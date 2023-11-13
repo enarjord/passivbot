@@ -301,15 +301,6 @@ class BybitBot(Bot):
             print_async_exception(ohlcvs)
             traceback.print_exc()
 
-    async def get_all_income(
-        self,
-        symbol: str = None,
-        start_time: int = None,
-        income_type: str = "Trade",
-        end_time: int = None,
-    ):
-        return await self.fetch_income(symbol=symbol, start_time=start_time, end_time=end_time)
-
     async def transfer_from_derivatives_to_spot(self, coin: str, amount: float):
         transferred = None
         try:
@@ -328,6 +319,37 @@ class BybitBot(Bot):
             print_async_exception(transferred)
             traceback.print_exc()
 
+    async def get_all_income(
+        self,
+        symbol: str = None,
+        start_time: int = None,
+        income_type: str = "Trade",
+        end_time: int = None,
+    ):
+        if start_time is not None:
+            week = 1000 * 60 * 60 * 24 * 7
+            income = []
+            if end_time is None:
+                end_time = int(utc_ms() + 1000 * 60 * 60 * 24)
+            if end_time - start_time > week:
+                # bybit has limit of 7 days per pageinated fetch
+                # fetch multiple times
+                i = 1
+                while i < 52: # limit n fetches to 52 (one year)
+                    sts = end_time - week * i
+                    ets = sts + week
+                    sts = max(sts, start_time)
+                    fetched = await self.fetch_income(symbol=symbol, start_time=sts, end_time=ets)
+                    income.extend(fetched)
+                    if sts <= start_time:
+                        break
+                    i += 1
+            return sorted({calc_hash(elm): elm for elm in income}.values(), key=lambda x: x['timestamp'])
+        else:
+            return await self.fetch_income(symbol=symbol, start_time=start_time, end_time=end_time)
+
+
+
     async def fetch_income(
         self,
         symbol: str = None,
@@ -335,7 +357,7 @@ class BybitBot(Bot):
         end_time: int = None,
     ):
         fetched = None
-        incomed = {}
+        income_d = {}
         try:
             limit = 100
             params = {"category": "linear", "limit": limit}
@@ -350,10 +372,14 @@ class BybitBot(Bot):
             while True:
                 if fetched["result"]["list"] == []:
                     break
-                if calc_hash(fetched["result"]["list"][0]) in incomed:
+                # print(f"fetching income {ts_to_date_utc(fetched['result']['list'][-1]['updatedTime'])}")
+                logging.debug(
+                    f"fetching income {ts_to_date_utc(fetched['result']['list'][-1]['updatedTime'])}"
+                )
+                if calc_hash(fetched["result"]["list"][0]) in income_d and calc_hash(fetched["result"]["list"][-1]) in income_d:
                     break
                 for elm in fetched["result"]["list"]:
-                    incomed[calc_hash(elm)] = elm
+                    income_d[calc_hash(elm)] = elm
                 if start_time is None:
                     break
                 if fetched["result"]["list"][-1]["updatedTime"] <= start_time:
@@ -363,9 +389,6 @@ class BybitBot(Bot):
                 params["cursor"] = fetched["result"]["nextPageCursor"]
                 fetched = await self.cc.private_get_v5_position_closed_pnl(params)
                 fetched["result"]["list"] = floatify(fetched["result"]["list"])
-                logging.debug(
-                    f"fetching income {ts_to_date_utc(fetched['result']['list'][-1]['updatedTime'])}"
-                )
             return [
                 {
                     "symbol": elm["symbol"],
@@ -378,7 +401,7 @@ class BybitBot(Bot):
                     "trade_id": elm["orderId"],
                     "position_side": determine_pos_side_ccxt(elm),
                 }
-                for elm in sorted(incomed.values(), key=lambda x: x["updatedTime"])
+                for elm in sorted(income_d.values(), key=lambda x: x["updatedTime"])
             ]
         except Exception as e:
             logging.error(f"error fetching income {e}")
