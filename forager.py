@@ -129,17 +129,22 @@ def generate_yaml(
     shorts_on_gs = [sym for sym in current_positions_short if sym not in active_shorts]
 
     if config["graceful_stop"]:
+        ideal_longs = []
         longs_on_gs = current_positions_long
         lw = round(twe_long / len(longs_on_gs), 4) if len(longs_on_gs) > 0 else 0.1
         active_longs = []
+
+        ideal_shorts = []
         shorts_on_gs = current_positions_short
         sw = round(twe_short / len(shorts_on_gs), 4) if len(shorts_on_gs) > 0 else 0.1
         active_shorts = []
     else:
         if config["graceful_stop_long"]:
+            ideal_longs = []
             longs_on_gs = current_positions_long
             active_longs = []
         if config["graceful_stop_short"]:
+            ideal_shorts = []
             shorts_on_gs = current_positions_short
             active_shorts = []
 
