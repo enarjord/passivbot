@@ -315,8 +315,8 @@ def plot_fills_multi(symbol, sdf, fdf, start_pct=0.0, end_pct=1.0):
     longs[longs.type.str.contains("close")].price.plot(style="r.")
     sdfc[f"{symbol}_pprice_l"].plot(style="b--")
 
-    shorts[shorts.type.str.contains("entry")].price.plot(style="r.")
-    shorts[shorts.type.str.contains("close")].price.plot(style="b.")
+    shorts[shorts.type.str.contains("entry")].price.plot(style="mx")
+    shorts[shorts.type.str.contains("close")].price.plot(style="cx")
     sdfc[f"{symbol}_pprice_s"].plot(style="r--")
 
     ax.legend(
