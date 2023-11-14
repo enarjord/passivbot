@@ -1808,6 +1808,7 @@ def analyze_fills_multi(sdf, fdf, params):
     final_equity = sdf.iloc[-1].equity
     daily_samples = sdf.groupby(sdf.index // (60 * 24)).last()
     adg = daily_samples.equity.pct_change().mean()
+    n_days = (sdf.index[-1] - sdf.index[0]) / 60 / 24
     pnl_sum = pnl_sum_total = fdf.pnl.sum()
     longs = fdf[fdf.type.str.contains("long")]
     shorts = fdf[fdf.type.str.contains("short")]
@@ -1834,6 +1835,7 @@ def analyze_fills_multi(sdf, fdf, params):
     )
     any_stuck = pd.concat([is_stuck_long, is_stuck_short], axis=1).any(axis=1)
     analysis = {
+        "n_days": n_days,
         "starting_balance": starting_balance,
         "final_balance": final_balance,
         "final_equity": final_equity,
@@ -1887,3 +1889,23 @@ def analyze_fills_multi(sdf, fdf, params):
             "stuck_time_ratio_short": stuck_time_ratio_short,
         }
     return analysis
+
+
+def multi_replace(input_data, replacements: [(str, str)]):
+    if isinstance(input_data, str):
+        new_data = input_data
+        for old, new in replacements:
+            new_data = new_data.replace(old, new)
+    elif isinstance(input_data, list):
+        new_data = []
+        for string in input_data:
+            for old, new in replacements:
+                string = string.replace(old, new)
+            new_data.append(string)
+    elif isinstance(input_data, dict):
+        new_data = {}
+        for key, string in input_data.items():
+            for old, new in replacements:
+                string = string.replace(old, new)
+            new_data[key] = string
+    return new_data
