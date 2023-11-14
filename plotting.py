@@ -326,32 +326,55 @@ def plot_fills_multi(symbol, sdf, fdf, start_pct=0.0, end_pct=1.0):
     return plt
 
 
-def plot_pnls_multi(sdf, fdf, TWE_long, TWE_short, symbol=None, start_pct=0.0, end_pct=1.0):
+def plot_pnls_long_short(sdf, fdf, start_pct=0.0, end_pct=1.0, symbol=None):
+    plt.clf()
+    start_minute = int(sdf.index[-1] * start_pct)
+    end_minute = int(sdf.index[-1] * end_pct)
+    fdfc = fdf.loc[start_minute:end_minute]
+    if symbol is not None:
+        fdfc = fdfc[fdfc.symbol == symbol]
+    longs = fdfc[fdfc.type.str.contains("long")]
+    shorts = fdfc[fdfc.type.str.contains("short")]
+    ax = fdfc.pnl.cumsum().plot()
+    longs.pnl.cumsum().plot()
+    shorts.pnl.cumsum().plot()
+    ax.legend(["pnl_sum", "pnl_long", "pnl_short"])
+    return plt
+
+
+def plot_pnls_separate(sdf, fdf, start_pct=0.0, end_pct=1.0, symbols=None):
+    plt.clf()
+    if symbols is None:
+        symbols = [c[: c.find("_price")] for c in sdf.columns if "_price" in c]
+    elif isinstance(symbols, str):
+        symbols = [symbols]
+    plt.clf()
+    start_minute = int(sdf.index[-1] * start_pct)
+    end_minute = int(sdf.index[-1] * end_pct)
+    fdfc = fdf.loc[start_minute:end_minute]
+    for symbol in symbols:
+        ax = fdfc[fdfc.symbol == symbol].pnl.cumsum().plot()
+    ax.legend(symbols)
+    return plt
+
+
+def plot_pnls_stuck(sdf, fdf, symbol=None, start_pct=0.0, end_pct=1.0, unstuck_threshold=0.9):
     plt.clf()
     symbols = [c[: c.find("_price")] for c in sdf.columns if "_price" in c]
     start_minute = int(sdf.index[-1] * start_pct)
     end_minute = int(sdf.index[-1] * end_pct)
     sdfc = sdf.loc[start_minute:end_minute]
     fdfc = fdf.loc[start_minute:end_minute]
-    if symbol is not None:
-        if isinstance(symbol, str):
-            fdfc = fdfc[fdfc.symbol == symbol]
-            longs = fdfc[fdfc.type.str.contains("long")]
-            shorts = fdfc[fdfc.type.str.contains("short")]
-            ax = fdfc.pnl.cumsum().plot(style="g-")
-            longs.pnl.cumsum().plot(style="b-")
-            shorts.pnl.cumsum().plot(style="r-")
-            ax.legend(["pnl_sum", "pnl_long", "pnl_short"])
-            return plt
-        elif isinstance(symbol, (list, tuple)):
-            for symbol_ in symbol:
-                ax = fdfc[fdfc.symbol == symbol_].pnl.cumsum().plot()
-                ax.legend(symbol)
-            return plt
-
-    is_stuck_long = sdfc[[c for c in sdfc.columns if "WE_l" in c]] / (TWE_long / len(symbols)) > 0.9
-    is_stuck_short = sdfc[[c for c in sdfc.columns if "WE_s" in c]] / (TWE_short / len(symbols)) > 0.9
-    any_stuck = pd.concat([is_stuck_long, is_stuck_short], axis=1).any(axis=1)
+    any_stuck = np.zeros(len(sdfc))
+    for symbol in fdfc.symbol.unique():
+        fdfcc = fdfc[(fdfc.symbol == symbol) & (fdfc.pnl < 0.0)]
+        stuck_threshold_long = fdfcc[(fdfcc.type.str.contains("long"))].WE.mean() * 0.99
+        stuck_threshold_short = fdfcc[(fdfcc.type.str.contains("short"))].WE.mean() * 0.99
+        is_stuck_long = sdfc.loc[:, f"{symbol}_WE_l"] / stuck_threshold_long > unstuck_threshold
+        is_stuck_short = sdfc.loc[:, f"{symbol}_WE_s"] / stuck_threshold_short > unstuck_threshold
+        any_stuck = (
+            pd.DataFrame({"0": any_stuck, "1": is_stuck_long.values, "2": is_stuck_short.values}).any(axis=1).values
+        )
     ax = sdfc.equity.plot()
     sdfc[any_stuck].balance.plot(style="r.")
     sdfc[~any_stuck].balance.plot(style="b.")
