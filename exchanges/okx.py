@@ -11,6 +11,7 @@ import numpy as np
 import ccxt.async_support as ccxt
 
 from procedures import load_ccxt_version
+
 ccxt_version_req = load_ccxt_version()
 assert (
     ccxt.__version__ == ccxt_version_req
