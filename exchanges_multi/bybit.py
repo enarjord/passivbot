@@ -4,8 +4,8 @@ import ccxt.async_support as ccxt_async
 import pprint
 import asyncio
 import traceback
-from pure_funcs import multi_replace
-from procedures import print_async_exception
+from pure_funcs import multi_replace, floatify, ts_to_date_utc, calc_hash, determine_pos_side_ccxt
+from procedures import print_async_exception, utc_ms
 
 
 class BybitBot(Passivbot):
@@ -31,11 +31,15 @@ class BybitBot(Passivbot):
         self.markets = await self.cca.fetch_markets()
         self.markets_dict = {elm["symbol"]: elm for elm in self.markets}
         approved_symbols = []
-        for symbol in sorted(set(self.config["symbols"])):
+        for symbol in sorted(set(self.config["symbols_long"] + self.config["symbols_short"])):
             if not symbol.endswith("/USDT:USDT"):
-                coin_extracted = multi_replace(symbol, [("/", ""), (":", ""), ("USDT", ""), ("BUSD", ""), ("USDC", "")])
+                coin_extracted = multi_replace(
+                    symbol, [("/", ""), (":", ""), ("USDT", ""), ("BUSD", ""), ("USDC", "")]
+                )
                 symbol_reformatted = coin_extracted + "/USDT:USDT"
-                logging.info(f"symbol {symbol} is wrongly formatted. Trying to reformat to {symbol_reformatted}")
+                logging.info(
+                    f"symbol {symbol} is wrongly formatted. Trying to reformat to {symbol_reformatted}"
+                )
                 symbol = symbol_reformatted
             if symbol not in self.markets_dict:
                 logging.info(f"{symbol} missing from {self.exchange}")
@@ -54,14 +58,19 @@ class BybitBot(Passivbot):
         for symbol in approved_symbols:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
-            self.min_costs[symbol] = 0.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
+            self.min_costs[symbol] = (
+                0.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
+            )
             self.min_qtys[symbol] = elm["limits"]["amount"]["min"]
             self.qty_steps[symbol] = elm["precision"]["amount"]
             self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
             self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "timestamp": 0.0}
             self.open_orders[symbol] = []
-            self.positions[symbol] = {}
+            self.positions[symbol] = {
+                "long": {"size": 0.0, "price": 0.0},
+                "short": {"size": 0.0, "price": 0.0},
+            }
             self.upd_timestamps["open_orders"][symbol] = 0.0
             self.upd_timestamps["tickers"][symbol] = 0.0
 
@@ -118,6 +127,7 @@ class BybitBot(Passivbot):
                     break
                 next_page_cursor = None
                 for elm in fetched:
+                    elm["position_side"] = determine_pos_side_ccxt(elm)
                     open_orders[elm["id"]] = elm
                     if "nextPageCursor" in elm["info"]:
                         next_page_cursor = elm["info"]["nextPageCursor"]
@@ -136,17 +146,18 @@ class BybitBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_positions(self, symbol: str = None):
+    async def fetch_positions(self):
         fetched = None
         positions = {}
         limit = 200
         try:
-            fetched = await self.cca.fetch_positions(symbol=symbol, limit=limit)
+            fetched = await self.cca.fetch_positions(params={"limit": limit})
             while True:
                 if all([elm["symbol"] + elm["side"] in positions for elm in fetched]):
                     break
                 next_page_cursor = None
                 for elm in fetched:
+                    elm["position_side"] = determine_pos_side_ccxt(elm)
                     positions[elm["symbol"] + elm["side"]] = elm
                     if "nextPageCursor" in elm["info"]:
                         next_page_cursor = elm["info"]["nextPageCursor"]
@@ -157,7 +168,7 @@ class BybitBot(Passivbot):
                     break
                 # fetch more
                 fetched = await self.cca.fetch_positions(
-                    symbol=symbol, limit=limit, params={"cursor": next_page_cursor}
+                    params={"cursor": next_page_cursor, "limit": limit}
                 )
             return sorted(positions.values(), key=lambda x: x["timestamp"])
         except Exception as e:
@@ -165,3 +176,89 @@ class BybitBot(Passivbot):
             print_async_exception(fetched)
             traceback.print_exc()
             return False
+
+    async def fetch_pnls(
+        self,
+        symbol: str = None,
+        start_time: int = None,
+        end_time: int = None,
+    ):
+        if start_time is not None:
+            week = 1000 * 60 * 60 * 24 * 7
+            income = []
+            if end_time is None:
+                end_time = int(utc_ms() + 1000 * 60 * 60 * 24)
+            # bybit has limit of 7 days per pageinated fetch
+            # fetch multiple times
+            i = 1
+            while i < 52:  # limit n fetches to 52 (one year)
+                sts = end_time - week * i
+                ets = sts + week
+                sts = max(sts, start_time)
+                fetched = await self.fetch_pnl(symbol=symbol, start_time=sts, end_time=ets)
+                income.extend(fetched)
+                if sts <= start_time:
+                    break
+                i += 1
+                logging.debug(f"fetching income for more than a week {ts_to_date_utc(sts)}")
+                print(f"fetching income for more than a week {ts_to_date_utc(sts)}")
+            return sorted(
+                {elm["orderId"]: elm for elm in income}.values(), key=lambda x: x["updatedTime"]
+            )
+        else:
+            return await self.fetch_pnl(symbol=symbol, start_time=start_time, end_time=end_time)
+
+    async def fetch_pnl(
+        self,
+        symbol: str = None,
+        start_time: int = None,
+        end_time: int = None,
+    ):
+        fetched = None
+        income_d = {}
+        limit = 100
+        try:
+            params = {"category": "linear", "limit": limit}
+            if symbol is not None:
+                params["symbol"] = symbol
+            if start_time is not None:
+                params["startTime"] = int(start_time)
+            if end_time is not None:
+                params["endTime"] = int(end_time)
+            fetched = await self.cca.private_get_v5_position_closed_pnl(params)
+            fetched["result"]["list"] = sorted(
+                floatify(fetched["result"]["list"]), key=lambda x: x["updatedTime"]
+            )
+            while True:
+                if fetched["result"]["list"] == []:
+                    break
+                print(
+                    f"fetching income {ts_to_date_utc(fetched['result']['list'][-1]['updatedTime'])}"
+                )
+                logging.debug(
+                    f"fetching income {ts_to_date_utc(fetched['result']['list'][-1]['updatedTime'])}"
+                )
+                if (
+                    fetched["result"]["list"][0]["orderId"] in income_d
+                    and fetched["result"]["list"][-1]["orderId"] in income_d
+                ):
+                    break
+                for elm in fetched["result"]["list"]:
+                    income_d[elm["orderId"]] = elm
+                if start_time is None:
+                    break
+                if fetched["result"]["list"][0]["updatedTime"] <= start_time:
+                    break
+                if not fetched["result"]["nextPageCursor"]:
+                    break
+                params["cursor"] = fetched["result"]["nextPageCursor"]
+                fetched = await self.cca.private_get_v5_position_closed_pnl(params)
+                fetched["result"]["list"] = sorted(
+                    floatify(fetched["result"]["list"]), key=lambda x: x["updatedTime"]
+                )
+            return sorted(income_d.values(), key=lambda x: x["updatedTime"])
+        except Exception as e:
+            logging.error(f"error fetching income {e}")
+            print_async_exception(fetched)
+            traceback.print_exc()
+            return []

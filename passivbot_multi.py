@@ -11,12 +11,13 @@ import asyncio
 import json
 import pprint
 
-from procedures import load_broker_code, load_user_info, utc_ms
+from procedures import load_broker_code, load_user_info, utc_ms, make_get_filepath
 
 
 class Passivbot:
     def __init__(self, config: dict):
         self.config = config
+        self.user = config["user"]
         self.user_info = load_user_info(config["user"])
         self.exchange = self.user_info["exchange"]
         self.broker_code = load_broker_code(self.user_info["exchange"])
@@ -36,6 +37,7 @@ class Passivbot:
         self.c_mults = {}
         self.debug_event_log = []
         self.stop_websocket = False
+        self.pnls_cache_filepath = make_get_filepath(f"caches/{self.exchange}/{self.user}_pnls.json")
         logging.basicConfig(
             format="%(asctime)s %(levelname)-8s %(message)s",
             level=logging.INFO,
@@ -93,7 +95,110 @@ class Passivbot:
 
     async def handle_ticker_update(self, upd):
         self.upd_timestamps["tickers"][upd["symbol"]] = utc_ms()  # update timestamp
-        if upd["bid"] != self.tickers[upd["symbol"]]["bid"] or upd["ask"] != self.tickers[upd["symbol"]]["ask"]:
+        if (
+            upd["bid"] != self.tickers[upd["symbol"]]["bid"]
+            or upd["ask"] != self.tickers[upd["symbol"]]["ask"]
+        ):
             self.tickers[upd["symbol"]]["bid"] = upd["bid"]
             self.tickers[upd["symbol"]]["ask"] = upd["ask"]
             # pprint.pprint(upd)
+
+    async def update_pnls(self):
+        # fetch latest pnls
+        # dump new pnls to cache
+        if len(self.pnls) == 0:
+            # load pnls from cache
+            pnls_cache = []
+            try:
+                if os.path.exists(self.pnls_cache_filepath):
+                    pnls_cache = json.load(open(self.pnls_cache_filepath))
+            except Exception as e:
+                logging.error(f"error loading {self.pnls_cache_filepath} {e}")
+            # fetch pnls since latest timestamp
+            self.pnls = pnls_cache
+        start_time = (
+            self.pnls[-1]["updatedTime"]
+            if self.pnls
+            else utc_ms() - 1000 * 60 * 60 * 24 * self.config["pnls_max_lookback_days"]
+        )
+        new_pnls = await self.fetch_pnls(start_time=start_time)
+        len_pnls = len(self.pnls)
+        self.pnls = sorted(
+            {elm["orderId"] + str(elm["qty"]): elm for elm in self.pnls + new_pnls}.values(),
+            key=lambda x: x["updatedTime"],
+        )
+        if len(self.pnls) > len_pnls:
+            logging.debug(f"{len(self.pnls) - len_pnls} new pnls")
+            print(f"{len(self.pnls) - len_pnls} new pnls")
+            try:
+                json.dump(self.pnls, open(self.pnls_cache_filepath, "w"))
+            except Exception as e:
+                logging.error(f"error dumping pnls to {self.pnls_cache_filepath} {e}")
+        return True
+
+    async def update_open_orders(self):
+        open_orders = await self.fetch_open_orders()
+        oo_ids_old = {elm["id"] for sublist in self.open_orders.values() for elm in sublist}
+        for oo in open_orders:
+            if oo["id"] not in oo_ids_old:
+                # there was a new open order not caught by websocket
+                logging.debug(f"new open order {oo['symbol']} {oo['position_side']} {oo['id']}")
+                print(f"new open order {oo['symbol']} {oo['position_side']} {oo['id']}")
+        oo_ids_new = {elm["id"] for elm in open_orders}
+        for oo in [elm for sublist in self.open_orders.values() for elm in sublist]:
+            if oo["id"] not in oo_ids_new:
+                # there was an order cancellation not caught by websocket
+                logging.debug(f"cancelled open order {oo['symbol']} {oo['position_side']} {oo['id']}")
+                print(f"cancelled open order {oo['symbol']} {oo['position_side']} {oo['id']}")
+        self.open_orders = {symbol: [] for symbol in self.open_orders}
+        for elm in open_orders:
+            if elm["symbol"] in self.open_orders:
+                self.open_orders[elm["symbol"]].append(elm)
+            else:
+                logging.debug(
+                    f"{elm['symbol']} has open order {elm['position_side']} {elm['id']}, but is not under passivbot management"
+                )
+                print(
+                    f"debug {elm['symbol']} has open order {elm['position_side']} {elm['id']}, but is not under passivbot management"
+                )
+        return True
+
+    async def update_positions(self):
+        positions_list_new = await self.fetch_positions()
+        positions_new = {
+            symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0, "price": 0.0}}
+            for symbol in self.positions
+        }
+        for elm in positions_list_new:
+            if elm["symbol"] not in self.positions:
+                print(
+                    f"debug {elm['symbol']} has a {elm['position_side']} position, but is not under passivbot management"
+                )
+                logging.debug(
+                    f"debug {elm['symbol']} has a {elm['position_side']} position, but is not under passivbot management"
+                )
+            else:
+                p_ = self.positions[elm["symbol"]][elm["position_side"]]
+                new_pos = {
+                    "size": abs(elm["contracts"])
+                    * (-1.0 if elm["position_side"] == "short" else 1.0),
+                    "price": elm["entryPrice"],
+                }
+                if new_pos != p_:
+                    print(f"{elm['symbol']} {elm['position_side']} changed: {p_} -> {new_pos}")
+                    logging.debug(
+                        f"{elm['symbol']} {elm['position_side']} changed: {p_} -> {new_pos}"
+                    )
+                positions_new[elm["symbol"]][elm["position_side"]] = new_pos
+
+        for symbol in self.positions:
+            for side in self.positions[symbol]:
+                if self.positions[symbol][side] != positions_new[symbol][side]:
+                    print(
+                        f"{symbol} {side} changed: {self.positions[symbol][side]} -> {positions_new[symbol][side]}"
+                    )
+                    logging.debug(
+                        f"{symbol} {side} changed: {self.positions[symbol][side]} -> {positions_new[symbol][side]}"
+                    )
+        self.positions = positions_new
+        return True
