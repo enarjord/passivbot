@@ -1,0 +1,66 @@
+{
+    // fetch API key/secret from api-keys.json
+    user: bybit_01
+
+    // how far into the past to fetch pnl history
+    pnls_max_lookback_days: 90
+
+    // if WE / WE_limit > stuck_threshold: consider position stuck
+    stuck_threshold: 0.95
+
+
+
+    // if approved_symbols_long is empty, all symbols are approved for longs
+    symbols_long: [
+        CELRUSDT
+        ENJUSDT
+        HOTUSDT
+        LINKUSDT
+        MKRUSDT
+        OCEANUSDT
+        RLCUSDT
+        RSRUSDT
+        RUNEUSDT
+        SFPUSDT
+        SNXUSDT
+        SUSHIUSDT
+    ]
+
+    // if approved_symbols_short is empty, all symbols are approved for shorts
+    symbols_short: [
+        SYM1USDT
+        SYM2USDT
+    ]
+
+
+
+
+
+
+
+
+
+
+
+    // Specify directory containing live configs.
+    // They are sorted alphabetically, then the first config whose filename includes symbol is selected.
+    // Set to "" to disable
+    live_configs_dir_long: "configs/live/single_symbol_optimizations/recursive_grid/"
+    live_configs_dir_short: "configs/live/single_symbol_optimizations/clock/"
+
+    // overrides live_configs_dir
+    live_configs_map: {
+        SYM1USDT: configs/live/recursive_grid_mode.example.json
+    }
+
+    // overrides long configs from live_configs_map
+    live_configs_map_long: {
+        SYM1USDT: configs/live/clock_mode.example.json
+    }
+
+    // overrides short configs from live_configs_map
+    live_configs_map_short: {
+        SYM1USDT: configs/live/single_symbol_optimizations/clock/EOSUSDT.json
+    }
+
+}
