@@ -331,7 +331,7 @@ def backtest_multisymbol_recursive_grid(
     min_costs,
     min_qtys,
     live_configs,
-    unstuck_threshold,
+    stuck_threshold,
 ):
     """
     multi symbol backtest
@@ -381,6 +381,8 @@ def backtest_multisymbol_recursive_grid(
 
     live_configs: [((float, float, ...), (float, float, ...)), ((float, float, ...), (float, float, ...))]
     [(long, short), (long, short), ...]
+
+    stuck_threshold: if WE / WE_limit > stuck_threshold: consider position stuck
     """
 
     inverse = False
@@ -576,7 +578,7 @@ def backtest_multisymbol_recursive_grid(
                     qty_to_cost(poss_long[i][0], poss_long[i][1], inverse, c_mults[i]) / balance
                 )
                 if (
-                    wallet_exposure / ll[i][16] > unstuck_threshold
+                    wallet_exposure / ll[i][16] > stuck_threshold
                 ):  # ratio of wallet exposure to exposure limit > 90%
                     # is stuck
                     any_stuck = True
@@ -608,7 +610,7 @@ def backtest_multisymbol_recursive_grid(
                     qty_to_cost(poss_short[i][0], poss_short[i][1], inverse, c_mults[i]) / balance
                 )
                 if (
-                    wallet_exposure / ls[i][16] > unstuck_threshold
+                    wallet_exposure / ls[i][16] > stuck_threshold
                 ):  # ratio of wallet exposure to exposure limit
                     # is stuck
                     any_stuck = True
