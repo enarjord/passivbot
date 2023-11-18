@@ -6,7 +6,7 @@ from hashlib import sha256
 import json
 import numpy as np
 import dateutil.parser
-from njit_funcs import round_dynamic, qty_to_cost
+from njit_funcs import round_dynamic, qty_to_cost, calc_pnl_long, calc_pnl_short
 
 try:
     import pandas as pd
@@ -1714,6 +1714,11 @@ def determine_pos_side_ccxt(open_order: dict) -> str:
         oo = open_order["info"]
     else:
         oo = open_order
+    if "positionIdx" in oo:  # bybit position
+        if float(oo["positionIdx"]) == 1.0:
+            return "long"
+        if float(oo["positionIdx"]) == 2.0:
+            return "short"
     keys_map = {key.lower().replace("_", ""): key for key in oo}
     for poskey in ["posside", "positionside"]:
         if poskey in keys_map:
@@ -1808,10 +1813,42 @@ def analyze_fills_multi(sdf, fdf, params):
     final_equity = sdf.iloc[-1].equity
     daily_samples = sdf.groupby(sdf.index // (60 * 24)).last()
     adg = daily_samples.equity.pct_change().mean()
-    n_days = (sdf.index[-1] - sdf.index[0]) / 60 / 24
-    pnl_sum = pnl_sum_total = fdf.pnl.sum()
+
     longs = fdf[fdf.type.str.contains("long")]
     shorts = fdf[fdf.type.str.contains("short")]
+
+    sdf_daily = sdf.groupby(sdf.index // (60 * 24)).last()
+    for symbol in symbols:
+        sdf_daily.loc[:, f"{symbol}_upnl_l"] = sdf_daily.apply(
+            lambda x: calc_pnl_long(
+                x[f"{symbol}_pprice_l"], x[f"{symbol}_price"], x[f"{symbol}_psize_l"], False, 1.0
+            ),
+            axis=1,
+        )
+        sdf_daily.loc[:, f"{symbol}_upnl_s"] = sdf_daily.apply(
+            lambda x: calc_pnl_short(
+                x[f"{symbol}_pprice_s"], x[f"{symbol}_price"], x[f"{symbol}_psize_s"], False, 1.0
+            ),
+            axis=1,
+        )
+    sdf_daily.loc[:, "upnl_l"] = sdf_daily[[c for c in sdf_daily if "upnl_l" in c]].sum(axis=1)
+    sdf_daily.loc[:, "upnl_s"] = sdf_daily[[c for c in sdf_daily if "upnl_s" in c]].sum(axis=1)
+
+    daily_pnls_long = longs.groupby(longs.index // (60 * 24)).pnl.sum().cumsum()
+    daily_pnls_short = shorts.groupby(shorts.index // (60 * 24)).pnl.sum().cumsum()
+
+    daily_pnls_long = daily_pnls_long.reindex(np.arange(sdf.index[0], sdf.index[-1] + 1)).ffill()
+    daily_pnls_short = daily_pnls_short.reindex(np.arange(sdf.index[0], sdf.index[-1] + 1)).ffill()
+
+    sdf_daily.loc[:, "equity_long"] = daily_pnls_long + sdf.balance.iloc[0]
+    sdf_daily.loc[:, "equity_short"] = daily_pnls_short + sdf.balance.iloc[0]
+
+    adg_long = sdf_daily.equity_long.pct_change().mean()
+    adg_short = sdf_daily.equity_short.pct_change().mean()
+
+    n_days = (sdf.index[-1] - sdf.index[0]) / 60 / 24
+    pnl_sum = pnl_sum_total = fdf.pnl.sum()
+
     pnl_long = longs.pnl.sum()
     pnl_short = shorts.pnl.sum()
     sum_profit_long = longs[longs.pnl > 0.0].pnl.sum()
@@ -1850,10 +1887,10 @@ def analyze_fills_multi(sdf, fdf, params):
         "pnl_long": pnl_long,
         "pnl_short": pnl_short,
         "sum_profit_long": sum_profit_long,
-        "sum_loss_long": sum_loss_long,
-        "loss_profit_ratio_long": loss_profit_ratio_long,
         "sum_profit_short": sum_profit_short,
+        "sum_loss_long": sum_loss_long,
         "sum_loss_short": sum_loss_short,
+        "loss_profit_ratio_long": loss_profit_ratio_long,
         "loss_profit_ratio_short": loss_profit_ratio_short,
         "stuck_time_ratio_long": stuck_time_ratio_long,
         "stuck_time_ratio_short": stuck_time_ratio_short,
