@@ -30,15 +30,16 @@ class BybitBot(Passivbot):
         # require symbols to be formatted to ccxt standard COIN/USDT:USDT
         self.markets = await self.cca.fetch_markets()
         self.markets_dict = {elm["symbol"]: elm for elm in self.markets}
-        approved_symbols = []
-        for symbol in sorted(set(self.config["symbols_long"] + self.config["symbols_short"])):
+        approved_symbols, approved_symbols_long, approved_symbols_short = [], [], []
+        for symbol_ in sorted(set(self.config["symbols_long"] + self.config["symbols_short"])):
+            symbol = symbol_
             if not symbol.endswith("/USDT:USDT"):
                 coin_extracted = multi_replace(
-                    symbol, [("/", ""), (":", ""), ("USDT", ""), ("BUSD", ""), ("USDC", "")]
+                    symbol_, [("/", ""), (":", ""), ("USDT", ""), ("BUSD", ""), ("USDC", "")]
                 )
                 symbol_reformatted = coin_extracted + "/USDT:USDT"
                 logging.info(
-                    f"symbol {symbol} is wrongly formatted. Trying to reformat to {symbol_reformatted}"
+                    f"symbol {symbol_} is wrongly formatted. Trying to reformat to {symbol_reformatted}"
                 )
                 symbol = symbol_reformatted
             if symbol not in self.markets_dict:
@@ -53,8 +54,17 @@ class BybitBot(Passivbot):
                     logging.info(f"{symbol} is not a linear market")
                 else:
                     approved_symbols.append(symbol)
+                    if symbol_ in self.config["live_configs_map"]:
+                        self.config["live_configs_map"][symbol] = self.config["live_configs_map"][
+                            symbol_
+                        ]
+                    if symbol_ in self.config["symbols_long"]:
+                        approved_symbols_long.append(symbol)
+                    if symbol_ in self.config["symbols_short"]:
+                        approved_symbols_short.append(symbol)
         logging.info(f"approved symbols: {approved_symbols}")
         self.symbols = sorted(set(approved_symbols))
+        self.quote = "USDT"
         for symbol in approved_symbols:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
@@ -65,7 +75,8 @@ class BybitBot(Passivbot):
             self.qty_steps[symbol] = elm["precision"]["amount"]
             self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
-            self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "timestamp": 0.0}
+            self.coins[symbol] = symbol.replace("/USDT:USDT", "")
+            self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "last": 0.0}
             self.open_orders[symbol] = []
             self.positions[symbol] = {
                 "long": {"size": 0.0, "price": 0.0},
@@ -73,6 +84,7 @@ class BybitBot(Passivbot):
             }
             self.upd_timestamps["open_orders"][symbol] = 0.0
             self.upd_timestamps["tickers"][symbol] = 0.0
+        super().init_bot()
 
     async def start_webstockets(self):
         await asyncio.gather(
@@ -173,6 +185,40 @@ class BybitBot(Passivbot):
             return sorted(positions.values(), key=lambda x: x["timestamp"])
         except Exception as e:
             logging.error(f"error fetching open orders {e}")
+            print_async_exception(fetched)
+            traceback.print_exc()
+            return False
+
+    async def fetch_balance(self):
+        fetched = None
+        try:
+            fetched = await self.cca.fetch_balance()
+            return fetched[self.quote]["total"]
+        except Exception as e:
+            logging.error(f"error fetching balance {e}")
+            print_async_exception(fetched)
+            traceback.print_exc()
+            return False
+
+    async def fetch_tickers(self):
+        fetched = None
+        try:
+            fetched = await self.cca.fetch_tickers()
+            return fetched
+        except Exception as e:
+            logging.error(f"error fetching tickers {e}")
+            print_async_exception(fetched)
+            traceback.print_exc()
+            return False
+
+    async def fetch_ohlcv(self, symbol: str, timeframe="1m"):
+        # intervals: 1,3,5,15,30,60,120,240,360,720,D,M,W
+        fetched = None
+        try:
+            fetched = await self.cca.fetch_ohlcv(symbol, timeframe=timeframe, limit=1000)
+            return fetched
+        except Exception as e:
+            logging.error(f"error fetching ohlcv for {symbol} {e}")
             print_async_exception(fetched)
             traceback.print_exc()
             return False
