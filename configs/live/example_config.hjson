@@ -5,9 +5,14 @@
     // how far into the past to fetch pnl history
     pnls_max_lookback_days: 90
 
-    // if WE / WE_limit > stuck_threshold: consider position stuck
+    // multisym auto unstuck: will use profits from other positions to offset losses realized on stuck positions
+    multisym_auto_unstuck_enabled: true
+
+    // if wallet_exposure / wallet_exposure_limit > stuck_threshold: consider position as stuck
     stuck_threshold: 0.95
 
+    TWE_long: 2.0  // total wallet exposure limit long. Exposure limit for each bot will be TWE_long / len(symbols_long)
+    TWE_short: 0.0  // total wallet exposure limit short. Exposure limit for each bot will be TWE_short / len(symbols_short)
 
 
     // if approved_symbols_long is empty, all symbols are approved for longs
@@ -32,35 +37,25 @@
         SYM2USDT
     ]
 
-
-
-
-
-
-
-
-
-
+    // override wallet_exposure_limits for individual symbols
+    wallet_exposure_limits_long: [
+        SYM1USDT: 0.15
+    ]
+    wallet_exposure_limits_short: [
+        SYM1USDT: 0.1
+    ]
 
     // Specify directory containing live configs.
     // They are sorted alphabetically, then the first config whose filename includes symbol is selected.
     // Set to "" to disable
-    live_configs_dir_long: "configs/live/single_symbol_optimizations/recursive_grid/"
-    live_configs_dir_short: "configs/live/single_symbol_optimizations/clock/"
+    live_configs_dir: "configs/live/single_symbol_optimizations/recursive_grid/"
 
     // overrides live_configs_dir
     live_configs_map: {
         SYM1USDT: configs/live/recursive_grid_mode.example.json
     }
 
-    // overrides long configs from live_configs_map
-    live_configs_map_long: {
-        SYM1USDT: configs/live/clock_mode.example.json
-    }
-
-    // overrides short configs from live_configs_map
-    live_configs_map_short: {
-        SYM1USDT: configs/live/single_symbol_optimizations/clock/EOSUSDT.json
-    }
+    // if symbol is missing from live_configs_map, default to this config
+    default_config_path: configs/live/recursive_grid_mode.example.json
 
 }
