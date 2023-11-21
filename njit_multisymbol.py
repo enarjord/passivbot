@@ -304,7 +304,7 @@ def calc_fills(
 
 
 @njit
-def calc_AU_allowance(pnls, balance, loss_allowance_pct=0.01, drop_since_peak_abs=-1.0):
+def calc_AU_allowance(pnls: np.ndarray, balance: float, loss_allowance_pct=0.01, drop_since_peak_abs=-1.0):
     """
     allow up to 1% drop from balance peak for auto unstuck
     """
