@@ -30,7 +30,7 @@ class BybitBot(Passivbot):
         # require symbols to be formatted to ccxt standard COIN/USDT:USDT
         self.markets = await self.cca.fetch_markets()
         self.markets_dict = {elm["symbol"]: elm for elm in self.markets}
-        approved_symbols, approved_symbols_long, approved_symbols_short = [], [], []
+        approved_symbols, self.approved_symbols_long, self.approved_symbols_short = [], [], []
         for symbol_ in sorted(set(self.config["symbols_long"] + self.config["symbols_short"])):
             symbol = symbol_
             if not symbol.endswith("/USDT:USDT"):
@@ -59,12 +59,13 @@ class BybitBot(Passivbot):
                             symbol_
                         ]
                     if symbol_ in self.config["symbols_long"]:
-                        approved_symbols_long.append(symbol)
+                        self.approved_symbols_long.append(symbol)
                     if symbol_ in self.config["symbols_short"]:
-                        approved_symbols_short.append(symbol)
+                        self.approved_symbols_short.append(symbol)
         logging.info(f"approved symbols: {approved_symbols}")
         self.symbols = sorted(set(approved_symbols))
         self.quote = "USDT"
+        self.inverse = False
         for symbol in approved_symbols:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
@@ -84,7 +85,7 @@ class BybitBot(Passivbot):
             }
             self.upd_timestamps["open_orders"][symbol] = 0.0
             self.upd_timestamps["tickers"][symbol] = 0.0
-        super().init_bot()
+        await super().init_bot()
 
     async def start_webstockets(self):
         await asyncio.gather(
