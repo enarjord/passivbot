@@ -2,14 +2,24 @@
     // fetch API key/secret from api-keys.json
     user: bybit_01
 
-    // how far into the past to fetch pnl history
-    pnls_max_lookback_days: 90
+
+    // bot will execute order changes every x seconds (60 is default). Set to zero to react in close to real-time.
+    execution_interval_seconds: 60
 
     // multisym auto unstuck: will use profits from other positions to offset losses realized on stuck positions
     multisym_auto_unstuck_enabled: true
 
+    // how far into the past to fetch pnl history
+    pnls_max_lookback_days: 90
+
+    // how much below past peak balance to allow losses (default 1% == 0.01)
+    loss_allowance_pct: 0.01
+
     // if wallet_exposure / wallet_exposure_limit > stuck_threshold: consider position as stuck
     stuck_threshold: 0.95
+
+    // percentage of balance * wallet_exposure_limit to close for each unstucking order (default 1% == 0.01)
+    unstuck_close_pct = 0.01
 
     TWE_long: 2.0  // total wallet exposure limit long. Exposure limit for each bot will be TWE_long / len(symbols_long)
     TWE_short: 0.0  // total wallet exposure limit short. Exposure limit for each bot will be TWE_short / len(symbols_short)
@@ -37,7 +47,7 @@
         SYM2USDT
     ]
 
-    // override wallet_exposure_limits for individual symbols
+    // override wallet_exposure_limits for individual symbols (takes precedence over TWE_long/short)
     wallet_exposure_limits_long: [
         SYM1USDT: 0.15
     ]
