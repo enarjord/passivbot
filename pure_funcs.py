@@ -1797,6 +1797,7 @@ def fills_multi_to_df(fills, symbols, c_mults):
             "psize",
             "pprice",
             "type",
+            "stuckness",
         ],
     )
     s2i = {symbol: i for i, symbol in enumerate(symbols)}
