@@ -215,6 +215,7 @@ def calc_fills(
     inverse,
     qty_step,
     c_mults: np.ndarray,
+    wallet_exposure_limit: float,
     maker_fee,
 ):
     """
@@ -239,6 +240,7 @@ def calc_fills(
         new_equity = new_balance + calc_pnl_sum(
             poss_long, poss_short, hlc[:, 2], c_mults
         )  # compute total equity
+        wallet_exposure = qty_to_cost(new_pos[0], new_pos[1], inverse, c_mults[idx]) / balance
         fills.append(
             (
                 k,  # index
@@ -252,6 +254,7 @@ def calc_fills(
                 new_pos[0],  # psize after fill
                 new_pos[1],  # pprice after fill
                 entry[2],  # fill type
+                wallet_exposure / wallet_exposure_limit, # stuckness
             )
         )
     for close in closes:
@@ -297,6 +300,7 @@ def calc_fills(
                 new_pos[0],  # psize after fill
                 new_pos[1],  # pprice after fill
                 close[2],  # fill type
+                wallet_exposure / wallet_exposure_limit, # stuckness
             )
         )
 
@@ -504,6 +508,7 @@ def backtest_multisymbol_recursive_grid(
                     inverse,
                     qty_steps[i],
                     c_mults,
+                    ll[i][16],
                     maker_fee,
                 )
                 if len(new_fills) > 0:
@@ -542,6 +547,7 @@ def backtest_multisymbol_recursive_grid(
                     inverse,
                     qty_steps[i],
                     c_mults,
+                    ls[i][16], # wallet exposure limit
                     maker_fee,
                 )
                 if len(new_fills) > 0:
