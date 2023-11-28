@@ -254,7 +254,7 @@ def calc_fills(
                 new_pos[0],  # psize after fill
                 new_pos[1],  # pprice after fill
                 entry[2],  # fill type
-                wallet_exposure / wallet_exposure_limit, # stuckness
+                wallet_exposure / wallet_exposure_limit,  # stuckness
             )
         )
     for close in closes:
@@ -300,7 +300,7 @@ def calc_fills(
                 new_pos[0],  # psize after fill
                 new_pos[1],  # pprice after fill
                 close[2],  # fill type
-                wallet_exposure / wallet_exposure_limit, # stuckness
+                wallet_exposure / wallet_exposure_limit,  # stuckness
             )
         )
 
@@ -308,7 +308,9 @@ def calc_fills(
 
 
 @njit
-def calc_AU_allowance(pnls: np.ndarray, balance: float, loss_allowance_pct=0.01, drop_since_peak_abs=-1.0):
+def calc_AU_allowance(
+    pnls: np.ndarray, balance: float, loss_allowance_pct=0.01, drop_since_peak_abs=-1.0
+):
     """
     allow up to 1% drop from balance peak for auto unstuck
     """
@@ -336,6 +338,7 @@ def backtest_multisymbol_recursive_grid(
     min_qtys,
     live_configs,
     stuck_threshold,
+    unstuck_close_pct,
 ):
     """
     multi symbol backtest
@@ -458,8 +461,6 @@ def backtest_multisymbol_recursive_grid(
     pnl_cumsum_running = 0.0
     pnl_cumsum_max = 0.0
 
-    unstuck_close_pct = 0.05
-
     if len(symbols) == 1:
         pass
         # TODO
@@ -547,7 +548,7 @@ def backtest_multisymbol_recursive_grid(
                     inverse,
                     qty_steps[i],
                     c_mults,
-                    ls[i][16], # wallet exposure limit
+                    ls[i][16],  # wallet exposure limit
                     maker_fee,
                 )
                 if len(new_fills) > 0:
@@ -585,8 +586,9 @@ def backtest_multisymbol_recursive_grid(
                 )
                 if (
                     wallet_exposure / ll[i][16] > stuck_threshold
-                ):  # ratio of wallet exposure to exposure limit > 90%
-                    # is stuck
+                    and 1.0 - hlcs[i][k][2] / poss_long[i][1] > 0.0
+                ):
+                    # is stuck and not in profit
                     any_stuck = True
                     stuck_positions_long[i] = 1.0
                 else:
@@ -617,8 +619,9 @@ def backtest_multisymbol_recursive_grid(
                 )
                 if (
                     wallet_exposure / ls[i][16] > stuck_threshold
-                ):  # ratio of wallet exposure to exposure limit
-                    # is stuck
+                    and hlcs[i][k][2] / poss_short[i][1] - 1.0 > 0.0
+                ):
+                    # is stuck and not in profit
                     any_stuck = True
                     stuck_positions_short[i] = 1.0
                 else:
