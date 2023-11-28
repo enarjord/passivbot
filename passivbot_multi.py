@@ -151,9 +151,38 @@ class Passivbot:
                     else:
                         self.live_configs[symbol][side]["enabled"] = False
 
-        for f in ["positions", "emas", "open_orders", "pnls", "balance"]:
+        for f in ["balance", "emas", "positions", "open_orders", "pnls"]:
             res = await getattr(self, f"update_{f}")()
             logging.info(f"initiating {f} {res}")
+
+    def add_new_order(self, order, source="WS"):
+        try:
+            oids = {x["id"] for x in self.open_orders[order["symbol"]]}
+            if order["id"] not in oids:
+                self.open_orders[order["symbol"]].append(order)
+                logging.info(
+                    f"  created {order['symbol']} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
+                )
+                return True
+        except Exception as e:
+            logging.error(f"failed to add order to self.open_orders {e}")
+            traceback.print_exc()
+            return False
+
+    def remove_cancelled_order(self, order, source="WS"):
+        try:
+            if order["id"] in {x["id"] for x in self.open_orders[order["symbol"]]}:
+                self.open_orders[order["symbol"]] = [
+                    x for x in self.open_orders[order["symbol"]] if x["id"] != order["id"]
+                ]
+                logging.info(
+                    f"cancelled {order['symbol']} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
+                )
+                return True
+        except Exception as e:
+            logging.error(f"failed to remove order from self.open_orders {e}")
+            traceback.print_exc()
+            return False
 
     async def handle_order_update(self, upd_list):
         try:
@@ -168,21 +197,11 @@ class Passivbot:
                     self.recent_fill = True
                 elif upd["status"] == "canceled":
                     # remove order from open_orders
-                    if upd["id"] in {x["id"] for x in self.open_orders[upd["symbol"]]}:
-                        logging.info(
-                            f"cancelled {upd['symbol']} {upd['side']} {upd['qty']} {upd['position_side']} @ {upd['price']}"
-                        )
-                        self.open_orders[upd["symbol"]] = [
-                            elm for elm in self.open_orders[upd["symbol"]] if elm["id"] != upd["id"]
-                        ]
+                    self.remove_cancelled_order(upd)
                     self.upd_timestamps["open_orders"][upd["symbol"]] = utc_ms()
                 elif upd["status"] == "open":
                     # add order to open_orders
-                    if upd["id"] not in {x["id"] for x in self.open_orders[upd["symbol"]]}:
-                        logging.info(
-                            f"  created {upd['symbol']} {upd['side']} {upd['qty']} {upd['position_side']} @ {upd['price']}"
-                        )
-                        self.open_orders[upd["symbol"]].append(upd)
+                    self.add_new_order(upd)
                     self.upd_timestamps["open_orders"][upd["symbol"]] = utc_ms()
                 else:
                     print("debug open orders unknown type", upd)
@@ -266,12 +285,16 @@ class Passivbot:
         for oo in open_orders:
             if oo["id"] not in oo_ids_old:
                 # there was a new open order not caught by websocket
-                logging.info(f"new open order {oo['symbol']} {oo['position_side']} {oo['id']}")
+                logging.info(
+                    f"new order {oo['symbol']} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
+                )
         oo_ids_new = {elm["id"] for elm in open_orders}
         for oo in [elm for sublist in self.open_orders.values() for elm in sublist]:
             if oo["id"] not in oo_ids_new:
                 # there was an order cancellation not caught by websocket
-                logging.info(f"cancelled open order {oo['symbol']} {oo['position_side']} {oo['id']}")
+                logging.info(
+                    f"cancelled {oo['symbol']} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
+                )
         self.open_orders = {symbol: [] for symbol in self.open_orders}
         for elm in open_orders:
             if elm["symbol"] in self.open_orders:
@@ -311,8 +334,33 @@ class Passivbot:
         for symbol in self.positions:
             for side in self.positions[symbol]:
                 if self.positions[symbol][side] != positions_new[symbol][side]:
+                    wallet_exposure = (
+                        qty_to_cost(
+                            positions_new[symbol][side]["size"],
+                            positions_new[symbol][side]["price"],
+                            self.inverse,
+                            self.c_mults[symbol],
+                        )
+                        / self.balance
+                    )
+                    WE_ratio = wallet_exposure / self.live_configs[symbol][side]["wallet_exposure_limit"]
+                    pprice_diff = (
+                        (
+                            1.0
+                            - self.tickers[symbol]["last"] / positions_new[symbol]["long"]["price"]
+                            if positions_new[symbol]["long"]["price"] > 0.0
+                            else 0.0
+                        )
+                        if side == "long"
+                        else (
+                            self.tickers[symbol]["last"] / positions_new[symbol]["short"]["price"]
+                            if positions_new[symbol]["short"]["price"] > 0.0
+                            else 0.0
+                        )
+                        - 1.0
+                    )
                     logging.info(
-                        f"{symbol} {side} changed: {self.positions[symbol][side]} -> {positions_new[symbol][side]}"
+                        f"{symbol} {side} changed: {self.positions[symbol][side]} -> {positions_new[symbol][side]} WE ratio: {WE_ratio:.3f} pprice diff {pprice_diff:.4f}"
                     )
         self.positions = positions_new
         now = utc_ms()
@@ -349,13 +397,6 @@ class Passivbot:
             return True
         while self.ema_minute < int(round(now_minute - 1000 * 60)):
             for symbol in self.symbols:
-                print("debug", symbol, emas_long[symbol])
-                print(
-                    self.alphas_long[symbol],
-                    self.alphas__long[symbol],
-                    self.emas_long[symbol],
-                    self.prev_prices[symbol],
-                )
                 self.emas_long[symbol] = calc_ema(
                     self.alphas_long[symbol],
                     self.alphas__long[symbol],
@@ -600,7 +641,8 @@ class Passivbot:
                         else self.tickers[symbol]["last"] / self.positions[symbol]["short"]["price"]
                         - 1.0
                     )
-                    print("pprice_diff", pprice_diff)
+                    logging.debug(f"debug unstucking {symbol} {side} pprice diff {pprice_diff}")
+                    logging.info(f"debug unstucking {symbol} {side} pprice diff {pprice_diff}")
                     if pprice_diff > 0.0:
                         # don't unstuck if position is in profit
                         stuck_positions.append((symbol, side, pprice_diff))
@@ -612,9 +654,11 @@ class Passivbot:
                 self.balance,
                 loss_allowance_pct=self.config["loss_allowance_pct"],
             )
+            logging.debug(f"debug AU_allowance {AU_allowance}")
+            logging.info(f"debug AU_allowance {AU_allowance}")
             if AU_allowance > 0.0:
                 close_price = (
-                    round_up(self.emas_short[sym].max(), self.price_steps[sym])
+                    round_up(self.emas_long[sym].max(), self.price_steps[sym])
                     if side == "long"
                     else round_dn(self.emas_short[sym].min(), self.price_steps[sym])
                 )
@@ -637,13 +681,7 @@ class Passivbot:
                 )
                 AU_allowance_pct = 1.0 if upnl >= 0.0 else min(1.0, AU_allowance / abs(upnl))
                 AU_allowance_qty = round_(
-                    self.positions[sym][side]["size"] * AU_allowance_pct, self.qty_steps[sym]
-                )
-                print(
-                    "upnl, AU_allowance_pct, AU_allowance_qty",
-                    upnl,
-                    AU_allowance_pct,
-                    AU_allowance_qty,
+                    abs(self.positions[sym][side]["size"]) * AU_allowance_pct, self.qty_steps[sym]
                 )
                 close_qty = max(
                     calc_min_entry_qty(
@@ -674,12 +712,11 @@ class Passivbot:
                     f"unstuck_close_{side}",
                 )
                 if unstuck_close_order[0] != 0.0:
-                    print(ideal_orders[sym])
                     ideal_orders[sym] = [
                         x for x in ideal_orders[sym] if not (side in x[2] and "close" in x[2])
                     ] + [unstuck_close_order]
                     logging.debug(f"creating unstucking order for {sym}: {unstuck_close_order}")
-                    print(f"creating unstucking order for {sym}: {unstuck_close_order}")
+                    logging.info(f"creating unstucking order for {sym}: {unstuck_close_order}")
         else:
             self.any_stuck = False
         ideal_orders = {
@@ -767,30 +804,14 @@ class Passivbot:
                 self.recent_fill = False
             await self.force_update()
             to_cancel, to_create = self.calc_orders_to_create_and_cancel()
-            if to_create:
-                pass
             res = await self.execute_cancellations(to_cancel)
             for elm in res:
-                try:
-                    logging.info(
-                        f"cancelled {elm['symbol']} {elm['side']} {elm['qty']} {elm['position_side']} @ {elm['price']}"
-                    )
-                    self.open_orders[elm["symbol"]] = [
-                        x for x in self.open_orders[elm["symbol"]] if x["id"] != elm["id"]
-                    ]
-                except Exception as e:
-                    logging.error(f"error cancelling order {elm}")
+                self.remove_cancelled_order(elm, source="POST")
             res = await self.execute_orders(to_create)
             for elm in res:
-                try:
-                    logging.info(
-                        f"  created {elm['symbol']} {elm['side']} {elm['qty']} {elm['position_side']} @ {elm['price']}"
-                    )
-                    elm["amount"] = elm["qty"]
-                    self.open_orders[elm["symbol"]].append(elm)
-                except Exception as e:
-                    logging.error(f"error creating order {elm}")
-            await asyncio.gather(self.update_open_orders(), self.update_positions())
+                self.add_new_order(elm, source="POST")
+            if to_cancel or to_create:
+                await asyncio.gather(self.update_open_orders(), self.update_positions())
         except Exception as e:
             logging.error(f"error executing to exchange {e}")
             traceback.print_exc()
@@ -824,7 +845,14 @@ async def main():
         from exchanges_multi.bybit import BybitBot
 
         bot = BybitBot(config)
-    await bot.start_bot()
+    try:
+        await bot.start_bot()
+    finally:
+        try:
+            await bot.ccp.close()
+            await bot.cca.close()
+        except:
+            pass
 
 
 if __name__ == "__main__":
