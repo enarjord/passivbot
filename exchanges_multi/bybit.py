@@ -70,8 +70,10 @@ class BybitBot(Passivbot):
                     if symbol_ in self.config["symbols_short"]:
                         self.approved_symbols_short[symbol] = self.config["symbols_short"][symbol_]
         n_prints = 5
-        for i in range(0, len(approved_symbols), n_prints):
-            logging.info(f"approved_symbols: {approved_symbols[i:i+n_prints]}")
+        for i in range(0, len(self.approved_symbols_long), n_prints):
+            logging.info(f"approved_symbols_long: {list(self.approved_symbols_long)[i:i+n_prints]}")
+        for i in range(0, len(self.approved_symbols_short), n_prints):
+            logging.info(f"approved_symbols_short: {list(self.approved_symbols_short)[i:i+n_prints]}")
         self.symbols = sorted(set(approved_symbols))
         self.quote = "USDT"
         self.inverse = False
