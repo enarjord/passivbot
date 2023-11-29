@@ -35,10 +35,8 @@ class BybitBot(Passivbot):
         # require symbols to be formatted to ccxt standard COIN/USDT:USDT
         self.markets = await self.cca.fetch_markets()
         self.markets_dict = {elm["symbol"]: elm for elm in self.markets}
-        approved_symbols, self.approved_symbols_long, self.approved_symbols_short = [], {}, {}
-        for symbol_ in sorted(
-            set(list(self.config["symbols_long"]) + list(self.config["symbols_short"]))
-        ):
+        self.symbols = {}
+        for symbol_ in sorted(set(self.config["symbols"])):
             symbol = symbol_
             if not symbol.endswith("/USDT:USDT"):
                 coin_extracted = multi_replace(
@@ -60,24 +58,10 @@ class BybitBot(Passivbot):
                 elif not elm["linear"]:
                     logging.info(f"{symbol} is not a linear market")
                 else:
-                    approved_symbols.append(symbol)
-                    if symbol_ in self.config["live_configs_map"]:
-                        self.config["live_configs_map"][symbol] = self.config["live_configs_map"][
-                            symbol_
-                        ]
-                    if symbol_ in self.config["symbols_long"]:
-                        self.approved_symbols_long[symbol] = self.config["symbols_long"][symbol_]
-                    if symbol_ in self.config["symbols_short"]:
-                        self.approved_symbols_short[symbol] = self.config["symbols_short"][symbol_]
-        n_prints = 5
-        for i in range(0, len(self.approved_symbols_long), n_prints):
-            logging.info(f"approved_symbols_long: {list(self.approved_symbols_long)[i:i+n_prints]}")
-        for i in range(0, len(self.approved_symbols_short), n_prints):
-            logging.info(f"approved_symbols_short: {list(self.approved_symbols_short)[i:i+n_prints]}")
-        self.symbols = sorted(set(approved_symbols))
+                    self.symbols[symbol] = self.config["symbols"][symbol_]
         self.quote = "USDT"
         self.inverse = False
-        for symbol in approved_symbols:
+        for symbol in self.symbols:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
             self.min_costs[symbol] = (
@@ -132,8 +116,7 @@ class BybitBot(Passivbot):
                 traceback.print_exc()
 
     async def watch_tickers(self, symbols=None):
-        if symbols is None:
-            symbols = self.symbols
+        symbols = list(self.symbols if symbols is None else symbols)
         while True:
             try:
                 if self.stop_websocket:
@@ -375,7 +358,7 @@ class BybitBot(Passivbot):
                 rest = [x for x in orders if not x["reduce_only"]]
                 orders = (reduce_only_orders + rest)[:max_n_cancellations_per_batch]
             except Exception as e:
-                logging.error("debug filter cancellations {e}")
+                logging.error(f"debug filter cancellations {e}")
         return await self.execute_multiple(
             orders, "execute_cancellation", self.max_n_cancellations_per_batch
         )
