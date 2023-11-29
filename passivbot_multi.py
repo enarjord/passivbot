@@ -97,6 +97,7 @@ class Passivbot:
         live_configs_fnames = sorted(
             [f for f in os.listdir(self.config["live_configs_dir"]) if f.endswith(".json")]
         )
+        max_len_symbol = max([len(s) for s in self.symbols])
         for symbol in self.symbols:
             live_config_fname_l = [x for x in live_configs_fnames if self.coins[symbol] in x]
             live_configs_dir_fname = (
@@ -113,61 +114,60 @@ class Passivbot:
                 if path is not None and os.path.exists(path):
                     try:
                         self.live_configs[symbol] = load_live_config(path)
-                        logging.info(f"loaded live config for {symbol}: {path}")
+                        logging.info(f"{symbol: <{max_len_symbol}} loaded live config: {path}")
                         break
                     except Exception as e:
                         logging.error(f"failed to load live config {symbol} {path} {e}")
             else:
                 raise Exception(f"no usable live config found for {symbol}")
 
-            for side in ["long", "short"]:
-                if getattr(args, f"{side}_mode") is None:
-                    if self.live_configs[symbol][side]["enabled"]:
-                        self.live_configs[symbol][side]["enabled"] = True
-                        self.live_configs[symbol][side]["mode"] = "normal"
-                        logging.info(f"{symbol} {side} normal mode")
+            for pside in ["long", "short"]:
+                if getattr(args, f"{pside}_mode") is None:
+                    if self.live_configs[symbol][pside]["enabled"]:
+                        self.live_configs[symbol][pside]["enabled"] = True
+                        self.live_configs[symbol][pside]["mode"] = "normal"
                     else:
-                        self.live_configs[symbol][side]["enabled"] = False
-                        self.live_configs[symbol][side]["mode"] = "manual"
-                        logging.info(
-                            f"{symbol} {side} manual mode enabled; will neither cancel nor create {side} orders"
-                        )
+                        self.live_configs[symbol][pside]["enabled"] = False
+                        self.live_configs[symbol][pside]["mode"] = "manual"
                 else:
-                    if getattr(args, f"{side}_mode") == "gs":
-                        self.live_configs[symbol][side]["enabled"] = True
-                        self.live_configs[symbol][side]["mode"] = "graceful_stop"
-                        logging.info(
-                            f"{symbol} {side} graceful stop mode; will not make new entries once existing positions are closed"
-                        )
-                    elif getattr(args, f"{side}_mode") == "m":
-                        self.live_configs[symbol][side]["enabled"] = False
-                        self.live_configs[symbol][side]["mode"] = "manual"
-                        logging.info(
-                            f"{symbol} {side} manual mode enabled; will neither cancel nor create {side} orders"
-                        )
-                    elif getattr(args, f"{side}_mode") == "n":
-                        self.live_configs[symbol][side]["enabled"] = True
-                        self.live_configs[symbol][side]["mode"] = "normal"
-                        logging.info(f"{symbol} {side} normal mode")
-                    elif getattr(args, f"{side}_mode") == "p":
-                        self.live_configs[symbol][side]["enabled"] = True
-                        self.live_configs[symbol][side]["mode"] = "panic"
-                        logging.info(f"{symbol} {side} panic mode enabled")
-                    elif getattr(args, f"{side}_mode").lower() == "t":
-                        logging.info(f"{symbol} {side} tp only mode enabled")
-                        self.live_configs[symbol][side]["mode"] = "tp_only"
+                    if getattr(args, f"{pside}_mode") == "gs":
+                        self.live_configs[symbol][pside]["enabled"] = True
+                        self.live_configs[symbol][pside]["mode"] = "graceful_stop"
+                    elif getattr(args, f"{pside}_mode") == "m":
+                        self.live_configs[symbol][pside]["enabled"] = False
+                        self.live_configs[symbol][pside]["mode"] = "manual"
+                    elif getattr(args, f"{pside}_mode") == "n":
+                        self.live_configs[symbol][pside]["enabled"] = True
+                        self.live_configs[symbol][pside]["mode"] = "normal"
+                    elif getattr(args, f"{pside}_mode") == "p":
+                        self.live_configs[symbol][pside]["enabled"] = True
+                        self.live_configs[symbol][pside]["mode"] = "panic"
+                    elif getattr(args, f"{pside}_mode").lower() == "t":
+                        self.live_configs[symbol][pside]["mode"] = "tp_only"
                     else:
-                        raise Exception(f"unknown {side} mode: {getattr(args,f'{side}_mode')}")
-        for side in ["long", "short"]:
-            n_actives = len([s for s in self.live_configs if self.live_configs[s][side]["enabled"]])
+                        raise Exception(f"unknown {pside} mode: {getattr(args,f'{pside}_mode')}")
+        modes = ["normal", "manual", "graceful_stop", "tp_only", "panic"]
+        for mode in modes:
+            for pside in ["long", "short"]:
+                syms_ = [
+                    s.replace("/USDT:USDT", "")
+                    for s in self.symbols
+                    if self.live_configs[s][pside]["mode"] == mode
+                ]
+                if len(syms_) > 0:
+                    logging.info(
+                        f"{pside: <5} mode: {mode: <{max([len(x) for x in modes])}}: {', '.join(syms_)}"
+                    )
+        for pside in ["long", "short"]:
+            n_actives = len([s for s in self.live_configs if self.live_configs[s][pside]["enabled"]])
             for symbol in self.symbols:
-                if getattr(args, f"WE_limit_{side}") is None:
-                    self.live_configs[symbol][side]["wallet_exposure_limit"] = (
-                        self.config[f"TWE_{side}"] / n_actives if n_actives > 0 else 0.0
+                if getattr(args, f"WE_limit_{pside}") is None:
+                    self.live_configs[symbol][pside]["wallet_exposure_limit"] = (
+                        self.config[f"TWE_{pside}"] / n_actives if n_actives > 0 else 0.0
                     )
                 else:
-                    self.live_configs[symbol][side]["wallet_exposure_limit"] = getattr(
-                        args, f"WE_limit_{side}"
+                    self.live_configs[symbol][pside]["wallet_exposure_limit"] = getattr(
+                        args, f"WE_limit_{pside}"
                     )
 
                 # disable AU
@@ -178,7 +178,7 @@ class Passivbot:
                         "auto_unstuck_qty_pct",
                         "auto_unstuck_wallet_exposure_threshold",
                     ]:
-                        self.live_configs[symbol][side][key] = 0.0
+                        self.live_configs[symbol][pside][key] = 0.0
 
         for f in ["balance", "emas", "positions", "open_orders", "pnls"]:
             res = await getattr(self, f"update_{f}")()
@@ -299,8 +299,7 @@ class Passivbot:
         )
         if len(self.pnls) > len_pnls or len(missing_pnls) > 0:
             n_new_pnls = len(self.pnls) - len_pnls
-            logging.debug(f"{n_new_pnls} new pnl{'s' if n_new_pnls > 1 else ''}")
-            print(f"{len(self.pnls) - len_pnls} new pnls")
+            logging.info(f"{n_new_pnls} new pnl{'s' if n_new_pnls > 1 else ''}")
             try:
                 json.dump(self.pnls, open(self.pnls_cache_filepath, "w"))
             except Exception as e:
@@ -361,19 +360,19 @@ class Passivbot:
                 }
 
         for symbol in self.positions:
-            for side in self.positions[symbol]:
-                if self.positions[symbol][side] != positions_new[symbol][side]:
+            for pside in self.positions[symbol]:
+                if self.positions[symbol][pside] != positions_new[symbol][pside]:
                     wallet_exposure = (
                         qty_to_cost(
-                            positions_new[symbol][side]["size"],
-                            positions_new[symbol][side]["price"],
+                            positions_new[symbol][pside]["size"],
+                            positions_new[symbol][pside]["price"],
                             self.inverse,
                             self.c_mults[symbol],
                         )
                         / self.balance
                     )
                     WE_ratio = (
-                        wallet_exposure / self.live_configs[symbol][side]["wallet_exposure_limit"]
+                        wallet_exposure / self.live_configs[symbol][pside]["wallet_exposure_limit"]
                     )
                     pprice_diff = (
                         (
@@ -382,7 +381,7 @@ class Passivbot:
                             if positions_new[symbol]["long"]["price"] > 0.0
                             else 0.0
                         )
-                        if side == "long"
+                        if pside == "long"
                         else (
                             self.tickers[symbol]["last"] / positions_new[symbol]["short"]["price"]
                             if positions_new[symbol]["short"]["price"] > 0.0
@@ -391,7 +390,7 @@ class Passivbot:
                         - 1.0
                     )
                     logging.info(
-                        f"{symbol} {side} changed: {self.positions[symbol][side]} -> {positions_new[symbol][side]} WE ratio: {WE_ratio:.3f} pprice diff {pprice_diff:.4f}"
+                        f"{symbol} {pside} changed: {self.positions[symbol][pside]} -> {positions_new[symbol][pside]} WE ratio: {WE_ratio:.3f} pprice diff {pprice_diff:.4f}"
                     )
         self.positions = positions_new
         now = utc_ms()
@@ -648,39 +647,41 @@ class Passivbot:
         for symbol in self.symbols:
             if not self.config["multisym_auto_unstuck_enabled"]:
                 break
-            for side in ["long", "short"]:
+            for pside in ["long", "short"]:
+                if self.live_configs[symbol][pside]["mode"] in ["manual", "panic", "tp_only"]:
+                    continue
                 if (
-                    not self.live_configs[symbol][side]["enabled"]
-                    or self.live_configs[symbol][side]["wallet_exposure_limit"] == 0.0
+                    not self.live_configs[symbol][pside]["enabled"]
+                    or self.live_configs[symbol][pside]["wallet_exposure_limit"] == 0.0
                 ):
                     continue
                 wallet_exposure = (
                     qty_to_cost(
-                        self.positions[symbol][side]["size"],
-                        self.positions[symbol][side]["price"],
+                        self.positions[symbol][pside]["size"],
+                        self.positions[symbol][pside]["price"],
                         self.inverse,
                         self.c_mults[symbol],
                     )
                     / self.balance
                 )
                 if (
-                    wallet_exposure / self.live_configs[symbol][side]["wallet_exposure_limit"]
+                    wallet_exposure / self.live_configs[symbol][pside]["wallet_exposure_limit"]
                     > self.config["stuck_threshold"]
                 ):
                     pprice_diff = (
                         1.0 - self.tickers[symbol]["last"] / self.positions[symbol]["long"]["price"]
-                        if side == "long"
+                        if pside == "long"
                         else self.tickers[symbol]["last"] / self.positions[symbol]["short"]["price"]
                         - 1.0
                     )
-                    logging.debug(f"debug unstucking {symbol} {side} pprice diff {pprice_diff}")
-                    logging.info(f"debug unstucking {symbol} {side} pprice diff {pprice_diff}")
+                    logging.debug(f"debug unstucking {symbol} {pside} pprice diff {pprice_diff}")
+                    logging.info(f"debug unstucking {symbol} {pside} pprice diff {pprice_diff}")
                     if pprice_diff > 0.0:
                         # don't unstuck if position is in profit
-                        stuck_positions.append((symbol, side, pprice_diff))
+                        stuck_positions.append((symbol, pside, pprice_diff))
         if stuck_positions:
             self.any_stuck = True
-            sym, side, pprice_diff = sorted(stuck_positions, key=lambda x: x[2])[0]
+            sym, pside, pprice_diff = sorted(stuck_positions, key=lambda x: x[2])[0]
             AU_allowance = calc_AU_allowance(
                 np.array([x["closedPnl"] for x in self.pnls]),
                 self.balance,
@@ -691,29 +692,29 @@ class Passivbot:
             if AU_allowance > 0.0:
                 close_price = (
                     round_up(self.emas_long[sym].max(), self.price_steps[sym])
-                    if side == "long"
+                    if pside == "long"
                     else round_dn(self.emas_short[sym].min(), self.price_steps[sym])
                 )
                 upnl = (
                     calc_pnl_long(
-                        self.positions[sym][side]["price"],
+                        self.positions[sym][pside]["price"],
                         self.tickers[sym]["last"],
-                        self.positions[sym][side]["size"],
+                        self.positions[sym][pside]["size"],
                         self.inverse,
                         self.c_mults[sym],
                     )
-                    if side == "long"
+                    if pside == "long"
                     else calc_pnl_short(
-                        self.positions[sym][side]["price"],
+                        self.positions[sym][pside]["price"],
                         self.tickers[sym]["last"],
-                        self.positions[sym][side]["size"],
+                        self.positions[sym][pside]["size"],
                         self.inverse,
                         self.c_mults[sym],
                     )
                 )
                 AU_allowance_pct = 1.0 if upnl >= 0.0 else min(1.0, AU_allowance / abs(upnl))
                 AU_allowance_qty = round_(
-                    abs(self.positions[sym][side]["size"]) * AU_allowance_pct, self.qty_steps[sym]
+                    abs(self.positions[sym][pside]["size"]) * AU_allowance_pct, self.qty_steps[sym]
                 )
                 close_qty = max(
                     calc_min_entry_qty(
@@ -728,7 +729,7 @@ class Passivbot:
                         round_(
                             cost_to_qty(
                                 self.balance
-                                * self.live_configs[sym][side]["wallet_exposure_limit"]
+                                * self.live_configs[sym][pside]["wallet_exposure_limit"]
                                 * self.config["unstuck_close_pct"],
                                 close_price,
                                 self.inverse,
@@ -739,13 +740,13 @@ class Passivbot:
                     ),
                 )
                 unstuck_close_order = (
-                    close_qty * (-1.0 if side == "long" else 1.0),
+                    close_qty * (-1.0 if pside == "long" else 1.0),
                     close_price,
-                    f"unstuck_close_{side}",
+                    f"unstuck_close_{pside}",
                 )
                 if unstuck_close_order[0] != 0.0:
                     ideal_orders[sym] = [
-                        x for x in ideal_orders[sym] if not (side in x[2] and "close" in x[2])
+                        x for x in ideal_orders[sym] if not (pside in x[2] and "close" in x[2])
                     ] + [unstuck_close_order]
                     logging.debug(f"creating unstucking order for {sym}: {unstuck_close_order}")
                     logging.info(f"creating unstucking order for {sym}: {unstuck_close_order}")
@@ -787,13 +788,59 @@ class Passivbot:
                         "position_side": x["position_side"],
                         "qty": abs(x["amount"]) * (-1.0 if x["side"] == "sell" else 1.0),
                         "price": x["price"],
+                        "reduce_only": (x["position_side"] == "long" and x["side"] == "sell")
+                        or (x["position_side"] == "short" and x["side"] == "buy"),
                         "id": x["id"],
                     }
                 )
         keys = ("symbol", "side", "position_side", "qty", "price")
         to_cancel, to_create = [], []
         for symbol in actual_orders:
+            for pside in ["long", "short"]:
+                # remove orders according to operation mode [n, m, gs, p, t]
+                if self.live_configs[symbol][pside]["mode"] in ["graceful_stop", "panic"]:
+                    if self.positions[symbol][pside]["size"] == 0.0:
+                        # if no pos, don't open new pos
+                        ideal_orders[symbol] = [
+                            x for x in ideal_orders[symbol] if x["position_side"] != pside
+                        ]
+                    elif self.live_configs[symbol][pside]["mode"] == "panic":
+                        # if in panic mode, only one close order at current market price
+                        ideal_orders[symbol] = [
+                            x for x in ideal_orders[symbol] if x["position_side"] != pside
+                        ]
+                        ideal_orders[symbol].append(
+                            {
+                                "symbol": symbol,
+                                "side": "sell" if pside == "long" else "buy",
+                                "position_side": pside,
+                                "qty": abs(self.positions[symbol][pside]["size"])
+                                * (-1.0 if pside == "long" else 1.0),
+                                "price": self.tickers[symbol][("ask" if pside == "long" else "bid")],
+                                "reduce_only": True,
+                                "custom_id": f"panic_close_{pside}",
+                            }
+                        )
             to_cancel_, to_create_ = filter_orders(actual_orders[symbol], ideal_orders[symbol], keys)
+            for pside in ["long", "short"]:
+                if self.live_configs[symbol][pside]["mode"] == "tp_only":
+                    # if take profit only mode, remove same pside entry orders
+                    to_cancel_ = [
+                        x
+                        for x in to_cancel_
+                        if (
+                            x["position_side"] != pside
+                            or (x["position_side"] == pside and x["reduce_only"])
+                        )
+                    ]
+                    to_create_ = [
+                        x
+                        for x in to_create_
+                        if (
+                            x["position_side"] != pside
+                            or (x["position_side"] == pside and x["reduce_only"])
+                        )
+                    ]
             to_cancel += to_cancel_
             to_create += to_create_
         return sorted(
@@ -872,7 +919,6 @@ async def main():
     args = parser.parse_args()
     config = hjson.load(open(args.hjson_config_path))
     user_info = load_user_info(config["user"])
-    pprint.pprint(config)
     if user_info["exchange"] == "bybit":
         from exchanges_multi.bybit import BybitBot
 
