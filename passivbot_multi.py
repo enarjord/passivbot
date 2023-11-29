@@ -82,49 +82,96 @@ class Passivbot:
         )
 
     async def init_bot(self):
-        # load live configs
+        parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
+        parser.add_argument("-sm", type=str, required=False, dest="short_mode", default=None)
+        parser.add_argument("-lm", type=str, required=False, dest="long_mode", default=None)
+        parser.add_argument(
+            "-pp", type=float, required=False, dest="price_precision_multiplier", default=None
+        )
+        parser.add_argument("-ps", type=float, required=False, dest="price_step_custom", default=None)
+        parser.add_argument("-lw", type=float, required=False, dest="WE_limit_long", default=None)
+        parser.add_argument("-sw", type=float, required=False, dest="WE_limit_short", default=None)
+        parser.add_argument("-lev", type=float, required=False, dest="leverage", default=None)
+        parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
+
         live_configs_fnames = sorted(
             [f for f in os.listdir(self.config["live_configs_dir"]) if f.endswith(".json")]
         )
         for symbol in self.symbols:
-            # check self.config['live_configs_map'] for matches
-            if symbol in self.config["live_configs_map"]:
-                if os.path.exists(self.config["live_configs_map"][symbol]):
+            live_config_fname_l = [x for x in live_configs_fnames if self.coins[symbol] in x]
+            live_configs_dir_fname = (
+                None
+                if live_config_fname_l == []
+                else os.path.join(self.config["live_configs_dir"], live_config_fname_l[0])
+            )
+            args = parser.parse_args(self.symbols[symbol].split())
+            for path in [
+                args.live_config_path,
+                live_configs_dir_fname,
+                self.config["default_config_path"],
+            ]:
+                if path is not None and os.path.exists(path):
                     try:
-                        self.live_configs[symbol] = load_live_config(
-                            self.config["live_configs_map"][symbol]
-                        )
-                        logging.info(
-                            f"loaded live config for {symbol}: {self.config['live_configs_map'][symbol]}"
-                        )
+                        self.live_configs[symbol] = load_live_config(path)
+                        logging.info(f"loaded live config for {symbol}: {path}")
+                        break
                     except Exception as e:
-                        logging.error(
-                            f"failed to load {symbol} live config from {self.config['live_configs_map'][symbol]} {e}"
+                        logging.error(f"failed to load live config {symbol} {path} {e}")
+            else:
+                raise Exception(f"no usable live config found for {symbol}")
+
+            for side in ["long", "short"]:
+                if getattr(args, f"{side}_mode") is None:
+                    if self.live_configs[symbol][side]["enabled"]:
+                        self.live_configs[symbol][side]["enabled"] = True
+                        self.live_configs[symbol][side]["mode"] = "normal"
+                        logging.info(f"{symbol} {side} normal mode")
+                    else:
+                        self.live_configs[symbol][side]["enabled"] = False
+                        self.live_configs[symbol][side]["mode"] = "manual"
+                        logging.info(
+                            f"{symbol} {side} manual mode enabled; will neither cancel nor create {side} orders"
                         )
-            if symbol not in self.live_configs:
-                # find matches in live_configs_dir
-                for fname in live_configs_fnames:
-                    if self.coins[symbol] in fname:
-                        ffpath = os.path.join(self.config["live_configs_dir"], fname)
-                        try:
-                            self.live_configs[symbol] = load_live_config(ffpath)
-                            logging.info(f"loaded live config for {symbol}: {ffpath}")
-                        except Exception as e:
-                            logging.error(f"failed to load {symbol} live config from {ffpath} {e}")
-            if symbol not in self.live_configs:
-                try:
-                    self.live_configs[symbol] = load_live_config(self.config["default_config_path"])
-                    logging.info(
-                        f"loaded live config for {symbol}: {self.config['default_config_path']}"
+                else:
+                    if getattr(args, f"{side}_mode") == "gs":
+                        self.live_configs[symbol][side]["enabled"] = True
+                        self.live_configs[symbol][side]["mode"] = "graceful_stop"
+                        logging.info(
+                            f"{symbol} {side} graceful stop mode; will not make new entries once existing positions are closed"
+                        )
+                    elif getattr(args, f"{side}_mode") == "m":
+                        self.live_configs[symbol][side]["enabled"] = False
+                        self.live_configs[symbol][side]["mode"] = "manual"
+                        logging.info(
+                            f"{symbol} {side} manual mode enabled; will neither cancel nor create {side} orders"
+                        )
+                    elif getattr(args, f"{side}_mode") == "n":
+                        self.live_configs[symbol][side]["enabled"] = True
+                        self.live_configs[symbol][side]["mode"] = "normal"
+                        logging.info(f"{symbol} {side} normal mode")
+                    elif getattr(args, f"{side}_mode") == "p":
+                        self.live_configs[symbol][side]["enabled"] = True
+                        self.live_configs[symbol][side]["mode"] = "panic"
+                        logging.info(f"{symbol} {side} panic mode enabled")
+                    elif getattr(args, f"{side}_mode").lower() == "t":
+                        logging.info(f"{symbol} {side} tp only mode enabled")
+                        self.live_configs[symbol][side]["mode"] = "tp_only"
+                    else:
+                        raise Exception(f"unknown {side} mode: {getattr(args,f'{side}_mode')}")
+        for side in ["long", "short"]:
+            n_actives = len([s for s in self.live_configs if self.live_configs[s][side]["enabled"]])
+            for symbol in self.symbols:
+                if getattr(args, f"WE_limit_{side}") is None:
+                    self.live_configs[symbol][side]["wallet_exposure_limit"] = (
+                        self.config[f"TWE_{side}"] / n_actives if n_actives > 0 else 0.0
                     )
-                except Exception as e:
-                    logging.error(
-                        f"failed to load {symbol} live config from {self.config['default_config_path']} {e}"
+                else:
+                    self.live_configs[symbol][side]["wallet_exposure_limit"] = getattr(
+                        args, f"WE_limit_{side}"
                     )
-                    raise Exception(f"no usable live config found for {symbol}")
-            # disable AU
-            if self.config["multisym_auto_unstuck_enabled"]:
-                for side in ["long", "short"]:
+
+                # disable AU
+                if self.config["multisym_auto_unstuck_enabled"]:
                     for key in [
                         "auto_unstuck_delay_minutes",
                         "auto_unstuck_ema_dist",
@@ -132,24 +179,6 @@ class Passivbot:
                         "auto_unstuck_wallet_exposure_threshold",
                     ]:
                         self.live_configs[symbol][side][key] = 0.0
-                    if symbol in getattr(self, f"approved_symbols_{side}"):
-                        if getattr(self, f"approved_symbols_{side}")[symbol] is None:
-                            self.live_configs[symbol][side]["enabled"] = True
-                            self.live_configs[symbol][side]["wallet_exposure_limit"] = (
-                                self.config[f"TWE_{side}"]
-                                / len(getattr(self, f"approved_symbols_{side}"))
-                                if len(getattr(self, f"approved_symbols_{side}")) > 0
-                                else 0.0
-                            )
-                        elif getattr(self, f"approved_symbols_{side}")[symbol] > 0.0:
-                            self.live_configs[symbol][side]["enabled"] = True
-                            self.live_configs[symbol][side]["wallet_exposure_limit"] = getattr(
-                                self, f"approved_symbols_{side}"
-                            )[symbol]
-                        else:
-                            self.live_configs[symbol][side]["enabled"] = False
-                    else:
-                        self.live_configs[symbol][side]["enabled"] = False
 
         for f in ["balance", "emas", "positions", "open_orders", "pnls"]:
             res = await getattr(self, f"update_{f}")()
@@ -343,7 +372,9 @@ class Passivbot:
                         )
                         / self.balance
                     )
-                    WE_ratio = wallet_exposure / self.live_configs[symbol][side]["wallet_exposure_limit"]
+                    WE_ratio = (
+                        wallet_exposure / self.live_configs[symbol][side]["wallet_exposure_limit"]
+                    )
                     pprice_diff = (
                         (
                             1.0
@@ -459,7 +490,7 @@ class Passivbot:
             self.alphas__long[sym] = 1 - self.alphas_long[sym]
             self.alphas_short[sym] = 2 / (self.ema_spans_short[sym] + 1)
             self.alphas__short[sym] = 1 - self.alphas_short[sym]
-        if self.tickers[self.symbols[0]]["last"] == 0.0:
+        if self.tickers[next(iter(self.symbols))]["last"] == 0.0:
             logging.info(f"updating tickers...")
             await self.update_tickers()
         for sym in self.symbols:
@@ -469,18 +500,19 @@ class Passivbot:
         ohs = None
         try:
             logging.info(f"fetching 15 min ohlcv for all symbols, initiating EMAs.")
+            sym_list = list(self.symbols)
             ohs = await asyncio.gather(
-                *[self.fetch_ohlcv(symbol, timeframe="15m") for symbol in self.symbols]
+                *[self.fetch_ohlcv(symbol, timeframe="15m") for symbol in sym_list]
             )
             samples_1m = [
                 calc_samples(numpyize(oh)[:, [0, 5, 4]], sample_size_ms=60000) for oh in ohs
             ]
-            for i in range(len(self.symbols)):
-                self.emas_long[self.symbols[i]] = calc_emas_last(
-                    samples_1m[i][:, 2], self.ema_spans_long[self.symbols[i]]
+            for i in range(len(sym_list)):
+                self.emas_long[sym_list[i]] = calc_emas_last(
+                    samples_1m[i][:, 2], self.ema_spans_long[sym_list[i]]
                 )
-                self.emas_short[self.symbols[i]] = calc_emas_last(
-                    samples_1m[i][:, 2], self.ema_spans_short[self.symbols[i]]
+                self.emas_short[sym_list[i]] = calc_emas_last(
+                    samples_1m[i][:, 2], self.ema_spans_short[sym_list[i]]
                 )
             return True
         except Exception as e:
