@@ -2,15 +2,11 @@
     // fetch API key/secret from api-keys.json
     user: bybit_01
 
-
-    // bot will execute order changes every x seconds (60 is default). Set to zero to react in close to real-time.
-    execution_interval_seconds: 60
-
     // multisym auto unstuck: will use profits from other positions to offset losses realized on stuck positions
     multisym_auto_unstuck_enabled: true
 
     // how far into the past to fetch pnl history
-    pnls_max_lookback_days: 90
+    pnls_max_lookback_days: 7
 
     // how much below past peak balance to allow losses (default 1% == 0.01)
     loss_allowance_pct: 0.01
@@ -24,39 +20,36 @@
     // delay between executions to exchange
     execution_delay_seconds: 2
 
-    TWE_long: 1.6  // total wallet exposure limit long. Exposure limit for each bot will be TWE_long / len(symbols_long)
-    TWE_short: 0.8  // total wallet exposure limit short. Exposure limit for each bot will be TWE_short / len(symbols_short)
+    TWE_long: 2.0  // total wallet exposure limit long. Exposure limit for each bot will be TWE_long / len(symbols_long)
+    TWE_short: 0.1  // total wallet exposure limit short. Exposure limit for each bot will be TWE_short / len(symbols_short)
 
-    // Symbols with long/short positions allowed and their wallet_exposure_limits.
-    // If {SYMUSDT: not null}: overrides TWE / len(symbols)
-    symbols_long: {
-        CELRUSDT: null
-        ENJUSDT: null
-        HOTUSDT: null
-        LINKUSDT: null
-        MKRUSDT: null
-        OCEANUSDT: null
-        RLCUSDT: null
-        RSRUSDT: null
-        RUNEUSDT: null
-        SFPUSDT: null
-        SNXUSDT: null
-        SUSHIUSDT: null
-    }
+    // Flags:
+    // -lm str: long mode. Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
+    // -sm str: short mode. Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
+        // normal mode: passivbot manages the position as normal
+        // manual mode: passivbot ignores the position
+        // graceful stop: if there is a position, passivbot will manage it, otherwise passivbot will not make new positions
+        // take profit only: passivbot will only manage closing orders
+    // -pp float: price precision multiplier. Override price step with market_price * price_precision_multiplier rounded to one significant digit. Suggested val 0.0001. Set to 0.0 to disable.
+    // -ps float: price step custom. Override price step with custom price step. Takes precedence over -pp. Set to 0.0 to disable.
+    // -lw float: wallet exposure limit long. Overrides value from live config. If absent, WE long is TWE_long / len(active_symbols_long)
+    // -sw: float: wallet exposure limit short. Overrides value from live config.
+    // -lev int: leverage set on exchange, if applicable. Default is 10.
+    // -lc str: live config path. Specify live config path to override config from live_configs_dir and default_config_path.
 
-    symbols_short: {
-        CELRUSDT: null
-        ENJUSDT: null
-        HOTUSDT: null
-        LINKUSDT: null
-        MKRUSDT: null
-        OCEANUSDT: null
-        RLCUSDT: null
-        RSRUSDT: null
-        RUNEUSDT: null
-        SFPUSDT: null
-        SNXUSDT: null
-        SUSHIUSDT: null
+    symbols: {
+        CELRUSDT:  -lm n -sm gs -lc configs/live/mod/CELRUSDT.json
+        ENJUSDT:   -lm n -sm gs
+        HOTUSDT:   -lm n -sm gs
+        LINKUSDT:  -lm n -sm n  -lw 0.15 -lev 10
+        MKRUSDT:   -lm n -sm gs
+        OCEANUSDT: -lm n -sm gs
+        RLCUSDT:   -lm n -sm gs
+        RSRUSDT:   -lm n -sm gs
+        RUNEUSDT:  -lm n -sm gs
+        SFPUSDT:   -lm n -sm gs
+        SNXUSDT:   -lm n -sm gs
+        SUSHIUSDT: -lm n -sm gs
     }
 
     // Specify directory containing live configs.
@@ -64,12 +57,6 @@
     // Set to "" to disable
     live_configs_dir: "configs/live/single_symbol_optimizations/recursive_grid/"
 
-    // overrides live_configs_dir
-    live_configs_map: {
-        SYM1USDT: configs/live/recursive_grid_mode.example.json
-    }
-
     // if symbol is missing from live_configs_map, default to this config
     default_config_path: configs/live/recursive_grid_mode.example.json
-
 }
