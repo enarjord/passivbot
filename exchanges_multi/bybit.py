@@ -356,7 +356,7 @@ class BybitBot(Passivbot):
             try:
                 reduce_only_orders = [x for x in orders if x["reduce_only"]]
                 rest = [x for x in orders if not x["reduce_only"]]
-                orders = (reduce_only_orders + rest)[:max_n_cancellations_per_batch]
+                orders = (reduce_only_orders + rest)[: self.max_n_cancellations_per_batch]
             except Exception as e:
                 logging.error(f"debug filter cancellations {e}")
         return await self.execute_multiple(
