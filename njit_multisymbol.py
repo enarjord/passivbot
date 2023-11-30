@@ -78,6 +78,7 @@ def get_open_orders_long(
     balance,
     pos_long,
     emas,
+    unstucking_close,
     inverse,
     qty_step,
     price_step,
@@ -112,7 +113,7 @@ def get_open_orders_long(
     closes = calc_close_grid_long(
         cfgl[4],  # backwards_tp
         balance,
-        pos_long[0],
+        max(0.0, abs(pos_long[0]) - abs(unstucking_close[0])) if unstucking_close[0] else pos_long[0],
         pos_long[1],
         close_price,  # close price
         max(emas),
@@ -133,6 +134,8 @@ def get_open_orders_long(
         cfgl[0],  # auto_unstuck_delay_minutes,
         cfgl[2],  # auto_unstuck_qty_pct,
     )
+    if unstucking_close[0]:
+        closes = [unstucking_close] + closes
     return entries, closes
 
 
@@ -142,6 +145,7 @@ def get_open_orders_short(
     balance,
     pos_short,
     emas,
+    unstucking_close,
     inverse,
     qty_step,
     price_step,
@@ -176,7 +180,9 @@ def get_open_orders_short(
     closes = calc_close_grid_short(
         cfgs[4],  # backwards_tp
         balance,
-        pos_short[0],
+        min(0.0, -abs(pos_short[0]) + abs(unstucking_close[0]))
+        if unstucking_close[0]
+        else pos_short[0],
         pos_short[1],
         close_price,  # close price
         min(emas),
@@ -197,12 +203,14 @@ def get_open_orders_short(
         cfgs[0],  # auto_unstuck_delay_minutes,
         cfgs[2],  # auto_unstuck_qty_pct,
     )
+    if unstucking_close[0]:
+        closes = [unstucking_close] + closes
     return entries, closes
 
 
 @njit
 def calc_fills(
-    side_idx,  # 0: long, 1: short
+    pside_idx,  # 0: long, 1: short
     k,
     poss_long,
     poss_short,
@@ -222,11 +230,11 @@ def calc_fills(
     returns fills: [tuple], new_pos: (float, float), new_balance: float
     """
     fills = []
-    pos = poss_long[idx] if side_idx == 0 else poss_short[idx]
+    pos = poss_long[idx] if pside_idx == 0 else poss_short[idx]
     new_pos = (pos[0], pos[1])
     new_balance = balance
     if entry[0] != 0.0 and (
-        (side_idx == 0 and hlc[idx][1] < entry[1]) or (side_idx == 1 and hlc[idx][0] > entry[1])
+        (pside_idx == 0 and hlc[idx][1] < entry[1]) or (pside_idx == 1 and hlc[idx][0] > entry[1])
     ):
         new_pos = calc_new_psize_pprice(
             new_pos[0],
@@ -260,14 +268,14 @@ def calc_fills(
     for close in closes:
         if (
             close[0] == 0.0
-            or (side_idx == 0 and close[1] >= hlc[idx][0])
-            or (side_idx == 1 and close[1] <= hlc[idx][1])
+            or (pside_idx == 0 and close[1] >= hlc[idx][0])
+            or (pside_idx == 1 and close[1] <= hlc[idx][1])
         ):
             break
         # close fill
         new_pos_ = (round_(new_pos[0] + close[0], qty_step), new_pos[1])
-        if (side_idx == 0 and new_pos_[0] < 0.0) or (side_idx == 1 and new_pos_[0] > 0.0):
-            print("warning: close qty greater than psize", "short" if side_idx else "short")
+        if (pside_idx == 0 and new_pos_[0] < 0.0) or (pside_idx == 1 and new_pos_[0] > 0.0):
+            print("warning: close qty greater than psize", "short" if pside_idx else "short")
             print("symbol", symbol)
             print("new_pos", new_pos)
             print("new_pos_", new_pos_)
@@ -279,7 +287,7 @@ def calc_fills(
         fee_paid = -qty_to_cost(close[0], close[1], inverse, c_mults[idx]) * maker_fee
         pnl = (
             calc_pnl_long(new_pos[1], close[1], close[0], inverse, c_mults[idx])
-            if side_idx == 0
+            if pside_idx == 0
             else calc_pnl_short(new_pos[1], close[1], close[0], inverse, c_mults[idx])
         )
         new_pos = new_pos_
@@ -456,6 +464,9 @@ def backtest_multisymbol_recursive_grid(
     stuck_positions_long = np.zeros(len(symbols))  # 0 is unstuck; 1 is stuck
     stuck_positions_short = np.zeros(len(symbols))  # 0 is unstuck; 1 is stuck
 
+    unstucking_close = (0.0, 0.0, "")
+    s_i, s_pside = -1, -1
+
     bankrupt = False
     any_stuck = False
     pnl_cumsum_running = 0.0
@@ -523,6 +534,20 @@ def backtest_multisymbol_recursive_grid(
                 poss_long[i] = new_pos_long
                 balance = new_balance
 
+                wallet_exposure = (
+                    qty_to_cost(poss_long[i][0], poss_long[i][1], inverse, c_mults[i]) / balance
+                )
+                if (
+                    wallet_exposure / ll[i][16] > stuck_threshold
+                    and 1.0 - hlcs[i][k][2] / poss_long[i][1] > 0.0
+                ):
+                    # is stuck and not in profit
+                    any_stuck = True
+                    stuck_positions_long[i] = 1.0
+                else:
+                    # is unstuck
+                    stuck_positions_long[i] = 0.0
+
         # check for fills short
         for i in idxs_short:
             if hlcs[i][k][0] == 0.0:
@@ -562,58 +587,6 @@ def backtest_multisymbol_recursive_grid(
                 poss_short[i] = new_pos_short
                 balance = new_balance
 
-        # check if open orders long need to be updated
-        for i in idxs_long:
-            if hlcs[i][k][0] == 0.0:
-                continue
-            if any_fill or poss_long[i][0] == 0.0:
-                # calc orders if any fill or if psize is zero
-                entries_long[i], closes_long[i] = get_open_orders_long(
-                    hlcs[i][k][2],
-                    balance,
-                    poss_long[i],
-                    emas_long[i],
-                    inverse,
-                    qty_steps[i],
-                    price_steps[i],
-                    min_qtys[i],
-                    min_costs[i],
-                    c_mults[i],
-                    ll[i],
-                )
-                wallet_exposure = (
-                    qty_to_cost(poss_long[i][0], poss_long[i][1], inverse, c_mults[i]) / balance
-                )
-                if (
-                    wallet_exposure / ll[i][16] > stuck_threshold
-                    and 1.0 - hlcs[i][k][2] / poss_long[i][1] > 0.0
-                ):
-                    # is stuck and not in profit
-                    any_stuck = True
-                    stuck_positions_long[i] = 1.0
-                else:
-                    # is unstuck
-                    stuck_positions_long[i] = 0.0
-
-        # check if open orders short need to be updated
-        for i in idxs_short:
-            if hlcs[i][k][0] == 0.0:
-                continue
-            if any_fill or poss_short[i][0] == 0.0:
-                # calc orders if any fill or if psize is zero
-                entries_short[i], closes_short[i] = get_open_orders_short(
-                    hlcs[i][k][2],
-                    balance,
-                    poss_short[i],
-                    emas_short[i],
-                    inverse,
-                    qty_steps[i],
-                    price_steps[i],
-                    min_qtys[i],
-                    min_costs[i],
-                    c_mults[i],
-                    ls[i],
-                )
                 wallet_exposure = (
                     qty_to_cost(poss_short[i][0], poss_short[i][1], inverse, c_mults[i]) / balance
                 )
@@ -628,6 +601,8 @@ def backtest_multisymbol_recursive_grid(
                     # is unstuck
                     stuck_positions_short[i] = 0.0
 
+        s_i, s_pside = -1, -1
+        unstucking_close = (0.0, 0.0, "")
         if any_stuck:
             # check if all are unstuck
             any_stuck = False
@@ -643,8 +618,8 @@ def backtest_multisymbol_recursive_grid(
             if any_stuck:
                 # find which position to unstuck
                 # lowest pprice diff is chosen
-                uside = 0  # 0==long, 1==short
-                ui = 0  # index
+                s_pside = 0  # 0==long, 1==short
+                s_i = 0  # index
                 lowest_pprice_diff = 100.0
                 for i in idxs_long:
                     if stuck_positions_long[i]:
@@ -652,62 +627,112 @@ def backtest_multisymbol_recursive_grid(
                         pprice_diff = 1.0 - hlcs[i][k][2] / poss_long[i][1]
                         if pprice_diff < lowest_pprice_diff:
                             lowest_pprice_diff = pprice_diff
-                            ui = i
-                            uside = 0
+                            s_i = i
+                            s_pside = 0
                 for i in idxs_short:
                     if stuck_positions_short[i]:
                         # short is stuck
                         pprice_diff = hlcs[i][k][2] / poss_short[i][1] - 1.0
                         if pprice_diff < lowest_pprice_diff:
                             lowest_pprice_diff = pprice_diff
-                            ui = i
-                            uside = 1
+                            s_i = i
+                            s_pside = 1
                 AU_allowance = calc_AU_allowance(
                     np.array([0.0]),
                     balance,
                     drop_since_peak_abs=(pnl_cumsum_max - pnl_cumsum_running),
                 )
                 if AU_allowance > 0.0:
-                    if uside:  # short
-                        close_price = emas_short[ui].min()  # lower ema band
+                    if s_pside:  # short
+                        close_price = emas_short[s_i].min()  # lower ema band
                         close_qty = max(
                             calc_min_entry_qty(
-                                close_price, inverse, qty_steps[ui], min_qtys[ui], min_costs[ui]
+                                close_price, inverse, qty_steps[s_i], min_qtys[s_i], min_costs[s_i]
                             ),
                             min(
-                                abs(poss_short[ui][0]),
+                                abs(poss_short[s_i][0]),
                                 round_(
                                     cost_to_qty(
-                                        min(AU_allowance, balance * ll[ui][16] * unstuck_close_pct),
+                                        min(AU_allowance, balance * ll[s_i][16] * unstuck_close_pct),
                                         close_price,
                                         inverse,
-                                        c_mults[ui],
+                                        c_mults[s_i],
                                     ),
-                                    qty_steps[ui],
+                                    qty_steps[s_i],
                                 ),
                             ),
                         )
-                        closes_short[ui] = [(abs(close_qty), close_price, "unstuck_close_short")]
+                        unstucking_close = (abs(close_qty), close_price, "unstuck_close_short")
                     else:  # long
-                        close_price = emas_long[ui].max()  # upper ema band
+                        close_price = emas_long[s_i].max()  # upper ema band
                         close_qty = max(
                             calc_min_entry_qty(
-                                close_price, inverse, qty_steps[ui], min_qtys[ui], min_costs[ui]
+                                close_price, inverse, qty_steps[s_i], min_qtys[s_i], min_costs[s_i]
                             ),
                             min(
-                                poss_long[ui][0],
+                                poss_long[s_i][0],
                                 round_(
                                     cost_to_qty(
-                                        min(AU_allowance, balance * ll[ui][16] * unstuck_close_pct),
+                                        min(AU_allowance, balance * ll[s_i][16] * unstuck_close_pct),
                                         close_price,
                                         inverse,
-                                        c_mults[ui],
+                                        c_mults[s_i],
                                     ),
-                                    qty_steps[ui],
+                                    qty_steps[s_i],
                                 ),
                             ),
                         )
-                        closes_long[ui] = [(-abs(close_qty), close_price, "unstuck_close_long")]
+                        unstucking_close = (-abs(close_qty), close_price, "unstuck_close_long")
+
+        # check if open orders long need to be updated
+        for i in idxs_long:
+            if hlcs[i][k][0] == 0.0:
+                continue
+            if (
+                any_fill
+                or poss_long[i][0] == 0.0
+                or (s_pside == 0 and s_i == i and unstucking_close[0])
+            ):
+                # calc orders if any fill or if psize is zero or if stuck
+                entries_long[i], closes_long[i] = get_open_orders_long(
+                    hlcs[i][k][2],
+                    balance,
+                    poss_long[i],
+                    emas_long[i],
+                    unstucking_close if s_pside == 0 and s_i == i else (0.0, 0.0, ""),
+                    inverse,
+                    qty_steps[i],
+                    price_steps[i],
+                    min_qtys[i],
+                    min_costs[i],
+                    c_mults[i],
+                    ll[i],
+                )
+
+        # check if open orders short need to be updated
+        for i in idxs_short:
+            if hlcs[i][k][0] == 0.0:
+                continue
+            if (
+                any_fill
+                or poss_short[i][0] == 0.0
+                or (unstucking_close[0] and s_pside == 1 and s_i == i)
+            ):
+                # calc orders if any fill or if psize is zero or if stuck
+                entries_short[i], closes_short[i] = get_open_orders_short(
+                    hlcs[i][k][2],
+                    balance,
+                    poss_short[i],
+                    emas_short[i],
+                    unstucking_close if s_pside == 1 and s_i == i else (0.0, 0.0, ""),
+                    inverse,
+                    qty_steps[i],
+                    price_steps[i],
+                    min_qtys[i],
+                    min_costs[i],
+                    c_mults[i],
+                    ls[i],
+                )
 
         if k % 60 == 0:
             # update stats hourly
