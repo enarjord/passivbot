@@ -352,6 +352,9 @@ class Passivbot:
         if res in [None, False]:
             return False
         positions_list_new, balance_new = res
+        if self.balance != balance_new:
+            logging.info(f"balance changed: {self.balance} -> {balance_new}")
+        self.balance = max(balance_new, 1e-12)
         positions_new = {
             symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0, "price": 0.0}}
             for symbol in self.positions
@@ -406,10 +409,6 @@ class Passivbot:
         self.positions = positions_new
         now = utc_ms()
         self.upd_timestamps["positions"] = {k: now for k in self.upd_timestamps["positions"]}
-
-        if self.balance != balance_new:
-            logging.info(f"balance changed: {self.balance} -> {balance_new}")
-        self.balance = max(balance_new, 1e-12)
         return True
 
     async def update_tickers(self):
