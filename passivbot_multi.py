@@ -993,6 +993,7 @@ async def main():
             await bot.start_bot()
         except Exception as e:
             logging.error(f"passivbot error {e}")
+            traceback.print_exc()
         finally:
             try:
                 await bot.ccp.close()
