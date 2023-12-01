@@ -161,11 +161,14 @@ class BybitBot(Passivbot):
             return False
 
     async def fetch_positions(self):
-        fetched = None
+        fetched_positions, fetched_balance = None, None
         positions = {}
         limit = 200
         try:
-            fetched = await self.cca.fetch_positions(params={"limit": limit})
+            fetched_positions, fetched_balance = await asyncio.gather(
+                self.cca.fetch_positions(params={"limit": limit}), self.cca.fetch_balance()
+            )
+            balance = fetched_balance[self.quote]["total"]
             while True:
                 if all([elm["symbol"] + elm["side"] in positions for elm in fetched]):
                     break
@@ -186,21 +189,11 @@ class BybitBot(Passivbot):
                 fetched = await self.cca.fetch_positions(
                     params={"cursor": next_page_cursor, "limit": limit}
                 )
-            return sorted(positions.values(), key=lambda x: x["timestamp"])
+            return sorted(positions.values(), key=lambda x: x["timestamp"]), balance
         except Exception as e:
-            logging.error(f"error fetching open orders {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
-            return False
-
-    async def fetch_balance(self):
-        fetched = None
-        try:
-            fetched = await self.cca.fetch_balance()
-            return fetched[self.quote]["total"]
-        except Exception as e:
-            logging.error(f"error fetching balance {e}")
-            print_async_exception(fetched)
+            logging.error(f"error fetching positions and balance {e}")
+            print_async_exception(fetched_positions)
+            print_async_exception(fetched_balance)
             traceback.print_exc()
             return False
 
