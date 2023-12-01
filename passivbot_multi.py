@@ -863,7 +863,6 @@ class Passivbot:
                     # logging.info(f"forcing update {key}")
                     coros_to_call.append((key, getattr(self, f"update_{key}")()))
         res = await asyncio.gather(*[x[1] for x in coros_to_call])
-        await self.update_emas()
         return res
 
     async def execute_to_exchange(self):
@@ -881,7 +880,13 @@ class Passivbot:
                 self.upd_timestamps["balance"] = 0.0
                 self.upd_timestamps["pnls"] = 0.0
                 self.recent_fill = False
-            await self.force_update()
+            update_res = await self.force_update()
+            if not all(update_res):
+                print("debug", update_res)
+                for i, key in enumerate(self.upd_timestamps):
+                    if not update_res[i]:
+                        logging.error(f"error with {key}")
+                return
             to_cancel, to_create = self.calc_orders_to_create_and_cancel()
             res = await self.execute_cancellations(to_cancel)
             for elm in res:
