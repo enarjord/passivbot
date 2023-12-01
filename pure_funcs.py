@@ -1899,6 +1899,7 @@ def analyze_fills_multi(sdf, fdf, params):
         "stuck_time_ratio_any": stuck_time_ratio_any,
         "eqbal_ratio_mean": eqbal_ratios.mean(),
         "eqbal_ratio_min": eqbal_ratios.min(),
+        "n_fills_per_day": len(fdf) / n_days,
         "individual_analyses": {},
     }
     for symbol in symbols:
@@ -1936,6 +1937,7 @@ def analyze_fills_multi(sdf, fdf, params):
             "loss_profit_ratio_short": loss_profit_ratio_short,
             "stuck_time_ratio_long": stuck_time_ratio_long,
             "stuck_time_ratio_short": stuck_time_ratio_short,
+            "n_fills_per_day": len(fdfc) / n_days,
         }
     return analysis
 
