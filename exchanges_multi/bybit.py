@@ -170,10 +170,10 @@ class BybitBot(Passivbot):
             )
             balance = fetched_balance[self.quote]["total"]
             while True:
-                if all([elm["symbol"] + elm["side"] in positions for elm in fetched]):
+                if all([elm["symbol"] + elm["side"] in positions for elm in fetched_positions]):
                     break
                 next_page_cursor = None
-                for elm in fetched:
+                for elm in fetched_positions:
                     elm["position_side"] = determine_pos_side_ccxt(elm)
                     elm["size"] = float(elm["contracts"])
                     elm["price"] = float(elm["entryPrice"])
@@ -181,12 +181,12 @@ class BybitBot(Passivbot):
                     if "nextPageCursor" in elm["info"]:
                         next_page_cursor = elm["info"]["nextPageCursor"]
                     positions[elm["symbol"] + elm["side"]] = elm
-                if len(fetched) < limit:
+                if len(fetched_positions) < limit:
                     break
                 if next_page_cursor is None:
                     break
                 # fetch more
-                fetched = await self.cca.fetch_positions(
+                fetched_positions = await self.cca.fetch_positions(
                     params={"cursor": next_page_cursor, "limit": limit}
                 )
             return sorted(positions.values(), key=lambda x: x["timestamp"]), balance
