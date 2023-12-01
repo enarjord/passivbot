@@ -359,8 +359,8 @@ class BybitBot(Bot):
     ):
         fetched = None
         income_d = {}
+        limit = 100
         try:
-            limit = 100
             params = {"category": "linear", "limit": limit}
             if symbol is not None:
                 params["symbol"] = symbol
@@ -369,7 +369,9 @@ class BybitBot(Bot):
             if end_time is not None:
                 params["endTime"] = int(end_time)
             fetched = await self.cc.private_get_v5_position_closed_pnl(params)
-            fetched["result"]["list"] = floatify(fetched["result"]["list"])
+            fetched["result"]["list"] = sorted(
+                floatify(fetched["result"]["list"]), key=lambda x: x["updatedTime"]
+            )
             while True:
                 if fetched["result"]["list"] == []:
                     break
@@ -386,13 +388,15 @@ class BybitBot(Bot):
                     income_d[calc_hash(elm)] = elm
                 if start_time is None:
                     break
-                if fetched["result"]["list"][-1]["updatedTime"] <= start_time:
+                if fetched["result"]["list"][0]["updatedTime"] <= start_time:
                     break
                 if not fetched["result"]["nextPageCursor"]:
                     break
                 params["cursor"] = fetched["result"]["nextPageCursor"]
                 fetched = await self.cc.private_get_v5_position_closed_pnl(params)
-                fetched["result"]["list"] = floatify(fetched["result"]["list"])
+                fetched["result"]["list"] = sorted(
+                    floatify(fetched["result"]["list"]), key=lambda x: x["updatedTime"]
+                )
             return [
                 {
                     "symbol": elm["symbol"],
