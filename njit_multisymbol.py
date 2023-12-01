@@ -685,15 +685,26 @@ def backtest_multisymbol_recursive_grid(
                 if AU_allowance > 0.0:
                     if s_pside:  # short
                         close_price = emas_short[s_i].min()  # lower ema band
+                        upnl = calc_pnl_short(
+                            poss_short[s_i][1],
+                            hlcs[i][k][2],
+                            poss_short[s_i][0],
+                            inverse,
+                            c_mults[s_i],
+                        )
+                        AU_allowance_pct = 1.0 if upnl >= 0.0 else min(1.0, AU_allowance / abs(upnl))
+                        AU_allowance_qty = round_(
+                            abs(poss_short[s_i][0]) * AU_allowance_pct, qty_steps[s_i]
+                        )
                         close_qty = max(
                             calc_min_entry_qty(
                                 close_price, inverse, qty_steps[s_i], min_qtys[s_i], min_costs[s_i]
                             ),
                             min(
-                                abs(poss_short[s_i][0]),
+                                abs(AU_allowance_qty),
                                 round_(
                                     cost_to_qty(
-                                        min(AU_allowance, balance * ll[s_i][16] * unstuck_close_pct),
+                                        balance * ls[s_i][16] * unstuck_close_pct,
                                         close_price,
                                         inverse,
                                         c_mults[s_i],
@@ -705,15 +716,22 @@ def backtest_multisymbol_recursive_grid(
                         unstucking_close = (abs(close_qty), close_price, "unstuck_close_short")
                     else:  # long
                         close_price = emas_long[s_i].max()  # upper ema band
+                        upnl = calc_pnl_long(
+                            poss_long[s_i][1], hlcs[i][k][2], poss_long[s_i][0], inverse, c_mults[s_i]
+                        )
+                        AU_allowance_pct = 1.0 if upnl >= 0.0 else min(1.0, AU_allowance / abs(upnl))
+                        AU_allowance_qty = round_(
+                            abs(poss_long[s_i][0]) * AU_allowance_pct, qty_steps[s_i]
+                        )
                         close_qty = max(
                             calc_min_entry_qty(
                                 close_price, inverse, qty_steps[s_i], min_qtys[s_i], min_costs[s_i]
                             ),
                             min(
-                                poss_long[s_i][0],
+                                abs(AU_allowance_qty),
                                 round_(
                                     cost_to_qty(
-                                        min(AU_allowance, balance * ll[s_i][16] * unstuck_close_pct),
+                                        balance * ll[s_i][16] * unstuck_close_pct,
                                         close_price,
                                         inverse,
                                         c_mults[s_i],
