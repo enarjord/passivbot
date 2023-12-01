@@ -46,7 +46,6 @@ class Passivbot:
         self.stop_websocket = False
         self.balance = 1e-12
         self.upd_timestamps = {
-            "balance": 0.0,
             "pnls": 0.0,
             "open_orders": {},
             "positions": {},
@@ -182,7 +181,7 @@ class Passivbot:
                     ]:
                         self.live_configs[symbol][pside][key] = 0.0
 
-        for f in ["balance", "emas", "positions", "open_orders", "pnls"]:
+        for f in ["emas", "positions", "open_orders", "pnls"]:
             res = await getattr(self, f"update_{f}")()
             logging.info(f"initiating {f} {res}")
 
@@ -245,7 +244,6 @@ class Passivbot:
             if self.balance != upd["USDT"]["total"]:
                 logging.info(f"balance changed: {self.balance} -> {upd['USDT']['total']}")
             self.balance = max(upd["USDT"]["total"], 1e-12)
-            self.upd_timestamps["balance"] = utc_ms()
         except Exception as e:
             logging.error(f"error updating balance from websocket {upd} {e}")
             traceback.print_exc()
@@ -276,9 +274,12 @@ class Passivbot:
             if len(pnls_cache) > 0:
                 if pnls_cache[0]["updatedTime"] > age_limit + 1000 * 60 * 60 * 4:
                     # fetch missing pnls
-                    missing_pnls = await self.fetch_pnls(
+                    res = await self.fetch_pnls(
                         start_time=age_limit - 1000, end_time=pnls_cache[0]["updatedTime"]
                     )
+                    if res in [None, False]:
+                        return False
+                    missing_pnls = res
                     pnls_cache = sorted(
                         {
                             elm["orderId"] + str(elm["qty"]): elm
@@ -289,7 +290,10 @@ class Passivbot:
                     )
             self.pnls = pnls_cache
         start_time = self.pnls[-1]["updatedTime"] if self.pnls else age_limit
-        new_pnls = await self.fetch_pnls(start_time=start_time)
+        res = await self.fetch_pnls(start_time=start_time)
+        if res in [None, False]:
+            return False
+        new_pnls = res
         len_pnls = len(self.pnls)
         self.pnls = sorted(
             {
@@ -310,7 +314,10 @@ class Passivbot:
         return True
 
     async def update_open_orders(self):
-        open_orders = await self.fetch_open_orders()
+        res = await self.fetch_open_orders()
+        if res in [None, False]:
+            return False
+        open_orders = res
         oo_ids_old = {elm["id"] for sublist in self.open_orders.values() for elm in sublist}
         for oo in open_orders:
             if oo["id"] not in oo_ids_old:
@@ -341,7 +348,10 @@ class Passivbot:
         return True
 
     async def update_positions(self):
-        positions_list_new = await self.fetch_positions()
+        res = await self.fetch_positions()
+        if res in [None, False]:
+            return False
+        positions_list_new, balance_new = res
         positions_new = {
             symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0, "price": 0.0}}
             for symbol in self.positions
@@ -356,9 +366,8 @@ class Passivbot:
                 )
             else:
                 positions_new[elm["symbol"]][elm["position_side"]] = {
-                    "size": abs(elm["contracts"])
-                    * (-1.0 if elm["position_side"] == "short" else 1.0),
-                    "price": elm["entryPrice"],
+                    "size": abs(elm["size"]) * (-1.0 if elm["position_side"] == "short" else 1.0),
+                    "price": elm["price"],
                 }
 
         for symbol in self.positions:
@@ -397,18 +406,17 @@ class Passivbot:
         self.positions = positions_new
         now = utc_ms()
         self.upd_timestamps["positions"] = {k: now for k in self.upd_timestamps["positions"]}
-        return True
 
-    async def update_balance(self):
-        balance_new = await self.fetch_balance()
         if self.balance != balance_new:
             logging.info(f"balance changed: {self.balance} -> {balance_new}")
         self.balance = max(balance_new, 1e-12)
-        self.upd_timestamps["balance"] = utc_ms()
         return True
 
     async def update_tickers(self):
-        tickers_new = await self.fetch_tickers()
+        res = await self.fetch_tickers()
+        if res in [None, False]:
+            return False
+        tickers_new = res
         for symbol in self.symbols:
             if symbol not in tickers_new:
                 raise Exception(f"{symbol} missing from tickers")
@@ -921,7 +929,6 @@ class Passivbot:
                 self.upd_timestamps["open_orders"] = {
                     k: 0.0 for k in self.upd_timestamps["positions"]
                 }
-                self.upd_timestamps["balance"] = 0.0
                 self.upd_timestamps["pnls"] = 0.0
                 self.recent_fill = False
             update_res = await self.force_update()
@@ -961,9 +968,6 @@ class Passivbot:
         logging.info("starting websockets")
         await asyncio.gather(self.execution_loop(), self.start_websockets())
 
-    async def restart_bot(self):
-        pass
-
 
 async def main():
     parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
@@ -979,6 +983,12 @@ async def main():
             from exchanges_multi.bybit import BybitBot
 
             bot = BybitBot(config)
+        elif user_info["exchange"] == "binance":
+            from exchanges_multi.binance import BinanceBot
+
+            bot = BinanceBot(config)
+        else:
+            raise Exception(f"unknown exchange {user_info['exchange']}")
         try:
             await bot.start_bot()
         except Exception as e:
