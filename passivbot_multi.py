@@ -70,7 +70,6 @@ class Passivbot:
         self.live_configs = {}
         self.stop_bot = False
         self.pnls_cache_filepath = make_get_filepath(f"caches/{self.exchange}/{self.user}_pnls.json")
-        self.any_stuck = False
         self.previous_execution_ts = 0
         self.recent_fill = False
         self.execution_delay_millis = max(3000.0, self.config["execution_delay_seconds"] * 1000)
@@ -524,128 +523,7 @@ class Passivbot:
             traceback.print_exc()
 
     def calc_ideal_orders(self):
-        ideal_orders = {symbol: [] for symbol in self.symbols}
-        for symbol in self.symbols:
-            if self.hedge_mode:
-                do_long = (
-                    self.live_configs[symbol]["long"]["enabled"]
-                    or self.positions[symbol]["long"]["size"] != 0.0
-                )
-                do_short = (
-                    self.live_configs[symbol]["short"]["enabled"]
-                    or self.positions[symbol]["short"]["size"] != 0.0
-                )
-            else:
-                no_pos = (
-                    self.positions[symbol]["long"]["size"] == 0.0
-                    and self.positions[symbol]["short"]["size"] == 0.0
-                )
-                do_long = (no_pos and self.live_configs[symbol]["long"]["enabled"]) or self.positions[
-                    symbol
-                ]["long"]["size"] != 0.0
-                do_short = (
-                    no_pos and self.live_configs[symbol]["short"]["enabled"]
-                ) or self.positions[symbol]["short"]["size"] != 0.0
-            if do_long:
-                entries_long = calc_recursive_entries_long(
-                    self.balance,
-                    self.positions[symbol]["long"]["size"],
-                    self.positions[symbol]["long"]["price"],
-                    self.tickers[symbol]["bid"],
-                    self.emas_long[symbol].min(),
-                    self.inverse,
-                    self.qty_steps[symbol],
-                    self.price_steps[symbol],
-                    self.min_qtys[symbol],
-                    self.min_costs[symbol],
-                    self.c_mults[symbol],
-                    self.live_configs[symbol]["long"]["initial_qty_pct"],
-                    self.live_configs[symbol]["long"]["initial_eprice_ema_dist"],
-                    self.live_configs[symbol]["long"]["ddown_factor"],
-                    self.live_configs[symbol]["long"]["rentry_pprice_dist"],
-                    self.live_configs[symbol]["long"]["rentry_pprice_dist_wallet_exposure_weighting"],
-                    self.live_configs[symbol]["long"]["wallet_exposure_limit"],
-                    self.live_configs[symbol]["long"]["auto_unstuck_ema_dist"],
-                    self.live_configs[symbol]["long"]["auto_unstuck_wallet_exposure_threshold"],
-                    self.live_configs[symbol]["long"]["auto_unstuck_delay_minutes"]
-                    or self.live_configs[symbol]["long"]["auto_unstuck_qty_pct"],
-                )
-                closes_long = calc_close_grid_long(
-                    self.live_configs[symbol]["long"]["backwards_tp"],
-                    self.balance,
-                    self.positions[symbol]["long"]["size"],
-                    self.positions[symbol]["long"]["price"],
-                    self.tickers[symbol]["ask"],
-                    self.emas_long[symbol].max(),
-                    0,
-                    0,
-                    self.inverse,
-                    self.qty_steps[symbol],
-                    self.price_steps[symbol],
-                    self.min_qtys[symbol],
-                    self.min_costs[symbol],
-                    self.c_mults[symbol],
-                    self.live_configs[symbol]["long"]["wallet_exposure_limit"],
-                    self.live_configs[symbol]["long"]["min_markup"],
-                    self.live_configs[symbol]["long"]["markup_range"],
-                    self.live_configs[symbol]["long"]["n_close_orders"],
-                    self.live_configs[symbol]["long"]["auto_unstuck_wallet_exposure_threshold"],
-                    self.live_configs[symbol]["long"]["auto_unstuck_ema_dist"],
-                    self.live_configs[symbol]["long"]["auto_unstuck_delay_minutes"],
-                    self.live_configs[symbol]["long"]["auto_unstuck_qty_pct"],
-                )
-                ideal_orders[symbol] += entries_long + closes_long
-            if do_short:
-                entries_short = calc_recursive_entries_short(
-                    self.balance,
-                    self.positions[symbol]["short"]["size"],
-                    self.positions[symbol]["short"]["price"],
-                    self.tickers[symbol]["ask"],
-                    self.emas_short[symbol].max(),
-                    self.inverse,
-                    self.qty_steps[symbol],
-                    self.price_steps[symbol],
-                    self.min_qtys[symbol],
-                    self.min_costs[symbol],
-                    self.c_mults[symbol],
-                    self.live_configs[symbol]["short"]["initial_qty_pct"],
-                    self.live_configs[symbol]["short"]["initial_eprice_ema_dist"],
-                    self.live_configs[symbol]["short"]["ddown_factor"],
-                    self.live_configs[symbol]["short"]["rentry_pprice_dist"],
-                    self.live_configs[symbol]["short"][
-                        "rentry_pprice_dist_wallet_exposure_weighting"
-                    ],
-                    self.live_configs[symbol]["short"]["wallet_exposure_limit"],
-                    self.live_configs[symbol]["short"]["auto_unstuck_ema_dist"],
-                    self.live_configs[symbol]["short"]["auto_unstuck_wallet_exposure_threshold"],
-                    self.live_configs[symbol]["short"]["auto_unstuck_delay_minutes"]
-                    or self.live_configs[symbol]["short"]["auto_unstuck_qty_pct"],
-                )
-                closes_short = calc_close_grid_short(
-                    self.live_configs[symbol]["short"]["backwards_tp"],
-                    self.balance,
-                    self.positions[symbol]["short"]["size"],
-                    self.positions[symbol]["short"]["price"],
-                    self.tickers[symbol]["bid"],
-                    self.emas_short[symbol].min(),
-                    0,
-                    0,
-                    self.inverse,
-                    self.qty_steps[symbol],
-                    self.price_steps[symbol],
-                    self.min_qtys[symbol],
-                    self.min_costs[symbol],
-                    self.c_mults[symbol],
-                    self.live_configs[symbol]["short"]["wallet_exposure_limit"],
-                    self.live_configs[symbol]["short"]["min_markup"],
-                    self.live_configs[symbol]["short"]["markup_range"],
-                    self.live_configs[symbol]["short"]["n_close_orders"],
-                    self.live_configs[symbol]["short"]["auto_unstuck_wallet_exposure_threshold"],
-                    self.live_configs[symbol]["short"]["auto_unstuck_ema_dist"],
-                    self.live_configs[symbol]["short"]["auto_unstuck_delay_minutes"],
-                    self.live_configs[symbol]["short"]["auto_unstuck_qty_pct"],
-                )
-                ideal_orders[symbol] += entries_short + closes_short
+        unstuck_close_order = None
         stuck_positions = []
         for symbol in self.symbols:
             if not self.config["multisym_auto_unstuck_enabled"]:
@@ -683,7 +561,6 @@ class Passivbot:
                         # don't unstuck if position is in profit
                         stuck_positions.append((symbol, pside, pprice_diff))
         if stuck_positions:
-            self.any_stuck = True
             sym, pside, pprice_diff = sorted(stuck_positions, key=lambda x: x[2])[0]
             AU_allowance = calc_AU_allowance(
                 np.array([x["closedPnl"] for x in self.pnls]),
@@ -742,19 +619,183 @@ class Passivbot:
                         ),
                     ),
                 )
-                unstuck_close_order = (
-                    close_qty * (-1.0 if pside == "long" else 1.0),
-                    close_price,
-                    f"unstuck_close_{pside}",
+                unstuck_close_order = {
+                    "symbol": sym,
+                    "position_side": pside,
+                    "order": (
+                        close_qty * (-1.0 if pside == "long" else 1.0),
+                        close_price,
+                        f"unstuck_close_{pside}",
+                    ),
+                }
+
+        ideal_orders = {symbol: [] for symbol in self.symbols}
+        for symbol in self.symbols:
+            if self.hedge_mode:
+                do_long = (
+                    self.live_configs[symbol]["long"]["enabled"]
+                    or self.positions[symbol]["long"]["size"] != 0.0
                 )
-                if unstuck_close_order[0] != 0.0:
-                    ideal_orders[sym] = [
-                        x for x in ideal_orders[sym] if not (pside in x[2] and "close" in x[2])
-                    ] + [unstuck_close_order]
-                    logging.debug(f"creating unstucking order for {sym}: {unstuck_close_order}")
-                    logging.info(f"creating unstucking order for {sym}: {unstuck_close_order}")
-        else:
-            self.any_stuck = False
+                do_short = (
+                    self.live_configs[symbol]["short"]["enabled"]
+                    or self.positions[symbol]["short"]["size"] != 0.0
+                )
+            else:
+                no_pos = (
+                    self.positions[symbol]["long"]["size"] == 0.0
+                    and self.positions[symbol]["short"]["size"] == 0.0
+                )
+                do_long = (no_pos and self.live_configs[symbol]["long"]["enabled"]) or self.positions[
+                    symbol
+                ]["long"]["size"] != 0.0
+                do_short = (
+                    no_pos and self.live_configs[symbol]["short"]["enabled"]
+                ) or self.positions[symbol]["short"]["size"] != 0.0
+            if do_long:
+                entries_long = calc_recursive_entries_long(
+                    self.balance,
+                    self.positions[symbol]["long"]["size"],
+                    self.positions[symbol]["long"]["price"],
+                    self.tickers[symbol]["bid"],
+                    self.emas_long[symbol].min(),
+                    self.inverse,
+                    self.qty_steps[symbol],
+                    self.price_steps[symbol],
+                    self.min_qtys[symbol],
+                    self.min_costs[symbol],
+                    self.c_mults[symbol],
+                    self.live_configs[symbol]["long"]["initial_qty_pct"],
+                    self.live_configs[symbol]["long"]["initial_eprice_ema_dist"],
+                    self.live_configs[symbol]["long"]["ddown_factor"],
+                    self.live_configs[symbol]["long"]["rentry_pprice_dist"],
+                    self.live_configs[symbol]["long"]["rentry_pprice_dist_wallet_exposure_weighting"],
+                    self.live_configs[symbol]["long"]["wallet_exposure_limit"],
+                    self.live_configs[symbol]["long"]["auto_unstuck_ema_dist"],
+                    self.live_configs[symbol]["long"]["auto_unstuck_wallet_exposure_threshold"],
+                    self.live_configs[symbol]["long"]["auto_unstuck_delay_minutes"]
+                    or self.live_configs[symbol]["long"]["auto_unstuck_qty_pct"],
+                )
+                if (
+                    unstuck_close_order is not None
+                    and unstuck_close_order["symbol"] == symbol
+                    and unstuck_close_order["position_side"] == "long"
+                ):
+                    ideal_orders[symbol] += unstuck_close_order["order"]
+                    psize_ = max(
+                        0.0,
+                        round_(
+                            abs(self.positions[symbol]["long"]["size"])
+                            - abs(unstuck_close_order["order"][0]),
+                            self.qty_steps[symbol],
+                        ),
+                    )
+                    logging.debug(
+                        f"creating unstucking order for {symbol} long: {unstuck_close_order['order']}"
+                    )
+                    logging.info(
+                        f"creating unstucking order for {symbol} long: {unstuck_close_order['order']}"
+                    )
+                else:
+                    psize_ = self.positions[symbol]["long"]["size"]
+                closes_long = calc_close_grid_long(
+                    self.live_configs[symbol]["long"]["backwards_tp"],
+                    self.balance,
+                    psize_,
+                    self.positions[symbol]["long"]["price"],
+                    self.tickers[symbol]["ask"],
+                    self.emas_long[symbol].max(),
+                    0,
+                    0,
+                    self.inverse,
+                    self.qty_steps[symbol],
+                    self.price_steps[symbol],
+                    self.min_qtys[symbol],
+                    self.min_costs[symbol],
+                    self.c_mults[symbol],
+                    self.live_configs[symbol]["long"]["wallet_exposure_limit"],
+                    self.live_configs[symbol]["long"]["min_markup"],
+                    self.live_configs[symbol]["long"]["markup_range"],
+                    self.live_configs[symbol]["long"]["n_close_orders"],
+                    self.live_configs[symbol]["long"]["auto_unstuck_wallet_exposure_threshold"],
+                    self.live_configs[symbol]["long"]["auto_unstuck_ema_dist"],
+                    self.live_configs[symbol]["long"]["auto_unstuck_delay_minutes"],
+                    self.live_configs[symbol]["long"]["auto_unstuck_qty_pct"],
+                )
+                ideal_orders[symbol] += entries_long + closes_long
+            if do_short:
+                entries_short = calc_recursive_entries_short(
+                    self.balance,
+                    self.positions[symbol]["short"]["size"],
+                    self.positions[symbol]["short"]["price"],
+                    self.tickers[symbol]["ask"],
+                    self.emas_short[symbol].max(),
+                    self.inverse,
+                    self.qty_steps[symbol],
+                    self.price_steps[symbol],
+                    self.min_qtys[symbol],
+                    self.min_costs[symbol],
+                    self.c_mults[symbol],
+                    self.live_configs[symbol]["short"]["initial_qty_pct"],
+                    self.live_configs[symbol]["short"]["initial_eprice_ema_dist"],
+                    self.live_configs[symbol]["short"]["ddown_factor"],
+                    self.live_configs[symbol]["short"]["rentry_pprice_dist"],
+                    self.live_configs[symbol]["short"][
+                        "rentry_pprice_dist_wallet_exposure_weighting"
+                    ],
+                    self.live_configs[symbol]["short"]["wallet_exposure_limit"],
+                    self.live_configs[symbol]["short"]["auto_unstuck_ema_dist"],
+                    self.live_configs[symbol]["short"]["auto_unstuck_wallet_exposure_threshold"],
+                    self.live_configs[symbol]["short"]["auto_unstuck_delay_minutes"]
+                    or self.live_configs[symbol]["short"]["auto_unstuck_qty_pct"],
+                )
+                if (
+                    unstuck_close_order is not None
+                    and unstuck_close_order["symbol"] == symbol
+                    and unstuck_close_order["position_side"] == "short"
+                ):
+                    ideal_orders[symbol] += unstuck_close_order["order"]
+                    psize_ = -max(
+                        0.0,
+                        round_(
+                            abs(self.positions[symbol]["short"]["size"])
+                            - abs(unstuck_close_order["order"][0]),
+                            self.qty_steps[symbol],
+                        ),
+                    )
+                    logging.debug(
+                        f"creating unstucking order for {symbol} short: {unstuck_close_order['order']}"
+                    )
+                    logging.info(
+                        f"creating unstucking order for {symbol} short: {unstuck_close_order['order']}"
+                    )
+                else:
+                    psize_ = self.positions[symbol]["short"]["size"]
+                closes_short = calc_close_grid_short(
+                    self.live_configs[symbol]["short"]["backwards_tp"],
+                    self.balance,
+                    psize_,
+                    self.positions[symbol]["short"]["price"],
+                    self.tickers[symbol]["bid"],
+                    self.emas_short[symbol].min(),
+                    0,
+                    0,
+                    self.inverse,
+                    self.qty_steps[symbol],
+                    self.price_steps[symbol],
+                    self.min_qtys[symbol],
+                    self.min_costs[symbol],
+                    self.c_mults[symbol],
+                    self.live_configs[symbol]["short"]["wallet_exposure_limit"],
+                    self.live_configs[symbol]["short"]["min_markup"],
+                    self.live_configs[symbol]["short"]["markup_range"],
+                    self.live_configs[symbol]["short"]["n_close_orders"],
+                    self.live_configs[symbol]["short"]["auto_unstuck_wallet_exposure_threshold"],
+                    self.live_configs[symbol]["short"]["auto_unstuck_ema_dist"],
+                    self.live_configs[symbol]["short"]["auto_unstuck_delay_minutes"],
+                    self.live_configs[symbol]["short"]["auto_unstuck_qty_pct"],
+                )
+                ideal_orders[symbol] += entries_short + closes_short
+
         ideal_orders = {
             symbol: sorted(
                 [x for x in ideal_orders[symbol] if x[0] != 0.0],
