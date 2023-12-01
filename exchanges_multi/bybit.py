@@ -211,6 +211,10 @@ class BybitBot(Passivbot):
             logging.error(f"error fetching tickers {e}")
             print_async_exception(fetched)
             traceback.print_exc()
+            if "bybit does not have market symbol" in str(e):
+                # ccxt is raising bad symbol error
+                # restart might help...
+                raise Exception("ccxt gives bad symbol error... attempting bot restart")
             return False
 
     async def fetch_ohlcv(self, symbol: str, timeframe="1m"):
