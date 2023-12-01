@@ -222,8 +222,11 @@ def calc_fills(
     hlc,
     inverse,
     qty_step,
+    price_step,
+    min_qty,
+    min_cost,
     c_mults: np.ndarray,
-    wallet_exposure_limit: float,
+    cfg: np.ndarray,
     maker_fee,
 ):
     """
@@ -233,7 +236,7 @@ def calc_fills(
     pos = poss_long[idx] if pside_idx == 0 else poss_short[idx]
     new_pos = (pos[0], pos[1])
     new_balance = balance
-    if entry[0] != 0.0 and (
+    while entry[0] != 0.0 and (
         (pside_idx == 0 and hlc[idx][1] < entry[1]) or (pside_idx == 1 and hlc[idx][0] > entry[1])
     ):
         new_pos = calc_new_psize_pprice(
@@ -262,9 +265,40 @@ def calc_fills(
                 new_pos[0],  # psize after fill
                 new_pos[1],  # pprice after fill
                 entry[2],  # fill type
-                wallet_exposure / wallet_exposure_limit,  # stuckness
+                wallet_exposure / cfg[16],  # stuckness
             )
         )
+        if "ientry" in entry[2]:
+            break
+        prev_eprice = entry[1]
+        args = (
+            new_balance,
+            new_pos[0],
+            new_pos[1],
+            entry[1],
+            entry[1],
+            inverse,
+            qty_step,
+            price_step,
+            min_qty,
+            min_cost,
+            c_mults[idx],
+            cfg[10],
+            cfg[9],
+            cfg[5],
+            cfg[14],
+            cfg[15],
+            cfg[16],
+            cfg[1],
+            cfg[3],
+            cfg[0] or cfg[2],
+        )
+        if pside_idx == 0:
+            entry = calc_recursive_entry_long(*args)
+        else:
+            entry = calc_recursive_entry_short(*args)
+        if entry[1] == prev_eprice:
+            break
     for close in closes:
         if (
             close[0] == 0.0
@@ -308,7 +342,7 @@ def calc_fills(
                 new_pos[0],  # psize after fill
                 new_pos[1],  # pprice after fill
                 close[2],  # fill type
-                wallet_exposure / wallet_exposure_limit,  # stuckness
+                wallet_exposure / cfg[16],  # stuckness
             )
         )
 
@@ -519,8 +553,11 @@ def backtest_multisymbol_recursive_grid(
                     hlcs[:, k],
                     inverse,
                     qty_steps[i],
+                    price_steps[i],
+                    min_qtys[i],
+                    min_costs[i],
                     c_mults,
-                    ll[i][16],
+                    ll[i],
                     maker_fee,
                 )
                 if len(new_fills) > 0:
@@ -572,8 +609,11 @@ def backtest_multisymbol_recursive_grid(
                     hlcs[:, k],
                     inverse,
                     qty_steps[i],
+                    price_steps[i],
+                    min_qtys[i],
+                    min_costs[i],
                     c_mults,
-                    ls[i][16],  # wallet exposure limit
+                    ls[i],
                     maker_fee,
                 )
                 if len(new_fills) > 0:
