@@ -687,7 +687,7 @@ def backtest_multisymbol_recursive_grid(
                         close_price = emas_short[s_i].min()  # lower ema band
                         upnl = calc_pnl_short(
                             poss_short[s_i][1],
-                            hlcs[i][k][2],
+                            hlcs[s_i][k][2],
                             poss_short[s_i][0],
                             inverse,
                             c_mults[s_i],
@@ -717,7 +717,11 @@ def backtest_multisymbol_recursive_grid(
                     else:  # long
                         close_price = emas_long[s_i].max()  # upper ema band
                         upnl = calc_pnl_long(
-                            poss_long[s_i][1], hlcs[i][k][2], poss_long[s_i][0], inverse, c_mults[s_i]
+                            poss_long[s_i][1],
+                            hlcs[s_i][k][2],
+                            poss_long[s_i][0],
+                            inverse,
+                            c_mults[s_i],
                         )
                         AU_allowance_pct = 1.0 if upnl >= 0.0 else min(1.0, AU_allowance / abs(upnl))
                         AU_allowance_qty = round_(
