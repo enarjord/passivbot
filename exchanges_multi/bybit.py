@@ -172,6 +172,8 @@ class BybitBot(Passivbot):
                 next_page_cursor = None
                 for elm in fetched:
                     elm["position_side"] = determine_pos_side_ccxt(elm)
+                    elm["size"] = float(elm["contracts"])
+                    elm["price"] = float(elm["entryPrice"])
                     positions[elm["symbol"] + elm["side"]] = elm
                     if "nextPageCursor" in elm["info"]:
                         next_page_cursor = elm["info"]["nextPageCursor"]
