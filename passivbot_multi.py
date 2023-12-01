@@ -94,9 +94,12 @@ class Passivbot:
         parser.add_argument("-lev", type=float, required=False, dest="leverage", default=None)
         parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
 
-        live_configs_fnames = sorted(
-            [f for f in os.listdir(self.config["live_configs_dir"]) if f.endswith(".json")]
-        )
+        if os.path.isdir(self.config["live_configs_dir"]):
+            live_configs_fnames = sorted(
+                [f for f in os.listdir(self.config["live_configs_dir"]) if f.endswith(".json")]
+            )
+        else:
+            live_configs_fnames = []
         max_len_symbol = max([len(s) for s in self.symbols])
         for symbol in self.symbols:
             live_config_fname_l = [x for x in live_configs_fnames if self.coins[symbol] in x]
@@ -917,25 +920,39 @@ class Passivbot:
         logging.info("starting websockets")
         await asyncio.gather(self.execution_loop(), self.start_websockets())
 
+    async def restart_bot(self):
+        pass
+
 
 async def main():
     parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
     parser.add_argument("hjson_config_path", type=str, help="path to hjson passivbot meta config")
-    args = parser.parse_args()
-    config = hjson.load(open(args.hjson_config_path))
-    user_info = load_user_info(config["user"])
-    if user_info["exchange"] == "bybit":
-        from exchanges_multi.bybit import BybitBot
+    max_n_restarts_per_day = 5
+    restarts = []
+    while True:
 
-        bot = BybitBot(config)
-    try:
-        await bot.start_bot()
-    finally:
+        args = parser.parse_args()
+        config = hjson.load(open(args.hjson_config_path))
+        user_info = load_user_info(config["user"])
+        if user_info["exchange"] == "bybit":
+            from exchanges_multi.bybit import BybitBot
+
+            bot = BybitBot(config)
         try:
-            await bot.ccp.close()
-            await bot.cca.close()
-        except:
-            pass
+            await bot.start_bot()
+        except Exception as e:
+            logging.error(f"passivbot error {e}")
+        finally:
+            try:
+                await bot.ccp.close()
+                await bot.cca.close()
+            except:
+                pass
+        logging.info(f"restarting bot...")
+        restarts.append(utc_ms())
+        restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]
+        if len(restarts) > max_n_restarts_per_day:
+            break
 
 
 if __name__ == "__main__":
