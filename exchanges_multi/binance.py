@@ -28,8 +28,8 @@ class BinanceBot(Passivbot):
                 "headers": {"referer": self.broker_code} if self.broker_code else {},
             }
         )
-        self.max_n_cancellations_per_batch = 20
-        self.max_n_creations_per_batch = 12
+        self.max_n_cancellations_per_batch = 10
+        self.max_n_creations_per_batch = 5
 
     async def init_bot(self):
         # require symbols to be formatted to ccxt standard COIN/USDT:USDT
@@ -73,11 +73,11 @@ class BinanceBot(Passivbot):
                 0.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
             )
             self.min_qtys[symbol] = elm["limits"]["amount"]["min"]
-            self.qty_steps[symbol] = elm["precision"]["amount"]
             for felm in elm["info"]["filters"]:
                 if felm["filterType"] == "PRICE_FILTER":
                     self.price_steps[symbol] = float(felm["tickSize"])
-                    break
+                elif felm["filterType"] == "MARKET_LOT_SIZE":
+                    self.qty_steps[symbol] = float(felm["stepSize"])
             self.c_mults[symbol] = elm["contractSize"]
             self.coins[symbol] = symbol.replace("/USDT:USDT", "")
             self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "last": 0.0}
@@ -300,11 +300,11 @@ class BinanceBot(Passivbot):
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
             return {
                 "symbol": executed["symbol"],
-                "side": order["side"],
+                "side": executed["side"],
                 "id": executed["id"],
-                "position_side": order["position_side"],
-                "qty": order["qty"],
-                "price": order["price"],
+                "position_side": executed["info"]["positionSide"].lower(),
+                "qty": executed["amount"],
+                "price": executed["price"],
             }
         except Exception as e:
             logging.error(f"error cancelling order {order} {e}")
@@ -313,14 +313,10 @@ class BinanceBot(Passivbot):
             return {}
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        if len(orders) > self.max_n_cancellations_per_batch:
-            # prioritize cancelling reduce-only orders
-            try:
-                reduce_only_orders = [x for x in orders if x["reduce_only"]]
-                rest = [x for x in orders if not x["reduce_only"]]
-                orders = (reduce_only_orders + rest)[: self.max_n_cancellations_per_batch]
-            except Exception as e:
-                logging.error(f"debug filter cancellations {e}")
+        if len(orders) == 0:
+            return []
+        if len(orders) == 1:
+            return [await self.execute_cancellation(orders[0])]
         return await self.execute_multiple(
             orders, "execute_cancellation", self.max_n_cancellations_per_batch
         )
@@ -334,17 +330,23 @@ class BinanceBot(Passivbot):
                 amount=abs(order["qty"]),
                 price=order["price"],
                 params={
-                    "positionIdx": 1 if order["position_side"] == "long" else 2,
-                    "timeInForce": "postOnly",
-                    "orderLinkId": order["custom_id"] + str(uuid4()),
+                    "positionSide": order["position_side"].upper(),
+                    "newClientOrderId": (order["custom_id"] + str(uuid4()))[:36],
+                    "timeInForce": "GTX",
                 },
             )
-            if "symbol" not in executed or executed["symbol"] is None:
-                executed["symbol"] = order["symbol"]
-            for key in ["side", "position_side", "qty", "price"]:
-                if key not in executed or executed[key] is None:
-                    executed[key] = order[key]
-            return executed
+            if (
+                "info" in executed
+                and "code" in executed["info"]
+                and executed["info"]["code"] == "-5022"
+            ):
+                logging.info(f"{executed['info']['msg']}")
+                return {}
+            elif "status" in executed and executed["status"] == "open":
+                executed["position_side"] = executed["info"]["positionSide"].lower()
+                executed["qty"] = executed["amount"]
+                executed["reduce_only"] = executed["reduceOnly"]
+                return executed
         except Exception as e:
             logging.error(f"error executing order {order} {e}")
             print_async_exception(executed)
@@ -352,4 +354,43 @@ class BinanceBot(Passivbot):
             return {}
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_order", self.max_n_creations_per_batch)
+        if len(orders) == 0:
+            return []
+        if len(orders) == 1:
+            return [await self.execute_order(orders[0])]
+        to_execute = []
+        for order in orders[: self.max_n_orders_per_batch]:
+            to_execute.append(
+                {
+                    "type": "limit",
+                    "symbol": order["symbol"],
+                    "side": order["side"],
+                    "amount": abs(order["qty"]),
+                    "price": order["price"],
+                    "params": {
+                        "positionSide": order["position_side"].upper(),
+                        "newClientOrderId": (order["custom_id"] + str(uuid4()))[:36],
+                        "timeInForce": "GTX",
+                    },
+                }
+            )
+        executed = None
+        try:
+            executed = await self.cca.create_orders(to_execute)
+            for i in range(len(executed)):
+                if (
+                    "info" in executed[i]
+                    and "code" in executed[i]["info"]
+                    and executed[i]["info"]["code"] == "-5022"
+                ):
+                    logging.info(f"{executed[i]['info']['msg']}")
+                elif "status" in executed[i] and executed[i]["status"] == "open":
+                    executed[i]["position_side"] = executed[i]["info"]["positionSide"].lower()
+                    executed[i]["qty"] = executed[i]["amount"]
+                    executed[i]["reduce_only"] = executed[i]["reduceOnly"]
+            return executed
+        except Exception as e:
+            logging.error(f"error executing orders {orders} {e}")
+            print_async_exception(executed)
+            traceback.print_exc()
+            return {}
