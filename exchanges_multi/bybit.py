@@ -248,9 +248,7 @@ class BybitBot(Passivbot):
                     break
                 i += 1
                 logging.debug(f"fetching income for more than a week {ts_to_date_utc(sts)}")
-            return sorted(
-                {elm["orderId"]: elm for elm in income}.values(), key=lambda x: x["updatedTime"]
-            )
+            return sorted({elm["id"]: elm for elm in income}.values(), key=lambda x: x["timestamp"])
         else:
             return await self.fetch_pnl(symbol=symbol, start_time=start_time, end_time=end_time)
 
@@ -299,6 +297,10 @@ class BybitBot(Passivbot):
                 fetched["result"]["list"] = sorted(
                     floatify(fetched["result"]["list"]), key=lambda x: x["updatedTime"]
                 )
+            for k in income_d:
+                income_d[k]["pnl"] = income_d[k]["closedPnl"]
+                income_d[k]["timestamp"] = income_d[k]["updatedTime"]
+                income_d[k]["id"] = str(income_d[k]["orderId"]) + str(income_d[k]["qty"])
             return sorted(income_d.values(), key=lambda x: x["updatedTime"])
         except Exception as e:
             logging.error(f"error fetching income {e}")
