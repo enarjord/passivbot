@@ -298,6 +298,9 @@ class BinanceBot(Passivbot):
         executed = None
         try:
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
+            if "code" in executed and executed["code"] == -2011:
+                logging.info(f"{executed}")
+                return {}
             return {
                 "symbol": executed["symbol"],
                 "side": executed["side"],
@@ -384,6 +387,7 @@ class BinanceBot(Passivbot):
                     and executed[i]["info"]["code"] == "-5022"
                 ):
                     logging.info(f"{executed[i]['info']['msg']}")
+                    executed[i] = {}
                 elif "status" in executed[i] and executed[i]["status"] == "open":
                     executed[i]["position_side"] = executed[i]["info"]["positionSide"].lower()
                     executed[i]["qty"] = executed[i]["amount"]
