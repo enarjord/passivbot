@@ -187,8 +187,9 @@ class Passivbot:
 
     def add_new_order(self, order, source="WS"):
         try:
-            oids = {x["id"] for x in self.open_orders[order["symbol"]]}
-            if order["id"] not in oids:
+            if not order or "id" not in order:
+                return False
+            if order["id"] not in {x["id"] for x in self.open_orders[order["symbol"]]}:
                 self.open_orders[order["symbol"]].append(order)
                 logging.info(
                     f"  created {order['symbol']} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
@@ -199,8 +200,10 @@ class Passivbot:
             traceback.print_exc()
             return False
 
-    def remove_cancelled_order(self, order, source="WS"):
+    def remove_cancelled_order(self, order: dict, source="WS"):
         try:
+            if not order or "id" not in order:
+                return False
             if order["id"] in {x["id"] for x in self.open_orders[order["symbol"]]}:
                 self.open_orders[order["symbol"]] = [
                     x for x in self.open_orders[order["symbol"]] if x["id"] != order["id"]
@@ -683,7 +686,7 @@ class Passivbot:
                     and unstuck_close_order["symbol"] == symbol
                     and unstuck_close_order["position_side"] == "long"
                 ):
-                    ideal_orders[symbol] += unstuck_close_order["order"]
+                    ideal_orders[symbol].append(unstuck_close_order["order"])
                     psize_ = max(
                         0.0,
                         round_(
@@ -756,7 +759,7 @@ class Passivbot:
                     and unstuck_close_order["symbol"] == symbol
                     and unstuck_close_order["position_side"] == "short"
                 ):
-                    ideal_orders[symbol] += unstuck_close_order["order"]
+                    ideal_orders[symbol].append(unstuck_close_order["order"])
                     psize_ = -max(
                         0.0,
                         round_(
@@ -822,7 +825,7 @@ class Passivbot:
             for symbol in ideal_orders
         }
 
-    def calc_orders_to_create_and_cancel(self):
+    def calc_orders_to_cancel_and_create(self):
         ideal_orders = self.calc_ideal_orders()
         actual_orders = {}
         for symbol in self.open_orders:
@@ -933,7 +936,7 @@ class Passivbot:
                     if not update_res[i]:
                         logging.error(f"error with {key}")
                 return
-            to_cancel, to_create = self.calc_orders_to_create_and_cancel()
+            to_cancel, to_create = self.calc_orders_to_cancel_and_create()
             res = await self.execute_cancellations(to_cancel)
             for elm in res:
                 self.remove_cancelled_order(elm, source="POST")
