@@ -196,7 +196,7 @@ class Passivbot:
                 )
                 return True
         except Exception as e:
-            logging.error(f"failed to add order to self.open_orders {e}")
+            logging.error(f"failed to add order to self.open_orders {order} {e}")
             traceback.print_exc()
             return False
 
@@ -213,7 +213,7 @@ class Passivbot:
                 )
                 return True
         except Exception as e:
-            logging.error(f"failed to remove order from self.open_orders {e}")
+            logging.error(f"failed to remove order from self.open_orders {order} {e}")
             traceback.print_exc()
             return False
 
@@ -937,6 +937,15 @@ class Passivbot:
                         logging.error(f"error with {key}")
                 return
             to_cancel, to_create = self.calc_orders_to_cancel_and_create()
+
+            # debug duplicates
+            seen = set()
+            for elm in to_cancel:
+                key = str(elm['price']) + str(elm['qty'])
+                if key in seen:
+                    print('debug duplicate', elm)
+                seen.add(key)
+
             res = await self.execute_cancellations(to_cancel)
             for elm in res:
                 self.remove_cancelled_order(elm, source="POST")
