@@ -226,29 +226,21 @@ class BinanceBot(Passivbot):
         start_time: int = None,
         end_time: int = None,
     ):
-        if start_time is not None:
-            week = 1000 * 60 * 60 * 24 * 7
-            income = []
-            if end_time is None:
-                end_time = int(utc_ms() + 1000 * 60 * 60 * 24)
-            # bybit has limit of 7 days per pageinated fetch
-            # fetch multiple times
-            i = 1
-            while i < 52:  # limit n fetches to 52 (one year)
-                sts = end_time - week * i
-                ets = sts + week
-                sts = max(sts, start_time)
-                fetched = await self.fetch_pnl(symbol=symbol, start_time=sts, end_time=ets)
-                income.extend(fetched)
-                if sts <= start_time:
-                    break
-                i += 1
-                logging.debug(f"fetching income for more than a week {ts_to_date_utc(sts)}")
-            return sorted(
-                {elm["orderId"]: elm for elm in income}.values(), key=lambda x: x["updatedTime"]
-            )
-        else:
-            return await self.fetch_pnl(symbol=symbol, start_time=start_time, end_time=end_time)
+        limit = 1000
+        if start_time is None and end_time is None:
+            return await self.fetch_pnl(symbol=symbol)
+        all_fetched = {}
+        while True:
+            fetched = await self.fetch_pnl(symbol=symbol, start_time=start_time, end_time=end_time)
+            if fetched == []:
+                break
+            for elm in fetched:
+                all_fetched[elm["tranId"]] = elm
+            if len(fetched) < limit:
+                break
+            logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
+            start_time = fetched[-1]["timestamp"]
+        return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
 
     async def fetch_pnl(
         self,
@@ -259,61 +251,23 @@ class BinanceBot(Passivbot):
         fetched = None
         try:
             params = {"incomeType": "REALIZED_PNL", "limit": 1000}
-            fetched = floatify(await bot.cca.fapiprivate_get_income(params=params))
-            for i in range(len(fetched)):
-                fetched[i]["pnl"] = fetched[i]["income"]
-            return fetched
-        except Exception as e:
-            logging.error(f"error fetching income {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
-            return False
-
-        fetched = None
-        income_d = {}
-        limit = 100
-        try:
-            params = {"category": "linear", "limit": limit}
             if symbol is not None:
                 params["symbol"] = symbol
             if start_time is not None:
                 params["startTime"] = int(start_time)
             if end_time is not None:
                 params["endTime"] = int(end_time)
-            fetched = await self.cca.private_get_v5_position_closed_pnl(params)
-            fetched["result"]["list"] = sorted(
-                floatify(fetched["result"]["list"]), key=lambda x: x["updatedTime"]
-            )
-            while True:
-                if fetched["result"]["list"] == []:
-                    break
-                logging.debug(
-                    f"fetching income {ts_to_date_utc(fetched['result']['list'][-1]['updatedTime'])}"
-                )
-                if (
-                    fetched["result"]["list"][0]["orderId"] in income_d
-                    and fetched["result"]["list"][-1]["orderId"] in income_d
-                ):
-                    break
-                for elm in fetched["result"]["list"]:
-                    income_d[elm["orderId"]] = elm
-                if start_time is None:
-                    break
-                if fetched["result"]["list"][0]["updatedTime"] <= start_time:
-                    break
-                if not fetched["result"]["nextPageCursor"]:
-                    break
-                params["cursor"] = fetched["result"]["nextPageCursor"]
-                fetched = await self.cca.private_get_v5_position_closed_pnl(params)
-                fetched["result"]["list"] = sorted(
-                    floatify(fetched["result"]["list"]), key=lambda x: x["updatedTime"]
-                )
-            return sorted(income_d.values(), key=lambda x: x["updatedTime"])
+            fetched = floatify(await self.cca.fapiprivate_get_income(params=params))
+            for i in range(len(fetched)):
+                fetched[i]["pnl"] = fetched[i]["income"]
+                fetched[i]["timestamp"] = fetched[i]["time"]
+                fetched[i]["id"] = fetched[i]["tranId"]
+            return sorted(fetched, key=lambda x: x["time"])
         except Exception as e:
             logging.error(f"error fetching income {e}")
             print_async_exception(fetched)
             traceback.print_exc()
-            return []
+            return False
 
     async def execute_multiple(self, orders: [dict], type_: str, max_n_executions: int):
         if not orders:
