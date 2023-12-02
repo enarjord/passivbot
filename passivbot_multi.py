@@ -272,36 +272,32 @@ class Passivbot:
                 logging.error(f"error loading {self.pnls_cache_filepath} {e}")
             # fetch pnls since latest timestamp
             if len(pnls_cache) > 0:
-                if pnls_cache[0]["updatedTime"] > age_limit + 1000 * 60 * 60 * 4:
+                if pnls_cache[0]["timestamp"] > age_limit + 1000 * 60 * 60 * 4:
                     # fetch missing pnls
                     res = await self.fetch_pnls(
-                        start_time=age_limit - 1000, end_time=pnls_cache[0]["updatedTime"]
+                        start_time=age_limit - 1000, end_time=pnls_cache[0]["timestamp"]
                     )
                     if res in [None, False]:
                         return False
                     missing_pnls = res
                     pnls_cache = sorted(
                         {
-                            elm["orderId"] + str(elm["qty"]): elm
+                            elm["id"]: elm
                             for elm in pnls_cache + missing_pnls
-                            if elm["updatedTime"] >= age_limit
+                            if elm["timestamp"] >= age_limit
                         }.values(),
-                        key=lambda x: x["updatedTime"],
+                        key=lambda x: x["timestamp"],
                     )
             self.pnls = pnls_cache
-        start_time = self.pnls[-1]["updatedTime"] if self.pnls else age_limit
+        start_time = self.pnls[-1]["timestamp"] if self.pnls else age_limit
         res = await self.fetch_pnls(start_time=start_time)
         if res in [None, False]:
             return False
         new_pnls = res
         len_pnls = len(self.pnls)
         self.pnls = sorted(
-            {
-                elm["orderId"] + str(elm["qty"]): elm
-                for elm in self.pnls + new_pnls
-                if elm["updatedTime"] > age_limit
-            }.values(),
-            key=lambda x: x["updatedTime"],
+            {elm["id"]: elm for elm in self.pnls + new_pnls if elm["timestamp"] > age_limit}.values(),
+            key=lambda x: x["timestamp"],
         )
         if len(self.pnls) > len_pnls or len(missing_pnls) > 0:
             n_new_pnls = len(self.pnls) - len_pnls
@@ -570,7 +566,7 @@ class Passivbot:
         if stuck_positions:
             sym, pside, pprice_diff = sorted(stuck_positions, key=lambda x: x[2])[0]
             AU_allowance = calc_AU_allowance(
-                np.array([x["closedPnl"] for x in self.pnls]),
+                np.array([x["pnl"] for x in self.pnls]),
                 self.balance,
                 loss_allowance_pct=self.config["loss_allowance_pct"],
             )
