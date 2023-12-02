@@ -359,7 +359,7 @@ class BinanceBot(Passivbot):
         if len(orders) == 1:
             return [await self.execute_order(orders[0])]
         to_execute = []
-        for order in orders[: self.max_n_orders_per_batch]:
+        for order in orders[: self.max_n_creations_per_batch]:
             to_execute.append(
                 {
                     "type": "limit",
