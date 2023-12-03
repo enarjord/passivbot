@@ -104,7 +104,7 @@ class BinanceBot(Passivbot):
                 if self.stop_websocket:
                     break
                 res = await self.ccp.watch_balance()
-                await self.handle_balance_update(res)
+                self.handle_balance_update(res)
             except Exception as e:
                 print(f"exception watch_balance", e)
                 traceback.print_exc()
@@ -116,25 +116,39 @@ class BinanceBot(Passivbot):
                     break
                 res = await self.ccp.watch_orders()
                 for i in range(len(res)):
-                    res[i]["position_side"] = determine_pos_side_ccxt(res[i])
+                    res[i]["position_side"] = res[i]["info"]["ps"].lower()
                     res[i]["qty"] = res[i]["amount"]
-                await self.handle_order_update(res)
+                self.handle_order_update(res)
             except Exception as e:
                 print(f"exception watch_orders", e)
                 traceback.print_exc()
 
     async def watch_tickers(self, symbols=None):
         symbols = list(self.symbols if symbols is None else symbols)
+        await asyncio.gather(*[self.watch_book_ticker(symbol) for symbol in symbols])
+
+    async def watch_book_ticker(self, symbol: str, params={}):
+        """
+        modified watch_ticker to watch_bookTicker
+        """
+        messageHash = f"{self.cca.market(symbol)['lowercaseId']}@bookTicker"
+        type_ = "future"
+        url = f"{self.ccp.urls['api']['ws'][type_]}/{self.ccp.stream(type_, messageHash)}"
+        requestId = self.ccp.request_id(url)
+        request = {"method": "SUBSCRIBE", "params": [messageHash], "id": requestId}
+        subscribe = {"id": requestId}
         while True:
             try:
-                if self.stop_websocket:
-                    break
-                res = await self.ccp.watch_tickers(symbols)
-                if res["last"] is None:
+                res = await self.ccp.watch(
+                    url, messageHash, self.ccp.extend(request, params), messageHash, subscribe
+                )
+                if res["symbol"] in self.symbol_ids_inv:
+                    res["symbol"] = self.symbol_ids_inv[res["symbol"]]
+                if "last" not in res or res["last"] is None:
                     res["last"] = np.random.choice([res["bid"], res["ask"]])
-                await self.handle_ticker_update(res)
+                self.handle_ticker_update(res)
             except Exception as e:
-                print(f"exception watch_tickers {symbols}", e)
+                print(f"exception watch_book_ticker {symbol}", e)
                 traceback.print_exc()
 
     async def fetch_open_orders(self, symbol: str = None):
@@ -163,7 +177,7 @@ class BinanceBot(Passivbot):
             fetched = floatify(fetched)
             positions = []
             for elm in fetched["info"]["positions"]:
-                if elm["positionAmt"] == 0.0 or elm["symbol"] not in self.symbol_ids_inv:
+                if elm["positionAmt"] == 0.0:
                     continue
                 positions.append(
                     {
