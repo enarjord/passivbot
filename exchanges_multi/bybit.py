@@ -96,7 +96,7 @@ class BybitBot(Passivbot):
                 if self.stop_websocket:
                     break
                 res = await self.ccp.watch_balance()
-                await self.handle_balance_update(res)
+                self.handle_balance_update(res)
             except Exception as e:
                 print(f"exception watch_balance", e)
                 traceback.print_exc()
@@ -110,7 +110,7 @@ class BybitBot(Passivbot):
                 for i in range(len(res)):
                     res[i]["position_side"] = determine_pos_side_ccxt(res[i])
                     res[i]["qty"] = res[i]["amount"]
-                await self.handle_order_update(res)
+                self.handle_order_update(res)
             except Exception as e:
                 print(f"exception watch_orders", e)
                 traceback.print_exc()
@@ -124,7 +124,7 @@ class BybitBot(Passivbot):
                 res = await self.ccp.watch_tickers(symbols)
                 if res["last"] is None:
                     res["last"] = np.random.choice([res["bid"], res["ask"]])
-                await self.handle_ticker_update(res)
+                self.handle_ticker_update(res)
             except Exception as e:
                 print(f"exception watch_tickers {symbols}", e)
                 traceback.print_exc()
