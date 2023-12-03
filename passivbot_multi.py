@@ -217,7 +217,7 @@ class Passivbot:
             traceback.print_exc()
             return False
 
-    async def handle_order_update(self, upd_list):
+    def handle_order_update(self, upd_list):
         try:
             for upd in upd_list:
                 if upd["symbol"] not in self.symbols:
@@ -225,7 +225,7 @@ class Passivbot:
                 if upd["filled"] > 0.0:
                     # There was a fill, partial or full. Schedule update of open orders, pnls, position.
                     logging.info(
-                        f"   filled {upd['symbol']} {upd['side']} {upd['qty']} {upd['position_side']} @ {upd['price']}"
+                        f"   filled {upd['symbol']} {upd['side']} {upd['qty']} {upd['position_side']} @ {upd['price']} source: WS"
                     )
                     self.recent_fill = True
                 elif upd["status"] == "canceled":
@@ -242,7 +242,7 @@ class Passivbot:
             logging.error(f"error updating open orders from websocket {upd_list} {e}")
             traceback.print_exc()
 
-    async def handle_balance_update(self, upd):
+    def handle_balance_update(self, upd):
         try:
             if self.balance != upd["USDT"]["total"]:
                 logging.info(f"balance changed: {self.balance} -> {upd['USDT']['total']}")
@@ -251,13 +251,14 @@ class Passivbot:
             logging.error(f"error updating balance from websocket {upd} {e}")
             traceback.print_exc()
 
-    async def handle_ticker_update(self, upd):
+    def handle_ticker_update(self, upd):
         self.upd_timestamps["tickers"][upd["symbol"]] = utc_ms()  # update timestamp
         if (
             upd["bid"] != self.tickers[upd["symbol"]]["bid"]
             or upd["ask"] != self.tickers[upd["symbol"]]["ask"]
         ):
             ticker_new = {k: upd[k] for k in ["bid", "ask", "last"]}
+            # print(f"ticker changed {upd['symbol']: <16} {self.tickers[upd['symbol']]} -> {ticker_new}")
             self.tickers[upd["symbol"]] = ticker_new
 
     async def update_pnls(self):
@@ -561,12 +562,11 @@ class Passivbot:
                         else self.tickers[symbol]["last"] / self.positions[symbol]["short"]["price"]
                         - 1.0
                     )
-                    logging.debug(f"debug unstucking {symbol} {pside} pprice diff {pprice_diff}")
-                    logging.info(f"debug unstucking {symbol} {pside} pprice diff {pprice_diff}")
                     if pprice_diff > 0.0:
                         # don't unstuck if position is in profit
                         stuck_positions.append((symbol, pside, pprice_diff))
         if stuck_positions:
+            logging.info(f"debug unstucking {sorted(stuck_positions, key=lambda x: x[2])}")
             sym, pside, pprice_diff = sorted(stuck_positions, key=lambda x: x[2])[0]
             AU_allowance = calc_AU_allowance(
                 np.array([x["pnl"] for x in self.pnls]),
@@ -941,9 +941,9 @@ class Passivbot:
             # debug duplicates
             seen = set()
             for elm in to_cancel:
-                key = str(elm['price']) + str(elm['qty'])
+                key = str(elm["price"]) + str(elm["qty"])
                 if key in seen:
-                    print('debug duplicate', elm)
+                    print("debug duplicate", elm)
                 seen.add(key)
 
             res = await self.execute_cancellations(to_cancel)
