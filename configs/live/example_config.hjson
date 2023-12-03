@@ -6,7 +6,7 @@
     multisym_auto_unstuck_enabled: true
 
     // how far into the past to fetch pnl history
-    pnls_max_lookback_days: 7
+    pnls_max_lookback_days: 60
 
     // how much below past peak balance to allow losses (default 1% == 0.01)
     loss_allowance_pct: 0.01
@@ -17,7 +17,7 @@
     // percentage of balance * wallet_exposure_limit to close for each unstucking order (default 1% == 0.01)
     unstuck_close_pct: 0.01
 
-    // delay between executions to exchange
+    // delay between executions to exchange. Set to 60 to simulate 1m ohlcv backtest.
     execution_delay_seconds: 2
 
     TWE_long: 2.0  // total wallet exposure limit long. Exposure limit for each bot will be TWE_long / len(symbols_long)
@@ -38,18 +38,9 @@
     // -lc str: live config path. Specify live config path to override config from live_configs_dir and default_config_path.
 
     symbols: {
-        CELRUSDT:  -lm n -sm gs -lc configs/live/mod/CELRUSDT.json
-        ENJUSDT:   -lm n -sm gs
-        HOTUSDT:   -lm n -sm gs
-        LINKUSDT:  -lm n -sm n  -lw 0.15 -lev 10
-        MKRUSDT:   -lm n -sm gs
-        OCEANUSDT: -lm n -sm gs
-        RLCUSDT:   -lm n -sm gs
-        RSRUSDT:   -lm n -sm gs
-        RUNEUSDT:  -lm n -sm gs
-        SFPUSDT:   -lm n -sm gs
-        SNXUSDT:   -lm n -sm gs
-        SUSHIUSDT: -lm n -sm gs
+        SYM1USDT: -lm n -sm gs -lc configs/live/custom/SYM1USDT.json
+        SYM2USDT: -lm n -sm gs -sw 0.4
+        SYM3USDT: -lm gs -sm n  -lw 0.15 -lev 10
     }
 
     // Specify directory containing live configs.
