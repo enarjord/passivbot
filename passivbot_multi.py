@@ -45,6 +45,7 @@ class Passivbot:
 
         self.stop_websocket = False
         self.balance = 1e-12
+        self.upnls = {}
         self.upd_timestamps = {
             "pnls": 0.0,
             "open_orders": {},
@@ -228,7 +229,7 @@ class Passivbot:
                         f"   filled {upd['symbol']} {upd['side']} {upd['qty']} {upd['position_side']} @ {upd['price']} source: WS"
                     )
                     self.recent_fill = True
-                elif upd["status"] == "canceled":
+                elif upd["status"] in ["canceled", "expired"]:
                     # remove order from open_orders
                     self.remove_cancelled_order(upd)
                     self.upd_timestamps["open_orders"][upd["symbol"]] = utc_ms()
@@ -245,7 +246,9 @@ class Passivbot:
     def handle_balance_update(self, upd):
         try:
             if self.balance != upd["USDT"]["total"]:
-                logging.info(f"balance changed: {self.balance} -> {upd['USDT']['total']}")
+                logging.info(
+                    f"balance changed: {self.balance} -> {upd['USDT']['total']} equity: {(upd['USDT']['total'] + self.calc_upnl_sum()):.4f}"
+                )
             self.balance = max(upd["USDT"]["total"], 1e-12)
         except Exception as e:
             logging.error(f"error updating balance from websocket {upd} {e}")
@@ -260,6 +263,31 @@ class Passivbot:
             ticker_new = {k: upd[k] for k in ["bid", "ask", "last"]}
             # print(f"ticker changed {upd['symbol']: <16} {self.tickers[upd['symbol']]} -> {ticker_new}")
             self.tickers[upd["symbol"]] = ticker_new
+
+    def calc_upnl_sum(self):
+        try:
+            self.upnls = {}
+            for sym in self.positions:
+                self.upnls[sym] = (
+                    calc_pnl_long(
+                        self.positions[sym]["long"]["price"],
+                        self.tickers[sym]["last"],
+                        self.positions[sym]["long"]["size"],
+                        self.inverse,
+                        self.c_mults[sym],
+                    )
+                ) + calc_pnl_short(
+                    self.positions[sym]["short"]["price"],
+                    self.tickers[sym]["last"],
+                    self.positions[sym]["short"]["size"],
+                    self.inverse,
+                    self.c_mults[sym],
+                )
+            return sum(self.upnls.values())
+        except Exception as e:
+            logging.error(f"error calculating upnl sum {e}")
+            traceback.print_exc()
+            return 0.0
 
     async def update_pnls(self):
         # fetch latest pnls
@@ -319,17 +347,18 @@ class Passivbot:
             return False
         open_orders = res
         oo_ids_old = {elm["id"] for sublist in self.open_orders.values() for elm in sublist}
+        created_prints, cancelled_prints = [], []
         for oo in open_orders:
             if oo["id"] not in oo_ids_old:
                 # there was a new open order not caught by websocket
-                logging.info(
+                created_prints.append(
                     f"new order {oo['symbol']} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
                 )
         oo_ids_new = {elm["id"] for elm in open_orders}
         for oo in [elm for sublist in self.open_orders.values() for elm in sublist]:
             if oo["id"] not in oo_ids_new:
                 # there was an order cancellation not caught by websocket
-                logging.info(
+                cancelled_prints.append(
                     f"cancelled {oo['symbol']} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
                 )
         self.open_orders = {symbol: [] for symbol in self.open_orders}
@@ -340,9 +369,16 @@ class Passivbot:
                 logging.debug(
                     f"{elm['symbol']} has open order {elm['position_side']} {elm['id']}, but is not under passivbot management"
                 )
-                print(
+                logging.info(
                     f"debug {elm['symbol']} has open order {elm['position_side']} {elm['id']}, but is not under passivbot management"
                 )
+        if len(created_prints) > 12:
+            logging.info(f"{len(created_prints)} new open orders")
+        else:
+            for line in created_prints:
+                logging.info(line)
+        for line in cancelled_prints:
+            logging.info(line)
         now = utc_ms()
         self.upd_timestamps["open_orders"] = {k: now for k in self.upd_timestamps["open_orders"]}
         return True
@@ -352,9 +388,7 @@ class Passivbot:
         if res in [None, False]:
             return False
         positions_list_new, balance_new = res
-        if self.balance != balance_new:
-            logging.info(f"balance changed: {self.balance} -> {balance_new}")
-        self.balance = max(balance_new, 1e-12)
+        balance_old, self.balance = self.balance, max(balance_new, 1e-12)
         positions_new = {
             symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0, "price": 0.0}}
             for symbol in self.positions
@@ -388,27 +422,47 @@ class Passivbot:
                     WE_ratio = (
                         wallet_exposure / self.live_configs[symbol][pside]["wallet_exposure_limit"]
                     )
-                    pprice_diff = (
-                        (
-                            1.0
-                            - self.tickers[symbol]["last"] / positions_new[symbol]["long"]["price"]
+                    if pside == "long":
+                        pprice_diff = (
+                            (
+                                1.0
+                                - self.tickers[symbol]["last"]
+                                / positions_new[symbol]["long"]["price"]
+                            )
                             if positions_new[symbol]["long"]["price"] > 0.0
                             else 0.0
                         )
-                        if pside == "long"
-                        else (
+                        upnl = calc_pnl_long(
+                            positions_new[symbol][pside]["price"],
+                            self.tickers[symbol]["last"],
+                            positions_new[symbol][pside]["size"],
+                            self.inverse,
+                            self.c_mults[symbol],
+                        )
+                    else:
+                        pprice_diff = (
                             self.tickers[symbol]["last"] / positions_new[symbol]["short"]["price"]
+                            - 1.0
                             if positions_new[symbol]["short"]["price"] > 0.0
                             else 0.0
                         )
-                        - 1.0
-                    )
+                        upnl = calc_pnl_short(
+                            positions_new[symbol][pside]["price"],
+                            self.tickers[symbol]["last"],
+                            positions_new[symbol][pside]["size"],
+                            self.inverse,
+                            self.c_mults[symbol],
+                        )
                     logging.info(
-                        f"{symbol} {pside} changed: {self.positions[symbol][pside]} -> {positions_new[symbol][pside]} WE ratio: {WE_ratio:.3f} pprice diff {pprice_diff:.4f}"
+                        f"{symbol} {pside} changed: {self.positions[symbol][pside]} -> {positions_new[symbol][pside]} WE ratio: {WE_ratio:.3f} pprice diff: {pprice_diff:.4f} upnl: {upnl:.4f}"
                     )
         self.positions = positions_new
         now = utc_ms()
         self.upd_timestamps["positions"] = {k: now for k in self.upd_timestamps["positions"]}
+        if balance_old != balance_new:
+            logging.info(
+                f"balance changed: {balance_old} -> {balance_new} equity: {(balance_new + self.calc_upnl_sum()):.4f}"
+            )
         return True
 
     async def update_tickers(self):
@@ -566,20 +620,24 @@ class Passivbot:
                         # don't unstuck if position is in profit
                         stuck_positions.append((symbol, pside, pprice_diff))
         if stuck_positions:
-            logging.info(f"debug unstucking {sorted(stuck_positions, key=lambda x: x[2])}")
+            # logging.info(f"debug unstucking {sorted(stuck_positions, key=lambda x: x[2])}")
             sym, pside, pprice_diff = sorted(stuck_positions, key=lambda x: x[2])[0]
             AU_allowance = calc_AU_allowance(
                 np.array([x["pnl"] for x in self.pnls]),
                 self.balance,
                 loss_allowance_pct=self.config["loss_allowance_pct"],
             )
-            logging.debug(f"debug AU_allowance {AU_allowance}")
-            logging.info(f"debug AU_allowance {AU_allowance}")
             if AU_allowance > 0.0:
                 close_price = (
-                    round_up(self.emas_long[sym].max(), self.price_steps[sym])
+                    max(
+                        self.tickers[sym]["ask"],
+                        round_up(self.emas_long[sym].max(), self.price_steps[sym]),
+                    )
                     if pside == "long"
-                    else round_dn(self.emas_short[sym].min(), self.price_steps[sym])
+                    else min(
+                        self.tickers[sym]["bid"],
+                        round_dn(self.emas_short[sym].min(), self.price_steps[sym]),
+                    )
                 )
                 upnl = (
                     calc_pnl_long(
@@ -634,6 +692,9 @@ class Passivbot:
                         f"unstuck_close_{pside}",
                     ),
                 }
+                logging.info(
+                    f"debug unstucking {sym} {pside} {close_price} last price: {self.tickers[sym]['last']} AU allowance: {AU_allowance:.3f}"
+                )
 
         ideal_orders = {symbol: [] for symbol in self.symbols}
         for symbol in self.symbols:
@@ -696,9 +757,6 @@ class Passivbot:
                         ),
                     )
                     logging.debug(
-                        f"creating unstucking order for {symbol} long: {unstuck_close_order['order']}"
-                    )
-                    logging.info(
                         f"creating unstucking order for {symbol} long: {unstuck_close_order['order']}"
                     )
                 else:
@@ -769,9 +827,6 @@ class Passivbot:
                         ),
                     )
                     logging.debug(
-                        f"creating unstucking order for {symbol} short: {unstuck_close_order['order']}"
-                    )
-                    logging.info(
                         f"creating unstucking order for {symbol} short: {unstuck_close_order['order']}"
                     )
                 else:
