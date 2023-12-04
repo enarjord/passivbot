@@ -692,9 +692,10 @@ class Passivbot:
                         f"unstuck_close_{pside}",
                     ),
                 }
-                logging.info(
-                    f"debug unstucking {sym} {pside} {close_price} last price: {self.tickers[sym]['last']} AU allowance: {AU_allowance:.3f}"
-                )
+                if utc_ms() % 60000 < 4000:
+                    logging.info(
+                        f"debug unstucking {sym} {pside} {close_price} last price: {self.tickers[sym]['last']} AU allowance: {AU_allowance:.3f}"
+                    )
 
         ideal_orders = {symbol: [] for symbol in self.symbols}
         for symbol in self.symbols:
