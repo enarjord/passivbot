@@ -251,7 +251,7 @@ def calc_fills(
         new_equity = new_balance + calc_pnl_sum(
             poss_long, poss_short, hlc[:, 2], c_mults
         )  # compute total equity
-        wallet_exposure = qty_to_cost(new_pos[0], new_pos[1], inverse, c_mults[idx]) / balance
+        wallet_exposure = qty_to_cost(new_pos[0], new_pos[1], inverse, c_mults[idx]) / new_balance
         fills.append(
             (
                 k,  # index
@@ -329,6 +329,7 @@ def calc_fills(
         new_equity = new_balance + calc_pnl_sum(
             poss_long, poss_short, hlc[:, 2], c_mults
         )  # compute total equity
+        wallet_exposure = qty_to_cost(new_pos[0], new_pos[1], inverse, c_mults[idx]) / new_balance
         fills.append(
             (
                 k,  # index
@@ -574,10 +575,7 @@ def backtest_multisymbol_recursive_grid(
                 wallet_exposure = (
                     qty_to_cost(poss_long[i][0], poss_long[i][1], inverse, c_mults[i]) / balance
                 )
-                if (
-                    wallet_exposure / ll[i][16] > stuck_threshold
-                    and 1.0 - hlcs[i][k][2] / poss_long[i][1] > 0.0
-                ):
+                if wallet_exposure / ll[i][16] > stuck_threshold and hlcs[i][k][2] < poss_long[i][1]:
                     # is stuck and not in profit
                     any_stuck = True
                     stuck_positions_long[i] = 1.0
@@ -630,10 +628,7 @@ def backtest_multisymbol_recursive_grid(
                 wallet_exposure = (
                     qty_to_cost(poss_short[i][0], poss_short[i][1], inverse, c_mults[i]) / balance
                 )
-                if (
-                    wallet_exposure / ls[i][16] > stuck_threshold
-                    and hlcs[i][k][2] / poss_short[i][1] - 1.0 > 0.0
-                ):
+                if wallet_exposure / ls[i][16] > stuck_threshold and hlcs[i][k][2] > poss_short[i][1]:
                     # is stuck and not in profit
                     any_stuck = True
                     stuck_positions_short[i] = 1.0
@@ -684,7 +679,7 @@ def backtest_multisymbol_recursive_grid(
                 )
                 if AU_allowance > 0.0:
                     if s_pside:  # short
-                        close_price = emas_short[s_i].min()  # lower ema band
+                        close_price = min(hlcs[s_i][k][2], emas_short[s_i].min())  # lower ema band
                         upnl = calc_pnl_short(
                             poss_short[s_i][1],
                             hlcs[s_i][k][2],
@@ -715,7 +710,7 @@ def backtest_multisymbol_recursive_grid(
                         )
                         unstucking_close = (abs(close_qty), close_price, "unstuck_close_short")
                     else:  # long
-                        close_price = emas_long[s_i].max()  # upper ema band
+                        close_price = max(hlcs[s_i][k][2], emas_long[s_i].max())  # upper ema band
                         upnl = calc_pnl_long(
                             poss_long[s_i][1],
                             hlcs[s_i][k][2],
