@@ -123,6 +123,11 @@ class Passivbot:
             else:
                 raise Exception(f"no usable live config found for {symbol}")
 
+            if args.leverage is None:
+                self.live_configs[symbol]["leverage"] = 10.0
+            else:
+                self.live_configs[symbol]["leverage"] = max(1.0, float(args.leverage))
+
             for pside in ["long", "short"]:
                 if getattr(args, f"{pside}_mode") is None:
                     if self.live_configs[symbol][pside]["enabled"]:
@@ -182,7 +187,7 @@ class Passivbot:
                     ]:
                         self.live_configs[symbol][pside][key] = 0.0
 
-        for f in ["emas", "positions", "open_orders", "pnls"]:
+        for f in ["exchange_config", "emas", "positions", "open_orders", "pnls"]:
             res = await getattr(self, f"update_{f}")()
             logging.info(f"initiating {f} {res}")
 
