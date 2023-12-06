@@ -1761,7 +1761,7 @@ def calc_hash(data):
     return data_hash
 
 
-def stats_multi_to_df(stats, symbols):
+def stats_multi_to_df(stats, symbols, c_mults):
     dicts = []
     for x in stats:
         d = {"minute": x[0], "balance": x[4], "equity": x[5]}
@@ -1771,6 +1771,28 @@ def stats_multi_to_df(stats, symbols):
             d[f"{symbols[i]}_psize_s"] = x[2][i][0]
             d[f"{symbols[i]}_pprice_s"] = x[2][i][1]
             d[f"{symbols[i]}_price"] = x[3][i]
+
+            d[f"{symbols[i]}_upnl_pct_l"] = (
+                calc_pnl_long(
+                    d[f"{symbols[i]}_pprice_l"],
+                    d[f"{symbols[i]}_price"],
+                    d[f"{symbols[i]}_psize_l"],
+                    False,
+                    c_mults[i],
+                )
+                / d["balance"]
+            )
+            d[f"{symbols[i]}_upnl_pct_s"] = (
+                calc_pnl_short(
+                    d[f"{symbols[i]}_pprice_s"],
+                    d[f"{symbols[i]}_price"],
+                    d[f"{symbols[i]}_psize_s"],
+                    False,
+                    c_mults[i],
+                )
+                / d["balance"]
+            )
+
         dicts.append(d)
     sdf = pd.DataFrame(dicts).set_index("minute")
     for s in symbols:
@@ -1780,6 +1802,14 @@ def stats_multi_to_df(stats, symbols):
             sdf_tmp[f"{s}_psize_s"].abs() * sdf_tmp[f"{s}_pprice_s"] / sdf.balance
         )
     return sdf.replace(0.0, np.nan)
+
+
+def calc_upnl(row, c_mults_d):
+    if row.psize == 0.0:
+        return 0.0
+    if row.psize < 0.0:
+        return calc_pnl_short(row.pprice, row.price, row.psize, False, c_mults_d[row.symbol])
+    return calc_pnl_long(row.pprice, row.price, row.psize, False, c_mults_d[row.symbol])
 
 
 def fills_multi_to_df(fills, symbols, c_mults):
@@ -1801,9 +1831,11 @@ def fills_multi_to_df(fills, symbols, c_mults):
         ],
     )
     s2i = {symbol: i for i, symbol in enumerate(symbols)}
+    c_mults_d = {s: c_mults[i] for i, s in enumerate(symbols)}
     c_mults_array = fdf.symbol.apply(lambda s: c_mults[s2i[s]])
     fdf.loc[:, "cost"] = (fdf.qty * fdf.price).abs() * c_mults_array
     fdf.loc[:, "WE"] = (fdf.psize * fdf.pprice).abs() * c_mults_array / fdf.balance
+    fdf.loc[:, "upnl_pct"] = fdf.apply(lambda x: calc_upnl(x, c_mults_d), axis=1) / fdf.balance
     return fdf.set_index("minute")
 
 
@@ -1819,19 +1851,6 @@ def analyze_fills_multi(sdf, fdf, params):
     shorts = fdf[fdf.type.str.contains("short")]
 
     sdf_daily = sdf.groupby(sdf.index // (60 * 24)).last()
-    for symbol in symbols:
-        sdf_daily.loc[:, f"{symbol}_upnl_l"] = sdf_daily.apply(
-            lambda x: calc_pnl_long(
-                x[f"{symbol}_pprice_l"], x[f"{symbol}_price"], x[f"{symbol}_psize_l"], False, 1.0
-            ),
-            axis=1,
-        )
-        sdf_daily.loc[:, f"{symbol}_upnl_s"] = sdf_daily.apply(
-            lambda x: calc_pnl_short(
-                x[f"{symbol}_pprice_s"], x[f"{symbol}_price"], x[f"{symbol}_psize_s"], False, 1.0
-            ),
-            axis=1,
-        )
     sdf_daily.loc[:, "upnl_l"] = sdf_daily[[c for c in sdf_daily if "upnl_l" in c]].sum(axis=1)
     sdf_daily.loc[:, "upnl_s"] = sdf_daily[[c for c in sdf_daily if "upnl_s" in c]].sum(axis=1)
 
@@ -1938,6 +1957,7 @@ def analyze_fills_multi(sdf, fdf, params):
             "stuck_time_ratio_long": stuck_time_ratio_long,
             "stuck_time_ratio_short": stuck_time_ratio_short,
             "n_fills_per_day": len(fdfc) / n_days,
+            "upnl_pct_min": fdfc.upnl_pct.min(),
         }
     return analysis
 
