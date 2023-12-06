@@ -442,12 +442,12 @@ class BinanceBot(Passivbot):
             to_print = ""
             try:
                 res = await coros_to_call_lev[symbol]
-                to_print += f"set leverage for {symbol} {res} "
+                to_print += f"set leverage {res} "
             except Exception as e:
                 logging.error(f"{symbol}: b error setting leverage {e}")
             try:
                 res = await coros_to_call_margin_mode[symbol]
-                to_print += f"set cross mode for {symbol} {res}"
+                to_print += f"set cross mode {res}"
             except:
                 logging.error(f"error setting cross mode {res}")
             if to_print:
