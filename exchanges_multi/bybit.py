@@ -392,3 +392,6 @@ class BybitBot(Passivbot):
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(orders, "execute_order", self.max_n_creations_per_batch)
+
+    async def update_exchange_config(self):
+        pass
