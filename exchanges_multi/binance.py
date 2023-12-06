@@ -430,13 +430,13 @@ class BinanceBot(Passivbot):
                     self.cca.set_margin_mode("cross", symbol=symbol)
                 )
             except Exception as e:
-                logging.error(f"error setting cross mode for {symbol} {e}")
+                logging.error(f"{symbol}: error setting cross mode {e}")
             try:
                 coros_to_call_lev[symbol] = asyncio.create_task(
                     self.cca.set_leverage(int(self.live_configs[symbol]["leverage"]), symbol=symbol)
                 )
             except Exception as e:
-                logging.error(f"a error setting leverage for {symbol} {e}")
+                logging.error(f"{symbol}: a error setting leverage {e}")
         for symbol in self.symbols:
             res = None
             to_print = ""
@@ -444,11 +444,11 @@ class BinanceBot(Passivbot):
                 res = await coros_to_call_lev[symbol]
                 to_print += f"set leverage for {symbol} {res} "
             except Exception as e:
-                logging.error(f"b error setting leverage for {symbol} {e}")
+                logging.error(f"{symbol}: b error setting leverage {e}")
             try:
                 res = await coros_to_call_margin_mode[symbol]
                 to_print += f"set cross mode for {symbol} {res}"
             except:
-                logging.error(f"error setting cross mode for {symbol} {res}")
+                logging.error(f"error setting cross mode {res}")
             if to_print:
-                logging.info(to_print)
+                logging.info(f"{symbol}: {to_print}")
