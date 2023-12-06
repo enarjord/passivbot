@@ -412,3 +412,43 @@ class BinanceBot(Passivbot):
             print_async_exception(executed)
             traceback.print_exc()
             return {}
+
+    async def update_exchange_config(self):
+        try:
+            res = await self.cca.set_position_mode(True)
+            logging.info(f"set hedge mode {res}")
+        except Exception as e:
+            if '"code":-4059' in e.args[0]:
+                logging.info(f"hedge mode: {e}")
+            else:
+                logging.error(f"error setting hedge mode {e}")
+
+        coros_to_call_lev, coros_to_call_margin_mode = {}, {}
+        for symbol in self.symbols:
+            try:
+                coros_to_call_margin_mode[symbol] = asyncio.create_task(
+                    self.cca.set_margin_mode("cross", symbol=symbol)
+                )
+            except Exception as e:
+                logging.error(f"error setting cross mode for {symbol} {e}")
+            try:
+                coros_to_call_lev[symbol] = asyncio.create_task(
+                    self.cca.set_leverage(int(self.live_configs[symbol]["leverage"]), symbol=symbol)
+                )
+            except Exception as e:
+                logging.error(f"a error setting leverage for {symbol} {e}")
+        for symbol in self.symbols:
+            res = None
+            to_print = ""
+            try:
+                res = await coros_to_call_lev[symbol]
+                to_print += f"set leverage for {symbol} {res} "
+            except Exception as e:
+                logging.error(f"b error setting leverage for {symbol} {e}")
+            try:
+                res = await coros_to_call_margin_mode[symbol]
+                to_print += f"set cross mode for {symbol} {res}"
+            except:
+                logging.error(f"error setting cross mode for {symbol} {res}")
+            if to_print:
+                logging.info(to_print)
