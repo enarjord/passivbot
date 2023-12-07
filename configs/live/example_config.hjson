@@ -40,13 +40,13 @@
     symbols: {
         SYM1USDT: -lm n -sm gs -lc configs/live/custom/SYM1USDT.json
         SYM2USDT: -lm n -sm gs -sw 0.4
-        SYM3USDT: -lm gs -sm n  -lw 0.15 -lev 10
+        SYM3USDT: -lm gs -sm n  -lw 0.15 -lev 12
     }
 
     // Specify directory containing live configs.
     // They are sorted alphabetically, then the first config whose filename includes symbol is selected.
     // Set to "" to disable
-    live_configs_dir: "configs/live/single_symbol_optimizations/recursive_grid/"
+    live_configs_dir: "configs/live/multisymbol/no_AU/"
 
     // if symbol is missing from live_configs_map, default to this config
     default_config_path: configs/live/recursive_grid_mode.example.json
