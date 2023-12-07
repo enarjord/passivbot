@@ -43,6 +43,7 @@ class Passivbot:
         self.exchange = self.user_info["exchange"]
         self.broker_code = load_broker_code(self.user_info["exchange"])
 
+        self.sym_padding = 17
         self.stop_websocket = False
         self.balance = 1e-12
         self.upnls = {}
@@ -81,6 +82,7 @@ class Passivbot:
         )
 
     async def init_bot(self):
+        self.sym_padding = max(self.sym_padding, max([len(s) for s in self.symbols]) + 1)
         parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
         parser.add_argument("-sm", type=str, required=False, dest="short_mode", default=None)
         parser.add_argument("-lm", type=str, required=False, dest="long_mode", default=None)
@@ -198,7 +200,7 @@ class Passivbot:
             if order["id"] not in {x["id"] for x in self.open_orders[order["symbol"]]}:
                 self.open_orders[order["symbol"]].append(order)
                 logging.info(
-                    f"  created {order['symbol']} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
+                    f"  created {order['symbol']: <{self.sym_padding}} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
                 )
                 return True
         except Exception as e:
@@ -215,7 +217,7 @@ class Passivbot:
                     x for x in self.open_orders[order["symbol"]] if x["id"] != order["id"]
                 ]
                 logging.info(
-                    f"cancelled {order['symbol']} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
+                    f"cancelled {order['symbol']: <{self.sym_padding}} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
                 )
                 return True
         except Exception as e:
@@ -231,7 +233,7 @@ class Passivbot:
                 if upd["filled"] > 0.0:
                     # There was a fill, partial or full. Schedule update of open orders, pnls, position.
                     logging.info(
-                        f"   filled {upd['symbol']} {upd['side']} {upd['qty']} {upd['position_side']} @ {upd['price']} source: WS"
+                        f"   filled {upd['symbol']: <{self.sym_padding}} {upd['side']} {upd['qty']} {upd['position_side']} @ {upd['price']} source: WS"
                     )
                     self.recent_fill = True
                 elif upd["status"] in ["canceled", "expired"]:
@@ -357,14 +359,14 @@ class Passivbot:
             if oo["id"] not in oo_ids_old:
                 # there was a new open order not caught by websocket
                 created_prints.append(
-                    f"new order {oo['symbol']} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
+                    f"new order {oo['symbol']: <{self.sym_padding}} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
                 )
         oo_ids_new = {elm["id"] for elm in open_orders}
         for oo in [elm for sublist in self.open_orders.values() for elm in sublist]:
             if oo["id"] not in oo_ids_new:
                 # there was an order cancellation not caught by websocket
                 cancelled_prints.append(
-                    f"cancelled {oo['symbol']} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
+                    f"cancelled {oo['symbol']: <{self.sym_padding}} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
                 )
         self.open_orders = {symbol: [] for symbol in self.open_orders}
         for elm in open_orders:
@@ -372,10 +374,10 @@ class Passivbot:
                 self.open_orders[elm["symbol"]].append(elm)
             else:
                 logging.debug(
-                    f"{elm['symbol']} has open order {elm['position_side']} {elm['id']}, but is not under passivbot management"
+                    f"{elm['symbol']: <{self.sym_padding}} has open order {elm['position_side']} {elm['id']}, but is not under passivbot management"
                 )
                 logging.info(
-                    f"debug {elm['symbol']} has open order {elm['position_side']} {elm['id']}, but is not under passivbot management"
+                    f"debug {elm['symbol']: <{self.sym_padding}} has open order {elm['position_side']} {elm['id']}, but is not under passivbot management"
                 )
         if len(created_prints) > 12:
             logging.info(f"{len(created_prints)} new open orders")
@@ -401,10 +403,10 @@ class Passivbot:
         for elm in positions_list_new:
             if elm["symbol"] not in self.positions:
                 print(
-                    f"debug {elm['symbol']} has a {elm['position_side']} position, but is not under passivbot management"
+                    f"debug {elm['symbol']: <{self.sym_padding}} has a {elm['position_side']} position, but is not under passivbot management"
                 )
                 logging.debug(
-                    f"debug {elm['symbol']} has a {elm['position_side']} position, but is not under passivbot management"
+                    f"debug {elm['symbol']: <{self.sym_padding}} has a {elm['position_side']} position, but is not under passivbot management"
                 )
             else:
                 positions_new[elm["symbol"]][elm["position_side"]] = {
