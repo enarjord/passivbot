@@ -1845,7 +1845,9 @@ def analyze_fills_multi(sdf, fdf, params):
     final_balance = sdf.iloc[-1].balance
     final_equity = sdf.iloc[-1].equity
     daily_samples = sdf.groupby(sdf.index // (60 * 24)).last()
-    adg = daily_samples.equity.pct_change().mean()
+    daily_gains = daily_samples.equity.pct_change().dropna()
+    adg = daily_gains.mean()
+    daily_gains_std = daily_gains.std()
 
     longs = fdf[fdf.type.str.contains("long")]
     shorts = fdf[fdf.type.str.contains("short")]
@@ -1919,8 +1921,10 @@ def analyze_fills_multi(sdf, fdf, params):
         "eqbal_ratio_mean": eqbal_ratios.mean(),
         "eqbal_ratio_min": eqbal_ratios.min(),
         "n_fills_per_day": len(fdf) / n_days,
+        "shape_ratio_daily": adg / daily_gains_std if daily_gains_std != 0.0 else 0.0,
         "individual_analyses": {},
     }
+    upnl_pcts_mins = dict(sdf[[c for c in sdf.columns if "upnl" in c]].min().sort_values())
     for symbol in symbols:
         fdfc = fdf[fdf.symbol == symbol]
         longs = fdfc[fdfc.type.str.contains("long")]
@@ -1943,6 +1947,7 @@ def analyze_fills_multi(sdf, fdf, params):
         stuck_time_ratio_long = len(stuck_l[stuck_l]) / len(stuck_l)
         stuck_s = is_stuck_short[f"{symbol}_WE_s"]
         stuck_time_ratio_short = len(stuck_s[stuck_s]) / len(stuck_s)
+
         analysis["individual_analyses"][symbol] = {
             "pnl_ratio": pnl_sum / pnl_sum_total,
             "pnl_ratio_long_short": pnl_long / pnl_sum,
@@ -1957,7 +1962,8 @@ def analyze_fills_multi(sdf, fdf, params):
             "stuck_time_ratio_long": stuck_time_ratio_long,
             "stuck_time_ratio_short": stuck_time_ratio_short,
             "n_fills_per_day": len(fdfc) / n_days,
-            "upnl_pct_min": fdfc.upnl_pct.min(),
+            "upnl_pct_min_long": min(longs.upnl_pct.min(), upnl_pcts_mins[f"{symbol}_upnl_pct_l"]),
+            "upnl_pct_min_short": min(shorts.upnl_pct.min(), upnl_pcts_mins[f"{symbol}_upnl_pct_s"]),
         }
     return analysis
 
