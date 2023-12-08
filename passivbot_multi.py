@@ -340,7 +340,12 @@ class Passivbot:
         )
         if len(self.pnls) > len_pnls or len(missing_pnls) > 0:
             n_new_pnls = len(self.pnls) - len_pnls
-            logging.info(f"{n_new_pnls} new pnl{'s' if n_new_pnls > 1 else ''}")
+            try:
+                new_income = sum([x['pnl'] for x in self.pnls[-n_new_pnls:]])
+            except Exception as e:
+                logging.error(f"error getting pnl sum {e}")
+                new_income = 0.0
+            logging.info(f"{n_new_pnls} new pnl{'s' if n_new_pnls > 1 else ''} {new_income} {self.quote}")
             try:
                 json.dump(self.pnls, open(self.pnls_cache_filepath, "w"))
             except Exception as e:
@@ -699,7 +704,7 @@ class Passivbot:
                         f"unstuck_close_{pside}",
                     ),
                 }
-                if utc_ms() % 60000 < 4000:
+                if utc_ms() % 60000 < 3000:
                     logging.info(
                         f"debug unstucking {sym} {pside} {close_price} last price: {self.tickers[sym]['last']} AU allowance: {AU_allowance:.3f}"
                     )
