@@ -341,11 +341,13 @@ class Passivbot:
         if len(self.pnls) > len_pnls or len(missing_pnls) > 0:
             n_new_pnls = len(self.pnls) - len_pnls
             try:
-                new_income = sum([x['pnl'] for x in self.pnls[-n_new_pnls:]])
+                new_income = sum([x["pnl"] for x in self.pnls[-n_new_pnls:]])
             except Exception as e:
                 logging.error(f"error getting pnl sum {e}")
                 new_income = 0.0
-            logging.info(f"{n_new_pnls} new pnl{'s' if n_new_pnls > 1 else ''} {new_income} {self.quote}")
+            logging.info(
+                f"{n_new_pnls} new pnl{'s' if n_new_pnls > 1 else ''} {new_income} {self.quote}"
+            )
             try:
                 json.dump(self.pnls, open(self.pnls_cache_filepath, "w"))
             except Exception as e:
