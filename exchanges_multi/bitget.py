@@ -198,8 +198,10 @@ class BitgetBot(Passivbot):
     async def fetch_tickers(self):
         fetched = None
         try:
-            fetched = await self.cca.public_mix_get_mix_v1_market_tickers(params={"productType": "UMCBL"})
-            tickers = self.cca.parse_tickers(fetched['data'])
+            fetched = await self.cca.public_mix_get_mix_v1_market_tickers(
+                params={"productType": "UMCBL"}
+            )
+            tickers = self.cca.parse_tickers(fetched["data"])
             return tickers
         except Exception as e:
             logging.error(f"error fetching tickers {e}")
