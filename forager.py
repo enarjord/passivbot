@@ -19,7 +19,12 @@ import time
 import subprocess
 import argparse
 import traceback
-from procedures import load_exchange_key_secret_passphrase, utc_ms, make_get_filepath, get_first_ohlcv_timestamps
+from procedures import (
+    load_exchange_key_secret_passphrase,
+    utc_ms,
+    make_get_filepath,
+    get_first_ohlcv_timestamps,
+)
 from njit_funcs import calc_emas
 from pure_funcs import determine_pos_side_ccxt, date_to_ts2
 
@@ -39,7 +44,9 @@ def score_func(ohlcv):
     closes = np.array(ohlcv)[:, 4]
     spans = [int(round(len(closes) * i)) for i in np.linspace(0.1, 0.9, 4)]
     emas = calc_emas(closes, np.array(spans))
-    unilateralness = abs(sum([(1 - emas[:, i] / emas[:, i - 1]).mean() for i in range(1, len(emas[0]))]))
+    unilateralness = abs(
+        sum([(1 - emas[:, i] / emas[:, i - 1]).mean() for i in range(1, len(emas[0]))])
+    )
     range_mean = ((highs - lows) / closes).mean()
     return range_mean / unilateralness
 
@@ -79,11 +86,17 @@ def sort_symbols(ohlcvs, config):
     ]:
         if config[f"{title}_clip_threshold"] == 0.0:
             continue
-        by_func = sorted([(func(ohlcvs[sym]), sym) for sym in filtered_syms], reverse=higher_is_better)
-        print(f"sorted by {title} {'high to low' if higher_is_better else 'low to high'} n syms: {len(by_func)}")
+        by_func = sorted(
+            [(func(ohlcvs[sym]), sym) for sym in filtered_syms], reverse=higher_is_better
+        )
+        print(
+            f"sorted by {title} {'high to low' if higher_is_better else 'low to high'} n syms: {len(by_func)}"
+        )
         for elm in by_func:
             print(elm)
-        by_func = by_func[: max(int(round(len(by_func) * config[f"{title}_clip_threshold"])), min_n_syms)]
+        by_func = by_func[
+            : max(int(round(len(by_func) * config[f"{title}_clip_threshold"])), min_n_syms)
+        ]
         filtered_syms = [elm[1] for elm in by_func]
     return by_func
 
@@ -110,10 +123,14 @@ def generate_yaml(
     current_positions_long = sorted(set(current_positions_long + current_open_orders_long))
     current_positions_short = sorted(set(current_positions_short + current_open_orders_short))
     approved_longs = (
-        set(config["approved_symbols_long"]) if len(config["approved_symbols_long"]) > 0 else set(sorted_syms)
+        set(config["approved_symbols_long"])
+        if len(config["approved_symbols_long"]) > 0
+        else set(sorted_syms)
     )
     approved_shorts = (
-        set(config["approved_symbols_short"]) if len(config["approved_symbols_short"]) > 0 else set(sorted_syms)
+        set(config["approved_symbols_short"])
+        if len(config["approved_symbols_short"]) > 0
+        else set(sorted_syms)
     )
     ideal_longs = [x for x in sorted_syms if x in approved_longs][:n_longs]
     ideal_shorts = [x for x in sorted_syms if x in approved_shorts][:n_shorts]
@@ -220,7 +237,9 @@ def generate_yaml(
             z = 0
             both_on_gs = True
         if z % config["max_n_panes"] == 0:
-            yaml += f"- window_name: {config['user']}_{'gs' if both_on_gs else 'normal'}_{z}\n  layout: "
+            yaml += (
+                f"- window_name: {config['user']}_{'gs' if both_on_gs else 'normal'}_{z}\n  layout: "
+            )
             yaml += f"even-vertical\n  shell_command_before:\n    - cd {config['passivbot_root_dir']}\n  panes:\n"
         yaml += pane + "\n"
         z += 1
@@ -251,7 +270,10 @@ async def get_ohlcvs(cc, symbols, config):
     for i in range(0, len(symbols), n):
         js = list(range(i, min(len(symbols), i + n)))
         fetched = await asyncio.gather(
-            *[cc.fetch_ohlcv(symbols[j], timeframe=config["ohlcv_interval"], **extra_args) for j in js]
+            *[
+                cc.fetch_ohlcv(symbols[j], timeframe=config["ohlcv_interval"], **extra_args)
+                for j in js
+            ]
         )
         print("fetching ohlcvs", [symbols[j] for j in js], f"{i}/{len(symbols)}")
         for k, j in enumerate(js):
@@ -304,7 +326,7 @@ async def get_current_symbols(cc):
 
 async def get_min_costs_and_contract_multipliers(cc):
     exchange = cc.id
-    info = await cc.fetch_markets()
+    info = await cc.load_markets()
 
     # tickers format is {"COIN/USDT:USDT": {"last": float, ...}, ...}
     if exchange == "kucoinfutures":
@@ -312,13 +334,8 @@ async def get_min_costs_and_contract_multipliers(cc):
     elif exchange == "okx":
         tickers = await cc.fetch_tickers_by_type(type="swap")
     elif exchange == "bitget":
-        tickers = await cc.public_mix_get_market_tickers(params={"productType": "UMCBL"})
-        bitget_id_map = {elm["id"]: elm["symbol"] for elm in info}
-        tickers = {
-            bitget_id_map[elm["symbol"]]: {"last": float(elm["last"])}
-            for elm in tickers["data"]
-            if elm["symbol"] in bitget_id_map
-        }
+        res = await cc.public_mix_get_mix_v1_market_tickers(params={"productType": "UMCBL"})
+        tickers = cc.parse_tickers(res["data"])
     elif exchange == "bingx":
         tickers = await cc.swap_v2_public_get_quote_price()
         bingx_id_map = {elm["id"]: elm["symbol"] for elm in info}
@@ -332,6 +349,8 @@ async def get_min_costs_and_contract_multipliers(cc):
     min_costs = {}
     c_mults = {}
     for x in info:
+        if isinstance(x, str):
+            x = info[x]
         symbol = x["symbol"]
         if symbol.endswith("USDT"):
             if x["type"] != "spot":
@@ -352,9 +371,15 @@ async def get_min_costs_and_contract_multipliers(cc):
                         c_mult = 1.0
                         last_price = tickers[symbol]["last"]
                     else:
-                        min_cost = 0.0 if x["limits"]["cost"]["min"] is None else x["limits"]["cost"]["min"]
+                        min_cost = (
+                            0.0 if x["limits"]["cost"]["min"] is None else x["limits"]["cost"]["min"]
+                        )
                         c_mult = 1.0 if x["contractSize"] is None else x["contractSize"]
-                        min_qty = 0.0 if x["limits"]["amount"]["min"] is None else x["limits"]["amount"]["min"]
+                        min_qty = (
+                            0.0
+                            if x["limits"]["amount"]["min"] is None
+                            else x["limits"]["amount"]["min"]
+                        )
                         last_price = tickers[symbol]["last"]
                     min_costs[symbol] = max(min_cost, min_qty * c_mult * last_price)
                     c_mults[symbol] = c_mult
@@ -370,18 +395,25 @@ async def dump_yaml(cc, config):
 
     for side in ["long", "short"]:
         if config[f"live_configs_dir_{side}"] and os.path.exists(config[f"live_configs_dir_{side}"]):
-            fnames = sorted([f for f in os.listdir(config[f"live_configs_dir_{side}"]) if f.endswith(".json")])
+            fnames = sorted(
+                [f for f in os.listdir(config[f"live_configs_dir_{side}"]) if f.endswith(".json")]
+            )
             if fnames:
                 for symbol in symbols_map_inv:
                     fnamesf = [f for f in fnames if symbol in f]
                     if fnamesf and not any(
-                        [symbol in x for x in [config[f"live_configs_map_{side}"], config["live_configs_map"]]]
+                        [
+                            symbol in x
+                            for x in [config[f"live_configs_map_{side}"], config["live_configs_map"]]
+                        ]
                     ):
                         config[f"live_configs_map_{side}"][symbol] = os.path.join(
                             config[f"live_configs_dir_{side}"], fnamesf[0]
                         )
 
-    approved = [symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost and k in symbols_map]
+    approved = [
+        symbols_map[k] for k, v in min_costs.items() if v <= max_min_cost and k in symbols_map
+    ]
     if config["market_age_threshold"] not in ["0", 0, 0.0]:
         first_timestamp_threshold = 0
         try:
@@ -399,7 +431,9 @@ async def dump_yaml(cc, config):
                         and (first_timestamps[symbols_map_inv[s]] < first_timestamp_threshold)
                     ]
                     removed = sorted(set(approved) - set(new_approved))
-                    print(f"symbols younger than {config['market_age_threshold']} disapproved: {removed}")
+                    print(
+                        f"symbols younger than {config['market_age_threshold']} disapproved: {removed}"
+                    )
                     approved = new_approved
             except:
                 pass
@@ -407,7 +441,9 @@ async def dump_yaml(cc, config):
     if (config["approved_symbols_long"] or config["n_longs"] == 0) and (
         config["approved_symbols_short"] or config["n_shorts"] == 0
     ):
-        approved = set(approved) & (set(config["approved_symbols_long"]) | set(config["approved_symbols_short"]))
+        approved = set(approved) & (
+            set(config["approved_symbols_long"]) | set(config["approved_symbols_short"])
+        )
 
     print("getting current bots...")
     (
@@ -417,15 +453,27 @@ async def dump_yaml(cc, config):
         current_open_orders_short,
     ) = await get_current_symbols(cc)
 
-    current_positions_long = [symbols_map[s] if s in symbols_map else s for s in current_positions_long]
-    current_positions_short = [symbols_map[s] if s in symbols_map else s for s in current_positions_short]
-    current_open_orders_long = [symbols_map[s] if s in symbols_map else s for s in current_open_orders_long]
-    current_open_orders_short = [symbols_map[s] if s in symbols_map else s for s in current_open_orders_short]
+    current_positions_long = [
+        symbols_map[s] if s in symbols_map else s for s in current_positions_long
+    ]
+    current_positions_short = [
+        symbols_map[s] if s in symbols_map else s for s in current_positions_short
+    ]
+    current_open_orders_long = [
+        symbols_map[s] if s in symbols_map else s for s in current_open_orders_long
+    ]
+    current_open_orders_short = [
+        symbols_map[s] if s in symbols_map else s for s in current_open_orders_short
+    ]
 
     current_positions_long = sorted(set(current_positions_long) - set(config["symbols_to_ignore"]))
     current_positions_short = sorted(set(current_positions_short) - set(config["symbols_to_ignore"]))
-    current_open_orders_long = sorted(set(current_open_orders_long) - set(config["symbols_to_ignore"]))
-    current_open_orders_short = sorted(set(current_open_orders_short) - set(config["symbols_to_ignore"]))
+    current_open_orders_long = sorted(
+        set(current_open_orders_long) - set(config["symbols_to_ignore"])
+    )
+    current_open_orders_short = sorted(
+        set(current_open_orders_short) - set(config["symbols_to_ignore"])
+    )
 
     print("ignoring symbols:", config["symbols_to_ignore"])
     print("current_positions_long", sorted(current_positions_long))
@@ -466,7 +514,13 @@ async def main():
     parser = argparse.ArgumentParser(prog="forager", description="start forager")
     parser.add_argument("forager_config_path", type=str, help="path to forager config")
     parser.add_argument(
-        "-n", "--noloop", "--no-loop", "--no_loop", dest="no_loop", help="break after first iter", action="store_true"
+        "-n",
+        "--noloop",
+        "--no-loop",
+        "--no_loop",
+        dest="no_loop",
+        help="break after first iter",
+        action="store_true",
     )
     parser.add_argument(
         "-gs",
@@ -535,7 +589,9 @@ async def main():
     error_timestamps = []
     while True:
         try:
-            cc = getattr(ccxt, exchange_map[exchange])({"apiKey": key, "secret": secret, "password": passphrase})
+            cc = getattr(ccxt, exchange_map[exchange])(
+                {"apiKey": key, "secret": secret, "password": passphrase}
+            )
             await dump_yaml(cc, config)
             print("waiting one minute to avoid API rate limiting...")
             for i in range(60, -1, -1):
