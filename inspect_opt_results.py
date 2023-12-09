@@ -68,7 +68,7 @@ def main():
     opt_config = hjson.load(open(args.optimize_config_path))
     minsmaxs = {}
     for k in opt_config:
-        if ("maximum_" in k or "minimum_" in k):
+        if "maximum_" in k or "minimum_" in k:
             minsmaxs[k] = opt_config[k]
     klen = max([len(k) for k in minsmaxs])
     for k, v in minsmaxs.items():
