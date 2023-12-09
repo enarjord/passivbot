@@ -380,6 +380,7 @@ def backtest_multisymbol_recursive_grid(
     min_costs,
     min_qtys,
     live_configs,
+    loss_allowance_pct,
     stuck_threshold,
     unstuck_close_pct,
 ):
@@ -675,6 +676,7 @@ def backtest_multisymbol_recursive_grid(
                 AU_allowance = calc_AU_allowance(
                     np.array([0.0]),
                     balance,
+                    loss_allowance_pct=loss_allowance_pct,
                     drop_since_peak_abs=(pnl_cumsum_max - pnl_cumsum_running),
                 )
                 if AU_allowance > 0.0:
