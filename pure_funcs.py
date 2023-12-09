@@ -1882,9 +1882,12 @@ def analyze_fills_multi(sdf, fdf, params):
         abs(sum_loss_short) / sum_profit_short if sum_profit_short > 0.0 else 1.0
     )
 
-    drawdown_max = abs(calc_drawdowns(sdf.equity).min())
-    drawdown_daily = calc_drawdowns(daily_samples.equity)
-    mean_of_10_worst_drawdowns = abs(drawdown_daily.sort_values().iloc[:10].mean())
+    minute_mult = 60 * 24
+    drawdowns = calc_drawdowns(sdf.equity)
+    drawdowns_daily = drawdowns.groupby(drawdowns.index // minute_mult * minute_mult).min()
+    drawdowns_ten_worst = drawdowns_daily.sort_values().iloc[:10]
+    drawdown_max = drawdowns.abs().max()
+    mean_of_10_worst_drawdowns = drawdowns_ten_worst.abs().mean()
 
     is_stuck_long = (
         sdf[[c for c in sdf.columns if "WE_l" in c]] / (params["TWE_long"] / len(symbols)) > 0.9
@@ -1986,3 +1989,28 @@ def multi_replace(input_data, replacements: [(str, str)]):
                 string = string.replace(old, new)
             new_data[key] = string
     return new_data
+
+
+def live_config_dict_to_list_recursive_grid(live_config: dict) -> list:
+    keys = [
+        "auto_unstuck_delay_minutes",
+        "auto_unstuck_ema_dist",
+        "auto_unstuck_qty_pct",
+        "auto_unstuck_wallet_exposure_threshold",
+        "backwards_tp",
+        "ddown_factor",
+        "ema_span_0",
+        "ema_span_1",
+        "enabled",
+        "initial_eprice_ema_dist",
+        "initial_qty_pct",
+        "markup_range",
+        "min_markup",
+        "n_close_orders",
+        "rentry_pprice_dist",
+        "rentry_pprice_dist_wallet_exposure_weighting",
+        "wallet_exposure_limit",
+    ]
+    return numpyize(
+        [(float(live_config["long"][key]), float(live_config["short"][key])) for key in keys]
+    )
