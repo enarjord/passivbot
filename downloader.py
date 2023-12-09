@@ -1286,17 +1286,24 @@ async def prepare_multsymbol_data(symbols, start_date, end_date) -> (float, np.n
     if end_date in ["today", "now", ""]:
         end_date = ts_to_date_utc(utc_ms())[:10]
     hlcs = []
+    interval = 60000.0
     for symbol in symbols:
         data = await load_hlc_cache(symbol, False, start_date, end_date)
         assert (
-            np.diff(data[:, 0]) == 60000.0
+            np.diff(data[:, 0]) == interval
         ).all(), f"gaps in hlc data {symbol}"  # verify integrous 1m hlcs
         dft = pd.DataFrame(
             data, columns=["timestamp"] + [f"{symbol}_{key}" for key in ["high", "low", "close"]]
         )
         hlcs.append(dft)
-    df = reduce(lambda left, right: pd.merge(left, right, how="outer"), hlcs)
-    df = df.sort_values("timestamp").set_index("timestamp").fillna(0.0)
+
+    tss = np.arange(
+        min([x.timestamp.iloc[0] for x in hlcs]),
+        max([x.timestamp.iloc[-1] for x in hlcs]) + interval,
+        interval,
+    )
+    df = pd.concat([x.set_index("timestamp").reindex(tss) for x in hlcs], axis=1, join="outer")
+    df = df.fillna(0.0)
     return df.index[0], np.array([df.values[:, i : i + 3] for i in range(0, len(symbols) * 3, 3)])
 
 
