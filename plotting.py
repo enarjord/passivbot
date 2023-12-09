@@ -26,7 +26,9 @@ def make_table(result_):
     table.add_row(["Exchange", result["exchange"] if "exchange" in result else "unknown"])
     table.add_row(["Market type", result["market_type"] if "market_type" in result else "unknown"])
     table.add_row(["Symbol", result["symbol"] if "symbol" in result else "unknown"])
-    table.add_row(["Passivbot mode", result["passivbot_mode"] if "passivbot_mode" in result else "unknown"])
+    table.add_row(
+        ["Passivbot mode", result["passivbot_mode"] if "passivbot_mode" in result else "unknown"]
+    )
     table.add_row(
         [
             "ADG n subdivisions",
@@ -57,10 +59,22 @@ def make_table(result_):
                     "%",
                 ),
                 ("Max drawdown", f"drawdown_max_{side}", 5, 100, "%"),
-                ("Drawdown mean of 1% worst (hourly)", f"drawdown_1pct_worst_mean_{side}", 5, 100, "%"),
+                (
+                    "Drawdown mean of 1% worst (hourly)",
+                    f"drawdown_1pct_worst_mean_{side}",
+                    5,
+                    100,
+                    "%",
+                ),
                 ("Sharpe Ratio (daily)", f"sharpe_ratio_{side}", 6, 1, ""),
                 ("Loss to profit ratio", f"loss_profit_ratio_{side}", 4, 1, ""),
-                ("P.A. distance mean of 1% worst (hourly)", f"pa_distance_1pct_worst_mean_{side}", 6, 1, ""),
+                (
+                    "P.A. distance mean of 1% worst (hourly)",
+                    f"pa_distance_1pct_worst_mean_{side}",
+                    6,
+                    1,
+                    "",
+                ),
                 ("#newline", "", 0, 0, ""),
                 ("Final balance", f"final_balance_{side}", 6, 1, ""),
                 ("Final equity", f"final_equity_{side}", 6, 1, ""),
@@ -74,7 +88,13 @@ def make_table(result_):
                 ("Price action distance max", f"pa_distance_max_{side}", 6, 1, ""),
                 ("Closest bankruptcy", f"closest_bkr_{side}", 4, 100, "%"),
                 ("Lowest equity/balance ratio", f"eqbal_ratio_min_{side}", 4, 1, ""),
-                ("Mean of 10 worst eq/bal ratios (hourly)", f"eqbal_ratio_mean_of_10_worst_{side}", 4, 1, ""),
+                (
+                    "Mean of 10 worst eq/bal ratios (hourly)",
+                    f"eqbal_ratio_mean_of_10_worst_{side}",
+                    4,
+                    1,
+                    "",
+                ),
                 ("Equity/balance ratio std", f"equity_balance_ratio_std_{side}", 4, 1, ""),
                 ("Ratio of time spent at max exposure", f"time_at_max_exposure_{side}", 4, 1, ""),
             ]:
@@ -168,7 +188,9 @@ def dump_plots(
 
     if disable_plotting:
         return
-    n_parts = n_parts if n_parts is not None else min(12, max(3, int(round_up(result["n_days"] / 14, 1.0))))
+    n_parts = (
+        n_parts if n_parts is not None else min(12, max(3, int(round_up(result["n_days"] / 14, 1.0))))
+    )
     for side, fdf in [("long", longs), ("short", shorts)]:
         if result[side]["enabled"]:
             plt.clf()
@@ -179,7 +201,9 @@ def dump_plots(
             print(f"\nplotting balance and equity {side} {result['plots_dirpath']}...")
             plt.clf()
             sdf[f"balance_{side}"].plot()
-            sdf[f"equity_{side}"].plot(title=f"Balance and equity {side.capitalize()}", xlabel="Time", ylabel="Balance")
+            sdf[f"equity_{side}"].plot(
+                title=f"Balance and equity {side.capitalize()}", xlabel="Time", ylabel="Balance"
+            )
             plt.savefig(f"{result['plots_dirpath']}balance_and_equity_sampled_{side}.png")
 
             if result["passivbot_mode"] == "clock":
@@ -194,8 +218,12 @@ def dump_plots(
                     {f"ema_{span}": df.price.ewm(span=span, adjust=False).mean() for span in spans},
                     index=df.index,
                 )
-                ema_dist_lower = result[side]["ema_dist_entry" if side == "long" else "ema_dist_close"]
-                ema_dist_upper = result[side]["ema_dist_entry" if side == "short" else "ema_dist_close"]
+                ema_dist_lower = result[side][
+                    "ema_dist_entry" if side == "long" else "ema_dist_close"
+                ]
+                ema_dist_upper = result[side][
+                    "ema_dist_entry" if side == "short" else "ema_dist_close"
+                ]
                 if abs(ema_dist_lower) < 0.1:
                     df = df.join(
                         pd.DataFrame(
@@ -258,31 +286,43 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
     if side >= 0:
         longs = fdf[fdf.type.str.contains("long")]
 
-        longs[longs.type.str.contains("rentry") | longs.type.str.contains("ientry")].price.plot(style="bo")
+        longs[longs.type.str.contains("rentry") | longs.type.str.contains("ientry")].price.plot(
+            style="bo"
+        )
         longs[longs.type.str.contains("secondary")].price.plot(style="go")
         longs[longs.type == "long_nclose"].price.plot(style="ro")
-        longs[(longs.type.str.contains("unstuck_entry")) | (longs.type == "clock_entry_long")].price.plot(style="bx")
-        longs[(longs.type.str.contains("unstuck_close")) | (longs.type == "clock_close_long")].price.plot(style="rx")
+        longs[
+            (longs.type.str.contains("unstuck_entry")) | (longs.type == "clock_entry_long")
+        ].price.plot(style="bx")
+        longs[
+            (longs.type.str.contains("unstuck_close")) | (longs.type == "clock_close_long")
+        ].price.plot(style="rx")
 
         lppu = longs[(longs.pprice != longs.pprice.shift(1)) & (longs.pprice != 0.0)]
         for i in range(len(lppu) - 1):
-            plt.plot([lppu.index[i], lppu.index[i + 1]], [lppu.pprice.iloc[i], lppu.pprice.iloc[i]], "b--")
+            plt.plot(
+                [lppu.index[i], lppu.index[i + 1]], [lppu.pprice.iloc[i], lppu.pprice.iloc[i]], "b--"
+            )
     if side <= 0:
         shorts = fdf[fdf.type.str.contains("short")]
 
-        shorts[shorts.type.str.contains("rentry") | shorts.type.str.contains("ientry")].price.plot(style="ro")
+        shorts[shorts.type.str.contains("rentry") | shorts.type.str.contains("ientry")].price.plot(
+            style="ro"
+        )
         shorts[shorts.type.str.contains("secondary")].price.plot(style="go")
         shorts[shorts.type == "short_nclose"].price.plot(style="bo")
-        shorts[(shorts.type.str.contains("unstuck_entry")) | (shorts.type == "clock_entry_short")].price.plot(
-            style="rx"
-        )
-        shorts[(shorts.type.str.contains("unstuck_close")) | (shorts.type == "clock_close_short")].price.plot(
-            style="bx"
-        )
+        shorts[
+            (shorts.type.str.contains("unstuck_entry")) | (shorts.type == "clock_entry_short")
+        ].price.plot(style="rx")
+        shorts[
+            (shorts.type.str.contains("unstuck_close")) | (shorts.type == "clock_close_short")
+        ].price.plot(style="bx")
 
         sppu = shorts[(shorts.pprice != shorts.pprice.shift(1)) & (shorts.pprice != 0.0)]
         for i in range(len(sppu) - 1):
-            plt.plot([sppu.index[i], sppu.index[i + 1]], [sppu.pprice.iloc[i], sppu.pprice.iloc[i]], "r--")
+            plt.plot(
+                [sppu.index[i], sppu.index[i + 1]], [sppu.pprice.iloc[i], sppu.pprice.iloc[i]], "r--"
+            )
 
     return plt
 
@@ -320,7 +360,15 @@ def plot_fills_multi(symbol, sdf, fdf, start_pct=0.0, end_pct=1.0):
     sdfc[f"{symbol}_pprice_s"].plot(style="r--")
 
     ax.legend(
-        ["price", "entries_long", "closes_long", "pprices_long", "entries_short", "closes_short", "pprices_short"]
+        [
+            "price",
+            "entries_long",
+            "closes_long",
+            "pprices_long",
+            "entries_short",
+            "closes_short",
+            "pprices_short",
+        ]
     )
 
     return plt
@@ -373,7 +421,9 @@ def plot_pnls_stuck(sdf, fdf, symbol=None, start_pct=0.0, end_pct=1.0, unstuck_t
         is_stuck_long = sdfc.loc[:, f"{symbol}_WE_l"] / stuck_threshold_long > unstuck_threshold
         is_stuck_short = sdfc.loc[:, f"{symbol}_WE_s"] / stuck_threshold_short > unstuck_threshold
         any_stuck = (
-            pd.DataFrame({"0": any_stuck, "1": is_stuck_long.values, "2": is_stuck_short.values}).any(axis=1).values
+            pd.DataFrame({"0": any_stuck, "1": is_stuck_long.values, "2": is_stuck_short.values})
+            .any(axis=1)
+            .values
         )
     ax = sdfc.equity.plot()
     sdfc[any_stuck].balance.plot(style="r.")
