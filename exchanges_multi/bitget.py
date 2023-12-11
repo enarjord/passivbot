@@ -27,8 +27,12 @@ class BitgetBot(Passivbot):
                 "password": self.user_info["passphrase"],
             }
         )
-        self.max_n_cancellations_per_batch = 20
-        self.max_n_creations_per_batch = 12
+        self.max_n_cancellations_per_batch = 10
+        self.max_n_creations_per_batch = 5
+        self.order_side_map = {
+            "buy": {"long": "open_long", "short": "close_short"},
+            "sell": {"long": "close_long", "short": "open_short"},
+        }
 
     async def init_bot(self):
         # require symbols to be formatted to ccxt standard COIN/USDT:USDT
@@ -132,29 +136,22 @@ class BitgetBot(Passivbot):
 
     async def fetch_open_orders(self, symbol: str = None):
         fetched = None
-        open_orders = {}
-        limit = 50
+        open_orders = []
         try:
-            fetched = await self.cca.fetch_open_orders(symbol=symbol, limit=limit)
-            while True:
-                if all([elm["id"] in open_orders for elm in fetched]):
-                    break
-                next_page_cursor = None
-                for elm in fetched:
-                    elm["position_side"] = determine_pos_side_ccxt(elm)
-                    elm["qty"] = elm["amount"]
-                    open_orders[elm["id"]] = elm
-                    if "nextPageCursor" in elm["info"]:
-                        next_page_cursor = elm["info"]["nextPageCursor"]
-                if len(fetched) < limit:
-                    break
-                if next_page_cursor is None:
-                    break
-                # fetch more
-                fetched = await self.cca.fetch_open_orders(
-                    symbol=symbol, limit=limit, params={"cursor": next_page_cursor}
-                )
-            return sorted(open_orders.values(), key=lambda x: x["timestamp"])
+            fetched = await self.cca.private_mix_get_mix_v1_order_margincoincurrent(
+                params={"productType": "umcbl"}
+            )
+            for elm in fetched["data"]:
+                elm["side"] = "buy" if elm["side"] in ["close_short", "open_long"] else "sell"
+                elm["position_side"] = elm["posSide"]
+                elm["price"] = float(elm["price"])
+                elm["qty"] = elm["amount"] = float(elm["size"])
+                elm["timestamp"] = float(elm["cTime"])
+                elm["id"] = elm["orderId"]
+                elm["custom_id"] = elm["clientOid"]
+                elm["symbol"] = self.symbol_ids_inv[elm["symbol"]]
+                open_orders.append(elm)
+            return sorted(open_orders, key=lambda x: x["timestamp"])
         except Exception as e:
             logging.error(f"error fetching open orders {e}")
             print_async_exception(fetched)
@@ -226,58 +223,48 @@ class BitgetBot(Passivbot):
 
     async def fetch_pnls(
         self,
-        symbol: str = None,
         start_time: int = None,
         end_time: int = None,
     ):
-        if start_time is not None:
-            week = 1000 * 60 * 60 * 24 * 7
-            income = []
-            if end_time is None:
-                end_time = int(utc_ms() + 1000 * 60 * 60 * 24)
-            # bybit has limit of 7 days per pageinated fetch
-            # fetch multiple times
-            i = 1
-            while i < 52:  # limit n fetches to 52 (one year)
-                sts = end_time - week * i
-                ets = sts + week
-                sts = max(sts, start_time)
-                fetched = await self.fetch_pnl(symbol=symbol, start_time=sts, end_time=ets)
-                income.extend(fetched)
-                if sts <= start_time:
-                    break
-                i += 1
-                logging.debug(f"fetching income for more than a week {ts_to_date_utc(sts)}")
-            return sorted({elm["id"]: elm for elm in income}.values(), key=lambda x: x["timestamp"])
-        else:
-            return await self.fetch_pnl(symbol=symbol, start_time=start_time, end_time=end_time)
+        limit = 100
+        if start_time is None and end_time is None:
+            return await self.fetch_pnl()
+        all_fetched = {}
+        while True:
+            fetched = await self.fetch_pnl(start_time=start_time, end_time=end_time)
+            if fetched == []:
+                break
+            for elm in fetched:
+                all_fetched[elm["id"]] = elm
+            if len(fetched) < limit:
+                break
+            logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
+            end_time = fetched[0]["timestamp"]
+        return sorted(
+            [x for x in all_fetched.values() if x["pnl"] != 0.0], key=lambda x: x["timestamp"]
+        )
 
     async def fetch_pnl(
         self,
-        symbol: str = None,
         start_time: int = None,
         end_time: int = None,
     ):
         fetched = None
+        # if there are more fills in timeframe than 100, it will fetch latest
         try:
-            ets = utc_ms() + 1000 * 60 * 60 * 24
-            sts = ets - 1000 * 60 * 60 * 24 * 7
-            params = {"productType": "umcbl", "startTime": int(sts), "endTime": int(ets)}
-            res = await self.cca.private_mix_get_mix_v1_order_allfills(params=params)
-
-            params = {"incomeType": "REALIZED_PNL", "limit": 1000}
-            if symbol is not None:
-                params["symbol"] = symbol
-            if start_time is not None:
-                params["startTime"] = int(start_time)
-            if end_time is not None:
-                params["endTime"] = int(end_time)
-            fetched = floatify(await self.cca.fapiprivate_get_income(params=params))
-            for i in range(len(fetched)):
-                fetched[i]["pnl"] = fetched[i]["income"]
-                fetched[i]["timestamp"] = fetched[i]["time"]
-                fetched[i]["id"] = fetched[i]["tranId"]
-            return sorted(fetched, key=lambda x: x["time"])
+            if end_time is None:
+                end_time = utc_ms() + 1000 * 60 * 60 * 24
+            if start_time is None:
+                start_time = 0
+            params = {"productType": "umcbl", "startTime": int(start_time), "endTime": int(end_time)}
+            fetched = await self.cca.private_mix_get_mix_v1_order_allfills(params=params)
+            pnls = []
+            for elm in fetched["data"]:
+                pnls.append(elm)
+                pnls[-1]["pnl"] = float(pnls[-1]["profit"])
+                pnls[-1]["timestamp"] = float(pnls[-1]["cTime"])
+                pnls[-1]["id"] = pnls[-1]["tradeId"]
+            return sorted(pnls, key=lambda x: x["timestamp"])
         except Exception as e:
             logging.error(f"error fetching income {e}")
             print_async_exception(fetched)
@@ -349,9 +336,10 @@ class BitgetBot(Passivbot):
                 amount=abs(order["qty"]),
                 price=order["price"],
                 params={
-                    "positionIdx": 1 if order["position_side"] == "long" else 2,
-                    "timeInForce": "postOnly",
-                    "orderLinkId": order["custom_id"] + str(uuid4()),
+                    "reduceOnly": order["reduce_only"],
+                    "timeInForceValue": "post_only",
+                    "side": self.order_side_map[order["side"]][order["position_side"]],
+                    "clientOid": order["custom_id"] + str(uuid4()),
                 },
             )
             if "symbol" not in executed or executed["symbol"] is None:
