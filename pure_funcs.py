@@ -1847,6 +1847,12 @@ def analyze_fills_multi(sdf, fdf, params):
     daily_samples = sdf.groupby(sdf.index // (60 * 24)).last()
     daily_gains = daily_samples.equity.pct_change().dropna()
     adg = daily_gains.mean()
+    adg_weighted = np.mean(
+        [
+            daily_gains.iloc[round(int(len(daily_gains) * (1 - 1 / (i + 1)))) :].mean()
+            for i in range(10)
+        ]
+    )
     daily_gains_std = daily_gains.std()
 
     longs = fdf[fdf.type.str.contains("long")]
@@ -1866,6 +1872,23 @@ def analyze_fills_multi(sdf, fdf, params):
     sdf_daily.loc[:, "equity_short"] = daily_pnls_short + sdf.balance.iloc[0]
 
     adg_long = sdf_daily.equity_long.pct_change().mean()
+    adg_weighted_long = np.mean(
+        [
+            sdf_daily.equity_long.iloc[round(int(len(sdf_daily) * (1 - 1 / (i + 1)))) :]
+            .pct_change()
+            .mean()
+            for i in range(10)
+        ]
+    )
+    adg_weighted_short = np.mean(
+        [
+            sdf_daily.equity_short.iloc[round(int(len(sdf_daily) * (1 - 1 / (i + 1)))) :]
+            .pct_change()
+            .mean()
+            for i in range(10)
+        ]
+    )
+
     adg_short = sdf_daily.equity_short.pct_change().mean()
 
     n_days = (sdf.index[-1] - sdf.index[0]) / 60 / 24
@@ -1908,6 +1931,11 @@ def analyze_fills_multi(sdf, fdf, params):
         "drawdown_max": drawdown_max,
         "mean_of_10_worst_drawdowns": mean_of_10_worst_drawdowns,
         "adg": adg,
+        "adg_weighted": adg_weighted,
+        "adg_long": adg_long,
+        "adg_weighted_long": adg_weighted_long,
+        "adg_short": adg_short,
+        "adg_weighted_short": adg_weighted_short,
         "pnl_sum": pnl_sum,
         "pnl_long": pnl_long,
         "pnl_short": pnl_short,
