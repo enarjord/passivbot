@@ -1056,7 +1056,7 @@ async def download_ohlcvs_bybit(symbol, start_date, end_date, download_only=Fals
             for i in range(0, len(filenames), 10):
                 filenames_sublist = filenames[i : i + n_concurrent_fetches]
                 print(
-                    f"fetching trades from {filenames_sublist[0][-17:-7]} to {filenames_sublist[-1][-17:-7]}"
+                    f"fetching {len(filenames_sublist)} trades from {filenames_sublist[0][-17:-7]} to {filenames_sublist[-1][-17:-7]}"
                 )
                 dfs_ = await get_bybit_trades(base_url, symbol, filenames_sublist)
                 dfs_ = {k[-17:-7]: convert_to_ohlcv(v) for k, v in dfs_.items()}
@@ -1071,7 +1071,7 @@ async def download_ohlcvs_bybit(symbol, start_date, end_date, download_only=Fals
                     dfs.update(dfs_)
     if not download_only:
         for day in ideal_days:
-            if day not in days_to_get:
+            if os.path.exists(f"{dirpath}{day}.csv"):
                 dfs[day] = pd.read_csv(f"{dirpath}{day}.csv")
         if len(dfs) == 0:
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
