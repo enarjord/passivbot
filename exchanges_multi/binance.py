@@ -151,7 +151,7 @@ class BinanceBot(Passivbot):
                 print(f"exception watch_book_ticker {symbol}", e)
                 traceback.print_exc()
 
-    async def fetch_open_orders(self, symbol: str = None):
+    async def fetch_open_orders(self, symbol: str = None) -> [dict]:
         fetched = None
         open_orders = {}
         try:
