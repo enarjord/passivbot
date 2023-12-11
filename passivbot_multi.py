@@ -468,7 +468,7 @@ class Passivbot:
                             self.c_mults[symbol],
                         )
                     logging.info(
-                        f"{symbol} {pside} changed: {self.positions[symbol][pside]} -> {positions_new[symbol][pside]} WE ratio: {WE_ratio:.3f} pprice diff: {pprice_diff:.4f} upnl: {upnl:.4f}"
+                        f"{symbol: <{self.sym_padding}} {pside} changed: {self.positions[symbol][pside]} -> {positions_new[symbol][pside]} WE ratio: {WE_ratio:.3f} pprice diff: {pprice_diff:.4f} upnl: {upnl:.4f}"
                     )
         self.positions = positions_new
         now = utc_ms()
@@ -706,7 +706,7 @@ class Passivbot:
                         f"unstuck_close_{pside}",
                     ),
                 }
-                if utc_ms() % 60000 < 3000:
+                if utc_ms() % 60000 < 5000:
                     logging.info(
                         f"debug unstucking {sym} {pside} {close_price} last price: {self.tickers[sym]['last']} AU allowance: {AU_allowance:.3f}"
                     )
