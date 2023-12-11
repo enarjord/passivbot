@@ -338,7 +338,7 @@ async def get_min_costs_and_contract_multipliers(cc):
         tickers = cc.parse_tickers(res["data"])
     elif exchange == "bingx":
         tickers = await cc.swap_v2_public_get_quote_price()
-        bingx_id_map = {elm["id"]: elm["symbol"] for elm in info}
+        bingx_id_map = {info[sym]["id"]: sym for sym in info}
         tickers = {
             bingx_id_map[elm["symbol"]]: {"last": float(elm["price"])}
             for elm in tickers["data"]
