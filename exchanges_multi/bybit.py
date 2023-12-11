@@ -129,7 +129,7 @@ class BybitBot(Passivbot):
                 print(f"exception watch_tickers {symbols}", e)
                 traceback.print_exc()
 
-    async def fetch_open_orders(self, symbol: str = None):
+    async def fetch_open_orders(self, symbol: str = None) -> [dict]:
         fetched = None
         open_orders = {}
         limit = 50
