@@ -192,7 +192,7 @@ class BinanceBot(Passivbot):
             ]
             return positions, balance
         except Exception as e:
-            logging.error(f"error fetching tickers {e}")
+            logging.error(f"error fetching positions {e}")
             print_async_exception(fetched)
             traceback.print_exc()
             return False
