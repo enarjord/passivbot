@@ -230,7 +230,7 @@ class Passivbot:
             for upd in upd_list:
                 if upd["symbol"] not in self.symbols:
                     return
-                if upd["filled"] > 0.0:
+                if "filled" in upd and upd["filled"] is not None and upd["filled"] > 0.0:
                     # There was a fill, partial or full. Schedule update of open orders, pnls, position.
                     logging.info(
                         f"   filled {upd['symbol']: <{self.sym_padding}} {upd['side']} {upd['qty']} {upd['position_side']} @ {upd['price']} source: WS"
@@ -1064,6 +1064,10 @@ async def main():
             from exchanges_multi.binance import BinanceBot
 
             bot = BinanceBot(config)
+        elif user_info["exchange"] == "bitget":
+            from exchanges_multi.bitget import BitgetBot
+
+            bot = BitgetBot(config)
         else:
             raise Exception(f"unknown exchange {user_info['exchange']}")
         try:
