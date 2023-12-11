@@ -20,6 +20,7 @@ class BitgetBot(Passivbot):
                 "password": self.user_info["passphrase"],
             }
         )
+        self.ccp.options["defaultType"] = "swap"
         self.cca = getattr(ccxt_async, self.exchange)(
             {
                 "apiKey": self.user_info["key"],
@@ -27,6 +28,7 @@ class BitgetBot(Passivbot):
                 "password": self.user_info["passphrase"],
             }
         )
+        self.cca.options["defaultType"] = "swap"
         self.max_n_cancellations_per_batch = 10
         self.max_n_creations_per_batch = 5
         self.order_side_map = {
@@ -113,7 +115,7 @@ class BitgetBot(Passivbot):
                     break
                 res = await self.ccp.watch_orders()
                 for i in range(len(res)):
-                    res[i]["position_side"] = determine_pos_side_ccxt(res[i])
+                    res[i]["position_side"] = res[i]["info"]["posSide"]
                     res[i]["qty"] = res[i]["amount"]
                 self.handle_order_update(res)
             except Exception as e:
