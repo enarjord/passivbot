@@ -637,10 +637,14 @@ class Passivbot:
         if stuck_positions:
             # logging.info(f"debug unstucking {sorted(stuck_positions, key=lambda x: x[2])}")
             sym, pside, pprice_diff = sorted(stuck_positions, key=lambda x: x[2])[0]
-            AU_allowance = calc_AU_allowance(
-                np.array([x["pnl"] for x in self.pnls]),
-                self.balance,
-                loss_allowance_pct=self.config["loss_allowance_pct"],
+            AU_allowance = (
+                calc_AU_allowance(
+                    np.array([x["pnl"] for x in self.pnls]),
+                    self.balance,
+                    loss_allowance_pct=self.config["loss_allowance_pct"],
+                )
+                if len(self.pnls) > 0
+                else 0.0
             )
             if AU_allowance > 0.0:
                 close_price = (
