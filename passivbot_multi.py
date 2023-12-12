@@ -254,7 +254,7 @@ class Passivbot:
         try:
             if self.balance != upd["USDT"]["total"]:
                 logging.info(
-                    f"balance changed: {self.balance} -> {upd['USDT']['total']} equity: {(upd['USDT']['total'] + self.calc_upnl_sum()):.4f}"
+                    f"balance changed: {self.balance} -> {upd['USDT']['total']} equity: {(upd['USDT']['total'] + self.calc_upnl_sum()):.4f} source: WS"
                 )
             self.balance = max(upd["USDT"]["total"], 1e-12)
         except Exception as e:
@@ -475,7 +475,7 @@ class Passivbot:
         self.upd_timestamps["positions"] = {k: now for k in self.upd_timestamps["positions"]}
         if balance_old != balance_new:
             logging.info(
-                f"balance changed: {balance_old} -> {balance_new} equity: {(balance_new + self.calc_upnl_sum()):.4f}"
+                f"balance changed: {balance_old} -> {balance_new} equity: {(balance_new + self.calc_upnl_sum()):.4f} source: REST"
             )
         return True
 
