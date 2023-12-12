@@ -103,6 +103,7 @@ class BitgetBot(Passivbot):
                 if self.stop_websocket:
                     break
                 res = await self.ccp.watch_balance()
+                res["USDT"]["total"] = res["USDT"]["free"]  # bitget balance is 'free'
                 self.handle_balance_update(res)
             except Exception as e:
                 print(f"exception watch_balance", e)
