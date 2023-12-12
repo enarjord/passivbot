@@ -345,9 +345,10 @@ class Passivbot:
             except Exception as e:
                 logging.error(f"error getting pnl sum {e}")
                 new_income = 0.0
-            logging.info(
-                f"{n_new_pnls} new pnl{'s' if n_new_pnls > 1 else ''} {new_income} {self.quote}"
-            )
+            if len(missing_pnls) == 0:
+                logging.info(
+                    f"{n_new_pnls} new pnl{'s' if n_new_pnls > 1 else ''} {new_income} {self.quote}"
+                )
             try:
                 json.dump(self.pnls, open(self.pnls_cache_filepath, "w"))
             except Exception as e:
