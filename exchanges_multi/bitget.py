@@ -342,7 +342,7 @@ class BitgetBot(Passivbot):
                     "reduceOnly": order["reduce_only"],
                     "timeInForceValue": "post_only",
                     "side": self.order_side_map[order["side"]][order["position_side"]],
-                    "clientOid": f"{self.broker_code}#{order['custom_id']}_{str(uuid4())}",
+                    "clientOid": f"{self.broker_code}#{order['custom_id']}_{str(uuid4())}"[:64],
                 },
             )
             if "symbol" not in executed or executed["symbol"] is None:
