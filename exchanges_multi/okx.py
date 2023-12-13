@@ -1,587 +1,335 @@
+from passivbot_multi import Passivbot, logging
+from uuid import uuid4
+import ccxt.pro as ccxt_pro
+import ccxt.async_support as ccxt_async
+import pprint
 import asyncio
-import hashlib
-import hmac
-import json
 import traceback
-from time import time, time_ns
-from urllib.parse import urlencode
-
-import aiohttp
 import numpy as np
-import ccxt.async_support as ccxt
-
-from procedures import load_ccxt_version
-
-ccxt_version_req = load_ccxt_version()
-assert (
-    ccxt.__version__ == ccxt_version_req
-), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v{ccxt_version_req} manually"
-import uuid
-
-from passivbot import Bot, logging
-from procedures import print_, print_async_exception
-from pure_funcs import ts_to_date, sort_dict_keys, format_float, shorten_custom_id
+from pure_funcs import multi_replace, floatify, ts_to_date_utc, calc_hash, determine_pos_side_ccxt
+from procedures import print_async_exception, utc_ms
 
 
-class OKXBot(Bot):
+class OKXBot(Passivbot):
     def __init__(self, config: dict):
-        self.exchange = "okx"
-        self.ohlcv = True  # TODO implement websocket
-        self.max_n_orders_per_batch = 20
-        self.max_n_cancellations_per_batch = 20
         super().__init__(config)
-        self.okx = getattr(ccxt, "okx")(
-            {"apiKey": self.key, "secret": self.secret, "password": self.passphrase}
+        self.ccp = getattr(ccxt_pro, self.exchange)(
+            {
+                "apiKey": self.user_info["key"],
+                "secret": self.user_info["secret"],
+                "password": self.user_info["passphrase"],
+            }
         )
-
-    async def init_market_type(self):
-        self.markets = None
-        try:
-            self.markets = await self.okx.fetch_markets()
-            self.market_type = "linear perpetual swap"
-            if self.symbol.endswith("USDT"):
-                self.symbol = f"{self.symbol[:self.symbol.find('USDT')]}/USDT:USDT"
-            else:
-                # TODO implement inverse
-                raise NotImplementedError(f"not implemented for {self.symbol}")
-        except Exception as e:
-            logging.error(f"error initiating market type {e}")
-            print_async_exception(self.markets)
-            traceback.print_exc()
-            raise Exception("stopping bot")
-
-    async def _init(self):
-        await self.init_market_type()
-        for elm in self.markets:
-            if elm["symbol"] == self.symbol:
-                break
-        else:
-            raise Exception(f"symbol {self.symbol} not found")
-        self.inst_id = elm["info"]["instId"]
-        self.inst_type = elm["info"]["instType"]
-        self.coin = elm["base"]
-        self.quote = elm["quote"]
-        self.margin_coin = elm["quote"]
-        self.c_mult = self.config["c_mult"] = elm["contractSize"]
-        self.min_qty = self.config["min_qty"] = (
-            elm["limits"]["amount"]["min"] if elm["limits"]["amount"]["min"] else 0.0
+        self.ccp.options["defaultType"] = "swap"
+        self.cca = getattr(ccxt_async, self.exchange)(
+            {
+                "apiKey": self.user_info["key"],
+                "secret": self.user_info["secret"],
+                "password": self.user_info["passphrase"],
+            }
         )
-        self.min_cost = self.config["min_cost"] = (
-            elm["limits"]["cost"]["min"] if elm["limits"]["cost"]["min"] else 0.0
-        )
-        self.qty_step = self.config["qty_step"] = elm["precision"]["amount"]
-        self.price_step = self.config["price_step"] = elm["precision"]["price"]
-        self.inverse = self.config["inverse"] = False
-        await super()._init()
-        await self.init_order_book()
-        await self.update_position()
+        self.cca.options["defaultType"] = "swap"
+        self.max_n_cancellations_per_batch = 10
+        self.max_n_creations_per_batch = 5
+        self.order_side_map = {
+            "buy": {"long": "open_long", "short": "close_short"},
+            "sell": {"long": "close_long", "short": "open_short"},
+        }
 
-    async def get_server_time(self):
-        # millis
-        return await self.okx.fetch_time()
-
-    async def transfer_from_derivatives_to_spot(self, coin: str, amount: float):
-        return
-        return await self.private_post(
-            self.endpoints["futures_transfer"],
-            {"asset": coin, "amount": amount, "type": 2},
-            base_endpoint=self.spot_base_endpoint,
-        )
-
-    async def execute_leverage_change(self):
-        return await self.okx.set_leverage(
-            self.leverage, symbol=self.symbol, params={"mgnMode": "cross"}
-        )
-
-    async def init_exchange_config(self) -> bool:
-        try:
-            logging.info(
-                str(
-                    await self.okx.set_margin_mode(
-                        "cross", symbol=self.symbol, params={"lever": self.leverage}
-                    )
+    async def init_bot(self):
+        # require symbols to be formatted to ccxt standard COIN/USDT:USDT
+        self.markets_dict = await self.cca.load_markets()
+        self.symbols = {}
+        for symbol_ in sorted(set(self.config["symbols"])):
+            symbol = symbol_
+            if not symbol.endswith("/USDT:USDT"):
+                coin_extracted = multi_replace(
+                    symbol_, [("/", ""), (":", ""), ("USDT", ""), ("BUSD", ""), ("USDC", "")]
                 )
+                symbol_reformatted = coin_extracted + "/USDT:USDT"
+                logging.info(
+                    f"symbol {symbol_} is wrongly formatted. Trying to reformat to {symbol_reformatted}"
+                )
+                symbol = symbol_reformatted
+            if symbol not in self.markets_dict:
+                logging.info(f"{symbol} missing from {self.exchange}")
+            else:
+                elm = self.markets_dict[symbol]
+                if elm["type"] != "swap":
+                    logging.info(f"wrong market type for {symbol}: {elm['type']}")
+                elif not elm["active"]:
+                    logging.info(f"{symbol} not active")
+                elif not elm["linear"]:
+                    logging.info(f"{symbol} is not a linear market")
+                else:
+                    self.symbols[symbol] = self.config["symbols"][symbol_]
+        self.quote = "USDT"
+        self.inverse = False
+        self.symbol_ids_inv = {
+            self.markets_dict[symbol]["id"]: symbol for symbol in self.markets_dict
+        }
+        for symbol in self.symbols:
+            elm = self.markets_dict[symbol]
+            self.symbol_ids[symbol] = elm["id"]
+            self.min_costs[symbol] = (
+                0.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
             )
-        except Exception as e:
-            print(e)
-        try:
-            logging.info(str(await self.execute_leverage_change()))
-        except Exception as e:
-            print(e)
-        try:
-            logging.info(str(await self.okx.set_position_mode(True)))
-        except Exception as e:
-            print(e)
+            self.min_qtys[symbol] = elm["limits"]["amount"]["min"]
+            self.qty_steps[symbol] = elm["precision"]["amount"]
+            self.price_steps[symbol] = elm["precision"]["price"]
+            self.c_mults[symbol] = elm["contractSize"]
+            self.coins[symbol] = symbol.replace("/USDT:USDT", "")
+            self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "last": 0.0}
+            self.open_orders[symbol] = []
+            self.positions[symbol] = {
+                "long": {"size": 0.0, "price": 0.0},
+                "short": {"size": 0.0, "price": 0.0},
+            }
+            self.upd_timestamps["open_orders"][symbol] = 0.0
+            self.upd_timestamps["tickers"][symbol] = 0.0
+            self.upd_timestamps["positions"][symbol] = 0.0
+        await super().init_bot()
 
-    async def init_order_book(self):
-        ticker = None
-        try:
-            ticker = await self.okx.fetch_ticker(symbol=self.symbol)
-            self.ob = [ticker["bid"], ticker["ask"]]
-            self.price = np.random.choice(self.ob)
-            return True
-        except Exception as e:
-            logging.error(f"error updating order book {e}")
-            print_async_exception(ticker)
-            return False
+    async def start_websockets(self):
+        await asyncio.gather(
+            self.watch_balance(),
+            self.watch_orders(),
+            self.watch_tickers(),
+        )
 
-    async def fetch_open_orders(self) -> [dict]:
-        open_orders = None
+    async def watch_balance(self):
+        while True:
+            try:
+                if self.stop_websocket:
+                    break
+                res = await self.ccp.watch_balance()
+                res["USDT"]["total"] = res["USDT"]["free"]  # bitget balance is 'free'
+                self.handle_balance_update(res)
+            except Exception as e:
+                print(f"exception watch_balance", e)
+                traceback.print_exc()
+
+    async def watch_orders(self):
+        while True:
+            try:
+                if self.stop_websocket:
+                    break
+                res = await self.ccp.watch_orders()
+                for i in range(len(res)):
+                    res[i]["position_side"] = res[i]["info"]["posSide"]
+                    res[i]["qty"] = res[i]["amount"]
+                self.handle_order_update(res)
+            except Exception as e:
+                print(f"exception watch_orders", e)
+                traceback.print_exc()
+
+    async def watch_tickers(self, symbols=None):
+        symbols = list(self.symbols if symbols is None else symbols)
+        while True:
+            try:
+                if self.stop_websocket:
+                    break
+                res = await self.ccp.watch_tickers(symbols)
+                if res["last"] is None:
+                    res["last"] = np.random.choice([res["bid"], res["ask"]])
+                self.handle_ticker_update(res)
+            except Exception as e:
+                print(f"exception watch_tickers {symbols}", e)
+                traceback.print_exc()
+
+    async def fetch_open_orders(self, symbol: str = None):
+        fetched = None
+        open_orders = []
         try:
-            open_orders = await self.okx.fetch_open_orders(symbol=self.symbol)
-            return [
-                {
-                    "order_id": e["id"],
-                    "symbol": e["symbol"],
-                    "price": e["price"],
-                    "qty": e["amount"],
-                    "type": e["type"],
-                    "side": e["side"],
-                    "position_side": e["info"]["posSide"],
-                    "timestamp": e["timestamp"],
-                }
-                for e in open_orders
-            ]
+            fetched = await self.cca.fetch_open_orders()
+            for i in range(len(fetched)):
+                fetched[i]["position_side"] = fetched[i]["info"]["posSide"]
+                fetched[i]["qty"] = fetched[i]["amount"]
+            return sorted(fetched, key=lambda x: x["timestamp"])
         except Exception as e:
             logging.error(f"error fetching open orders {e}")
-            print_async_exception(open_orders)
+            print_async_exception(fetched)
             traceback.print_exc()
             return False
 
-    async def fetch_position(self) -> dict:
-        positions, balance = None, None
+    async def fetch_positions(self) -> ([dict], float):
+        # also fetches balance
+        fetched_positions, fetched_balance = None, None
         try:
-            positions, balance = await asyncio.gather(
-                self.okx.fetch_positions(),
-                self.okx.fetch_balance(),
+            fetched_positions, fetched_balance = await asyncio.gather(
+                self.cca.fetch_positions(),
+                self.cca.fetch_balance(),
             )
-            positions = [e for e in positions if e["symbol"] == self.symbol]
-            position = {
-                "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
-                "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
-                "wallet_balance": 0.0,
-                "equity": 0.0,
-            }
-            if positions:
-                for p in positions:
-                    if p["side"] == "long":
-                        position["long"] = {
-                            "size": p["contracts"],
-                            "price": p["entryPrice"],
-                            "liquidation_price": p["liquidationPrice"]
-                            if p["liquidationPrice"]
-                            else 0.0,
-                        }
-                    elif p["side"] == "short":
-                        position["short"] = {
-                            "size": p["contracts"],
-                            "price": p["entryPrice"],
-                            "liquidation_price": p["liquidationPrice"]
-                            if p["liquidationPrice"]
-                            else 0.0,
-                        }
-            for elm in balance["info"]["data"]:
+            for elm in fetched_balance["info"]["data"]:
                 for elm2 in elm["details"]:
                     if elm2["ccy"] == self.quote:
-                        position["wallet_balance"] = float(elm2["cashBal"])
+                        balance = float(elm2["cashBal"])
                         break
-            return position
+            for i in range(len(fetched_positions)):
+                fetched_positions[i]["position_side"] = fetched_positions[i]["side"]
+                fetched_positions[i]["size"] = fetched_positions[i]["contracts"]
+                fetched_positions[i]["price"] = fetched_positions[i]["entryPrice"]
+            return fetched_positions, balance
         except Exception as e:
-            logging.error(f"error fetching pos or balance {e}")
-            print_async_exception(positions)
-            print_async_exception(balance)
+            logging.error(f"error fetching positions and balance {e}")
+            print_async_exception(fetched_positions)
+            print_async_exception(fetched_balance)
             traceback.print_exc()
-            return None
+            return False
 
-    async def execute_orders(self, orders: [dict]) -> [dict]:
-        if len(orders) == 0:
-            return []
-        executed = None
-        try:
-            to_execute = []
-            for order in orders:
-                params = {
-                    "instId": self.inst_id,
-                    "tdMode": "cross",
-                    "side": order["side"],
-                    "posSide": order["position_side"],
-                    "sz": int(order["qty"]),
-                    "reduceOnly": order["reduce_only"],
-                    "tag": self.broker_code,
-                }
-                if order["type"] == "limit":
-                    params["ordType"] = "post_only"
-                    params["px"] = order["price"]
-                custom_id_ = self.broker_code
-                if "custom_id" in order:
-                    custom_id_ += order["custom_id"]
-                params["clOrdId"] = shorten_custom_id(f"{custom_id_}{uuid.uuid4().hex}")[:32]
-                # print('debug client order id', params['clOrdId'])
-                # print('debug execute order', params)
-                to_execute.append(params)
-            executed = await self.okx.private_post_trade_batch_orders(params=to_execute)
-            to_return = []
-            for elm in executed["data"]:
-                for to_ex in to_execute:
-                    if elm["clOrdId"] == to_ex["clOrdId"] and elm["sCode"] == "0":
-                        to_return.append(
-                            {
-                                "symbol": self.symbol,
-                                "side": to_ex["side"],
-                                "position_side": to_ex["posSide"],
-                                "type": to_ex["ordType"],
-                                "qty": to_ex["sz"],
-                                "order_id": int(elm["ordId"]),
-                                "custom_id": elm["clOrdId"],
-                                "price": to_ex["px"],
-                            }
-                        )
-                        break
-            return to_return
-        except Exception as e:
-            print(f"error executing order {executed} {orders} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return []
-
-    async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        if not orders:
-            return []
-        cancellations = []
-        try:
-            cancellations = await self.okx.private_post_trade_cancel_batch_orders(
-                params=[{"instId": self.inst_id, "ordId": str(order["order_id"])} for order in orders]
-            )
-            to_return = []
-            for elm in cancellations["data"]:
-                for order in orders:
-                    if elm["ordId"] == order["order_id"] and elm["sCode"] == "0":
-                        to_return.append(
-                            {
-                                "symbol": self.symbol,
-                                "side": order["side"],
-                                "position_side": order["position_side"],
-                                "type": order["type"],
-                                "qty": order["qty"],
-                                "order_id": int(elm["ordId"]),
-                                "price": order["price"],
-                            }
-                        )
-                        break
-            return to_return
-        except Exception as e:
-            logging.error(f"error cancelling orders {orders} {e}")
-            print_async_exception(cancellations)
-            traceback.print_exc()
-            return []
-
-    async def fetch_latest_fills(self):
+    async def fetch_tickers(self):
         fetched = None
         try:
-            params = {"instType": self.inst_type, "instId": self.inst_id}
-            fetched = await self.okx.private_get_trade_fills(params=params)
-            fills = [
-                {
-                    "order_id": elm["ordId"],
-                    "symbol": self.symbol,
-                    "status": None,
-                    "custom_id": elm["clOrdId"],
-                    "price": float(elm["fillPx"]),
-                    "qty": float(elm["fillSz"]),
-                    "original_qty": None,
-                    "type": None,
-                    "reduce_only": None,
-                    "side": elm["side"],
-                    "position_side": elm["posSide"],
-                    "timestamp": float(elm["ts"]),
-                }
-                for elm in fetched["data"]
-            ]
+            fetched = await self.cca.fetch_tickers()
+            return fetched
         except Exception as e:
-            print("error fetching latest fills", e)
+            logging.error(f"error fetching tickers {e}")
             print_async_exception(fetched)
             traceback.print_exc()
-            return []
-        return fills
+            return False
 
-    async def fetch_all_fills(
-        self,
-        symbol=None,
-        limit: int = 1000,
-        from_id: int = None,
-        start_time: int = None,
-        end_time: int = None,
-    ):
-        fetched = self.okx.private_get_trade_fills_history({"instType": self.inst_type})
-        fillsd = {}
-        while True:
-            if len(fetched["data"]) == 0:
-                break
-            new_fills = [elm for elm in fetched["data"] if elm["billId"] not in fillsd]
-            if not new_fills:
-                break
-            fillsd.update({elm["billId"]: elm for elm in new_fills})
-            end_time = int(new_fills[-1]["fillTime"])
-            fetched = self.okx.private_get_trade_fills_history(
-                {"instType": self.inst_type, "end": end_time}
-            )
-        return sorted(fillsd.values(), key=lambda x: x["fillTime"])
-
-    def fetch_all_fills_(start_time: int):
-        fetched = okx.private_get_trade_fills_history({"instType": "SWAP"})
-        fillsd = {}
-        while True:
-            if len(fetched["data"]) == 0:
-                break
-            new_fills = [elm for elm in fetched["data"] if elm["billId"] not in fillsd]
-            if not new_fills:
-                break
-            fillsd.update({elm["billId"]: elm for elm in new_fills})
-            end_time = int(new_fills[-1]["fillTime"])
-            fetched = okx.private_get_trade_fills_history({"instType": "SWAP", "end": end_time})
-            print(end_time)
-        return sorted(fillsd.values(), key=lambda x: x["fillTime"])
-
-    async def fetch_fills(
-        self,
-        symbol=None,
-        limit: int = 1000,
-        from_id: int = None,
-        start_time: int = None,
-        end_time: int = None,
-    ):
-        return []
-
-    async def get_all_income(
-        self,
-        symbol: str = None,
-        start_time: int = None,
-        income_type: str = "realized_pnl",
-        end_time: int = None,
-    ):
-        income = []
-        while True:
-            fetched = await self.fetch_income(
-                symbol=symbol,
-                start_time=start_time,
-                income_type=income_type,
-                limit=1000,
-            )
-            print_(["fetched income", ts_to_date(fetched[0]["timestamp"])])
-            if fetched == income[-len(fetched) :]:
-                break
-            income += fetched
-            if len(fetched) < 1000:
-                break
-            start_time = income[-1]["timestamp"]
-        income_d = {e["transaction_id"]: e for e in income}
-        return sorted(income_d.values(), key=lambda x: x["timestamp"])
-
-    async def fetch_income(
-        self,
-        symbol: str = None,
-        income_type: str = None,
-        limit: int = 1000,
-        start_time: int = None,
-        end_time: int = None,
-    ):
-        params = {"limit": limit}
-        if symbol is not None:
-            params["symbol"] = symbol
-        if start_time is not None:
-            params["startTime"] = int(start_time)
-        if end_time is not None:
-            params["endTime"] = int(end_time)
-        if income_type is not None:
-            params["incomeType"] = income_type.upper()
+    async def fetch_ohlcv(self, symbol: str, timeframe="1m"):
+        # intervals: 1,3,5,15,30,60,120,240,360,720,D,M,W
+        fetched = None
         try:
-            fetched = await self.private_get(self.endpoints["income"], params)
-            return [
-                {
-                    "symbol": e["symbol"],
-                    "income_type": e["incomeType"].lower(),
-                    "income": float(e["income"]),
-                    "token": e["asset"],
-                    "timestamp": float(e["time"]),
-                    "info": e["info"],
-                    "transaction_id": float(e["tranId"]),
-                    "trade_id": float(e["tradeId"]) if e["tradeId"] != "" else 0,
-                }
-                for e in fetched
-            ]
+            fetched = await self.cca.fetch_ohlcv(symbol, timeframe=timeframe, limit=1000)
+            return fetched
         except Exception as e:
-            print("error fetching income: ", e)
+            logging.error(f"error fetching ohlcv for {symbol} {e}")
+            print_async_exception(fetched)
             traceback.print_exc()
-            return []
-        return income
+            return False
 
-    async def fetch_account(self):
-        try:
-            return await self.private_get(
-                self.endpoints["account"], base_endpoint=self.spot_base_endpoint
-            )
-        except Exception as e:
-            print("error fetching account: ", e)
-            return {"balances": []}
-
-    async def fetch_ticks(
+    async def fetch_pnls(
         self,
-        from_id: int = None,
         start_time: int = None,
         end_time: int = None,
-        do_print: bool = True,
     ):
-        raise NotImplementedError
-        params = {"symbol": self.symbol, "limit": 1000}
-        if from_id is not None:
-            params["fromId"] = max(0, from_id)
-        if start_time is not None:
-            params["startTime"] = int(start_time)
-        if end_time is not None:
-            params["endTime"] = int(end_time)
-        try:
-            fetched = await self.public_get(self.endpoints["ticks"], params)
-        except Exception as e:
-            print("error fetching ticks a", e)
-            traceback.print_exc()
-            return []
-        try:
-            ticks = [
-                {
-                    "trade_id": int(t["a"]),
-                    "price": float(t["p"]),
-                    "qty": float(t["q"]),
-                    "timestamp": int(t["T"]),
-                    "is_buyer_maker": t["m"],
-                }
-                for t in fetched
-            ]
-            if do_print:
-                print_(
-                    [
-                        "fetched ticks",
-                        self.symbol,
-                        ticks[0]["trade_id"],
-                        ts_to_date(float(ticks[0]["timestamp"]) / 1000),
-                    ]
-                )
-        except Exception as e:
-            print("error fetching ticks b", e, fetched)
-            ticks = []
-            if do_print:
-                print_(["fetched no new ticks", self.symbol])
-        return ticks
-
-    async def fetch_ticks_time(self, start_time: int, end_time: int = None, do_print: bool = True):
-        raise NotImplementedError
-        return await self.fetch_ticks(start_time=start_time, end_time=end_time, do_print=do_print)
-
-    async def fetch_ohlcvs(
-        self, symbol: str = None, start_time: int = None, interval="1m", limit=100
-    ):
-        interval = interval.replace("h", "H")
-        intervals = ["1m", "3m", "5m", "15m", "30m", "1H", "2H", "4H"]
-        assert interval in intervals, f"{interval} {intervals}"
-        params = {"instId": self.inst_id, "bar": interval, "limit": limit}
-        if start_time is not None:
-            params["after"] = str(start_time)
-        try:
-            fetched = await self.okx.public_get_market_history_candles(params)
-            return [
-                {
-                    **{"timestamp": int(elm[0])},
-                    **{
-                        k: float(elm[i + 1])
-                        for i, k in enumerate(["open", "high", "low", "close", "volume"])
-                    },
-                }
-                for elm in fetched["data"]
-            ]
-        except Exception as e:
-            print("error fetching ohlcvs", fetched, e)
-            traceback.print_exc()
-
-    async def transfer(self, type_: str, amount: float, asset: str = "USDT"):
-        raise NotImplementedError
-        params = {"type": type_.upper(), "amount": amount, "asset": asset}
-        return await self.private_post(
-            self.endpoints["transfer"], params, base_endpoint=self.spot_base_endpoint
+        limit = 100
+        if start_time is None and end_time is None:
+            return await self.fetch_pnl()
+        all_fetched = {}
+        while True:
+            fetched = await self.fetch_pnl(start_time=start_time, end_time=end_time)
+            if fetched == []:
+                break
+            for elm in fetched:
+                all_fetched[elm["id"]] = elm
+            if len(fetched) < limit:
+                break
+            logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
+            end_time = fetched[0]["timestamp"]
+        return sorted(
+            [x for x in all_fetched.values() if x["pnl"] != 0.0], key=lambda x: x["timestamp"]
         )
 
-    def standardize_market_stream_event(self, data: dict) -> [dict]:
-        raise NotImplementedError
+    async def fetch_pnl(
+        self,
+        start_time: int = None,
+        end_time: int = None,
+    ):
+        fetched = None
+        # if there are more fills in timeframe than 100, it will fetch latest
         try:
-            return [
-                {
-                    "timestamp": int(data["T"]),
-                    "price": float(data["p"]),
-                    "qty": float(data["q"]),
-                    "is_buyer_maker": data["m"],
-                }
-            ]
+            if end_time is None:
+                end_time = utc_ms() + 1000 * 60 * 60 * 24
+            if start_time is None:
+                start_time = end_time - 1000 * 60 * 60 * 24 * 7
+            fetched = await self.cca.fetch_my_trades(since=start_time, params={"until": end_time})
+            for i in range(len(fetched)):
+                fetched[i]["pnl"] = float(fetched[i]["info"]["fillPnl"])
+            return sorted(fetched, key=lambda x: x["timestamp"])
         except Exception as e:
-            print("error in websocket tick", e, data)
-        return []
-
-    async def beat_heart_user_stream(self) -> None:
-        raise NotImplementedError
-        while True:
-            await asyncio.sleep(60 + np.random.randint(60 * 9, 60 * 14))
-            await self.init_user_stream()
-
-    async def init_user_stream(self) -> None:
-        raise NotImplementedError
-        try:
-            response = await self.private_post(self.endpoints["listen_key"])
-            self.listen_key = response["listenKey"]
-            self.endpoints["websocket_user"] = self.endpoints["websocket"] + self.listen_key
-        except Exception as e:
+            logging.error(f"error fetching pnl {e}")
+            print_async_exception(fetched)
             traceback.print_exc()
-            print_(["error fetching listen key", e])
+            return False
 
-    def standardize_user_stream_event(self, event: dict) -> dict:
-        raise NotImplementedError
-        standardized = {}
-        if "e" in event:
-            if event["e"] == "ACCOUNT_UPDATE":
-                if "a" in event and "B" in event["a"]:
-                    for x in event["a"]["B"]:
-                        if x["a"] == self.margin_coin:
-                            standardized["wallet_balance"] = float(x["cw"])
-                if event["a"]["m"] == "ORDER":
-                    for x in event["a"]["P"]:
-                        if x["s"] != self.symbol:
-                            standardized["other_symbol"] = x["s"]
-                            standardized["other_type"] = "account_update"
-                            continue
-                        if x["ps"] == "LONG":
-                            standardized["psize_long"] = float(x["pa"])
-                            standardized["pprice_long"] = float(x["ep"])
-                        elif x["ps"] == "SHORT":
-                            standardized["psize_short"] = float(x["pa"])
-                            standardized["pprice_short"] = float(x["ep"])
-            elif event["e"] == "ORDER_TRADE_UPDATE":
-                if event["o"]["s"] == self.symbol:
-                    if event["o"]["X"] == "NEW":
-                        standardized["new_open_order"] = {
-                            "order_id": int(event["o"]["i"]),
-                            "symbol": event["o"]["s"],
-                            "price": float(event["o"]["p"]),
-                            "qty": float(event["o"]["q"]),
-                            "type": event["o"]["o"].lower(),
-                            "side": event["o"]["S"].lower(),
-                            "position_side": event["o"]["ps"].lower().replace("short", "short"),
-                            "timestamp": int(event["o"]["T"]),
-                        }
-                    elif event["o"]["X"] in ["CANCELED", "EXPIRED"]:
-                        standardized["deleted_order_id"] = int(event["o"]["i"])
-                    elif event["o"]["X"] == "FILLED":
-                        standardized["deleted_order_id"] = int(event["o"]["i"])
-                        standardized["filled"] = True
-                    elif event["o"]["X"] == "PARTIALLY_FILLED":
-                        standardized["deleted_order_id"] = int(event["o"]["i"])
-                        standardized["partially_filled"] = True
-                else:
-                    standardized["other_symbol"] = event["o"]["s"]
-                    standardized["other_type"] = "order_update"
-        return standardized
+    async def execute_multiple(self, orders: [dict], type_: str, max_n_executions: int):
+        if not orders:
+            return []
+        executions = []
+        for order in orders[:max_n_executions]:  # sorted by PA dist
+            execution = None
+            try:
+                execution = asyncio.create_task(getattr(self, type_)(order))
+                executions.append((order, execution))
+            except Exception as e:
+                logging.error(f"error executing {type_} {order} {e}")
+                print_async_exception(execution)
+                traceback.print_exc()
+        results = []
+        for execution in executions:
+            result = None
+            try:
+                result = await execution[1]
+                results.append(result)
+            except Exception as e:
+                logging.error(f"error executing {type_} {execution} {e}")
+                print_async_exception(result)
+                traceback.print_exc()
+        return results
+
+    async def execute_cancellation(self, order: dict) -> dict:
+        executed = None
+        try:
+            executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
+            return {
+                "symbol": executed["symbol"],
+                "side": order["side"],
+                "id": executed["id"],
+                "position_side": order["position_side"],
+                "qty": order["qty"],
+                "price": order["price"],
+            }
+        except Exception as e:
+            logging.error(f"error cancelling order {order} {e}")
+            print_async_exception(executed)
+            traceback.print_exc()
+            return {}
+
+    async def execute_cancellations(self, orders: [dict]) -> [dict]:
+        if len(orders) > self.max_n_cancellations_per_batch:
+            # prioritize cancelling reduce-only orders
+            try:
+                reduce_only_orders = [x for x in orders if x["reduce_only"]]
+                rest = [x for x in orders if not x["reduce_only"]]
+                orders = (reduce_only_orders + rest)[: self.max_n_cancellations_per_batch]
+            except Exception as e:
+                logging.error(f"debug filter cancellations {e}")
+        return await self.execute_multiple(
+            orders, "execute_cancellation", self.max_n_cancellations_per_batch
+        )
+
+    async def execute_order(self, order: dict) -> dict:
+        executed = None
+        try:
+            executed = await self.cca.create_limit_order(
+                symbol=order["symbol"],
+                side=order["side"],
+                amount=abs(order["qty"]),
+                price=order["price"],
+                params={
+                    "reduceOnly": order["reduce_only"],
+                    "timeInForceValue": "post_only",
+                    "side": self.order_side_map[order["side"]][order["position_side"]],
+                    "clientOid": order["custom_id"] + str(uuid4()),
+                },
+            )
+            if "symbol" not in executed or executed["symbol"] is None:
+                executed["symbol"] = order["symbol"]
+            for key in ["side", "position_side", "qty", "price"]:
+                if key not in executed or executed[key] is None:
+                    executed[key] = order[key]
+            return executed
+        except Exception as e:
+            logging.error(f"error executing order {order} {e}")
+            print_async_exception(executed)
+            traceback.print_exc()
+            return {}
+
+    async def execute_orders(self, orders: [dict]) -> [dict]:
+        return await self.execute_multiple(orders, "execute_order", self.max_n_creations_per_batch)
+
+    async def update_exchange_config(self):
+        pass
