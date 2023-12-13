@@ -155,7 +155,9 @@ class OKXBot(Bot):
                 self.okx.fetch_positions(),
                 self.okx.fetch_balance(),
             )
-            positions = [e for e in positions if e["symbol"] == self.symbol]
+            positions = [
+                e for e in positions if e["symbol"] == self.symbol and e["marginMode"] == "cross"
+            ]
             position = {
                 "long": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
                 "short": {"size": 0.0, "price": 0.0, "liquidation_price": 0.0},
