@@ -1073,6 +1073,10 @@ async def main():
             from exchanges_multi.bitget import BitgetBot
 
             bot = BitgetBot(config)
+        elif user_info["exchange"] == "okx":
+            from exchanges_multi.okx import OKXBot
+
+            bot = OKXBot(config)
         else:
             raise Exception(f"unknown exchange {user_info['exchange']}")
         try:
