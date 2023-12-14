@@ -6,7 +6,14 @@ import pprint
 import asyncio
 import traceback
 import numpy as np
-from pure_funcs import multi_replace, floatify, ts_to_date_utc, calc_hash, determine_pos_side_ccxt
+from pure_funcs import (
+    multi_replace,
+    floatify,
+    ts_to_date_utc,
+    calc_hash,
+    determine_pos_side_ccxt,
+    shorten_custom_id,
+)
 from procedures import print_async_exception, utc_ms
 
 
@@ -29,8 +36,8 @@ class OKXBot(Passivbot):
             }
         )
         self.cca.options["defaultType"] = "swap"
-        self.max_n_cancellations_per_batch = 10
-        self.max_n_creations_per_batch = 5
+        self.max_n_cancellations_per_batch = 20
+        self.max_n_creations_per_batch = 10
         self.order_side_map = {
             "buy": {"long": "open_long", "short": "close_short"},
             "sell": {"long": "close_long", "short": "open_short"},
@@ -103,7 +110,11 @@ class OKXBot(Passivbot):
                 if self.stop_websocket:
                     break
                 res = await self.ccp.watch_balance()
-                res["USDT"]["total"] = res["USDT"]["free"]  # bitget balance is 'free'
+                res["USDT"]["total"] = float(
+                    [x for x in res["info"]["data"][0]["details"] if x["ccy"] == self.quote][0][
+                        "cashBal"
+                    ]
+                )
                 self.handle_balance_update(res)
             except Exception as e:
                 print(f"exception watch_balance", e)
@@ -130,9 +141,8 @@ class OKXBot(Passivbot):
                 if self.stop_websocket:
                     break
                 res = await self.ccp.watch_tickers(symbols)
-                if res["last"] is None:
-                    res["last"] = np.random.choice([res["bid"], res["ask"]])
-                self.handle_ticker_update(res)
+                for k in res:
+                    self.handle_ticker_update(res[k])
             except Exception as e:
                 print(f"exception watch_tickers {symbols}", e)
                 traceback.print_exc()
@@ -165,6 +175,7 @@ class OKXBot(Passivbot):
                     if elm2["ccy"] == self.quote:
                         balance = float(elm2["cashBal"])
                         break
+            fetched_positions = [x for x in fetched_positions if x["marginMode"] == "cross"]
             for i in range(len(fetched_positions)):
                 fetched_positions[i]["position_side"] = fetched_positions[i]["side"]
                 fetched_positions[i]["size"] = fetched_positions[i]["contracts"]
@@ -219,6 +230,7 @@ class OKXBot(Passivbot):
                 break
             logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
             end_time = fetched[0]["timestamp"]
+        return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
         return sorted(
             [x for x in all_fetched.values() if x["pnl"] != 0.0], key=lambda x: x["timestamp"]
         )
@@ -274,15 +286,14 @@ class OKXBot(Passivbot):
         executed = None
         try:
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
-            return {
-                "symbol": executed["symbol"],
-                "side": order["side"],
-                "id": executed["id"],
-                "position_side": order["position_side"],
-                "qty": order["qty"],
-                "price": order["price"],
-            }
+            for key in ["symbol", "side", "position_side", "qty", "price"]:
+                if key not in executed or executed[key] is None:
+                    executed[key] = order[key]
+            return executed
         except Exception as e:
+            if '"sCode":"51400"' in e.args[0]:
+                logging.info(e.args[0])
+                return {}
             logging.error(f"error cancelling order {order} {e}")
             print_async_exception(executed)
             traceback.print_exc()
@@ -302,34 +313,55 @@ class OKXBot(Passivbot):
         )
 
     async def execute_order(self, order: dict) -> dict:
-        executed = None
-        try:
-            executed = await self.cca.create_limit_order(
-                symbol=order["symbol"],
-                side=order["side"],
-                amount=abs(order["qty"]),
-                price=order["price"],
-                params={
-                    "reduceOnly": order["reduce_only"],
-                    "timeInForceValue": "post_only",
-                    "side": self.order_side_map[order["side"]][order["position_side"]],
-                    "clientOid": order["custom_id"] + str(uuid4()),
-                },
-            )
-            if "symbol" not in executed or executed["symbol"] is None:
-                executed["symbol"] = order["symbol"]
-            for key in ["side", "position_side", "qty", "price"]:
-                if key not in executed or executed[key] is None:
-                    executed[key] = order[key]
-            return executed
-        except Exception as e:
-            logging.error(f"error executing order {order} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return {}
+        return self.execute_orders([order])
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_order", self.max_n_creations_per_batch)
+        if len(orders) == 0:
+            return []
+        to_execute = []
+        custom_ids_map = {}
+        for order in orders[: self.max_n_creations_per_batch]:
+            to_execute.append(
+                {
+                    "type": "limit",
+                    "symbol": order["symbol"],
+                    "side": order["side"],
+                    "ordType": "post_only",
+                    "amount": abs(order["qty"]),
+                    "tdMode": "cross",
+                    "price": order["price"],
+                    "params": {
+                        "tag": self.broker_code,
+                        "posSide": order["position_side"],
+                        "clOrdId": (
+                            self.broker_code + shorten_custom_id(order["custom_id"]) + uuid4().hex
+                        )[:32],
+                    },
+                }
+            )
+            custom_ids_map[to_execute[-1]["params"]["clOrdId"]] = {**to_execute[-1], **order}
+        executed = None
+        try:
+            executed = await self.cca.create_orders(to_execute)
+        except Exception as e:
+            logging.error(f"error executing orders {orders} {e}")
+            print_async_exception(executed)
+            traceback.print_exc()
+            return []
+
+        to_return = []
+        for res in executed:
+            try:
+                if "status" in res and res["status"] == "rejected":
+                    logging.info(f"order rejected: {res} {custom_ids_map[res['clientOrderId']]}")
+                elif "clientOrderId" in res and res["clientOrderId"] in custom_ids_map:
+                    for key in ["side", "position_side", "qty", "price", "symbol", "reduce_only"]:
+                        res[key] = custom_ids_map[res["clientOrderId"]][key]
+                    to_return.append(res)
+            except Exception as e:
+                logging.error(f"error executing order {res} {e}")
+                traceback.print_exc()
+        return to_return
 
     async def update_exchange_config(self):
         pass
