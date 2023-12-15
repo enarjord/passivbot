@@ -332,22 +332,16 @@ class Passivbot:
         res = await self.fetch_pnls(start_time=start_time)
         if res in [None, False]:
             return False
-        new_pnls = res
-        len_pnls = len(self.pnls)
+        new_pnls = [x for x in res if x["id"] not in {elm["id"] for elm in self.pnls}]
         self.pnls = sorted(
             {elm["id"]: elm for elm in self.pnls + new_pnls if elm["timestamp"] > age_limit}.values(),
             key=lambda x: x["timestamp"],
         )
-        if len(self.pnls) > len_pnls or len(missing_pnls) > 0:
-            n_new_pnls = len(self.pnls) - len_pnls
-            try:
-                new_income = sum([x["pnl"] for x in self.pnls[-n_new_pnls:]])
-            except Exception as e:
-                logging.error(f"error getting pnl sum {e}")
-                new_income = 0.0
-            if len(missing_pnls) == 0:
+        if new_pnls:
+            new_income = sum([x["pnl"] for x in new_pnls])
+            if new_income != 0.0:
                 logging.info(
-                    f"{n_new_pnls} new pnl{'s' if n_new_pnls > 1 else ''} {new_income} {self.quote}"
+                    f"{len(new_pnls)} new pnl{'s' if len(new_pnls) > 1 else ''} {new_income} {self.quote}"
                 )
             try:
                 json.dump(self.pnls, open(self.pnls_cache_filepath, "w"))
