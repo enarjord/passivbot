@@ -5,7 +5,7 @@ import json
 import numpy as np
 
 from uuid import uuid4
-from njit_funcs import calc_diff
+from njit_funcs import calc_diff, round_
 from passivbot import Bot, logging
 from procedures import print_async_exception, utc_ms, make_get_filepath
 from pure_funcs import determine_pos_side_ccxt, floatify, calc_hash, ts_to_date_utc, date_to_ts2
@@ -145,7 +145,7 @@ class BingXBot(Bot):
             {x["orderId"]: x for x in order_details}.values(), key=lambda x: float(x["orderId"])
         )
         for sublist in sublists:
-            print(
+            logging.info(
                 f"debug fetch order details sublist {cache_path} n fetches: {len(ids_to_fetch) - len(all_fetched)}"
             )
             fetched = await asyncio.gather(
@@ -281,11 +281,12 @@ class BingXBot(Bot):
             except Exception as e:
                 logging.error(f"error loading cached open orders {e}")
                 traceback.print_exc()
+                cached_orders = []
             cached_orders.extend(to_dump)
             try:
                 json.dump(cached_orders, open(self.cache_path_open_orders, "w"))
             except Exception as e:
-                logging.error(f"error loading cached open orders {e}")
+                logging.error(f"error dumping cached open orders {e}")
                 traceback.print_exc()
         return executed_orders
 
@@ -309,6 +310,14 @@ class BingXBot(Bot):
                     executed[key] = order[key]
             return executed
         except Exception as e:
+            if '"code":101400' in str(e):
+                new_min_qty = round_(max(self.min_qty, order["qty"]) + self.qty_step, self.qty_step)
+                logging.info(
+                    f"successfully caught order size error, code 101400. Adjusting min_qty from {self.min_qty} to {new_min_qty}..."
+                )
+                self.min_qty = self.xk["min_qty"] = self.config["min_qty"] = new_min_qty
+                logging.error(f"{order} {e}")
+                return {}
             logging.error(f"error executing order {order} {e}")
             print_async_exception(executed)
             traceback.print_exc()
