@@ -193,6 +193,26 @@ class Passivbot:
             res = await getattr(self, f"update_{f}")()
             logging.info(f"initiating {f} {res}")
 
+    def set_wallet_exposure_limits(self):
+        # an active bot has normal mode or graceful stop mode with position
+        for pside in ["long", "short"]:
+            n_actives = 0
+            for sym in self.live_configs:
+                if self.live_configs[sym][pside]["mode"] in ["normal", "tp_only"] or (
+                    self.live_configs[sym][pside]["mode"] == "graceful_stop"
+                    and self.positions[sym][pside]["size"] != 0.0
+                ):
+                    n_actives += 1
+            for symbol in self.symbols:
+                if getattr(args, f"WE_limit_{pside}") is None:
+                    self.live_configs[symbol][pside]["wallet_exposure_limit"] = (
+                        self.config[f"TWE_{pside}"] / n_actives if n_actives > 0 else 0.0
+                    )
+                else:
+                    self.live_configs[symbol][pside]["wallet_exposure_limit"] = getattr(
+                        args, f"WE_limit_{pside}"
+                    )
+
     def add_new_order(self, order, source="WS"):
         try:
             if not order or "id" not in order:
@@ -705,10 +725,13 @@ class Passivbot:
                         f"unstuck_close_{pside}",
                     ),
                 }
-                if utc_ms() % 60000 < 5000:
-                    logging.info(
-                        f"debug unstucking {sym} {pside} {close_price} last price: {self.tickers[sym]['last']} AU allowance: {AU_allowance:.3f}"
-                    )
+                try:
+                    if utc_ms() - self.prev_AU_print_ms > 1000 * 60:
+                        line = f"Auto unstuck allowance: {AU_allowance:.3f} {self.quote}. Placing {pside} unstucking order for {sym} at {close_price}. Last price: {self.tickers[sym]['last']}"
+                        logging.info(line)
+                        self.prev_AU_print_ms = utc_ms()
+                except:
+                    self.prev_AU_print_ms = 0.0
 
         ideal_orders = {symbol: [] for symbol in self.symbols}
         for symbol in self.symbols:
