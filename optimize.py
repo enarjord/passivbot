@@ -45,8 +45,10 @@ import logging.config
 logging.config.dictConfig({"version": 1, "disable_existing_loggers": True})
 
 
-def calc_metrics_mean(analyses):
-    # first analysis in analyses is full backtest
+def calc_metrics_mean(analyses: dict):
+    """
+    take list of analyses and return either min, first, max or mean for each item
+    """
     mins = [
         "closest_bkr_long",
         "closest_bkr_short",
@@ -105,6 +107,12 @@ def calc_metrics_mean(analyses):
         "symbol",
         "volume_quote_long",
         "volume_quote_short",
+        "drawdown_max_long",
+        "drawdown_max_short",
+        "drawdown_1pct_worst_mean_long",
+        "drawdown_1pct_worst_mean_short",
+        "sharpe_ratio_long",
+        "sharpe_ratio_short",
     ]
     maxs = [
         "hrs_stuck_max_long",

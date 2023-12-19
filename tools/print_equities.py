@@ -11,6 +11,7 @@ import argparse
 import pandas as pd
 
 import sys
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from procedures import (
@@ -95,9 +96,7 @@ async def main():
         data = {}
         exchange, key, secret, passphrase = load_exchange_key_secret_passphrase(user)
         data["exchange"] = exchange
-        cc = getattr(ccxt, exchange_map[exchange])(
-            {"apiKey": key, "secret": secret, "password": passphrase}
-        )
+        cc = getattr(ccxt, exchange_map[exchange])({"apiKey": key, "secret": secret, "password": passphrase})
         if exchange not in tickers:
             tickers[exchange] = await cc.fetch_tickers()
             for key in sorted(tickers[exchange]):
@@ -162,7 +161,7 @@ async def main():
         print("failed reading log", e)
     jsons = [json.loads(line) for line in lines]
     if args.n_days is not None:
-        jsons = [x for x in jsons if x['timestamp'] > now - 1000 * 60 * 60 * 24 * args.n_days]
+        jsons = [x for x in jsons if x["timestamp"] > now - 1000 * 60 * 60 * 24 * args.n_days]
 
     dfts = []
     first = None

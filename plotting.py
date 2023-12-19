@@ -9,7 +9,7 @@ import time
 from colorama import init, Fore
 from prettytable import PrettyTable
 
-from njit_funcs import round_up
+from njit_funcs import round_up, calc_pnl_long, calc_pnl_short
 from procedures import dump_live_config, make_get_filepath
 from pure_funcs import round_dynamic, denumpyize, ts_to_date
 
@@ -58,21 +58,43 @@ def make_table(result_):
                     100,
                     "%",
                 ),
+                ("Max drawdown", f"drawdown_max_{side}", 5, 100, "%"),
+                (
+                    "Drawdown mean of 1% worst (hourly)",
+                    f"drawdown_1pct_worst_mean_{side}",
+                    5,
+                    100,
+                    "%",
+                ),
+                ("Sharpe Ratio (daily)", f"sharpe_ratio_{side}", 6, 1, ""),
+                ("Loss to profit ratio", f"loss_profit_ratio_{side}", 4, 1, ""),
+                (
+                    "P.A. distance mean of 1% worst (hourly)",
+                    f"pa_distance_1pct_worst_mean_{side}",
+                    6,
+                    1,
+                    "",
+                ),
+                ("#newline", "", 0, 0, ""),
                 ("Final balance", f"final_balance_{side}", 6, 1, ""),
                 ("Final equity", f"final_equity_{side}", 6, 1, ""),
                 ("Net PNL + fees", f"net_pnl_plus_fees_{side}", 6, 1, ""),
                 ("Net Total gain", f"gain_{side}", 4, 100, "%"),
                 ("Average daily gain", f"adg_{side}", 3, 100, "%"),
                 ("Average daily gain weighted", f"adg_weighted_{side}", 3, 100, "%"),
-                ("Loss to profit ratio", f"loss_profit_ratio_{side}", 4, 1, ""),
                 ("Exposure ratios mean", f"exposure_ratios_mean_{side}", 5, 1, ""),
-                (f"Price action distance mean", f"pa_distance_mean_{side}", 6, 1, ""),
-                (f"Price action distance std", f"pa_distance_std_{side}", 6, 1, ""),
-                (f"Price action distance max", f"pa_distance_max_{side}", 6, 1, ""),
-                (f"Price action distance mean of 1% worst", f"pa_distance_1pct_worst_mean_{side}", 6, 1, ""),
+                ("Price action distance mean", f"pa_distance_mean_{side}", 6, 1, ""),
+                ("Price action distance std", f"pa_distance_std_{side}", 6, 1, ""),
+                ("Price action distance max", f"pa_distance_max_{side}", 6, 1, ""),
                 ("Closest bankruptcy", f"closest_bkr_{side}", 4, 100, "%"),
                 ("Lowest equity/balance ratio", f"eqbal_ratio_min_{side}", 4, 1, ""),
-                ("Mean of 10 worst eq/bal ratios", f"eqbal_ratio_mean_of_10_worst_{side}", 4, 1, ""),
+                (
+                    "Mean of 10 worst eq/bal ratios (hourly)",
+                    f"eqbal_ratio_mean_of_10_worst_{side}",
+                    4,
+                    1,
+                    "",
+                ),
                 ("Equity/balance ratio std", f"equity_balance_ratio_std_{side}", 4, 1, ""),
                 ("Ratio of time spent at max exposure", f"time_at_max_exposure_{side}", 4, 1, ""),
             ]:
@@ -84,6 +106,8 @@ def make_table(result_):
                             f"{profit_color}{val}{suffix}{Fore.RESET}",
                         ]
                     )
+                elif title == "#newline":
+                    table.add_row([" ", " "])
             for title, key in [
                 ("No. fills", f"n_fills_{side}"),
                 ("No. entries", f"n_entries_{side}"),
@@ -300,4 +324,109 @@ def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
                 [sppu.index[i], sppu.index[i + 1]], [sppu.pprice.iloc[i], sppu.pprice.iloc[i]], "r--"
             )
 
+    return plt
+
+
+def scale_array(xs, bottom, top):
+    # Calculate the midpoint
+    midpoint = (bottom + top) / 2
+
+    # Scale the array
+    scaled_xs = (xs - np.min(xs)) / (np.max(xs) - np.min(xs))  # Scale between 0 and 1
+    scaled_xs = (
+        scaled_xs * (top - bottom) + midpoint - (top - bottom) / 2
+    )  # Scale to the desired range and shift to the midpoint
+
+    return scaled_xs
+
+
+def plot_fills_multi(symbol, sdf, fdf, start_pct=0.0, end_pct=1.0):
+    plt.clf()
+    start_minute = int(sdf.index[-1] * start_pct)
+    end_minute = int(sdf.index[-1] * end_pct)
+    sdfc = sdf.loc[start_minute:end_minute]
+    fdfc = fdf.loc[start_minute:end_minute]
+    fdfc = fdfc[fdfc.symbol == symbol]
+    longs = fdfc[fdfc.type.str.contains("long")]
+    shorts = fdfc[fdfc.type.str.contains("short")]
+
+    ax = sdfc[f"{symbol}_price"].plot(style="y-")
+    longs[longs.type.str.contains("entry")].price.plot(style="b.")
+    longs[longs.type.str.contains("close")].price.plot(style="r.")
+    sdfc[f"{symbol}_pprice_l"].plot(style="b--")
+
+    shorts[shorts.type.str.contains("entry")].price.plot(style="mx")
+    shorts[shorts.type.str.contains("close")].price.plot(style="cx")
+    sdfc[f"{symbol}_pprice_s"].plot(style="r--")
+
+    ax.legend(
+        [
+            "price",
+            "entries_long",
+            "closes_long",
+            "pprices_long",
+            "entries_short",
+            "closes_short",
+            "pprices_short",
+        ]
+    )
+
+    return plt
+
+
+def plot_pnls_long_short(sdf, fdf, start_pct=0.0, end_pct=1.0, symbol=None):
+    plt.clf()
+    start_minute = int(sdf.index[-1] * start_pct)
+    end_minute = int(sdf.index[-1] * end_pct)
+    fdfc = fdf.loc[start_minute:end_minute]
+    if symbol is not None:
+        fdfc = fdfc[fdfc.symbol == symbol]
+    longs = fdfc[fdfc.type.str.contains("long")]
+    shorts = fdfc[fdfc.type.str.contains("short")]
+    ax = fdfc.pnl.cumsum().plot()
+    longs.pnl.cumsum().plot()
+    shorts.pnl.cumsum().plot()
+    ax.legend(["pnl_sum", "pnl_long", "pnl_short"])
+    return plt
+
+
+def plot_pnls_separate(sdf, fdf, start_pct=0.0, end_pct=1.0, symbols=None):
+    plt.clf()
+    if symbols is None:
+        symbols = [c[: c.find("_price")] for c in sdf.columns if "_price" in c]
+    elif isinstance(symbols, str):
+        symbols = [symbols]
+    plt.clf()
+    start_minute = int(sdf.index[-1] * start_pct)
+    end_minute = int(sdf.index[-1] * end_pct)
+    fdfc = fdf.loc[start_minute:end_minute]
+    for symbol in symbols:
+        ax = fdfc[fdfc.symbol == symbol].pnl.cumsum().plot()
+    ax.legend(symbols)
+    return plt
+
+
+def plot_pnls_stuck(sdf, fdf, symbol=None, start_pct=0.0, end_pct=1.0, unstuck_threshold=0.9):
+    plt.clf()
+    symbols = [c[: c.find("_price")] for c in sdf.columns if "_price" in c]
+    start_minute = int(sdf.index[-1] * start_pct)
+    end_minute = int(sdf.index[-1] * end_pct)
+    sdfc = sdf.loc[start_minute:end_minute]
+    fdfc = fdf.loc[start_minute:end_minute]
+    any_stuck = np.zeros(len(sdfc))
+    for symbol in fdfc.symbol.unique():
+        fdfcc = fdfc[(fdfc.symbol == symbol) & (fdfc.pnl < 0.0)]
+        stuck_threshold_long = fdfcc[(fdfcc.type.str.contains("long"))].WE.mean() * 0.99
+        stuck_threshold_short = fdfcc[(fdfcc.type.str.contains("short"))].WE.mean() * 0.99
+        is_stuck_long = sdfc.loc[:, f"{symbol}_WE_l"] / stuck_threshold_long > unstuck_threshold
+        is_stuck_short = sdfc.loc[:, f"{symbol}_WE_s"] / stuck_threshold_short > unstuck_threshold
+        any_stuck = (
+            pd.DataFrame({"0": any_stuck, "1": is_stuck_long.values, "2": is_stuck_short.values})
+            .any(axis=1)
+            .values
+        )
+    ax = sdfc.equity.plot()
+    sdfc[any_stuck].balance.plot(style="r.")
+    sdfc[~any_stuck].balance.plot(style="b.")
+    ax.legend(["equity", "balance_with_any_stuck", "balance_with_none_stuck"])
     return plt

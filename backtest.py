@@ -104,7 +104,11 @@ def plot_wrap(config, data):
 
 async def main():
     parser = argparse.ArgumentParser(prog="Backtest", description="Backtest given passivbot config.")
-    parser.add_argument("live_config_path", type=str, help="path to live config to test, comma separated for multiple configs serially")
+    parser.add_argument(
+        "live_config_path",
+        type=str,
+        help="path to live config to test, comma separated for multiple configs serially",
+    )
     parser = add_argparse_args(parser)
     parser.add_argument(
         "-lw",
@@ -164,7 +168,7 @@ async def main():
         help="disable plotting",
     )
     args = parser.parse_args()
-    live_config_paths = args.live_config_path.split(',')
+    live_config_paths = args.live_config_path.split(",")
     config = prepare_backtest_config(args)
     for ix, live_config_path in enumerate(live_config_paths):
         for symbol in config["symbols"]:

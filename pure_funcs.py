@@ -6,7 +6,7 @@ from hashlib import sha256
 import json
 import numpy as np
 import dateutil.parser
-from njit_funcs import round_dynamic, qty_to_cost
+from njit_funcs import round_dynamic, qty_to_cost, calc_pnl_long, calc_pnl_short
 
 try:
     import pandas as pd
@@ -630,91 +630,235 @@ def get_template_live_config(passivbot_mode="neat_grid"):
         raise Exception(f"unknown passivbot mode {passivbot_mode}")
 
 
-def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config: dict) -> dict:
-    # return only what's needed for computing a score
-    #  adg_weighted_per_exposure,
-    #  hrs_stuck_max,
-    #  pa_distance_mean,
-    #  pa_distance_std,
-    #  pa_distance_1pct_worst_mean,
-    #  loss_profit_ratio,
+def calc_drawdowns(equity_series):
+    """
+    Calculate the drawdowns of a portfolio of equities over time.
 
-    #  plus n_days, starting_balance and adg_per_exposure
+    Parameters:
+    equity_series (pandas.Series): A pandas Series containing the portfolio's equity values over time.
+
+    Returns:
+    drawdowns (pandas.Series): The drawdowns as a percentage (expressed as a negative value).
+    """
+    if not isinstance(equity_series, pd.Series):
+        equity_series = pd.Series(equity_series)
+
+    # Calculate the cumulative returns of the portfolio
+    cumulative_returns = (1 + equity_series.pct_change()).cumprod()
+
+    # Calculate the cumulative maximum value over time
+    cumulative_max = cumulative_returns.cummax()
+
+    # Return the drawdown as the percentage decline from the cumulative maximum
+    return (cumulative_returns - cumulative_max) / cumulative_max
+
+
+def calc_max_drawdown(equity_series):
+    return calc_drawdowns(equity_series).min()
+
+
+def calc_sharpe_ratio(equity_series):
+    """
+    Calculate the Sharpe ratio for a portfolio of equities assuming a zero risk-free rate.
+
+    Parameters:
+    equity_series (pandas.Series): A pandas Series containing daily equity values.
+
+    Returns:
+    float: The Sharpe ratio.
+    """
+    if not isinstance(equity_series, pd.Series):
+        equity_series = pd.Series(equity_series)
+
+    # Calculate the hourly returns
+    returns = equity_series.pct_change().dropna()
+    std_dev = returns.std()
+    return returns.mean() / std_dev if std_dev != 0.0 else 0.0
+
+
+def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config: dict) -> dict:
+    sdf = pd.DataFrame(
+        stats,
+        columns=[
+            "timestamp",
+            "bkr_price_long",
+            "bkr_price_short",
+            "psize_long",
+            "pprice_long",
+            "psize_short",
+            "pprice_short",
+            "price",
+            "closest_bkr_long",
+            "closest_bkr_short",
+            "balance_long",
+            "balance_short",
+            "equity_long",
+            "equity_short",
+        ],
+    )
+    longs = pd.DataFrame(
+        fills_long,
+        columns=[
+            "trade_id",
+            "timestamp",
+            "pnl",
+            "fee_paid",
+            "balance",
+            "equity",
+            "qty",
+            "price",
+            "psize",
+            "pprice",
+            "type",
+        ],
+    )
+    longs.index = longs.timestamp
+    shorts = pd.DataFrame(
+        fills_short,
+        columns=[
+            "trade_id",
+            "timestamp",
+            "pnl",
+            "fee_paid",
+            "balance",
+            "equity",
+            "qty",
+            "price",
+            "psize",
+            "pprice",
+            "type",
+        ],
+    )
+    shorts.index = shorts.timestamp
+    n_days = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[0]) / 1000 / 60 / 60 / 24.0
+    if config["inverse"]:
+        longs.loc[:, "pcost"] = (longs.psize / longs.pprice).abs() * config["c_mult"]
+        shorts.loc[:, "pcost"] = (shorts.psize / shorts.pprice).abs() * config["c_mult"]
+        sdf.loc[:, "wallet_exposure_long"] = (
+            sdf.psize_long / sdf.pprice_long / sdf.balance_long
+        ).abs() * config["c_mult"]
+        sdf.loc[:, "wallet_exposure_short"] = (
+            sdf.psize_short / sdf.pprice_short / sdf.balance_short
+        ).abs() * config["c_mult"]
+    else:
+        longs.loc[:, "pcost"] = (longs.psize * longs.pprice).abs() * config["c_mult"]
+        shorts.loc[:, "pcost"] = (shorts.psize * shorts.pprice).abs() * config["c_mult"]
+        sdf.loc[:, "wallet_exposure_long"] = (
+            sdf.psize_long * sdf.pprice_long / sdf.balance_long
+        ).abs() * config["c_mult"]
+        sdf.loc[:, "wallet_exposure_short"] = (
+            sdf.psize_short * sdf.pprice_short / sdf.balance_short
+        ).abs() * config["c_mult"]
 
     if "adg_n_subdivisions" not in config:
         config["adg_n_subdivisions"] = 1
 
-    ms_per_day = 1000 * 60 * 60 * 24
-
-    n_days = (stats[-1][0] - stats[0][0]) / ms_per_day
-
-    if stats[-1][10] <= 0.0:
-        adg_long = adg_weighted_long = stats[-1][10]
+    if sdf.balance_long.iloc[-1] <= 0.0:
+        adg_long = adg_weighted_long = sdf.balance_long.iloc[-1]
     else:
         adgs_long = []
         for i in range(config["adg_n_subdivisions"]):
-            idx = round(int(len(stats) * (1 - 1 / (i + 1))))
-            n_days_ = (stats[-1][0] - stats[idx][0]) / ms_per_day
-            adgs_long.append((stats[-1][10] / stats[idx][10]) ** (1 / n_days_) - 1)
+            idx = round(int(len(sdf) * (1 - 1 / (i + 1))))
+            n_days_ = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / (1000 * 60 * 60 * 24)
+            if n_days_ == 0.0 or sdf.balance_long.iloc[idx] == 0.0:
+                adgs_long.append(0.0)
+            else:
+                adgs_long.append(
+                    (sdf.balance_long.iloc[-1] / sdf.balance_long.iloc[idx]) ** (1 / n_days_) - 1
+                )
         adg_long = adgs_long[0]
         adg_weighted_long = np.mean(adgs_long)
-    if stats[-1][11] <= 0.0:
-        adg_short = adg_weighted_short = stats[-1][11]
+    if sdf.balance_short.iloc[-1] <= 0.0:
+        adg_short = adg_weighted_short = sdf.balance_short.iloc[-1]
+
     else:
         adgs_short = []
         for i in range(config["adg_n_subdivisions"]):
-            idx = round(int(len(stats) * (1 - 1 / (i + 1))))
-            n_days_ = (stats[-1][0] - stats[idx][0]) / ms_per_day
-            adgs_short.append((stats[-1][11] / stats[idx][11]) ** (1 / n_days_) - 1)
+            idx = round(int(len(sdf) * (1 - 1 / (i + 1))))
+            n_days_ = (sdf.timestamp.iloc[-1] - sdf.timestamp.iloc[idx]) / (1000 * 60 * 60 * 24)
+            if n_days_ == 0.0 or sdf.balance_short.iloc[idx] == 0.0:
+                adgs_short.append(0.0)
+            else:
+                adgs_short.append(
+                    (sdf.balance_short.iloc[-1] / sdf.balance_short.iloc[idx]) ** (1 / n_days_) - 1
+                )
         adg_short = adgs_short[0]
         adg_weighted_short = np.mean(adgs_short)
+    if config["long"]["wallet_exposure_limit"] > 0.0:
+        adg_per_exposure_long = adg_long / config["long"]["wallet_exposure_limit"]
+        adg_weighted_per_exposure_long = adg_weighted_long / config["long"]["wallet_exposure_limit"]
+    else:
+        adg_per_exposure_long = adg_weighted_per_exposure_long = 0.0
 
-    ts_diffs_long = np.diff([x[1] for x in fills_long]) if len(fills_long) > 1 else np.array([0.0])
-    hrs_stuck_max_long = ts_diffs_long.max() / (1000 * 60 * 60)
-    ts_diffs_short = np.diff([x[1] for x in fills_short]) if len(fills_short) > 1 else np.array([0.0])
-    hrs_stuck_max_short = ts_diffs_short.max() / (1000 * 60 * 60)
+    if config["short"]["wallet_exposure_limit"] > 0.0:
+        adg_per_exposure_short = adg_short / config["short"]["wallet_exposure_limit"]
+        adg_weighted_per_exposure_short = (
+            adg_weighted_short / config["short"]["wallet_exposure_limit"]
+        )
+    else:
+        adg_per_exposure_short = adg_weighted_per_exposure_short = 0.0
 
-    # pa dist
-    pa_dists_long = np.array([abs(elm[4] - elm[7]) / elm[7] for elm in stats if elm[3] != 0])
-    pa_dists_short = np.array([abs(elm[6] - elm[7]) / elm[7] for elm in stats if elm[5] != 0])
-    if len(pa_dists_long) == 0:
-        pa_dists_long = np.array([100.0])
-    if len(pa_dists_short) == 0:
-        pa_dists_short = np.array([100.0])
+    lpprices = sdf[sdf.psize_long != 0.0]
+    spprices = sdf[sdf.psize_short != 0.0]
+    pa_dists_long = (
+        ((lpprices.pprice_long - lpprices.price).abs() / lpprices.price)
+        if len(lpprices) > 0
+        else pd.Series([100.0])
+    )
+    pa_dists_short = (
+        ((spprices.pprice_short - spprices.price).abs() / spprices.price)
+        if len(spprices) > 0
+        else pd.Series([100.0])
+    )
+    pa_distance_mean_long = pa_dists_long.mean()
+    pa_distance_mean_short = pa_dists_short.mean()
+    pa_distance_std_long = pa_dists_long.std()
+    pa_distance_std_short = pa_dists_short.std()
 
-    profit_sum_long, loss_sum_long = 0.0, 0.0
-    for elm in fills_long:
-        if elm[2] > 0.0:
-            profit_sum_long += elm[2]
-        elif elm[2] < 0.0:
-            loss_sum_long += elm[2]
-    profit_sum_short, loss_sum_short = 0.0, 0.0
-    for elm in fills_short:
-        if elm[2] > 0.0:
-            profit_sum_short += elm[2]
-        elif elm[2] < 0.0:
-            loss_sum_short += elm[2]
-
-    # loss profit ratio
-    loss_profit_ratio_long = abs(loss_sum_long) / profit_sum_long if profit_sum_long > 0.0 else 1.0
-    loss_profit_ratio_short = (
-        abs(loss_sum_short) / profit_sum_short if profit_sum_short > 0.0 else 1.0
+    ms_diffs_long = longs.timestamp.diff()
+    ms_diffs_short = shorts.timestamp.diff()
+    hrs_stuck_max_long = (
+        max(
+            ms_diffs_long.max(),
+            (sdf.iloc[-1].timestamp - longs.iloc[-1].timestamp if len(longs) > 0 else 0.0),
+        )
+        / (1000.0 * 60 * 60)
+    )
+    hrs_stuck_max_short = (
+        max(
+            ms_diffs_short.max(),
+            (sdf.iloc[-1].timestamp - shorts.iloc[-1].timestamp if len(shorts) > 0 else 0.0),
+        )
+        / (1000.0 * 60 * 60)
     )
 
-    exposure_ratios_long = [
-        qty_to_cost(elm[3], elm[4], config["inverse"], config["c_mult"]) / elm[10] for elm in stats
-    ]
+    profit_sum_long = longs[longs.pnl > 0.0].pnl.sum()
+    loss_sum_long = longs[longs.pnl < 0.0].pnl.sum()
+
+    profit_sum_short = shorts[shorts.pnl > 0.0].pnl.sum()
+    loss_sum_short = shorts[shorts.pnl < 0.0].pnl.sum()
+
+    exposure_ratios_long = sdf.wallet_exposure_long / config["long"]["wallet_exposure_limit"]
     time_at_max_exposure_long = (
-        1.0 if len(stats) == 0 else (len([x for x in exposure_ratios_long if x > 0.9]) / len(stats))
+        1.0 if len(sdf) == 0 else (len(exposure_ratios_long[exposure_ratios_long > 0.9]) / len(sdf))
     )
-    exposure_ratios_mean_long = np.mean(exposure_ratios_long)
-    exposure_ratios_short = [
-        qty_to_cost(elm[5], elm[6], config["inverse"], config["c_mult"]) / elm[11] for elm in stats
-    ]
+    exposure_ratios_mean_long = exposure_ratios_long.mean()
+    exposure_ratios_short = sdf.wallet_exposure_short / config["short"]["wallet_exposure_limit"]
     time_at_max_exposure_short = (
-        1.0 if len(stats) == 0 else (len([x for x in exposure_ratios_short if x > 0.9]) / len(stats))
+        1.0 if len(sdf) == 0 else (len(exposure_ratios_short[exposure_ratios_short > 0.9]) / len(sdf))
     )
-    exposure_ratios_mean_short = np.mean(exposure_ratios_short)
+    exposure_ratios_mean_short = exposure_ratios_short.mean()
+
+    drawdowns_long = calc_drawdowns(sdf.equity_long)
+    drawdown_max_long = drawdowns_long.min()
+    mean_of_10_worst_drawdowns = drawdowns_long.sort_values().iloc[:10].mean()
+
+    drawdowns_long = calc_drawdowns(sdf.equity_long)
+    drawdowns_short = calc_drawdowns(sdf.equity_short)
+
+    daily_sdf = sdf.groupby(sdf.timestamp // (1000 * 60 * 60 * 24)).last()
+    sharpe_ratio_long = calc_sharpe_ratio(daily_sdf.equity_long)
+    sharpe_ratio_short = calc_sharpe_ratio(daily_sdf.equity_short)
 
     return {
         "adg_weighted_per_exposure_long": adg_weighted_long / config["long"]["wallet_exposure_limit"],
@@ -723,25 +867,49 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
         "adg_per_exposure_long": adg_long / config["long"]["wallet_exposure_limit"],
         "adg_per_exposure_short": adg_short / config["short"]["wallet_exposure_limit"],
         "n_days": n_days,
-        "starting_balance": stats[0][10],
-        "pa_distance_std_long": pa_dists_long.std(),
-        "pa_distance_std_short": pa_dists_short.std(),
-        "pa_distance_mean_long": pa_dists_long.mean(),
-        "pa_distance_mean_short": pa_dists_short.mean(),
-        "pa_distance_1pct_worst_mean_long": np.sort(pa_dists_long)[
-            -max(1, len(stats) // 100) :
-        ].mean(),
-        "pa_distance_1pct_worst_mean_short": np.sort(pa_dists_short)[
-            -max(1, len(stats) // 100) :
-        ].mean(),
+        "starting_balance": sdf.balance_long.iloc[0],
+        "pa_distance_mean_long": pa_distance_mean_long
+        if pa_distance_mean_long == pa_distance_mean_long
+        else 1.0,
+        "pa_distance_max_long": pa_dists_long.max(),
+        "pa_distance_std_long": pa_distance_std_long
+        if pa_distance_std_long == pa_distance_std_long
+        else 1.0,
+        "pa_distance_mean_short": pa_distance_mean_short
+        if pa_distance_mean_short == pa_distance_mean_short
+        else 1.0,
+        "pa_distance_max_short": pa_dists_short.max(),
+        "pa_distance_std_short": pa_distance_std_short
+        if pa_distance_std_short == pa_distance_std_short
+        else 1.0,
+        "pa_distance_1pct_worst_mean_long": pa_dists_long.sort_values()
+        .iloc[-max(1, len(sdf) // 100) :]
+        .mean(),
+        "pa_distance_1pct_worst_mean_short": pa_dists_short.sort_values()
+        .iloc[-max(1, len(sdf) // 100) :]
+        .mean(),
         "hrs_stuck_max_long": hrs_stuck_max_long,
         "hrs_stuck_max_short": hrs_stuck_max_short,
-        "loss_profit_ratio_long": loss_profit_ratio_long,
-        "loss_profit_ratio_short": loss_profit_ratio_short,
+        "loss_profit_ratio_long": abs(loss_sum_long) / profit_sum_long
+        if profit_sum_long > 0.0
+        else 1.0,
+        "loss_profit_ratio_short": abs(loss_sum_short) / profit_sum_short
+        if profit_sum_short > 0.0
+        else 1.0,
         "exposure_ratios_mean_long": exposure_ratios_mean_long,
         "exposure_ratios_mean_short": exposure_ratios_mean_short,
         "time_at_max_exposure_long": time_at_max_exposure_long,
         "time_at_max_exposure_short": time_at_max_exposure_short,
+        "drawdown_max_long": -drawdowns_long.min(),
+        "drawdown_max_short": -drawdowns_short.min(),
+        "drawdown_1pct_worst_mean_long": -drawdowns_long.sort_values()
+        .iloc[: (len(drawdowns_long) // 100)]
+        .mean(),
+        "drawdown_1pct_worst_mean_short": -drawdowns_short.sort_values()
+        .iloc[: (len(drawdowns_short) // 100)]
+        .mean(),
+        "sharpe_ratio_long": sharpe_ratio_long,
+        "sharpe_ratio_short": sharpe_ratio_short,
     }
 
 
@@ -929,6 +1097,13 @@ def analyze_fills(
     )
     exposure_ratios_mean_short = exposure_ratios_short.mean()
 
+    drawdowns_long = calc_drawdowns(sdf.equity_long)
+    drawdowns_short = calc_drawdowns(sdf.equity_short)
+
+    daily_sdf = sdf.groupby(sdf.timestamp // (1000 * 60 * 60 * 24)).last()
+    sharpe_ratio_long = calc_sharpe_ratio(daily_sdf.equity_long)
+    sharpe_ratio_short = calc_sharpe_ratio(daily_sdf.equity_short)
+
     analysis = {
         "exchange": config["exchange"] if "exchange" in config else "unknown",
         "symbol": config["symbol"] if "symbol" in config else "unknown",
@@ -1038,6 +1213,16 @@ def analyze_fills(
         "eqbal_ratio_std_short": eqbal_ratio_std_short,
         "volume_quote_long": volume_quote_long,
         "volume_quote_short": volume_quote_short,
+        "drawdown_max_long": -drawdowns_long.min(),
+        "drawdown_max_short": -drawdowns_short.min(),
+        "drawdown_1pct_worst_mean_long": -drawdowns_long.sort_values()
+        .iloc[: (len(drawdowns_long) // 100)]
+        .mean(),
+        "drawdown_1pct_worst_mean_short": -drawdowns_short.sort_values()
+        .iloc[: (len(drawdowns_short) // 100)]
+        .mean(),
+        "sharpe_ratio_long": sharpe_ratio_long,
+        "sharpe_ratio_short": sharpe_ratio_short,
     }
     return longs, shorts, sdf, sort_dict_keys(analysis)
 
@@ -1419,11 +1604,13 @@ def calc_scores(config: dict, results: dict):
         ("adg_weighted_per_exposure", True),
         ("exposure_ratios_mean", False),
         ("time_at_max_exposure", False),
-        ("hrs_stuck_max", False),
         ("pa_distance_mean", False),
         ("pa_distance_std", False),
+        ("hrs_stuck_max", False),
         ("pa_distance_1pct_worst_mean", False),
         ("loss_profit_ratio", False),
+        ("drawdown_1pct_worst_mean", False),
+        ("drawdown_max", False),
     ]
     means = {side: {} for side in sides}  # adjusted means
     scores = {side: 0.0 for side in sides}
@@ -1517,6 +1704,7 @@ def shorten_custom_id(id_: str) -> str:
         ("short", "shrt"),
         ("primary", "prm"),
         ("unstuck", "ustk"),
+        ("partial", "prtl"),
     ]:
         id0 = id0.replace(k_, r_)
     return id0
@@ -1527,6 +1715,11 @@ def determine_pos_side_ccxt(open_order: dict) -> str:
         oo = open_order["info"]
     else:
         oo = open_order
+    if "positionIdx" in oo:  # bybit position
+        if float(oo["positionIdx"]) == 1.0:
+            return "long"
+        if float(oo["positionIdx"]) == 2.0:
+            return "short"
     keys_map = {key.lower().replace("_", ""): key for key in oo}
     for poskey in ["posside", "positionside"]:
         if poskey in keys_map:
@@ -1567,3 +1760,286 @@ def calc_hash(data):
     data_string = json.dumps(data, sort_keys=True)
     data_hash = sha256(data_string.encode("utf-8")).hexdigest()
     return data_hash
+
+
+def stats_multi_to_df(stats, symbols, c_mults):
+    dicts = []
+    for x in stats:
+        d = {"minute": x[0], "balance": x[4], "equity": x[5]}
+        for i in range(len(symbols)):
+            d[f"{symbols[i]}_psize_l"] = x[1][i][0]
+            d[f"{symbols[i]}_pprice_l"] = x[1][i][1]
+            d[f"{symbols[i]}_psize_s"] = x[2][i][0]
+            d[f"{symbols[i]}_pprice_s"] = x[2][i][1]
+            d[f"{symbols[i]}_price"] = x[3][i]
+
+            d[f"{symbols[i]}_upnl_pct_l"] = (
+                calc_pnl_long(
+                    d[f"{symbols[i]}_pprice_l"],
+                    d[f"{symbols[i]}_price"],
+                    d[f"{symbols[i]}_psize_l"],
+                    False,
+                    c_mults[i],
+                )
+                / d["balance"]
+            )
+            d[f"{symbols[i]}_upnl_pct_s"] = (
+                calc_pnl_short(
+                    d[f"{symbols[i]}_pprice_s"],
+                    d[f"{symbols[i]}_price"],
+                    d[f"{symbols[i]}_psize_s"],
+                    False,
+                    c_mults[i],
+                )
+                / d["balance"]
+            )
+
+        dicts.append(d)
+    sdf = pd.DataFrame(dicts).set_index("minute")
+    for s in symbols:
+        sdf_tmp = sdf[[c for c in sdf.columns if s in c or "bal" in c]]
+        sdf.loc[:, f"{s}_WE_l"] = sdf_tmp[f"{s}_psize_l"] * sdf_tmp[f"{s}_pprice_l"] / sdf.balance
+        sdf.loc[:, f"{s}_WE_s"] = (
+            sdf_tmp[f"{s}_psize_s"].abs() * sdf_tmp[f"{s}_pprice_s"] / sdf.balance
+        )
+    return sdf.replace(0.0, np.nan)
+
+
+def calc_upnl(row, c_mults_d):
+    if row.psize == 0.0:
+        return 0.0
+    if row.psize < 0.0:
+        return calc_pnl_short(row.pprice, row.price, row.psize, False, c_mults_d[row.symbol])
+    return calc_pnl_long(row.pprice, row.price, row.psize, False, c_mults_d[row.symbol])
+
+
+def fills_multi_to_df(fills, symbols, c_mults):
+    fdf = pd.DataFrame(
+        fills,
+        columns=[
+            "minute",
+            "symbol",
+            "pnl",
+            "fee_paid",
+            "balance",
+            "equity",
+            "qty",
+            "price",
+            "psize",
+            "pprice",
+            "type",
+            "stuckness",
+        ],
+    )
+    s2i = {symbol: i for i, symbol in enumerate(symbols)}
+    c_mults_d = {s: c_mults[i] for i, s in enumerate(symbols)}
+    c_mults_array = fdf.symbol.apply(lambda s: c_mults[s2i[s]])
+    fdf.loc[:, "cost"] = (fdf.qty * fdf.price).abs() * c_mults_array
+    fdf.loc[:, "WE"] = (fdf.psize * fdf.pprice).abs() * c_mults_array / fdf.balance
+    fdf.loc[:, "upnl_pct"] = fdf.apply(lambda x: calc_upnl(x, c_mults_d), axis=1) / fdf.balance
+    return fdf.set_index("minute")
+
+
+def analyze_fills_multi(sdf, fdf, params):
+    symbols = [c[: c.find("_price")] for c in sdf.columns if "_price" in c]
+    starting_balance = sdf.iloc[0].balance
+    final_balance = sdf.iloc[-1].balance
+    final_equity = sdf.iloc[-1].equity
+    daily_samples = sdf.groupby(sdf.index // (60 * 24)).last()
+    daily_gains = daily_samples.equity.pct_change().dropna()
+    adg = daily_gains.mean()
+    adg_weighted = np.mean(
+        [
+            daily_gains.iloc[round(int(len(daily_gains) * (1 - 1 / (i + 1)))) :].mean()
+            for i in range(10)
+        ]
+    )
+    daily_gains_std = daily_gains.std()
+
+    longs = fdf[fdf.type.str.contains("long")]
+    shorts = fdf[fdf.type.str.contains("short")]
+
+    sdf_daily = sdf.groupby(sdf.index // (60 * 24)).last()
+    sdf_daily.loc[:, "upnl_l"] = sdf_daily[[c for c in sdf_daily if "upnl_l" in c]].sum(axis=1)
+    sdf_daily.loc[:, "upnl_s"] = sdf_daily[[c for c in sdf_daily if "upnl_s" in c]].sum(axis=1)
+
+    daily_pnls_long = longs.groupby(longs.index // (60 * 24)).pnl.sum().cumsum()
+    daily_pnls_short = shorts.groupby(shorts.index // (60 * 24)).pnl.sum().cumsum()
+
+    daily_pnls_long = daily_pnls_long.reindex(np.arange(sdf.index[0], sdf.index[-1] + 1)).ffill()
+    daily_pnls_short = daily_pnls_short.reindex(np.arange(sdf.index[0], sdf.index[-1] + 1)).ffill()
+
+    sdf_daily.loc[:, "equity_long"] = daily_pnls_long + sdf.balance.iloc[0]
+    sdf_daily.loc[:, "equity_short"] = daily_pnls_short + sdf.balance.iloc[0]
+
+    adg_long = sdf_daily.equity_long.pct_change().mean()
+    adg_weighted_long = np.mean(
+        [
+            sdf_daily.equity_long.iloc[round(int(len(sdf_daily) * (1 - 1 / (i + 1)))) :]
+            .pct_change()
+            .mean()
+            for i in range(10)
+        ]
+    )
+    adg_weighted_short = np.mean(
+        [
+            sdf_daily.equity_short.iloc[round(int(len(sdf_daily) * (1 - 1 / (i + 1)))) :]
+            .pct_change()
+            .mean()
+            for i in range(10)
+        ]
+    )
+
+    adg_short = sdf_daily.equity_short.pct_change().mean()
+
+    n_days = (sdf.index[-1] - sdf.index[0]) / 60 / 24
+    pnl_sum = pnl_sum_total = fdf.pnl.sum()
+
+    pnl_long = longs.pnl.sum()
+    pnl_short = shorts.pnl.sum()
+    sum_profit_long = longs[longs.pnl > 0.0].pnl.sum()
+    sum_loss_long = longs[longs.pnl < 0.0].pnl.sum()
+    loss_profit_ratio_long = abs(sum_loss_long) / sum_profit_long if sum_profit_long > 0.0 else 1.0
+    sum_profit_short = shorts[shorts.pnl > 0.0].pnl.sum()
+    sum_loss_short = shorts[shorts.pnl < 0.0].pnl.sum()
+    loss_profit_ratio_short = (
+        abs(sum_loss_short) / sum_profit_short if sum_profit_short > 0.0 else 1.0
+    )
+
+    minute_mult = 60 * 24
+    drawdowns = calc_drawdowns(sdf.equity)
+    drawdowns_daily = drawdowns.groupby(drawdowns.index // minute_mult * minute_mult).min()
+    drawdowns_ten_worst = drawdowns_daily.sort_values().iloc[:10]
+    drawdown_max = drawdowns.abs().max()
+    mean_of_10_worst_drawdowns = drawdowns_ten_worst.abs().mean()
+
+    is_stuck_long = (
+        sdf[[c for c in sdf.columns if "WE_l" in c]] / (params["TWE_long"] / len(symbols)) > 0.9
+    )
+    is_stuck_short = (
+        sdf[[c for c in sdf.columns if "WE_s" in c]] / (params["TWE_short"] / len(symbols)) > 0.9
+    )
+    any_stuck = pd.concat([is_stuck_long, is_stuck_short], axis=1).any(axis=1)
+    stuck_time_ratio_long = len(is_stuck_long[is_stuck_long.any(axis=1)]) / len(is_stuck_long)
+    stuck_time_ratio_short = len(is_stuck_short[is_stuck_short.any(axis=1)]) / len(is_stuck_short)
+    stuck_time_ratio_any = len(any_stuck[any_stuck]) / len(any_stuck)
+    eqbal_ratios = sdf.equity / sdf.balance
+    analysis = {
+        "n_days": n_days,
+        "starting_balance": starting_balance,
+        "final_balance": final_balance,
+        "final_equity": final_equity,
+        "drawdown_max": drawdown_max,
+        "mean_of_10_worst_drawdowns": mean_of_10_worst_drawdowns,
+        "adg": adg,
+        "adg_weighted": adg_weighted,
+        "adg_long": adg_long,
+        "adg_weighted_long": adg_weighted_long,
+        "adg_short": adg_short,
+        "adg_weighted_short": adg_weighted_short,
+        "pnl_sum": pnl_sum,
+        "pnl_long": pnl_long,
+        "pnl_short": pnl_short,
+        "pnl_ratio_long_short": pnl_long / pnl_sum,
+        "sum_profit_long": sum_profit_long,
+        "sum_profit_short": sum_profit_short,
+        "sum_loss_long": sum_loss_long,
+        "sum_loss_short": sum_loss_short,
+        "loss_profit_ratio_long": loss_profit_ratio_long,
+        "loss_profit_ratio_short": loss_profit_ratio_short,
+        "stuck_time_ratio_long": stuck_time_ratio_long,
+        "stuck_time_ratio_short": stuck_time_ratio_short,
+        "stuck_time_ratio_any": stuck_time_ratio_any,
+        "eqbal_ratio_mean": eqbal_ratios.mean(),
+        "eqbal_ratio_min": eqbal_ratios.min(),
+        "n_fills_per_day": len(fdf) / n_days,
+        "shape_ratio_daily": adg / daily_gains_std if daily_gains_std != 0.0 else 0.0,
+        "individual_analyses": {},
+    }
+    upnl_pcts_mins = dict(sdf[[c for c in sdf.columns if "upnl" in c]].min().sort_values())
+    for symbol in symbols:
+        fdfc = fdf[fdf.symbol == symbol]
+        longs = fdfc[fdfc.type.str.contains("long")]
+        shorts = fdfc[fdfc.type.str.contains("short")]
+        pnl_sum = fdfc.pnl.sum()
+        pnl_long = longs.pnl.sum()
+        pnl_short = shorts.pnl.sum()
+        sum_profit_long = longs[longs.pnl > 0.0].pnl.sum()
+        sum_loss_long = longs[longs.pnl < 0.0].pnl.sum()
+        loss_profit_ratio_long = (
+            abs(sum_loss_long) / sum_profit_long if sum_profit_long > 0.0 else 1.0
+        )
+        sum_profit_short = shorts[shorts.pnl > 0.0].pnl.sum()
+        sum_loss_short = shorts[shorts.pnl < 0.0].pnl.sum()
+        loss_profit_ratio_short = (
+            abs(sum_loss_short) / sum_profit_short if sum_profit_short > 0.0 else 1.0
+        )
+
+        stuck_l = is_stuck_long[f"{symbol}_WE_l"]
+        stuck_time_ratio_long = len(stuck_l[stuck_l]) / len(stuck_l)
+        stuck_s = is_stuck_short[f"{symbol}_WE_s"]
+        stuck_time_ratio_short = len(stuck_s[stuck_s]) / len(stuck_s)
+
+        analysis["individual_analyses"][symbol] = {
+            "pnl_ratio": pnl_sum / pnl_sum_total,
+            "pnl_ratio_long_short": pnl_long / pnl_sum,
+            "pnl_long": pnl_long,
+            "pnl_short": pnl_short,
+            "sum_profit_long": sum_profit_long,
+            "sum_loss_long": sum_loss_long,
+            "loss_profit_ratio_long": loss_profit_ratio_long,
+            "sum_profit_short": sum_profit_short,
+            "sum_loss_short": sum_loss_short,
+            "loss_profit_ratio_short": loss_profit_ratio_short,
+            "stuck_time_ratio_long": stuck_time_ratio_long,
+            "stuck_time_ratio_short": stuck_time_ratio_short,
+            "n_fills_per_day": len(fdfc) / n_days,
+            "upnl_pct_min_long": min(longs.upnl_pct.min(), upnl_pcts_mins[f"{symbol}_upnl_pct_l"]),
+            "upnl_pct_min_short": min(shorts.upnl_pct.min(), upnl_pcts_mins[f"{symbol}_upnl_pct_s"]),
+        }
+    return analysis
+
+
+def multi_replace(input_data, replacements: [(str, str)]):
+    if isinstance(input_data, str):
+        new_data = input_data
+        for old, new in replacements:
+            new_data = new_data.replace(old, new)
+    elif isinstance(input_data, list):
+        new_data = []
+        for string in input_data:
+            for old, new in replacements:
+                string = string.replace(old, new)
+            new_data.append(string)
+    elif isinstance(input_data, dict):
+        new_data = {}
+        for key, string in input_data.items():
+            for old, new in replacements:
+                string = string.replace(old, new)
+            new_data[key] = string
+    return new_data
+
+
+def live_config_dict_to_list_recursive_grid(live_config: dict) -> list:
+    keys = [
+        "auto_unstuck_delay_minutes",
+        "auto_unstuck_ema_dist",
+        "auto_unstuck_qty_pct",
+        "auto_unstuck_wallet_exposure_threshold",
+        "backwards_tp",
+        "ddown_factor",
+        "ema_span_0",
+        "ema_span_1",
+        "enabled",
+        "initial_eprice_ema_dist",
+        "initial_qty_pct",
+        "markup_range",
+        "min_markup",
+        "n_close_orders",
+        "rentry_pprice_dist",
+        "rentry_pprice_dist_wallet_exposure_weighting",
+        "wallet_exposure_limit",
+    ]
+    return numpyize(
+        [(float(live_config["long"][key]), float(live_config["short"][key])) for key in keys]
+    )

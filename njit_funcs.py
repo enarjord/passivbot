@@ -160,6 +160,8 @@ def calc_equity(
 def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> (float, float):
     if qty == 0.0:
         return psize, pprice
+    if psize == 0.0:
+        return qty, price
     new_psize = round_(psize + qty, qty_step)
     if new_psize == 0.0:
         return 0.0, 0.0
@@ -674,6 +676,8 @@ def calc_close_grid_backwards_long(
     if len(close_prices) == 1:
         if psize_ >= calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost):
             closes.append((-psize_, close_prices[0], "long_nclose"))
+        else:
+            return [(0.0, 0.0, "")]
         return closes
     qty_per_close = max(min_qty, round_up(full_psize / len(close_prices_all), qty_step))
     for price in close_prices[::-1]:
@@ -769,6 +773,8 @@ def calc_close_grid_frontwards_long(
     if len(close_prices) == 1:
         if psize_ >= calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost):
             closes.append((-psize_, close_prices[0], "long_nclose"))
+        else:
+            return [(0.0, 0.0, "")]
         return closes
     default_close_qty = round_dn(psize_ / len(close_prices), qty_step)
     for price in close_prices[:-1]:
@@ -866,6 +872,8 @@ def calc_close_grid_backwards_short(
     if len(close_prices) == 1:
         if psize_ >= calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost):
             closes.append((psize_, close_prices[0], "short_nclose"))
+        else:
+            return [(0.0, 0.0, "")]
         return closes
     qty_per_close = max(min_qty, round_up(full_psize / len(close_prices_all), qty_step))
     for price in close_prices[::-1]:
@@ -961,6 +969,8 @@ def calc_close_grid_frontwards_short(
     if len(close_prices) == 1:
         if abs_psize_ >= calc_min_entry_qty(close_prices[0], inverse, qty_step, min_qty, min_cost):
             closes.append((abs_psize_, close_prices[0], "short_nclose"))
+        else:
+            return [(0.0, 0.0, "")]
         return closes
     default_close_qty = round_dn(abs_psize_ / len(close_prices), qty_step)
     for price in close_prices[:-1]:

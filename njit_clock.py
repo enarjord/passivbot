@@ -171,7 +171,9 @@ def calc_clock_close_long(
                 ),
             )
             if qty_long > 0.0:
-                if round_(psize_long - qty_long, qty_step) < calc_min_entry_qty(ask_price_long, inverse, qty_step, min_qty, min_cost):
+                if round_(psize_long - qty_long, qty_step) < calc_min_entry_qty(
+                    ask_price_long, inverse, qty_step, min_qty, min_cost
+                ):
                     # close whole pos; include leftovers
                     return (-psize_long, ask_price_long, "clock_close_long")
                 return (-qty_long, ask_price_long, "clock_close_long")
@@ -307,7 +309,9 @@ def calc_clock_close_short(
                 ),
             )
             if qty_short > 0.0:
-                if round_(psize_short - qty_short, qty_step) < calc_min_entry_qty(bid_price_short, inverse, qty_step, min_qty, min_cost):
+                if round_(psize_short - qty_short, qty_step) < calc_min_entry_qty(
+                    bid_price_short, inverse, qty_step, min_qty, min_cost
+                ):
                     # close whole pos; include leftovers
                     return (psize_short, bid_price_short, "clock_close_short")
                 return (qty_short, bid_price_short, "clock_close_short")

@@ -7,9 +7,8 @@ mkdocs==1.4.0
 mkdocs-material==8.1.8
 pymdown-extensions==9.1
 tqdm==4.62.3
-numpy==1.21.5
 python-dateutil==2.8.2
-numba==0.55.1
+numba==0.58.1
 pandas==1.4.0
 PyYAML==6.0
 asyncio==3.4.3

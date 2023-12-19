@@ -38,33 +38,6 @@ def main():
 
     parser = argparse.ArgumentParser(prog="view conf", description="inspect conf")
     parser.add_argument("results_fpath", type=str, help="path to results file")
-    weights_keys = [
-        ("psl", "maximum_pa_distance_std_long"),
-        ("pss", "maximum_pa_distance_std_short"),
-        ("pml", "maximum_pa_distance_mean_long"),
-        ("pms", "maximum_pa_distance_mean_short"),
-        ("pwl", "maximum_pa_distance_1pct_worst_mean_long"),
-        ("pws", "maximum_pa_distance_1pct_worst_mean_short"),
-        ("pll", "maximum_loss_profit_ratio_long"),
-        ("pls", "maximum_loss_profit_ratio_short"),
-        ("hsl", "maximum_hrs_stuck_max_long"),
-        ("hss", "maximum_hrs_stuck_max_short"),
-        ("exl", "maximum_exposure_ratios_mean_long"),
-        ("exs", "maximum_exposure_ratios_mean_short"),
-        ("tel", "maximum_time_at_max_exposure_long"),
-        ("tes", "maximum_time_at_max_exposure_short"),
-        ("ct", "clip_threshold"),
-    ]
-    for k0, k1 in weights_keys:
-        parser.add_argument(
-            f"-{k0}",
-            f"--{k1}",
-            dest=k1,
-            type=float,
-            required=False,
-            default=None,
-            help=f"max {k1}",
-        )
     parser.add_argument(
         "-i",
         "--index",
@@ -94,12 +67,15 @@ def main():
 
     opt_config = hjson.load(open(args.optimize_config_path))
     minsmaxs = {}
-    for _, k1 in weights_keys:
-        minsmaxs[k1] = opt_config[k1] if getattr(args, k1) is None else getattr(args, k1)
+    for k in opt_config:
+        if "maximum_" in k or "minimum_" in k:
+            minsmaxs[k] = opt_config[k]
     klen = max([len(k) for k in minsmaxs])
     for k, v in minsmaxs.items():
         print(f"{k: <{klen}} {v}")
 
+    if os.path.isdir(args.results_fpath):
+        args.results_fpath = os.path.join(args.results_fpath, "all_results.txt")
     with open(args.results_fpath) as f:
         results = [json.loads(x) for x in f.readlines()]
     print(f"{'n results': <{klen}} {len(results)}")
@@ -111,7 +87,7 @@ def main():
     sides = ["long", "short"]
     for r in results:
         cfg = r["config"].copy()
-        cfg.update(minsmaxs)
+        cfg.update(opt_config)
         ress = r["results"]
         all_scores.append({})
         scores_res = calc_scores(cfg, {s: r["results"][s] for s in symbols})

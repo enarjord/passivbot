@@ -26,12 +26,8 @@ def floatify(xs):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        prog="select_coins", description="select coins from table dump"
-    )
-    parser.add_argument(
-        "path_to_table_dump", type=str, help="path to live config to test"
-    )
+    parser = argparse.ArgumentParser(prog="select_coins", description="select coins from table dump")
+    parser.add_argument("path_to_table_dump", type=str, help="path to live config to test")
     parser.add_argument(
         "-adg",
         type=float,
@@ -94,9 +90,7 @@ def main():
         ) / 4
 
     syms_sorted_by_nscores = sorted(nscores.items(), key=lambda x: x[1], reverse=True)
-    syms = [
-        s for s in syms if s in [x[0] for x in syms_sorted_by_nscores][: args.n_syms]
-    ]
+    syms = [s for s in syms if s in [x[0] for x in syms_sorted_by_nscores][: args.n_syms]]
     print("long")
     print(longs[longs.symbol.isin(syms)].sort_values("adg_per_exp", ascending=False))
     print("\nshort")

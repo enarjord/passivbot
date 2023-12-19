@@ -79,7 +79,7 @@ async def main():
             # traceback.print_exc()
             income = []
         income = [e for e in income if e["transaction_id"] not in already_transferred_ids]
-        income = [x for x in income if x['timestamp'] > now - 1000 * 60 * 60 * 24]
+        income = [x for x in income if x["timestamp"] > now - 1000 * 60 * 60 * 24]
         income = [e for e in income if e["token"] == args.quote]
         profit = sum([e["income"] for e in income])
         to_transfer = round_dynamic(profit * args.percentage, 4)
