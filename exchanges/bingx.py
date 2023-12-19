@@ -5,7 +5,7 @@ import json
 import numpy as np
 
 from uuid import uuid4
-from njit_funcs import calc_diff
+from njit_funcs import calc_diff, round_
 from passivbot import Bot, logging
 from procedures import print_async_exception, utc_ms, make_get_filepath
 from pure_funcs import determine_pos_side_ccxt, floatify, calc_hash, ts_to_date_utc, date_to_ts2
@@ -137,14 +137,17 @@ class BingXBot(Bot):
 
         # split into multiple tasks
         sublists = [
-            ids_to_fetch[i : i + max_n_fetches]
-            for i in range(0, len(ids_to_fetch), max_n_fetches)
+            ids_to_fetch[i : i + max_n_fetches] for i in range(0, len(ids_to_fetch), max_n_fetches)
         ]
         all_fetched = []
         order_details = [x for x in cached_orders if x["orderId"] in order_ids]
-        order_details = sorted({x["orderId"]: x for x in order_details}.values(), key=lambda x: float(x["orderId"]))
+        order_details = sorted(
+            {x["orderId"]: x for x in order_details}.values(), key=lambda x: float(x["orderId"])
+        )
         for sublist in sublists:
-            print(f"debug fetch order details sublist {cache_path} n fetches: {len(ids_to_fetch) - len(all_fetched)}")
+            logging.info(
+                f"debug fetch order details sublist {cache_path} n fetches: {len(ids_to_fetch) - len(all_fetched)}"
+            )
             fetched = await asyncio.gather(
                 *[
                     self.cc.swap_v2_private_get_trade_order(
@@ -158,7 +161,9 @@ class BingXBot(Bot):
             all_fetched += fetched
             order_details = [x for x in order_details + all_fetched if x["orderId"] in order_ids]
             # dedup
-            order_details = sorted({x["orderId"]: x for x in order_details}.values(), key=lambda x: float(x["orderId"]))
+            order_details = sorted(
+                {x["orderId"]: x for x in order_details}.values(), key=lambda x: float(x["orderId"])
+            )
             if cache:
                 try:
                     json.dump(order_details, open(cache_path, "w"))
@@ -276,11 +281,12 @@ class BingXBot(Bot):
             except Exception as e:
                 logging.error(f"error loading cached open orders {e}")
                 traceback.print_exc()
+                cached_orders = []
             cached_orders.extend(to_dump)
             try:
-                json.dump(cached_orders, open(self.cache_path_open_orders, 'w'))
+                json.dump(cached_orders, open(self.cache_path_open_orders, "w"))
             except Exception as e:
-                logging.error(f"error loading cached open orders {e}")
+                logging.error(f"error dumping cached open orders {e}")
                 traceback.print_exc()
         return executed_orders
 
@@ -304,6 +310,14 @@ class BingXBot(Bot):
                     executed[key] = order[key]
             return executed
         except Exception as e:
+            if '"code":101400' in str(e):
+                new_min_qty = round_(max(self.min_qty, order["qty"]) + self.qty_step, self.qty_step)
+                logging.info(
+                    f"successfully caught order size error, code 101400. Adjusting min_qty from {self.min_qty} to {new_min_qty}..."
+                )
+                self.min_qty = self.xk["min_qty"] = self.config["min_qty"] = new_min_qty
+                logging.error(f"{order} {e}")
+                return {}
             logging.error(f"error executing order {order} {e}")
             print_async_exception(executed)
             traceback.print_exc()
@@ -490,7 +504,12 @@ class BingXBot(Bot):
         try:
             age_limit = int(utc_ms() - 1000 * 60 * 60 * 48)
             fetched = await self.cc.fetch_my_trades(symbol=self.symbol, since=age_limit)
-            fetched = [elm for elm in fetched if date_to_ts2(elm["info"]["filledTm"]) > age_limit and elm["info"]["symbol"] == self.symbol_id]
+            fetched = [
+                elm
+                for elm in fetched
+                if date_to_ts2(elm["info"]["filledTm"]) > age_limit
+                and elm["info"]["symbol"] == self.symbol_id
+            ]
             order_details = await self.fetch_order_details(
                 [elm["info"]["orderId"] for elm in fetched], self.cache_path_fills
             )
