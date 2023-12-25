@@ -172,12 +172,15 @@ class Passivbot:
             for symbol in self.symbols:
                 if getattr(args, f"WE_limit_{pside}") is None:
                     self.live_configs[symbol][pside]["wallet_exposure_limit"] = (
-                        self.config[f"TWE_{pside}"] / n_actives if n_actives > 0 else 0.0
+                        self.config[f"TWE_{pside}"] / n_actives if n_actives > 0 else 0.01
                     )
                 else:
                     self.live_configs[symbol][pside]["wallet_exposure_limit"] = getattr(
                         args, f"WE_limit_{pside}"
                     )
+                self.live_configs[symbol][pside]["wallet_exposure_limit"] = max(
+                    self.live_configs[symbol][pside]["wallet_exposure_limit"], 0.01
+                )
 
                 # disable AU
                 if self.config["multisym_auto_unstuck_enabled"]:
@@ -206,7 +209,7 @@ class Passivbot:
             for symbol in self.symbols:
                 if getattr(args, f"WE_limit_{pside}") is None:
                     self.live_configs[symbol][pside]["wallet_exposure_limit"] = (
-                        self.config[f"TWE_{pside}"] / n_actives if n_actives > 0 else 0.0
+                        self.config[f"TWE_{pside}"] / n_actives if n_actives > 0 else 0.01
                     )
                 else:
                     self.live_configs[symbol][pside]["wallet_exposure_limit"] = getattr(
