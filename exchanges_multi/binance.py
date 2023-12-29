@@ -6,7 +6,7 @@ import pprint
 import asyncio
 import traceback
 import numpy as np
-from pure_funcs import multi_replace, floatify, ts_to_date_utc, calc_hash, determine_pos_side_ccxt
+from pure_funcs import floatify, ts_to_date_utc, calc_hash, determine_pos_side_ccxt
 from procedures import print_async_exception, utc_ms
 
 
@@ -32,41 +32,7 @@ class BinanceBot(Passivbot):
         self.max_n_creations_per_batch = 5
 
     async def init_bot(self):
-        # require symbols to be formatted to ccxt standard COIN/USDT:USDT
-        self.markets = await self.cca.fetch_markets()
-        self.markets_dict = {elm["symbol"]: elm for elm in self.markets}
-        self.symbols = {}
-        for symbol_ in sorted(set(self.config["symbols"])):
-            symbol = symbol_
-            if not symbol.endswith("/USDT:USDT"):
-                coin_extracted = multi_replace(
-                    symbol_, [("/", ""), (":", ""), ("USDT", ""), ("BUSD", ""), ("USDC", "")]
-                )
-                symbol_reformatted = coin_extracted + "/USDT:USDT"
-                logging.info(
-                    f"symbol {symbol_} is wrongly formatted. Trying to reformat to {symbol_reformatted}"
-                )
-                symbol = symbol_reformatted
-            if symbol not in self.markets_dict:
-                logging.info(f"{symbol} missing from {self.exchange}")
-            else:
-                elm = self.markets_dict[symbol]
-                if elm["type"] != "swap":
-                    logging.info(f"wrong market type for {symbol}: {elm['type']}")
-                elif not elm["active"]:
-                    logging.info(f"{symbol} not active")
-                elif not elm["linear"]:
-                    logging.info(f"{symbol} is not a linear market")
-                else:
-                    self.symbols[symbol] = self.config["symbols"][symbol_]
-        self.quote = "USDT"
-        self.inverse = False
-        self.symbol_ids = {
-            symbol: self.markets_dict[symbol]["id"]
-            for symbol in self.markets_dict
-            if symbol.endswith(f":{self.quote}")
-        }
-        self.symbol_ids_inv = {v: k for k, v in self.symbol_ids.items()}
+        await self.init_symbols()
         for symbol in self.symbols:
             elm = self.markets_dict[symbol]
             self.min_costs[symbol] = (
@@ -151,14 +117,21 @@ class BinanceBot(Passivbot):
                 print(f"exception watch_book_ticker {symbol}", e)
                 traceback.print_exc()
 
-    async def fetch_open_orders(self, symbol: str = None) -> [dict]:
+    async def fetch_open_orders(self, symbol: str = None, all=False) -> [dict]:
         fetched = None
         open_orders = {}
         try:
-            fetched = await asyncio.gather(
-                *[self.cca.fetch_open_orders(symbol=symbol) for symbol in self.symbols]
-            )
-            for elm in [x for sublist in fetched for x in sublist]:
+            if all:
+                self.cca.options["warnOnFetchOpenOrdersWithoutSymbol"] = False
+                logging.info(f"fetching all open orders for binance")
+                fetched = await self.cca.fetch_open_orders()
+                self.cca.options["warnOnFetchOpenOrdersWithoutSymbol"] = True
+            else:
+                fetched = await asyncio.gather(
+                    *[self.cca.fetch_open_orders(symbol=symbol) for symbol in self.symbols]
+                )
+                fetched = [x for sublist in fetched for x in sublist]
+            for elm in fetched:
                 elm["position_side"] = elm["info"]["positionSide"].lower()
                 elm["qty"] = elm["amount"]
                 open_orders[elm["id"]] = elm
