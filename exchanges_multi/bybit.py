@@ -32,35 +32,7 @@ class BybitBot(Passivbot):
         self.max_n_creations_per_batch = 12
 
     async def init_bot(self):
-        # require symbols to be formatted to ccxt standard COIN/USDT:USDT
-        self.markets = await self.cca.fetch_markets()
-        self.markets_dict = {elm["symbol"]: elm for elm in self.markets}
-        self.symbols = {}
-        for symbol_ in sorted(set(self.config["symbols"])):
-            symbol = symbol_
-            if not symbol.endswith("/USDT:USDT"):
-                coin_extracted = multi_replace(
-                    symbol_, [("/", ""), (":", ""), ("USDT", ""), ("BUSD", ""), ("USDC", "")]
-                )
-                symbol_reformatted = coin_extracted + "/USDT:USDT"
-                logging.info(
-                    f"symbol {symbol_} is wrongly formatted. Trying to reformat to {symbol_reformatted}"
-                )
-                symbol = symbol_reformatted
-            if symbol not in self.markets_dict:
-                logging.info(f"{symbol} missing from {self.exchange}")
-            else:
-                elm = self.markets_dict[symbol]
-                if elm["type"] != "swap":
-                    logging.info(f"wrong market type for {symbol}: {elm['type']}")
-                elif not elm["active"]:
-                    logging.info(f"{symbol} not active")
-                elif not elm["linear"]:
-                    logging.info(f"{symbol} is not a linear market")
-                else:
-                    self.symbols[symbol] = self.config["symbols"][symbol_]
-        self.quote = "USDT"
-        self.inverse = False
+        await self.init_symbols()
         for symbol in self.symbols:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
