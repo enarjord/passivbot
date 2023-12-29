@@ -20,6 +20,9 @@
     // delay between executions to exchange. Set to 60 to simulate 1m ohlcv backtest.
     execution_delay_seconds: 2
 
+    // set all non-specified symbols on graceful stop
+    auto_gs: true
+
     TWE_long: 2.0  // total wallet exposure limit long. Exposure limit for each bot will be TWE_long / len(symbols_long)
     TWE_short: 0.1  // total wallet exposure limit short. Exposure limit for each bot will be TWE_short / len(symbols_short)
 
