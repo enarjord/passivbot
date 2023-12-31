@@ -41,8 +41,8 @@ class BitgetBot(Passivbot):
         for symbol in self.symbols:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
-            self.min_costs[symbol] = (
-                0.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
+            self.min_costs[symbol] = max(
+                5.1, 0.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
             )
             self.min_qtys[symbol] = elm["limits"]["amount"]["min"]
             self.qty_steps[symbol] = elm["precision"]["amount"]
