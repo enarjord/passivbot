@@ -972,7 +972,7 @@ class Passivbot:
                     "symbol": symbol,
                     "side": "buy" if x[0] > 0.0 else "sell",
                     "position_side": "long" if "long" in x[2] else "short",
-                    "qty": x[0],
+                    "qty": abs(x[0]),
                     "price": x[1],
                     "reduce_only": "close" in x[2],
                     "custom_id": x[2],
@@ -984,6 +984,19 @@ class Passivbot:
 
     def calc_orders_to_cancel_and_create(self):
         ideal_orders = self.calc_ideal_orders()
+        if self.exchange == "okx":
+            # okx has max 100 open orders. Drop orders whose pprice diff is greatest.
+            ideal_orders_tmp = []
+            for s in ideal_orders:
+                for x in ideal_orders[s]:
+                    ideal_orders_tmp.append({**x, **{"symbol": s}})
+            ideal_orders_tmp = sorted(
+                ideal_orders_tmp,
+                key=lambda x: calc_diff(x["price"], self.tickers[x["symbol"]]["last"]),
+            )[:100]
+            ideal_orders = {symbol: [] for symbol in self.symbols}
+            for x in ideal_orders_tmp:
+                ideal_orders[x["symbol"]].append(x)
         actual_orders = {}
         for symbol in self.open_orders:
             actual_orders[symbol] = []
@@ -993,7 +1006,7 @@ class Passivbot:
                         "symbol": x["symbol"],
                         "side": x["side"],
                         "position_side": x["position_side"],
-                        "qty": abs(x["amount"]) * (-1.0 if x["side"] == "sell" else 1.0),
+                        "qty": abs(x["amount"]),
                         "price": x["price"],
                         "reduce_only": (x["position_side"] == "long" and x["side"] == "sell")
                         or (x["position_side"] == "short" and x["side"] == "buy"),
