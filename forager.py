@@ -292,7 +292,7 @@ async def get_current_symbols(cc):
             elif elm["side"] == "short":
                 current_positions_short.append(elm["symbol"])
     if cc.id == "bitget":
-        oos = await cc.private_mix_get_order_margincoincurrent({"productType": "umcbl"})
+        oos = await cc.private_mix_get_mix_v1_order_margincoincurrent({"productType": "umcbl"})
         oos = oos["data"]
         for i in range(len(oos)):
             oos[i]["symbol"] = oos[i]["symbol"].replace("_UMCBL", "")
