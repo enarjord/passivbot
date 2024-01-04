@@ -223,7 +223,7 @@ class BinanceBotSpot(Bot):
             self.price = np.random.choice(self.ob)
             return True
         except Exception as e:
-            logging.error(f"error updating order book {e}")
+            print(f"error updating order book {e}")
             print_async_exception(ticker)
             return False
 
