@@ -984,19 +984,6 @@ class Passivbot:
 
     def calc_orders_to_cancel_and_create(self):
         ideal_orders = self.calc_ideal_orders()
-        if self.exchange == "okx":
-            # okx has max 100 open orders. Drop orders whose pprice diff is greatest.
-            ideal_orders_tmp = []
-            for s in ideal_orders:
-                for x in ideal_orders[s]:
-                    ideal_orders_tmp.append({**x, **{"symbol": s}})
-            ideal_orders_tmp = sorted(
-                ideal_orders_tmp,
-                key=lambda x: calc_diff(x["price"], self.tickers[x["symbol"]]["last"]),
-            )[:100]
-            ideal_orders = {symbol: [] for symbol in self.symbols}
-            for x in ideal_orders_tmp:
-                ideal_orders[x["symbol"]].append(x)
         actual_orders = {}
         for symbol in self.open_orders:
             actual_orders[symbol] = []
