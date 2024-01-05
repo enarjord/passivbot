@@ -130,10 +130,12 @@ def prep_config_multi(parser):
     config = OrderedDict()
 
     for key, value in vars(args).items():
-        print("debug", key, value)
         if "config_path" in key:
             logging.info(f"loading {value}")
             config = hjson.load(open(value))
+        elif key not in confg:
+            logging.info(f"setting {key}: {value}")
+            config[key] = value
         elif getattr(args, key) is not None:
             if key == "symbols":
                 new_symbols = {s: "" for s in getattr(args, key).split(",")}
