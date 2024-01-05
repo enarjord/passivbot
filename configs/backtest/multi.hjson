@@ -1,0 +1,78 @@
+{
+  # exchange from api-keys.json is used
+  user: binance_01
+
+  // multisym auto unstuck: will use profits from other positions to offset losses realized on stuck positions
+  multisym_auto_unstuck_enabled: true
+
+  // how much below past peak balance to allow losses (default 1% == 0.01)
+  loss_allowance_pct: 0.01
+
+  // if wallet_exposure / wallet_exposure_limit > stuck_threshold: consider position as stuck
+  stuck_threshold: 0.95
+
+  // percentage of balance * wallet_exposure_limit to close for each unstucking order (default 1% == 0.01)
+  unstuck_close_pct: 0.01
+
+  TWE_long: 3.0  // total wallet exposure limit long. Exposure limit for each bot will be TWE_long / len(symbols_long)
+  TWE_short: 2.0  // total wallet exposure limit short. Exposure limit for each bot will be TWE_short / len(symbols_short)
+
+  long_enabled: true
+  short_enabled: true
+
+  # format YYYY-MM-DD
+  start_date: 2021-05-01
+  // if end_date is "now" will use current date as end_date.
+  end_date: now
+
+  # specify starting balance in USDT
+  starting_balance: 100000.0
+
+  // Flags:
+  // -lm str: long mode. Choices: [n (normal), gs (graceful_stop)]. Will override long_enabled.
+  // -sm str: short mode. Choices: [n (normal), gs (graceful_stop)]. Will override short_enabled.
+      // normal mode: passivbot manages the position as normal
+      // graceful stop: if there is a position, passivbot will manage it, otherwise passivbot will not make new positions
+  // -lw float: wallet exposure limit long. Overrides value from live config. If absent, WE long is TWE_long / len(active_symbols_long)
+  // -sw: float: wallet exposure limit short. Overrides value from live config.
+  // -lc str: live config path. Specify live config path to override config from live_configs_dir and default_config_path.
+
+  symbols: {
+      BTCUSDT: ''
+      ETHUSDT: ''
+      BCHUSDT: ''
+      XRPUSDT: ''
+      EOSUSDT: ''
+      LTCUSDT: ''
+      TRXUSDT: ''
+      ETCUSDT: ''
+      LINKUSDT: ''
+      XLMUSDT: ''
+      ADAUSDT: ''
+      XMRUSDT: ''
+      DASHUSDT: ''
+      ZECUSDT: ''
+      XTZUSDT: ''
+      BNBUSDT: ''
+      ATOMUSDT: ''
+      ONTUSDT: ''
+      IOTAUSDT: ''
+      BATUSDT: ''
+      VETUSDT: ''
+      NEOUSDT: ''
+      QTUMUSDT: ''
+      IOSTUSDT: ''
+      THETAUSDT: ''
+  }
+
+  // Specify directory containing live configs.
+  // They are sorted alphabetically, then the first config whose filename includes symbol is selected.
+  // Set to "" to disable
+  live_configs_dir: "configs/live/multisymbol/no_AU/"
+
+  // if symbol is missing from live_configs_map, default to this config
+  default_config_path: configs/live/recursive_grid_mode.example.json
+
+  # backtests path
+  base_dir: backtests
+}
