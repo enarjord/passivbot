@@ -185,8 +185,6 @@ async def main():
         help="specify total_wallet_exposure_short, overriding value from hjson config",
     )
     config = prep_config_multi(parser)
-    pprint.pprint(config)
-    return
 
     # this parser is used to parse flags from backtest config
     parser = argparse.ArgumentParser(prog="flags_parser", description="used internally")
