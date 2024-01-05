@@ -59,6 +59,94 @@ def backtest_multi(hlcs, config):
     return res
 
 
+def prep_config_multi(parser):
+    parser.add_argument(
+        "-s",
+        "--symbols",
+        type=str,
+        required=False,
+        dest="symbols",
+        default=None,
+        help="specify symbols, comma separated, overriding symbols from backtest config.  ",
+    )
+    parser.add_argument(
+        "-u",
+        "--user",
+        type=str,
+        required=False,
+        dest="user",
+        default=None,
+        help="specify user, a.k.a. account_name, overriding user from backtest config",
+    )
+    parser.add_argument(
+        "-sd",
+        "--start_date",
+        type=str,
+        required=False,
+        dest="start_date",
+        default=None,
+        help="specify start date, overriding value from hjson config",
+    )
+    parser.add_argument(
+        "-ed",
+        "--end_date",
+        type=str,
+        required=False,
+        dest="end_date",
+        default=None,
+        help="specify end date, overriding value from hjson config",
+    )
+    parser.add_argument(
+        "-sb",
+        "--starting_balance",
+        "--starting-balance",
+        type=float,
+        required=False,
+        dest="starting_balance",
+        default=None,
+        help="specify starting_balance, overriding value from hjson config",
+    )
+    parser.add_argument(
+        "-le",
+        "--long_enabled",
+        "--long-enabled",
+        type=str2bool,
+        required=False,
+        dest="long_enabled",
+        default=None,
+        help="specify long_enabled (y/n or t/f), overriding value from hjson config",
+    )
+    parser.add_argument(
+        "-se",
+        "--short_enabled",
+        "--short-enabled",
+        type=str2bool,
+        required=False,
+        dest="short_enabled",
+        default=None,
+        help="specify short_enabled (y/n or t/f), overriding value from hjson config",
+    )
+    args = parser.parse_args()
+    config = OrderedDict()
+
+    for key, value in vars(args).items():
+        print("debug", key, value)
+        if "config_path" in key:
+            logging.info(f"loading {value}")
+            config = hjson.load(open(value))
+        elif getattr(args, key) is not None:
+            if key == "symbols":
+                new_symbols = {s: "" for s in getattr(args, key).split(",")}
+                if new_symbols != config["symbols"]:
+                    logging.info(f"new symbols: {new_symbols}")
+                    config["symbols"] = new_symbols
+            else:
+                if key in config and config[key] != getattr(args, key):
+                    logging.info(f"changing {key}: {config[key]} -> {getattr(args, key)}")
+                    config[key] = getattr(args, key)
+    return config
+
+
 async def main():
 
     logging.basicConfig(
@@ -77,96 +165,28 @@ async def main():
         help="backtest config hjson file",
     )
     parser.add_argument(
-        "-s",
-        "--symbols",
-        type=str,
-        required=False,
-        dest="symbols",
-        default=None,
-        help="specify symbol(s), overriding symbol from backtest config.  "
-        + "multiple symbols separated with comma",
-    )
-    parser.add_argument(
-        "-u",
-        "--user",
-        type=str,
-        required=False,
-        dest="user",
-        default=None,
-        help="specify user, a.k.a. account_name, overriding user from backtest config",
-    )
-    parser.add_argument(
-        "-sd",
-        "--start_date",
-        type=str,
-        required=False,
-        dest="start_date",
-        default=None,
-        help="specify start date, overriding value from backtest config",
-    )
-    parser.add_argument(
-        "-ed",
-        "--end_date",
-        type=str,
-        required=False,
-        dest="end_date",
-        default=None,
-        help="specify end date, overriding value from backtest config",
-    )
-    parser.add_argument(
-        "-sb",
-        "--starting_balance",
-        "--starting-balance",
+        "-tl",
+        "--total_wallet_exposure_long",
+        "--total-wallet-exposure-long",
         type=float,
         required=False,
-        dest="starting_balance",
+        dest="TWE_long",
         default=None,
-        help="specify starting_balance, overriding value from backtest config",
+        help="specify total_wallet_exposure_long, overriding value from hjson config",
     )
     parser.add_argument(
-        "-le",
-        "--long_enabled",
-        "--long-enabled",
-        type=str2bool,
+        "-ts",
+        "--total_wallet_exposure_short",
+        "--total-wallet-exposure-short",
+        type=float,
         required=False,
-        dest="long_enabled",
+        dest="TWE_short",
         default=None,
-        help="specify long_enabled (y/n or t/f), overriding value from backtest config",
+        help="specify total_wallet_exposure_short, overriding value from hjson config",
     )
-    parser.add_argument(
-        "-se",
-        "--short_enabled",
-        "--short-enabled",
-        type=str2bool,
-        required=False,
-        dest="short_enabled",
-        default=None,
-        help="specify short_enabled (y/n or t/f), overriding value from backtest config",
-    )
-
-    args = parser.parse_args()
-    config = hjson.load(open(args.backtest_config_path))
-
-    for key in [
-        "backtest_config_path",
-        "symbols",
-        "user",
-        "start_date",
-        "end_date",
-        "starting_balance",
-        "long_enabled",
-        "short_enabled",
-    ]:
-        if getattr(args, key) is not None:
-            if key == "symbols":
-                new_symbols = {s: "" for s in getattr(args, key).split(",")}
-                if new_symbols != config["symbols"]:
-                    logging.info(f"new symbols: {new_symbols}")
-                    config["symbols"] = new_symbols
-            else:
-                if key in config and config[key] != getattr(args, key):
-                    logging.info(f"changing {key}: {config[key]} -> {getattr(args, key)}")
-                    config[key] = getattr(args, key)
+    config = prep_config_multi(parser)
+    pprint.pprint(config)
+    return
 
     # this parser is used to parse flags from backtest config
     parser = argparse.ArgumentParser(prog="flags_parser", description="used internally")
