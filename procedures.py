@@ -641,6 +641,29 @@ def load_ccxt_version():
         return None
 
 
+def fetch_market_specific_settings_multi(symbols):
+    import ccxt
+
+    ccxt_version_req = load_ccxt_version()
+    assert (
+        ccxt.__version__ == ccxt_version_req
+    ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v{ccxt_version_req} manually"
+    cc = ccxt.binanceusdm()
+    info = cc.load_markets()
+    for symbol in info:
+        for felm in info[symbol]["info"]["filters"]:
+            if felm["filterType"] == "PRICE_FILTER":
+                info[symbol]["price_step"] = float(felm["tickSize"])
+            elif felm["filterType"] == "MARKET_LOT_SIZE":
+                info[symbol]["qty_step"] = float(felm["stepSize"])
+        info[symbol]["c_mult"] = info[symbol]["contractSize"]
+        info[symbol]["min_cost"] = info[symbol]["limits"]["cost"]["min"]
+        info[symbol]["min_qty"] = info[symbol]["limits"]["amount"]["min"]
+    for symbol in sorted(info):
+        info[info[symbol]["id"]] = info[symbol]
+    return {symbol: info[symbol] for symbol in symbols}
+
+
 def fetch_market_specific_settings(config: dict):
     import ccxt
 
