@@ -25,6 +25,7 @@ from pure_funcs import (
     stats_multi_to_df,
     analyze_fills_multi,
     calc_drawdowns,
+    str2bool,
 )
 from plotting import plot_pnls_stuck, plot_pnls_separate, plot_pnls_long_short, plot_fills_multi
 from collections import OrderedDict
@@ -65,15 +66,116 @@ async def main():
         level=logging.INFO,
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
-
     parser = argparse.ArgumentParser(prog="backtest_multi", description="run multisym backtest")
+    parser.add_argument(
+        "-bc",
+        "--backtest_config",
+        type=str,
+        required=False,
+        dest="backtest_config_path",
+        default="configs/backtest/multi.hjson",
+        help="backtest config hjson file",
+    )
+    parser.add_argument(
+        "-s",
+        "--symbols",
+        type=str,
+        required=False,
+        dest="symbols",
+        default=None,
+        help="specify symbol(s), overriding symbol from backtest config.  "
+        + "multiple symbols separated with comma",
+    )
+    parser.add_argument(
+        "-u",
+        "--user",
+        type=str,
+        required=False,
+        dest="user",
+        default=None,
+        help="specify user, a.k.a. account_name, overriding user from backtest config",
+    )
+    parser.add_argument(
+        "-sd",
+        "--start_date",
+        type=str,
+        required=False,
+        dest="start_date",
+        default=None,
+        help="specify start date, overriding value from backtest config",
+    )
+    parser.add_argument(
+        "-ed",
+        "--end_date",
+        type=str,
+        required=False,
+        dest="end_date",
+        default=None,
+        help="specify end date, overriding value from backtest config",
+    )
+    parser.add_argument(
+        "-sb",
+        "--starting_balance",
+        "--starting-balance",
+        type=float,
+        required=False,
+        dest="starting_balance",
+        default=None,
+        help="specify starting_balance, overriding value from backtest config",
+    )
+    parser.add_argument(
+        "-le",
+        "--long_enabled",
+        "--long-enabled",
+        type=str2bool,
+        required=False,
+        dest="long_enabled",
+        default=None,
+        help="specify long_enabled (y/n or t/f), overriding value from backtest config",
+    )
+    parser.add_argument(
+        "-se",
+        "--short_enabled",
+        "--short-enabled",
+        type=str2bool,
+        required=False,
+        dest="short_enabled",
+        default=None,
+        help="specify short_enabled (y/n or t/f), overriding value from backtest config",
+    )
+
+    args = parser.parse_args()
+    config = hjson.load(open(args.backtest_config_path))
+
+    for key in [
+        "backtest_config_path",
+        "symbols",
+        "user",
+        "start_date",
+        "end_date",
+        "starting_balance",
+        "long_enabled",
+        "short_enabled",
+    ]:
+        if getattr(args, key) is not None:
+            if key == "symbols":
+                new_symbols = {s: "" for s in getattr(args, key).split(",")}
+                if new_symbols != config["symbols"]:
+                    logging.info(f"new symbols: {new_symbols}")
+                    config["symbols"] = new_symbols
+            else:
+                if key in config and config[key] != getattr(args, key):
+                    logging.info(f"changing {key}: {config[key]} -> {getattr(args, key)}")
+                    config[key] = getattr(args, key)
+
+    # this parser is used to parse flags from backtest config
+    parser = argparse.ArgumentParser(prog="flags_parser", description="used internally")
     parser.add_argument("-sm", type=str, required=False, dest="short_mode", default=None)
     parser.add_argument("-lm", type=str, required=False, dest="long_mode", default=None)
     parser.add_argument("-lw", type=float, required=False, dest="WE_limit_long", default=None)
     parser.add_argument("-sw", type=float, required=False, dest="WE_limit_short", default=None)
     parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
 
-    config = hjson.load(open("configs/backtest/multi.hjson"))
     config["symbols"] = OrderedDict(sorted(config["symbols"].items()))
     config["exchange"] = load_user_info(config["user"])["exchange"]
     pprint.pprint(config)
@@ -143,7 +245,7 @@ async def main():
     if config["end_date"] in ["now", "", "today"]:
         config["end_date"] = ts_to_date_utc(utc_ms())[:10]
     coins = [s.replace("USDT", "") for s in config["symbols"]]
-    cache_fpath = make_get_filepath(
+    config["cache_fpath"] = make_get_filepath(
         oj(
             f"{config['base_dir']}",
             "multisymbol",
@@ -151,8 +253,6 @@ async def main():
             f"{'_'.join(coins)}_{config['start_date']}_{config['end_date']}_hlc_cache.npy",
         )
     )
-    config["cache_fpath"] = cache_fpath
-
     # prepare_multsymbol_data() is computationally expensive, so use a cache
     try:
         hlcs = np.load(config["cache_fpath"])
@@ -213,6 +313,9 @@ async def main():
     fills, stats = res
     fdf = fills_multi_to_df(fills, config["symbols"], config["c_mults"])
     sdf = stats_multi_to_df(stats, config["symbols"], config["c_mults"])
+
+    # fdf = pd.read_csv('backtests/multisymbol/binance/2024-01-06T01_38_47/fills.csv').set_index('minute')
+    # sdf = pd.read_csv('backtests/multisymbol/binance/2024-01-06T01_38_47/stats.csv').set_index('minute')
 
     now_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
     backtest_metrics_path = make_get_filepath(
