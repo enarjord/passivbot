@@ -2043,3 +2043,14 @@ def live_config_dict_to_list_recursive_grid(live_config: dict) -> list:
     return numpyize(
         [(float(live_config["long"][key]), float(live_config["short"][key])) for key in keys]
     )
+
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    else:
+        raise Exception("Boolean value expected.")
