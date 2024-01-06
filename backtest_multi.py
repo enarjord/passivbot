@@ -26,6 +26,7 @@ from pure_funcs import (
     analyze_fills_multi,
     calc_drawdowns,
     str2bool,
+    denumpyize,
 )
 from plotting import plot_pnls_stuck, plot_pnls_separate, plot_pnls_long_short, plot_fills_multi
 from collections import OrderedDict
@@ -197,7 +198,6 @@ async def main():
 
     config["symbols"] = OrderedDict(sorted(config["symbols"].items()))
     config["exchange"] = load_user_info(config["user"])["exchange"]
-    pprint.pprint(config)
 
     if os.path.isdir(config["live_configs_dir"]):
         live_configs_fnames = sorted(
@@ -205,7 +205,7 @@ async def main():
         )
     else:
         live_configs_fnames = []
-    live_configs = {}
+    config["live_configs"] = {}
     all_args = {}
     max_len_symbol = max([len(s) for s in config["symbols"]])
 
@@ -225,7 +225,7 @@ async def main():
         ]:
             if path is not None and os.path.exists(path):
                 try:
-                    live_configs[symbol] = load_live_config(path)
+                    config["live_configs"][symbol] = load_live_config(path)
                     logging.info(f"{symbol: <{max_len_symbol}} loaded live config: {path}")
                     break
                 except Exception as e:
@@ -234,14 +234,18 @@ async def main():
             raise Exception(f"no usable live config found for {symbol}")
         for pside in ["long", "short"]:
             if getattr(args, f"{pside}_mode") == "n":
-                live_configs[symbol][pside]["enabled"] = True
+                config["live_configs"][symbol][pside]["enabled"] = True
             elif getattr(args, f"{pside}_mode") == "gs":
-                live_configs[symbol][pside]["enabled"] = False
+                config["live_configs"][symbol][pside]["enabled"] = False
             else:
-                live_configs[symbol][pside]["enabled"] = config[f"{pside}_enabled"]
+                config["live_configs"][symbol][pside]["enabled"] = config[f"{pside}_enabled"]
 
-    n_active_longs = len([s for s in config["symbols"] if live_configs[s]["long"]["enabled"]])
-    n_active_shorts = len([s for s in config["symbols"] if live_configs[s]["short"]["enabled"]])
+    n_active_longs = len(
+        [s for s in config["symbols"] if config["live_configs"][s]["long"]["enabled"]]
+    )
+    n_active_shorts = len(
+        [s for s in config["symbols"] if config["live_configs"][s]["short"]["enabled"]]
+    )
 
     WE_limits = {
         "long": config["TWE_long"] / n_active_longs if n_active_longs > 0 else 0.0,
@@ -252,13 +256,13 @@ async def main():
         for pside in ["long", "short"]:
             for symbol in config["symbols"]:
                 if getattr(all_args[symbol], f"WE_limit_{pside}") is None:
-                    live_configs[symbol][pside]["wallet_exposure_limit"] = WE_limits[pside]
+                    config["live_configs"][symbol][pside]["wallet_exposure_limit"] = WE_limits[pside]
                 else:
-                    live_configs[symbol][pside]["wallet_exposure_limit"] = getattr(
+                    config["live_configs"][symbol][pside]["wallet_exposure_limit"] = getattr(
                         all_args[symbol], f"WE_limit_{pside}"
                     )
-                live_configs[symbol][pside]["wallet_exposure_limit"] = max(
-                    live_configs[symbol][pside]["wallet_exposure_limit"], 0.01
+                config["live_configs"][symbol][pside]["wallet_exposure_limit"] = max(
+                    config["live_configs"][symbol][pside]["wallet_exposure_limit"], 0.01
                 )
 
     if config["end_date"] in ["now", "", "today"]:
@@ -282,16 +286,24 @@ async def main():
         )
         np.save(config["cache_fpath"], hlcs)
 
-    pprint.pprint(config)
+    now_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
+    backtest_metrics_path = make_get_filepath(
+        oj(f"{config['base_dir']}", "multisymbol", config["exchange"], now_fname, "")
+    )
+    hjson.dump(denumpyize(config), open(oj(backtest_metrics_path, "backtest_config.hjson"), "w"))
+
+    config["do_longs"] = tuplify(
+        [config["live_configs"][s]["long"]["enabled"] for s in config["symbols"]]
+    )
+    config["do_shorts"] = tuplify(
+        [config["live_configs"][s]["short"]["enabled"] for s in config["symbols"]]
+    )
     config["live_configs"] = numpyize(
         [
-            live_config_dict_to_list_recursive_grid(live_configs[symbol])
+            live_config_dict_to_list_recursive_grid(config["live_configs"][symbol])
             for symbol in config["symbols"]
         ]
     )
-
-    config["do_longs"] = tuplify([live_configs[s]["long"]["enabled"] for s in config["symbols"]])
-    config["do_shorts"] = tuplify([live_configs[s]["short"]["enabled"] for s in config["symbols"]])
 
     mss_path = oj(
         f"{config['base_dir']}",
@@ -333,13 +345,9 @@ async def main():
     fdf = fills_multi_to_df(fills, config["symbols"], config["c_mults"])
     sdf = stats_multi_to_df(stats, config["symbols"], config["c_mults"])
 
-    # fdf = pd.read_csv('backtests/multisymbol/binance/2024-01-06T01_38_47/fills.csv').set_index('minute')
-    # sdf = pd.read_csv('backtests/multisymbol/binance/2024-01-06T01_38_47/stats.csv').set_index('minute')
+    # fdf = pd.read_csv("backtests/multisymbol/binance/2024-01-07T02_16_06/fills.csv").set_index("minute")
+    # sdf = pd.read_csv("backtests/multisymbol/binance/2024-01-07T02_16_06/stats.csv").set_index("minute")
 
-    now_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
-    backtest_metrics_path = make_get_filepath(
-        oj(f"{config['base_dir']}", "multisymbol", config["exchange"], now_fname, "")
-    )
     fdf.to_csv(oj(backtest_metrics_path, "fills.csv"))
     sdf.to_csv(oj(backtest_metrics_path, "stats.csv"))
 
