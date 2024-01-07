@@ -113,7 +113,10 @@ def generate_yaml(
     user = config["user"]
     twe_long = config["twe_long"]
     twe_short = config["twe_short"]
-    before_command = config["before_command"]
+    if config["before_command"] and not config["before_command"].strip().endswith("&&"):
+        before_command = config["before_command"] + " && "
+    else:
+        before_command = config["before_command"]
 
     n_longs = config["n_longs"]
     n_shorts = config["n_shorts"]
@@ -207,7 +210,7 @@ def generate_yaml(
             conf_path_long = conf_path_short
 
         if conf_path_long == conf_path_short:
-            pane = f"    - shell_command:\n      - {before_command} && sleep {sleep_duration}; python3 passivbot.py {user} {sym} {conf_path_long} "
+            pane = f"    - shell_command:\n      - {before_command} sleep {sleep_duration}; python3 passivbot.py {user} {sym} {conf_path_long} "
             pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
             bot_instances.append((sym, pane))
         else:
@@ -216,18 +219,18 @@ def generate_yaml(
             short_active = sym in active_shorts or sym in current_positions_short
             if long_active and short_active:
                 # two separate bot instances for long & short
-                pane = f"    - shell_command:\n      - {before_command} && sleep {sleep_duration}; python3 passivbot.py {user} {sym} {conf_path_long} "
+                pane = f"    - shell_command:\n      - {before_command} sleep {sleep_duration}; python3 passivbot.py {user} {sym} {conf_path_long} "
                 pane += f"-lw {lw} -sw {sw} -lm {lm} -sm m -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
                 bot_instances.append((sym, pane))
-                pane = f"    - shell_command:\n      - {before_command} && sleep {sleep_duration}; python3 passivbot.py {user} {sym} {conf_path_short} "
+                pane = f"    - shell_command:\n      - {before_command} sleep {sleep_duration}; python3 passivbot.py {user} {sym} {conf_path_short} "
                 pane += f"-lw {lw} -sw {sw} -lm m -sm {sm} -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
                 bot_instances.append((sym, pane))
             elif long_active:
-                pane = f"    - shell_command:\n      - {before_command} && sleep {sleep_duration}; python3 passivbot.py {user} {sym} {conf_path_long} "
+                pane = f"    - shell_command:\n      - {before_command} sleep {sleep_duration}; python3 passivbot.py {user} {sym} {conf_path_long} "
                 pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
                 bot_instances.append((sym, pane))
             elif short_active:
-                pane = f"    - shell_command:\n      - {before_command} && sleep {sleep_duration}; python3 passivbot.py {user} {sym} {conf_path_short} "
+                pane = f"    - shell_command:\n      - {before_command} sleep {sleep_duration}; python3 passivbot.py {user} {sym} {conf_path_short} "
                 pane += f"-lw {lw} -sw {sw} -lm {lm} -sm {sm} -lev {config['leverage']} -cd -pt {config['price_distance_threshold']}"
                 bot_instances.append((sym, pane))
     both_on_gs = False
@@ -571,6 +574,7 @@ async def main():
         ("market_age_threshold", 0),
         ("passivbot_root_dir", "~/passivbot"),
         ("sleep_interval", 5),
+        ("before_command", ""),
     ]:
         if key not in config:
             config[key] = value
