@@ -10,8 +10,9 @@
   ohlcv_interval: 1h
   leverage: 10
   price_distance_threshold: 0.3
+
   passivbot_root_dir: "~/passivbot"
-  // add venv if needed "source bin/activate"
+  // add venv if needed, e.g. "source bin/activate"
   before_command: ""
 
   // set to zero to disable
