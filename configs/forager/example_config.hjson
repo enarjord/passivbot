@@ -11,6 +11,8 @@
   leverage: 10
   price_distance_threshold: 0.3
   passivbot_root_dir: "~/passivbot"
+  // add venv if needed "source bin/activate"
+  before_command: ""
 
   // set to zero to disable
   volume_clip_threshold: 0.51  // include 51% of the highest volume coins
