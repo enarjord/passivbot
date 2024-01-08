@@ -309,16 +309,16 @@ async def main():
         f"{config['base_dir']}",
         "multisymbol",
         config["exchange"],
-        "market_specific_settings",
-        f"{symbol}_mss.json",
+        "market_specific_settings.json",
     )
     try:
-        mss = fetch_market_specific_settings_multi(config["symbols"])
+        mss = fetch_market_specific_settings_multi()
         json.dump(mss, open(make_get_filepath(mss_path), "w"))
     except Exception as e:
         print("failed to fetch market specific settings", e)
         try:
             mss = json.load(open(mss_path))
+            print(f"loaded market specific settings from cache {mss_path}")
         except:
             raise Exception("failed to load market specific settings from cache")
 
