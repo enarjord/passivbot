@@ -641,7 +641,7 @@ def load_ccxt_version():
         return None
 
 
-def fetch_market_specific_settings_multi(symbols):
+def fetch_market_specific_settings_multi(symbols=None):
     import ccxt
 
     ccxt_version_req = load_ccxt_version()
@@ -661,7 +661,7 @@ def fetch_market_specific_settings_multi(symbols):
         info[symbol]["min_qty"] = info[symbol]["limits"]["amount"]["min"]
     for symbol in sorted(info):
         info[info[symbol]["id"]] = info[symbol]
-    return {symbol: info[symbol] for symbol in symbols}
+    return info if symbols is None else {symbol: info[symbol] for symbol in symbols}
 
 
 def fetch_market_specific_settings(config: dict):
