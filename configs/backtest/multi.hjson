@@ -1,11 +1,12 @@
 {
-  # exchange from api-keys.json is used
+  /*
+  passivbot with multisym auto unstuck: will use profits from other positions to offset losses realized on stuck positions.
+  */
+
+  // exchange from api-keys.json is used
   user: binance_01
 
-  // multisym auto unstuck: will use profits from other positions to offset losses realized on stuck positions
-  multisym_auto_unstuck_enabled: true
-
-  // how much below past peak balance to allow losses (default 1% == 0.01)
+  // how much below past peak balance to allow losses (default 1% == 0.01). Set to 0.0 to disable auto unstuck.
   loss_allowance_pct: 0.01
 
   // if wallet_exposure / wallet_exposure_limit > stuck_threshold: consider position as stuck
@@ -14,8 +15,9 @@
   // percentage of balance * wallet_exposure_limit to close for each unstucking order (default 1% == 0.01)
   unstuck_close_pct: 0.01
 
-  TWE_long: 3.0  // total wallet exposure limit long. Exposure limit for each bot will be TWE_long / len(symbols_long)
-  TWE_short: 2.0  // total wallet exposure limit short. Exposure limit for each bot will be TWE_short / len(symbols_short)
+  // total wallet exposure limits long and short. Exposure limit for each bot will be TWE_pos_side / len(symbols_pos_side)
+  TWE_long: 3.0
+  TWE_short: 2.0
 
   long_enabled: true
   short_enabled: true
