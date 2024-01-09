@@ -1030,7 +1030,10 @@ class Passivbot:
                         )
             to_cancel_, to_create_ = filter_orders(actual_orders[symbol], ideal_orders[symbol], keys)
             for pside in ["long", "short"]:
-                if self.live_configs[symbol][pside]["mode"] == "tp_only":
+                if self.live_configs[symbol][pside]["mode"] == "manual":
+                    # neither create nor cancel orders
+                    to_cancel_, to_create_ = [], []
+                elif self.live_configs[symbol][pside]["mode"] == "tp_only":
                     # if take profit only mode, remove same pside entry orders
                     to_cancel_ = [
                         x
@@ -1141,7 +1144,6 @@ async def main():
     max_n_restarts_per_day = 5
     restarts = []
     while True:
-
         args = parser.parse_args()
         config = hjson.load(open(args.hjson_config_path))
         user_info = load_user_info(config["user"])
