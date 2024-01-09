@@ -150,7 +150,7 @@ class BinanceBotSpot(Bot):
                         self.price_multiplier_dn = max(
                             float(q["bidMultiplierDown"]), float(q["askMultiplierDown"])
                         )
-                    elif q["filterType"] == "MIN_NOTIONAL":
+                    elif q["filterType"] in ["MIN_NOTIONAL", "NOTIONAL"]:
                         self.min_cost = self.config["min_cost"] = float(q["minNotional"])
                 try:
                     z = self.min_cost
@@ -299,6 +299,8 @@ class BinanceBotSpot(Bot):
             result = None
             try:
                 result = await creation[1]
+                if "code" in result and result["code"] == -1013:
+                    print("error:", result)
                 results.append(result)
             except Exception as e:
                 print(f"error creating order {creation} {e}")
