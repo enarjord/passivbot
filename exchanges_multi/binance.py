@@ -57,6 +57,12 @@ class BinanceBot(Passivbot):
             self.upd_timestamps["positions"][symbol] = 0.0
         await super().init_bot()
 
+    async def get_active_symbols(self):
+        # get symbols with open orders and/or positions
+        positions, balance = await self.fetch_positions()
+        open_orders = await self.fetch_open_orders(all=True)
+        return sorted(set([elm["symbol"] for elm in positions + open_orders]))
+
     async def start_websockets(self):
         await asyncio.gather(
             self.watch_balance(),
