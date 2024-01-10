@@ -1032,7 +1032,8 @@ class Passivbot:
             for pside in ["long", "short"]:
                 if self.live_configs[symbol][pside]["mode"] == "manual":
                     # neither create nor cancel orders
-                    to_cancel_, to_create_ = [], []
+                    to_cancel_ = [x for x in to_cancel_ if x["pside"] != pside]
+                    to_create_ = [x for x in to_create_ if x["pside"] != pside]
                 elif self.live_configs[symbol][pside]["mode"] == "tp_only":
                     # if take profit only mode, remove same pside entry orders
                     to_cancel_ = [
