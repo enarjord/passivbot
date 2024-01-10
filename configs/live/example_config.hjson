@@ -3,13 +3,11 @@
     user: bybit_01
 
     // multisym auto unstuck: will use profits from other positions to offset losses realized on stuck positions
-    multisym_auto_unstuck_enabled: true
+    // how much below past peak balance to allow losses (default 1% == 0.01). Set to 0.0 to disable multisym auto unstuck.
+    loss_allowance_pct: 0.01
 
     // how far into the past to fetch pnl history
     pnls_max_lookback_days: 60
-
-    // how much below past peak balance to allow losses (default 1% == 0.01)
-    loss_allowance_pct: 0.01
 
     // if wallet_exposure / wallet_exposure_limit > stuck_threshold: consider position as stuck
     stuck_threshold: 0.95
@@ -23,8 +21,13 @@
     // set all non-specified symbols on graceful stop
     auto_gs: true
 
-    TWE_long: 2.0  // total wallet exposure limit long. Exposure limit for each bot will be TWE_long / len(symbols_long)
-    TWE_short: 0.1  // total wallet exposure limit short. Exposure limit for each bot will be TWE_short / len(symbols_short)
+    // total wallet exposure limits long and short. Exposure limit for each bot will be TWE_pos_side / len(active_symbols_pos_side)
+    TWE_long: 2.0
+    TWE_short: 0.1
+
+    // if true, mode defaults to 'normal'. If false, mode defaults to 'graceful_stop' if auto_gs=true, else 'manual'.
+    long_enabled: true
+    short_enabled: false
 
     // Flags:
     // -lm str: long mode. Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].

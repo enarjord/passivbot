@@ -38,7 +38,7 @@ from pure_funcs import numpyize, filter_orders, multi_replace
 class Passivbot:
     def __init__(self, config: dict):
         self.config = config
-        for key, default_val in [("auto_gs", True)]:
+        for key, default_val in [("auto_gs", True), ("long_enabled", True), ("short_enabled", True)]:
             if key not in self.config:
                 self.config[key] = default_val
         self.user = config["user"]
@@ -84,7 +84,10 @@ class Passivbot:
         )
 
     async def init_bot(self):
-        self.sym_padding = max(self.sym_padding, max([len(s) for s in self.symbols]) + 1)
+        max_len_symbol = max([len(s) for s in self.symbols])
+        self.sym_padding = max(self.sym_padding, max_len_symbol + 1)
+
+        # this argparser is used only internally
         parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
         parser.add_argument("-sm", type=str, required=False, dest="short_mode", default=None)
         parser.add_argument("-lm", type=str, required=False, dest="long_mode", default=None)
@@ -103,7 +106,6 @@ class Passivbot:
             )
         else:
             live_configs_fnames = []
-        max_len_symbol = max([len(s) for s in self.symbols])
         self.args = {}
         for symbol in self.symbols:
             live_config_fname_l = [x for x in live_configs_fnames if self.coins[symbol] in x]
@@ -136,15 +138,15 @@ class Passivbot:
 
             for pside in ["long", "short"]:
                 if getattr(args, f"{pside}_mode") is None:
-                    if self.live_configs[symbol][pside]["enabled"]:
-                        self.live_configs[symbol][pside]["enabled"] = True
-                        self.live_configs[symbol][pside]["mode"] = "normal"
-                    else:
-                        self.live_configs[symbol][pside]["enabled"] = False
-                        self.live_configs[symbol][pside]["mode"] = "manual"
+                    self.live_configs[symbol][pside]["enabled"] = self.config[f"{pside}_enabled"]
+                    self.live_configs[symbol][pside]["mode"] = (
+                        "normal"
+                        if self.config[f"{pside}_enabled"]
+                        else ("graceful_stop" if self.config["auto_gs"] else "manual")
+                    )
                 else:
                     if getattr(args, f"{pside}_mode") == "gs":
-                        self.live_configs[symbol][pside]["enabled"] = True
+                        self.live_configs[symbol][pside]["enabled"] = False
                         self.live_configs[symbol][pside]["mode"] = "graceful_stop"
                     elif getattr(args, f"{pside}_mode") == "m":
                         self.live_configs[symbol][pside]["enabled"] = False
@@ -153,9 +155,10 @@ class Passivbot:
                         self.live_configs[symbol][pside]["enabled"] = True
                         self.live_configs[symbol][pside]["mode"] = "normal"
                     elif getattr(args, f"{pside}_mode") == "p":
-                        self.live_configs[symbol][pside]["enabled"] = True
+                        self.live_configs[symbol][pside]["enabled"] = False
                         self.live_configs[symbol][pside]["mode"] = "panic"
                     elif getattr(args, f"{pside}_mode").lower() == "t":
+                        self.live_configs[symbol][pside]["enabled"] = False
                         self.live_configs[symbol][pside]["mode"] = "tp_only"
                     else:
                         raise Exception(f"unknown {pside} mode: {getattr(args,f'{pside}_mode')}")
@@ -174,7 +177,9 @@ class Passivbot:
         for pside in ["long", "short"]:
             for symbol in self.symbols:
                 # disable AU
-                if self.config["multisym_auto_unstuck_enabled"]:
+                # if self.config["loss_allowance_pct"] != 0.0:
+                # possible TODO: single coin auto unstuck in multi symbol mode
+                if True:
                     for key in [
                         "auto_unstuck_delay_minutes",
                         "auto_unstuck_ema_dist",
@@ -191,11 +196,7 @@ class Passivbot:
     async def get_active_symbols(self):
         # get symbols with open orders and/or positions
         positions, balance = await self.fetch_positions()
-        open_orders = await (
-            self.fetch_open_orders(all=True)
-            if self.exchange == "binance"
-            else self.fetch_open_orders()
-        )
+        open_orders = await self.fetch_open_orders()
         return sorted(set([elm["symbol"] for elm in positions + open_orders]))
 
     async def init_symbols(self):
@@ -252,7 +253,7 @@ class Passivbot:
         for pside in ["long", "short"]:
             n_actives = 0
             for sym in self.live_configs:
-                if self.live_configs[sym][pside]["mode"] in ["normal", "tp_only"] or (
+                if self.live_configs[sym][pside]["mode"] == "normal" or (
                     self.live_configs[sym][pside]["mode"] == "graceful_stop"
                     and self.positions[sym][pside]["size"] != 0.0
                 ):
@@ -262,7 +263,9 @@ class Passivbot:
             if self.prev_n_actives[pside] != n_actives:
                 logging.info(f"n active {pside} bots: {self.prev_n_actives[pside]} -> {n_actives}")
                 self.prev_n_actives[pside] = n_actives
-            new_WE_limit = self.config[f"TWE_{pside}"] / n_actives if n_actives > 0 else 0.01
+            new_WE_limit = round_(
+                self.config[f"TWE_{pside}"] / n_actives if n_actives > 0 else 0.01, 0.0001
+            )
             for symbol in self.symbols:
                 if getattr(self.args[symbol], f"WE_limit_{pside}") is None:
                     if self.live_configs[symbol][pside]["wallet_exposure_limit"] != new_WE_limit:
@@ -681,15 +684,15 @@ class Passivbot:
         unstuck_close_order = None
         stuck_positions = []
         for symbol in self.symbols:
-            if not self.config["multisym_auto_unstuck_enabled"]:
+            # check for stuck position
+            if self.config["loss_allowance_pct"] == 0.0:
+                # no auto unstuck
                 break
             for pside in ["long", "short"]:
                 if self.live_configs[symbol][pside]["mode"] in ["manual", "panic", "tp_only"]:
+                    # no auto unstuck in these modes
                     continue
-                if (
-                    not self.live_configs[symbol][pside]["enabled"]
-                    or self.live_configs[symbol][pside]["wallet_exposure_limit"] == 0.0
-                ):
+                if self.live_configs[symbol][pside]["wallet_exposure_limit"] == 0.0:
                     continue
                 wallet_exposure = (
                     qty_to_cost(
