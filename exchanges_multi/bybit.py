@@ -366,4 +366,48 @@ class BybitBot(Passivbot):
         return await self.execute_multiple(orders, "execute_order", self.max_n_creations_per_batch)
 
     async def update_exchange_config(self):
-        pass
+        try:
+            res = await self.cca.set_position_mode(True)
+            logging.info(f"set hedge mode {res}")
+        except Exception as e:
+            logging.error(f"error setting hedge mode {e}")
+
+        coros_to_call_lev, coros_to_call_margin_mode = {}, {}
+        for symbol in self.symbols:
+            try:
+                coros_to_call_margin_mode[symbol] = asyncio.create_task(
+                    self.cca.set_margin_mode(
+                        "cross",
+                        symbol=symbol,
+                        params={"leverage": int(self.live_configs[symbol]["leverage"])},
+                    )
+                )
+            except Exception as e:
+                logging.error(f"{symbol}: error setting cross mode {e}")
+            try:
+                coros_to_call_lev[symbol] = asyncio.create_task(
+                    self.cca.set_leverage(int(self.live_configs[symbol]["leverage"]), symbol=symbol)
+                )
+            except Exception as e:
+                logging.error(f"{symbol}: a error setting leverage {e}")
+        for symbol in self.symbols:
+            res = None
+            to_print = ""
+            try:
+                res = await coros_to_call_lev[symbol]
+                to_print += f" set leverage {res} "
+            except Exception as e:
+                if '"retCode":110043' in e.args[0]:
+                    to_print += f" leverage: {e}"
+                else:
+                    logging.error(f"{symbol} error setting leverage {e}")
+            try:
+                res = await coros_to_call_margin_mode[symbol]
+                to_print += f"set cross mode {res}"
+            except Exception as e:
+                if '"retCode":110026' in e.args[0]:
+                    to_print += f" set cross mode: {res} {e}"
+                else:
+                    logging.error(f"{symbol} error setting cross mode {res} {e}")
+            if to_print:
+                logging.info(f"{symbol}: {to_print}")
