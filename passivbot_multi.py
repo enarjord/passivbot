@@ -108,7 +108,12 @@ class Passivbot:
             live_configs_fnames = []
         self.args = {}
         for symbol in self.symbols:
-            live_config_fname_l = [x for x in live_configs_fnames if self.coins[symbol] in x]
+            # look for an exact match first
+            live_config_fname_l = [
+                x for x in live_configs_fnames if x == self.coins[symbol] + "USDT.json"
+            ]
+            if not live_config_fname_l:
+                live_config_fname_l = [x for x in live_configs_fnames if self.coins[symbol] in x]
             live_configs_dir_fname = (
                 None
                 if live_config_fname_l == []
@@ -270,7 +275,7 @@ class Passivbot:
                 if getattr(self.args[symbol], f"WE_limit_{pside}") is None:
                     if self.live_configs[symbol][pside]["wallet_exposure_limit"] != new_WE_limit:
                         logging.info(
-                            f"changing WE limit for {symbol} {pside}: {self.live_configs[symbol][pside]['wallet_exposure_limit']} -> {new_WE_limit}"
+                            f"changing WE limit for {pside} {symbol}: {self.live_configs[symbol][pside]['wallet_exposure_limit']} -> {new_WE_limit}"
                         )
                         self.live_configs[symbol][pside]["wallet_exposure_limit"] = new_WE_limit
                 else:
