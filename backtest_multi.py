@@ -146,11 +146,54 @@ def prep_config_multi(parser):
                 if key in config and config[key] != getattr(args, key):
                     logging.info(f"changing {key}: {config[key]} -> {getattr(args, key)}")
                     config[key] = getattr(args, key)
+    config["symbols"] = OrderedDict(sorted(config["symbols"].items()))
+    config["exchange"] = load_user_info(config["user"])["exchange"]
     return config
 
 
-async def main():
+async def prep_hlcs_mss_config(config):
+    if config["end_date"] in ["now", "", "today"]:
+        config["end_date"] = ts_to_date_utc(utc_ms())[:10]
+    coins = [s.replace("USDT", "") for s in config["symbols"]]
+    config["cache_fpath"] = make_get_filepath(
+        oj(
+            f"{config['base_dir']}",
+            "multisymbol",
+            config["exchange"],
+            f"{'_'.join(coins)}_{config['start_date']}_{config['end_date']}_hlc_cache.npy",
+        )
+    )
 
+    mss_path = oj(
+        f"{config['base_dir']}",
+        "multisymbol",
+        config["exchange"],
+        "market_specific_settings.json",
+    )
+    try:
+        mss = fetch_market_specific_settings_multi()
+        json.dump(mss, open(make_get_filepath(mss_path), "w"))
+    except Exception as e:
+        print("failed to fetch market specific settings", e)
+        try:
+            mss = json.load(open(mss_path))
+            print(f"loaded market specific settings from cache {mss_path}")
+        except:
+            raise Exception("failed to load market specific settings from cache")
+
+    # prepare_multsymbol_data() is computationally expensive, so use a cache
+    try:
+        hlcs = np.load(config["cache_fpath"])
+        first_ts = 0
+    except:
+        first_ts, hlcs = await prepare_multsymbol_data(
+            config["symbols"], config["start_date"], config["end_date"]
+        )
+        np.save(config["cache_fpath"], hlcs)
+    return hlcs, mss, config
+
+
+async def main():
     logging.basicConfig(
         format="%(asctime)s %(levelname)-8s %(message)s",
         level=logging.INFO,
@@ -195,9 +238,6 @@ async def main():
     parser.add_argument("-lw", type=float, required=False, dest="WE_limit_long", default=None)
     parser.add_argument("-sw", type=float, required=False, dest="WE_limit_short", default=None)
     parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
-
-    config["symbols"] = OrderedDict(sorted(config["symbols"].items()))
-    config["exchange"] = load_user_info(config["user"])["exchange"]
 
     if os.path.isdir(config["live_configs_dir"]):
         live_configs_fnames = sorted(
@@ -265,26 +305,7 @@ async def main():
                     config["live_configs"][symbol][pside]["wallet_exposure_limit"], 0.01
                 )
 
-    if config["end_date"] in ["now", "", "today"]:
-        config["end_date"] = ts_to_date_utc(utc_ms())[:10]
-    coins = [s.replace("USDT", "") for s in config["symbols"]]
-    config["cache_fpath"] = make_get_filepath(
-        oj(
-            f"{config['base_dir']}",
-            "multisymbol",
-            config["exchange"],
-            f"{'_'.join(coins)}_{config['start_date']}_{config['end_date']}_hlc_cache.npy",
-        )
-    )
-    # prepare_multsymbol_data() is computationally expensive, so use a cache
-    try:
-        hlcs = np.load(config["cache_fpath"])
-        first_ts = 0
-    except:
-        first_ts, hlcs = await prepare_multsymbol_data(
-            config["symbols"], config["start_date"], config["end_date"]
-        )
-        np.save(config["cache_fpath"], hlcs)
+    hlcs, mss, config = await prep_hlcs_mss_config(config)
 
     now_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
     backtest_metrics_path = make_get_filepath(
@@ -304,23 +325,6 @@ async def main():
             for symbol in config["symbols"]
         ]
     )
-
-    mss_path = oj(
-        f"{config['base_dir']}",
-        "multisymbol",
-        config["exchange"],
-        "market_specific_settings.json",
-    )
-    try:
-        mss = fetch_market_specific_settings_multi()
-        json.dump(mss, open(make_get_filepath(mss_path), "w"))
-    except Exception as e:
-        print("failed to fetch market specific settings", e)
-        try:
-            mss = json.load(open(mss_path))
-            print(f"loaded market specific settings from cache {mss_path}")
-        except:
-            raise Exception("failed to load market specific settings from cache")
 
     config["qty_steps"] = tuplify([mss[symbol]["qty_step"] for symbol in config["symbols"]])
     config["price_steps"] = tuplify([mss[symbol]["price_step"] for symbol in config["symbols"]])
