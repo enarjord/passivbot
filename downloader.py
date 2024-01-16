@@ -1266,7 +1266,7 @@ async def load_hlc_cache(
     return data
 
 
-async def prepare_multsymbol_data(symbols, start_date, end_date) -> (float, np.ndarray):
+async def prepare_multsymbol_data(symbols, start_date, end_date, base_dir, exchange) -> (float, np.ndarray):
     """
     returns first timestamp and hlc data in the form
     [
@@ -1288,7 +1288,7 @@ async def prepare_multsymbol_data(symbols, start_date, end_date) -> (float, np.n
     hlcs = []
     interval = 60000.0
     for symbol in symbols:
-        data = await load_hlc_cache(symbol, False, start_date, end_date)
+        data = await load_hlc_cache(symbol, False, start_date, end_date, base_dir, False, exchange)
         assert (
             np.diff(data[:, 0]) == interval
         ).all(), f"gaps in hlc data {symbol}"  # verify integrous 1m hlcs
