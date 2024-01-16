@@ -341,7 +341,6 @@ class ParticleSwarmOptimization:
             pass
 
     def run_(self):
-
         # initialize ticks cache
         """
         if self.n_cpus >= len(self.symbols) or (

@@ -35,7 +35,6 @@ def shorten(key):
 
 
 def main():
-
     parser = argparse.ArgumentParser(prog="view conf", description="inspect conf")
     parser.add_argument("results_fpath", type=str, help="path to results file")
     parser.add_argument(
