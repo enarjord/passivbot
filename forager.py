@@ -35,7 +35,7 @@ def score_func_old(ohlcv):
     closes = np.array(ohlcv)[:, 4]
     range_mean = ((highs - lows) / closes).mean()
     std_over_mean = closes.std() / closes.mean()
-    return range_mean ** 2 / std_over_mean
+    return range_mean**2 / std_over_mean
 
 
 def score_func(ohlcv):
