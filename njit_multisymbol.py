@@ -541,7 +541,7 @@ def backtest_multisymbol_recursive_grid(
                 )
                 if len(new_fills) > 0:
                     any_fill = True
-                if new_equity <= 0.0:
+                if new_equity / new_balance < 0.1:
                     bankrupt = True
                 for fill in new_fills:
                     pnl_cumsum_running += fill[2]
@@ -594,7 +594,7 @@ def backtest_multisymbol_recursive_grid(
                 )
                 if len(new_fills) > 0:
                     any_fill = True
-                if new_equity <= 0.0:
+                if new_equity / new_balance < 0.1:
                     bankrupt = True
                 for fill in new_fills:
                     pnl_cumsum_running += fill[2]
@@ -783,8 +783,9 @@ def backtest_multisymbol_recursive_grid(
                     equity,
                 )
             )
-            if equity <= 0.0 or bankrupt:
+            if equity / balance < 0.1 or bankrupt:
                 # bankrupt
+                bankrupt = True
                 break
     equity = balance + calc_pnl_sum(poss_long, poss_short, hlcs[:, k, 2], c_mults)
     if bankrupt:
@@ -923,7 +924,7 @@ def backtest_single_symbol_recursive_grid(
             )
             if len(new_fills) > 0:
                 any_fill = True
-            if new_equity <= 0.0:
+            if new_equity / new_balance < 0.06:
                 bankrupt = True
             fills.extend(new_fills)
             pos_long = new_pos_long
@@ -957,7 +958,7 @@ def backtest_single_symbol_recursive_grid(
             )
             if len(new_fills) > 0:
                 any_fill = True
-            if new_equity <= 0.0:
+            if new_equity / new_balance < 0.1:
                 bankrupt = True
             fills.extend(new_fills)
             pos_short = new_pos_short
@@ -1013,7 +1014,6 @@ def backtest_single_symbol_recursive_grid(
                 )
             )
             if equity <= 0.0 or bankrupt:
-                print("debug", equity, bankrupt)
                 # bankrupt
                 break
     equity = balance + calc_pnl_sum((pos_long,), (pos_short,), hlc[k, 2], (c_mult,))
