@@ -1903,6 +1903,7 @@ def analyze_fills_multi(sdf, fdf, params):
     minute_mult = 60 * 24
     drawdowns = calc_drawdowns(pd.concat([fdf.equity, sdf.equity]).sort_index())
     drawdowns_daily = drawdowns.groupby(drawdowns.index // minute_mult * minute_mult).min()
+    drawdowns_mean = abs(drawdowns_daily.mean())
     drawdowns_ten_worst = drawdowns_daily.sort_values().iloc[:10]
     drawdown_max = drawdowns.abs().max()
     mean_of_10_worst_drawdowns = drawdowns_ten_worst.abs().mean()
@@ -1924,7 +1925,8 @@ def analyze_fills_multi(sdf, fdf, params):
         "final_balance": final_balance,
         "final_equity": final_equity,
         "drawdown_max": drawdown_max,
-        "mean_of_10_worst_drawdowns": mean_of_10_worst_drawdowns,
+        "drawdown_mean_daily_10_worst": mean_of_10_worst_drawdowns,
+        "drawdown_mean_daily": drawdowns_mean,
         "adg": adg,
         "adg_weighted": adg_weighted,
         "adg_long": adg_long,
