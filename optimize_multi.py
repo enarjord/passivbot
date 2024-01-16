@@ -66,15 +66,21 @@ class Evaluator:
         )
         res = backtest_multi(self.hlcs, config_)
         fills, stats = res
-        eqs = pd.DataFrame([(x[0], x[5]) for x in stats] + [(x[0], x[5]) for x in fills]).set_index(0).sort_index()[1]
+        stats_eqs = [(x[0], x[5]) for x in stats]
+        fills_eqs = [(x[0], x[5]) for x in fills]
+        all_eqs = pd.DataFrame(stats_eqs + fills_eqs).set_index(0).sort_index()[1]
+        drawdowns = calc_drawdowns(all_eqs)
+        worst_drawdown = abs(drawdowns.min())
+
         thr = config_["starting_balance"] * 1e-6
-        daily_eqs = eqs.groupby(eqs.index // 1440).last()
+        stats_eqs_df = pd.DataFrame(stats_eqs).set_index(0)
+        daily_eqs = stats_eqs_df.groupby(stats_eqs_df.index // 1440).last()[1]
+        daily_eqs_pct_change = daily_eqs.pct_change()
         if daily_eqs.iloc[-1] <= thr:
             adg = (max(thr, daily_eqs.iloc[-1]) / daily_eqs.iloc[0]) ** (1 / len(daily_eqs)) - 1
         else:
-            adg = daily_eqs.pct_change().mean()
-        drawdowns = calc_drawdowns(eqs)
-        worst_drawdown = abs(drawdowns.min())
+            adg = daily_eqs_pct_change.mean()
+        sharpe_ratio = adg / daily_eqs_pct_change.std()
         # daily_min_drawdowns = drawdowns.groupby(drawdowns.index // 1440).min()
         # mean_of_10_worst_drawdowns_daily = abs(daily_min_drawdowns.sort_values().iloc[:10].mean())
 
@@ -94,15 +100,16 @@ class Evaluator:
                 "live_config": decode_individual(individual),
                 "adg": adg,
                 "worst_drawdown": worst_drawdown,
+                "sharpe_ratio": sharpe_ratio,
             }
         )
         with open(self.results_cache_fname, "a") as f:
             f.write(json.dumps(denumpyize(to_dump)) + "\n")
-        return adg, worst_drawdown
+        return adg, sharpe_ratio, worst_drawdown
 
 
-def decode_individual(individual):
-    keys = [
+def get_individual_keys():
+    return [
         "global_TWE_long",
         "global_TWE_short",
         "global_loss_allowance_pct",
@@ -129,8 +136,29 @@ def decode_individual(individual):
         "short_rentry_pprice_dist",
         "short_rentry_pprice_dist_wallet_exposure_weighting",
     ]
-    decoded = {"global": {}, "long": {}, "short": {}}
+
+
+def config_to_individual(config):
+    keys = get_individual_keys()
+    individual = [0.0 for _ in range(len(keys))]
     for i, key in enumerate(keys):
+        key_ = key[key.find("_") + 1 :]
+        if key.startswith("global"):
+            if key_ in config:
+                individual[i] = config[key_]
+            elif "global" in config and key_ in config["global"]:
+                individual[i] = config["global"][key_]
+            else:
+                print(f"warning: '{key_}' missing from config. Setting {key_} = 0.0")
+        else:
+            pside = key[: key.find("_")]
+            individual[i] = config[pside][key_]
+    return individual
+
+
+def decode_individual(individual):
+    decoded = {"global": {}, "long": {}, "short": {}}
+    for i, key in enumerate(get_individual_keys()):
         for k0 in decoded:
             if key.startswith(k0):
                 decoded[k0][key.replace(k0 + "_", "")] = individual[i]
@@ -139,33 +167,7 @@ def decode_individual(individual):
 
 
 def individual_to_live_configs(individual, symbols):
-    keys = [
-        "global_TWE_long",
-        "global_TWE_short",
-        "global_loss_allowance_pct",
-        "global_stuck_threshold",
-        "global_unstuck_close_pct",
-        "long_ddown_factor",
-        "long_ema_span_0",
-        "long_ema_span_1",
-        "long_initial_eprice_ema_dist",
-        "long_initial_qty_pct",
-        "long_markup_range",
-        "long_min_markup",
-        "long_n_close_orders",
-        "long_rentry_pprice_dist",
-        "long_rentry_pprice_dist_wallet_exposure_weighting",
-        "short_ddown_factor",
-        "short_ema_span_0",
-        "short_ema_span_1",
-        "short_initial_eprice_ema_dist",
-        "short_initial_qty_pct",
-        "short_markup_range",
-        "short_min_markup",
-        "short_n_close_orders",
-        "short_rentry_pprice_dist",
-        "short_rentry_pprice_dist_wallet_exposure_weighting",
-    ]
+    keys = get_individual_keys()
     assert len(keys) == len(individual)
     live_configs = {symbol: {"long": {}, "short": {}} for symbol in symbols}
     for i, key in enumerate(keys):
@@ -219,6 +221,11 @@ def backtest_multi(hlcs, config):
     return res
 
 
+def add_starting_configs(pop, config):
+    for cfg in config['starting_configs']:
+        pass
+
+
 async def main():
     logging.basicConfig(
         format="%(asctime)s %(levelname)-8s %(message)s",
@@ -236,6 +243,17 @@ async def main():
         help="optimize config hjson file",
     )
     config = prep_config_multi(parser)
+    '''
+    parser.add_argument(
+        "-t",
+        "--start",
+        type=str,
+        required=False,
+        dest="starting_configs",
+        default=None,
+        help="start with given live configs.  single json file or dir with multiple json files",
+    )
+    '''
     config["symbols"] = OrderedDict({k: v for k, v in sorted(config["symbols"].items())})
     config["results_cache_fname"] = make_get_filepath(
         f"results_multi/{ts_to_date_utc(utc_ms())[:19].replace(':', '_')}_all_results.txt"
@@ -260,7 +278,8 @@ async def main():
 
     # Define the problem as a multi-objective optimization
     # Maximize adg; minimize max_drawdown
-    creator.create("FitnessMulti", base.Fitness, weights=(1.0, -1.0))
+    weights = (1.0, 1.0, -1.0)
+    creator.create("FitnessMulti", base.Fitness, weights=weights)
     creator.create("Individual", list, fitness=creator.FitnessMulti)
 
     # Toolbox initialization
@@ -298,12 +317,15 @@ async def main():
 
     # Population setup
     pop = toolbox.population(n=100)
+    #pop = add_starting_configs(pop, config)
     hof = tools.HallOfFame(1)
     stats = tools.Statistics(lambda ind: ind.fitness.values)
-    stats.register("avg1", lambda pop: sum(f[0] for f in pop) / len(pop))
-    stats.register("avg2", lambda pop: sum(f[1] for f in pop) / len(pop))
-    stats.register("max1", lambda pop: max(f[0] for f in pop))
-    stats.register("min2", lambda pop: min(f[1] for f in pop))
+    for i, w in enumerate(weights):
+        stats.register(f"avg{i}", lambda pop: sum(f[i] for f in pop) / len(pop))
+        if w < 0.0:
+            stats.register(f"min{i}", lambda pop: min(f[i] for f in pop))
+        else:
+            stats.register(f"max{i}", lambda pop: max(f[i] for f in pop))
 
     logging.info(f"starting optimize")
     try:
