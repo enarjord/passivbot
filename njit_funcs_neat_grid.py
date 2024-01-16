@@ -449,7 +449,6 @@ def eval_neat_entry_grid_long(
     eprice_exp_base,
     last_entry_qty,
 ):
-
     # returns [[qty, price, psize, pprice, wallet_exposure]]
     grid = np.zeros((max_n_entry_orders, 5))
     grid[:, 1] = [
@@ -511,7 +510,6 @@ def eval_neat_entry_grid_short(
     eprice_exp_base,
     last_entry_qty,
 ):
-
     # returns [[qty, price, psize, pprice, wallet_exposure]]
     grid = np.zeros((max_n_entry_orders, 5))
     grid[:, 1] = [
@@ -748,7 +746,6 @@ def calc_whole_neat_entry_grid_long(
     eqty_exp_base,
     eprice_exp_base,
 ):
-
     # [qty, price, psize, pprice, wallet_exposure]
     last_entry_qty = find_last_entry_qty_long(
         balance,
@@ -802,7 +799,6 @@ def calc_whole_neat_entry_grid_short(
     eqty_exp_base,
     eprice_exp_base,
 ):
-
     # [qty, price, psize, pprice, wallet_exposure]
     last_entry_qty = find_last_entry_qty_short(
         balance,
