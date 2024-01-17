@@ -755,18 +755,19 @@ def fetch_market_specific_settings(config: dict):
     elif exchange == "bybit":
         cc = ccxt.bybit()
         markets = cc.fetch_markets()
+        spot = True if market_type == "spot" else False
         for elm in markets:
-            if elm["id"] == symbol and not elm["spot"]:
+            if elm["id"] == symbol and spot == elm["spot"]:
                 break
         else:
             raise Exception(f"unknown symbol {symbol}")
         settings_from_exchange["hedge_mode"] = True
-        settings_from_exchange["maker_fee"] = 0.0001
-        settings_from_exchange["taker_fee"] = 0.0006
+        settings_from_exchange["maker_fee"] = elm["maker"]
+        settings_from_exchange["taker_fee"] = elm["taker"]
         settings_from_exchange["c_mult"] = 1.0 if elm["contractSize"] is None else elm["contractSize"]
         settings_from_exchange["qty_step"] = elm["precision"]["amount"]
         settings_from_exchange["price_step"] = elm["precision"]["price"]
-        settings_from_exchange["spot"] = False
+        settings_from_exchange["spot"] = spot
         settings_from_exchange["inverse"] = elm["linear"] is not None and not elm["linear"]
         settings_from_exchange["min_qty"] = elm["limits"]["amount"]["min"]
     elif exchange == "kucoin":
