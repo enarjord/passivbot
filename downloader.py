@@ -1039,18 +1039,23 @@ def get_days_in_between(start_day, end_day):
     return days_in_between
 
 
-async def download_ohlcvs_bybit(symbol, start_date, end_date, download_only=False):
+async def download_ohlcvs_bybit(symbol, start_date, end_date, spot=False, download_only=False):
     start_date, end_date = get_day(start_date), get_day(end_date)
     assert date_to_ts2(end_date) >= date_to_ts2(start_date), "end_date is older than start_date"
     dirpath = make_get_filepath(f"historical_data/ohlcvs_bybit/{symbol}/")
+    if spot:
+        dirpath = make_get_filepath(f"historical_data/ohlcvs_bybit_spot/{symbol}/")
     ideal_days = get_days_in_between(start_date, end_date)
     days_done = [filename[:-4] for filename in os.listdir(dirpath) if ".csv" in filename]
     days_to_get = [day for day in ideal_days if day not in days_done]
     dfs = {}
     if len(days_to_get) > 0:
-        base_url = "https://public.bybit.com/trading/"
+        base_url = "https://public.bybit.com/"
+        base_url += "spot/" if spot else f"trading/"
         webpage = await get_bybit_webpage(base_url, symbol)
         filenames = [cand for day in days_to_get if (cand := f"{symbol}{day}.csv.gz") in webpage]
+        if spot:
+            filenames = [cand for day in days_to_get if (cand := f"{symbol}_{day}.csv.gz") in webpage]
         if len(filenames) > 0:
             n_concurrent_fetches = 10
             for i in range(0, len(filenames), 10):
@@ -1059,7 +1064,7 @@ async def download_ohlcvs_bybit(symbol, start_date, end_date, download_only=Fals
                     f"fetching {len(filenames_sublist)} trades from {filenames_sublist[0][-17:-7]} to {filenames_sublist[-1][-17:-7]}"
                 )
                 dfs_ = await get_bybit_trades(base_url, symbol, filenames_sublist)
-                dfs_ = {k[-17:-7]: convert_to_ohlcv(v) for k, v in dfs_.items()}
+                dfs_ = {k[-17:-7]: convert_to_ohlcv(v, spot) for k, v in dfs_.items()}
                 dumped = []
                 for day, df in sorted(dfs_.items()):
                     if day in days_done:
@@ -1115,19 +1120,31 @@ async def get_csv_gz(session, url: str):
         return pd.DataFrame()
 
 
-def convert_to_ohlcv(df, interval=60000):
+def convert_to_ohlcv(df, spot, interval=60000):
     # bybit data
     # timestamps are in seconds
-    groups = df.groupby((df.timestamp * 1000) // interval * interval)
-    ohlcvs = pd.DataFrame(
-        {
-            "open": groups.price.first(),
-            "high": groups.price.max(),
-            "low": groups.price.min(),
-            "close": groups.price.last(),
-            "volume": groups["size"].sum(),
-        }
-    )
+    if spot:
+        groups = df.groupby((df.timestamp) // interval * interval)
+        ohlcvs = pd.DataFrame(
+            {
+                "open": groups.price.first(),
+                "high": groups.price.max(),
+                "low": groups.price.min(),
+                "close": groups.price.last(),
+                "volume": groups["volume"].sum(),
+            }
+        )
+    else:
+        groups = df.groupby((df.timestamp * 1000) // interval * interval)
+        ohlcvs = pd.DataFrame(
+            {
+                "open": groups.price.first(),
+                "high": groups.price.max(),
+                "low": groups.price.min(),
+                "close": groups.price.last(),
+                "volume": groups["size"].sum(),
+            }
+        )
     new_index = np.arange(ohlcvs.index[0], ohlcvs.index[-1] + interval, interval)
     ohlcvs = ohlcvs.reindex(new_index)
     closes = ohlcvs.close.ffill()
@@ -1252,7 +1269,7 @@ async def load_hlc_cache(
         data = np.load(filepath)
     else:
         if exchange == "bybit":
-            df = await download_ohlcvs_bybit(symbol, start_date, end_date, download_only=False)
+            df = await download_ohlcvs_bybit(symbol, start_date, end_date, spot, download_only=False)
         else:
             df = await download_ohlcvs_binance(symbol, inverse, start_date, end_date, spot)
         df = df[df.timestamp >= date_to_ts2(start_date)]
