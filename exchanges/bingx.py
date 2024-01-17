@@ -34,7 +34,7 @@ class BingXBot(Bot):
             {
                 "apiKey": self.key,
                 "secret": self.secret,
-                # "headers": {"referer": self.broker_code} if self.broker_code else {},
+                "headers": {"X-SOURCE-KEY": self.broker_code} if self.broker_code else {},
             }
         )
 
