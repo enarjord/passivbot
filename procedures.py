@@ -761,7 +761,7 @@ def fetch_market_specific_settings(config: dict):
                 break
         else:
             raise Exception(f"unknown symbol {symbol}")
-        settings_from_exchange["hedge_mode"] = True
+        settings_from_exchange["hedge_mode"] = True if market_type == 'futures' else False
         settings_from_exchange["maker_fee"] = elm["maker"]
         settings_from_exchange["taker_fee"] = elm["taker"]
         settings_from_exchange["c_mult"] = 1.0 if elm["contractSize"] is None else elm["contractSize"]
