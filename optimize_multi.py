@@ -75,8 +75,11 @@ class Evaluator:
         thr = config_["starting_balance"] * 1e-6
         stats_eqs_df = pd.DataFrame(stats_eqs).set_index(0)
         daily_eqs = stats_eqs_df.groupby(stats_eqs_df.index // 1440).last()[1]
+        drawdowns_daily = calc_drawdowns(daily_eqs)
+        drawdowns_daily_mean = abs(daily_drawdowns.mean())
         daily_eqs_pct_change = daily_eqs.pct_change()
         if daily_eqs.iloc[-1] <= thr:
+            # ensure adg is negative if final equity is low
             adg = (max(thr, daily_eqs.iloc[-1]) / daily_eqs.iloc[0]) ** (1 / len(daily_eqs)) - 1
         else:
             adg = daily_eqs_pct_change.mean()
@@ -100,6 +103,7 @@ class Evaluator:
                 "live_config": decode_individual(individual),
                 "adg": adg,
                 "worst_drawdown": worst_drawdown,
+                "drawdowns_daily_mean": drawdowns_daily_mean,
                 "sharpe_ratio": sharpe_ratio,
             }
         )
