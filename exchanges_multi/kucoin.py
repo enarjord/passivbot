@@ -676,7 +676,6 @@ class KuCoinBot(Bot):
                 events.append(standardized)
 
         elif event["tunnelId"] == "wallet" and event["subject"] == "availableBalance.change":
-
             """
             events.append(
                 {
