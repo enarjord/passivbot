@@ -68,22 +68,25 @@ class Evaluator:
         fills, stats = res
         stats_eqs = [(x[0], x[5]) for x in stats]
         fills_eqs = [(x[0], x[5]) for x in fills]
-        all_eqs = pd.DataFrame(stats_eqs + fills_eqs).set_index(0).sort_index()[1]
-        drawdowns = calc_drawdowns(all_eqs)
-        worst_drawdown = abs(drawdowns.min())
 
-        thr = config_["starting_balance"] * 1e-6
+        all_eqs = pd.DataFrame(stats_eqs + fills_eqs).set_index(0).sort_index()[1]
+        drawdowns_all = calc_drawdowns(all_eqs)
+        worst_drawdown = abs(drawdowns_all.min())
+
+        eq_threshold = config_["starting_balance"] * 1e-4
         stats_eqs_df = pd.DataFrame(stats_eqs).set_index(0)
-        daily_eqs = stats_eqs_df.groupby(stats_eqs_df.index // 1440).last()[1]
-        drawdowns_daily = calc_drawdowns(daily_eqs)
-        drawdowns_daily_mean = abs(daily_drawdowns.mean())
-        daily_eqs_pct_change = daily_eqs.pct_change()
-        if daily_eqs.iloc[-1] <= thr:
+        eqs_daily = stats_eqs_df.groupby(stats_eqs_df.index // 1440).last()[1]
+        drawdowns_daily = calc_drawdowns(eqs_daily)
+        drawdowns_daily_mean = abs(drawdowns_daily.mean())
+        eqs_daily_pct_change = eqs_daily.pct_change()
+        if eqs_daily.iloc[-1] <= eq_threshold:
             # ensure adg is negative if final equity is low
-            adg = (max(thr, daily_eqs.iloc[-1]) / daily_eqs.iloc[0]) ** (1 / len(daily_eqs)) - 1
+            adg = (max(eq_threshold, eqs_daily.iloc[-1]) / eqs_daily.iloc[0]) ** (
+                1 / len(eqs_daily)
+            ) - 1
         else:
-            adg = daily_eqs_pct_change.mean()
-        sharpe_ratio = adg / daily_eqs_pct_change.std()
+            adg = eqs_daily_pct_change.mean()
+        sharpe_ratio = adg / eqs_daily_pct_change.std()
         # daily_min_drawdowns = drawdowns.groupby(drawdowns.index // 1440).min()
         # mean_of_10_worst_drawdowns_daily = abs(daily_min_drawdowns.sort_values().iloc[:10].mean())
 
