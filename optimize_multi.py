@@ -226,7 +226,7 @@ def backtest_multi(hlcs, config):
 
 
 def add_starting_configs(pop, config):
-    for cfg in config['starting_configs']:
+    for cfg in config["starting_configs"]:
         pass
 
 
@@ -247,7 +247,7 @@ async def main():
         help="optimize config hjson file",
     )
     config = prep_config_multi(parser)
-    '''
+    """
     parser.add_argument(
         "-t",
         "--start",
@@ -257,7 +257,7 @@ async def main():
         default=None,
         help="start with given live configs.  single json file or dir with multiple json files",
     )
-    '''
+    """
     config["symbols"] = OrderedDict({k: v for k, v in sorted(config["symbols"].items())})
     config["results_cache_fname"] = make_get_filepath(
         f"results_multi/{ts_to_date_utc(utc_ms())[:19].replace(':', '_')}_all_results.txt"
@@ -321,7 +321,7 @@ async def main():
 
     # Population setup
     pop = toolbox.population(n=100)
-    #pop = add_starting_configs(pop, config)
+    # pop = add_starting_configs(pop, config)
     hof = tools.HallOfFame(1)
     stats = tools.Statistics(lambda ind: ind.fitness.values)
     for i, w in enumerate(weights):
