@@ -1567,7 +1567,6 @@ class Bot:
             traceback.print_exc()
 
     def order_is_valid(self, order: dict) -> bool:
-
         # perform checks to detect abnormal orders
         # such abnormal orders were observed in bitget bots where short entries exceeded exposure limit
 
