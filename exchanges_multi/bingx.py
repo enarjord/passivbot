@@ -98,7 +98,19 @@ class BingXBot(Passivbot):
 
     async def watch_tickers(self, symbols=None):
         # ccxt hasn't implemented the needed WS endpoints... Relying instead on REST update of tickers.
-        return
+        symbols = list(self.symbols if symbols is None else symbols)
+        while True:
+            try:
+                if self.stop_websocket:
+                    break
+                res = await self.fetch_tickers()
+                res = {s: {k: res[s][k] for k in ["symbol", "bid", "ask", "last"]} for s in symbols}
+                for k in res:
+                    self.handle_ticker_update(res[k])
+                await asyncio.sleep(10)
+            except Exception as e:
+                print(f"exception watch_tickers {symbols}", e)
+                traceback.print_exc()
 
     async def fetch_open_orders(self, symbol: str = None):
         fetched = None
