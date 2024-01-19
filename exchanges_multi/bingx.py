@@ -14,7 +14,7 @@ from pure_funcs import (
     determine_pos_side_ccxt,
     shorten_custom_id,
 )
-from njit_funcs import calc_diff
+from njit_funcs import calc_diff, round_
 from procedures import print_async_exception, utc_ms
 
 
@@ -299,6 +299,17 @@ class BingXBot(Passivbot):
                     executed[key] = order[key]
             return executed
         except Exception as e:
+            if '"code":101400' in str(e):
+                sym = order["symbol"]
+                new_min_qty = round_(
+                    max(self.min_qtys[sym], order["qty"]) + self.qty_steps[sym], self.qty_steps[sym]
+                )
+                logging.info(
+                    f"successfully caught order size error, code 101400. Adjusting min_qty from {self.min_qtys[sym]} to {new_min_qty}..."
+                )
+                self.min_qtys[sym] = new_min_qty
+                logging.error(f"{order} {e}")
+                return {}
             logging.error(f"error executing order {order} {e}")
             print_async_exception(executed)
             traceback.print_exc()
