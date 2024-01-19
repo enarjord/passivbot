@@ -27,7 +27,7 @@ def first_capitalized(s: str):
 def truncate_float(x: float, d: int) -> float:
     if x is None:
         return 0.0
-    multiplier = 10 ** d
+    multiplier = 10**d
     return int(x * multiplier) / multiplier
 
 
@@ -947,7 +947,6 @@ class BitgetBot(Bot):
     def standardize_user_stream_event(
         self, event: Union[List[Dict], Dict]
     ) -> Union[List[Dict], Dict]:
-
         events = []
         if "event" in event and event["event"] == "login":
             self.is_logged_into_user_stream = True
