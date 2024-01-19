@@ -37,8 +37,8 @@ class BingXBot(Passivbot):
             }
         )
         self.cca.options["defaultType"] = "swap"
-        self.max_n_cancellations_per_batch = 20
-        self.max_n_creations_per_batch = 10
+        self.max_n_cancellations_per_batch = 6
+        self.max_n_creations_per_batch = 3
 
     async def init_bot(self):
         await self.init_symbols()
@@ -77,11 +77,6 @@ class BingXBot(Passivbot):
                 if self.stop_websocket:
                     break
                 res = await self.ccp.watch_balance()
-                res["USDT"]["total"] = float(
-                    [x for x in res["info"]["data"][0]["details"] if x["ccy"] == self.quote][0][
-                        "cashBal"
-                    ]
-                )
                 self.handle_balance_update(res)
             except Exception as e:
                 print(f"exception watch_balance", e)
@@ -94,7 +89,7 @@ class BingXBot(Passivbot):
                     break
                 res = await self.ccp.watch_orders()
                 for i in range(len(res)):
-                    res[i]["position_side"] = res[i]["info"]["posSide"]
+                    res[i]["position_side"] = res[i]["info"]["ps"].lower()
                     res[i]["qty"] = res[i]["amount"]
                 self.handle_order_update(res)
             except Exception as e:
@@ -102,28 +97,25 @@ class BingXBot(Passivbot):
                 traceback.print_exc()
 
     async def watch_tickers(self, symbols=None):
-        symbols = list(self.symbols if symbols is None else symbols)
-        while True:
-            try:
-                if self.stop_websocket:
-                    break
-                res = await self.ccp.watch_tickers(symbols)
-                for k in res:
-                    self.handle_ticker_update(res[k])
-            except Exception as e:
-                print(f"exception watch_tickers {symbols}", e)
-                traceback.print_exc()
+        # ccxt hasn't implemented the needed WS endpoints... Relying instead on REST update of tickers.
+        return
 
     async def fetch_open_orders(self, symbol: str = None):
         fetched = None
         open_orders = []
         try:
             fetched = await self.cca.swap_v2_private_get_trade_openorders()
-            fetched = floatify(self.cca.parse_orders(fetched['data']['orders'], market={'spot': False, 'quote': self.quote, 'symbol': None}))
+            fetched = self.cca.parse_orders(
+                fetched["data"]["orders"], market={"spot": False, "quote": self.quote, "symbol": None}
+            )
             for i in range(len(fetched)):
                 fetched[i]["position_side"] = fetched[i]["info"]["positionSide"].lower()
-                fetched[i]["qty"] = fetched[i]["amount"]
-                fetched[i]["reduce_only"] = (fetched[i]['side'] == 'sell' and fetched[i]['position_side'] == 'long') or (fetched[i]['side'] == 'buy' and fetched[i]['position_side'] == 'short') 
+                fetched[i]["qty"] = float(fetched[i]["amount"])
+                fetched[i]["price"] = float(fetched[i]["price"])
+                fetched[i]["timestamp"] = float(fetched[i]["timestamp"])
+                fetched[i]["reduce_only"] = (
+                    fetched[i]["side"] == "sell" and fetched[i]["position_side"] == "long"
+                ) or (fetched[i]["side"] == "buy" and fetched[i]["position_side"] == "short")
             return sorted(fetched, key=lambda x: x["timestamp"])
         except Exception as e:
             logging.error(f"error fetching open orders {e}")
@@ -139,7 +131,7 @@ class BingXBot(Passivbot):
                 self.cca.fetch_positions(),
                 self.cca.fetch_balance(),
             )
-            balance = float(fetched_balance['info']['data']['balance']['balance'])
+            balance = float(fetched_balance["info"]["data"]["balance"]["balance"])
             fetched_positions = [x for x in fetched_positions if x["marginMode"] == "cross"]
             for i in range(len(fetched_positions)):
                 fetched_positions[i]["position_side"] = fetched_positions[i]["side"]
@@ -191,7 +183,7 @@ class BingXBot(Passivbot):
                 break
             for elm in fetched:
                 all_fetched[elm["id"]] = elm
-            if fetched[0]['timestamp'] <= start_time:
+            if fetched[0]["timestamp"] <= start_time:
                 break
             if len(fetched) < limit:
                 break
@@ -214,16 +206,16 @@ class BingXBot(Passivbot):
                 end_time = utc_ms() + 1000 * 60 * 60 * 24
             if start_time is None:
                 start_time = end_time - 1000 * 60 * 60 * 24 * 6.99
-            start_time = max(start_time, end_time - 1000 * 60 * 60 * 24 * 6.99) # max 7 days fetch
-            params = {'startTime': int(start_time), "endTime": int(end_time), 'limit': 1000}
+            start_time = max(start_time, end_time - 1000 * 60 * 60 * 24 * 6.99)  # max 7 days fetch
+            params = {"startTime": int(start_time), "endTime": int(end_time), "limit": 1000}
             fetched = await self.cca.swap_v2_private_get_trade_allorders(params=params)
-            fetched = floatify(fetched['data']['orders'])
+            fetched = floatify(fetched["data"]["orders"])
             for i in range(len(fetched)):
                 fetched[i]["pnl"] = fetched[i]["profit"]
-                fetched[i]['timestamp'] = fetched[i]['updateTime']
-                fetched[i]['id'] = fetched[i]['orderId']
-                fetched[i]['symbol_id'] = fetched[i]['symbol']
-                fetched[i]['symbol'] = self.symbol_ids_inv[fetched[i]['symbol']]
+                fetched[i]["timestamp"] = fetched[i]["updateTime"]
+                fetched[i]["id"] = fetched[i]["orderId"]
+                fetched[i]["symbol_id"] = fetched[i]["symbol"]
+                fetched[i]["symbol"] = self.symbol_ids_inv[fetched[i]["symbol"]]
             return sorted(fetched, key=lambda x: x["timestamp"])
         except Exception as e:
             logging.error(f"error fetching pnl {e}")
@@ -287,71 +279,33 @@ class BingXBot(Passivbot):
         )
 
     async def execute_order(self, order: dict) -> dict:
-        return self.execute_orders([order])
-
-    async def execute_orders(self, orders: [dict]) -> [dict]:
-        if len(orders) == 0:
-            return []
-        to_execute = []
-        custom_ids_map = {}
-        for order in orders[: self.max_n_creations_per_batch]:
-            to_execute.append(
-                {
-                    "type": "limit",
-                    "symbol": order["symbol"],
-                    "side": order["side"],
-                    "ordType": "post_only",
-                    "amount": abs(order["qty"]),
-                    "tdMode": "cross",
-                    "price": order["price"],
-                    "params": {
-                        "tag": self.broker_code,
-                        "posSide": order["position_side"],
-                        "clOrdId": (
-                            self.broker_code + shorten_custom_id(order["custom_id"]) + uuid4().hex
-                        )[:32],
-                    },
-                }
-            )
-            custom_ids_map[to_execute[-1]["params"]["clOrdId"]] = {**to_execute[-1], **order}
         executed = None
         try:
-            executed = await self.cca.create_orders(to_execute)
+            executed = await self.cca.create_limit_order(
+                symbol=order["symbol"],
+                side=order["side"],
+                amount=order["qty"],
+                price=order["price"],
+                params={
+                    "positionSide": order["position_side"].upper(),
+                    "clientOrderID": (order["custom_id"] + str(uuid4()))[:40],
+                    "timeInForce": "PostOnly",
+                },
+            )
+            if "symbol" not in executed or executed["symbol"] is None:
+                executed["symbol"] = order["symbol"]
+            for key in ["side", "position_side", "qty", "price"]:
+                if key not in executed or executed[key] is None:
+                    executed[key] = order[key]
+            return executed
         except Exception as e:
-            logging.error(f"error executing orders {orders} {e}")
+            logging.error(f"error executing order {order} {e}")
             print_async_exception(executed)
             traceback.print_exc()
-            return []
+            return {}
 
-        to_return = []
-        for res in executed:
-            try:
-                if "status" in res and res["status"] == "rejected":
-                    logging.info(f"order rejected: {res} {custom_ids_map[res['clientOrderId']]}")
-                elif "clientOrderId" in res and res["clientOrderId"] in custom_ids_map:
-                    for key in ["side", "position_side", "qty", "price", "symbol", "reduce_only"]:
-                        res[key] = custom_ids_map[res["clientOrderId"]][key]
-                    to_return.append(res)
-            except Exception as e:
-                logging.error(f"error executing order {res} {e}")
-                traceback.print_exc()
-        return to_return
+    async def execute_orders(self, orders: [dict]) -> [dict]:
+        return await self.execute_multiple(orders, "execute_order", self.max_n_creations_per_batch)
 
     async def update_exchange_config(self):
         pass
-
-    def calc_ideal_orders(self):
-        # okx has max 100 open orders. Drop orders whose pprice diff is greatest.
-        ideal_orders = super().calc_ideal_orders()
-        ideal_orders_tmp = []
-        for s in ideal_orders:
-            for x in ideal_orders[s]:
-                ideal_orders_tmp.append({**x, **{"symbol": s}})
-        ideal_orders_tmp = sorted(
-            ideal_orders_tmp,
-            key=lambda x: calc_diff(x["price"], self.tickers[x["symbol"]]["last"]),
-        )[:100]
-        ideal_orders = {symbol: [] for symbol in self.symbols}
-        for x in ideal_orders_tmp:
-            ideal_orders[x["symbol"]].append(x)
-        return ideal_orders
