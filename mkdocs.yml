@@ -18,7 +18,6 @@ nav:
   - Different Passivbot Modes: passivbot_modes.md
   - First-time users: walkthrough.md
   - Developers: developers.md
-  - FAQ: faq.md
 theme:
   name: material
   logo: 'images/logo.png'
