@@ -32,6 +32,7 @@ class Evaluator:
             self.hlcs.shape, dtype=self.hlcs.dtype, buffer=self.shared_hlcs.buf
         )
         np.copyto(self.shared_hlcs_np, self.hlcs)
+        del self.hlcs
         self.results_cache_fname = config["results_cache_fname"]
         self.config = {
             key: config[key]
@@ -122,7 +123,6 @@ class Evaluator:
 
     def cleanup(self):
         # Close and unlink the shared memory
-        self.shared_hlcs_np.close()
         self.shared_hlcs.close()
         self.shared_hlcs.unlink()
 
@@ -366,6 +366,7 @@ async def main():
         )
     finally:
         # Close the pool
+        logging.info(f"attempting clean shutdown...")
         evaluator.cleanup()
         pool.close()
         pool.join()
