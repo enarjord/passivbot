@@ -6,6 +6,8 @@ import asyncio
 from datetime import datetime
 from time import time
 import numpy as np
+import pprint
+
 
 try:
     import hjson
@@ -755,15 +757,16 @@ def fetch_market_specific_settings(config: dict):
     elif exchange == "bybit":
         cc = ccxt.bybit()
         markets = cc.fetch_markets()
-        spot = True if market_type == "spot" else False
+        spot = market_type == "spot"
         for elm in markets:
-            if elm["id"] == symbol and spot == elm["spot"]:
+            if elm["id"] == symbol and elm["spot"] == spot:
                 break
         else:
             raise Exception(f"unknown symbol {symbol}")
-        settings_from_exchange["hedge_mode"] = True if market_type == 'futures' else False
-        settings_from_exchange["maker_fee"] = elm["maker"]
-        settings_from_exchange["taker_fee"] = elm["taker"]
+        settings_from_exchange["hedge_mode"] = not spot
+        # ccxt reports incorrect fees for bybit perps
+        settings_from_exchange["maker_fee"] = 0.0002 if not spot else elm["maker"]
+        settings_from_exchange["taker_fee"] = 0.00055 if not spot else elm["taker"]
         settings_from_exchange["c_mult"] = 1.0 if elm["contractSize"] is None else elm["contractSize"]
         settings_from_exchange["qty_step"] = elm["precision"]["amount"]
         settings_from_exchange["price_step"] = elm["precision"]["price"]
@@ -815,7 +818,11 @@ def fetch_market_specific_settings(config: dict):
     return sort_dict_keys(settings_from_exchange)
 
 
-if __name__ == "__main__":
+def main():
+    cfg = {"exchange": "bybit", "symbol": "DOGEUSDT", "market_type": "spot"}
+    mss = fetch_market_specific_settings(cfg)
+    pprint.pprint(mss)
+    return
     for exchange in ["kucoin", "bitget", "binance", "bybit", "okx", "bingx"]:
         cfg = {"exchange": exchange, "symbol": "DOGEUSDT", "market_type": "futures"}
         try:
@@ -823,3 +830,7 @@ if __name__ == "__main__":
             print(mss)
         except:
             traceback.print_exc()
+
+
+if __name__ == "__main__":
+    main()
