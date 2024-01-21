@@ -10,6 +10,7 @@ import argparse
 from deap import base, creator, tools, algorithms
 from collections import OrderedDict
 from procedures import utc_ms, make_get_filepath
+from multiprocessing import shared_memory
 
 from pure_funcs import (
     live_config_dict_to_list_recursive_grid,
@@ -26,6 +27,11 @@ from njit_multisymbol import backtest_multisymbol_recursive_grid
 class Evaluator:
     def __init__(self, hlcs, config):
         self.hlcs = hlcs
+        self.shared_hlcs = shared_memory.SharedMemory(create=True, size=self.hlcs.nbytes)
+        self.shared_hlcs_np = np.ndarray(
+            self.hlcs.shape, dtype=self.hlcs.dtype, buffer=self.shared_hlcs.buf
+        )
+        np.copyto(self.shared_hlcs_np, self.hlcs)
         self.results_cache_fname = config["results_cache_fname"]
         self.config = {
             key: config[key]
@@ -64,7 +70,7 @@ class Evaluator:
                 for symbol in config_["symbols"]
             ]
         )
-        res = backtest_multi(self.hlcs, config_)
+        res = backtest_multi(self.shared_hlcs_np, config_)
         fills, stats = res
         stats_eqs = [(x[0], x[5]) for x in stats]
         fills_eqs = [(x[0], x[5]) for x in fills]
@@ -113,6 +119,12 @@ class Evaluator:
         with open(self.results_cache_fname, "a") as f:
             f.write(json.dumps(denumpyize(to_dump)) + "\n")
         return adg, sharpe_ratio, worst_drawdown
+
+    def cleanup(self):
+        # Close and unlink the shared memory
+        self.shared_hlcs_np.close()
+        self.shared_hlcs.close()
+        self.shared_hlcs.unlink()
 
 
 def get_individual_keys():
@@ -277,65 +289,68 @@ async def main():
     config["maker_fee"] = next(iter(mss.values()))["maker"]
     config["symbols"] = tuple(sorted(config["symbols"]))
 
-    evaluator = Evaluator(hlcs, config)
-
-    NUMBER_OF_VARIABLES = len(config["bounds"])
-    BOUNDS = [(x[0], x[1]) for x in config["bounds"].values()]
-    n_cpus = max(1, config["n_cpus"])  # Specify the number of CPUs to use
-
-    # Define the problem as a multi-objective optimization
-    # Maximize adg; minimize max_drawdown
-    weights = (1.0, 1.0, -1.0)
-    creator.create("FitnessMulti", base.Fitness, weights=weights)
-    creator.create("Individual", list, fitness=creator.FitnessMulti)
-
-    # Toolbox initialization
-    toolbox = base.Toolbox()
-
-    # Attribute generator - generates one float for each parameter with unique bounds
-    def create_individual():
-        return [random.uniform(BOUND_LOW, BOUND_UP) for BOUND_LOW, BOUND_UP in BOUNDS]
-
-    # Structure initializers
-    toolbox.register("individual", tools.initIterate, creator.Individual, create_individual)
-    toolbox.register("population", tools.initRepeat, list, toolbox.individual)
-
-    toolbox.register("evaluate", evaluator.evaluate)
-    toolbox.register(
-        "mate",
-        tools.cxSimulatedBinaryBounded,
-        low=[bound[0] for bound in BOUNDS],
-        up=[bound[1] for bound in BOUNDS],
-        eta=20.0,
-    )
-    toolbox.register(
-        "mutate",
-        tools.mutPolynomialBounded,
-        low=[bound[0] for bound in BOUNDS],
-        up=[bound[1] for bound in BOUNDS],
-        eta=20.0,
-        indpb=1.0 / NUMBER_OF_VARIABLES,
-    )
-    toolbox.register("select", tools.selNSGA2)
-
-    # Parallelization setup
-    pool = multiprocessing.Pool(processes=n_cpus)
-    toolbox.register("map", pool.map)
-
-    # Population setup
-    pop = toolbox.population(n=100)
-    # pop = add_starting_configs(pop, config)
-    hof = tools.HallOfFame(1)
-    stats = tools.Statistics(lambda ind: ind.fitness.values)
-    for i, w in enumerate(weights):
-        stats.register(f"avg{i}", lambda pop: sum(f[i] for f in pop) / len(pop))
-        if w < 0.0:
-            stats.register(f"min{i}", lambda pop: min(f[i] for f in pop))
-        else:
-            stats.register(f"max{i}", lambda pop: max(f[i] for f in pop))
-
-    logging.info(f"starting optimize")
     try:
+        evaluator = Evaluator(hlcs, config)
+
+        NUMBER_OF_VARIABLES = len(config["bounds"])
+        min_diff = 1e-12  # avoid bound_low == bound_up
+        BOUNDS = [
+            (x[0], x[1] + (min_diff if x[0] == x[1] else 0.0)) for x in config["bounds"].values()
+        ]
+        n_cpus = max(1, config["n_cpus"])  # Specify the number of CPUs to use
+
+        # Define the problem as a multi-objective optimization
+        # Maximize adg; minimize max_drawdown
+        weights = (1.0, 1.0, -1.0)
+        creator.create("FitnessMulti", base.Fitness, weights=weights)
+        creator.create("Individual", list, fitness=creator.FitnessMulti)
+
+        # Toolbox initialization
+        toolbox = base.Toolbox()
+
+        # Attribute generator - generates one float for each parameter with unique bounds
+        def create_individual():
+            return [random.uniform(BOUND_LOW, BOUND_UP) for BOUND_LOW, BOUND_UP in BOUNDS]
+
+        # Structure initializers
+        toolbox.register("individual", tools.initIterate, creator.Individual, create_individual)
+        toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+
+        toolbox.register("evaluate", evaluator.evaluate)
+        toolbox.register(
+            "mate",
+            tools.cxSimulatedBinaryBounded,
+            low=[bound[0] for bound in BOUNDS],
+            up=[bound[1] for bound in BOUNDS],
+            eta=20.0,
+        )
+        toolbox.register(
+            "mutate",
+            tools.mutPolynomialBounded,
+            low=[bound[0] for bound in BOUNDS],
+            up=[bound[1] for bound in BOUNDS],
+            eta=20.0,
+            indpb=1.0 / NUMBER_OF_VARIABLES,
+        )
+        toolbox.register("select", tools.selNSGA2)
+
+        # Parallelization setup
+        pool = multiprocessing.Pool(processes=n_cpus)
+        toolbox.register("map", pool.map)
+
+        # Population setup
+        pop = toolbox.population(n=100)
+        # pop = add_starting_configs(pop, config)
+        hof = tools.HallOfFame(1)
+        stats = tools.Statistics(lambda ind: ind.fitness.values)
+        for i, w in enumerate(weights):
+            stats.register(f"avg{i}", lambda pop: sum(f[i] for f in pop) / len(pop))
+            if w < 0.0:
+                stats.register(f"min{i}", lambda pop: min(f[i] for f in pop))
+            else:
+                stats.register(f"max{i}", lambda pop: max(f[i] for f in pop))
+
+        logging.info(f"starting optimize")
         # Run the algorithm
         algorithms.eaMuPlusLambda(
             pop,
@@ -351,6 +366,7 @@ async def main():
         )
     finally:
         # Close the pool
+        evaluator.cleanup()
         pool.close()
         pool.join()
 
