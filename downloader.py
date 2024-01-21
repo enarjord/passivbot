@@ -1042,20 +1042,19 @@ def get_days_in_between(start_day, end_day):
 async def download_ohlcvs_bybit(symbol, start_date, end_date, spot=False, download_only=False):
     start_date, end_date = get_day(start_date), get_day(end_date)
     assert date_to_ts2(end_date) >= date_to_ts2(start_date), "end_date is older than start_date"
-    dirpath = make_get_filepath(f"historical_data/ohlcvs_bybit/{symbol}/")
-    if spot:
-        dirpath = make_get_filepath(f"historical_data/ohlcvs_bybit_spot/{symbol}/")
+    dirpath = make_get_filepath(f"historical_data/ohlcvs_bybit{'_spot' if spot else ''}/{symbol}/")
     ideal_days = get_days_in_between(start_date, end_date)
     days_done = [filename[:-4] for filename in os.listdir(dirpath) if ".csv" in filename]
     days_to_get = [day for day in ideal_days if day not in days_done]
     dfs = {}
     if len(days_to_get) > 0:
-        base_url = "https://public.bybit.com/"
-        base_url += "spot/" if spot else f"trading/"
+        base_url = f"https://public.bybit.com/{'spot' if spot else 'trading'}/"
         webpage = await get_bybit_webpage(base_url, symbol)
-        filenames = [cand for day in days_to_get if (cand := f"{symbol}{day}.csv.gz") in webpage]
-        if spot:
-            filenames = [cand for day in days_to_get if (cand := f"{symbol}_{day}.csv.gz") in webpage]
+        filenames = [
+            cand
+            for day in days_to_get
+            if (cand := f"{symbol}{'_' if spot else ''}{day}.csv.gz") in webpage
+        ]
         if len(filenames) > 0:
             n_concurrent_fetches = 10
             for i in range(0, len(filenames), 10):
@@ -1122,29 +1121,17 @@ async def get_csv_gz(session, url: str):
 
 def convert_to_ohlcv(df, spot, interval=60000):
     # bybit data
-    # timestamps are in seconds
-    if spot:
-        groups = df.groupby((df.timestamp) // interval * interval)
-        ohlcvs = pd.DataFrame(
-            {
-                "open": groups.price.first(),
-                "high": groups.price.max(),
-                "low": groups.price.min(),
-                "close": groups.price.last(),
-                "volume": groups["volume"].sum(),
-            }
-        )
-    else:
-        groups = df.groupby((df.timestamp * 1000) // interval * interval)
-        ohlcvs = pd.DataFrame(
-            {
-                "open": groups.price.first(),
-                "high": groups.price.max(),
-                "low": groups.price.min(),
-                "close": groups.price.last(),
-                "volume": groups["size"].sum(),
-            }
-        )
+    # timestamps are in seconds for futures, millis for spot
+    groups = df.groupby((df.timestamp * (1 if spot else 1000)) // interval * interval)
+    ohlcvs = pd.DataFrame(
+        {
+            "open": groups.price.first(),
+            "high": groups.price.max(),
+            "low": groups.price.min(),
+            "close": groups.price.last(),
+            "volume": groups["volume" if spot else "size"].sum(),
+        }
+    )
     new_index = np.arange(ohlcvs.index[0], ohlcvs.index[-1] + interval, interval)
     ohlcvs = ohlcvs.reindex(new_index)
     closes = ohlcvs.close.ffill()
