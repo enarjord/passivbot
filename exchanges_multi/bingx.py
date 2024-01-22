@@ -51,7 +51,7 @@ class BingXBot(Passivbot):
             self.min_costs[symbol] = (
                 2.2 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
             )
-            self.c_mults[symbol] = elm["contractSize"]
+            self.c_mults[symbol] = 1.0
             self.coins[symbol] = symbol.replace("/USDT:USDT", "")
             self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "last": 0.0}
             self.open_orders[symbol] = []
