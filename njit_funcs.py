@@ -775,7 +775,7 @@ def calc_close_grid_frontwards_long(
             closes.append((-psize_, close_prices[0], "long_nclose"))
         else:
             return [(0.0, 0.0, "")]
-        return closes
+        return closes if closes else [(0.0, 0.0, "")]
     default_close_qty = round_dn(psize_ / len(close_prices), qty_step)
     for price in close_prices[:-1]:
         min_close_qty = calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost)
@@ -789,7 +789,7 @@ def calc_close_grid_frontwards_long(
         closes.append((-psize_, close_prices[-1], "long_nclose"))
     elif len(closes) > 0:
         closes[-1] = (-round_(abs(closes[-1][0]) + psize_, qty_step), closes[-1][1], closes[-1][2])
-    return closes
+    return closes if closes else [(0.0, 0.0, "")]
 
 
 @njit
@@ -971,7 +971,7 @@ def calc_close_grid_frontwards_short(
             closes.append((abs_psize_, close_prices[0], "short_nclose"))
         else:
             return [(0.0, 0.0, "")]
-        return closes
+        return closes if closes else [(0.0, 0.0, "")]
     default_close_qty = round_dn(abs_psize_ / len(close_prices), qty_step)
     for price in close_prices[:-1]:
         min_close_qty = calc_min_entry_qty(price, inverse, qty_step, min_qty, min_cost)
@@ -985,7 +985,7 @@ def calc_close_grid_frontwards_short(
         closes.append((abs_psize_, close_prices[-1], "short_nclose"))
     elif len(closes) > 0:
         closes[-1] = (round_(closes[-1][0] + abs_psize_, qty_step), closes[-1][1], closes[-1][2])
-    return closes
+    return closes if closes else [(0.0, 0.0, "")]
 
 
 @njit
