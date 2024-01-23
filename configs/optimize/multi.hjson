@@ -49,7 +49,7 @@
   # backtests path
   base_dir: backtests
 
-  n_cpus: 99
+  n_cpus: 3
   iters: 4000
 
   starting_balance: 1000000
