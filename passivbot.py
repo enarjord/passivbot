@@ -222,6 +222,7 @@ class Bot:
                 self.config["short"]["delay_between_fills_minutes_close"] * 60 * 1000.0,
             )
         print("initiating position, open orders, fills, exchange config, order book, and emas...")
+        await asyncio.sleep(self.countdown_offset)
         await asyncio.gather(
             self.update_position(),
             self.update_open_orders(),
