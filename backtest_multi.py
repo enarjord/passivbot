@@ -187,7 +187,7 @@ async def prep_hlcs_mss_config(config):
         first_ts = 0
     except:
         first_ts, hlcs = await prepare_multsymbol_data(
-            config["symbols"], config["start_date"], config["end_date"]
+            config["symbols"], config["start_date"], config["end_date"], config["base_dir"], config["exchange"]
         )
         np.save(config["cache_fpath"], hlcs)
     return hlcs, mss, config
