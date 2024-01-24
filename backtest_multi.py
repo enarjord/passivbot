@@ -130,6 +130,7 @@ def prep_config_multi(parser):
     args = parser.parse_args()
     return args2config(args)
 
+
 def args2config(args):
     config = OrderedDict()
     for key, value in vars(args).items():
@@ -190,7 +191,11 @@ async def prep_hlcs_mss_config(config):
         first_ts = 0
     except:
         first_ts, hlcs = await prepare_multsymbol_data(
-            config["symbols"], config["start_date"], config["end_date"], config["base_dir"], config["exchange"]
+            config["symbols"],
+            config["start_date"],
+            config["end_date"],
+            config["base_dir"],
+            config["exchange"],
         )
         np.save(config["cache_fpath"], hlcs)
     return hlcs, mss, config
