@@ -175,7 +175,7 @@ async def prep_hlcs_mss_config(config):
         "market_specific_settings.json",
     )
     try:
-        mss = fetch_market_specific_settings_multi()
+        mss = fetch_market_specific_settings_multi(exchange=config["exchange"])
         json.dump(mss, open(make_get_filepath(mss_path), "w"))
     except Exception as e:
         print("failed to fetch market specific settings", e)
