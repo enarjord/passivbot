@@ -128,6 +128,9 @@ def prep_config_multi(parser):
         help="specify short_enabled (y/n or t/f), overriding value from hjson config",
     )
     args = parser.parse_args()
+    return args2config(args)
+
+def args2config(args):
     config = OrderedDict()
     for key, value in vars(args).items():
         if "config_path" in key:
