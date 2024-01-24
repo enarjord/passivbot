@@ -1060,7 +1060,7 @@ async def download_ohlcvs_bybit(symbol, start_date, end_date, spot=False, downlo
             for i in range(0, len(filenames), 10):
                 filenames_sublist = filenames[i : i + n_concurrent_fetches]
                 print(
-                    f"fetching {len(filenames_sublist)} trades from {filenames_sublist[0][-17:-7]} to {filenames_sublist[-1][-17:-7]}"
+                    f"fetching {len(filenames_sublist)} files with {symbol} trades from {filenames_sublist[0][-17:-7]} to {filenames_sublist[-1][-17:-7]}"
                 )
                 dfs_ = await get_bybit_trades(base_url, symbol, filenames_sublist)
                 dfs_ = {k[-17:-7]: convert_to_ohlcv(v, spot) for k, v in dfs_.items()}
@@ -1241,8 +1241,33 @@ def count_longest_identical_data(hlc, symbol):
     return longest_consecutive
 
 
+def attempt_gap_fix_hlcs(df):
+    interval = 60 * 1000
+    greatest_gap = df.timestamp.diff().max()
+    if greatest_gap == interval:
+        return df
+    if greatest_gap > interval * 60:
+        raise Exception(f"ohlcvs grap too great: {greatest_gap}")
+    print("gap(s) in ohlcvs... attempting fix")
+    new_timestamps = np.arange(df["timestamp"].iloc[0], df["timestamp"].iloc[-1] + interval, interval)
+    new_df = df.set_index("timestamp").reindex(new_timestamps)
+    new_df.close = new_df.close.ffill()
+    new_df.open = new_df.open.fillna(new_df.close)
+    new_df.high = new_df.high.fillna(new_df.close)
+    new_df.low = new_df.low.fillna(new_df.close)
+    new_df.volume = new_df.volume.fillna(0.0)
+    new_df = new_df.reset_index()
+    return new_df[["timestamp", "open", "high", "low", "close", "volume"]]
+
+
 async def load_hlc_cache(
-    symbol, inverse, start_date, end_date, base_dir="backtests", spot=False, exchange="binance"
+    symbol,
+    inverse,
+    start_date,
+    end_date,
+    base_dir="backtests",
+    spot=False,
+    exchange="binance",
 ):
     cache_fname = (
         f"{ts_to_date_utc(date_to_ts2(start_date))[:10]}_"
@@ -1257,6 +1282,7 @@ async def load_hlc_cache(
     else:
         if exchange == "bybit":
             df = await download_ohlcvs_bybit(symbol, start_date, end_date, spot, download_only=False)
+            df = attempt_gap_fix_hlcs(df)
         else:
             df = await download_ohlcvs_binance(symbol, inverse, start_date, end_date, spot)
         df = df[df.timestamp >= date_to_ts2(start_date)]
@@ -1270,7 +1296,9 @@ async def load_hlc_cache(
     return data
 
 
-async def prepare_multsymbol_data(symbols, start_date, end_date, base_dir, exchange) -> (float, np.ndarray):
+async def prepare_multsymbol_data(
+    symbols, start_date, end_date, base_dir, exchange
+) -> (float, np.ndarray):
     """
     returns first timestamp and hlc data in the form
     [
