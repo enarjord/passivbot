@@ -1841,7 +1841,15 @@ def analyze_fills_multi(sdf, fdf, params):
     final_equity = sdf.iloc[-1].equity
     daily_samples = sdf.groupby(sdf.index // (60 * 24)).last()
     daily_gains = daily_samples.equity.pct_change().dropna()
-    adg = daily_gains.mean()
+    n_days = (sdf.index[-1] - sdf.index[0]) / 60 / 24
+
+    eq_threshold = starting_balance * 1e-4
+    if daily_samples.equity.iloc[-1] <= eq_threshold:
+        # ensure adg is negative if final equity is low
+        adg = (max(eq_threshold, final_equity) / starting_balance) ** (1 / n_days) - 1
+    else:
+        adg = daily_gains.mean()
+
     adg_weighted = np.mean(
         [
             daily_gains.iloc[round(int(len(daily_gains) * (1 - 1 / (i + 1)))) :].mean()
@@ -1886,7 +1894,6 @@ def analyze_fills_multi(sdf, fdf, params):
 
     adg_short = sdf_daily.equity_short.pct_change().mean()
 
-    n_days = (sdf.index[-1] - sdf.index[0]) / 60 / 24
     pnl_sum = pnl_sum_total = fdf.pnl.sum()
 
     pnl_long = longs.pnl.sum()
@@ -2018,27 +2025,36 @@ def multi_replace(input_data, replacements: [(str, str)]):
 
 def live_config_dict_to_list_recursive_grid(live_config: dict) -> list:
     keys = [
-        "auto_unstuck_delay_minutes",
-        "auto_unstuck_ema_dist",
-        "auto_unstuck_qty_pct",
-        "auto_unstuck_wallet_exposure_threshold",
-        "backwards_tp",
-        "ddown_factor",
-        "ema_span_0",
-        "ema_span_1",
-        "enabled",
-        "initial_eprice_ema_dist",
-        "initial_qty_pct",
-        "markup_range",
-        "min_markup",
-        "n_close_orders",
-        "rentry_pprice_dist",
-        "rentry_pprice_dist_wallet_exposure_weighting",
-        "wallet_exposure_limit",
+        ("auto_unstuck_delay_minutes", 0.0),
+        ("auto_unstuck_ema_dist", 0.0),
+        ("auto_unstuck_qty_pct", 0.0),
+        ("auto_unstuck_wallet_exposure_threshold", 0.0),
+        ("backwards_tp", 1.0),
+        ("ddown_factor", None),
+        ("ema_span_0", None),
+        ("ema_span_1", None),
+        ("enabled", 1.0),
+        ("initial_eprice_ema_dist", None),
+        ("initial_qty_pct", None),
+        ("markup_range", None),
+        ("min_markup", None),
+        ("n_close_orders", None),
+        ("rentry_pprice_dist", None),
+        ("rentry_pprice_dist_wallet_exposure_weighting", None),
+        ("wallet_exposure_limit", 1.0),
     ]
-    return numpyize(
-        [(float(live_config["long"][key]), float(live_config["short"][key])) for key in keys]
-    )
+    tuples = []
+    for key, default in keys:
+        tpl = {}
+        for pside in ["long", "short"]:
+            if key in live_config[pside]:
+                tpl[pside] = live_config[pside][key]
+            else:
+                if default is None:
+                    raise Exception(f"necessary key missing from live config: {key}")
+                tpl[pside] = default
+        tuples.append((float(tpl["long"]), float(tpl["short"])))
+    return numpyize(tuples)
 
 
 def str2bool(v):
