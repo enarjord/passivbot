@@ -643,24 +643,42 @@ def load_ccxt_version():
         return None
 
 
-def fetch_market_specific_settings_multi(symbols=None):
+def fetch_market_specific_settings_multi(symbols=None, exchange="binance"):
     import ccxt
 
     ccxt_version_req = load_ccxt_version()
     assert (
         ccxt.__version__ == ccxt_version_req
     ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v{ccxt_version_req} manually"
-    cc = ccxt.binanceusdm()
+    exchange_map = {
+        # "kucoin": "kucoinfutures",
+        # "okx": "okx",
+        "bybit": "bybit",
+        "binance": "binanceusdm",
+        # "bitget": "bitget",
+        # "bingx": "bingx",
+    }
+    cc = getattr(ccxt, exchange_map[exchange])()
     info = cc.load_markets()
     for symbol in info:
-        for felm in info[symbol]["info"]["filters"]:
-            if felm["filterType"] == "PRICE_FILTER":
-                info[symbol]["price_step"] = float(felm["tickSize"])
-            elif felm["filterType"] == "MARKET_LOT_SIZE":
-                info[symbol]["qty_step"] = float(felm["stepSize"])
-        info[symbol]["c_mult"] = info[symbol]["contractSize"]
-        info[symbol]["min_cost"] = info[symbol]["limits"]["cost"]["min"]
-        info[symbol]["min_qty"] = info[symbol]["limits"]["amount"]["min"]
+        if exchange == "binance":
+            for felm in info[symbol]["info"]["filters"]:
+                if felm["filterType"] == "PRICE_FILTER":
+                    info[symbol]["price_step"] = float(felm["tickSize"])
+                elif felm["filterType"] == "MARKET_LOT_SIZE":
+                    info[symbol]["qty_step"] = float(felm["stepSize"])
+            info[symbol]["c_mult"] = info[symbol]["contractSize"]
+            info[symbol]["min_cost"] = info[symbol]["limits"]["cost"]["min"]
+            info[symbol]["min_qty"] = info[symbol]["limits"]["amount"]["min"]
+        elif exchange == "bybit":
+            info[symbol]["price_step"] = info[symbol]["precision"]["price"]
+            info[symbol]["qty_step"] = info[symbol]["precision"]["amount"]
+            info[symbol]["c_mult"] = info[symbol]["contractSize"]
+            info[symbol]["min_cost"] = 0.0
+            info[symbol]["min_qty"] = info[symbol]["limits"]["amount"]["min"]
+            # ccxt reports incorrect fees for bybit perps
+            info[symbol]["maker"] = info[symbol]["maker_fee"] = 0.0002
+            info[symbol]["taker"] = info[symbol]["taker_fee"] = 0.00055
     for symbol in sorted(info):
         info[info[symbol]["id"]] = info[symbol]
     return info if symbols is None else {symbol: info[symbol] for symbol in symbols}
