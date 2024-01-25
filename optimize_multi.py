@@ -97,6 +97,8 @@ class Evaluator:
         # daily_min_drawdowns = drawdowns.groupby(drawdowns.index // 1440).min()
         # mean_of_10_worst_drawdowns_daily = abs(daily_min_drawdowns.sort_values().iloc[:10].mean())
 
+        score = max(config["worst_drawdown_lower_bound"], worst_drawdown) * 10**3 - adg
+
         to_dump = {
             key: self.config[key]
             for key in [
@@ -119,7 +121,7 @@ class Evaluator:
         )
         with open(self.results_cache_fname, "a") as f:
             f.write(json.dumps(denumpyize(to_dump)) + "\n")
-        return adg, sharpe_ratio, worst_drawdown
+        return score, sharpe_ratio
 
     def cleanup(self):
         # Close and unlink the shared memory
@@ -277,6 +279,9 @@ async def main():
     config["results_cache_fname"] = make_get_filepath(
         f"results_multi/{ts_to_date_utc(utc_ms())[:19].replace(':', '_')}_all_results.txt"
     )
+    for key, default_val in [("worst_drawdown_lower_bound", 0.5)]:
+        if key not in config:
+            config[key] = default_val
 
     hlcs, mss, config = await prep_hlcs_mss_config(config)
     config["qty_steps"] = tuplify([mss[symbol]["qty_step"] for symbol in config["symbols"]])
@@ -300,8 +305,9 @@ async def main():
         n_cpus = max(1, config["n_cpus"])  # Specify the number of CPUs to use
 
         # Define the problem as a multi-objective optimization
-        # Maximize adg; minimize max_drawdown
-        weights = (1.0, 1.0, -1.0)
+        # Minimize score; minimize sharpe_ratio
+        # score = max(worst_drawdown, worst_drawdown_lower_bound) * 10 ** 3 - adg
+        weights = (-1.0, 1.0)
         creator.create("FitnessMulti", base.Fitness, weights=weights)
         creator.create("Individual", list, fitness=creator.FitnessMulti)
 
