@@ -150,6 +150,8 @@ def args2config(args):
                 if key in config and config[key] != getattr(args, key):
                     logging.info(f"changing {key}: {config[key]} -> {getattr(args, key)}")
                     config[key] = getattr(args, key)
+    if isinstance(config["symbols"], list):
+        config["symbols"] = {s: "" for s in config["symbols"]}
     config["symbols"] = OrderedDict(sorted(config["symbols"].items()))
     config["exchange"] = load_user_info(config["user"])["exchange"]
     return config
