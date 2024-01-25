@@ -58,6 +58,8 @@ class BybitBot(Bot):
             print_async_exception(info)
             if info is None:
                 info = {"info": await self.cc.fetch_markets(), "dump_ts": utc_ms()}
+                json.dump(info, open(fname, "w"))
+                logging.info("dumped market info to cache")
         return info["info"]
 
     async def _init(self):
