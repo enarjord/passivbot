@@ -4,7 +4,7 @@
 
   # format YYYY-MM-DD
   start_date: 2021-05-01
-  // if end_date is "now" will use current date as end_date.
+  // if end_date is "now", will use current date as end_date.
   end_date: now
 
   // Flags:
@@ -14,36 +14,39 @@
       // graceful stop: if there is a position, passivbot will manage it, otherwise passivbot will not make new positions
   // -lw float: wallet exposure limit long. Overrides value from live config. If absent, WE long is TWE_long / len(active_symbols_long)
   // -sw: float: wallet exposure limit short. Overrides value from live config.
-  // -lc str: live config path. Specify live config path to override config from live_configs_dir and default_config_path.
 
-  symbols: {
-    ETHUSDT: ''
-    BCHUSDT: ''
-    XRPUSDT: ''
-    LTCUSDT: ''
-    TRXUSDT: ''
-    ETCUSDT: ''
-    XLMUSDT: ''
-    XMRUSDT: ''
-    DASHUSDT: ''
-    ZECUSDT: ''
-    XTZUSDT: ''
-    BNBUSDT: ''
-    ATOMUSDT: ''
-    ONTUSDT: ''
-    BATUSDT: ''
-    VETUSDT: ''
-    NEOUSDT: ''
-    QTUMUSDT: ''
-    IOSTUSDT: ''
-    THETAUSDT: ''
-    ZILUSDT: ''
-    ZRXUSDT: ''
-    COMPUSDT: ''
-    DOGEUSDT: ''
-    SXPUSDT: ''
-    BANDUSDT: ''
-  }
+  symbols: [
+    ALGOUSDT,
+    ALICEUSDT,
+    ATOMUSDT,
+    BLZUSDT,
+    CELRUSDT,
+    CHRUSDT,
+    CTKUSDT,
+    DEFIUSDT,
+    ENJUSDT,
+    GALUSDT,
+    GRTUSDT,
+    HBARUSDT,
+    HOTUSDT,
+    LITUSDT,
+    MANAUSDT,
+    MATICUSDT,
+    OCEANUSDT,
+    OGNUSDT,
+    ONEUSDT,
+    REEFUSDT,
+    RLCUSDT,
+    RSRUSDT,
+    SFPUSDT,
+    SKLUSDT,
+    STMXUSDT,
+    SUSHIUSDT,
+    VETUSDT,
+    XEMUSDT,
+    XLMUSDT,
+    ZENUSDT,
+  ]
 
 
   # backtests path
@@ -53,6 +56,8 @@
   iters: 4000
 
   starting_balance: 1000000
+
+  worst_drawdown_lower_bound: 0.5 # will penalize worst_drawdowns greater than 50%
 
   # will override starting configs' parameters
   long_enabled: true
@@ -64,7 +69,7 @@
   {
     global_TWE_long: [1.0, 10.0]
     global_TWE_short: [0.5, 10.0]
-    global_loss_allowance_pct: [0.001, 0.3]
+    global_loss_allowance_pct: [0.001, 0.01]
     global_stuck_threshold: [0.7, 0.98]
     global_unstuck_close_pct: [0.001, 0.01]
 
