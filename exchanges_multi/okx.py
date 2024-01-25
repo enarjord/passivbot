@@ -335,7 +335,40 @@ class OKXBot(Passivbot):
         return to_return
 
     async def update_exchange_config(self):
-        pass
+        try:
+            res = await self.cca.set_position_mode(True)
+            logging.info(f"set hedge mode {res}")
+        except Exception as e:
+            if '"code":"59000"' in e.args[0]:
+                print(f"margin mode: {e}")
+            else:
+                logging.error(f"error setting hedge mode {e}")
+
+        coros_to_call_margin_mode = {}
+        for symbol in self.symbols:
+            try:
+                coros_to_call_margin_mode[symbol] = asyncio.create_task(
+                    self.cca.set_margin_mode(
+                        "cross",
+                        symbol=symbol,
+                        params={"lever": int(self.live_configs[symbol]["leverage"])},
+                    )
+                )
+            except Exception as e:
+                logging.error(f"{symbol}: error setting cross mode and leverage {e}")
+        for symbol in self.symbols:
+            res = None
+            to_print = ""
+            try:
+                res = await coros_to_call_margin_mode[symbol]
+                to_print += f"set cross mode {res}"
+            except Exception as e:
+                if '"code":"59107"' in e.args[0]:
+                    to_print += f" cross mode and leverage: {res} {e}"
+                else:
+                    logging.error(f"{symbol} error setting cross mode {res} {e}")
+            if to_print:
+                logging.info(f"{symbol}: {to_print}")
 
     def calc_ideal_orders(self):
         # okx has max 100 open orders. Drop orders whose pprice diff is greatest.
