@@ -340,7 +340,7 @@ class OKXBot(Passivbot):
             logging.info(f"set hedge mode {res}")
         except Exception as e:
             if '"code":"59000"' in e.args[0]:
-                print(f"margin mode: {e}")
+                logging.info(f"margin mode: {e}")
             else:
                 logging.error(f"error setting hedge mode {e}")
 
