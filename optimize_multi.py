@@ -97,7 +97,7 @@ class Evaluator:
         # daily_min_drawdowns = drawdowns.groupby(drawdowns.index // 1440).min()
         # mean_of_10_worst_drawdowns_daily = abs(daily_min_drawdowns.sort_values().iloc[:10].mean())
 
-        score = max(config["worst_drawdown_lower_bound"], worst_drawdown) * 10**3 - adg
+        score = max(config_["worst_drawdown_lower_bound"], worst_drawdown) * 10**3 - adg
 
         to_dump = {
             key: self.config[key]
