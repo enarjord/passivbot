@@ -1243,11 +1243,14 @@ def count_longest_identical_data(hlc, symbol):
 
 def attempt_gap_fix_hlcs(df):
     interval = 60 * 1000
+    max_gap = interval * 60 * 12  # 12 hours
     greatest_gap = df.timestamp.diff().max()
     if greatest_gap == interval:
         return df
-    if greatest_gap > interval * 60:
-        raise Exception(f"ohlcvs grap too great: {greatest_gap}")
+    if greatest_gap > max_gap:
+        raise Exception(
+            f"ohlcvs gap greater than {max_gap / (1000 * 60 * 60)} hours: {greatest_gap / (1000 * 60 * 60)} hours"
+        )
     print("gap(s) in ohlcvs... attempting fix")
     new_timestamps = np.arange(df["timestamp"].iloc[0], df["timestamp"].iloc[-1] + interval, interval)
     new_df = df.set_index("timestamp").reindex(new_timestamps)
