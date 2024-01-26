@@ -51,6 +51,7 @@ class Evaluator:
                 "price_steps",
                 "min_costs",
                 "min_qtys",
+                "worst_drawdown_lower_bound",
             ]
         }
 
