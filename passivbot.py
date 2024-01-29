@@ -64,7 +64,7 @@ from typing import Union, Dict, List
 import websockets
 import logging
 
-TEST_MODE_SUPPORTED_EXCHANGES = ["bybit"]
+TEST_MODE_SUPPORTED_EXCHANGES = ["bybit","binance"]
 
 
 class Bot:
