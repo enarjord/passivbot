@@ -672,7 +672,12 @@ def backtest_multisymbol_recursive_grid(
                         )
                         close_qty = max(
                             calc_min_entry_qty(
-                                close_price, inverse, qty_steps[s_i], min_qtys[s_i], min_costs[s_i]
+                                close_price,
+                                inverse,
+                                c_mults[s_i],
+                                qty_steps[s_i],
+                                min_qtys[s_i],
+                                min_costs[s_i],
                             ),
                             min(
                                 abs(AU_allowance_qty),
@@ -703,7 +708,12 @@ def backtest_multisymbol_recursive_grid(
                         )
                         close_qty = max(
                             calc_min_entry_qty(
-                                close_price, inverse, qty_steps[s_i], min_qtys[s_i], min_costs[s_i]
+                                close_price,
+                                inverse,
+                                c_mults[s_i],
+                                qty_steps[s_i],
+                                min_qtys[s_i],
+                                min_costs[s_i],
                             ),
                             min(
                                 abs(AU_allowance_qty),
