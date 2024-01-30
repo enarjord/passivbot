@@ -206,6 +206,7 @@ class Passivbot:
 
     async def init_symbols(self):
         # require symbols to be formatted to ccxt standard COIN/USDT:USDT
+
         self.markets_dict = await self.cca.load_markets()
         self.symbols = {}
         for symbol_ in sorted(set(self.config["symbols"])):
@@ -230,7 +231,11 @@ class Passivbot:
                 elif not elm["linear"]:
                     logging.info(f"{symbol} is not a linear market")
                 else:
-                    self.symbols[symbol] = self.config["symbols"][symbol_]
+                    self.symbols[symbol] = (
+                        self.config["symbols"][symbol_]
+                        if isinstance(self.config["symbols"], dict)
+                        else ""
+                    )
         self.quote = "USDT"
         self.inverse = False
         self.symbol_ids = {
@@ -770,6 +775,7 @@ class Passivbot:
                     calc_min_entry_qty(
                         close_price,
                         self.inverse,
+                        self.c_mults[sym],
                         self.qty_steps[sym],
                         self.min_qtys[sym],
                         self.min_costs[sym],
@@ -1151,6 +1157,7 @@ async def main():
     parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
     parser.add_argument("hjson_config_path", type=str, help="path to hjson passivbot meta config")
     max_n_restarts_per_day = 5
+    cooldown_secs = 60
     restarts = []
     while True:
         args = parser.parse_args()
@@ -1190,6 +1197,11 @@ async def main():
             except:
                 pass
         logging.info(f"restarting bot...")
+        print()
+        for z in range(cooldown_secs, -1, -1):
+            print(f"\rcountdown {z}...  ")
+            await asyncio.sleep(1)
+        print()
         restarts.append(utc_ms())
         restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]
         if len(restarts) > max_n_restarts_per_day:
