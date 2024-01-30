@@ -190,6 +190,7 @@ class BinanceBotSpot(Bot):
                     min_entry_qty = calc_min_entry_qty(
                         order["price"],
                         self.inverse,
+                        self.c_mult,
                         self.qty_step,
                         self.min_qty,
                         self.min_cost,
