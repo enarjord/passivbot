@@ -58,7 +58,7 @@ def calc_recursive_reentry_qty(
     wallet_exposure_limit,
 ):
     return max(
-        calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost),
+        calc_min_entry_qty(entry_price, inverse, c_mult, qty_step, min_qty, min_cost),
         round_(
             max(
                 psize * ddown_factor,
@@ -102,7 +102,7 @@ def calc_recursive_entry_long(
     )
     if ientry_price == price_step:
         return (0.0, ientry_price, "")
-    min_entry_qty = calc_min_entry_qty(ientry_price, inverse, qty_step, min_qty, min_cost)
+    min_entry_qty = calc_min_entry_qty(ientry_price, inverse, c_mult, qty_step, min_qty, min_cost)
     ientry_qty = max(
         min_entry_qty,
         round_(
@@ -227,7 +227,7 @@ def calc_recursive_entry_long(
                 [
                     ientry_qty,
                     entry_qty,
-                    calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost),
+                    calc_min_entry_qty(entry_price, inverse, c_mult, qty_step, min_qty, min_cost),
                 ]
             )
         return entry_qty, entry_price, "long_rentry"
@@ -262,7 +262,7 @@ def calc_recursive_entry_short(
     ientry_price = max(
         lowest_ask, round_up(ema_band_upper * (1 + initial_eprice_ema_dist), price_step)
     )
-    min_entry_qty = calc_min_entry_qty(ientry_price, inverse, qty_step, min_qty, min_cost)
+    min_entry_qty = calc_min_entry_qty(ientry_price, inverse, c_mult, qty_step, min_qty, min_cost)
     ientry_qty = max(
         min_entry_qty,
         round_(
@@ -385,7 +385,7 @@ def calc_recursive_entry_short(
                 [
                     ientry_qty,
                     entry_qty,
-                    calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost),
+                    calc_min_entry_qty(entry_price, inverse, c_mult, qty_step, min_qty, min_cost),
                 ]
             )
         return -entry_qty, entry_price, "short_rentry"

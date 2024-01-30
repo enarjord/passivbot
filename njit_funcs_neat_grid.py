@@ -75,7 +75,7 @@ def calc_neat_grid_long(
         highest_bid,
         round_dn(ema_band_lower * (1 - initial_eprice_ema_dist), price_step),
     )
-    min_ientry_qty = calc_min_entry_qty(ientry_price, inverse, qty_step, min_qty, min_cost)
+    min_ientry_qty = calc_min_entry_qty(ientry_price, inverse, c_mult, qty_step, min_qty, min_cost)
     if psize < min_ientry_qty * 0.9:  # initial entry
         entry_qty = calc_initial_entry_qty(
             balance,
@@ -141,7 +141,7 @@ def calc_neat_grid_long(
         if grid[i][4] > wallet_exposure_limit * 1.1:
             break
         entry_price = min(highest_bid, grid[i][1])
-        min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
+        min_entry_qty = calc_min_entry_qty(entry_price, inverse, c_mult, qty_step, min_qty, min_cost)
         grid[i][1] = entry_price
         grid[i][0] = max(min_entry_qty, grid[i][0])
         comment = "long_primary_rentry"
@@ -184,7 +184,7 @@ def calc_neat_grid_short(
         round_up(ema_band_upper * (1 + initial_eprice_ema_dist), price_step),
     )
     abs_psize = abs(psize)
-    min_ientry_qty = calc_min_entry_qty(ientry_price, inverse, qty_step, min_qty, min_cost)
+    min_ientry_qty = calc_min_entry_qty(ientry_price, inverse, c_mult, qty_step, min_qty, min_cost)
     if abs_psize < min_ientry_qty * 0.9:  # initial entry
         entry_qty = calc_initial_entry_qty(
             balance,
@@ -250,7 +250,7 @@ def calc_neat_grid_short(
         if grid[i][4] > wallet_exposure_limit * 1.1:
             break
         entry_price = max(lowest_ask, grid[i][1])
-        min_entry_qty = calc_min_entry_qty(entry_price, inverse, qty_step, min_qty, min_cost)
+        min_entry_qty = calc_min_entry_qty(entry_price, inverse, c_mult, qty_step, min_qty, min_cost)
         grid[i][1] = entry_price
         grid[i][0] = -max(min_entry_qty, abs(grid[i][0]))
         comment = "short_primary_rentry"
@@ -317,7 +317,7 @@ def approximate_neat_grid_long(
     if k == 0:
         # means psize is less than iqty
         # return grid with adjusted iqty
-        min_ientry_qty = calc_min_entry_qty(grid[0][1], inverse, qty_step, min_qty, min_cost)
+        min_ientry_qty = calc_min_entry_qty(grid[0][1], inverse, c_mult, qty_step, min_qty, min_cost)
         grid[0][0] = max(min_ientry_qty, round_(grid[0][0] - psize, qty_step))
         grid[0][2] = round_(psize + grid[0][0], qty_step)
         grid[0][4] = qty_to_cost(grid[0][2], grid[0][3], inverse, c_mult) / balance
@@ -338,7 +338,7 @@ def approximate_neat_grid_long(
         while k < len(grid) - 1 and grid[k][2] <= psize * 0.99999:
             # find first node whose psize > psize
             k += 1
-    min_entry_qty = calc_min_entry_qty(grid[k][1], inverse, qty_step, min_qty, min_cost)
+    min_entry_qty = calc_min_entry_qty(grid[k][1], inverse, c_mult, qty_step, min_qty, min_cost)
     grid[k][0] = max(min_entry_qty, round_(grid[k][2] - psize, qty_step))
     return grid[k:] if crop else grid
 
@@ -405,7 +405,7 @@ def approximate_neat_grid_short(
     if k == 0:
         # means psize is less than iqty
         # return grid with adjusted iqty
-        min_ientry_qty = calc_min_entry_qty(grid[0][1], inverse, qty_step, min_qty, min_cost)
+        min_ientry_qty = calc_min_entry_qty(grid[0][1], inverse, c_mult, qty_step, min_qty, min_cost)
         grid[0][0] = -max(min_ientry_qty, round_(abs(grid[0][0]) - abs_psize, qty_step))
         grid[0][2] = round_(psize + grid[0][0], qty_step)
         grid[0][4] = qty_to_cost(grid[0][2], grid[0][3], inverse, c_mult) / balance
@@ -426,7 +426,7 @@ def approximate_neat_grid_short(
         while k < len(grid) - 1 and abs(grid[k][2]) <= abs_psize * 0.99999:
             # find first node whose psize > psize
             k += 1
-    min_entry_qty = calc_min_entry_qty(grid[k][1], inverse, qty_step, min_qty, min_cost)
+    min_entry_qty = calc_min_entry_qty(grid[k][1], inverse, c_mult, qty_step, min_qty, min_cost)
     grid[k][0] = -max(min_entry_qty, round_(abs(grid[k][2]) - abs_psize, qty_step))
     return grid[k:] if crop else grid
 
@@ -462,7 +462,7 @@ def eval_neat_entry_grid_long(
     ]
 
     grid[0][0] = max(
-        calc_min_entry_qty(grid[0][1], inverse, qty_step, min_qty, min_cost),
+        calc_min_entry_qty(grid[0][1], inverse, c_mult, qty_step, min_qty, min_cost),
         round_(
             cost_to_qty(
                 balance * wallet_exposure_limit * initial_qty_pct,
@@ -479,7 +479,7 @@ def eval_neat_entry_grid_long(
     qtys = basespace(grid[0][0], last_entry_qty, eqty_exp_base, max_n_entry_orders)
     for i in range(1, max_n_entry_orders):
         qty = max(
-            calc_min_entry_qty(grid[i][1], inverse, qty_step, min_qty, min_cost),
+            calc_min_entry_qty(grid[i][1], inverse, c_mult, qty_step, min_qty, min_cost),
             round_(qtys[i], qty_step),
         )
         psize, pprice = calc_new_psize_pprice(psize, pprice, qty, grid[i][1], qty_step)
@@ -523,7 +523,7 @@ def eval_neat_entry_grid_short(
     ]
 
     grid[0][0] = -max(
-        calc_min_entry_qty(grid[0][1], inverse, qty_step, min_qty, min_cost),
+        calc_min_entry_qty(grid[0][1], inverse, c_mult, qty_step, min_qty, min_cost),
         round_(
             cost_to_qty(
                 balance * wallet_exposure_limit * initial_qty_pct,
@@ -540,7 +540,7 @@ def eval_neat_entry_grid_short(
     qtys = basespace(abs(grid[0][0]), last_entry_qty, eqty_exp_base, max_n_entry_orders)
     for i in range(1, max_n_entry_orders):
         qty = -max(
-            calc_min_entry_qty(grid[i][1], inverse, qty_step, min_qty, min_cost),
+            calc_min_entry_qty(grid[i][1], inverse, c_mult, qty_step, min_qty, min_cost),
             round_(qtys[i], qty_step),
         )
         psize, pprice = calc_new_psize_pprice(psize, pprice, qty, grid[i][1], qty_step)
@@ -571,7 +571,7 @@ def find_last_entry_qty_long(
     eprice_exp_base,
 ):
     guess0 = max(
-        calc_min_entry_qty(initial_entry_price, inverse, qty_step, min_qty, min_cost),
+        calc_min_entry_qty(initial_entry_price, inverse, c_mult, qty_step, min_qty, min_cost),
         cost_to_qty(
             balance * wallet_exposure_limit * 0.5,
             initial_entry_price,
@@ -659,7 +659,7 @@ def find_last_entry_qty_short(
     eprice_exp_base,
 ):
     guess0 = max(
-        calc_min_entry_qty(initial_entry_price, inverse, qty_step, min_qty, min_cost),
+        calc_min_entry_qty(initial_entry_price, inverse, c_mult, qty_step, min_qty, min_cost),
         cost_to_qty(
             balance * wallet_exposure_limit * 0.5,
             initial_entry_price,

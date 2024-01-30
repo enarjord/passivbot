@@ -115,7 +115,9 @@ def calc_clock_entry_long(
                 if qty_long != 0.0:
                     qty_long = max(
                         qty_long,
-                        calc_min_entry_qty(bid_price_long, inverse, qty_step, min_qty, min_cost),
+                        calc_min_entry_qty(
+                            bid_price_long, inverse, c_mult, qty_step, min_qty, min_cost
+                        ),
                     )
                 new_psize_long, new_pprice_long = calc_new_psize_pprice(
                     psize_long, pprice_long, qty_long, bid_price_long, qty_step
@@ -172,7 +174,7 @@ def calc_clock_close_long(
             )
             if qty_long > 0.0:
                 if round_(psize_long - qty_long, qty_step) < calc_min_entry_qty(
-                    ask_price_long, inverse, qty_step, min_qty, min_cost
+                    ask_price_long, inverse, c_mult, qty_step, min_qty, min_cost
                 ):
                     # close whole pos; include leftovers
                     return (-psize_long, ask_price_long, "clock_close_long")
@@ -243,7 +245,9 @@ def calc_clock_entry_short(
                 if qty_short != 0.0:
                     qty_short = -max(
                         abs(qty_short),
-                        calc_min_entry_qty(ask_price_short, inverse, qty_step, min_qty, min_cost),
+                        calc_min_entry_qty(
+                            ask_price_short, inverse, c_mult, qty_step, min_qty, min_cost
+                        ),
                     )
                 new_psize_short, new_pprice_short = calc_new_psize_pprice(
                     -abs(psize_short), pprice_short, qty_short, ask_price_short, qty_step
@@ -310,7 +314,7 @@ def calc_clock_close_short(
             )
             if qty_short > 0.0:
                 if round_(psize_short - qty_short, qty_step) < calc_min_entry_qty(
-                    bid_price_short, inverse, qty_step, min_qty, min_cost
+                    bid_price_short, inverse, c_mult, qty_step, min_qty, min_cost
                 ):
                     # close whole pos; include leftovers
                     return (psize_short, bid_price_short, "clock_close_short")
