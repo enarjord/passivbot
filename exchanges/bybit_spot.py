@@ -348,7 +348,7 @@ class BybitBotSpot(Bot):
         if "custom_id" in order:
             params[
                 "orderLinkId"
-            ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+            ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"[:45]
         o = await self.private_post(self.endpoints["create_order"], params)
         o = o["result"]
         if "side" in o:
