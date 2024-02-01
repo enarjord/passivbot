@@ -125,7 +125,7 @@ class BinanceBot(Bot):
         fws_endpoint = "wss://fstream.binance.com"
         dws_endpoint = "wss://dstream.binance.com"
         spot_base_endpoint = "https://api.binance.com"
-        
+
         self.exchange_info = None
         if self.test_mode:
             fapi_endpoint = "https://testnet.binancefuture.com"
@@ -133,7 +133,6 @@ class BinanceBot(Bot):
             fws_endpoint = "wss://stream.binancefuture.com"
             dws_endpoint = "wss://dstream.binancefuture.com"
             spot_base_endpoint = "https://testnet.binance.vision"
-
 
         try:
             self.exchange_info = await self.public_get(
@@ -408,10 +407,7 @@ class BinanceBot(Bot):
             if params["type"] == "LIMIT":
                 params["timeInForce"] = "GTX"
                 params["price"] = order["price"]
-            if "custom_id" in order:
-                params[
-                    "newClientOrderId"
-                ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+            params["newClientOrderId"] = order["custom_id"]
             o = await self.private_post(self.endpoints["create_order"], params)
             return {
                 "symbol": self.symbol,
@@ -443,10 +439,7 @@ class BinanceBot(Bot):
                 if params["type"] == "LIMIT":
                     params["timeInForce"] = "GTX"
                     params["price"] = order["price"]
-                if "custom_id" in order:
-                    params[
-                        "newClientOrderId"
-                    ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+                params["newClientOrderId"] = order["custom_id"]
                 to_execute.append(params)
             executed = await self.private_post(
                 self.endpoints["batch_orders"], {"batchOrders": to_execute}, data_=True

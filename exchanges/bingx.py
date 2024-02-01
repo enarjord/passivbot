@@ -37,6 +37,7 @@ class BingXBot(Bot):
                 "headers": {"X-SOURCE-KEY": self.broker_code} if self.broker_code else {},
             }
         )
+        self.custom_id_max_length = 40
 
     def init_market_type(self):
         if not self.symbol.endswith("USDT"):
@@ -300,7 +301,7 @@ class BingXBot(Bot):
                 price=order["price"],
                 params={
                     "positionSide": order["position_side"].upper(),
-                    "clientOrderID": (order["custom_id"] + str(uuid4()))[:40],
+                    "clientOrderID": order["custom_id"],
                 },
             )
             if "symbol" not in executed or executed["symbol"] is None:

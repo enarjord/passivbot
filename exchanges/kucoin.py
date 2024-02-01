@@ -66,6 +66,7 @@ class KuCoinBot(Bot):
             "funds_transfer": "/api/v3/transfer-out",
         }
         self.session = aiohttp.ClientSession()
+        self.custom_id_max_length = 32
 
     def init_market_type(self):
         if self.symbol.endswith("USDT"):
@@ -340,9 +341,7 @@ class KuCoinBot(Bot):
             if order["type"] == "limit":
                 params["postOnly"] = True
                 params["price"] = str(order["price"])
-            params[
-                "clientOid"
-            ] = f"{(order['custom_id'] if 'custom_id' in order else '')}{uuid.uuid4().hex}"[:32]
+            params["clientOid"] = order["custom_id"]
             executed = await self.private_post(self.endpoints["create_order"], params)
             if "code" in executed and executed["code"] == "200000":
                 return {

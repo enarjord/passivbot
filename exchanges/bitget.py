@@ -17,7 +17,14 @@ import os
 from njit_funcs import round_
 from passivbot import Bot, logging
 from procedures import print_async_exception, print_, utc_ms, make_get_filepath
-from pure_funcs import ts_to_date, sort_dict_keys, date_to_ts, format_float, flatten
+from pure_funcs import (
+    ts_to_date,
+    sort_dict_keys,
+    date_to_ts,
+    format_float,
+    flatten,
+    shorten_custom_id,
+)
 
 
 def first_capitalized(s: str):
@@ -74,6 +81,7 @@ class BitgetBot(Bot):
             "open_short": "sell",
         }
         self.session = aiohttp.ClientSession()
+        self.custom_id_max_length = 64
 
     def init_market_type(self):
         self.symbol_stripped = self.symbol
@@ -380,9 +388,7 @@ class BitgetBot(Bot):
                 params["price"] = str(order["price"])
             else:
                 params["timeInForceValue"] = "normal"
-            random_str = f"{str(int(time() * 1000))[-6:]}_{int(np.random.random() * 10000)}"
-            custom_id = order["custom_id"] if "custom_id" in order else "0"
-            params["clientOid"] = f"{self.broker_code}#{custom_id}_{random_str}"
+            params["clientOid"] = order["custom_id"]
             o = await self.private_post(self.endpoints["create_order"], params)
             # print('debug create order', o, order)
             if o["data"]:
@@ -422,11 +428,7 @@ class BitgetBot(Bot):
                     params["price"] = str(order["price"])
                 else:
                     params["timeInForceValue"] = "normal"
-                random_str = f"{str(int(time() * 1000))[-6:]}_{int(np.random.random() * 10000)}"
-                custom_id = order["custom_id"] if "custom_id" in order else "0"
-                params["clientOid"] = order[
-                    "custom_id"
-                ] = f"{self.broker_code}#{custom_id}_{random_str}"
+                params["clientOid"] = order["custom_id"]
                 orders_with_custom_ids.append({**order, **{"symbol": self.symbol}})
                 to_execute.append(params)
             executed = await self.private_post(
@@ -1003,3 +1005,16 @@ class BitgetBot(Bot):
                     if elm["marginCoin"] == self.quote:
                         events.append({"wallet_balance": float(elm["available"])})
         return events
+
+    def format_custom_ids(self, orders: [dict]) -> [dict]:
+        # bitget needs broker code plus '#' at the beginning of the custom_id
+        new_orders = []
+        for order in orders:
+            order["custom_id"] = (
+                self.broker_code
+                + "#"
+                + shorten_custom_id(order["custom_id"] if "custom_id" in order else "")
+                + uuid4().hex
+            )[: self.custom_id_max_length]
+            new_orders.append(order)
+        return new_orders
