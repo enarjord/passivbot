@@ -12,6 +12,7 @@ import json
 import hjson
 import pprint
 import numpy as np
+from uuid import uuid4
 
 from procedures import load_broker_code, load_user_info, utc_ms, make_get_filepath, load_live_config
 from njit_funcs_recursive_grid import calc_recursive_entries_long, calc_recursive_entries_short
@@ -32,7 +33,7 @@ from njit_funcs import (
     calc_pnl_short,
 )
 from njit_multisymbol import calc_AU_allowance
-from pure_funcs import numpyize, filter_orders, multi_replace
+from pure_funcs import numpyize, filter_orders, multi_replace, shorten_custom_id
 
 
 class Passivbot:
@@ -45,6 +46,7 @@ class Passivbot:
         self.user_info = load_user_info(config["user"])
         self.exchange = self.user_info["exchange"]
         self.broker_code = load_broker_code(self.user_info["exchange"])
+        self.custom_id_max_length = 36
         self.sym_padding = 17
         self.stop_websocket = False
         self.balance = 1e-12
@@ -1123,6 +1125,9 @@ class Passivbot:
                     print("debug duplicate", elm)
                 seen.add(key)
 
+            # format custom_id
+            to_create = self.format_custom_ids(to_create)
+
             res = await self.execute_cancellations(to_cancel)
             for elm in res:
                 self.remove_cancelled_order(elm, source="POST")
@@ -1136,6 +1141,15 @@ class Passivbot:
             traceback.print_exc()
         finally:
             self.previous_execution_ts = utc_ms()
+
+    def format_custom_ids(self, orders: [dict]) -> [dict]:
+        new_orders = []
+        for order in orders:
+            order["custom_id"] = (
+                shorten_custom_id(order["custom_id"] if "custom_id" in order else "") + uuid4().hex
+            )[: self.custom_id_max_length]
+            new_orders.append(order)
+        return new_orders
 
     async def execution_loop(self):
         while True:
