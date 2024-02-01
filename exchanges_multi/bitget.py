@@ -6,7 +6,14 @@ import pprint
 import asyncio
 import traceback
 import numpy as np
-from pure_funcs import multi_replace, floatify, ts_to_date_utc, calc_hash, determine_pos_side_ccxt
+from pure_funcs import (
+    multi_replace,
+    floatify,
+    ts_to_date_utc,
+    calc_hash,
+    determine_pos_side_ccxt,
+    shorten_custom_id,
+)
 from procedures import print_async_exception, utc_ms
 
 
@@ -35,6 +42,7 @@ class BitgetBot(Passivbot):
             "buy": {"long": "open_long", "short": "close_short"},
             "sell": {"long": "close_long", "short": "open_short"},
         }
+        self.custom_id_max_length = 64
 
     async def init_bot(self):
         await self.init_symbols()
@@ -309,7 +317,7 @@ class BitgetBot(Passivbot):
                     "reduceOnly": order["reduce_only"],
                     "timeInForceValue": "post_only",
                     "side": self.order_side_map[order["side"]][order["position_side"]],
-                    "clientOid": f"{self.broker_code}#{order['custom_id']}_{str(uuid4())}"[:64],
+                    "clientOid": order["custom_id"],
                 },
             )
             if "symbol" not in executed or executed["symbol"] is None:
@@ -329,3 +337,16 @@ class BitgetBot(Passivbot):
 
     async def update_exchange_config(self):
         pass
+
+    def format_custom_ids(self, orders: [dict]) -> [dict]:
+        # bitget needs broker code plus '#' at the beginning of the custom_id
+        new_orders = []
+        for order in orders:
+            order["custom_id"] = (
+                self.broker_code
+                + "#"
+                + shorten_custom_id(order["custom_id"] if "custom_id" in order else "")
+                + uuid4().hex
+            )[: self.custom_id_max_length]
+            new_orders.append(order)
+        return new_orders

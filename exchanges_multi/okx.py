@@ -43,6 +43,7 @@ class OKXBot(Passivbot):
             "buy": {"long": "open_long", "short": "close_short"},
             "sell": {"long": "close_long", "short": "open_short"},
         }
+        self.custom_id_max_length = 32
 
     async def init_bot(self):
         await self.init_symbols()
@@ -304,9 +305,7 @@ class OKXBot(Passivbot):
                     "params": {
                         "tag": self.broker_code,
                         "posSide": order["position_side"],
-                        "clOrdId": (
-                            self.broker_code + shorten_custom_id(order["custom_id"]) + uuid4().hex
-                        )[:32],
+                        "clOrdId": order["custom_id"],
                     },
                 }
             )
@@ -385,3 +384,15 @@ class OKXBot(Passivbot):
         for x in ideal_orders_tmp:
             ideal_orders[x["symbol"]].append(x)
         return ideal_orders
+
+    def format_custom_ids(self, orders: [dict]) -> [dict]:
+        # okx needs broker code at the beginning of the custom_id
+        new_orders = []
+        for order in orders:
+            order["custom_id"] = (
+                self.broker_code
+                + shorten_custom_id(order["custom_id"] if "custom_id" in order else "")
+                + uuid4().hex
+            )[: self.custom_id_max_length]
+            new_orders.append(order)
+        return new_orders

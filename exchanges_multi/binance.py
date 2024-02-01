@@ -327,7 +327,7 @@ class BinanceBot(Passivbot):
                 price=order["price"],
                 params={
                     "positionSide": order["position_side"].upper(),
-                    "newClientOrderId": (order["custom_id"] + str(uuid4()))[:36],
+                    "newClientOrderId": order["custom_id"],
                     "timeInForce": "GTX",
                 },
             )
@@ -365,7 +365,7 @@ class BinanceBot(Passivbot):
                     "price": order["price"],
                     "params": {
                         "positionSide": order["position_side"].upper(),
-                        "newClientOrderId": (order["custom_id"] + str(uuid4()))[:36],
+                        "newClientOrderId": order["custom_id"],
                         "timeInForce": "GTX",
                     },
                 }

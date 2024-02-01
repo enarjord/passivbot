@@ -12,7 +12,6 @@ from pure_funcs import (
     ts_to_date_utc,
     calc_hash,
     determine_pos_side_ccxt,
-    shorten_custom_id,
 )
 from njit_funcs import calc_diff, round_
 from procedures import print_async_exception, utc_ms
@@ -39,6 +38,7 @@ class BingXBot(Passivbot):
         self.cca.options["defaultType"] = "swap"
         self.max_n_cancellations_per_batch = 6
         self.max_n_creations_per_batch = 3
+        self.custom_id_max_length = 40
 
     async def init_bot(self):
         await self.init_symbols()
@@ -300,7 +300,7 @@ class BingXBot(Passivbot):
                 price=order["price"],
                 params={
                     "positionSide": order["position_side"].upper(),
-                    "clientOrderID": (order["custom_id"] + str(uuid4()))[:40],
+                    "clientOrderID": order["custom_id"],
                     "timeInForce": "PostOnly",
                 },
             )
