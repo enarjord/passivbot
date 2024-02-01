@@ -12,6 +12,7 @@ import pprint
 import numpy as np
 import time
 import random
+from uuid import uuid4
 from procedures import (
     load_live_config,
     make_get_filepath,
@@ -64,7 +65,7 @@ from typing import Union, Dict, List
 import websockets
 import logging
 
-TEST_MODE_SUPPORTED_EXCHANGES = ["bybit","binance"]
+TEST_MODE_SUPPORTED_EXCHANGES = ["bybit", "binance"]
 
 
 class Bot:
@@ -144,6 +145,8 @@ class Bot:
 
         self.stop_websocket = False
         self.process_websocket_ticks = True
+
+        self.custom_id_max_length = 36
 
     def set_config(self, config):
         for k, v in [
@@ -507,6 +510,7 @@ class Bot:
         try:
             orders = None
             orders_to_create = [order for order in orders_to_create if self.order_is_valid(order)]
+            orders_to_create = self.format_custom_ids(orders_to_create)
             orders = await self.execute_orders(orders_to_create)
             orders_f = [x for x in orders if "price" in x]
             for order in sorted(orders_f, key=lambda x: calc_diff(x["price"], self.price)):
@@ -1645,6 +1649,15 @@ class Bot:
             logging.error(f"error validating order")
             traceback.print_exc()
             return False
+
+    def format_custom_ids(self, orders: [dict]) -> [dict]:
+        new_orders = []
+        for order in orders:
+            order["custom_id"] = (
+                shorten_custom_id(order["custom_id"] if "custom_id" in order else "") + uuid4().hex
+            )[: self.custom_id_max_length]
+            new_orders.append(order)
+        return new_orders
 
 
 async def start_bot(bot):
