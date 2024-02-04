@@ -2074,3 +2074,22 @@ def str2bool(v):
         return False
     else:
         raise Exception("Boolean value expected.")
+
+
+def determine_side_from_order_tuple(order_tuple):
+    if "long" in order_tuple[2]:
+        if "entry" in order_tuple[2]:
+            return "buy"
+        elif "close" in order_tuple[2]:
+            return "sell"
+        else:
+            raise Exception(f"malformed order tuple {order_tuple}")
+    elif "short" in order_tuple[2]:
+        if "entry" in order_tuple[2]:
+            return "sell"
+        elif "close" in order_tuple[2]:
+            return "buy"
+        else:
+            raise Exception(f"malformed order tuple {order_tuple}")
+    else:
+        raise Exception(f"malformed order tuple {order_tuple}")
