@@ -607,7 +607,7 @@ async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
                     print(f"error loading ohlcv first ts cache", e)
         fetched = []
         for i, symbol in enumerate(symbols):
-            if cc.id in ["bybit", "binance"]:
+            if cc.id in ["bybit", "binanceusdm"]:
                 fetched.append(
                     (
                         symbol,
