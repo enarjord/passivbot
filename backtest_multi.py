@@ -154,6 +154,17 @@ def args2config(args):
         config["symbols"] = {s: "" for s in config["symbols"]}
     config["symbols"] = OrderedDict(sorted(config["symbols"].items()))
     config["exchange"] = load_user_info(config["user"])["exchange"]
+    for key, default_val in [
+        ("base_dir", "backtests"),
+        ("starting_balance", 10000),
+        ("start_date", "2021-05-01"),
+        ("end_date", "now"),
+    ]:
+        if key not in config:
+            logging.info(
+                f'key "{key}"" missing from config; setting to default value "{default_val}"'
+            )
+            config[key] = default_val
     return config
 
 
