@@ -33,6 +33,7 @@ from pure_funcs import (
     sort_dict_keys,
     make_compatible,
     determine_passivbot_mode,
+    date2ts_utc,
 )
 
 
@@ -593,7 +594,7 @@ async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
     try:
         if symbols is None:
             markets = await cc.load_markets()
-            symbols = sorted([x for x in markets if markets[x]["swap"]])
+            symbols = sorted([x for x in markets if markets[x]["swap"] and markets[x]["active"]])
         n = 30
         first_timestamps = {}
         cache_fname = f"caches/first_ohlcv_timestamps_{cc.id}.json"
@@ -606,7 +607,21 @@ async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
                     print(f"error loading ohlcv first ts cache", e)
         fetched = []
         for i, symbol in enumerate(symbols):
-            fetched.append((symbol, asyncio.ensure_future(cc.fetch_ohlcv(symbol, timeframe="1M"))))
+            if cc.id in ["bybit", "binance"]:
+                fetched.append(
+                    (
+                        symbol,
+                        asyncio.ensure_future(
+                            cc.fetch_ohlcv(
+                                symbol, timeframe="1d", since=int(date2ts_utc("2015-01-01"))
+                            )
+                        ),
+                    )
+                )
+            else:
+                fetched.append(
+                    (symbol, asyncio.ensure_future(cc.fetch_ohlcv(symbol, timeframe="1M")))
+                )
             if i + 1 == len(symbols) or (i + 1) % n == 0:
                 for sym, task in fetched:
                     try:
