@@ -1,9 +1,11 @@
 import pandas as pd
 import pprint
 import argparse
-import ccxt
+import ccxt.async_support as ccxt
 import numpy as np
 import argparse
+import hjson
+import asyncio
 
 import os
 
@@ -14,7 +16,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from forager import get_min_costs_and_contract_multipliers
-from procedures import load_live_config, utc_ms, make_get_filepath
+from procedures import load_live_config, utc_ms, make_get_filepath, get_first_ohlcv_timestamps
 from pure_funcs import floatify, ts_to_date_utc, date2ts_utc, str2bool
 
 
@@ -45,45 +47,64 @@ def parse_backtest_metrics():
     return longs, shorts
 
 
-def load_min_costs():
+async def load_min_costs_single(exchange):
+    results = []
+    print(f"fetching info for {exchange}")
+    cc = getattr(ccxt, exchange)()
+    cc.options["defaultType"] = "swap"
+    min_costs = {"bitget": 5.0, "bingx": 2.0}
+    c_mults = {"bingx": 1.0}
+    markets = await cc.load_markets()
+    tickers = await cc.fetch_tickers()
+    first_timestamps = await get_first_ohlcv_timestamps(cc)
+    for symbol in markets:
+        if not symbol.endswith("/USDT:USDT"):
+            continue
+        if not markets[symbol]["swap"] or not markets[symbol]["active"]:
+            continue
+        if symbol not in first_timestamps:
+            continue
+        if markets[symbol]["limits"]["cost"]["min"] is None:
+            if exchange in min_costs:
+                min_cost = min_costs[exchange]
+            else:
+                min_cost = 0.0
+        else:
+            min_cost = markets[symbol]["limits"]["cost"]["min"]
+        if exchange in c_mults:
+            c_mult = c_mults[exchange]
+        else:
+            c_mult = markets[symbol]["contractSize"]
+        if exchange in ["bingx"]:
+            min_qty = markets[symbol]["contractSize"]
+        else:
+            min_qty = markets[symbol]["limits"]["amount"]["min"]
+        results.append(
+            {
+                "exchange": cc.id,
+                "symbol": symbol,
+                "min_qty": min_qty,
+                "min_cost": min_cost,
+                "last_price": (last_price := tickers[symbol]["last"]),
+                "c_mult": c_mult,
+                "effective_min_cost": max(min_cost, min_qty * last_price * c_mult),
+                "first_timestamp": first_timestamps[symbol],
+            }
+        )
+    return results
+
+
+async def load_min_costs(exchanges=["binanceusdm", "bybit", "okx", "bitget"]):
     today = ts_to_date_utc(utc_ms())[:10]
     filepath = make_get_filepath(f"caches/min_costs_{today}.csv")
     if os.path.exists(filepath):
         return pd.read_csv(filepath)
-    exchanges = ["binanceusdm", "bybit", "okx", "bitget"]
-    min_costs = {"bitget": 5.0}
+    # exchanges = ["binanceusdm", "bybit", "okx", "bitget", "bingx"]
+    # exchanges = ["bingx"]
     results = []
     for exchange in exchanges:
-        print(f"fetching info for {exchange}")
-        cc = getattr(ccxt, exchange)()
-        cc.options["defaultType"] = "swap"
-        markets = cc.load_markets()
-        tickers = cc.fetch_tickers()
-        for symbol in markets:
-            if not symbol.endswith("/USDT:USDT"):
-                continue
-            if not markets[symbol]["swap"] or not markets[symbol]["active"]:
-                continue
-            if markets[symbol]["limits"]["cost"]["min"] is None:
-                if exchange in min_costs:
-                    min_cost = min_costs[exchange]
-                else:
-                    min_cost = 0.0
-            else:
-                min_cost = markets[symbol]["limits"]["cost"]["min"]
-            results.append(
-                {
-                    "exchange": cc.id,
-                    "symbol": symbol,
-                    "min_qty": (min_qty := markets[symbol]["limits"]["amount"]["min"]),
-                    "min_cost": min_cost,
-                    "last_price": (last_price := tickers[symbol]["last"]),
-                    "c_mult": (c_mult := markets[symbol]["contractSize"]),
-                    "effective_min_cost": max(min_cost, min_qty * last_price * c_mult),
-                    "first_timestamp": markets[symbol]["created"],
-                }
-            )
-
+        results_single = await load_min_costs_single(exchange)
+        results += results_single
     print(f"writing to {filepath}")
     mdf = pd.DataFrame(results)
     mdf.to_csv(filepath)
@@ -91,14 +112,14 @@ def load_min_costs():
 
 
 def load_live_configs():
-    path = 'configs/live/multisymbol/no_AU/'
+    path = "configs/live/multisymbol/no_AU/"
     configs = {}
     for f in os.listdir(path):
         try:
             symbol = f[:-5]
             configs[symbol] = load_live_config(os.path.join(path, f))
         except Exception as e:
-            print('error', f, e)
+            print("error", f, e)
     return configs
 
 
@@ -106,20 +127,43 @@ def sname(symbol):
     coin = symbol.replace("/USDT:USDT", "")
     if coin.endswith("USDT"):
         coin = coin[:-4]
-    coin = coin.replace('1000', '')
+    if "1000" in coin:
+        istart = coin.find("1000")
+        iend = istart + 1
+        while True:
+            if iend >= len(coin):
+                break
+            if coin[iend] != "0":
+                break
+            iend += 1
+        coin = coin[:istart] + coin[iend:]
     return coin + "USDT"
 
 
+def generate_hjson_config(user, TWE_limit_long, long_enabled, symbols):
+    template = hjson.load(open("configs/live/example_config.hjson"))
+    template["user"] = user
+    template["TWE_long"] = TWE_limit_long
+    template["long_enabled"] = long_enabled
+    template["symbols"] = sorted(set(symbols))
+    today = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
+    filepath = make_get_filepath(f"configs/live/live_config_{user}_{today}.hjson")
+    hjson.dump(template, open(filepath, "w"))
+    print("dumped", filepath)
 
-def main():
-    parser = argparse.ArgumentParser(prog="filter_coins", description="filter coins based on exchange, balance, WE_limit and n_syms")
+
+async def main():
+    parser = argparse.ArgumentParser(
+        prog="filter_coins",
+        description="filter coins based on exchange, balance, WE_limit and n_syms",
+    )
     parser.add_argument(
         "-e",
         "--exchange",
         type=str,
         required=False,
         dest="exchange",
-        default='bybit',
+        default="bybit",
         help="exchange (default bybit; choices [binance, bybit, okx, bitget])",
     )
     parser.add_argument(
@@ -129,7 +173,7 @@ def main():
         type=str,
         required=False,
         dest="backtested_since",
-        default='2021-05-10',
+        default="2021-05-10",
         help="backtested since (default '2021-05-10')",
     )
     parser.add_argument(
@@ -199,10 +243,22 @@ def main():
         default=0.005,
         help="specify min initial entry qty pct (default 0.005)",
     )
+    parser.add_argument(
+        "-u",
+        "--user",
+        type=str,
+        required=False,
+        dest="user",
+        default=None,
+        help="If given, will generate and dump live hjson config for user.",
+    )
     args = parser.parse_args()
 
-
+    exchanges = ["binanceusdm", "bybit", "okx", "bitget"]
     exchange = args.exchange
+    if "binance" in exchange:
+        exchange = "binanceusdm"
+    assert exchange in exchanges, f"unknown exchange {exchange}"
     backtested_since = args.backtested_since
     n_coins = args.n_coins
     balance = args.balance
@@ -212,31 +268,64 @@ def main():
     short_enabled = args.short_enabled
     initial_qty_pct_lower_bound = args.min_initial_qty_pct
 
-    minimum_coin_backtest_age_days = (utc_ms() - date2ts_utc(backtested_since)) / (1000 * 60 * 60 * 24)
-
-    if 'binance' in exchange:
-        exchange = 'binanceusdm'
-
-
-    min_cost_upper_bound = balance * TWE_limit_long * initial_qty_pct_lower_bound / n_coins
+    minimum_coin_backtest_age_days = (utc_ms() - date2ts_utc(backtested_since)) / (
+        1000 * 60 * 60 * 24
+    )
 
     longs, shorts = parse_backtest_metrics()
-    min_costs = load_min_costs()
+    min_costs = await load_min_costs()
     configs = load_live_configs()
 
+    min_cost_lower_bound = min_costs[min_costs.exchange == exchange].effective_min_cost.median()
+    min_cost_upper_bound = balance * TWE_limit_long * initial_qty_pct_lower_bound / n_coins
 
-    min_costs.loc[:,'symbol'] = min_costs.symbol.apply(sname)
-    longs.loc[:,'symbol'] = longs.symbol.apply(sname)
-    shorts.loc[:,'symbol'] = shorts.symbol.apply(sname)
+    if min_cost_upper_bound < min_cost_lower_bound:
+        print("\n" + "#" * 40)
+        print(f"Median effective_min_cost for {exchange} is {min_cost_lower_bound}.")
+        print(
+            f"On {exchange} with balance {balance}, TWE limit long {TWE_limit_long} and initial qty pct {initial_qty_pct_lower_bound},"
+        )
+        print(
+            f"minimum cost per long position is balance * TWE_limit_long * initial_qty_pct_lower_bound / n_coins == {min_cost_upper_bound},"
+        )
+        print(
+            f"which is too low.",
+        )
+        while n_coins > 1 and min_cost_upper_bound < min_cost_lower_bound:
+            n_coins -= 1
+            min_cost_upper_bound = balance * TWE_limit_long * initial_qty_pct_lower_bound / n_coins
+        if min_cost_upper_bound < min_cost_lower_bound:
+            print(f"Balance is too low, even with only one coin.")
+            print(f"Try again with higher balance and/or higher TWE and/or on another exchange.")
+            print("#" * 40 + "\n")
+            return
+        print(
+            f"Reducing n_coins to {n_coins}. Now balance * TWE_limit_long * initial_qty_pct_lower_bound / n_coins == {min_cost_upper_bound}."
+        )
+        print()
+        print("#" * 40 + "\n")
+
+    symbol_names_map = {}
+    for exchange_ in exchanges:
+        symbol_names_map[exchange_] = {}
+        for symbol in min_costs[min_costs.exchange == exchange_].symbol:
+            symbol_names_map[exchange_][sname(symbol)] = symbol
+
+    min_costs.loc[:, "symbol"] = min_costs.symbol.apply(sname)
+    longs.loc[:, "symbol"] = longs.symbol.apply(sname)
+    shorts.loc[:, "symbol"] = shorts.symbol.apply(sname)
     configs = {sname(k): v for k, v in configs.items()}
 
-    longs = longs.sort_values('symbol').reset_index()
-    shorts = shorts.sort_values('symbol').reset_index()
+    first_timestamps = min_costs.groupby("symbol").first_timestamp.min()
 
-    scores = longs.adg_w_per_exp + longs.adg_per_exp + shorts.adg_w_per_exp + shorts.adg_per_exp
-    scores /= 4.0
-    longs.loc[:,'score'] = scores
-    shorts.loc[:,'score'] = scores
+    longs = longs.sort_values("symbol").reset_index()
+    shorts = shorts.sort_values("symbol").reset_index()
+
+    scores = (
+        longs.adg_w_per_exp + longs.adg_per_exp + shorts.adg_w_per_exp + shorts.adg_per_exp
+    ) / 4.0
+    longs.loc[:, "score"] = scores
+    shorts.loc[:, "score"] = scores
 
     print(f"{'balance': <30} {balance}")
     print(f"{'exchange': <30} {exchange}")
@@ -250,14 +339,43 @@ def main():
     print(f"{'initial_qty_pct_lower_bound': <30} {initial_qty_pct_lower_bound}")
     print(f"{'min_cost_upper_bound': <30} {min_cost_upper_bound}")
 
+    eligible_coins = set(
+        min_costs[
+            (min_costs.exchange == exchange) & (min_costs.effective_min_cost <= min_cost_upper_bound)
+        ].symbol
+    )
+    longs_filtered = longs[
+        (longs.symbol.isin(eligible_coins)) & (longs.n_days >= minimum_coin_backtest_age_days)
+    ].sort_values("score", ascending=False)
+    shorts_filtered = shorts[
+        (shorts.symbol.isin(eligible_coins)) & (shorts.n_days >= minimum_coin_backtest_age_days)
+    ].sort_values("score", ascending=False)
 
-    eligible_coins = set(min_costs[(min_costs.exchange == exchange) & (min_costs.effective_min_cost <= min_cost_upper_bound)].symbol)
-    longs_filtered = longs[(longs.symbol.isin(eligible_coins)) & (longs.n_days >= minimum_coin_backtest_age_days)].sort_values('score', ascending=False)
-    shorts_filtered = shorts[(shorts.symbol.isin(eligible_coins)) & (shorts.n_days >= minimum_coin_backtest_age_days)].sort_values('score', ascending=False)
-    print(longs_filtered.iloc[:n_coins])
-
-
+    longs_filtered.loc[:, "first_timestamp"] = [
+        first_timestamps[symbol] if symbol in first_timestamps else -1
+        for symbol in longs_filtered.symbol.values
+    ]
+    longs_filtered.loc[:, "first_date"] = longs_filtered.first_timestamp.apply(ts_to_date_utc)
+    longs_filtered = longs_filtered.iloc[:n_coins]
+    columns_to_print = [
+        "symbol",
+        "adg_w_per_exp",
+        "adg_per_exp",
+        "hrs_stuck_max",
+        "pa_dist_1pct_worst_mean",
+        "loss_profit_rt",
+        "drawdown_1pct_worst_mean",
+        "drawdown_max",
+        "n_days",
+        "first_timestamp",
+        "first_date",
+    ]
+    symbols = longs_filtered.symbol.values
+    longs_filtered = longs_filtered[columns_to_print]
+    print(longs_filtered)
+    if args.user is not None:
+        generate_hjson_config(args.user, TWE_limit_long, long_enabled, symbols)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
