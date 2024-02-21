@@ -3,8 +3,6 @@ import os
 if "NOJIT" not in os.environ:
     os.environ["NOJIT"] = "true"
 
-
-import logging
 import traceback
 import argparse
 import asyncio
@@ -39,6 +37,15 @@ from pure_funcs import (
     multi_replace,
     shorten_custom_id,
     determine_side_from_order_tuple,
+    str2bool,
+)
+
+import logging
+
+logging.basicConfig(
+    format="%(asctime)s %(levelname)-8s %(message)s",
+    level=logging.INFO,
+    datefmt="%Y-%m-%dT%H:%M:%S",
 )
 
 
@@ -85,11 +92,6 @@ class Passivbot:
         self.recent_fill = False
         self.execution_delay_millis = max(3000.0, self.config["execution_delay_seconds"] * 1000)
         self.force_update_age_millis = 60 * 1000  # force update once a minute
-        logging.basicConfig(
-            format="%(asctime)s %(levelname)-8s %(message)s",
-            level=logging.INFO,
-            datefmt="%Y-%m-%dT%H:%M:%S",
-        )
 
     async def init_bot(self):
         max_len_symbol = max([len(s) for s in self.symbols])
@@ -1184,12 +1186,70 @@ class Passivbot:
 async def main():
     parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
     parser.add_argument("hjson_config_path", type=str, help="path to hjson passivbot meta config")
+    parser.add_argument(
+        "-s",
+        "--symbols",
+        type=str,
+        required=False,
+        dest="symbols",
+        default=None,
+        help="specify symbols, comma separated (SYM1USDT,SYM2USDT,...), overriding symbols from live hjson config.  ",
+    )
+    parser.add_argument(
+        "-le",
+        "--long_enabled",
+        "--long-enabled",
+        type=str2bool,
+        required=False,
+        dest="long_enabled",
+        default=None,
+        help="specify long_enabled (y/n or t/f), overriding value from live hjson config",
+    )
+    parser.add_argument(
+        "-se",
+        "--short_enabled",
+        "--short-enabled",
+        type=str2bool,
+        required=False,
+        dest="short_enabled",
+        default=None,
+        help="specify short_enabled (y/n or t/f), overriding value from live hjson config",
+    )
+    parser.add_argument(
+        "-tl",
+        "--total_wallet_exposure_long",
+        "--total-wallet-exposure-long",
+        type=float,
+        required=False,
+        dest="TWE_long",
+        default=None,
+        help="specify total_wallet_exposure_long, overriding value from live hjson config",
+    )
+    parser.add_argument(
+        "-ts",
+        "--total_wallet_exposure_short",
+        "--total-wallet-exposure-short",
+        type=float,
+        required=False,
+        dest="TWE_short",
+        default=None,
+        help="specify total_wallet_exposure_short, overriding value from live hjson config",
+    )
     max_n_restarts_per_day = 5
     cooldown_secs = 60
     restarts = []
     while True:
         args = parser.parse_args()
         config = hjson.load(open(args.hjson_config_path))
+        for key in ["symbols", "long_enabled", "short_enabled", "TWE_long", "TWE_short"]:
+            if getattr(args, key) is not None:
+                if key == "symbols":
+                    old_value = sorted(set(config["symbols"]))
+                    new_value = sorted(set(args.symbols.split(",")))
+                else:
+                    old_value = config[key]
+                    new_value = getattr(args, key)
+                logging.info(f"changing {key}: {old_value} -> {new_value}")
         user_info = load_user_info(config["user"])
         if user_info["exchange"] == "bybit":
             from exchanges_multi.bybit import BybitBot
