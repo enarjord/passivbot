@@ -1186,62 +1186,38 @@ class Passivbot:
 async def main():
     parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
     parser.add_argument("hjson_config_path", type=str, help="path to hjson passivbot meta config")
-    parser.add_argument(
-        "-s",
-        "--symbols",
-        type=str,
-        required=False,
-        dest="symbols",
-        default=None,
-        help="specify symbols, comma separated (SYM1USDT,SYM2USDT,...), overriding symbols from live hjson config.  ",
-    )
-    parser.add_argument(
-        "-le",
-        "--long_enabled",
-        "--long-enabled",
-        type=str2bool,
-        required=False,
-        dest="long_enabled",
-        default=None,
-        help="specify long_enabled (y/n or t/f), overriding value from live hjson config",
-    )
-    parser.add_argument(
-        "-se",
-        "--short_enabled",
-        "--short-enabled",
-        type=str2bool,
-        required=False,
-        dest="short_enabled",
-        default=None,
-        help="specify short_enabled (y/n or t/f), overriding value from live hjson config",
-    )
-    parser.add_argument(
-        "-tl",
-        "--total_wallet_exposure_long",
-        "--total-wallet-exposure-long",
-        type=float,
-        required=False,
-        dest="TWE_long",
-        default=None,
-        help="specify total_wallet_exposure_long, overriding value from live hjson config",
-    )
-    parser.add_argument(
-        "-ts",
-        "--total_wallet_exposure_short",
-        "--total-wallet-exposure-short",
-        type=float,
-        required=False,
-        dest="TWE_short",
-        default=None,
-        help="specify total_wallet_exposure_short, overriding value from live hjson config",
-    )
+    parser_items = [
+        ("s", "symbols", "symbols", str, ", comma separated (SYM1USDT,SYM2USDT,...)"),
+        ("le", "long_enabled", "long_enabled", str2bool, " (y/n or t/f)"),
+        ("se", "short_enabled", "short_enabled", str2bool, " (y/n or t/f)"),
+        ("tl", "total_wallet_exposure_long", "TWE_long", float, ""),
+        ("ts", "total_wallet_exposure_short", "TWE_short", float, ""),
+        ("u", "user", "user", str, ""),
+        ("lap", "loss_allowance_pct", "loss_allowance_pct", float, " (set to 0.0 to disable)"),
+        ("pml", "pnls_max_lookback_days", "pnls_max_lookback_days", float, ""),
+        ("st", "stuck_threshold", "stuck_threshold", float, ""),
+        ("ucp", "unstuck_close_pct", "unstuck_close_pct", float, ""),
+        ("eds", "execution_delay_seconds", "execution_delay_seconds", float, ""),
+        ("lcd", "live_configs_dir", "live_configs_dir", str, ""),
+        ("dcp", "default_config_path", "default_config_path", str, ""),
+        ("ag", "auto_gs", "auto_gs", str2bool, " enabled (y/n or t/f)"),
+    ]
+    for k0, k1, d, t, h in parser_items:
+        parser.add_argument(
+            *[f"-{k0}", f"--{k1}"] + ([f"--{k1.replace('_', '-')}"] if "_" in k1 else []),
+            type=t,
+            required=False,
+            dest=d,
+            default=None,
+            help=f"specify {k1}{h}, overriding value from live hjson config.",
+        )
     max_n_restarts_per_day = 5
     cooldown_secs = 60
     restarts = []
     while True:
         args = parser.parse_args()
         config = hjson.load(open(args.hjson_config_path))
-        for key in ["symbols", "long_enabled", "short_enabled", "TWE_long", "TWE_short"]:
+        for key in [x[2] for x in parser_items]:
             if getattr(args, key) is not None:
                 if key == "symbols":
                     old_value = sorted(set(config["symbols"]))
@@ -1250,6 +1226,7 @@ async def main():
                     old_value = config[key]
                     new_value = getattr(args, key)
                 logging.info(f"changing {key}: {old_value} -> {new_value}")
+                config[key] = new_value
         user_info = load_user_info(config["user"])
         if user_info["exchange"] == "bybit":
             from exchanges_multi.bybit import BybitBot
