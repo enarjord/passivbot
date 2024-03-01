@@ -103,7 +103,7 @@ def prepare_backtest_config(args) -> dict:
         f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_"
         f"{config['end_date'].replace(' ', '').replace(':', '').replace('.', '')}"
     )
-    if config["exchange"] in ["okx", "kucoin", "mexc"]:
+    if config["exchange"] in ["okx", "kucoin"]:
         config["ohlcv"] = True
     elif hasattr(args, "ohlcv"):
         if args.ohlcv is None:
@@ -337,17 +337,10 @@ async def fetch_market_specific_settings_old(config: dict):
         settings_from_exchange["maker_fee"] = 0.0002
         settings_from_exchange["taker_fee"] = 0.0005
         settings_from_exchange["exchange"] = "okx"
-    elif exchange == "mexc":
-        if "spot" in config["market_type"]:
-            raise Exception("spot not implemented on mexc")
-        bot = await create_mexc_bot(tmp_live_settings)
-        settings_from_exchange["maker_fee"] = 0.0002
-        settings_from_exchange["taker_fee"] = 0.0005
-        settings_from_exchange["exchange"] = "mexc"
     elif exchange == "bingx":
         if "spot" in config["market_type"]:
             raise Exception("spot not implemented on bingx")
-        bot = await create_mexc_bot(tmp_live_settings)
+        bot = await create_bingx_bot(tmp_live_settings)
         settings_from_exchange["maker_fee"] = 0.0002
         settings_from_exchange["taker_fee"] = 0.0005
         settings_from_exchange["exchange"] = "bingx"
@@ -427,14 +420,6 @@ async def create_kucoin_bot(config: dict):
     from exchanges.kucoin import KuCoinBot
 
     bot = KuCoinBot(config)
-    await bot._init()
-    return bot
-
-
-async def create_mexc_bot(config: dict):
-    from exchanges.mexc import MEXCBot
-
-    bot = MEXCBot(config)
     await bot._init()
     return bot
 
