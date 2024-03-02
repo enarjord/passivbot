@@ -24,7 +24,8 @@ The strategy is integrated -- the bot only needs a predefined configuration to r
 ## Controlling the bot
 
 Passivbot is controlled via terminal commands.  
-There is an integrated manager for controlling multiple bots (see docs/manager.md).  
+To let Passivbot run on multiple markets simulatenously, use passivbot_multi (see docs/passivbot_multi.md)  
+There is also an integrated manager for controlling multiple single symbol bots (see docs/manager.md).  
 There is also a script, forager.py, which uses tmux to manage multiple bot instances (see docs/forager.md).  
 See also https://github.com/msei99/pbgui/ for a web based passivbot GUI.  
 
@@ -51,8 +52,12 @@ See also https://www.futuresboard.xyz/guides.html
 
 [![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/passivbot_futures)
 
-## Referrals and Tip Jar
+## Third Party Links, Referrals and Tip Jar
 
+**Passivbot Manager Service:**  
+www.passivbotmanager.com  
+
+**Referrals:**  
 https://accounts.binance.me/en/register?ref=TII4B07C  
 https://partner.bybit.com/b/passivbot  
 https://partner.bitget.com/bg/Y8FU1W  
@@ -60,8 +65,10 @@ https://www.okx.com/join/PASSIVBOT  (20% rebate)
 https://www.kucoin.com/r/rf/QBSFZ5HT  
 https://bingx.com/invite/DFONXA  
 
+**BuyMeACoffee:**  
 https://www.buymeacoffee.com/enarjord  
 
+**Donations:**  
 Tether USD (USDT):  
 - USDT Solana:  
 9hUCHBQA261PU6rUSbwgMoxn8nrdcXPAYgbASRgA8dtm  
