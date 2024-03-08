@@ -41,7 +41,7 @@ logging.config.dictConfig({"version": 1, "disable_existing_loggers": True})
 
 
 class ParticleSwarmOptimization:
-    def __init__(self, config: dict, backtest_wrap):
+    def __init__(self, config: dict, backtest_wrap, pool=None):
         self.backtest_wrap = backtest_wrap
         self.config = config
         self.do_long = config["long"]["enabled"]
@@ -53,7 +53,7 @@ class ParticleSwarmOptimization:
         self.starting_configs = config["starting_configs"]
         self.iters = config["iters"]
         self.n_cpus = config["n_cpus"]
-        self.pool = Pool(processes=config["n_cpus"])
+        self.pool = Pool(processes=config["n_cpus"]) if pool is None else pool
         self.long_bounds = sort_dict_keys(config[f"bounds_{self.config['passivbot_mode']}"]["long"])
         self.short_bounds = sort_dict_keys(config[f"bounds_{self.config['passivbot_mode']}"]["short"])
         self.symbols = config["symbols"]

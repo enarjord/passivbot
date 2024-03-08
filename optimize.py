@@ -328,6 +328,7 @@ async def main(algorithm=None):
     args = parser.parse_args()
     config = prepare_optimize_config(args)
     args = parser.parse_args()
+    pool = Pool(processes=config["n_cpus"])
     if algorithm is not None:
         args.algorithm = algorithm
     if args.serial:
@@ -336,8 +337,10 @@ async def main(algorithm=None):
         for symbol in all_symbols:
             args.symbols = symbol
             config = prepare_optimize_config(args)
+            config["pool"] = pool
             await run_opt(args, config)
     else:
+        config["pool"] = pool
         await run_opt(args, config)
 
 
@@ -502,12 +505,14 @@ async def run_opt(args, config):
         if config["algorithm"] == "particle_swarm_optimization":
             from particle_swarm_optimization import ParticleSwarmOptimization
 
-            particle_swarm_optimization = ParticleSwarmOptimization(config, backtest_wrap)
+            particle_swarm_optimization = ParticleSwarmOptimization(
+                config, backtest_wrap, config["pool"]
+            )
             particle_swarm_optimization.run()
         elif config["algorithm"] == "harmony_search":
             from harmony_search import HarmonySearch
 
-            harmony_search = HarmonySearch(config, backtest_wrap)
+            harmony_search = HarmonySearch(config, backtest_wrap, config["pool"])
             harmony_search.run()
     finally:
         if "shared_memories" in config:
