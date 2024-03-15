@@ -24,6 +24,101 @@ from backtest_multi import backtest_multi, prep_config_multi, prep_hlcs_mss_conf
 from njit_multisymbol import backtest_multisymbol_recursive_grid
 
 
+def calc_pa_dist_mean(stats):
+    elms = []
+    for x in stats:
+        for lp, sp, p in zip(x[1], x[2], x[3]):
+            if lp[1]:
+                elms.append(abs(lp[1] - p) / p)
+            if sp[1]:
+                elms.append(abs(sp[1] - p) / p)
+    return (sum(elms) / len(elms)) if elms else 1.0
+
+
+def analyze_fills_opti(fills, stats, config):
+    starting_balance = config["starting_balance"]
+    stats_eqs = [(x[0], x[5]) for x in stats]
+    fills_eqs = [(x[0], x[5]) for x in fills]
+
+    all_eqs = pd.DataFrame(stats_eqs + fills_eqs).set_index(0).sort_index()[1]
+    drawdowns_all = calc_drawdowns(all_eqs)
+    worst_drawdown = abs(drawdowns_all.min())
+
+    eq_threshold = starting_balance * 1e-4
+    stats_eqs_df = pd.DataFrame(stats_eqs).set_index(0)
+    eqs_daily = stats_eqs_df.groupby(stats_eqs_df.index // 1440).last()[1]
+    n_days = len(eqs_daily)
+    drawdowns_daily = calc_drawdowns(eqs_daily)
+    drawdowns_daily_mean = abs(drawdowns_daily.mean())
+    eqs_daily_pct_change = eqs_daily.pct_change()
+    if eqs_daily.iloc[-1] <= eq_threshold:
+        # ensure adg is negative if final equity is low
+        adg = (max(eq_threshold, eqs_daily.iloc[-1]) / starting_balance) ** (1.0 / n_days) - 1.0
+        adg_weighted = adg
+    else:
+        # weigh adg to prefer higher adg closer to present
+        adgs = [
+            eqs_daily_pct_change.iloc[int(len(eqs_daily_pct_change) * (1 - 1 / i)) :].mean()
+            for i in range(1, 11)
+        ]
+        adg = adgs[0]
+        adg_weighted = np.mean(adgs)
+    eqs_daily_pct_change_std = eqs_daily_pct_change.std()
+    sharpe_ratio = adg / eqs_daily_pct_change_std if eqs_daily_pct_change_std else 0.0
+
+    price_action_distance_mean = calc_pa_dist_mean(stats)
+
+    loss_sum_long, profit_sum_long = 0.0, 0.0
+    loss_sum_short, profit_sum_short = 0.0, 0.0
+    for x in fills:
+        if "long" in x[10]:
+            if x[2] > 0.0:
+                profit_sum_long += x[2]
+            elif x[2] < 0.0:
+                loss_sum_long += x[2]
+        elif "short" in x[10]:
+            if x[2] > 0.0:
+                profit_sum_short += x[2]
+            elif x[2] < 0.0:
+                loss_sum_short += x[2]
+    loss_profit_ratio_long = abs(loss_sum_long) / profit_sum_long if profit_sum_long > 0.0 else 1.0
+    loss_profit_ratio_short = (
+        abs(loss_sum_short) / profit_sum_short if profit_sum_short > 0.0 else 1.0
+    )
+    loss_profit_ratio = (
+        abs(loss_sum_long + loss_sum_short) / (profit_sum_long + profit_sum_short)
+        if (profit_sum_long + profit_sum_short) > 0.0
+        else 1.0
+    )
+    pnl_long = profit_sum_long + loss_sum_long
+    pnl_short = profit_sum_short + loss_sum_short
+    pnl_sum = pnl_long + pnl_short
+    pnl_ratio_long_short = pnl_long / pnl_sum if pnl_sum else 0.0
+
+    worst_drawdown_mod = (
+        max(config["worst_drawdown_lower_bound"], worst_drawdown)
+        - config["worst_drawdown_lower_bound"]
+    ) * 10**1
+    return {
+        "w_adg_weighted": worst_drawdown_mod - adg_weighted,
+        "w_price_action_distance_mean": worst_drawdown_mod + price_action_distance_mean,
+        "w_loss_profit_ratio": worst_drawdown_mod + loss_profit_ratio,
+        "w_sharpe_ratio": worst_drawdown_mod - sharpe_ratio,
+        "w_drawdowns_daily_mean": worst_drawdown_mod + drawdowns_daily_mean,
+        "worst_drawdown": worst_drawdown,
+        "n_days": n_days,
+        "drawdowns_daily_mean": drawdowns_daily_mean,
+        "price_action_distance_mean": price_action_distance_mean,
+        "adg_weighted": adg_weighted,
+        "adg": adg,
+        "sharpe_ratio": sharpe_ratio,
+        "loss_profit_ratio": loss_profit_ratio,
+        "loss_profit_ratio_long": loss_profit_ratio_long,
+        "loss_profit_ratio_short": loss_profit_ratio_short,
+        "pnl_ratio_long_short": pnl_ratio_long_short,
+    }
+
+
 class Evaluator:
     def __init__(self, hlcs, config):
         self.hlcs = hlcs
@@ -47,11 +142,13 @@ class Evaluator:
                 "do_shorts",
                 "c_mults",
                 "symbols",
+                "exchange",
                 "qty_steps",
                 "price_steps",
                 "min_costs",
                 "min_qtys",
                 "worst_drawdown_lower_bound",
+                "selected_metrics",
             ]
         }
 
@@ -74,55 +171,25 @@ class Evaluator:
         )
         res = backtest_multi(self.shared_hlcs_np, config_)
         fills, stats = res
-        stats_eqs = [(x[0], x[5]) for x in stats]
-        fills_eqs = [(x[0], x[5]) for x in fills]
-
-        all_eqs = pd.DataFrame(stats_eqs + fills_eqs).set_index(0).sort_index()[1]
-        drawdowns_all = calc_drawdowns(all_eqs)
-        worst_drawdown = abs(drawdowns_all.min())
-
-        eq_threshold = config_["starting_balance"] * 1e-4
-        stats_eqs_df = pd.DataFrame(stats_eqs).set_index(0)
-        eqs_daily = stats_eqs_df.groupby(stats_eqs_df.index // 1440).last()[1]
-        drawdowns_daily = calc_drawdowns(eqs_daily)
-        drawdowns_daily_mean = abs(drawdowns_daily.mean())
-        eqs_daily_pct_change = eqs_daily.pct_change()
-        if eqs_daily.iloc[-1] <= eq_threshold:
-            # ensure adg is negative if final equity is low
-            adg = (max(eq_threshold, eqs_daily.iloc[-1]) / eqs_daily.iloc[0]) ** (
-                1 / len(eqs_daily)
-            ) - 1
-        else:
-            adg = eqs_daily_pct_change.mean()
-        sharpe_ratio = adg / eqs_daily_pct_change.std()
-        # daily_min_drawdowns = drawdowns.groupby(drawdowns.index // 1440).min()
-        # mean_of_10_worst_drawdowns_daily = abs(daily_min_drawdowns.sort_values().iloc[:10].mean())
-
-        score = max(config_["worst_drawdown_lower_bound"], worst_drawdown) * 10**3 - adg
+        analysis = analyze_fills_opti(fills, stats, config_)
 
         to_dump = {
-            key: self.config[key]
-            for key in [
-                "symbols",
-                "start_date",
-                "end_date",
-                "starting_balance",
-                "long_enabled",
-                "short_enabled",
-            ]
+            "analysis": analysis,
+            "live_config": decode_individual(individual),
+            "args": {
+                "symbols": self.config["symbols"],
+                "start_date": self.config["start_date"],
+                "end_date": self.config["end_date"],
+                "starting_balance": self.config["starting_balance"],
+                "exchange": self.config["exchange"],
+                "long_enabled": self.config["long_enabled"],
+                "short_enabled": self.config["short_enabled"],
+                "worst_drawdown_lower_bound": self.config["worst_drawdown_lower_bound"],
+            },
         }
-        to_dump.update(
-            {
-                "live_config": decode_individual(individual),
-                "adg": adg,
-                "worst_drawdown": worst_drawdown,
-                "drawdowns_daily_mean": drawdowns_daily_mean,
-                "sharpe_ratio": sharpe_ratio,
-            }
-        )
         with open(self.results_cache_fname, "a") as f:
             f.write(json.dumps(denumpyize(to_dump)) + "\n")
-        return score, sharpe_ratio
+        return tuple([analysis[k] for k in self.config["selected_metrics"]])
 
     def cleanup(self):
         # Close and unlink the shared memory
@@ -264,6 +331,16 @@ async def main():
         default="configs/optimize/multi.hjson",
         help="optimize config hjson file",
     )
+    parser.add_argument(
+        "-c",
+        "--n_cpus",
+        "--n-cpus",
+        type=int,
+        required=False,
+        dest="n_cpus",
+        default=3,
+        help="number of cpus for multiprocessing",
+    )
     config = prep_config_multi(parser)
     """
     parser.add_argument(
@@ -295,20 +372,20 @@ async def main():
     config["maker_fee"] = next(iter(mss.values()))["maker"]
     config["symbols"] = tuple(sorted(config["symbols"]))
 
+    config["selected_metrics"] = ("w_adg_weighted", "w_sharpe_ratio")
+
     try:
         evaluator = Evaluator(hlcs, config)
 
         NUMBER_OF_VARIABLES = len(config["bounds"])
-        min_diff = 1e-12  # avoid bound_low == bound_up
         BOUNDS = [
-            (x[0], x[1] + (min_diff if x[0] == x[1] else 0.0)) for x in config["bounds"].values()
+            (x[0] * (1 - 1e-12), x[1] * (1 + 1e-12)) if x[0] == x[1] else (x[0], x[1])
+            for x in config["bounds"].values()
         ]
         n_cpus = max(1, config["n_cpus"])  # Specify the number of CPUs to use
 
         # Define the problem as a multi-objective optimization
-        # Minimize score; minimize sharpe_ratio
-        # score = max(worst_drawdown, worst_drawdown_lower_bound) * 10 ** 3 - adg
-        weights = (-1.0, 1.0)
+        weights = (-1.0, -1.0)  # minimize
         creator.create("FitnessMulti", base.Fitness, weights=weights)
         creator.create("Individual", list, fitness=creator.FitnessMulti)
 
@@ -366,7 +443,7 @@ async def main():
             lambda_=200,
             cxpb=0.7,
             mutpb=0.3,
-            ngen=40,
+            ngen=max(1, int(config["iters"] / 200)),
             stats=stats,
             halloffame=hof,
             verbose=True,
