@@ -466,11 +466,11 @@ def backtest_multisymbol_recursive_grid(
     any_do_long, any_do_short = False, False
     idxs_long, idxs_short = [], []
     for i in range(len(do_longs)):
-        if do_longs[i]:
+        if do_longs[i] and ll[i][16] > 0.0:  # long enabled and long WE_limit > 0.0
             idxs_long.append(i)
             any_do_long = True
     for i in range(len(do_shorts)):
-        if do_shorts[i]:
+        if do_shorts[i] and ls[i][16] > 0.0:
             idxs_short.append(i)
             any_do_short = True
 
@@ -484,26 +484,6 @@ def backtest_multisymbol_recursive_grid(
     any_stuck = False
     pnl_cumsum_running = 0.0
     pnl_cumsum_max = 0.0
-
-    if len(symbols) == 1:
-        pass
-        # TODO
-        """
-        return backtest_single_symbol_recursive_grid(
-            hlcs[0],
-            starting_balance,
-            maker_fee,
-            do_longs[0],
-            do_shorts[0],
-            c_mults[0],
-            symbols[0],
-            qty_steps[0],
-            price_steps[0],
-            min_costs[0],
-            min_qtys[0],
-            live_configs[0],
-        )
-        """
 
     for k in range(1, len(hlcs[0])):
         any_fill = False
@@ -553,7 +533,11 @@ def backtest_multisymbol_recursive_grid(
                 wallet_exposure = (
                     qty_to_cost(poss_long[i][0], poss_long[i][1], inverse, c_mults[i]) / balance
                 )
-                if wallet_exposure / ll[i][16] > stuck_threshold and hlcs[i][k][2] < poss_long[i][1]:
+                if (
+                    loss_allowance_pct > 0.0
+                    and wallet_exposure / ll[i][16] > stuck_threshold
+                    and hlcs[i][k][2] < poss_long[i][1]
+                ):
                     # is stuck and not in profit
                     any_stuck = True
                     stuck_positions_long[i] = 1.0
@@ -606,7 +590,11 @@ def backtest_multisymbol_recursive_grid(
                 wallet_exposure = (
                     qty_to_cost(poss_short[i][0], poss_short[i][1], inverse, c_mults[i]) / balance
                 )
-                if wallet_exposure / ls[i][16] > stuck_threshold and hlcs[i][k][2] > poss_short[i][1]:
+                if (
+                    loss_allowance_pct > 0.0
+                    and wallet_exposure / ls[i][16] > stuck_threshold
+                    and hlcs[i][k][2] > poss_short[i][1]
+                ):
                     # is stuck and not in profit
                     any_stuck = True
                     stuck_positions_short[i] = 1.0
@@ -817,234 +805,6 @@ def backtest_multisymbol_recursive_grid(
                 poss_long.copy(),
                 poss_short.copy(),
                 hlcs[:, k, 2],
-                balance,
-                equity,
-            )
-        )
-    return fills, stats
-
-
-@njit
-def backtest_single_symbol_recursive_grid(
-    hlc,
-    starting_balance,
-    maker_fee,
-    do_long,
-    do_short,
-    c_mult,
-    symbol,
-    qty_step,
-    price_step,
-    min_cost,
-    min_qty,
-    live_config,
-):
-    """
-    live config tuple:
-    0  auto_unstuck_delay_minutes
-    1  auto_unstuck_ema_dist
-    2  auto_unstuck_qty_pct
-    3  auto_unstuck_wallet_exposure_threshold
-    4  backwards_tp
-    5  ddown_factor
-    6  ema_span_0
-    7  ema_span_1
-    8  enabled
-    9  initial_eprice_ema_dist
-    10 initial_qty_pct
-    11 markup_range
-    12 min_markup
-    13 n_close_orders
-    14 rentry_pprice_dist
-    15 rentry_pprice_dist_wallet_exposure_weighting
-    16 wallet_exposure_limit
-    """
-
-    inverse = False
-
-    ll = [x[0] for x in live_configs]  # live configs long
-    ls = [x[1] for x in live_configs]  # live configs short
-
-    # disable auto unstuck
-    ll = [0.0] * 4 + ll[4:]
-    ls = [0.0] * 4 + ls[4:]
-
-    balance = starting_balance
-    pos_long = (0.0, 0.0)  # (psize: float, pprice: float)
-    pos_short = (0.0, 0.0)  # (psize: float, pprice: float)
-    fills = []
-    stats = [
-        (
-            0,
-            (pos_long.copy(),),
-            (pos_short.copy(),),
-            hlc[0, 2],
-            balance,
-            balance,
-        )
-    ]
-    entry_long = (0.0, 0.0, "")  # (qty: float, price: float, type: str)
-    entry_short = (0.0, 0.0, "")
-    closes_long = [(0.0, 0.0, "")]  # [(qty: float, price: float, type: str), (), ...]
-    closes_short = [(0.0, 0.0, "")]  # [(qty: float, price: float, type: str), (), ...]
-
-    ema_spans_long = np.array(sorted((ll[6], (ll[6] * ll[7]) ** 0.5, ll[7])))
-    ema_spans_short = np.array(sorted((ls[6], (ls[6] * ls[7]) ** 0.5, ls[7])))
-    ema_spans_long = np.where(x < 1.0, 1.0, x)
-    ema_spans_short = np.where(x < 1.0, 1.0, x)
-
-    emas_long = np.repeat(hlc[0, 2], 3)
-    emas_short = np.repeat(hlc[0, 2], 3)
-
-    alphas_long = 2.0 / (ema_spans_long + 1.0)
-    alphas__long = 1.0 - alphas_long
-    alphas_short = 2.0 / (ema_spans_short + 1.0)
-    alphas__short = 1.0 - alphas_short
-
-    bankrupt = False
-
-    for k in range(1, len(hlcs[0])):
-        any_fill = False
-
-        # check for fills long
-        emas_long = calc_ema(alphas_long, alphas__long, emas_long, hlc[k][2])
-        if (entry_long[0] > 0.0 and hlc[k][1] < entry_long[1]) or (
-            pos_long[0] > 0.0 and closes_long[0][0] != 0.0 and hlc[k][0] > closes_long[0][1]
-        ):
-            # there were fills
-            new_fills, new_pos_long, new_balance, new_equity = calc_fills(
-                0,
-                k,
-                (pos_long,),
-                (pos_short,),
-                0,
-                symbol,
-                balance,
-                entry_long,
-                closes_long,
-                hlc[k],
-                inverse,
-                qty_step,
-                price_step,
-                min_qty,
-                min_cost,
-                (c_mult,),
-                ll,
-                maker_fee,
-            )
-            if len(new_fills) > 0:
-                any_fill = True
-            if new_equity / new_balance < 0.06:
-                bankrupt = True
-            fills.extend(new_fills)
-            pos_long = new_pos_long
-            balance = new_balance
-
-        # check for fills short
-        emas_short = calc_ema(alphas_short, alphas__short, emas_short, hlc[k][2])
-        if (entry_short[0] != 0.0 and hlc[k][0] > entry_short[1]) or (
-            pos_short[0] != 0.0 and closes_short[0][0] != 0.0 and hlc[k][1] < closes_short[0][1]
-        ):
-            # there were fills
-            new_fills, new_pos_short, new_balance, new_equity = calc_fills(
-                1,
-                k,
-                (pos_long,),
-                (pos_short,),
-                0,
-                symbol,
-                balance,
-                entry_short,
-                closes_short,
-                hlc[k],
-                inverse,
-                qty_step,
-                price_step,
-                min_qty,
-                min_cost,
-                (c_mult,),
-                ls,
-                maker_fee,
-            )
-            if len(new_fills) > 0:
-                any_fill = True
-            if new_equity / new_balance < 0.1:
-                bankrupt = True
-            fills.extend(new_fills)
-            pos_short = new_pos_short
-            balance = new_balance
-
-        # check if open orders long need to be updated
-        if any_fill or pos_long[0] == 0.0:
-            # calc orders if any fill or if psize is zero or if stuck
-            entry_long, closes_long = get_open_orders_long(
-                hlc[k][2],
-                balance,
-                pos_long,
-                emas_long,
-                (0.0, 0.0, ""),
-                inverse,
-                qty_step,
-                price_step,
-                min_qty,
-                min_cost,
-                c_mult,
-                ll,
-            )
-
-        # check if open orders short need to be updated
-        if any_fill or pos_short[0] == 0.0:
-            # calc orders if any fill or if psize is zero or if stuck
-            entry_short, closes_short = get_open_orders_short(
-                hlc[k][2],
-                balance,
-                pos_short,
-                emas_short,
-                (0.0, 0.0, ""),
-                inverse,
-                qty_step,
-                price_step,
-                min_qty,
-                min_cost,
-                c_mult,
-                ls,
-            )
-
-        if k % 60 == 0:
-            # update stats hourly
-            equity = balance + calc_pnl_sum((pos_long,), (pos_short,), hlc[k, 2], (c_mult,))
-            stats.append(
-                (
-                    k,
-                    (pos_long,),
-                    (pos_short,),
-                    hlc[k, 2],
-                    balance,
-                    equity,
-                )
-            )
-            if equity <= 0.0 or bankrupt:
-                # bankrupt
-                break
-    equity = balance + calc_pnl_sum((pos_long,), (pos_short,), hlc[k, 2], (c_mult,))
-    if bankrupt:
-        stats.append(
-            (
-                stats[-1][0] + 60,
-                (pos_long,),
-                (pos_short,),
-                hlc[k, 2],
-                balance,
-                min(0.0, equity),
-            )
-        )
-    elif stats[-1][0] != k:
-        stats.append(
-            (
-                stats[-1][0] + 60,
-                (pos_long,),
-                (pos_short,),
-                hlc[k, 2],
                 balance,
                 equity,
             )
