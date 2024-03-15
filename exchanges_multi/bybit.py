@@ -28,8 +28,8 @@ class BybitBot(Passivbot):
                 "headers": {"referer": self.broker_code} if self.broker_code else {},
             }
         )
-        self.max_n_cancellations_per_batch = 20
-        self.max_n_creations_per_batch = 12
+        self.max_n_cancellations_per_batch = 10
+        self.max_n_creations_per_batch = 6
 
     async def init_bot(self):
         await self.init_symbols()
