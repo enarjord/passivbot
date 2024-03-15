@@ -12,7 +12,6 @@ from downloader import prepare_multsymbol_data
 from procedures import (
     load_live_config,
     utc_ms,
-    load_user_info,
     make_get_filepath,
     fetch_market_specific_settings_multi,
 )
@@ -61,74 +60,94 @@ def backtest_multi(hlcs, config):
 
 
 def prep_config_multi(parser):
-    parser.add_argument(
-        "-s",
-        "--symbols",
-        type=str,
-        required=False,
-        dest="symbols",
-        default=None,
-        help="specify symbols, comma separated, overriding symbols from backtest config.  ",
-    )
-    parser.add_argument(
-        "-u",
-        "--user",
-        type=str,
-        required=False,
-        dest="user",
-        default=None,
-        help="specify user, a.k.a. account_name, overriding user from backtest config",
-    )
-    parser.add_argument(
-        "-sd",
-        "--start_date",
-        type=str,
-        required=False,
-        dest="start_date",
-        default=None,
-        help="specify start date, overriding value from hjson config",
-    )
-    parser.add_argument(
-        "-ed",
-        "--end_date",
-        type=str,
-        required=False,
-        dest="end_date",
-        default=None,
-        help="specify end date, overriding value from hjson config",
-    )
-    parser.add_argument(
-        "-sb",
-        "--starting_balance",
-        "--starting-balance",
-        type=float,
-        required=False,
-        dest="starting_balance",
-        default=None,
-        help="specify starting_balance, overriding value from hjson config",
-    )
-    parser.add_argument(
-        "-le",
-        "--long_enabled",
-        "--long-enabled",
-        type=str2bool,
-        required=False,
-        dest="long_enabled",
-        default=None,
-        help="specify long_enabled (y/n or t/f), overriding value from hjson config",
-    )
-    parser.add_argument(
-        "-se",
-        "--short_enabled",
-        "--short-enabled",
-        type=str2bool,
-        required=False,
-        dest="short_enabled",
-        default=None,
-        help="specify short_enabled (y/n or t/f), overriding value from hjson config",
-    )
+    parser_items = [
+        ("s", "symbols", "symbols", str, ", comma separated (SYM1USDT,SYM2USDT,...)"),
+        ("e", "exchange", "exchange", str, ""),
+        ("sd", "start_date", "start_date", str, ""),
+        (
+            "ed",
+            "end_date",
+            "end_date",
+            str,
+            ", if end date is 'now', will use current date as end date",
+        ),
+        ("sb", "starting_balance", "starting_balance", float, ""),
+        ("le", "long_enabled", "long_enabled", str2bool, " (y/n or t/f)"),
+        ("se", "short_enabled", "short_enabled", str2bool, " (y/n or t/f)"),
+    ]
+    for k0, k1, d, t, h in parser_items:
+        parser.add_argument(
+            *[f"-{k0}", f"--{k1}"] + ([f"--{k1.replace('_', '-')}"] if "_" in k1 else []),
+            type=t,
+            required=False,
+            dest=d,
+            default=None,
+            help=f"specify {k1}{h}, overriding value from hjson config.",
+        )
     args = parser.parse_args()
     return args2config(args)
+
+
+def load_and_parse_config(path: str):
+    loaded = hjson.load(open(path))
+    if all([x in loaded for x in ["live_config", "args"]]):
+        # single live config type
+        formatted = {}
+        for k in [
+            "exchange",
+            "long_enabled",
+            "short_enabled",
+            "start_date",
+            "end_date",
+            "starting_balance",
+            "symbols",
+        ]:
+            formatted[k] = loaded["args"][k]
+        for k in [
+            "TWE_long",
+            "TWE_short",
+            "loss_allowance_pct",
+            "stuck_threshold",
+            "unstuck_close_pct",
+        ]:
+            formatted[k] = loaded["live_config"]["global"][k]
+
+        formatted["live_configs_dir"] = "configs/live/multisymbol/no_AU/"
+        formatted["default_config_path"] = "tmp/test.json"
+        formatted["base_dir"] = "backtests"
+        formatted["live_configs"] = {
+            symbol: {pside: loaded["live_config"][pside] for pside in ["long", "short"]}
+            for symbol in formatted["symbols"]
+        }
+
+    elif all(
+        [
+            x in loaded
+            for x in [
+                "exchange",
+                "loss_allowance_pct",
+                "stuck_threshold",
+                "unstuck_close_pct",
+                "TWE_long",
+                "TWE_short",
+                "long_enabled",
+                "short_enabled",
+                "start_date",
+                "end_date",
+                "starting_balance",
+                "symbols",
+                "live_configs_dir",
+                "default_config_path",
+                "base_dir",
+            ]
+        ]
+    ):
+        # hjson config type
+        formatted = loaded
+        formatted["live_configs"] = {}
+    else:
+        raise Exception("unknown config type")
+    return formatted
 
 
 def args2config(args):
@@ -136,13 +155,13 @@ def args2config(args):
     for key, value in vars(args).items():
         if "config_path" in key:
             logging.info(f"loading {value}")
-            config = hjson.load(open(value))
+            config = load_and_parse_config(value)
         elif key not in config:
             logging.info(f"setting {key}: {value}")
             config[key] = value
         elif getattr(args, key) is not None:
             if key == "symbols":
-                new_symbols = {s: "" for s in getattr(args, key).split(",")}
+                new_symbols = {s: "" for s in getattr(args, key).split(",") if s}
                 if new_symbols != config["symbols"]:
                     logging.info(f"new symbols: {new_symbols}")
                     config["symbols"] = new_symbols
@@ -153,7 +172,6 @@ def args2config(args):
     if isinstance(config["symbols"], list):
         config["symbols"] = {s: "" for s in config["symbols"]}
     config["symbols"] = OrderedDict(sorted(config["symbols"].items()))
-    config["exchange"] = load_user_info(config["user"])["exchange"]
     for key, default_val in [
         ("base_dir", "backtests"),
         ("starting_balance", 10000),
@@ -228,7 +246,7 @@ async def main():
         required=False,
         dest="backtest_config_path",
         default="configs/backtest/multi.hjson",
-        help="backtest config hjson file",
+        help="backtest config hjson file (default: configs/backtest.multi.hjson) or json config from results_multi_analysis/",
     )
     parser.add_argument(
         "-tl",
@@ -266,13 +284,16 @@ async def main():
         )
     else:
         live_configs_fnames = []
-    config["live_configs"] = {}
+    if "live_configs" not in config or not config["live_configs"]:
+        config["live_configs"] = {}
     all_args = {}
     max_len_symbol = max([len(s) for s in config["symbols"]])
 
     for symbol in config["symbols"]:
         args = parser.parse_args(config["symbols"][symbol].split())
         all_args[symbol] = args
+        if symbol in config["live_configs"]:
+            continue
         live_config_fname_l = [x for x in live_configs_fnames if symbol in x]
         live_configs_dir_fname = (
             None
