@@ -142,7 +142,32 @@ def load_and_parse_config(path: str):
             ]
         ]
     ):
-        # hjson config type
+        # hjson backtest config type
+        formatted = loaded
+        formatted["live_configs"] = {}
+    elif all(
+        [
+            x in loaded
+            for x in [
+                "exchange",
+                "start_date",
+                "end_date",
+                "symbols",
+                "base_dir",
+                "n_cpus",
+                "iters",
+                "starting_balance",
+                "market_type",
+                "worst_drawdown_lower_bound",
+                "long_enabled",
+                "short_enabled",
+                "backwards_tp_long",
+                "backwards_tp_short",
+                "bounds",
+            ]
+        ]
+    ):
+        # hjson optimize config type
         formatted = loaded
         formatted["live_configs"] = {}
     else:
