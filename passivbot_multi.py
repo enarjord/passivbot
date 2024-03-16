@@ -226,9 +226,7 @@ class Passivbot:
                     symbol_, [("/", ""), (":", ""), ("USDT", ""), ("BUSD", ""), ("USDC", "")]
                 )
                 symbol_reformatted = coin_extracted + "/USDT:USDT"
-                logging.info(
-                    f"symbol {symbol_} is wrongly formatted. Trying to reformat to {symbol_reformatted}"
-                )
+                logging.info(f"Trying to reformat symbol {symbol_} to {symbol_reformatted}")
                 symbol = symbol_reformatted
             if symbol not in self.markets_dict:
                 logging.info(f"{symbol} missing from {self.exchange}")
