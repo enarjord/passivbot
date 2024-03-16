@@ -92,6 +92,7 @@ class Passivbot:
         self.recent_fill = False
         self.execution_delay_millis = max(3000.0, self.config["execution_delay_seconds"] * 1000)
         self.force_update_age_millis = 60 * 1000  # force update once a minute
+        self.quote = "USDT"
 
     async def init_bot(self):
         max_len_symbol = max([len(s) for s in self.symbols])
@@ -181,7 +182,7 @@ class Passivbot:
         for mode in modes:
             for pside in ["long", "short"]:
                 syms_ = [
-                    s.replace("/USDT:USDT", "")
+                    s.replace(f"/{self.quote}:{self.quote}", "")
                     for s in self.symbols
                     if self.live_configs[s][pside]["mode"] == mode
                 ]
@@ -215,17 +216,17 @@ class Passivbot:
         return sorted(set([elm["symbol"] for elm in positions + open_orders]))
 
     async def init_symbols(self):
-        # require symbols to be formatted to ccxt standard COIN/USDT:USDT
+        # require symbols to be formatted to ccxt standard COIN/QUOTE:QUOTE
 
         self.markets_dict = await self.cca.load_markets()
         self.symbols = {}
         for symbol_ in sorted(set(self.config["symbols"])):
             symbol = symbol_
-            if not symbol.endswith("/USDT:USDT"):
+            if not symbol.endswith(f"/{self.quote}:{self.quote}"):
                 coin_extracted = multi_replace(
                     symbol_, [("/", ""), (":", ""), ("USDT", ""), ("BUSD", ""), ("USDC", "")]
                 )
-                symbol_reformatted = coin_extracted + "/USDT:USDT"
+                symbol_reformatted = coin_extracted + f"/{self.quote}:{self.quote}"
                 logging.info(f"Trying to reformat symbol {symbol_} to {symbol_reformatted}")
                 symbol = symbol_reformatted
             if symbol not in self.markets_dict:
@@ -244,7 +245,6 @@ class Passivbot:
                         if isinstance(self.config["symbols"], dict)
                         else ""
                     )
-        self.quote = "USDT"
         self.inverse = False
         self.symbol_ids = {
             symbol: self.markets_dict[symbol]["id"]
@@ -358,16 +358,29 @@ class Passivbot:
 
     def handle_balance_update(self, upd):
         try:
-            if self.balance != upd["USDT"]["total"]:
+            if self.balance != upd[self.quote]["total"]:
                 logging.info(
-                    f"balance changed: {self.balance} -> {upd['USDT']['total']} equity: {(upd['USDT']['total'] + self.calc_upnl_sum()):.4f} source: WS"
+                    f"balance changed: {self.balance} -> {upd[self.quote]['total']} equity: {(upd[self.quote]['total'] + self.calc_upnl_sum()):.4f} source: WS"
                 )
-            self.balance = max(upd["USDT"]["total"], 1e-12)
+            self.balance = max(upd[self.quote]["total"], 1e-12)
         except Exception as e:
             logging.error(f"error updating balance from websocket {upd} {e}")
             traceback.print_exc()
 
     def handle_ticker_update(self, upd):
+        if isinstance(upd, list):
+            for x in upd:
+                self.handle_ticker_update(x)
+            return
+        elif isinstance(upd, dict):
+            if len(upd) == 1:
+                sym = next(iter(upd))
+                if "symbol" in upd[sym] and sym == upd[sym]["symbol"]:
+                    self.handle_ticker_update(upd[sym])
+                    return
+        for key in ["bid", "ask", "last"]:
+            if key not in upd or upd[key] is None:
+                upd[key] = self.tickers[upd["symbol"]][key]
         self.upd_timestamps["tickers"][upd["symbol"]] = utc_ms()  # update timestamp
         if (
             upd["bid"] != self.tickers[upd["symbol"]]["bid"]
