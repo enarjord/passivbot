@@ -331,16 +331,20 @@ async def main():
         default="configs/optimize/multi.hjson",
         help="optimize config hjson file",
     )
-    parser.add_argument(
-        "-c",
-        "--n_cpus",
-        "--n-cpus",
-        type=int,
-        required=False,
-        dest="n_cpus",
-        default=3,
-        help="number of cpus for multiprocessing",
-    )
+    parser_items = [
+        ("c", "n_cpus", "n_cpus", int, ""),
+        ("i", "iters", "iters", int, ""),
+        ("wd", "worst_drawdown_lower_bound", "worst_drawdown_lower_bound", float, ""),
+    ]
+    for k0, k1, d, t, h in parser_items:
+        parser.add_argument(
+            *[f"-{k0}", f"--{k1}"] + ([f"--{k1.replace('_', '-')}"] if "_" in k1 else []),
+            type=t,
+            required=False,
+            dest=d,
+            default=None,
+            help=f"specify {k1}{h}, overriding value from hjson config.",
+        )
     config = prep_config_multi(parser)
     """
     parser.add_argument(
