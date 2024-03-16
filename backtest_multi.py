@@ -74,6 +74,7 @@ def prep_config_multi(parser):
         ("sb", "starting_balance", "starting_balance", float, ""),
         ("le", "long_enabled", "long_enabled", str2bool, " (y/n or t/f)"),
         ("se", "short_enabled", "short_enabled", str2bool, " (y/n or t/f)"),
+        ("bd", "base_dir", "base_dir", str, ""),
     ]
     for k0, k1, d, t, h in parser_items:
         parser.add_argument(
