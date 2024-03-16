@@ -94,9 +94,6 @@ class BybitBot(Passivbot):
                 if self.stop_websocket:
                     break
                 res = await self.ccp.watch_tickers(symbols)
-                for key in ["bid", "ask", "last"]:
-                    if res[key] is None:
-                        res[key] = self.tickers[res["symbol"]][key]
                 self.handle_ticker_update(res)
             except Exception as e:
                 print(f"exception watch_tickers {symbols}", e)
