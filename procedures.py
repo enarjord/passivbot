@@ -240,7 +240,7 @@ def load_user_info(user: str, api_keys_path="api-keys.json") -> dict:
         raise Exception(f"user {user} not found in {api_keys_path}")
     return {
         k: api_keys[user][k] if k in api_keys[user] else ""
-        for k in ["exchange", "key", "secret", "passphrase"]
+        for k in ["exchange", "key", "secret", "passphrase", "walletAddress", "privateKey"]
     }
 
 
@@ -630,6 +630,17 @@ async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
     finally:
         await cc.close()
     return first_timestamps
+
+
+def assert_correct_ccxt_version(version=None, ccxt=None):
+    if version is None:
+        version = load_ccxt_version()
+    if ccxt is None:
+        import ccxt
+
+    assert (
+        ccxt.__version__ == version
+    ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v{version} manually"
 
 
 def load_ccxt_version():
