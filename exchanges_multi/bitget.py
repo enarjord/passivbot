@@ -41,8 +41,8 @@ class BitgetBot(Passivbot):
         self.max_n_cancellations_per_batch = 10
         self.max_n_creations_per_batch = 5
         self.order_side_map = {
-            "buy": {"long": "Open", "short": "Close"},
-            "sell": {"long": "Close", "short": "Open"},
+            "buy": {"long": "open_long", "short": "close_short"},
+            "sell": {"long": "close_long", "short": "open_short"},
         }
         self.custom_id_max_length = 64
 
@@ -290,22 +290,23 @@ class BitgetBot(Passivbot):
     async def execute_order(self, order: dict) -> dict:
         executed = None
         try:
-            executed = await self.cca.create_limit_order(
-                symbol=order["symbol"],
-                side=order["side"],
-                amount=abs(order["qty"]),
-                price=order["price"],
-                params={
-                    "tradeSide": self.order_side_map[order['side']][order['position_side']],
-                    "clientOid": order["custom_id"],
-                    "force": "post_only",
-                },
+            executed = await self.cca.private_mix_post_mix_v1_order_placeorder(
+                {
+                    "symbol": self.symbol_ids[order["symbol"]] + "_UMCBL",
+                    "marginCoin": "USDT",
+                    "size": str(order["qty"]),
+                    "price": str(order["price"]),
+                    "side": self.order_side_map[order["side"]][order["position_side"]],
+                    "orderType": "limit",
+                    "timeInForceValue": "post_only",
+                }
             )
-            if "symbol" not in executed or executed["symbol"] is None:
-                executed["symbol"] = order["symbol"]
-            for key in ["side", "position_side", "qty", "price"]:
-                if key not in executed or executed[key] is None:
+            if "msg" in executed and executed["msg"] == "success":
+                for key in ["symbol", "side", "position_side", "qty", "price"]:
                     executed[key] = order[key]
+                executed["timestamp"] = float(executed["requestTime"])
+                executed["id"] = executed["data"]["orderId"]
+                executed["custom_id"] = executed["data"]["clientOid"]
             return executed
         except Exception as e:
             logging.error(f"error executing order {order} {e}")
