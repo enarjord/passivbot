@@ -119,20 +119,12 @@ class BitgetBot(Passivbot):
         fetched = None
         open_orders = []
         try:
-            fetched = await self.cca.private_mix_get_mix_v1_order_margincoincurrent(
-                params={"productType": "umcbl"}
-            )
-            for elm in fetched["data"]:
-                elm["side"] = "buy" if elm["side"] in ["close_short", "open_long"] else "sell"
-                elm["position_side"] = elm["posSide"]
-                elm["price"] = float(elm["price"])
-                elm["qty"] = elm["amount"] = float(elm["size"])
-                elm["timestamp"] = float(elm["cTime"])
-                elm["id"] = elm["orderId"]
-                elm["custom_id"] = elm["clientOid"]
-                elm["symbol"] = self.symbol_ids_inv[elm["symbol"]]
-                open_orders.append(elm)
-            return sorted(open_orders, key=lambda x: x["timestamp"])
+            fetched = await self.cca.fetch_open_orders()
+            for i in range(len(fetched)):
+                fetched[i]["position_side"] = fetched[i]["info"]["posSide"]
+                fetched[i]["qty"] = fetched[i]["amount"]
+                fetched[i]["custom_id"] = fetched[i]["clientOrderId"]
+            return sorted(fetched, key=lambda x: x["timestamp"])
         except Exception as e:
             logging.error(f"error fetching open orders {e}")
             print_async_exception(fetched)
@@ -144,27 +136,17 @@ class BitgetBot(Passivbot):
         fetched_positions, fetched_balance = None, None
         try:
             fetched_positions, fetched_balance = await asyncio.gather(
-                self.cca.private_mix_get_mix_v1_position_allposition_v2(
-                    {"marginCoin": "USDT", "productType": "umcbl"}
-                ),
-                self.cca.private_mix_get_mix_v1_account_accounts({"productType": "umcbl"}),
+                self.cca.fetch_positions(),
+                self.cca.fetch_balance(),
             )
             balance = float(
-                [x for x in fetched_balance["data"] if x["marginCoin"] == self.quote][0]["available"]
+                [x for x in fetched_balance["info"] if x["marginCoin"] == self.quote][0]["available"]
             )
-            positions = []
-            for elm in floatify(fetched_positions["data"]):
-                if elm["total"] == 0.0:
-                    continue
-                positions.append(
-                    {
-                        "symbol": self.symbol_ids_inv[elm["symbol"]],
-                        "position_side": elm["holdSide"],
-                        "size": abs(elm["total"]) * (1.0 if elm["holdSide"] == "long" else -1.0),
-                        "price": elm["averageOpenPrice"],
-                    }
-                )
-            return positions, balance
+            for i in range(len(fetched_positions)):
+                fetched_positions[i]["position_side"] = fetched_positions[i]["side"]
+                fetched_positions[i]["size"] = fetched_positions[i]["contracts"]
+                fetched_positions[i]["price"] = fetched_positions[i]["entryPrice"]
+            return fetched_positions, balance
         except Exception as e:
             logging.error(f"error fetching positions and balance {e}")
             print_async_exception(fetched_positions)
