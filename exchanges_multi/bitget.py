@@ -41,8 +41,8 @@ class BitgetBot(Passivbot):
         self.max_n_cancellations_per_batch = 10
         self.max_n_creations_per_batch = 5
         self.order_side_map = {
-            "buy": {"long": "open_long", "short": "close_short"},
-            "sell": {"long": "close_long", "short": "open_short"},
+            "buy": {"long": "Open", "short": "Close"},
+            "sell": {"long": "Close", "short": "Open"},
         }
         self.custom_id_max_length = 64
 
@@ -296,10 +296,9 @@ class BitgetBot(Passivbot):
                 amount=abs(order["qty"]),
                 price=order["price"],
                 params={
-                    "reduceOnly": order["reduce_only"],
-                    "timeInForceValue": "post_only",
-                    "side": self.order_side_map[order["side"]][order["position_side"]],
+                    "tradeSide": self.order_side_map[order['side']][order['position_side']],
                     "clientOid": order["custom_id"],
+                    "force": "post_only",
                 },
             )
             if "symbol" not in executed or executed["symbol"] is None:
