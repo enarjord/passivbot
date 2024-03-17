@@ -2,6 +2,7 @@ from passivbot_multi import Passivbot, logging
 from uuid import uuid4
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
+
 import pprint
 import asyncio
 import traceback
@@ -15,7 +16,9 @@ from pure_funcs import (
     shorten_custom_id,
 )
 from njit_funcs import calc_diff
-from procedures import print_async_exception, utc_ms
+from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
+
+assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
 class OKXBot(Passivbot):

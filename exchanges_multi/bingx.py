@@ -14,7 +14,9 @@ from pure_funcs import (
     determine_pos_side_ccxt,
 )
 from njit_funcs import calc_diff, round_
-from procedures import print_async_exception, utc_ms
+from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
+
+assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
 class BingXBot(Passivbot):
