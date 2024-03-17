@@ -44,5 +44,10 @@
         "exchange": "bingx",
         "key": "key",
         "secret": "secret"
+    },
+    "hyperliquid_01" : {
+        "exchange": "hyperliquid",
+        "walletAddress": "key",
+        "privateKey": "secret"
     }
 }
