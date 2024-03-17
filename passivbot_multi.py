@@ -371,24 +371,28 @@ class Passivbot:
         if isinstance(upd, list):
             for x in upd:
                 self.handle_ticker_update(x)
-            return
         elif isinstance(upd, dict):
-            if len(upd) == 1:
-                sym = next(iter(upd))
-                if "symbol" in upd[sym] and sym == upd[sym]["symbol"]:
-                    self.handle_ticker_update(upd[sym])
-                    return
-        for key in ["bid", "ask", "last"]:
-            if key not in upd or upd[key] is None:
-                upd[key] = self.tickers[upd["symbol"]][key]
-        self.upd_timestamps["tickers"][upd["symbol"]] = utc_ms()  # update timestamp
-        if (
-            upd["bid"] != self.tickers[upd["symbol"]]["bid"]
-            or upd["ask"] != self.tickers[upd["symbol"]]["ask"]
-        ):
-            ticker_new = {k: upd[k] for k in ["bid", "ask", "last"]}
-            # print(f"ticker changed {upd['symbol']: <16} {self.tickers[upd['symbol']]} -> {ticker_new}")
-            self.tickers[upd["symbol"]] = ticker_new
+            if len(upd) == 0:
+                return
+            if "symbol" in upd:
+                for key in ["bid", "ask"]:
+                    if key not in upd or upd[key] is None:
+                        upd[key] = self.tickers[upd["symbol"]][key]
+                if "last" not in upd or upd["last"] is None:
+                    upd["last"] = np.random.choice([upd["bid"], upd["ask"]])
+                self.upd_timestamps["tickers"][upd["symbol"]] = utc_ms()  # update timestamp
+                if (
+                    upd["bid"] != self.tickers[upd["symbol"]]["bid"]
+                    or upd["ask"] != self.tickers[upd["symbol"]]["ask"]
+                ):
+                    ticker_new = {k: upd[k] for k in ["bid", "ask", "last"]}
+                    # print(f"ticker changed {upd['symbol']: <16} {self.tickers[upd['symbol']]} -> {ticker_new}")
+                    self.tickers[upd["symbol"]] = ticker_new
+            else:
+                # upd on the form {sym: {bid, ask, ...}}
+                for sym in upd:
+                    if sym in self.symbols:
+                        self.handle_ticker_update(upd[sym])
 
     def calc_upnl_sum(self):
         try:
