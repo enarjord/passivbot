@@ -657,10 +657,8 @@ def load_ccxt_version():
 def fetch_market_specific_settings_multi(symbols=None, exchange="binance"):
     import ccxt
 
-    ccxt_version_req = load_ccxt_version()
-    assert (
-        ccxt.__version__ == ccxt_version_req
-    ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v{ccxt_version_req} manually"
+    assert_correct_ccxt_version(ccxt=ccxt)
+
     exchange_map = {
         # "kucoin": "kucoinfutures",
         # "okx": "okx",
@@ -670,6 +668,7 @@ def fetch_market_specific_settings_multi(symbols=None, exchange="binance"):
         # "bingx": "bingx",
     }
     cc = getattr(ccxt, exchange_map[exchange])()
+    cc.options["defaultType"] = "swap"
     info = cc.load_markets()
     for symbol in info:
         if exchange == "binance":
@@ -698,11 +697,7 @@ def fetch_market_specific_settings_multi(symbols=None, exchange="binance"):
 def fetch_market_specific_settings(config: dict):
     import ccxt
 
-    ccxt_version_req = load_ccxt_version()
-    assert (
-        ccxt.__version__ == ccxt_version_req
-    ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v{ccxt_version_req} manually"
-
+    assert_correct_ccxt_version(ccxt=ccxt)
     exchange = config["exchange"]
     symbol = config["symbol"]
     market_type = config["market_type"]
@@ -746,9 +741,10 @@ def fetch_market_specific_settings(config: dict):
                 settings_from_exchange["price_step"] = float(elm1["tickSize"])
     elif exchange == "bitget":
         cc = ccxt.bitget()
+        cc.options["defaultType"] = "swap"
         markets = cc.fetch_markets()
         for elm in markets:
-            if elm["type"] == "swap" and elm["id"] == symbol + "_UMCBL":
+            if elm["id"] == symbol and elm["swap"]:
                 break
         else:
             raise Exception(f"unknown symbol {symbol}")
@@ -756,14 +752,12 @@ def fetch_market_specific_settings(config: dict):
         settings_from_exchange["maker_fee"] = elm["maker"]
         settings_from_exchange["taker_fee"] = elm["taker"]
         settings_from_exchange["c_mult"] = 1.0
-        settings_from_exchange["price_step"] = round_(
-            (10 ** (-int(elm["info"]["pricePlace"]))) * int(elm["info"]["priceEndStep"]), 1e-12
+        settings_from_exchange["price_step"] = elm["precision"]["price"]
+        settings_from_exchange["qty_step"] = elm["precision"]["amount"]
+        settings_from_exchange["min_qty"] = max(
+            elm["limits"]["amount"]["min"], elm["precision"]["amount"]
         )
-        settings_from_exchange["qty_step"] = round_(
-            10 ** (-int(elm["info"]["volumePlace"])), 0.00000001
-        )
-        settings_from_exchange["min_qty"] = float(elm["info"]["minTradeNum"])
-        settings_from_exchange["min_cost"] = 5.0
+        settings_from_exchange["min_cost"] = elm["limits"]["cost"]["min"]
         settings_from_exchange["spot"] = elm["spot"]
         settings_from_exchange["inverse"] = elm["linear"] is not None and not elm["linear"]
     elif exchange == "okx":
@@ -848,12 +842,18 @@ def fetch_market_specific_settings(config: dict):
 
 
 def main():
+    mssm = fetch_market_specific_settings_multi(exchange="bybit")
+    # pprint.pprint(mssm)
+    return
+    """
     cfg = {"exchange": "bybit", "symbol": "DOGEUSDT", "market_type": "spot"}
     mss = fetch_market_specific_settings(cfg)
     pprint.pprint(mss)
     return
+    """
+    # for exchange in ["bitget"]:
     for exchange in ["kucoin", "bitget", "binance", "bybit", "okx", "bingx"]:
-        cfg = {"exchange": exchange, "symbol": "DOGEUSDT", "market_type": "futures"}
+        cfg = {"exchange": exchange, "symbol": "ETHUSDT", "market_type": "futures"}
         try:
             mss = fetch_market_specific_settings(cfg)
             print(mss)
