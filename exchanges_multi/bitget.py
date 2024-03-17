@@ -14,7 +14,9 @@ from pure_funcs import (
     determine_pos_side_ccxt,
     shorten_custom_id,
 )
-from procedures import print_async_exception, utc_ms
+from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
+
+assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
 class BitgetBot(Passivbot):
@@ -108,8 +110,6 @@ class BitgetBot(Passivbot):
                 if self.stop_websocket:
                     break
                 res = await self.ccp.watch_tickers(symbols)
-                if res["last"] is None:
-                    res["last"] = np.random.choice([res["bid"], res["ask"]])
                 self.handle_ticker_update(res)
             except Exception as e:
                 print(f"exception watch_tickers {symbols}", e)
