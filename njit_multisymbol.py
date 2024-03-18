@@ -445,7 +445,7 @@ def backtest_multisymbol_recursive_grid(
     ]  # [(qty: float, price: float, type: str), (), ...]
 
     ema_spans_long = [np.array(sorted((x[6], (x[6] * x[7]) ** 0.5, x[7]))) for x in ll]
-    ema_spans_short = [np.array(sorted((x[6], (x[6] * x[7]) ** 0.5, x[7]))) for x in ll]
+    ema_spans_short = [np.array(sorted((x[6], (x[6] * x[7]) ** 0.5, x[7]))) for x in ls]
     ema_spans_long = [np.where(x < 1.0, 1.0, x) for x in ema_spans_long]
     ema_spans_short = [np.where(x < 1.0, 1.0, x) for x in ema_spans_short]
 
