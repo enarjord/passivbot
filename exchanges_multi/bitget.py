@@ -78,13 +78,18 @@ class BitgetBot(Passivbot):
         )
 
     async def watch_balance(self):
+        # bitget ccxt watch balance doesn't return required info.
+        # relying instead on periodic REST updates
         while True:
             try:
                 if self.stop_websocket:
                     break
-                res = await self.ccp.watch_balance()
-                res["USDT"]["total"] = res["USDT"]["free"]  # bitget balance is 'free'
+                res = await self.cca.fetch_balance()
+                res["USDT"]["total"] = float(
+                    [x for x in res["info"] if x["marginCoin"] == self.quote][0]["available"]
+                )
                 self.handle_balance_update(res)
+                await asyncio.sleep(10)
             except Exception as e:
                 print(f"exception watch_balance", e)
                 traceback.print_exc()
