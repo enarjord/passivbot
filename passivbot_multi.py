@@ -66,7 +66,6 @@ class Passivbot:
         self.upnls = {}
         self.upd_timestamps = {
             "pnls": 0.0,
-            "balance": 0.0,
             "open_orders": {},
             "positions": {},
             "tickers": {},
@@ -364,7 +363,6 @@ class Passivbot:
                     f"balance changed: {self.balance} -> {upd[self.quote]['total']} equity: {(upd[self.quote]['total'] + self.calc_upnl_sum()):.4f} source: {source}"
                 )
             self.balance = max(upd[self.quote]["total"], 1e-12)
-            self.upd_timestamps["balance"] = utc_ms()
         except Exception as e:
             logging.error(f"error updating balance from websocket {upd} {e}")
             traceback.print_exc()
@@ -1137,7 +1135,6 @@ class Passivbot:
                     k: 0.0 for k in self.upd_timestamps["positions"]
                 }
                 self.upd_timestamps["pnls"] = 0.0
-                self.upd_timestamps["balance"] = 0.0
                 self.recent_fill = False
             update_res = await self.force_update()
             if not all(update_res):
