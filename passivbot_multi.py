@@ -66,6 +66,7 @@ class Passivbot:
         self.upnls = {}
         self.upd_timestamps = {
             "pnls": 0.0,
+            "balance": 0.0,
             "open_orders": {},
             "positions": {},
             "tickers": {},
@@ -356,13 +357,14 @@ class Passivbot:
             logging.error(f"error updating open orders from websocket {upd_list} {e}")
             traceback.print_exc()
 
-    def handle_balance_update(self, upd):
+    def handle_balance_update(self, upd, source="WS"):
         try:
             if self.balance != upd[self.quote]["total"]:
                 logging.info(
-                    f"balance changed: {self.balance} -> {upd[self.quote]['total']} equity: {(upd[self.quote]['total'] + self.calc_upnl_sum()):.4f} source: WS"
+                    f"balance changed: {self.balance} -> {upd[self.quote]['total']} equity: {(upd[self.quote]['total'] + self.calc_upnl_sum()):.4f} source: {source}"
                 )
             self.balance = max(upd[self.quote]["total"], 1e-12)
+            self.upd_timestamps["balance"] = utc_ms()
         except Exception as e:
             logging.error(f"error updating balance from websocket {upd} {e}")
             traceback.print_exc()
@@ -516,11 +518,12 @@ class Passivbot:
         return True
 
     async def update_positions(self):
+        # also updates balance
         res = await self.fetch_positions()
-        if res in [None, False]:
+        if all(x in [None, False] for x in res):
             return False
         positions_list_new, balance_new = res
-        balance_old, self.balance = self.balance, max(balance_new, 1e-12)
+        self.handle_balance_update({self.quote: {"total": balance_new}})
         positions_new = {
             symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0, "price": 0.0}}
             for symbol in self.positions
@@ -591,10 +594,6 @@ class Passivbot:
         self.positions = positions_new
         now = utc_ms()
         self.upd_timestamps["positions"] = {k: now for k in self.upd_timestamps["positions"]}
-        if balance_old != balance_new:
-            logging.info(
-                f"balance changed: {balance_old} -> {balance_new} equity: {(balance_new + self.calc_upnl_sum()):.4f} source: REST"
-            )
         return True
 
     async def update_tickers(self):
@@ -1138,6 +1137,7 @@ class Passivbot:
                     k: 0.0 for k in self.upd_timestamps["positions"]
                 }
                 self.upd_timestamps["pnls"] = 0.0
+                self.upd_timestamps["balance"] = 0.0
                 self.recent_fill = False
             update_res = await self.force_update()
             if not all(update_res):
