@@ -14,7 +14,7 @@ from pure_funcs import (
     determine_pos_side_ccxt,
     shorten_custom_id,
 )
-from njit_funcs import calc_diff
+from njit_funcs import calc_diff, round_, round_up, round_dn, round_dynamic
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
@@ -41,6 +41,8 @@ class HyperliquidBot(Passivbot):
         self.max_n_creations_per_batch = 4
         self.quote = "USDC"
         self.hedge_mode = False
+        self.significant_digits = {}
+        self.szDecimals = {}
 
     async def init_bot(self):
         await self.init_symbols()
@@ -56,7 +58,8 @@ class HyperliquidBot(Passivbot):
                 else elm["limits"]["amount"]["min"]
             )
             self.qty_steps[symbol] = elm["precision"]["amount"]
-            self.price_steps[symbol] = 10 ** -elm["precision"]["price"]
+            self.price_steps[symbol] = round_(10 ** -elm["precision"]["price"], 0.0000000001)
+            self.szDecimals[symbol] = elm["info"]["szDecimals"]
             self.c_mults[symbol] = elm["contractSize"]
             self.coins[symbol] = symbol.replace(f"/{self.quote}:{self.quote}", "")
             self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "last": 0.0}
@@ -68,6 +71,8 @@ class HyperliquidBot(Passivbot):
             self.upd_timestamps["open_orders"][symbol] = 0.0
             self.upd_timestamps["tickers"][symbol] = 0.0
             self.upd_timestamps["positions"][symbol] = 0.0
+        self.n_decimal_places = 6
+        self.n_significant_digits = 5
         await super().init_bot()
 
     async def start_websockets(self):
@@ -323,17 +328,59 @@ class HyperliquidBot(Passivbot):
                 orders = (reduce_only_orders + rest)[: self.max_n_cancellations_per_batch]
             except Exception as e:
                 logging.error(f"debug filter cancellations {e}")
+        by_symbol = {}
+        for order in orders:
+            if order["symbol"] not in by_symbol:
+                by_symbol[order["symbol"]] = []
+            by_symbol[order["symbol"]].append(order)
+        syms = sorted(by_symbol)
+        res = await asyncio.gather(
+            *[self.cca.cancel_orders([x["id"] for x in by_symbol[sym]], symbol=sym) for sym in syms]
+        )
+        cancellations = []
+        for sym, elm in zip(syms, res):
+            if "status" in elm and elm["status"] == "ok":
+                for status, order in zip(elm["response"]["data"]["statuses"], by_symbol[sym]):
+                    if status == "success":
+                        cancellations.append(order)
+        return cancellations
         return await self.execute_multiple(
             orders, "execute_cancellation", self.max_n_cancellations_per_batch
         )
 
     async def execute_order(self, order: dict) -> dict:
-        return self.execute_orders([order])
+        res = await self.cca.create_limit_order(
+            order["symbol"], order["side"], order["qty"], order["price"]
+        )
+        return res
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if len(orders) == 0:
             return []
         to_execute = []
+        for order in orders:
+            to_execute.append(
+                {
+                    "symbol": order["symbol"],
+                    "type": "limit",
+                    "side": order["side"],
+                    "amount": order["qty"],
+                    "price": order["price"],
+                    # "params": {
+                    #    "orderType": {"limit": {"tif": "Alo"}},
+                    #    "reduceOnly": order["reduce_only"],
+                    # },
+                }
+            )
+        print(to_execute)
+        res = await self.cca.create_orders(to_execute)
+        print(res)
+        executed = []
+        for i, order in enumerate(orders):
+            if "info" in res[i] and "filled" in res[i]["info"] or "resting" in res[i]["info"]:
+                executed.append({**res[i], **order})
+        return executed
+
         custom_ids_map = {}
         for order in orders[: self.max_n_creations_per_batch]:
             to_execute.append(
@@ -439,3 +486,19 @@ class HyperliquidBot(Passivbot):
             )[: self.custom_id_max_length]
             new_orders.append(order)
         return new_orders
+
+    def px_round(self, val, symbol, direction=""):
+        if direction == "up":
+            return round_dynamic(round_up(val, self.price_steps[symbol]), self.n_significant_digits)
+        elif direction in ["dn", "down"]:
+            return round_dynamic(round_dn(val, self.price_steps[symbol]), self.n_significant_digits)
+        else:
+            return round_dynamic(round_(val, self.price_steps[symbol]), self.n_significant_digits)
+
+    def sz_round(self, val, symbol, direction=""):
+        if direction == "up":
+            return round_up(val, self.qty_steps[symbol])
+        elif direction in ["dn", "down"]:
+            return round_dn(val, self.qty_steps[symbol])
+        else:
+            return round_(val, self.qty_steps[symbol])
