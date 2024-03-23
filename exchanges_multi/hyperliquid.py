@@ -48,11 +48,15 @@ class HyperliquidBot(Passivbot):
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
             self.min_costs[symbol] = (
-                0.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
+                10.0 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
             )
-            self.min_qtys[symbol] = elm["limits"]["amount"]["min"]
+            self.min_qtys[symbol] = (
+                elm["precision"]["amount"]
+                if elm["limits"]["amount"]["min"] is None
+                else elm["limits"]["amount"]["min"]
+            )
             self.qty_steps[symbol] = elm["precision"]["amount"]
-            self.price_steps[symbol] = elm["precision"]["price"]
+            self.price_steps[symbol] = 10 ** -elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
             self.coins[symbol] = symbol.replace(f"/{self.quote}:{self.quote}", "")
             self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "last": 0.0}
@@ -206,9 +210,13 @@ class HyperliquidBot(Passivbot):
 
     async def fetch_ohlcv(self, symbol: str, timeframe="1m"):
         # intervals: 1,3,5,15,30,60,120,240,360,720,D,M,W
+        # fetches latest ohlcvs
         fetched = None
+        str2int = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 60 * 4}
+        n_candles = 480
         try:
-            fetched = await self.cca.fetch_ohlcv(symbol, timeframe=timeframe, limit=1000)
+            since = int(utc_ms() - 1000 * 60 * str2int[timeframe] * n_candles)
+            fetched = await self.cca.fetch_ohlcv(symbol, timeframe=timeframe, since=since)
             return fetched
         except Exception as e:
             logging.error(f"error fetching ohlcv for {symbol} {e}")
@@ -252,9 +260,11 @@ class HyperliquidBot(Passivbot):
                 end_time = utc_ms() + 1000 * 60 * 60 * 24
             if start_time is None:
                 start_time = end_time - 1000 * 60 * 60 * 24 * 7
-            fetched = await self.cca.fetch_my_trades(since=start_time, params={"until": end_time})
+            fetched = await self.cca.fetch_my_trades(
+                since=int(start_time), params={"endTime": int(end_time)}
+            )
             for i in range(len(fetched)):
-                fetched[i]["pnl"] = float(fetched[i]["info"]["fillPnl"])
+                fetched[i]["pnl"] = float(fetched[i]["info"]["closedPnl"])
             return sorted(fetched, key=lambda x: x["timestamp"])
         except Exception as e:
             logging.error(f"error fetching pnl {e}")
