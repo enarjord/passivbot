@@ -1179,6 +1179,22 @@ class Passivbot:
             new_orders.append(order)
         return new_orders
 
+    def px_round(self, val, symbol, direction=""):
+        if direction == "up":
+            return round_up(val, self.price_steps[symbol])
+        elif direction in ["dn", "down"]:
+            return round_dn(val, self.price_steps[symbol])
+        else:
+            return round_(val, self.price_steps[symbol])
+
+    def sz_round(self, val, symbol, direction=""):
+        if direction == "up":
+            return round_up(val, self.qty_steps[symbol])
+        elif direction in ["dn", "down"]:
+            return round_dn(val, self.qty_steps[symbol])
+        else:
+            return round_(val, self.qty_steps[symbol])
+
     async def execution_loop(self):
         while True:
             if self.stop_websocket:
