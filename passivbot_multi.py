@@ -1179,7 +1179,7 @@ class Passivbot:
             new_orders.append(order)
         return new_orders
 
-    def px_round(self, val, symbol, direction=""):
+    def round_price(self, val, symbol, direction=""):
         if direction == "up":
             return round_up(val, self.price_steps[symbol])
         elif direction in ["dn", "down"]:
@@ -1187,7 +1187,7 @@ class Passivbot:
         else:
             return round_(val, self.price_steps[symbol])
 
-    def sz_round(self, val, symbol, direction=""):
+    def round_qty(self, val, symbol, direction=""):
         if direction == "up":
             return round_up(val, self.qty_steps[symbol])
         elif direction in ["dn", "down"]:
