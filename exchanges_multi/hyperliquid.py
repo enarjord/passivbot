@@ -14,7 +14,16 @@ from pure_funcs import (
     determine_pos_side_ccxt,
     shorten_custom_id,
 )
-from njit_funcs import calc_diff, round_, round_up, round_dn, round_dynamic
+from njit_funcs import (
+    calc_diff,
+    round_,
+    round_up,
+    round_dn,
+    round_dynamic,
+    round_significant_normal,
+    round_significant_down,
+    round_significant_up,
+)
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
@@ -42,7 +51,6 @@ class HyperliquidBot(Passivbot):
         self.quote = "USDC"
         self.hedge_mode = False
         self.significant_digits = {}
-        self.szDecimals = {}
 
     async def init_bot(self):
         await self.init_symbols()
@@ -59,7 +67,6 @@ class HyperliquidBot(Passivbot):
             )
             self.qty_steps[symbol] = elm["precision"]["amount"]
             self.price_steps[symbol] = round_(10 ** -elm["precision"]["price"], 0.0000000001)
-            self.szDecimals[symbol] = elm["info"]["szDecimals"]
             self.c_mults[symbol] = elm["contractSize"]
             self.coins[symbol] = symbol.replace(f"/{self.quote}:{self.quote}", "")
             self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "last": 0.0}
@@ -487,18 +494,10 @@ class HyperliquidBot(Passivbot):
             new_orders.append(order)
         return new_orders
 
-    def px_round(self, val, symbol, direction=""):
+    def round_price(self, val, symbol, direction=""):
         if direction == "up":
-            return round_dynamic(round_up(val, self.price_steps[symbol]), self.n_significant_digits)
+            return round_significant_up(val, self.n_significant_digits, self.n_decimal_places)
         elif direction in ["dn", "down"]:
-            return round_dynamic(round_dn(val, self.price_steps[symbol]), self.n_significant_digits)
+            return round_significant_down(val, self.n_significant_digits, self.n_decimal_places)
         else:
-            return round_dynamic(round_(val, self.price_steps[symbol]), self.n_significant_digits)
-
-    def sz_round(self, val, symbol, direction=""):
-        if direction == "up":
-            return round_up(val, self.qty_steps[symbol])
-        elif direction in ["dn", "down"]:
-            return round_dn(val, self.qty_steps[symbol])
-        else:
-            return round_(val, self.qty_steps[symbol])
+            return round_significant_normal(val, self.n_significant_digits, self.n_decimal_places)
