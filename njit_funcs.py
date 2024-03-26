@@ -29,6 +29,30 @@ def round_dynamic(n: float, d: int):
 
 
 @njit
+def round_dynamic_up(n: float, d: int) -> float:
+    if n == 0.0:
+        return n
+    # Calculate the scaling factor
+    shift = d - int(np.floor(np.log10(abs(n)))) - 1
+    scaled_n = n * (10**shift)
+    # Apply np.ceil to the scaled number and then scale back
+    rounded_n = np.ceil(scaled_n) / (10**shift)
+    return rounded_n
+
+
+@njit
+def round_dynamic_dn(n: float, d: int) -> float:
+    if n == 0.0:
+        return n
+    # Calculate the scaling factor
+    shift = d - int(np.floor(np.log10(abs(n)))) - 1
+    scaled_n = n * (10**shift)
+    # Apply np.floor to the scaled number and then scale back
+    rounded_n = np.floor(scaled_n) / (10**shift)
+    return rounded_n
+
+
+@njit
 def round_up(n, step, safety_rounding=10) -> float:
     return np.round(np.ceil(np.round(n / step, safety_rounding)) * step, safety_rounding)
 
