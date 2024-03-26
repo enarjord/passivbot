@@ -20,9 +20,8 @@ from njit_funcs import (
     round_up,
     round_dn,
     round_dynamic,
-    round_significant_normal,
-    round_significant_down,
-    round_significant_up,
+    round_dynamic_up,
+    round_dynamic_dn,
 )
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
 
@@ -79,7 +78,7 @@ class HyperliquidBot(Passivbot):
             self.upd_timestamps["tickers"][symbol] = 0.0
             self.upd_timestamps["positions"][symbol] = 0.0
         self.n_decimal_places = 6
-        self.n_significant_digits = 5
+        self.n_significant_figures = 5
         await super().init_bot()
 
     async def start_websockets(self):
@@ -356,10 +355,7 @@ class HyperliquidBot(Passivbot):
         )
 
     async def execute_order(self, order: dict) -> dict:
-        res = await self.cca.create_limit_order(
-            order["symbol"], order["side"], order["qty"], order["price"]
-        )
-        return res
+        return await self.execute_orders([order])
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if len(orders) == 0:
@@ -379,56 +375,12 @@ class HyperliquidBot(Passivbot):
                     # },
                 }
             )
-        print(to_execute)
         res = await self.cca.create_orders(to_execute)
-        print(res)
         executed = []
         for i, order in enumerate(orders):
             if "info" in res[i] and "filled" in res[i]["info"] or "resting" in res[i]["info"]:
                 executed.append({**res[i], **order})
         return executed
-
-        custom_ids_map = {}
-        for order in orders[: self.max_n_creations_per_batch]:
-            to_execute.append(
-                {
-                    "type": "limit",
-                    "symbol": order["symbol"],
-                    "side": order["side"],
-                    "ordType": "post_only",
-                    "amount": abs(order["qty"]),
-                    "tdMode": "cross",
-                    "price": order["price"],
-                    "params": {
-                        "tag": self.broker_code,
-                        "posSide": order["position_side"],
-                        "clOrdId": order["custom_id"],
-                    },
-                }
-            )
-            custom_ids_map[to_execute[-1]["params"]["clOrdId"]] = {**to_execute[-1], **order}
-        executed = None
-        try:
-            executed = await self.cca.create_orders(to_execute)
-        except Exception as e:
-            logging.error(f"error executing orders {orders} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return []
-
-        to_return = []
-        for res in executed:
-            try:
-                if "status" in res and res["status"] == "rejected":
-                    logging.info(f"order rejected: {res} {custom_ids_map[res['clientOrderId']]}")
-                elif "clientOrderId" in res and res["clientOrderId"] in custom_ids_map:
-                    for key in ["side", "position_side", "qty", "price", "symbol", "reduce_only"]:
-                        res[key] = custom_ids_map[res["clientOrderId"]][key]
-                    to_return.append(res)
-            except Exception as e:
-                logging.error(f"error executing order {res} {e}")
-                traceback.print_exc()
-        return to_return
 
     async def update_exchange_config(self):
         try:
@@ -467,19 +419,25 @@ class HyperliquidBot(Passivbot):
                 logging.info(f"{symbol}: {to_print}")
 
     def calc_ideal_orders(self):
-        # okx has max 100 open orders. Drop orders whose pprice diff is greatest.
+        # hyperliquid needs custom price rounding
         ideal_orders = super().calc_ideal_orders()
-        ideal_orders_tmp = []
-        for s in ideal_orders:
-            for x in ideal_orders[s]:
-                ideal_orders_tmp.append({**x, **{"symbol": s}})
-        ideal_orders_tmp = sorted(
-            ideal_orders_tmp,
-            key=lambda x: calc_diff(x["price"], self.tickers[x["symbol"]]["last"]),
-        )[:100]
-        ideal_orders = {symbol: [] for symbol in self.symbols}
-        for x in ideal_orders_tmp:
-            ideal_orders[x["symbol"]].append(x)
+        for sym in ideal_orders:
+            for i in range(len(ideal_orders[sym])):
+                if ideal_orders[sym][i]["side"] == "sell":
+                    ideal_orders[sym][i]["price"] = round_dynamic_up(
+                        round(ideal_orders[sym][i]["price"], self.n_decimal_places),
+                        self.n_significant_figures,
+                    )
+                elif ideal_orders[sym][i]["side"] == "buy":
+                    ideal_orders[sym][i]["price"] = round_dynamic_dn(
+                        round(ideal_orders[sym][i]["price"], self.n_decimal_places),
+                        self.n_significant_figures,
+                    )
+                else:
+                    ideal_orders[sym][i]["price"] = round_dynamic(
+                        round(ideal_orders[sym][i]["price"], self.n_decimal_places),
+                        self.n_significant_figures,
+                    )
         return ideal_orders
 
     def format_custom_ids(self, orders: [dict]) -> [dict]:
@@ -493,11 +451,3 @@ class HyperliquidBot(Passivbot):
             )[: self.custom_id_max_length]
             new_orders.append(order)
         return new_orders
-
-    def round_price(self, val, symbol, direction=""):
-        if direction == "up":
-            return round_significant_up(val, self.n_significant_digits, self.n_decimal_places)
-        elif direction in ["dn", "down"]:
-            return round_significant_down(val, self.n_significant_digits, self.n_decimal_places)
-        else:
-            return round_significant_normal(val, self.n_significant_digits, self.n_decimal_places)
