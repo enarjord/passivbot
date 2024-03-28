@@ -40,8 +40,8 @@ class OKXBot(Passivbot):
             }
         )
         self.cca.options["defaultType"] = "swap"
-        self.max_n_cancellations_per_batch = 20
-        self.max_n_creations_per_batch = 10
+        self.max_n_cancellations_per_batch = 3
+        self.max_n_creations_per_batch = 2
         self.order_side_map = {
             "buy": {"long": "open_long", "short": "close_short"},
             "sell": {"long": "close_long", "short": "open_short"},
