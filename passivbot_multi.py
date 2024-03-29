@@ -27,6 +27,7 @@ from njit_funcs import (
     round_,
     round_up,
     round_dn,
+    round_dynamic,
     calc_pnl_long,
     calc_pnl_short,
 )
@@ -336,13 +337,15 @@ class Passivbot:
             for upd in upd_list:
                 if upd["symbol"] not in self.symbols:
                     return
-                if "filled" in upd and upd["filled"] is not None and upd["filled"] > 0.0:
+                if upd["status"] == "closed" or (
+                    "filled" in upd and upd["filled"] is not None and upd["filled"] > 0.0
+                ):
                     # There was a fill, partial or full. Schedule update of open orders, pnls, position.
                     logging.info(
                         f"   filled {upd['symbol']: <{self.sym_padding}} {upd['side']} {upd['qty']} {upd['position_side']} @ {upd['price']} source: WS"
                     )
                     self.recent_fill = True
-                elif upd["status"] in ["canceled", "expired"]:
+                elif upd["status"] in ["canceled", "expired", "rejected"]:
                     # remove order from open_orders
                     self.remove_cancelled_order(upd)
                     self.upd_timestamps["open_orders"][upd["symbol"]] = utc_ms()
@@ -358,6 +361,7 @@ class Passivbot:
 
     def handle_balance_update(self, upd, source="WS"):
         try:
+            upd[self.quote]["total"] = round_dynamic(upd[self.quote]["total"], 10)
             if self.balance != upd[self.quote]["total"]:
                 logging.info(
                     f"balance changed: {self.balance} -> {upd[self.quote]['total']} equity: {(upd[self.quote]['total'] + self.calc_upnl_sum()):.4f} source: {source}"
@@ -1260,6 +1264,10 @@ async def main():
             from exchanges_multi.bingx import BingXBot
 
             bot = BingXBot(config)
+        elif user_info["exchange"] == "hyperliquid":
+            from exchanges_multi.hyperliquid import HyperliquidBot
+
+            bot = HyperliquidBot(config)
         else:
             raise Exception(f"unknown exchange {user_info['exchange']}")
         try:
