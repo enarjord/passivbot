@@ -340,9 +340,9 @@ class KuCoinBot(Bot):
             if order["type"] == "limit":
                 params["postOnly"] = True
                 params["price"] = str(order["price"])
-            params[
-                "clientOid"
-            ] = f"{(order['custom_id'] if 'custom_id' in order else '')}{uuid.uuid4().hex}"[:32]
+            params["clientOid"] = (
+                f"{(order['custom_id'] if 'custom_id' in order else '')}{uuid.uuid4().hex}"[:32]
+            )
             executed = await self.private_post(self.endpoints["create_order"], params)
             if "code" in executed and executed["code"] == "200000":
                 return {
@@ -552,16 +552,16 @@ class KuCoinBot(Bot):
     async def init_user_stream(self) -> None:
         res = await self.private_post(self.endpoints["private_token_ws"], {})
         logging.info(f"init user stream {res}")
-        self.endpoints[
-            "websocket_user"
-        ] = f"{res['data']['instanceServers'][0]['endpoint']}?token={res['data']['token']}"
+        self.endpoints["websocket_user"] = (
+            f"{res['data']['instanceServers'][0]['endpoint']}?token={res['data']['token']}"
+        )
 
     async def init_market_stream(self):
         res = await self.private_post(self.endpoints["public_token_ws"], {})
         logging.info(f"init market stream {res}")
-        self.endpoints[
-            "websocket_market"
-        ] = f"{res['data']['instanceServers'][0]['endpoint']}?token={res['data']['token']}"
+        self.endpoints["websocket_market"] = (
+            f"{res['data']['instanceServers'][0]['endpoint']}?token={res['data']['token']}"
+        )
 
     async def subscribe_to_market_stream(self, ws):
         await ws.send(
