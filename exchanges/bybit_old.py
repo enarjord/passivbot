@@ -356,9 +356,11 @@ class BybitBot(Bot):
                 "symbol": self.symbol,
                 "side": first_capitalized(order["side"]),
                 "order_type": first_capitalized(order["type"]),
-                "qty": float(order["qty"])
-                if "linear_perpetual" in self.market_type
-                else int(order["qty"]),
+                "qty": (
+                    float(order["qty"])
+                    if "linear_perpetual" in self.market_type
+                    else int(order["qty"])
+                ),
                 "close_on_trigger": False,
             }
             if self.hedge_mode:
@@ -373,9 +375,9 @@ class BybitBot(Bot):
                 params["price"] = str(order["price"])
             else:
                 params["time_in_force"] = "GoodTillCancel"
-            params[
-                "order_link_id"
-            ] = f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+            params["order_link_id"] = (
+                f"{order['custom_id']}_{str(int(time() * 1000))[8:]}_{int(np.random.random() * 1000)}"
+            )
             o = await self.private_post(self.endpoints["create_order"], params)
             if o["result"]:
                 return {
