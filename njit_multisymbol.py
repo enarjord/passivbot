@@ -157,9 +157,11 @@ def get_open_orders_short(
     closes = calc_close_grid_short(
         cfgs[4],  # backwards_tp
         balance,
-        min(0.0, -abs(pos_short[0]) + abs(unstucking_close[0]))
-        if unstucking_close[0]
-        else pos_short[0],
+        (
+            min(0.0, -abs(pos_short[0]) + abs(unstucking_close[0]))
+            if unstucking_close[0]
+            else pos_short[0]
+        ),
         pos_short[1],
         close_price,  # close price
         min(emas),

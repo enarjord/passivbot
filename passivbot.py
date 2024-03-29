@@ -672,9 +672,11 @@ class Bot:
                             self.ob[0],
                             self.emas_long,
                             self.server_time,
-                            0
-                            if psize_long == 0.0
-                            else self.last_fills_timestamps["clock_entry_long"],
+                            (
+                                0
+                                if psize_long == 0.0
+                                else self.last_fills_timestamps["clock_entry_long"]
+                            ),
                             self.xk["inverse"],
                             self.xk["qty_step"],
                             self.xk["price_step"],
@@ -866,9 +868,11 @@ class Bot:
                             self.ob[1],
                             self.emas_short,
                             self.server_time,
-                            0
-                            if psize_short == 0.0
-                            else self.last_fills_timestamps["clock_entry_short"],
+                            (
+                                0
+                                if psize_short == 0.0
+                                else self.last_fills_timestamps["clock_entry_short"]
+                            ),
                             self.xk["inverse"],
                             self.xk["qty_step"],
                             self.xk["price_step"],

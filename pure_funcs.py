@@ -869,20 +869,20 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
         "adg_per_exposure_short": adg_short / config["short"]["wallet_exposure_limit"],
         "n_days": n_days,
         "starting_balance": sdf.balance_long.iloc[0],
-        "pa_distance_mean_long": pa_distance_mean_long
-        if pa_distance_mean_long == pa_distance_mean_long
-        else 1.0,
+        "pa_distance_mean_long": (
+            pa_distance_mean_long if pa_distance_mean_long == pa_distance_mean_long else 1.0
+        ),
         "pa_distance_max_long": pa_dists_long.max(),
-        "pa_distance_std_long": pa_distance_std_long
-        if pa_distance_std_long == pa_distance_std_long
-        else 1.0,
-        "pa_distance_mean_short": pa_distance_mean_short
-        if pa_distance_mean_short == pa_distance_mean_short
-        else 1.0,
+        "pa_distance_std_long": (
+            pa_distance_std_long if pa_distance_std_long == pa_distance_std_long else 1.0
+        ),
+        "pa_distance_mean_short": (
+            pa_distance_mean_short if pa_distance_mean_short == pa_distance_mean_short else 1.0
+        ),
         "pa_distance_max_short": pa_dists_short.max(),
-        "pa_distance_std_short": pa_distance_std_short
-        if pa_distance_std_short == pa_distance_std_short
-        else 1.0,
+        "pa_distance_std_short": (
+            pa_distance_std_short if pa_distance_std_short == pa_distance_std_short else 1.0
+        ),
         "pa_distance_1pct_worst_mean_long": pa_dists_long.sort_values()
         .iloc[-max(1, len(sdf) // 100) :]
         .mean(),
@@ -891,12 +891,12 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
         .mean(),
         "hrs_stuck_max_long": hrs_stuck_max_long,
         "hrs_stuck_max_short": hrs_stuck_max_short,
-        "loss_profit_ratio_long": abs(loss_sum_long) / profit_sum_long
-        if profit_sum_long > 0.0
-        else 1.0,
-        "loss_profit_ratio_short": abs(loss_sum_short) / profit_sum_short
-        if profit_sum_short > 0.0
-        else 1.0,
+        "loss_profit_ratio_long": (
+            abs(loss_sum_long) / profit_sum_long if profit_sum_long > 0.0 else 1.0
+        ),
+        "loss_profit_ratio_short": (
+            abs(loss_sum_short) / profit_sum_short if profit_sum_short > 0.0 else 1.0
+        ),
         "exposure_ratios_mean_long": exposure_ratios_mean_long,
         "exposure_ratios_mean_short": exposure_ratios_mean_short,
         "time_at_max_exposure_long": time_at_max_exposure_long,
@@ -1109,20 +1109,20 @@ def analyze_fills(
         "exchange": config["exchange"] if "exchange" in config else "unknown",
         "symbol": config["symbol"] if "symbol" in config else "unknown",
         "starting_balance": sdf.balance_long.iloc[0],
-        "pa_distance_mean_long": pa_distance_mean_long
-        if pa_distance_mean_long == pa_distance_mean_long
-        else 1.0,
+        "pa_distance_mean_long": (
+            pa_distance_mean_long if pa_distance_mean_long == pa_distance_mean_long else 1.0
+        ),
         "pa_distance_max_long": pa_dists_long.max(),
-        "pa_distance_std_long": pa_distance_std_long
-        if pa_distance_std_long == pa_distance_std_long
-        else 1.0,
-        "pa_distance_mean_short": pa_distance_mean_short
-        if pa_distance_mean_short == pa_distance_mean_short
-        else 1.0,
+        "pa_distance_std_long": (
+            pa_distance_std_long if pa_distance_std_long == pa_distance_std_long else 1.0
+        ),
+        "pa_distance_mean_short": (
+            pa_distance_mean_short if pa_distance_mean_short == pa_distance_mean_short else 1.0
+        ),
         "pa_distance_max_short": pa_dists_short.max(),
-        "pa_distance_std_short": pa_distance_std_short
-        if pa_distance_std_short == pa_distance_std_short
-        else 1.0,
+        "pa_distance_std_short": (
+            pa_distance_std_short if pa_distance_std_short == pa_distance_std_short else 1.0
+        ),
         "pa_distance_1pct_worst_mean_long": pa_dists_long.sort_values()
         .iloc[-max(1, len(sdf) // 100) :]
         .mean(),
@@ -1140,9 +1140,9 @@ def analyze_fills(
         "adg_weighted_per_exposure_long": adg_weighted_per_exposure_long,
         "gain_short": gain_short,
         "adg_short": adg_short if adg_short == adg_short else -1.0,
-        "adg_weighted_short": adg_weighted_short
-        if adg_weighted_short == adg_weighted_short
-        else -1.0,
+        "adg_weighted_short": (
+            adg_weighted_short if adg_weighted_short == adg_weighted_short else -1.0
+        ),
         "adg_per_exposure_short": adg_per_exposure_short,
         "adg_weighted_per_exposure_short": adg_weighted_per_exposure_short,
         "exposure_ratios_mean_long": exposure_ratios_mean_long,
@@ -1191,9 +1191,9 @@ def analyze_fills(
         "pnl_sum_long": pnl_sum_long,
         "pnl_sum_short": pnl_sum_short,
         "loss_profit_ratio_long": (abs(loss_sum_long) / profit_sum_long) if profit_sum_long else 1.0,
-        "loss_profit_ratio_short": (abs(loss_sum_short) / profit_sum_short)
-        if profit_sum_short
-        else 1.0,
+        "loss_profit_ratio_short": (
+            (abs(loss_sum_short) / profit_sum_short) if profit_sum_short else 1.0
+        ),
         "fee_sum_long": (fee_sum_long := longs.fee_paid.sum()),
         "fee_sum_short": (fee_sum_short := shorts.fee_paid.sum()),
         "net_pnl_plus_fees_long": pnl_sum_long + fee_sum_long,
