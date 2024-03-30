@@ -77,6 +77,10 @@ class BingXBot(Passivbot):
                 if self.stop_websocket:
                     break
                 res = await self.ccp.watch_balance()
+                for elm in res["info"]:
+                    if elm["a"] == self.quote:
+                        res[self.quote]["total"] = float(elm["wb"])
+                        break
                 self.handle_balance_update(res)
             except Exception as e:
                 print(f"exception watch_balance", e)
@@ -97,19 +101,18 @@ class BingXBot(Passivbot):
                 traceback.print_exc()
 
     async def watch_tickers(self, symbols=None):
-        # ccxt hasn't implemented the needed WS endpoints... Relying instead on REST update of tickers.
         symbols = list(self.symbols if symbols is None else symbols)
+        await asyncio.gather(*[self.watch_ticker(symbol) for symbol in symbols])
+
+    async def watch_ticker(self, symbol):
         while True:
             try:
                 if self.stop_websocket:
                     break
-                res = await self.fetch_tickers()
-                res = {s: {k: res[s][k] for k in ["symbol", "bid", "ask", "last"]} for s in symbols}
-                for k in res:
-                    self.handle_ticker_update(res[k])
-                await asyncio.sleep(10)
+                res = await self.ccp.watch_ticker(symbol)
+                self.handle_ticker_update(res)
             except Exception as e:
-                print(f"exception watch_tickers {symbols}", e)
+                print(f"exception watch_ticker {symbol}", e)
                 traceback.print_exc()
 
     async def fetch_open_orders(self, symbol: str = None):
