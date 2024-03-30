@@ -53,7 +53,6 @@ async def load_min_costs_single(exchange):
     cc = getattr(ccxt, exchange)()
     cc.options["defaultType"] = "swap"
     min_costs = {"bitget": 5.0, "bingx": 2.0}
-    c_mults = {"bingx": 1.0}
     markets = await cc.load_markets()
     tickers = await cc.fetch_tickers()
     first_timestamps = await get_first_ohlcv_timestamps(cc)
@@ -71,14 +70,8 @@ async def load_min_costs_single(exchange):
                 min_cost = 0.0
         else:
             min_cost = markets[symbol]["limits"]["cost"]["min"]
-        if exchange in c_mults:
-            c_mult = c_mults[exchange]
-        else:
-            c_mult = markets[symbol]["contractSize"]
-        if exchange in ["bingx"]:
-            min_qty = markets[symbol]["contractSize"]
-        else:
-            min_qty = markets[symbol]["limits"]["amount"]["min"]
+        min_qty = markets[symbol]["limits"]["amount"]["min"]
+        c_mult = markets[symbol]["contractSize"]
         results.append(
             {
                 "exchange": cc.id,
@@ -94,13 +87,11 @@ async def load_min_costs_single(exchange):
     return results
 
 
-async def load_min_costs(exchanges=["binanceusdm", "bybit", "okx", "bitget"]):
+async def load_min_costs(exchanges=["binanceusdm", "bybit", "okx", "bitget", "bingx"]):
     today = ts_to_date_utc(utc_ms())[:10]
     filepath = make_get_filepath(f"caches/min_costs_{today}.csv")
     if os.path.exists(filepath):
         return pd.read_csv(filepath)
-    # exchanges = ["binanceusdm", "bybit", "okx", "bitget", "bingx"]
-    # exchanges = ["bingx"]
     results = []
     for exchange in exchanges:
         results_single = await load_min_costs_single(exchange)
@@ -164,7 +155,7 @@ async def main():
         required=False,
         dest="exchange",
         default="bybit",
-        help="exchange (default bybit; choices [binance, bybit, okx, bitget])",
+        help="exchange (default bybit; choices [binance, bybit, okx, bitget, bingx])",
     )
     parser.add_argument(
         "-bs",
@@ -254,7 +245,7 @@ async def main():
     )
     args = parser.parse_args()
 
-    exchanges = ["binanceusdm", "bybit", "okx", "bitget"]
+    exchanges = ["binanceusdm", "bybit", "okx", "bitget", "bingx"]
     exchange = args.exchange
     if "binance" in exchange:
         exchange = "binanceusdm"
