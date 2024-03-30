@@ -49,10 +49,8 @@ class BingXBot(Passivbot):
             self.symbol_ids[symbol] = elm["id"]
             self.price_steps[symbol] = round(1.0 / (10 ** elm["precision"]["price"]), 12)
             self.qty_steps[symbol] = round(1.0 / (10 ** elm["precision"]["amount"]), 12)
-            self.min_qtys[symbol] = elm["contractSize"]
-            self.min_costs[symbol] = (
-                2.2 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
-            )
+            self.min_qtys[symbol] = elm["limits"]["amount"]["min"]
+            self.min_costs[symbol] = elm["limits"]["cost"]["min"]
             self.c_mults[symbol] = 1.0
             self.coins[symbol] = symbol.replace("/USDT:USDT", "")
             self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "last": 0.0}
