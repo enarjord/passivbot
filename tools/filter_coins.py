@@ -5,6 +5,7 @@ import ccxt.async_support as ccxt
 import numpy as np
 import argparse
 import hjson
+import json
 import asyncio
 
 import os
@@ -52,12 +53,31 @@ async def load_min_costs_single(exchange):
     print(f"fetching info for {exchange}")
     cc = getattr(ccxt, exchange)()
     cc.options["defaultType"] = "swap"
-    min_costs = {"bitget": 5.0, "bingx": 2.0}
+    min_costs = {"bitget": 5.0, "bingx": 2.0, "hyperliquid": 10.0}
+    quotes = {x: "USDT" for x in ["binanceusdm", "bybit", "okx", "bitget", "bingx"]}
+    quotes["hyperliquid"] = "USDC"
     markets = await cc.load_markets()
-    tickers = await cc.fetch_tickers()
+    if exchange == "hyperliquid":
+        coin2symbol_map = {markets[symbol]["info"]["name"]: symbol for symbol in markets}
+        fetched = await cc.fetch(
+            "https://api.hyperliquid.xyz/info",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            body=json.dumps({"type": "allMids"}),
+        )
+        tickers = {
+            coin2symbol_map[coin]: {
+                "bid": float(fetched[coin]),
+                "ask": float(fetched[coin]),
+                "last": float(fetched[coin]),
+            }
+            for coin in coin2symbol_map
+        }
+    else:
+        tickers = await cc.fetch_tickers()
     first_timestamps = await get_first_ohlcv_timestamps(cc)
     for symbol in markets:
-        if not symbol.endswith("/USDT:USDT"):
+        if not symbol.endswith(f"/{quotes[exchange]}:{quotes[exchange]}"):
             continue
         if not markets[symbol]["swap"] or not markets[symbol]["active"]:
             continue
@@ -70,7 +90,10 @@ async def load_min_costs_single(exchange):
                 min_cost = 0.0
         else:
             min_cost = markets[symbol]["limits"]["cost"]["min"]
-        min_qty = markets[symbol]["limits"]["amount"]["min"]
+        if exchange == "hyperliquid":
+            min_qty = markets[symbol]["precision"]["amount"]
+        else:
+            min_qty = markets[symbol]["limits"]["amount"]["min"]
         c_mult = markets[symbol]["contractSize"]
         results.append(
             {
@@ -87,7 +110,7 @@ async def load_min_costs_single(exchange):
     return results
 
 
-async def load_min_costs(exchanges=["binanceusdm", "bybit", "okx", "bitget", "bingx"]):
+async def load_min_costs(exchanges=["binanceusdm", "bybit", "okx", "bitget", "bingx", "hyperliquid"]):
     today = ts_to_date_utc(utc_ms())[:10]
     filepath = make_get_filepath(f"caches/min_costs_{today}.csv")
     if os.path.exists(filepath):
@@ -114,9 +137,9 @@ def load_live_configs():
     return configs
 
 
-def sname(symbol):
-    coin = symbol.replace("/USDT:USDT", "")
-    if coin.endswith("USDT"):
+def sname(symbol, quote="USDT"):
+    coin = symbol.replace(f"/{quote}:{quote}", "")
+    if coin.endswith(f"{quote}"):
         coin = coin[:-4]
     if "1000" in coin:
         istart = coin.find("1000")
@@ -128,7 +151,7 @@ def sname(symbol):
                 break
             iend += 1
         coin = coin[:istart] + coin[iend:]
-    return coin + "USDT"
+    return coin + f"{quote}"
 
 
 def generate_hjson_config(user, TWE_limit_long, long_enabled, symbols):
@@ -155,7 +178,7 @@ async def main():
         required=False,
         dest="exchange",
         default="bybit",
-        help="exchange (default bybit; choices [binance, bybit, okx, bitget, bingx])",
+        help="exchange (default bybit; choices [binance, bybit, okx, bitget, bingx, hyperliquid])",
     )
     parser.add_argument(
         "-bs",
@@ -245,7 +268,9 @@ async def main():
     )
     args = parser.parse_args()
 
-    exchanges = ["binanceusdm", "bybit", "okx", "bitget", "bingx"]
+    exchanges = ["binanceusdm", "bybit", "okx", "bitget", "bingx", "hyperliquid"]
+    quotes = {x: "USDT" for x in exchanges}
+    quotes["hyperliquid"] = "USDC"
     exchange = args.exchange
     if "binance" in exchange:
         exchange = "binanceusdm"
@@ -300,7 +325,7 @@ async def main():
     for exchange_ in exchanges:
         symbol_names_map[exchange_] = {}
         for symbol in min_costs[min_costs.exchange == exchange_].symbol:
-            symbol_names_map[exchange_][sname(symbol)] = symbol
+            symbol_names_map[exchange_][sname(symbol, quote=quotes[exchange])] = symbol
 
     min_costs.loc[:, "symbol"] = min_costs.symbol.apply(sname)
     longs.loc[:, "symbol"] = longs.symbol.apply(sname)
