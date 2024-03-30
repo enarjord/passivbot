@@ -72,18 +72,24 @@ class BingXBot(Passivbot):
         )
 
     async def watch_balance(self):
+        res = None
         while True:
             try:
                 if self.stop_websocket:
                     break
                 res = await self.ccp.watch_balance()
-                for elm in res["info"]:
-                    if elm["a"] == self.quote:
-                        res[self.quote]["total"] = float(elm["wb"])
-                        break
+                if "info" in res:
+                    if "data" in res["info"] and "balance" in res["info"]["data"]:
+                        res[self.quote]["total"] = float(res["info"]["data"]["balance"]["balance"])
+                    else:
+                        for elm in res["info"]:
+                            if elm["a"] == self.quote:
+                                res[self.quote]["total"] = float(elm["wb"])
+                                break
                 self.handle_balance_update(res)
             except Exception as e:
                 print(f"exception watch_balance", e)
+                print_async_exception(res)
                 traceback.print_exc()
 
     async def watch_orders(self):
