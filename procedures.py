@@ -572,7 +572,7 @@ async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
 
         cc = ccxt.binanceusdm()
     else:
-        supported_exchanges = ["binanceusdm", "bybit", "bitget", "okx", "bingx"]
+        supported_exchanges = ["binanceusdm", "bybit", "bitget", "okx", "bingx", "hyperliquid"]
         if cc.id not in supported_exchanges:
             print(f"get_first_ohlcv_timestamps() currently only supports {supported_exchanges}")
             return {}
