@@ -5,6 +5,7 @@ import ccxt.async_support as ccxt_async
 import pprint
 import asyncio
 import traceback
+import json
 import numpy as np
 from pure_funcs import (
     multi_replace,
@@ -78,6 +79,9 @@ class HyperliquidBot(Passivbot):
             self.upd_timestamps["positions"][symbol] = 0.0
         self.n_decimal_places = 6
         self.n_significant_figures = 5
+        self.coin2symbol_map = {
+            self.markets_dict[symbol]["info"]["name"]: symbol for symbol in self.markets_dict
+        }
         await super().init_bot()
 
     async def start_websockets(self):
@@ -190,14 +194,20 @@ class HyperliquidBot(Passivbot):
     async def fetch_tickers(self):
         fetched = None
         try:
-            fetched = await asyncio.gather(*[self.cca.fetch_order_book(s) for s in self.symbols])
+            fetched = await self.cca.fetch(
+                "https://api.hyperliquid.xyz/info",
+                method="POST",
+                headers={"Content-Type": "application/json"},
+                body=json.dumps({"type": "allMids"}),
+            )
             return {
-                x["symbol"]: {
-                    "bid": x["bids"][0][0],
-                    "ask": x["asks"][0][0],
-                    "last": np.random.choice([x["bids"][0][0], x["asks"][0][0]]),
+                self.coin2symbol_map[coin]: {
+                    "bid": float(fetched[coin]),
+                    "ask": float(fetched[coin]),
+                    "last": float(fetched[coin]),
                 }
-                for x in fetched
+                for coin in self.coin2symbol_map
+                if self.coin2symbol_map[coin] in self.symbols
             }
         except Exception as e:
             logging.error(f"error fetching tickers {e}")
