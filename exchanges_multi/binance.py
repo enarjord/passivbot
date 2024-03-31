@@ -30,8 +30,6 @@ class BinanceBot(Passivbot):
                 "headers": {"referer": self.broker_code} if self.broker_code else {},
             }
         )
-        self.max_n_cancellations_per_batch = 10
-        self.max_n_creations_per_batch = 5
 
     async def init_bot(self):
         await self.init_symbols()
@@ -316,7 +314,7 @@ class BinanceBot(Passivbot):
         if len(orders) == 1:
             return [await self.execute_cancellation(orders[0])]
         return await self.execute_multiple(
-            orders, "execute_cancellation", self.max_n_cancellations_per_batch
+            orders, "execute_cancellation", self.config["max_n_cancellations_per_batch"]
         )
 
     async def execute_order(self, order: dict) -> dict:
@@ -357,7 +355,7 @@ class BinanceBot(Passivbot):
         if len(orders) == 1:
             return [await self.execute_order(orders[0])]
         to_execute = []
-        for order in orders[: self.max_n_creations_per_batch]:
+        for order in orders[: self.config["max_n_creations_per_batch"]]:
             to_execute.append(
                 {
                     "type": "limit",

@@ -30,8 +30,6 @@ class BybitBot(Passivbot):
                 "headers": {"referer": self.broker_code} if self.broker_code else {},
             }
         )
-        self.max_n_cancellations_per_batch = 10
-        self.max_n_creations_per_batch = 6
 
     async def init_bot(self):
         await self.init_symbols()
@@ -324,16 +322,16 @@ class BybitBot(Passivbot):
             return {}
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        if len(orders) > self.max_n_cancellations_per_batch:
+        if len(orders) > self.config["max_n_cancellations_per_batch"]:
             # prioritize cancelling reduce-only orders
             try:
                 reduce_only_orders = [x for x in orders if x["reduce_only"]]
                 rest = [x for x in orders if not x["reduce_only"]]
-                orders = (reduce_only_orders + rest)[: self.max_n_cancellations_per_batch]
+                orders = (reduce_only_orders + rest)[: self.config["max_n_cancellations_per_batch"]]
             except Exception as e:
                 logging.error(f"debug filter cancellations {e}")
         return await self.execute_multiple(
-            orders, "execute_cancellation", self.max_n_cancellations_per_batch
+            orders, "execute_cancellation", self.config["max_n_cancellations_per_batch"]
         )
 
     async def execute_order(self, order: dict) -> dict:
@@ -363,7 +361,9 @@ class BybitBot(Passivbot):
             return {}
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_order", self.max_n_creations_per_batch)
+        return await self.execute_multiple(
+            orders, "execute_order", self.config["max_n_creations_per_batch"]
+        )
 
     async def update_exchange_config(self):
         try:

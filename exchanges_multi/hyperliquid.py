@@ -45,8 +45,6 @@ class HyperliquidBot(Passivbot):
             }
         )
         self.cca.options["defaultType"] = "swap"
-        self.max_n_cancellations_per_batch = 8
-        self.max_n_creations_per_batch = 4
         self.quote = "USDC"
         self.hedge_mode = False
         self.significant_digits = {}
@@ -282,12 +280,14 @@ class HyperliquidBot(Passivbot):
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
         res = None
         try:
-            if len(orders) > self.max_n_cancellations_per_batch:
+            if len(orders) > self.config["max_n_cancellations_per_batch"]:
                 # prioritize cancelling reduce-only orders
                 try:
                     reduce_only_orders = [x for x in orders if x["reduce_only"]]
                     rest = [x for x in orders if not x["reduce_only"]]
-                    orders = (reduce_only_orders + rest)[: self.max_n_cancellations_per_batch]
+                    orders = (reduce_only_orders + rest)[
+                        : self.config["max_n_cancellations_per_batch"]
+                    ]
                 except Exception as e:
                     logging.error(f"debug filter cancellations {e}")
             by_symbol = {}

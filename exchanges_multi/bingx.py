@@ -38,8 +38,6 @@ class BingXBot(Passivbot):
             }
         )
         self.cca.options["defaultType"] = "swap"
-        self.max_n_cancellations_per_batch = 6
-        self.max_n_creations_per_batch = 3
         self.custom_id_max_length = 40
 
     async def init_bot(self):
@@ -287,16 +285,16 @@ class BingXBot(Passivbot):
             return {}
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        if len(orders) > self.max_n_cancellations_per_batch:
+        if len(orders) > self.config["max_n_cancellations_per_batch"]:
             # prioritize cancelling reduce-only orders
             try:
                 reduce_only_orders = [x for x in orders if x["reduce_only"]]
                 rest = [x for x in orders if not x["reduce_only"]]
-                orders = (reduce_only_orders + rest)[: self.max_n_cancellations_per_batch]
+                orders = (reduce_only_orders + rest)[: self.config["max_n_cancellations_per_batch"]]
             except Exception as e:
                 logging.error(f"debug filter cancellations {e}")
         return await self.execute_multiple(
-            orders, "execute_cancellation", self.max_n_cancellations_per_batch
+            orders, "execute_cancellation", self.config["max_n_cancellations_per_batch"]
         )
 
     async def execute_order(self, order: dict) -> dict:
@@ -337,7 +335,9 @@ class BingXBot(Passivbot):
             return {}
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_order", self.max_n_creations_per_batch)
+        return await self.execute_multiple(
+            orders, "execute_order", self.config["max_n_creations_per_batch"]
+        )
 
     async def update_exchange_config(self):
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}
