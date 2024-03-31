@@ -1160,10 +1160,10 @@ class Passivbot:
             # format custom_id
             to_create = self.format_custom_ids(to_create)
 
-            res = await self.execute_cancellations(to_cancel)
+            res = await self.execute_cancellations(to_cancel[: self.max_n_cancellations_per_batch])
             for elm in res:
                 self.remove_cancelled_order(elm, source="POST")
-            res = await self.execute_orders(to_create)
+            res = await self.execute_orders(to_create[: self.max_n_creations_per_batch])
             for elm in res:
                 self.add_new_order(elm, source="POST")
             if to_cancel or to_create:
