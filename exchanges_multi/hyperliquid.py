@@ -280,58 +280,73 @@ class HyperliquidBot(Passivbot):
         return await self.execute_cancellations([order])
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        if len(orders) > self.max_n_cancellations_per_batch:
-            # prioritize cancelling reduce-only orders
-            try:
-                reduce_only_orders = [x for x in orders if x["reduce_only"]]
-                rest = [x for x in orders if not x["reduce_only"]]
-                orders = (reduce_only_orders + rest)[: self.max_n_cancellations_per_batch]
-            except Exception as e:
-                logging.error(f"debug filter cancellations {e}")
-        by_symbol = {}
-        for order in orders:
-            if order["symbol"] not in by_symbol:
-                by_symbol[order["symbol"]] = []
-            by_symbol[order["symbol"]].append(order)
-        syms = sorted(by_symbol)
-        res = await asyncio.gather(
-            *[self.cca.cancel_orders([x["id"] for x in by_symbol[sym]], symbol=sym) for sym in syms]
-        )
-        cancellations = []
-        for sym, elm in zip(syms, res):
-            if "status" in elm and elm["status"] == "ok":
-                for status, order in zip(elm["response"]["data"]["statuses"], by_symbol[sym]):
-                    if status == "success":
-                        cancellations.append(order)
-        return cancellations
+        res = None
+        try:
+            if len(orders) > self.max_n_cancellations_per_batch:
+                # prioritize cancelling reduce-only orders
+                try:
+                    reduce_only_orders = [x for x in orders if x["reduce_only"]]
+                    rest = [x for x in orders if not x["reduce_only"]]
+                    orders = (reduce_only_orders + rest)[: self.max_n_cancellations_per_batch]
+                except Exception as e:
+                    logging.error(f"debug filter cancellations {e}")
+            by_symbol = {}
+            for order in orders:
+                if order["symbol"] not in by_symbol:
+                    by_symbol[order["symbol"]] = []
+                by_symbol[order["symbol"]].append(order)
+            syms = sorted(by_symbol)
+            res = await asyncio.gather(
+                *[
+                    self.cca.cancel_orders([x["id"] for x in by_symbol[sym]], symbol=sym)
+                    for sym in syms
+                ]
+            )
+            cancellations = []
+            for sym, elm in zip(syms, res):
+                if "status" in elm and elm["status"] == "ok":
+                    for status, order in zip(elm["response"]["data"]["statuses"], by_symbol[sym]):
+                        if status == "success":
+                            cancellations.append(order)
+            return cancellations
+        except Exception as e:
+            logging.error(f"error executing cancellations {e}")
+            print_async_exception(res)
+            traceback.print_exc()
 
     async def execute_order(self, order: dict) -> dict:
         return await self.execute_orders([order])
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        if len(orders) == 0:
-            return []
-        to_execute = []
-        for order in orders:
-            to_execute.append(
-                {
-                    "symbol": order["symbol"],
-                    "type": "limit",
-                    "side": order["side"],
-                    "amount": order["qty"],
-                    "price": order["price"],
-                    # "params": {
-                    #    "orderType": {"limit": {"tif": "Alo"}},
-                    #    "reduceOnly": order["reduce_only"],
-                    # },
-                }
-            )
-        res = await self.cca.create_orders(to_execute)
-        executed = []
-        for i, order in enumerate(orders):
-            if "info" in res[i] and "filled" in res[i]["info"] or "resting" in res[i]["info"]:
-                executed.append({**res[i], **order})
-        return executed
+        res = None
+        try:
+            if len(orders) == 0:
+                return []
+            to_execute = []
+            for order in orders:
+                to_execute.append(
+                    {
+                        "symbol": order["symbol"],
+                        "type": "limit",
+                        "side": order["side"],
+                        "amount": order["qty"],
+                        "price": order["price"],
+                        # "params": {
+                        #    "orderType": {"limit": {"tif": "Alo"}},
+                        #    "reduceOnly": order["reduce_only"],
+                        # },
+                    }
+                )
+            res = await self.cca.create_orders(to_execute)
+            executed = []
+            for i, order in enumerate(orders):
+                if "info" in res[i] and "filled" in res[i]["info"] or "resting" in res[i]["info"]:
+                    executed.append({**res[i], **order})
+            return executed
+        except Exception as e:
+            logging.error(f"error executing orders {e}")
+            print_async_exception(res)
+            traceback.print_exc()
 
     async def update_exchange_config(self):
         coros_to_call_margin_mode = {}
