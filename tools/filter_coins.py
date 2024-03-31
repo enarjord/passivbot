@@ -137,10 +137,10 @@ def load_live_configs():
     return configs
 
 
-def sname(symbol, quote="USDT"):
-    coin = symbol.replace(f"/{quote}:{quote}", "")
-    if coin.endswith(f"{quote}"):
-        coin = coin[:-4]
+def symbol2coin(symbol: str) -> str:
+    coin = symbol
+    for x in ["USDT", "USDC", "BUSD", "USD", "/:"]:
+        coin = coin.replace(x, "")
     if "1000" in coin:
         istart = coin.find("1000")
         iend = istart + 1
@@ -151,7 +151,10 @@ def sname(symbol, quote="USDT"):
                 break
             iend += 1
         coin = coin[:istart] + coin[iend:]
-    return coin + f"{quote}"
+    if coin.startswith("k") and coin[1:].isupper():
+        # hyperliquid uses e.g. kSHIB instead of 1000SHIB
+        coin = coin[1:]
+    return coin
 
 
 def generate_hjson_config(user, TWE_limit_long, long_enabled, symbols):
@@ -269,8 +272,6 @@ async def main():
     args = parser.parse_args()
 
     exchanges = ["binanceusdm", "bybit", "okx", "bitget", "bingx", "hyperliquid"]
-    quotes = {x: "USDT" for x in exchanges}
-    quotes["hyperliquid"] = "USDC"
     exchange = args.exchange
     if "binance" in exchange:
         exchange = "binanceusdm"
@@ -291,6 +292,11 @@ async def main():
     longs, shorts = parse_backtest_metrics()
     min_costs = await load_min_costs()
     configs = load_live_configs()
+
+    longs.loc[:, "symbol"] = longs.symbol.apply(symbol2coin)
+    shorts.loc[:, "symbol"] = shorts.symbol.apply(symbol2coin)
+    min_costs.loc[:, "symbol"] = min_costs.symbol.apply(symbol2coin)
+    configs = {symbol2coin(k): v for k, v in configs.items()}
 
     min_cost_lower_bound = min_costs[min_costs.exchange == exchange].effective_min_cost.median()
     min_cost_upper_bound = balance * TWE_limit_long * initial_qty_pct_lower_bound / n_coins
@@ -320,17 +326,6 @@ async def main():
         )
         print()
         print("#" * 40 + "\n")
-
-    symbol_names_map = {}
-    for exchange_ in exchanges:
-        symbol_names_map[exchange_] = {}
-        for symbol in min_costs[min_costs.exchange == exchange_].symbol:
-            symbol_names_map[exchange_][sname(symbol, quote=quotes[exchange])] = symbol
-
-    min_costs.loc[:, "symbol"] = min_costs.symbol.apply(sname)
-    longs.loc[:, "symbol"] = longs.symbol.apply(sname)
-    shorts.loc[:, "symbol"] = shorts.symbol.apply(sname)
-    configs = {sname(k): v for k, v in configs.items()}
 
     first_timestamps = min_costs.groupby("symbol").first_timestamp.min()
 
