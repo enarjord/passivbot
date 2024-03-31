@@ -94,6 +94,8 @@ class Passivbot:
         self.execution_delay_millis = max(3000.0, self.config["execution_delay_seconds"] * 1000)
         self.force_update_age_millis = 60 * 1000  # force update once a minute
         self.quote = "USDT"
+        self.max_n_cancellations_per_batch = 8
+        self.max_n_creations_per_batch = 4
 
     async def init_bot(self):
         max_len_symbol = max([len(s) for s in self.symbols])
@@ -1159,13 +1161,14 @@ class Passivbot:
 
             # format custom_id
             to_create = self.format_custom_ids(to_create)
-
             res = await self.execute_cancellations(to_cancel[: self.max_n_cancellations_per_batch])
-            for elm in res:
-                self.remove_cancelled_order(elm, source="POST")
+            if res:
+                for elm in res:
+                    self.remove_cancelled_order(elm, source="POST")
             res = await self.execute_orders(to_create[: self.max_n_creations_per_batch])
-            for elm in res:
-                self.add_new_order(elm, source="POST")
+            if res:
+                for elm in res:
+                    self.add_new_order(elm, source="POST")
             if to_cancel or to_create:
                 await asyncio.gather(self.update_open_orders(), self.update_positions())
         except Exception as e:
