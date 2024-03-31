@@ -53,7 +53,13 @@ logging.basicConfig(
 class Passivbot:
     def __init__(self, config: dict):
         self.config = config
-        for key, default_val in [("auto_gs", True), ("long_enabled", True), ("short_enabled", True)]:
+        for key, default_val in [
+            ("auto_gs", True),
+            ("long_enabled", True),
+            ("short_enabled", True),
+            ("max_n_cancellations_per_batch", 8),
+            ("max_n_creations_per_batch", 4),
+        ]:
             if key not in self.config:
                 self.config[key] = default_val
         self.user = config["user"]
@@ -94,8 +100,6 @@ class Passivbot:
         self.execution_delay_millis = max(3000.0, self.config["execution_delay_seconds"] * 1000)
         self.force_update_age_millis = 60 * 1000  # force update once a minute
         self.quote = "USDT"
-        self.max_n_cancellations_per_batch = 8
-        self.max_n_creations_per_batch = 4
 
     async def init_bot(self):
         max_len_symbol = max([len(s) for s in self.symbols])
@@ -1161,11 +1165,13 @@ class Passivbot:
 
             # format custom_id
             to_create = self.format_custom_ids(to_create)
-            res = await self.execute_cancellations(to_cancel[: self.max_n_cancellations_per_batch])
+            res = await self.execute_cancellations(
+                to_cancel[: self.config["max_n_cancellations_per_batch"]]
+            )
             if res:
                 for elm in res:
                     self.remove_cancelled_order(elm, source="POST")
-            res = await self.execute_orders(to_create[: self.max_n_creations_per_batch])
+            res = await self.execute_orders(to_create[: self.config["max_n_creations_per_batch"]])
             if res:
                 for elm in res:
                     self.add_new_order(elm, source="POST")
@@ -1220,6 +1226,8 @@ async def main():
         ("lcd", "live_configs_dir", "live_configs_dir", str, ""),
         ("dcp", "default_config_path", "default_config_path", str, ""),
         ("ag", "auto_gs", "auto_gs", str2bool, " enabled (y/n or t/f)"),
+        ("nca", "max_n_cancellations_per_batch", "max_n_cancellations_per_batch", int, ""),
+        ("ncr", "max_n_creations_per_batch", "max_n_creations_per_batch", int, ""),
     ]
     for k0, k1, d, t, h in parser_items:
         parser.add_argument(
