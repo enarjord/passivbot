@@ -18,6 +18,10 @@
     // delay between executions to exchange. Set to 60 to simulate 1m ohlcv backtest.
     execution_delay_seconds: 2
 
+    // how many executions in parallel per batch
+    max_n_cancellations_per_batch: 8
+    max_n_creations_per_batch: 4
+
     // set all non-specified symbols on graceful stop
     auto_gs: true
 
