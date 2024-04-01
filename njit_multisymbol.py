@@ -36,16 +36,12 @@ from njit_funcs_recursive_grid import calc_recursive_entry_long, calc_recursive_
 
 
 @njit
-def calc_pnl_sum(poss_long, poss_short, market_prices, c_mults):
+def calc_pnl_sum(poss_long, poss_short, lows, highs, c_mults):
     pnl_sum = 0.0
     for i in range(len(poss_long)):
-        pnl_sum += calc_pnl_long(
-            poss_long[i][1], market_prices[i], poss_long[i][0], False, c_mults[i]
-        )
+        pnl_sum += calc_pnl_long(poss_long[i][1], lows[i], poss_long[i][0], False, c_mults[i])
     for i in range(len(poss_short)):
-        pnl_sum += calc_pnl_short(
-            poss_short[i][1], market_prices[i], poss_short[i][0], False, c_mults[i]
-        )
+        pnl_sum += calc_pnl_short(poss_short[i][1], highs[i], poss_short[i][0], False, c_mults[i])
     return pnl_sum
 
 
@@ -228,7 +224,7 @@ def calc_fills(
         fee_paid = -qty_to_cost(entry[0], entry[1], inverse, c_mults[idx]) * maker_fee
         new_balance = max(new_balance * 1e-6, new_balance + fee_paid)
         new_equity = new_balance + calc_pnl_sum(
-            poss_long, poss_short, hlc[:, 2], c_mults
+            poss_long, poss_short, hlc[:, 1], hlc[:, 0], c_mults
         )  # compute total equity
         wallet_exposure = qty_to_cost(new_pos[0], new_pos[1], inverse, c_mults[idx]) / new_balance
         fills.append(
@@ -306,7 +302,7 @@ def calc_fills(
         new_pos = new_pos_
         new_balance = max(new_balance * 1e-6, new_balance + fee_paid + pnl)
         new_equity = new_balance + calc_pnl_sum(
-            poss_long, poss_short, hlc[:, 2], c_mults
+            poss_long, poss_short, hlc[:, 1], hlc[:, 0], c_mults
         )  # compute total equity
         wallet_exposure = qty_to_cost(new_pos[0], new_pos[1], inverse, c_mults[idx]) / new_balance
         fills.append(
@@ -772,7 +768,9 @@ def backtest_multisymbol_recursive_grid(
 
         if k % 60 == 0:
             # update stats hourly
-            equity = balance + calc_pnl_sum(poss_long, poss_short, hlcs[:, k, 2], c_mults)
+            equity = balance + calc_pnl_sum(
+                poss_long, poss_short, hlcs[:, k, 1], hlcs[:, k, 0], c_mults
+            )
             stats.append(
                 (
                     k,
@@ -787,7 +785,7 @@ def backtest_multisymbol_recursive_grid(
                 # bankrupt
                 bankrupt = True
                 break
-    equity = balance + calc_pnl_sum(poss_long, poss_short, hlcs[:, k, 2], c_mults)
+    equity = balance + calc_pnl_sum(poss_long, poss_short, hlcs[:, k, 1], hlcs[:, k, 0], c_mults)
     if bankrupt:
         # force equity to be close to zero if bankrupt
         stats.append(
