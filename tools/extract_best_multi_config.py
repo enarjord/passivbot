@@ -1,0 +1,117 @@
+import os
+import json
+import pandas as pd
+import argparse
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from procedures import utc_ms, make_get_filepath
+from pure_funcs import (
+    flatten_dict,
+    ts_to_date_utc,
+)
+
+
+# Function definitions
+def calc_dist(p0, p1):
+    return ((p0[0] - p1[0]) ** 2 + (p0[1] - p1[1]) ** 2) ** 0.5
+
+
+def dominates_d(x, y, higher_is_better):
+    """Check if point x dominates point y."""
+    better_in_one = False
+    for xi, yi, hib in zip(x, y, higher_is_better):
+        if hib:
+            if xi > yi:
+                better_in_one = True
+            elif xi < yi:
+                return False
+        else:
+            if xi < yi:
+                better_in_one = True
+            elif xi > yi:
+                return False
+    return better_in_one
+
+
+def calc_pareto_front_d(objectives: dict, higher_is_better: [bool]):
+    sorted_keys = sorted(
+        objectives,
+        key=lambda k: [
+            -objectives[k][i] if higher_is_better[i] else objectives[k][i]
+            for i in range(len(higher_is_better))
+        ],
+    )
+    pareto_front = []
+    for kcandidate in sorted_keys:
+        is_dominated = False
+        for kmember in pareto_front:
+            if dominates_d(objectives[kmember], objectives[kcandidate], higher_is_better):
+                is_dominated = True
+                break
+        if not is_dominated:
+            pareto_front = [
+                kmember
+                for kmember in pareto_front
+                if not dominates_d(objectives[kcandidate], objectives[kmember], higher_is_better)
+            ]
+            pareto_front.append(kcandidate)
+    return pareto_front
+
+
+def main(file_location):
+    with open(file_location) as f:
+        lines = [x.strip() for x in f.readlines()]
+    print(f"n backtests: {len(lines)}")
+    xs = [json.loads(x) for x in lines if x]
+    res = pd.DataFrame([flatten_dict(x) for x in xs])
+
+    worst_drawdown_lower_bound = res.iloc[0].args_worst_drawdown_lower_bound
+    print("worst_drawdown_lower_bound", worst_drawdown_lower_bound)
+
+    keys, higher_is_better = ["w_adg_weighted", "w_sharpe_ratio"], [False, False]
+    keys = ["analysis_" + key for key in keys]
+    candidates = res[res.analysis_worst_drawdown <= worst_drawdown_lower_bound][keys]
+    print("n candidates", len(candidates))
+    pareto = candidates.loc[
+        calc_pareto_front_d(
+            {i: x for i, x in zip(candidates.index, candidates.values)}, higher_is_better
+        )
+    ]
+
+    cands_norm = (candidates - candidates.min()) / (candidates.max() - candidates.min())
+    pareto_norm = (pareto - candidates.min()) / (candidates.max() - candidates.min())
+    dists = [calc_dist(p, [float(x) for x in higher_is_better]) for p in pareto_norm.values]
+    pareto_w_dists = pareto_norm.join(pd.Series(dists, name="dists", index=pareto_norm.index))
+    closest_to_ideal = pareto_w_dists.sort_values("dists")
+    best = closest_to_ideal.dists.idxmin()
+    print("best")
+    print(candidates.loc[best])
+    print("pareto front:")
+    print(pareto.loc[closest_to_ideal.index])
+
+    # Processing the best result for configuration
+    best_d = xs[best]
+    cfg = best_d["live_config"]
+    cfg["long"]["wallet_exposure_limit"] = cfg["global"]["TWE_long"] / len(best_d["args"]["symbols"])
+    cfg["short"]["wallet_exposure_limit"] = cfg["global"]["TWE_short"] / len(
+        best_d["args"]["symbols"]
+    )
+    cfg["long"]["enabled"] = best_d["args"]["long_enabled"]
+    cfg["short"]["enabled"] = best_d["args"]["short_enabled"]
+    fjson = json.dumps(best_d, indent=4, sort_keys=True)
+    print(fjson)
+    coins = "".join([s.replace("USDT", "") for s in best_d["args"]["symbols"]])
+    coins = [s.replace("USDT", "") for s in best_d["args"]["symbols"]]
+    fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
+    fname += "_" + ("_".join(coins) if len(coins) <= 5 else f"{len(coins)}_coins") + ".json"
+    full_path = make_get_filepath(os.path.join("results_multi_analysis", fname))
+    json.dump(best_d, open(full_path, "w"), indent=4, sort_keys=True)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Process results file.")
+    parser.add_argument("file_location", type=str, help="Location of the results file")
+    args = parser.parse_args()
+
+    main(args.file_location)
