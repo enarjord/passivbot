@@ -37,7 +37,6 @@ manager start -a
 ```
 
 
-
 ## Available Commands
 
 ### `manager sync`
@@ -48,7 +47,7 @@ Syncs all the instances with the config
 Supports queries and following flags: `-s`, `-y`
 
 ### `manager start`
-Starts specified instances. To see the instance logs go to `[passovbot path]/logs/[user]/[symbol].log`. The file will contain passivbot output logs and errors, unless you start the instance with the `-s` flag, in which case logs file will not be created.
+Starts specified instances. To see the instance logs go to `[passivbot path]/logs/[user]/[symbol].log`. The file will contain passivbot output logs and errors, unless you start the instance with the `-s` flag, in which case logs file will not be created.
 
 Supports queries and following flags: `-a`, `-s`, `-y`, `-m`
 ### `manager stop`
