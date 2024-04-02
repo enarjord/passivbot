@@ -59,20 +59,28 @@ def calc_pareto_front_d(objectives: dict, higher_is_better: [bool]):
     return pareto_front
 
 
-def main(file_location):
+def gprint(verbose):
+    if verbose:
+        return print
+    else:
+        return lambda *args, **kwargs: None
+
+
+def process_single(file_location, verbose=False):
+    print_ = gprint(verbose)
     with open(file_location) as f:
         lines = [x.strip() for x in f.readlines()]
-    print(f"n backtests: {len(lines)}")
+    print_(f"n backtests: {len(lines)}")
     xs = [json.loads(x) for x in lines if x]
     res = pd.DataFrame([flatten_dict(x) for x in xs])
 
     worst_drawdown_lower_bound = res.iloc[0].args_worst_drawdown_lower_bound
-    print("worst_drawdown_lower_bound", worst_drawdown_lower_bound)
+    print_("worst_drawdown_lower_bound", worst_drawdown_lower_bound)
 
     keys, higher_is_better = ["w_adg_weighted", "w_sharpe_ratio"], [False, False]
     keys = ["analysis_" + key for key in keys]
     candidates = res[res.analysis_worst_drawdown <= worst_drawdown_lower_bound][keys]
-    print("n candidates", len(candidates))
+    print_("n candidates", len(candidates))
     pareto = candidates.loc[
         calc_pareto_front_d(
             {i: x for i, x in zip(candidates.index, candidates.values)}, higher_is_better
@@ -85,10 +93,10 @@ def main(file_location):
     pareto_w_dists = pareto_norm.join(pd.Series(dists, name="dists", index=pareto_norm.index))
     closest_to_ideal = pareto_w_dists.sort_values("dists")
     best = closest_to_ideal.dists.idxmin()
-    print("best")
-    print(candidates.loc[best])
-    print("pareto front:")
-    print(pareto.loc[closest_to_ideal.index])
+    print_("best")
+    print_(candidates.loc[best])
+    print_("pareto front:")
+    print_(pareto.loc[closest_to_ideal.index])
 
     # Processing the best result for configuration
     best_d = xs[best]
@@ -100,18 +108,39 @@ def main(file_location):
     cfg["long"]["enabled"] = best_d["args"]["long_enabled"]
     cfg["short"]["enabled"] = best_d["args"]["short_enabled"]
     fjson = json.dumps(best_d, indent=4, sort_keys=True)
-    print(fjson)
+    print_(fjson)
     coins = "".join([s.replace("USDT", "") for s in best_d["args"]["symbols"]])
     coins = [s.replace("USDT", "") for s in best_d["args"]["symbols"]]
-    fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
+    print_(file_location)
+    fname = os.path.split(file_location)[-1].replace("_all_results.txt", "")
     fname += "_" + ("_".join(coins) if len(coins) <= 5 else f"{len(coins)}_coins") + ".json"
     full_path = make_get_filepath(os.path.join("results_multi_analysis", fname))
     json.dump(best_d, open(full_path, "w"), indent=4, sort_keys=True)
 
 
+def main(file_location, verbose):
+    if os.path.isdir(file_location):
+        for fname in os.listdir(file_location):
+            try:
+                process_single(os.path.join(file_location, fname))
+            except Exception as e:
+                print(f"error with {os.path.join(file_location, fname)} {e}")
+    else:
+        try:
+            process_single(file_location, verbose)
+        except Exception as e:
+            print(f"error with {file_location} {e}")
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Process results file.")
-    parser.add_argument("file_location", type=str, help="Location of the results file")
+    parser = argparse.ArgumentParser(description="Process results.")
+    parser.add_argument("file_location", type=str, help="Location of the results file or directory")
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbosity",
+    )
     args = parser.parse_args()
 
-    main(args.file_location)
+    main(args.file_location, args.verbose)
