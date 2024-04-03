@@ -331,10 +331,11 @@ class HyperliquidBot(Passivbot):
                         "side": order["side"],
                         "amount": order["qty"],
                         "price": order["price"],
-                        # "params": {
-                        #    "orderType": {"limit": {"tif": "Alo"}},
-                        #    "reduceOnly": order["reduce_only"],
-                        # },
+                        "params": {
+                            # "orderType": {"limit": {"tif": "Alo"}},
+                            # "cloid": order["custom_id"],
+                            "reduceOnly": order["reduce_only"],
+                        },
                     }
                 )
             res = await self.cca.create_orders(to_execute)
