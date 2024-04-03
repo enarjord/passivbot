@@ -7,6 +7,8 @@ import pandas as pd
 import json
 import logging
 import argparse
+import signal
+import sys
 from deap import base, creator, tools, algorithms
 from collections import OrderedDict
 from procedures import utc_ms, make_get_filepath
@@ -22,6 +24,11 @@ from pure_funcs import (
 )
 from backtest_multi import backtest_multi, prep_config_multi, prep_hlcs_mss_config
 from njit_multisymbol import backtest_multisymbol_recursive_grid
+
+
+def signal_handler(signal, frame):
+    print("\nOptimization interrupted by user. Exiting gracefully...")
+    sys.exit(0)
 
 
 def calc_pa_dist_mean(stats):
@@ -316,6 +323,7 @@ def add_starting_configs(pop, config):
 
 
 async def main():
+    signal.signal(signal.SIGINT, signal_handler)
     logging.basicConfig(
         format="%(asctime)s %(levelname)-8s %(message)s",
         level=logging.INFO,
@@ -431,13 +439,10 @@ async def main():
         # pop = add_starting_configs(pop, config)
         hof = tools.HallOfFame(1)
         stats = tools.Statistics(lambda ind: ind.fitness.values)
-        for i, w in enumerate(weights):
-            stats.register(f"avg{i}", lambda pop: sum(f[i] for f in pop) / len(pop))
-            if w < 0.0:
-                stats.register(f"min{i}", lambda pop: min(f[i] for f in pop))
-            else:
-                stats.register(f"max{i}", lambda pop: max(f[i] for f in pop))
-
+        stats.register("avg", np.mean, axis=0)
+        stats.register("std", np.std, axis=0)
+        stats.register("min", np.min, axis=0)
+        stats.register("max", np.max, axis=0)
         logging.info(f"starting optimize")
         # Run the algorithm
         algorithms.eaMuPlusLambda(
@@ -456,8 +461,9 @@ async def main():
         # Close the pool
         logging.info(f"attempting clean shutdown...")
         evaluator.cleanup()
-        pool.close()
-        pool.join()
+        sys.exit(0)
+        # pool.close()
+        # pool.join()
 
     return pop, stats, hof
 
