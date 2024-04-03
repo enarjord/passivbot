@@ -152,7 +152,14 @@ class Passivbot:
                     except Exception as e:
                         logging.error(f"failed to load live config {symbol} {path} {e}")
             else:
-                raise Exception(f"no usable live config found for {symbol}")
+                try:
+                    self.live_configs[symbol] = self.config["universal_live_config"]
+                    logging.info(
+                        f"{symbol: <{max_len_symbol}} loaded universal live config from hjson config"
+                    )
+                except Exception as e:
+                    logging.error(f"failed to apply universal_live_config {e}")
+                    raise Exception(f"no usable live config found for {symbol}")
 
             if args.leverage is None:
                 self.live_configs[symbol]["leverage"] = 10.0
@@ -203,14 +210,14 @@ class Passivbot:
                 # if self.config["loss_allowance_pct"] != 0.0:
                 # possible TODO: single coin auto unstuck in multi symbol mode
                 if True:
-                    for key in [
-                        "auto_unstuck_delay_minutes",
-                        "auto_unstuck_ema_dist",
-                        "auto_unstuck_qty_pct",
-                        "auto_unstuck_wallet_exposure_threshold",
+                    for key, val in [
+                        ("auto_unstuck_delay_minutes", 0.0),
+                        ("auto_unstuck_qty_pct", 0.0),
+                        ("auto_unstuck_wallet_exposure_threshold", 0.0),
+                        ("auto_unstuck_ema_dist", 0.0),
+                        ("backwards_tp", True),
                     ]:
-                        self.live_configs[symbol][pside][key] = 0.0
-
+                        self.live_configs[symbol][pside][key] = val
         for f in ["exchange_config", "emas", "positions", "open_orders", "pnls"]:
             res = await getattr(self, f"update_{f}")()
             logging.info(f"initiating {f} {res}")
