@@ -18,7 +18,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from forager import get_min_costs_and_contract_multipliers
 from procedures import load_live_config, utc_ms, make_get_filepath, get_first_ohlcv_timestamps
-from pure_funcs import floatify, ts_to_date_utc, date2ts_utc, str2bool
+from pure_funcs import floatify, ts_to_date_utc, date2ts_utc, str2bool, symbol2coin
 
 
 def parse_backtest_metrics():
@@ -135,26 +135,6 @@ def load_live_configs():
         except Exception as e:
             print("error", f, e)
     return configs
-
-
-def symbol2coin(symbol: str) -> str:
-    coin = symbol
-    for x in ["USDT", "USDC", "BUSD", "USD", "/:"]:
-        coin = coin.replace(x, "")
-    if "1000" in coin:
-        istart = coin.find("1000")
-        iend = istart + 1
-        while True:
-            if iend >= len(coin):
-                break
-            if coin[iend] != "0":
-                break
-            iend += 1
-        coin = coin[:istart] + coin[iend:]
-    if coin.startswith("k") and coin[1:].isupper():
-        # hyperliquid uses e.g. kSHIB instead of 1000SHIB
-        coin = coin[1:]
-    return coin
 
 
 def generate_hjson_config(user, TWE_limit_long, long_enabled, symbols):
