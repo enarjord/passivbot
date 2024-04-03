@@ -121,13 +121,16 @@ def process_single(file_location, verbose=False):
 def main(file_location, verbose):
     if os.path.isdir(file_location):
         for fname in os.listdir(file_location):
+            fpath = os.path.join(file_location, fname)
             try:
-                process_single(os.path.join(file_location, fname))
+                process_single(fpath)
+                print(f"successfully processed {fpath}")
             except Exception as e:
-                print(f"error with {os.path.join(file_location, fname)} {e}")
+                print(f"error with {fpath} {e}")
     else:
         try:
             process_single(file_location, verbose)
+            print(f"successfully processed {file_location}")
         except Exception as e:
             print(f"error with {file_location} {e}")
 
