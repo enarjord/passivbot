@@ -2093,3 +2093,42 @@ def determine_side_from_order_tuple(order_tuple):
             raise Exception(f"malformed order tuple {order_tuple}")
     else:
         raise Exception(f"malformed order tuple {order_tuple}")
+
+
+def symbol2coin(symbol: str) -> str:
+    coin = symbol
+    for x in ["USDT", "USDC", "BUSD", "USD", "/:"]:
+        coin = coin.replace(x, "")
+    if "1000" in coin:
+        istart = coin.find("1000")
+        iend = istart + 1
+        while True:
+            if iend >= len(coin):
+                break
+            if coin[iend] != "0":
+                break
+            iend += 1
+        coin = coin[:istart] + coin[iend:]
+    if coin.startswith("k") and coin[1:].isupper():
+        # hyperliquid uses e.g. kSHIB instead of 1000SHIB
+        coin = coin[1:]
+    return coin
+
+
+def live_multi_config2single_config(live_multi_config: dict) -> dict:
+    template = get_template_live_config("recursive_grid")
+    for pside in ["long", "short"]:
+        for key, val in [
+            ("auto_unstuck_delay_minutes", 0.0),
+            ("auto_unstuck_qty_pct", 0.0),
+            ("auto_unstuck_wallet_exposure_threshold", 0.0),
+            ("auto_unstuck_ema_dist", 0.0),
+            ("backwards_tp", True),
+        ]:
+            template[pside][key] = val
+        for key in live_multi_config["live_config"][pside]:
+            template[pside][key] = live_multi_config["live_config"][pside][key]
+    template["config_name"] = "_".join(
+        [symbol2coin(sym) for sym in live_multi_config["args"]["symbols"]]
+    )
+    return template
