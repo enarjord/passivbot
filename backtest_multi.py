@@ -162,8 +162,6 @@ def load_and_parse_config(path: str):
                 "worst_drawdown_lower_bound",
                 "long_enabled",
                 "short_enabled",
-                "backwards_tp_long",
-                "backwards_tp_short",
                 "bounds",
             ]
         ]
