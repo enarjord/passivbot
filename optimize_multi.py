@@ -77,7 +77,9 @@ def analyze_fills_opti(fills, stats, config):
 
     loss_sum_long, profit_sum_long = 0.0, 0.0
     loss_sum_short, profit_sum_short = 0.0, 0.0
+    pnls_by_symbol = {symbol: 0.0 for symbol in config["symbols"]}
     for x in fills:
+        pnls_by_symbol[x[1]] += x[2]
         if "long" in x[10]:
             if x[2] > 0.0:
                 profit_sum_long += x[2]
@@ -101,6 +103,9 @@ def analyze_fills_opti(fills, stats, config):
     pnl_short = profit_sum_short + loss_sum_short
     pnl_sum = pnl_long + pnl_short
     pnl_ratio_long_short = pnl_long / pnl_sum if pnl_sum else 0.0
+    pnl_ratios_symbols = {
+        symbol: pnls_by_symbol[symbol] / pnl_sum if pnl_sum else 0.0 for symbol in config["symbols"]
+    }
 
     worst_drawdown_mod = (
         max(config["worst_drawdown_lower_bound"], worst_drawdown)
@@ -123,6 +128,7 @@ def analyze_fills_opti(fills, stats, config):
         "loss_profit_ratio_long": loss_profit_ratio_long,
         "loss_profit_ratio_short": loss_profit_ratio_short,
         "pnl_ratio_long_short": pnl_ratio_long_short,
+        "pnl_ratios_symbols": pnl_ratios_symbols,
     }
 
 
