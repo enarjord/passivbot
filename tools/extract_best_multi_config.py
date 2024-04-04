@@ -1,5 +1,6 @@
 import os
 import json
+import hjson
 import pandas as pd
 import argparse
 import sys
@@ -9,6 +10,7 @@ from procedures import utc_ms, make_get_filepath
 from pure_funcs import (
     flatten_dict,
     ts_to_date_utc,
+    backtested_multiconfig2live_multiconfig,
 )
 
 
@@ -116,12 +118,13 @@ def process_single(file_location, verbose=False):
     fname += "_" + ("_".join(coins) if len(coins) <= 5 else f"{len(coins)}_coins") + ".json"
     full_path = make_get_filepath(os.path.join("results_multi_analysis", fname))
     json.dump(best_d, open(full_path, "w"), indent=4, sort_keys=True)
+    return best_d
 
 
-def main(file_location, verbose):
-    if os.path.isdir(file_location):
-        for fname in os.listdir(file_location):
-            fpath = os.path.join(file_location, fname)
+def main(args):
+    if os.path.isdir(args.file_location):
+        for fname in os.listdir(args.file_location):
+            fpath = os.path.join(args.file_location, fname)
             try:
                 process_single(fpath)
                 print(f"successfully processed {fpath}")
@@ -129,10 +132,17 @@ def main(file_location, verbose):
                 print(f"error with {fpath} {e}")
     else:
         try:
-            process_single(file_location, verbose)
-            print(f"successfully processed {file_location}")
+            result = process_single(args.file_location, args.verbose)
+            print(f"successfully processed {args.file_location}")
+            if args.user is not None:
+                live_config = backtested_multiconfig2live_multiconfig(result)
+                live_config["user"] = args.user
+                now = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
+                fpath = f"configs/live/{now}_{args.user}.hjson"
+                hjson.dump(live_config, open(fpath, "w"))
+                print(f"successfully dumped live config {fpath}")
         except Exception as e:
-            print(f"error with {file_location} {e}")
+            print(f"error with {args.file_location} {e}")
 
 
 if __name__ == "__main__":
@@ -144,6 +154,15 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable verbosity",
     )
+    parser.add_argument(
+        "-u",
+        "--user",
+        type=str,
+        required=False,
+        dest="user",
+        default=None,
+        help="if user is passed, generate live config",
+    )
     args = parser.parse_args()
 
-    main(args.file_location, args.verbose)
+    main(args)
