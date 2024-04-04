@@ -4,11 +4,11 @@
 
   // multisym auto unstuck: will use profits from other positions to offset losses realized on stuck positions
 
-  // how much below past peak balance to allow losses (default 1% == 0.01). Set to 0.0 to disable multisym auto unstuck.
-  loss_allowance_pct: 0.002
-
   // how far into the past to fetch pnl history
   pnls_max_lookback_days: 30
+
+  // how much below past peak balance to allow losses (default 1% == 0.01). Set to 0.0 to disable multisym auto unstuck.
+  loss_allowance_pct: 0.002
 
   // if wallet_exposure / wallet_exposure_limit > stuck_threshold: consider position as stuck
   stuck_threshold: 0.9
@@ -58,16 +58,17 @@
   // Live configs.
   // Will try to find live configs in this order: 1. live_configs_dir, 2. default_config_path, 3. universal_live_config
 
-  // Specify directory containing live configs.
+  // 1. Specify directory containing live configs.
   // They are sorted alphabetically, then the first config whose filename includes symbol is selected.
   // Set to "" to disable
   live_configs_dir: configs/live/multisymbol/no_AU/
 
-  // if symbol is missing from live_configs_map, default to this config
+  // 2. Specify single config file
+  // if symbol is missing from live_configs_dir, default to this config
   // Set to "" to disable
   default_config_path: configs/live/recursive_grid_mode.example.json
 
-  // Specify live config for all symbols directly
+  // 3. Specify live config for all symbols directly
   universal_live_config:
   {
     long:
