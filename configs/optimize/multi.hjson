@@ -34,15 +34,11 @@
   long_enabled: true
   short_enabled: true
 
-  # only backwards tp supported
-  backwards_tp_long: true
-  backwards_tp_short: true
-
   bounds:
   {
     global_TWE_long: [0.0, 9.0]
     global_TWE_short: [0.0, 9.0]
-    global_loss_allowance_pct: [0.001, 0.5]
+    global_loss_allowance_pct: [-0.01, 0.01]
     global_stuck_threshold: [0.5, 0.95]
     global_unstuck_close_pct: [0.001, 0.01]
 
