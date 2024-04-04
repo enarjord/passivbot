@@ -441,9 +441,9 @@ def flatten_dict(d, parent_key="", sep="_"):
 
 
 def sort_dict_keys(d):
-    if type(d) == list:
+    if isinstance(d, list):
         return [sort_dict_keys(e) for e in d]
-    if type(d) != dict:
+    if not isinstance(d, dict):
         return d
     return {key: sort_dict_keys(d[key]) for key in sorted(d)}
 
@@ -493,7 +493,56 @@ def flatten(lst: list) -> list:
 
 
 def get_template_live_config(passivbot_mode="neat_grid"):
-    if passivbot_mode == "recursive_grid":
+    if passivbot_mode == "multi":
+        return {
+            "user": "bybit_01",
+            "pnls_max_lookback_days": 30,
+            "loss_allowance_pct": 0.002,
+            "stuck_threshold": 0.9,
+            "unstuck_close_pct": 0.01,
+            "execution_delay_seconds": 2,
+            "max_n_cancellations_per_batch": 8,
+            "max_n_creations_per_batch": 4,
+            "auto_gs": True,
+            "TWE_long": 2,
+            "TWE_short": 0.1,
+            "long_enabled": True,
+            "short_enabled": False,
+            "symbols": {
+                "COIN1": "-lm n -sm gs -lc configs/live/custom/COIN1USDT.json",
+                "COIN2": "-lm n -sm gs -sw 0.4",
+                "COIN3": "-lm gs -sm n  -lw 0.15 -lev 12",
+            },
+            "live_configs_dir": "configs/live/multisymbol/no_AU/",
+            "default_config_path": "configs/live/recursive_grid_mode.example.json",
+            "universal_live_config": {
+                "long": {
+                    "ddown_factor": 0.6038,
+                    "ema_span_0": 149.6,
+                    "ema_span_1": 667.6,
+                    "initial_eprice_ema_dist": 0.004734,
+                    "initial_qty_pct": 0.01,
+                    "markup_range": 0.002959,
+                    "min_markup": 0.003966,
+                    "n_close_orders": 2,
+                    "rentry_pprice_dist": 0.026,
+                    "rentry_pprice_dist_wallet_exposure_weighting": 1.464,
+                },
+                "short": {
+                    "ddown_factor": 0.2415,
+                    "ema_span_0": 308.8,
+                    "ema_span_1": 1024,
+                    "initial_eprice_ema_dist": 0.004,
+                    "initial_qty_pct": 0.01,
+                    "markup_range": 0,
+                    "min_markup": 0.001939,
+                    "n_close_orders": 6,
+                    "rentry_pprice_dist": 0.03088,
+                    "rentry_pprice_dist_wallet_exposure_weighting": 3.257,
+                },
+            },
+        }
+    elif passivbot_mode == "recursive_grid":
         return sort_dict_keys(
             {
                 "config_name": "recursive_grid_test",
@@ -2115,7 +2164,7 @@ def symbol2coin(symbol: str) -> str:
     return coin
 
 
-def live_multi_config2single_config(live_multi_config: dict) -> dict:
+def backtested_multiconfig2singleconfig(backtested_config: dict) -> dict:
     template = get_template_live_config("recursive_grid")
     for pside in ["long", "short"]:
         for key, val in [
@@ -2126,9 +2175,25 @@ def live_multi_config2single_config(live_multi_config: dict) -> dict:
             ("backwards_tp", True),
         ]:
             template[pside][key] = val
-        for key in live_multi_config["live_config"][pside]:
-            template[pside][key] = live_multi_config["live_config"][pside][key]
+        for key in backtested_config["live_config"][pside]:
+            template[pside][key] = backtested_config["live_config"][pside][key]
     template["config_name"] = "_".join(
-        [symbol2coin(sym) for sym in live_multi_config["args"]["symbols"]]
+        [symbol2coin(sym) for sym in backtested_config["args"]["symbols"]]
     )
+    return template
+
+
+def backtested_multiconfig2live_multiconfig(backtested_config: dict) -> dict:
+    template = get_template_live_config("multi")
+    for key in ["long_enabled", "short_enabled", "symbols"]:
+        template[key] = backtested_config["args"][key]
+    for key in ["live_configs_dir", "default_config_path"]:
+        template[key] = ""
+    for key in backtested_config["live_config"]["global"]:
+        template[key] = backtested_config["live_config"]["global"][key]
+    for pside in ["long", "short"]:
+        for key in backtested_config["live_config"][pside]:
+            template["universal_live_config"][pside][key] = backtested_config["live_config"][pside][
+                key
+            ]
     return template
