@@ -9,6 +9,7 @@ import logging
 import argparse
 import signal
 import sys
+import traceback
 from deap import base, creator, tools, algorithms
 from collections import OrderedDict
 from procedures import utc_ms, make_get_filepath
@@ -24,6 +25,86 @@ from pure_funcs import (
 )
 from backtest_multi import backtest_multi, prep_config_multi, prep_hlcs_mss_config
 from njit_multisymbol import backtest_multisymbol_recursive_grid
+
+
+def mutPolynomialBoundedWrapper(individual, eta, low, up, indpb):
+    """
+    A wrapper around DEAP's mutPolynomialBounded function to pre-process
+    bounds and handle the case where lower and upper bounds may be equal.
+
+    Args:
+        individual: Sequence individual to be mutated.
+        eta: Crowding degree of the mutation.
+        low: A value or sequence of values that is the lower bound of the search space.
+        up: A value or sequence of values that is the upper bound of the search space.
+        indpb: Independent probability for each attribute to be mutated.
+
+    Returns:
+        A tuple of one individual, mutated with consideration for equal lower and upper bounds.
+    """
+    # Convert low and up to numpy arrays for easier manipulation
+    low_array = np.array(low)
+    up_array = np.array(up)
+
+    # Identify dimensions where lower and upper bounds are equal
+    equal_bounds_mask = low_array == up_array
+
+    # Temporarily adjust bounds for those dimensions
+    # This adjustment is arbitrary and won't affect the outcome since the mutation
+    # won't be effective in these dimensions
+    temp_low = np.where(equal_bounds_mask, low_array - 1e-6, low_array)
+    temp_up = np.where(equal_bounds_mask, up_array + 1e-6, up_array)
+
+    # Call the original mutPolynomialBounded function with the temporarily adjusted bounds
+    tools.mutPolynomialBounded(individual, eta, list(temp_low), list(temp_up), indpb)
+
+    # Reset values in dimensions with originally equal bounds to ensure they remain unchanged
+    for i, equal in enumerate(equal_bounds_mask):
+        if equal:
+            individual[i] = low[i]
+
+    return (individual,)
+
+
+def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up):
+    """
+    A wrapper around DEAP's cxSimulatedBinaryBounded function to pre-process
+    bounds and handle the case where lower and upper bounds are equal.
+
+    Args:
+        ind1: The first individual participating in the crossover.
+        ind2: The second individual participating in the crossover.
+        eta: Crowding degree of the crossover.
+        low: A value or sequence of values that is the lower bound of the search space.
+        up: A value or sequence of values that is the upper bound of the search space.
+
+    Returns:
+        A tuple of two individuals after crossover operation.
+    """
+    # Convert low and up to numpy arrays for easier manipulation
+    low_array = np.array(low)
+    up_array = np.array(up)
+
+    # Identify dimensions where lower and upper bounds are equal
+    equal_bounds_mask = low_array == up_array
+
+    # Temporarily adjust bounds for those dimensions to prevent division by zero
+    # This adjustment is arbitrary and won't affect the outcome since the crossover
+    # won't modify these dimensions
+    low_array[equal_bounds_mask] -= 1e-6
+    up_array[equal_bounds_mask] += 1e-6
+
+    # Call the original cxSimulatedBinaryBounded function with adjusted bounds
+    tools.cxSimulatedBinaryBounded(ind1, ind2, eta, list(low_array), list(up_array))
+
+    # Ensure that values in dimensions with originally equal bounds are reset
+    # to the bound value (since they should not be modified)
+    for i, equal in enumerate(equal_bounds_mask):
+        if equal:
+            ind1[i] = low[i]
+            ind2[i] = low[i]
+
+    return ind1, ind2
 
 
 def signal_handler(signal, frame):
@@ -323,9 +404,15 @@ def backtest_multi(hlcs, config):
     return res
 
 
-def add_starting_configs(pop, config):
+def add_starting_configs(pop, config, toolbox):
     for cfg in config["starting_configs"]:
-        pass
+        individual = config_to_individual(cfg)
+        ind = toolbox.individual()  # Create a new individual
+        for i, value in enumerate(individual):
+            ind[i] = value
+        ind.fitness.values = toolbox.evaluate(ind)
+        pop.append(ind)
+    return pop
 
 
 async def main():
@@ -396,10 +483,7 @@ async def main():
         evaluator = Evaluator(hlcs, config)
 
         NUMBER_OF_VARIABLES = len(config["bounds"])
-        BOUNDS = [
-            (x[0] * (1 - 1e-12), x[1] * (1 + 1e-12)) if x[0] == x[1] else (x[0], x[1])
-            for x in config["bounds"].values()
-        ]
+        BOUNDS = [(x[0], x[1]) for x in config["bounds"].values()]
         n_cpus = max(1, config["n_cpus"])  # Specify the number of CPUs to use
 
         # Define the problem as a multi-objective optimization
@@ -421,14 +505,14 @@ async def main():
         toolbox.register("evaluate", evaluator.evaluate)
         toolbox.register(
             "mate",
-            tools.cxSimulatedBinaryBounded,
+            cxSimulatedBinaryBoundedWrapper,
             low=[bound[0] for bound in BOUNDS],
             up=[bound[1] for bound in BOUNDS],
             eta=20.0,
         )
         toolbox.register(
             "mutate",
-            tools.mutPolynomialBounded,
+            mutPolynomialBoundedWrapper,
             low=[bound[0] for bound in BOUNDS],
             up=[bound[1] for bound in BOUNDS],
             eta=20.0,
@@ -463,6 +547,9 @@ async def main():
             halloffame=hof,
             verbose=True,
         )
+    except Exception as e:
+        print(e)
+        traceback.print_exc()
     finally:
         # Close the pool
         logging.info(f"attempting clean shutdown...")
