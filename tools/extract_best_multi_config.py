@@ -102,6 +102,7 @@ def process_single(file_location, verbose=False):
 
     # Processing the best result for configuration
     best_d = xs[best]
+    best_d["analysis"]["n_iters"] = len(lines)
     cfg = best_d["live_config"]
     cfg["long"]["wallet_exposure_limit"] = cfg["global"]["TWE_long"] / len(best_d["args"]["symbols"])
     cfg["short"]["wallet_exposure_limit"] = cfg["global"]["TWE_short"] / len(
