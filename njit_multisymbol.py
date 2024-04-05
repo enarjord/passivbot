@@ -678,7 +678,11 @@ def backtest_multisymbol_recursive_grid(
                                 ),
                             ),
                         )
-                        unstucking_close = (abs(close_qty), close_price, "unstuck_close_short")
+                        unstucking_close = (
+                            min(abs(close_qty), abs(poss_short[s_i][0])),
+                            close_price,
+                            "unstuck_close_short",
+                        )
                     else:  # long
                         close_price = max(hlcs[s_i][k][2], emas_long[s_i].max())  # upper ema band
                         upnl = calc_pnl_long(
@@ -714,7 +718,11 @@ def backtest_multisymbol_recursive_grid(
                                 ),
                             ),
                         )
-                        unstucking_close = (-abs(close_qty), close_price, "unstuck_close_long")
+                        unstucking_close = (
+                            -min(abs(close_qty), abs(poss_long[s_i][0])),
+                            close_price,
+                            "unstuck_close_long",
+                        )
 
         # check if open orders long need to be updated
         for i in idxs_long:
