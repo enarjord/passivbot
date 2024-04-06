@@ -228,6 +228,7 @@ class Passivbot:
             and self.markets_dict[sym]["swap"]
         ]
         self.ohlcv_upd_timestamps = {symbol: 0 for symbol in self.ohlcv_symbols}
+        self.noisiness = {symbol: 0.0 for symbol in self.ohlcv_symbols}
         for f in ["exchange_config", "emas", "positions", "open_orders", "pnls"]:
             res = await getattr(self, f"update_{f}")()
             logging.info(f"initiating {f} {res}")
@@ -1229,7 +1230,9 @@ class Passivbot:
     def load_ohlcv_from_cache(self, symbol, suppress_error_log=False):
         fname = symbol.replace(f"/{self.quote}:{self.quote}", "") + ".json"
         try:
-            return json.load(open(os.path.join(self.ohlcvs_cache_dirpath, fname)))
+            ohlcvs = json.load(open(os.path.join(self.ohlcvs_cache_dirpath, fname)))
+            self.noisiness[symbol] = np.mean([(x[2] - x[3]) / x[4] for x in ohlcvs])
+            return ohlcvs
         except Exception as e:
             if not suppress_error_log:
                 logging.error(f"failed to load ohlcvs from cache for {symbol}")
@@ -1245,7 +1248,7 @@ class Passivbot:
             logging.error(f"failed to dump ohlcvs to cache for {symbol}")
             traceback.print_exc()
 
-    async def maintain_ohlcvs(self, timeframe="15m", sleep_interval=10):
+    async def maintain_ohlcvs(self, timeframe="15m", sleep_interval=15):
         for symbol in self.ohlcv_symbols:
             ohlcvs = self.load_ohlcv_from_cache(symbol, suppress_error_log=True)
             if ohlcvs:
@@ -1258,14 +1261,19 @@ class Passivbot:
         while True:
             missing_symbols = [s for s in self.ohlcv_symbols if s not in self.ohlcvs]
             if missing_symbols:
-                print("missing symbols", missing_symbols)
+                sleep_interval_ = 1
+                logging.info(
+                    f"missing symbols for ohlcvs: {(missing_symbols if len(missing_symbols) < 10 else len(missing_symbols))}"
+                )
                 symbol = missing_symbols[0]
             else:
+                sleep_interval_ = sleep_interval
                 symbol = sorted(self.ohlcv_symbols, key=lambda x: self.ohlcv_upd_timestamps[x])[0]
             self.ohlcvs[symbol] = await self.fetch_ohlcv(symbol, timeframe=timeframe)
             self.dump_ohlcv_to_cache(symbol, self.ohlcvs[symbol])
             # logging.info(f"updated ohlcvs for {symbol}")
-            await asyncio.sleep(sleep_interval)
+            self.noisiness[symbol] = np.mean([(x[2] - x[3]) / x[4] for x in self.ohlcvs[symbol]])
+            await asyncio.sleep(sleep_interval_)
 
 
 async def main():
