@@ -95,6 +95,7 @@ class Passivbot:
         self.live_configs = {}
         self.stop_bot = False
         self.pnls_cache_filepath = make_get_filepath(f"caches/{self.exchange}/{self.user}_pnls.json")
+        self.ohlcvs_cache_dirpath = make_get_filepath(f"caches/{self.exchange}/ohlcvs/")
         self.previous_execution_ts = 0
         self.recent_fill = False
         self.execution_delay_millis = max(3000.0, self.config["execution_delay_seconds"] * 1000)
@@ -218,6 +219,15 @@ class Passivbot:
                         ("backwards_tp", True),
                     ]:
                         self.live_configs[symbol][pside][key] = val
+        self.ohlcvs = {}
+        self.ohlcv_symbols = [
+            sym
+            for sym in sorted(self.markets_dict)
+            if self.markets_dict[sym]["active"]
+            and sym.endswith(f"/{self.quote}:{self.quote}")
+            and self.markets_dict[sym]["swap"]
+        ]
+        self.ohlcv_upd_timestamps = {symbol: 0 for symbol in self.ohlcv_symbols}
         for f in ["exchange_config", "emas", "positions", "open_orders", "pnls"]:
             res = await getattr(self, f"update_{f}")()
             logging.info(f"initiating {f} {res}")
@@ -712,6 +722,8 @@ class Passivbot:
             ohs = await asyncio.gather(
                 *[self.fetch_ohlcv(symbol, timeframe="15m") for symbol in sym_list]
             )
+            for oh, sym in zip(ohs, sym_list):
+                self.dump_ohlcv_to_cache(sym, oh)
             samples_1m = [
                 calc_samples(numpyize(oh)[:, [0, 5, 4]], sample_size_ms=60000) for oh in ohs
             ]
@@ -1213,6 +1225,47 @@ class Passivbot:
         logging.info("done initiating bot")
         logging.info("starting websockets")
         await asyncio.gather(self.execution_loop(), self.start_websockets())
+
+    def load_ohlcv_from_cache(self, symbol, suppress_error_log=False):
+        fname = symbol.replace(f"/{self.quote}:{self.quote}", "") + ".json"
+        try:
+            return json.load(open(os.path.join(self.ohlcvs_cache_dirpath, fname)))
+        except Exception as e:
+            if not suppress_error_log:
+                logging.error(f"failed to load ohlcvs from cache for {symbol}")
+                traceback.print_exc()
+
+    def dump_ohlcv_to_cache(self, symbol, ohlcv):
+        fname = symbol.replace(f"/{self.quote}:{self.quote}", "") + ".json"
+        try:
+            json.dump(ohlcv, open(os.path.join(self.ohlcvs_cache_dirpath, fname), "w"))
+            self.ohlcv_upd_timestamps[symbol] = utc_ms()
+            # logging.info(f'dumped ohlcv for {symbol} to {os.path.join(self.ohlcvs_cache_dirpath, fname)}')
+        except Exception as e:
+            logging.error(f"failed to dump ohlcvs to cache for {symbol}")
+            traceback.print_exc()
+
+    async def maintain_ohlcvs(self, timeframe="15m", sleep_interval=10):
+        for symbol in self.ohlcv_symbols:
+            ohlcvs = self.load_ohlcv_from_cache(symbol, suppress_error_log=True)
+            if ohlcvs:
+                self.ohlcvs[symbol] = ohlcvs
+                if not self.ohlcv_upd_timestamps[symbol]:
+                    logging.info(
+                        f"setting ohlcv_upd_timestamps for {symbol} to {self.ohlcvs[symbol][-1][0]}"
+                    )
+                    self.ohlcv_upd_timestamps[symbol] = self.ohlcvs[symbol][-1][0]
+        while True:
+            missing_symbols = [s for s in self.ohlcv_symbols if s not in self.ohlcvs]
+            if missing_symbols:
+                print("missing symbols", missing_symbols)
+                symbol = missing_symbols[0]
+            else:
+                symbol = sorted(self.ohlcv_symbols, key=lambda x: self.ohlcv_upd_timestamps[x])[0]
+            self.ohlcvs[symbol] = await self.fetch_ohlcv(symbol, timeframe=timeframe)
+            self.dump_ohlcv_to_cache(symbol, self.ohlcvs[symbol])
+            # logging.info(f"updated ohlcvs for {symbol}")
+            await asyncio.sleep(sleep_interval)
 
 
 async def main():
