@@ -4,9 +4,9 @@ Passivbot may be run in multi symbol mode, where one bot handles multiple symbol
 
 - only recursive grid mode is supported.
 - only USDT margined perpetual futures is supported.
-- supported exchanges: Bitget, OKX, Bybit, Binance.
-- backtesting is supported, optimizing not.
-- bot will automatically set positions not under active management to graceful stop mode
+- supported exchanges: Bitget, OKX, Bybit, Binance, BingX and Hyperliquid.
+- backtesting and optimizing is supported with backtest_multi.py and optimize_multi.py.
+- bot will automatically set positions not under active management to graceful stop mode.
 
 ## Usage
 

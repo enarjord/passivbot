@@ -4,8 +4,8 @@ Here follows a quick start guide for passivbot installation
 
 ## Exchange account and API access
 
-Passivbot works on Binance, Binance.US, Bybit, Bitget, OKX and Kucoin.  
-US residents are advised to use Bitget with a VPN because, at the time of writing, Bitget does not require KYC verification for derivatives trading.
+Passivbot works on Binance, Binance.US, Bybit, Bitget, OKX, Kucoin, BingX and Hyperliquid.  
+US residents are advised to use Hyperliquid with a VPN because, at the time of writing, Hyperliquid does not require KYC verification for derivatives trading.
 
 Create an API key with trading permissions. Some exchanges will use only a key and secret, some will use a key, secret and passphrase.  
 
@@ -23,11 +23,11 @@ Passivbot is lightweight, and 50+ bot instances can be run on the cheapest dropl
 
 Most exchanges have servers located in Asia, so choosing Singapore as droplet server location will probably give the lowest latency, but low latency is not critical for passivbot performance.
 
-The bot can be installed on a Windows server, but in this guide it is assumed that a Ubuntu 22.04+ x64 droplet is used.  
+The bot can be installed on a Windows server, but in this guide it is assumed that a Ubuntu 22.04 x64 droplet is used.  
 
 Access the VPS via SSH, web browser console, PuTTY or whatever method is preferred (if in doubt, the simplest is to click on "Access Console" -> "Launch Droplet Console" and a pop-up window will appear).
 
-If running more than one or two bot instances on the cheapest droplet with 500mb RAM, adding swap space is needed.  See this guide:  
+If running more than one or two bot instances on the cheapest droplet with 500mb RAM, adding swap space is needed. See this guide:  
 https://www.digitalocean.com/community/tutorials/how-to-add-swap-space-on-ubuntu-20-04  
 
 4GB swap is sufficient for most cases; add more if needed.  
@@ -75,11 +75,11 @@ See here for instructions to use the manager: `https://github.com/enarjord/passi
 Alternatively, use screen or tmux, which work similarly, but with different commands. Here follow instructions for tmux:
 * Start a new tmux session: `tmux new -s {name}` where `{name}` is an arbitrary name chosen, for example `bot1` or `xrp`.
 A green line at the bottom indicates one is inside a tmux session. Tmux sessions can be compared to browser tabs.
-* Now a passivbot instance may be started: `python3 passivbot.py {exchange_name}_01 SYMUSDT configs/live/configs/live/{config_name}.json`,  
-where `{exchange_name}_01` must match the entry inside `api-keys.json` and `configs/live/configs/live/{config_name}.json` must match the live config name file.  
+* Now a passivbot instance may be started: `python3 passivbot.py {exchange_name}_01 SYMUSDT configs/live/{config_name}.json`,  
+where `{exchange_name}_01` must match the entry inside `api-keys.json` and `configs/live/{config_name}.json` must match the live config name file.  
 If started without any additional arguments, default settings are used. Run `python3 passivbot.py --help` to see all command options.  
 For example, to start a bot with shorts disabled and long wallet exposure limit set to 0.5, run  
-`python3 passivbot.py {exchange_name}_01 SYMUSDT configs/live/configs/live/{config_name}.json -sm gs -lw 0.5`
+`python3 passivbot.py {exchange_name}_01 SYMUSDT configs/live/{config_name}.json -sm gs -lw 0.5`
 
 Now the console may be closed without stopping the bot.  
 
