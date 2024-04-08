@@ -3,7 +3,7 @@ import json
 import os
 import traceback
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from time import time
 import numpy as np
 import pprint
@@ -546,6 +546,26 @@ def utc_ms() -> float:
 
 def local_time() -> float:
     return datetime.now().astimezone().timestamp() * 1000
+
+
+def get_file_modification_utc(filepath):
+    """
+    Get the UTC timestamp of the last modification of a file.
+
+    Args:
+        filepath (str): The path to the file.
+
+    Returns:
+        float: The UTC timestamp in milliseconds of the last modification of the file.
+    """
+    # Get the last modification time of the file in seconds since the epoch
+    mod_time_epoch = os.path.getmtime(filepath)
+
+    # Convert the timestamp to a UTC datetime object
+    mod_time_utc = datetime.utcfromtimestamp(mod_time_epoch)
+
+    # Return the UTC timestamp
+    return mod_time_utc.timestamp() * 1000
 
 
 def print_async_exception(coro):
