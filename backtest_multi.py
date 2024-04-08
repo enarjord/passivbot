@@ -26,6 +26,7 @@ from pure_funcs import (
     calc_drawdowns,
     str2bool,
     denumpyize,
+    calc_hash,
 )
 from plotting import plot_pnls_stuck, plot_pnls_separate, plot_pnls_long_short, plot_fills_multi
 from collections import OrderedDict
@@ -169,6 +170,41 @@ def load_and_parse_config(path: str):
         # hjson optimize config type
         formatted = loaded
         formatted["live_configs"] = {}
+    elif all(
+        [
+            x in loaded
+            for x in [
+                "user",
+                "pnls_max_lookback_days",
+                "loss_allowance_pct",
+                "stuck_threshold",
+                "unstuck_close_pct",
+                "execution_delay_seconds",
+                "max_n_cancellations_per_batch",
+                "max_n_creations_per_batch",
+                "auto_gs",
+                "TWE_long",
+                "TWE_short",
+                "long_enabled",
+                "short_enabled",
+                "symbols",
+                "live_configs_dir",
+                "default_config_path",
+                "universal_live_config",
+            ]
+        ]
+    ):
+        # hjson live multi config
+        formatted = loaded
+        formatted["exchange"] = "binance"
+        formatted["start_date"] = "2021-05-01"
+        formatted["end_date"] = "now"
+        formatted["starting_balance"] = 100000.0
+        formatted["base_dir"] = "backtests"
+        formatted["live_configs"] = {
+            symbol: {pside: loaded["universal_live_config"][pside] for pside in ["long", "short"]}
+            for symbol in formatted["symbols"]
+        }
     else:
         raise Exception("unknown config type")
     return formatted
@@ -213,13 +249,13 @@ def args2config(args):
 async def prep_hlcs_mss_config(config):
     if config["end_date"] in ["now", "", "today"]:
         config["end_date"] = ts_to_date_utc(utc_ms())[:10]
-    coins = [s.replace("USDT", "") for s in config["symbols"]]
+    coins = [s.replace("USDT", "") for s in sorted(set(config["symbols"]))]
     config["cache_fpath"] = make_get_filepath(
         oj(
             f"{config['base_dir']}",
             "multisymbol",
             config["exchange"],
-            f"{'_'.join(coins)}_{config['start_date']}_{config['end_date']}_hlc_cache.npy",
+            f"{calc_hash(coins)}_{config['start_date']}_{config['end_date']}_hlc_cache.npy",
         )
     )
 
