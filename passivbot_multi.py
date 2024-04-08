@@ -12,7 +12,14 @@ import pprint
 import numpy as np
 from uuid import uuid4
 
-from procedures import load_broker_code, load_user_info, utc_ms, make_get_filepath, load_live_config
+from procedures import (
+    load_broker_code,
+    load_user_info,
+    utc_ms,
+    make_get_filepath,
+    load_live_config,
+    get_file_modification_utc,
+)
 from njit_funcs_recursive_grid import calc_recursive_entries_long, calc_recursive_entries_short
 from njit_funcs import (
     calc_samples,
@@ -1227,10 +1234,15 @@ class Passivbot:
         logging.info("starting websockets")
         await asyncio.gather(self.execution_loop(), self.start_websockets())
 
+    def get_ohlcv_fpath(self, symbol) -> str:
+        return os.path.join(
+            self.ohlcvs_cache_dirpath, symbol.replace(f"/{self.quote}:{self.quote}", "") + ".json"
+        )
+
     def load_ohlcv_from_cache(self, symbol, suppress_error_log=False):
-        fname = symbol.replace(f"/{self.quote}:{self.quote}", "") + ".json"
+        fpath = self.get_ohlcv_fpath(symbol)
         try:
-            ohlcvs = json.load(open(os.path.join(self.ohlcvs_cache_dirpath, fname)))
+            ohlcvs = json.load(open(fpath))
             self.noisiness[symbol] = np.mean([(x[2] - x[3]) / x[4] for x in ohlcvs])
             return ohlcvs
         except Exception as e:
@@ -1239,11 +1251,12 @@ class Passivbot:
                 traceback.print_exc()
 
     def dump_ohlcv_to_cache(self, symbol, ohlcv):
-        fname = symbol.replace(f"/{self.quote}:{self.quote}", "") + ".json"
+        fpath = self.get_ohlcv_fpath(symbol)
         try:
-            json.dump(ohlcv, open(os.path.join(self.ohlcvs_cache_dirpath, fname), "w"))
-            self.ohlcv_upd_timestamps[symbol] = utc_ms()
-            # logging.info(f'dumped ohlcv for {symbol} to {os.path.join(self.ohlcvs_cache_dirpath, fname)}')
+            json.dump(ohlcv, open(fpath, "w"))
+            self.ohlcv_upd_timestamps[symbol] = get_file_modification_utc(
+                self.get_ohlcv_fpath(symbol)
+            )
         except Exception as e:
             logging.error(f"failed to dump ohlcvs to cache for {symbol}")
             traceback.print_exc()
@@ -1253,11 +1266,9 @@ class Passivbot:
             ohlcvs = self.load_ohlcv_from_cache(symbol, suppress_error_log=True)
             if ohlcvs:
                 self.ohlcvs[symbol] = ohlcvs
-                if not self.ohlcv_upd_timestamps[symbol]:
-                    logging.info(
-                        f"setting ohlcv_upd_timestamps for {symbol} to {self.ohlcvs[symbol][-1][0]}"
-                    )
-                    self.ohlcv_upd_timestamps[symbol] = self.ohlcvs[symbol][-1][0]
+                self.ohlcv_upd_timestamps[symbol] = get_file_modification_utc(
+                    self.get_ohlcv_fpath(symbol)
+                )
         while True:
             missing_symbols = [s for s in self.ohlcv_symbols if s not in self.ohlcvs]
             if missing_symbols:
@@ -1268,7 +1279,21 @@ class Passivbot:
                 symbol = missing_symbols[0]
             else:
                 sleep_interval_ = sleep_interval
-                symbol = sorted(self.ohlcv_symbols, key=lambda x: self.ohlcv_upd_timestamps[x])[0]
+                for _ in range(100):
+                    symbol = sorted(self.ohlcv_symbols, key=lambda x: self.ohlcv_upd_timestamps[x])[0]
+                    # check if has been modified by other PB instance
+                    self.ohlcv_upd_timestamps[symbol] = get_file_modification_utc(
+                        self.get_ohlcv_fpath(symbol)
+                    )
+                    if (
+                        symbol
+                        == sorted(self.ohlcv_symbols, key=lambda x: self.ohlcv_upd_timestamps[x])[0]
+                    ):
+                        break
+                else:
+                    logging.error(
+                        f"more than 100 retries for getting most recently modified ohlcv symbol"
+                    )
             self.ohlcvs[symbol] = await self.fetch_ohlcv(symbol, timeframe=timeframe)
             self.dump_ohlcv_to_cache(symbol, self.ohlcvs[symbol])
             # logging.info(f"updated ohlcvs for {symbol}")
