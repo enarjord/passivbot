@@ -187,6 +187,7 @@ def analyze_fills_opti(fills, stats, config):
     pnl_ratios_symbols = {
         symbol: pnls_by_symbol[symbol] / pnl_sum if pnl_sum else 0.0 for symbol in config["symbols"]
     }
+    pnl_ratios_symbols = {k: v for k, v in sorted(pnl_ratios_symbols.items(), key=lambda x: x[1])}
 
     worst_drawdown_mod = (
         max(config["worst_drawdown_lower_bound"], worst_drawdown)
