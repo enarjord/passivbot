@@ -67,6 +67,10 @@ class Passivbot:
             ("short_enabled", True),
             ("max_n_cancellations_per_batch", 8),
             ("max_n_creations_per_batch", 4),
+            ("forbidden_symbols", []),
+            ("n_longs", 0),
+            ("n_shorts", 0),
+            ("minimum_market_age_days", 0),
         ]:
             if key not in self.config:
                 self.config[key] = default_val
