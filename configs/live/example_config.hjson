@@ -42,8 +42,6 @@
     // manual mode: passivbot ignores the position
     // graceful stop: if there is a position, passivbot will manage it, otherwise passivbot will not make new positions
     // take profit only: passivbot will only manage closing orders
-  // -pp float: price precision multiplier. Override price step with market_price * price_precision_multiplier rounded to one significant digit. Suggested val 0.0001. Set to 0.0 to disable.
-  // -ps float: price step custom. Override price step with custom price step. Takes precedence over -pp. Set to 0.0 to disable.
   // -lw float: wallet exposure limit long. Overrides value from live config. If absent, WE long is TWE_long / len(active_symbols_long)
   // -sw: float: wallet exposure limit short. Overrides value from live config.
   // -lev int: leverage set on exchange, if applicable. Default is 10.
@@ -54,6 +52,19 @@
     COIN2: -lm n -sm gs -sw 0.4
     COIN3: -lm gs -sm n  -lw 0.15 -lev 12
   }
+
+  // Forager mode. Dynamically enable bots on markets of higher noisiness.
+  // Only select among symbols defined above. If symbols == [], all symbols are eligible.
+
+  // explicitly avoid coins
+  forbidden_symbols: []
+
+  // if n_longs and n_shorts are both zero, disable forager mode.
+  n_longs: 0
+  n_shorts: 0
+
+  // minimum market age. Don't trade markets younger than x days. Set to zero to allow all markets.
+  minimum_market_age_days: 60
 
   // Live configs.
   // Will try to find live configs in this order: 1. live_configs_dir, 2. default_config_path, 3. universal_live_config
