@@ -19,6 +19,7 @@ from procedures import (
     make_get_filepath,
     load_live_config,
     get_file_mod_utc,
+    get_first_ohlcv_timestamps,
 )
 from njit_funcs_recursive_grid import calc_recursive_entries_long, calc_recursive_entries_short
 from njit_funcs import (
@@ -118,27 +119,28 @@ class Passivbot:
         parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
         parser.add_argument("-sm", type=str, required=False, dest="short_mode", default=None)
         parser.add_argument("-lm", type=str, required=False, dest="long_mode", default=None)
-        parser.add_argument(
-            "-pp", type=float, required=False, dest="price_precision_multiplier", default=None
-        )
-        parser.add_argument("-ps", type=float, required=False, dest="price_step_custom", default=None)
         parser.add_argument("-lw", type=float, required=False, dest="WE_limit_long", default=None)
         parser.add_argument("-sw", type=float, required=False, dest="WE_limit_short", default=None)
         parser.add_argument("-lev", type=float, required=False, dest="leverage", default=None)
         parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
         self.parser = parser
+        self.args = {
+            symbol: self.parser.parse_args(self.symbols[symbol].split()) for symbol in self.symbols
+        }
 
-    async def init_bot(self):
-        self.adjust_sym_padding()
-        self.setup_internal_argparser()
-
+    def set_live_configs(self):
+        # live configs priority:
+        # 1) -lc path from hjson multi config
+        # 2) live config from live configs dir, matching name or coin
+        # 3) live config from default config path
+        # 4) universal live config given in hjson multi config
         if os.path.isdir(self.config["live_configs_dir"]):
+            # live config candidates from live configs dir
             live_configs_fnames = sorted(
                 [f for f in os.listdir(self.config["live_configs_dir"]) if f.endswith(".json")]
             )
         else:
             live_configs_fnames = []
-        self.args = {}
         for symbol in self.symbols:
             # look for an exact match first
             live_config_fname_l = [
@@ -151,10 +153,8 @@ class Passivbot:
                 if live_config_fname_l == []
                 else os.path.join(self.config["live_configs_dir"], live_config_fname_l[0])
             )
-            args = self.parser.parse_args(self.symbols[symbol].split())
-            self.args[symbol] = args
             for path in [
-                args.live_config_path,
+                self.args[symbol].live_config_path,
                 live_configs_dir_fname,
                 self.config["default_config_path"],
             ]:
@@ -175,13 +175,13 @@ class Passivbot:
                     logging.error(f"failed to apply universal_live_config {e}")
                     raise Exception(f"no usable live config found for {symbol}")
 
-            if args.leverage is None:
+            if self.args[symbol].leverage is None:
                 self.live_configs[symbol]["leverage"] = 10.0
             else:
-                self.live_configs[symbol]["leverage"] = max(1.0, float(args.leverage))
+                self.live_configs[symbol]["leverage"] = max(1.0, float(self.args[symbol].leverage))
 
             for pside in ["long", "short"]:
-                if getattr(args, f"{pside}_mode") is None:
+                if getattr(self.args[symbol], f"{pside}_mode") is None:
                     self.live_configs[symbol][pside]["enabled"] = self.config[f"{pside}_enabled"]
                     self.live_configs[symbol][pside]["mode"] = (
                         "normal"
@@ -189,23 +189,42 @@ class Passivbot:
                         else ("graceful_stop" if self.config["auto_gs"] else "manual")
                     )
                 else:
-                    if getattr(args, f"{pside}_mode") == "gs":
+                    if getattr(self.args[symbol], f"{pside}_mode") == "gs":
                         self.live_configs[symbol][pside]["enabled"] = False
                         self.live_configs[symbol][pside]["mode"] = "graceful_stop"
-                    elif getattr(args, f"{pside}_mode") == "m":
+                    elif getattr(self.args[symbol], f"{pside}_mode") == "m":
                         self.live_configs[symbol][pside]["enabled"] = False
                         self.live_configs[symbol][pside]["mode"] = "manual"
-                    elif getattr(args, f"{pside}_mode") == "n":
+                    elif getattr(self.args[symbol], f"{pside}_mode") == "n":
                         self.live_configs[symbol][pside]["enabled"] = True
                         self.live_configs[symbol][pside]["mode"] = "normal"
-                    elif getattr(args, f"{pside}_mode") == "p":
+                    elif getattr(self.args[symbol], f"{pside}_mode") == "p":
                         self.live_configs[symbol][pside]["enabled"] = False
                         self.live_configs[symbol][pside]["mode"] = "panic"
-                    elif getattr(args, f"{pside}_mode").lower() == "t":
+                    elif getattr(self.args[symbol], f"{pside}_mode").lower() == "t":
                         self.live_configs[symbol][pside]["enabled"] = False
                         self.live_configs[symbol][pside]["mode"] = "tp_only"
                     else:
-                        raise Exception(f"unknown {pside} mode: {getattr(args,f'{pside}_mode')}")
+                        raise Exception(
+                            f"unknown {pside} mode: {getattr(self.args[symbol],f'{pside}_mode')}"
+                        )
+            for pside in ["long", "short"]:
+                # disable AU and set backwards TP
+                for key, val in [
+                    ("auto_unstuck_delay_minutes", 0.0),
+                    ("auto_unstuck_qty_pct", 0.0),
+                    ("auto_unstuck_wallet_exposure_threshold", 0.0),
+                    ("auto_unstuck_ema_dist", 0.0),
+                    ("backwards_tp", True),
+                ]:
+                    self.live_configs[symbol][pside][key] = val
+
+    async def init_bot(self):
+        self.adjust_sym_padding()
+        self.setup_internal_argparser()
+        self.set_live_configs()
+
+        # print symbols and modes
         modes = ["normal", "manual", "graceful_stop", "tp_only", "panic"]
         for mode in modes:
             for pside in ["long", "short"]:
@@ -218,20 +237,7 @@ class Passivbot:
                     logging.info(
                         f"{pside: <5} mode: {mode: <{max([len(x) for x in modes])}}: {', '.join(syms_)}"
                     )
-        for pside in ["long", "short"]:
-            for symbol in self.symbols:
-                # disable AU
-                # if self.config["loss_allowance_pct"] != 0.0:
-                # possible TODO: single coin auto unstuck in multi symbol mode
-                if True:
-                    for key, val in [
-                        ("auto_unstuck_delay_minutes", 0.0),
-                        ("auto_unstuck_qty_pct", 0.0),
-                        ("auto_unstuck_wallet_exposure_threshold", 0.0),
-                        ("auto_unstuck_ema_dist", 0.0),
-                        ("backwards_tp", True),
-                    ]:
-                        self.live_configs[symbol][pside][key] = val
+
         self.ohlcvs = {}
         self.ohlcv_symbols = [
             sym
@@ -255,9 +261,11 @@ class Passivbot:
     async def init_symbols(self):
         # require symbols to be formatted to ccxt standard COIN/QUOTE:QUOTE
 
-        self.markets_dict = await self.cca.load_markets()
+        if not hasattr(self, "markets_dict"):
+            self.markets_dict = await self.cca.load_markets()
+        self.set_approved_symbols()
         self.symbols = {}
-        for symbol_ in sorted(set(self.config["symbols"])):
+        for symbol_ in self.approved_symbols:
             symbol = symbol_
             if not symbol.endswith(f"/{self.quote}:{self.quote}"):
                 coin_extracted = multi_replace(
@@ -300,8 +308,25 @@ class Passivbot:
 
                     self.symbols[symbol] = "-lm m -sm m"
 
-    def get_approved_symbols(self):
-        pass
+    def set_approved_symbols(self):
+        self.first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
+        if self.config["symbols"]:
+            self.approved_symbols = sorted(set(self.config["symbols"]))
+        else:
+            # all symbols approved
+            self.approved_symbols = sorted(set(self.markets_dict))
+        if self.config["forbidden_symbols"]:
+            self.approved_symbols = [
+                x for x in self.approved_symbols if x not in self.config["forbidden_symbols"]
+            ]
+        if self.config["minimum_market_age_days"] > 0:
+            self.approved_symbols = [
+                x
+                for x in self.approved_symbols
+                if x in self.first_timestamps
+                and utc_ms() - self.first_timestamps[x] > self.config["minimum_market_age_days"]
+            ]
+        self.approved_symbols = sorted(set(self.approved_symbols))
 
     def set_wallet_exposure_limits(self):
         # an active bot has normal mode or graceful stop mode with position
