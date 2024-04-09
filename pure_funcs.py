@@ -2193,7 +2193,8 @@ def backtested_multiconfig2live_multiconfig(backtested_config: dict) -> dict:
         template[key] = backtested_config["live_config"]["global"][key]
     for pside in ["long", "short"]:
         for key in backtested_config["live_config"][pside]:
-            template["universal_live_config"][pside][key] = backtested_config["live_config"][pside][
-                key
-            ]
+            if key in template["universal_live_config"][pside]:
+                template["universal_live_config"][pside][key] = backtested_config["live_config"][
+                    pside
+                ][key]
     return template
