@@ -267,7 +267,7 @@ class Passivbot:
 
         if not hasattr(self, "markets_dict"):
             self.markets_dict = await self.cca.load_markets()
-        self.set_approved_symbols()
+        await self.set_approved_symbols()
         self.symbols = {}
         for symbol_ in self.approved_symbols:
             symbol = symbol_
@@ -312,7 +312,7 @@ class Passivbot:
 
                     self.symbols[symbol] = "-lm m -sm m"
 
-    def set_approved_symbols(self):
+    async def set_approved_symbols(self):
         self.first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
         if self.config["symbols"]:
             self.approved_symbols = sorted(set(self.config["symbols"]))
