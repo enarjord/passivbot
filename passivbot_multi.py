@@ -18,7 +18,7 @@ from procedures import (
     utc_ms,
     make_get_filepath,
     load_live_config,
-    get_file_modification_utc,
+    get_file_mod_utc,
 )
 from njit_funcs_recursive_grid import calc_recursive_entries_long, calc_recursive_entries_short
 from njit_funcs import (
@@ -109,10 +109,11 @@ class Passivbot:
         self.force_update_age_millis = 60 * 1000  # force update once a minute
         self.quote = "USDT"
 
-    async def init_bot(self):
+    def adjust_sym_padding(self):
         max_len_symbol = max([len(s) for s in self.symbols])
         self.sym_padding = max(self.sym_padding, max_len_symbol + 1)
 
+    def setup_internal_argparser(self):
         # this argparser is used only internally
         parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
         parser.add_argument("-sm", type=str, required=False, dest="short_mode", default=None)
@@ -125,6 +126,11 @@ class Passivbot:
         parser.add_argument("-sw", type=float, required=False, dest="WE_limit_short", default=None)
         parser.add_argument("-lev", type=float, required=False, dest="leverage", default=None)
         parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
+        self.parser = parser
+
+    async def init_bot(self):
+        self.adjust_sym_padding()
+        self.setup_internal_argparser()
 
         if os.path.isdir(self.config["live_configs_dir"]):
             live_configs_fnames = sorted(
@@ -145,7 +151,7 @@ class Passivbot:
                 if live_config_fname_l == []
                 else os.path.join(self.config["live_configs_dir"], live_config_fname_l[0])
             )
-            args = parser.parse_args(self.symbols[symbol].split())
+            args = self.parser.parse_args(self.symbols[symbol].split())
             self.args[symbol] = args
             for path in [
                 args.live_config_path,
@@ -235,7 +241,6 @@ class Passivbot:
             and self.markets_dict[sym]["swap"]
         ]
         self.ohlcv_upd_timestamps = {symbol: 0 for symbol in self.ohlcv_symbols}
-        self.noisiness = {symbol: 0.0 for symbol in self.ohlcv_symbols}
         for f in ["exchange_config", "emas", "positions", "open_orders", "pnls"]:
             res = await getattr(self, f"update_{f}")()
             logging.info(f"initiating {f} {res}")
@@ -1243,7 +1248,6 @@ class Passivbot:
         fpath = self.get_ohlcv_fpath(symbol)
         try:
             ohlcvs = json.load(open(fpath))
-            self.noisiness[symbol] = np.mean([(x[2] - x[3]) / x[4] for x in ohlcvs])
             return ohlcvs
         except Exception as e:
             if not suppress_error_log:
@@ -1254,25 +1258,34 @@ class Passivbot:
         fpath = self.get_ohlcv_fpath(symbol)
         try:
             json.dump(ohlcv, open(fpath, "w"))
-            self.ohlcv_upd_timestamps[symbol] = get_file_modification_utc(
-                self.get_ohlcv_fpath(symbol)
-            )
+            self.ohlcv_upd_timestamps[symbol] = get_file_mod_utc(self.get_ohlcv_fpath(symbol))
         except Exception as e:
             logging.error(f"failed to dump ohlcvs to cache for {symbol}")
             traceback.print_exc()
+
+    def get_oldest_updated_ohlcv_symbol(self):
+        return sorted(self.ohlcv_symbols, key=lambda x: self.ohlcv_upd_timestamps[x])[0]
+
+    def calc_noisiness(self, symbol=None):
+        if not hasattr(self, "noisiness"):
+            self.noisiness = {}
+        symbols = self.ohlcv_symbols if symbol is None else [symbol]
+        for symbol in symbols:
+            if symbol in self.ohlcvs and len(self.ohlcvs[symbol]) > 0:
+                self.noisiness[symbol] = np.mean([(x[2] - x[3]) / x[4] for x in self.ohlcvs[symbol]])
+            else:
+                self.noisiness[symbol] = 0.0
 
     async def maintain_ohlcvs(self, timeframe="15m", sleep_interval=15):
         for symbol in self.ohlcv_symbols:
             ohlcvs = self.load_ohlcv_from_cache(symbol, suppress_error_log=True)
             if ohlcvs:
                 self.ohlcvs[symbol] = ohlcvs
-                self.ohlcv_upd_timestamps[symbol] = get_file_modification_utc(
-                    self.get_ohlcv_fpath(symbol)
-                )
+                self.ohlcv_upd_timestamps[symbol] = get_file_mod_utc(self.get_ohlcv_fpath(symbol))
         while True:
             missing_symbols = [s for s in self.ohlcv_symbols if s not in self.ohlcvs]
             if missing_symbols:
-                sleep_interval_ = 1
+                sleep_interval_ = 0.1
                 logging.info(
                     f"missing symbols for ohlcvs: {(missing_symbols if len(missing_symbols) < 10 else len(missing_symbols))}"
                 )
@@ -1280,15 +1293,10 @@ class Passivbot:
             else:
                 sleep_interval_ = sleep_interval
                 for _ in range(100):
-                    symbol = sorted(self.ohlcv_symbols, key=lambda x: self.ohlcv_upd_timestamps[x])[0]
+                    symbol = self.get_oldest_updated_ohlcv_symbol()
                     # check if has been modified by other PB instance
-                    self.ohlcv_upd_timestamps[symbol] = get_file_modification_utc(
-                        self.get_ohlcv_fpath(symbol)
-                    )
-                    if (
-                        symbol
-                        == sorted(self.ohlcv_symbols, key=lambda x: self.ohlcv_upd_timestamps[x])[0]
-                    ):
+                    self.ohlcv_upd_timestamps[symbol] = get_file_mod_utc(self.get_ohlcv_fpath(symbol))
+                    if symbol == self.get_oldest_updated_ohlcv_symbol():
                         break
                 else:
                     logging.error(
@@ -1297,8 +1305,13 @@ class Passivbot:
             self.ohlcvs[symbol] = await self.fetch_ohlcv(symbol, timeframe=timeframe)
             self.dump_ohlcv_to_cache(symbol, self.ohlcvs[symbol])
             # logging.info(f"updated ohlcvs for {symbol}")
-            self.noisiness[symbol] = np.mean([(x[2] - x[3]) / x[4] for x in self.ohlcvs[symbol]])
             await asyncio.sleep(sleep_interval_)
+
+    def select_forager_symbols(self):
+        self.calc_noisiness()
+        n_symbols = 10
+        sorted_by_noisiness = sorted(self.noisiness.items(), key=lambda x: x[1])
+        return [x[0] for x in sorted_by_noisiness[-n_symbols:]]
 
 
 async def main():
