@@ -115,8 +115,8 @@ class Passivbot:
         self.quote = "USDT"
 
     def adjust_sym_padding(self):
-        max_len_symbol = max([len(s) for s in self.symbols])
-        self.sym_padding = max(self.sym_padding, max_len_symbol + 1)
+        self.max_len_symbol = max([len(s) for s in self.symbols])
+        self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
 
     def setup_internal_argparser(self):
         # this argparser is used only internally
@@ -165,7 +165,7 @@ class Passivbot:
                 if path is not None and os.path.exists(path):
                     try:
                         self.live_configs[symbol] = load_live_config(path)
-                        logging.info(f"{symbol: <{max_len_symbol}} loaded live config: {path}")
+                        logging.info(f"{symbol: <{self.max_len_symbol}} loaded live config: {path}")
                         break
                     except Exception as e:
                         logging.error(f"failed to load live config {symbol} {path} {e}")
@@ -173,7 +173,7 @@ class Passivbot:
                 try:
                     self.live_configs[symbol] = self.config["universal_live_config"]
                     logging.info(
-                        f"{symbol: <{max_len_symbol}} loaded universal live config from hjson config"
+                        f"{symbol: <{self.max_len_symbol}} loaded universal live config from hjson config"
                     )
                 except Exception as e:
                     logging.error(f"failed to apply universal_live_config {e}")
@@ -313,7 +313,6 @@ class Passivbot:
                     self.symbols[symbol] = "-lm m -sm m"
 
     async def set_approved_symbols(self):
-        self.first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
         if self.config["symbols"]:
             self.approved_symbols = sorted(set(self.config["symbols"]))
         else:
@@ -324,6 +323,7 @@ class Passivbot:
                 x for x in self.approved_symbols if x not in self.config["forbidden_symbols"]
             ]
         if self.config["minimum_market_age_days"] > 0:
+            self.first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
             self.approved_symbols = [
                 x
                 for x in self.approved_symbols
