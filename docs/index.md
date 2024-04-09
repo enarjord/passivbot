@@ -6,7 +6,7 @@
 <a class="github-button" href="https://github.com/enarjord/passivbot/fork" data-icon="octicon-repo-forked" data-size="large" aria-label="Fork enarjord/passivbot on GitHub">Fork</a>
 
 !!! Warning
-    **Use at your own risk! You should never trade with money you cannot or are are afraid to miss.**
+    **Use at your own risk! You should never trade with money you cannot or are afraid to miss.**
 
     YOU ALONE ARE RESPONSIBLE FOR HOW THE BOT BEHAVES, AND FOR ANY LOSSES THAT MAY BE A RESULT OF USING THE BOT!
 
