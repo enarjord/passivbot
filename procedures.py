@@ -548,7 +548,7 @@ def local_time() -> float:
     return datetime.now().astimezone().timestamp() * 1000
 
 
-def get_file_modification_utc(filepath):
+def get_file_mod_utc(filepath):
     """
     Get the UTC timestamp of the last modification of a file.
 
@@ -624,8 +624,12 @@ async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
                     )
                 )
             else:
+                if cc.id in ["hyperliquid"]:
+                    timeframe_ = "1w"
+                else:
+                    timeframe_ = "1M"
                 fetched.append(
-                    (symbol, asyncio.ensure_future(cc.fetch_ohlcv(symbol, timeframe="1M")))
+                    (symbol, asyncio.ensure_future(cc.fetch_ohlcv(symbol, timeframe=timeframe_)))
                 )
             if i + 1 == len(symbols) or (i + 1) % n == 0:
                 for sym, task in fetched:
