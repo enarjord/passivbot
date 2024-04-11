@@ -34,6 +34,7 @@ from pure_funcs import (
     make_compatible,
     determine_passivbot_mode,
     date2ts_utc,
+    remove_OD,
 )
 
 
@@ -863,6 +864,10 @@ def fetch_market_specific_settings(config: dict):
     # import pprint
     # pprint.pprint(elm)
     return sort_dict_keys(settings_from_exchange)
+
+
+def load_hjson(fpath):
+    return remove_OD(hjson.load(open(fpath)))
 
 
 def main():
