@@ -493,7 +493,7 @@ def flatten(lst: list) -> list:
 
 
 def get_template_live_config(passivbot_mode="neat_grid"):
-    if passivbot_mode == "multi":
+    if passivbot_mode == "multi_hjson":
         return {
             "user": "bybit_01",
             "pnls_max_lookback_days": 30,
@@ -539,6 +539,81 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                     "n_close_orders": 6,
                     "rentry_pprice_dist": 0.03088,
                     "rentry_pprice_dist_wallet_exposure_weighting": 3.257,
+                },
+            },
+        }
+    elif passivbot_mode == "multi_json":
+        return {
+            "analysis": {
+                "adg": 0.003956322219722023,
+                "adg_weighted": 0.0028311504314386944,
+                "drawdowns_daily_mean": 0.017813249628287595,
+                "loss_profit_ratio": 0.11029048146750035,
+                "loss_profit_ratio_long": 0.11029048146750035,
+                "loss_profit_ratio_short": 1.0,
+                "n_days": 1073,
+                "n_iters": 30100,
+                "pnl_ratio_long_short": 1.0,
+                "pnl_ratios_symbols": {
+                    "AVAXUSDT": 0.27468845221661337,
+                    "MATICUSDT": 0.2296174818198483,
+                    "SOLUSDT": 0.2953751960870163,
+                    "SUSHIUSDT": 0.20031886987652528,
+                },
+                "price_action_distance_mean": 0.04008693098008042,
+                "sharpe_ratio": 0.16774229057551596,
+                "w_adg_weighted": -0.0028311504314386944,
+                "w_drawdowns_daily_mean": 0.017813249628287595,
+                "w_loss_profit_ratio": 0.11029048146750035,
+                "w_price_action_distance_mean": 0.04008693098008042,
+                "w_sharpe_ratio": -0.16774229057551596,
+                "worst_drawdown": 0.4964442148721724,
+            },
+            "args": {
+                "end_date": "2024-04-07",
+                "exchange": "binance",
+                "long_enabled": True,
+                "short_enabled": False,
+                "start_date": "2021-05-01",
+                "starting_balance": 1000000,
+                "symbols": ["AVAXUSDT", "MATICUSDT", "SOLUSDT", "SUSHIUSDT"],
+                "worst_drawdown_lower_bound": 0.5,
+            },
+            "live_config": {
+                "global": {
+                    "TWE_long": 1.5444230850628553,
+                    "TWE_short": 9.649688432169954,
+                    "loss_allowance_pct": 0.0026679762307641607,
+                    "stuck_threshold": 0.8821459931849173,
+                    "unstuck_close_pct": 0.0010155575341165876,
+                },
+                "long": {
+                    "ddown_factor": 2.629714810883098,
+                    "ema_span_0": 899.2508850110795,
+                    "ema_span_1": 421.7063898877953,
+                    "enabled": True,
+                    "initial_eprice_ema_dist": -0.1,
+                    "initial_qty_pct": 0.014476246820125136,
+                    "markup_range": 0.0053184619781202315,
+                    "min_markup": 0.007118561833656905,
+                    "n_close_orders": 1.8921222249558793,
+                    "rentry_pprice_dist": 0.053886357819123286,
+                    "rentry_pprice_dist_wallet_exposure_weighting": 2.399828941237894,
+                    "wallet_exposure_limit": 0.3861057712657138,
+                },
+                "short": {
+                    "ddown_factor": 2.4945922781706855,
+                    "ema_span_0": 455.44131691615075,
+                    "ema_span_1": 802.61831996626,
+                    "enabled": False,
+                    "initial_eprice_ema_dist": -0.1,
+                    "initial_qty_pct": 0.010939831544335615,
+                    "markup_range": 0.003907075073595213,
+                    "min_markup": 0.00126517818899668,
+                    "n_close_orders": 3.1853269137597926,
+                    "rentry_pprice_dist": 0.04288693053869011,
+                    "rentry_pprice_dist_wallet_exposure_weighting": 0.48577214018315135,
+                    "wallet_exposure_limit": 2.4124221080424886,
                 },
             },
         }
@@ -2184,7 +2259,7 @@ def backtested_multiconfig2singleconfig(backtested_config: dict) -> dict:
 
 
 def backtested_multiconfig2live_multiconfig(backtested_config: dict) -> dict:
-    template = get_template_live_config("multi")
+    template = get_template_live_config("multi_hjson")
     for key in ["long_enabled", "short_enabled", "symbols"]:
         template[key] = backtested_config["args"][key]
     for key in ["live_configs_dir", "default_config_path"]:
@@ -2198,3 +2273,11 @@ def backtested_multiconfig2live_multiconfig(backtested_config: dict) -> dict:
                     pside
                 ][key]
     return template
+
+
+def remove_OD(d: dict) -> dict:
+    if isinstance(d, dict):
+        return {k: remove_OD(v) for k, v in d.items()}
+    if isinstance(d, list):
+        return [remove_OD(x) for x in d]
+    return d
