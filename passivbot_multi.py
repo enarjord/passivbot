@@ -11,6 +11,7 @@ import hjson
 import pprint
 import numpy as np
 from uuid import uuid4
+from copy import deepcopy
 
 from procedures import (
     load_broker_code,
@@ -20,6 +21,7 @@ from procedures import (
     load_live_config,
     get_file_mod_utc,
     get_first_ohlcv_timestamps,
+    load_hjson_config,
 )
 from njit_funcs_recursive_grid import calc_recursive_entries_long, calc_recursive_entries_short
 from njit_funcs import (
@@ -36,8 +38,10 @@ from njit_funcs import (
     round_up,
     round_dn,
     round_dynamic,
+    calc_pnl,
     calc_pnl_long,
     calc_pnl_short,
+    calc_pprice_diff,
 )
 from njit_multisymbol import calc_AU_allowance
 from pure_funcs import (
@@ -47,6 +51,7 @@ from pure_funcs import (
     shorten_custom_id,
     determine_side_from_order_tuple,
     str2bool,
+    symbol2coin,
 )
 
 import logging
@@ -67,13 +72,15 @@ class Passivbot:
             ("short_enabled", True),
             ("max_n_cancellations_per_batch", 8),
             ("max_n_creations_per_batch", 4),
-            ("forbidden_symbols", []),
+            ("ignored_symbols", []),
             ("n_longs", 0),
             ("n_shorts", 0),
             ("minimum_market_age_days", 0),
         ]:
             if key not in self.config:
                 self.config[key] = default_val
+        if "approved_symbols" not in self.config and "symbols" in self.config:
+            self.config["approved_symbols"] = self.config["symbols"]
         self.user = config["user"]
         self.user_info = load_user_info(config["user"])
         self.exchange = self.user_info["exchange"]
@@ -85,13 +92,13 @@ class Passivbot:
         self.upnls = {}
         self.upd_timestamps = {
             "pnls": 0.0,
-            "open_orders": {},
-            "positions": {},
-            "tickers": {},
+            "open_orders": 0.0,
+            "positions": 0.0,
+            "tickers": 0.0,
         }
         self.hedge_mode = True
-        self.positions = {}
-        self.open_orders = {}
+        self.inverse = False
+        self.active_symbols = []
         self.pnls = []
         self.tickers = {}
         self.emas_long = {}
@@ -103,7 +110,6 @@ class Passivbot:
         self.qty_steps = {}
         self.price_steps = {}
         self.c_mults = {}
-        self.coins = {}
         self.live_configs = {}
         self.stop_bot = False
         self.pnls_cache_filepath = make_get_filepath(f"caches/{self.exchange}/{self.user}_pnls.json")
@@ -114,30 +120,13 @@ class Passivbot:
         self.force_update_age_millis = 60 * 1000  # force update once a minute
         self.quote = "USDT"
 
-    def adjust_sym_padding(self):
-        self.max_len_symbol = max([len(s) for s in self.symbols])
-        self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
-
-    def setup_internal_argparser(self):
-        # this argparser is used only internally
-        parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
-        parser.add_argument("-sm", type=str, required=False, dest="short_mode", default=None)
-        parser.add_argument("-lm", type=str, required=False, dest="long_mode", default=None)
-        parser.add_argument("-lw", type=float, required=False, dest="WE_limit_long", default=None)
-        parser.add_argument("-sw", type=float, required=False, dest="WE_limit_short", default=None)
-        parser.add_argument("-lev", type=float, required=False, dest="leverage", default=None)
-        parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
-        self.parser = parser
-        self.args = {
-            symbol: self.parser.parse_args(self.symbols[symbol].split()) for symbol in self.symbols
-        }
-
     def set_live_configs(self):
         # live configs priority:
         # 1) -lc path from hjson multi config
         # 2) live config from live configs dir, matching name or coin
         # 3) live config from default config path
         # 4) universal live config given in hjson multi config
+
         if os.path.isdir(self.config["live_configs_dir"]):
             # live config candidates from live configs dir
             live_configs_fnames = sorted(
@@ -145,13 +134,15 @@ class Passivbot:
             )
         else:
             live_configs_fnames = []
-        for symbol in self.symbols:
+        for symbol in self.approved_symbols:
             # look for an exact match first
+            coin = symbol2coin(symbol)
             live_config_fname_l = [
-                x for x in live_configs_fnames if x == self.coins[symbol] + "USDT.json"
+                x for x in live_configs_fnames if x == coin + "USDT.json" or x == coin + ".json"
             ]
             if not live_config_fname_l:
-                live_config_fname_l = [x for x in live_configs_fnames if self.coins[symbol] in x]
+                # then look if coin name in filename
+                live_config_fname_l = [x for x in live_configs_fnames if coin in x]
             live_configs_dir_fname = (
                 None
                 if live_config_fname_l == []
@@ -164,14 +155,14 @@ class Passivbot:
             ]:
                 if path is not None and os.path.exists(path):
                     try:
-                        self.live_configs[symbol] = load_live_config(path)
+                        self.live_configs[symbol] = deepcopy(load_live_config(path))
                         logging.info(f"{symbol: <{self.max_len_symbol}} loaded live config: {path}")
                         break
                     except Exception as e:
                         logging.error(f"failed to load live config {symbol} {path} {e}")
             else:
                 try:
-                    self.live_configs[symbol] = self.config["universal_live_config"]
+                    self.live_configs[symbol] = deepcopy(self.config["universal_live_config"])
                     logging.info(
                         f"{symbol: <{self.max_len_symbol}} loaded universal live config from hjson config"
                     )
@@ -212,7 +203,6 @@ class Passivbot:
                         raise Exception(
                             f"unknown {pside} mode: {getattr(self.args[symbol],f'{pside}_mode')}"
                         )
-            for pside in ["long", "short"]:
                 # disable AU and set backwards TP
                 for key, val in [
                     ("auto_unstuck_delay_minutes", 0.0),
@@ -223,18 +213,13 @@ class Passivbot:
                 ]:
                     self.live_configs[symbol][pside][key] = val
 
-    async def init_bot(self):
-        self.adjust_sym_padding()
-        self.setup_internal_argparser()
-        self.set_live_configs()
-
         # print symbols and modes
         modes = ["normal", "manual", "graceful_stop", "tp_only", "panic"]
         for mode in modes:
             for pside in ["long", "short"]:
                 syms_ = [
-                    s.replace(f"/{self.quote}:{self.quote}", "")
-                    for s in self.symbols
+                    symbol2coin(s)
+                    for s in self.live_configs
                     if self.live_configs[s][pside]["mode"] == mode
                 ]
                 if len(syms_) > 0:
@@ -242,16 +227,31 @@ class Passivbot:
                         f"{pside: <5} mode: {mode: <{max([len(x) for x in modes])}}: {', '.join(syms_)}"
                     )
 
-        self.ohlcvs = {}
-        self.ohlcv_symbols = [
-            sym
-            for sym in sorted(self.markets_dict)
-            if self.markets_dict[sym]["active"]
-            and sym.endswith(f"/{self.quote}:{self.quote}")
-            and self.markets_dict[sym]["swap"]
-        ]
-        self.ohlcv_upd_timestamps = {symbol: 0 for symbol in self.ohlcv_symbols}
-        for f in ["exchange_config", "emas", "positions", "open_orders", "pnls"]:
+    def pad_sym(self, symbol):
+        return f"{symbol: <{self.sym_padding}}"
+
+    async def init_bot(self):
+        logging.info(f"initiating markets...")
+        await self.init_market_dict()
+        logging.info(f"initiating tickers...")
+        await self.update_tickers()
+        logging.info(f"initiating balance, positions, open orders...")
+        await asyncio.gather(*[self.update_positions(), self.update_open_orders()])
+        await self.update_approved_symbols()  # parse flags
+        self.set_live_configs()
+        self.ohlcv_maintainer = asyncio.create_task(self.maintain_ohlcvs())
+        for i in range(10000):
+            await asyncio.sleep(0.2)
+            upd_timestamps = [v for k, v in self.ohlcv_upd_timestamps.items()]
+            if all(upd_timestamps):
+                break
+            if i == 0:
+                print()
+            print(
+                f"\r waiting for ohlcvs to be updated... {len([x for x in upd_timestamps if x])} / {len(upd_timestamps)}"
+            )
+
+        for f in ["exchange_config", "emas", "pnls"]:
             res = await getattr(self, f"update_{f}")()
             logging.info(f"initiating {f} {res}")
         self.set_wallet_exposure_limits()
@@ -262,75 +262,137 @@ class Passivbot:
         open_orders = await self.fetch_open_orders()
         return sorted(set([elm["symbol"] for elm in positions + open_orders]))
 
-    async def init_symbols(self):
-        # require symbols to be formatted to ccxt standard COIN/QUOTE:QUOTE
+    def format_symbol(self, symbol: str, suppress_log=False) -> str:
+        formatted = f"{symbol2coin(symbol)}/{self.quote}:{self.quote}"
+        if not suppress_log and symbol != formatted:
+            logging.info(f"formatted {symbol} -> {formatted}")
+        return formatted
 
-        if not hasattr(self, "markets_dict"):
-            self.markets_dict = await self.cca.load_markets()
-        await self.set_approved_symbols()
-        self.symbols = {}
-        for symbol_ in self.approved_symbols:
-            symbol = symbol_
-            if not symbol.endswith(f"/{self.quote}:{self.quote}"):
-                coin_extracted = multi_replace(
-                    symbol_, [("/", ""), (":", ""), ("USDT", ""), ("BUSD", ""), ("USDC", "")]
+    async def init_market_dict(self):
+        self.markets_dict = await self.cca.load_markets()
+        self.all_symbols = []  # all active symbols on exchange
+        for symbol in self.markets_dict:
+            if all(
+                [
+                    self.markets_dict[symbol]["active"],
+                    self.markets_dict[symbol]["swap"],
+                    self.markets_dict[symbol]["linear"],
+                    symbol.endswith(f"/{self.quote}:{self.quote}"),
+                ]
+            ):
+                self.all_symbols.append(symbol)
+        self.all_symbols = sorted(set(self.all_symbols))
+        self.set_market_specific_settings()
+
+    def set_market_specific_settings(self):
+        # set min cost, min qty, price step, qty step, c_mult
+        # defined individually for each exchange
+        self.symbol_ids = {symbol: self.markets_dict[symbol]["id"] for symbol in self.markets_dict}
+        self.symbol_ids_inv = {v: k for k, v in self.symbol_ids.items()}
+
+    def update_active_symbols(self):
+        symbols_with_pos_or_open_orders = sorted(
+            set([x["symbol"] for x in self.fetched_positions + self.fetched_open_orders])
+        )
+        # put on gs/manual mode
+        for symbol in symbols_with_pos_or_open_orders:
+            if symbol not in self.approved_symbols:
+                if self.config["auto_gs"]:
+                    logging.info(f"{self.pad_sym(symbol)} will be set to graceful stop mode")
+                    self.approved_symbols[symbol] = "-lm gs -sm gs"
+                else:
+                    logging.info(f"{self.pad_sym(symbol)} will be set to manual mode")
+                    self.approved_symbols[symbol] = "-lm m -sm m"
+
+        if self.config["n_longs"] == 0 and self.config["n_shorts"] == 0:
+            # forager is disabled
+            # use static symbol list
+            # all approved symbols plus symbols with position on graceful stop
+            self.active_symbols = sorted(set(self.approved_symbols))
+        else:
+            # forager mode
+            # active symbols are symbols with position plus symbols with high noisiness
+            self.active_symbols = symbols_with_pos_or_open_orders
+            # ... TBC
+        for symbol in self.active_symbols:
+            if symbol not in self.positions:
+                self.positions[symbol] = {
+                    "long": {"size": 0.0, "price": 0.0},
+                    "short": {"size": 0.0, "price": 0.0},
+                }
+            if symbol not in self.open_orders:
+                self.open_orders[symbol] = []
+
+    async def update_approved_symbols(self):
+        # symbols are formatted to ccxt standard COIN/QUOTE:QUOTE
+        self.ignored_symbols = [
+            self.format_symbol(x, suppress_log=True) for x in self.config["ignored_symbols"]
+        ]
+
+        approved_symbols = {}  # all symbols approved according to various conditions, with flags
+        if self.config["approved_symbols"]:
+            for symbol in self.config["approved_symbols"]:
+                approved_symbols[self.format_symbol(symbol)] = (
+                    self.config["approved_symbols"][symbol]
+                    if isinstance(self.config["approved_symbols"], dict)
+                    else ""
                 )
-                symbol_reformatted = coin_extracted + f"/{self.quote}:{self.quote}"
-                logging.info(f"Trying to reformat symbol {symbol_} to {symbol_reformatted}")
-                symbol = symbol_reformatted
+        else:
+            # all symbols are approved
+            for symbol in self.all_symbols:
+                approved_symbols[symbol] = ""
+
+        if self.config["minimum_market_age_days"] > 0:
+            first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
+            for symbol in first_timestamps:
+                first_timestamps[self.format_symbol(symbol)] = first_timestamps[symbol]
+        else:
+            first_timestamps = None
+
+        self.approved_symbols = {}
+        for symbol in sorted(set(approved_symbols)):
             if symbol not in self.markets_dict:
                 logging.info(f"{symbol} missing from {self.exchange}")
-            else:
-                elm = self.markets_dict[symbol]
-                if elm["type"] != "swap":
-                    logging.info(f"wrong market type for {symbol}: {elm['type']}")
-                elif not elm["active"]:
-                    logging.info(f"{symbol} not active")
-                elif not elm["linear"]:
-                    logging.info(f"{symbol} is not a linear market")
-                else:
-                    self.symbols[symbol] = (
-                        self.config["symbols"][symbol_]
-                        if isinstance(self.config["symbols"], dict)
-                        else ""
+            elif not self.markets_dict[symbol]["active"]:
+                logging.info(f"{symbol} not active")
+            elif not self.markets_dict[symbol]["swap"]:
+                logging.info(f"wrong market type for {symbol}: {self.market_dict[symbol]['type']}")
+            elif not self.markets_dict[symbol]["linear"]:
+                logging.info(f"{symbol} is not a linear market")
+            elif not symbol.endswith(f"/{self.quote}:{self.quote}"):
+                logging.info(f"{symbol} has wrong formatting")
+            elif self.format_symbol(symbol) in self.ignored_symbols:
+                logging.info(f"{symbol} is ignored")
+            elif first_timestamps:
+                if symbol not in first_timestamps:
+                    logging.info(f"{self.pad_sym(symbol)} missing from first timestamps")
+                elif utc_ms() - first_timestamps[symbol] < self.config["minimum_market_age_days"]:
+                    logging.info(
+                        f"{symbol} is younger than {self.config['minimum_market_age_days']} days"
                     )
-        self.inverse = False
-        self.symbol_ids = {
-            symbol: self.markets_dict[symbol]["id"]
-            for symbol in self.markets_dict
-            if symbol.endswith(f":{self.quote}")
-        }
-        self.symbol_ids_inv = {v: k for k, v in self.symbol_ids.items()}
-        active_symbols = await self.get_active_symbols()
-        for symbol in active_symbols:
-            if symbol not in self.symbols:
-                if self.config["auto_gs"]:
-                    logging.info(f"{symbol: <{self.sym_padding}} will be set to graceful stop mode")
-                    self.symbols[symbol] = "-lm gs -sm gs"
                 else:
-                    logging.info(f"{symbol: <{self.sym_padding}} will be set to manual mode")
+                    self.approved_symbols[symbol] = approved_symbols[symbol]
+            else:
+                self.approved_symbols[symbol] = approved_symbols[symbol]
 
-                    self.symbols[symbol] = "-lm m -sm m"
+        # add symbols on gs
+        self.update_active_symbols()
 
-    async def set_approved_symbols(self):
-        if self.config["symbols"]:
-            self.approved_symbols = sorted(set(self.config["symbols"]))
-        else:
-            # all symbols approved
-            self.approved_symbols = sorted(set(self.markets_dict))
-        if self.config["forbidden_symbols"]:
-            self.approved_symbols = [
-                x for x in self.approved_symbols if x not in self.config["forbidden_symbols"]
-            ]
-        if self.config["minimum_market_age_days"] > 0:
-            self.first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
-            self.approved_symbols = [
-                x
-                for x in self.approved_symbols
-                if x in self.first_timestamps
-                and utc_ms() - self.first_timestamps[x] > self.config["minimum_market_age_days"]
-            ]
-        self.approved_symbols = sorted(set(self.approved_symbols))
+        # this argparser is used only internally
+        parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
+        parser.add_argument("-sm", type=str, required=False, dest="short_mode", default=None)
+        parser.add_argument("-lm", type=str, required=False, dest="long_mode", default=None)
+        parser.add_argument("-lw", type=float, required=False, dest="WE_limit_long", default=None)
+        parser.add_argument("-sw", type=float, required=False, dest="WE_limit_short", default=None)
+        parser.add_argument("-lev", type=float, required=False, dest="leverage", default=None)
+        parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
+        self.args = {
+            symbol: parser.parse_args(self.approved_symbols[symbol].split())
+            for symbol in self.approved_symbols
+        }
+        # for prettier printing
+        self.max_len_symbol = max([len(s) for s in self.approved_symbols])
+        self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
 
     def set_wallet_exposure_limits(self):
         # an active bot has normal mode or graceful stop mode with position
@@ -339,7 +401,7 @@ class Passivbot:
             for sym in self.live_configs:
                 if self.live_configs[sym][pside]["mode"] == "normal" or (
                     self.live_configs[sym][pside]["mode"] == "graceful_stop"
-                    and self.positions[sym][pside]["size"] != 0.0
+                    and (sym in self.positions and self.positions[sym][pside]["size"] != 0.0)
                 ):
                     n_actives += 1
             if not hasattr(self, "prev_n_actives"):
@@ -350,7 +412,9 @@ class Passivbot:
             new_WE_limit = round_(
                 self.config[f"TWE_{pside}"] / n_actives if n_actives > 0 else 0.01, 0.0001
             )
-            for symbol in self.symbols:
+            for symbol in self.active_symbols:
+                if "wallet_exposure_limit" not in self.live_configs[symbol][pside]:
+                    self.live_configs[symbol][pside]["wallet_exposure_limit"] = 0.0
                 if getattr(self.args[symbol], f"WE_limit_{pside}") is None:
                     if self.live_configs[symbol][pside]["wallet_exposure_limit"] != new_WE_limit:
                         logging.info(
@@ -372,7 +436,7 @@ class Passivbot:
             if order["id"] not in {x["id"] for x in self.open_orders[order["symbol"]]}:
                 self.open_orders[order["symbol"]].append(order)
                 logging.info(
-                    f"  created {order['symbol']: <{self.sym_padding}} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
+                    f"  created {self.pad_sym(order['symbol'])} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
                 )
                 return True
         except Exception as e:
@@ -389,7 +453,7 @@ class Passivbot:
                     x for x in self.open_orders[order["symbol"]] if x["id"] != order["id"]
                 ]
                 logging.info(
-                    f"cancelled {order['symbol']: <{self.sym_padding}} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
+                    f"cancelled {self.pad_sym(order['symbol'])} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
                 )
                 return True
         except Exception as e:
@@ -400,24 +464,22 @@ class Passivbot:
     def handle_order_update(self, upd_list):
         try:
             for upd in upd_list:
-                if upd["symbol"] not in self.symbols:
+                if upd["symbol"] not in self.approved_symbols:
                     return
                 if upd["status"] == "closed" or (
                     "filled" in upd and upd["filled"] is not None and upd["filled"] > 0.0
                 ):
                     # There was a fill, partial or full. Schedule update of open orders, pnls, position.
                     logging.info(
-                        f"   filled {upd['symbol']: <{self.sym_padding}} {upd['side']} {upd['qty']} {upd['position_side']} @ {upd['price']} source: WS"
+                        f"   filled {self.pad_sym(upd['symbol'])} {upd['side']} {upd['qty']} {upd['position_side']} @ {upd['price']} source: WS"
                     )
                     self.recent_fill = True
                 elif upd["status"] in ["canceled", "expired", "rejected"]:
                     # remove order from open_orders
                     self.remove_cancelled_order(upd)
-                    self.upd_timestamps["open_orders"][upd["symbol"]] = utc_ms()
                 elif upd["status"] == "open":
                     # add order to open_orders
                     self.add_new_order(upd)
-                    self.upd_timestamps["open_orders"][upd["symbol"]] = utc_ms()
                 else:
                     print("debug open orders unknown type", upd)
         except Exception as e:
@@ -427,9 +489,10 @@ class Passivbot:
     def handle_balance_update(self, upd, source="WS"):
         try:
             upd[self.quote]["total"] = round_dynamic(upd[self.quote]["total"], 10)
+            equity = upd[self.quote]["total"] + self.calc_upnl_sum()
             if self.balance != upd[self.quote]["total"]:
                 logging.info(
-                    f"balance changed: {self.balance} -> {upd[self.quote]['total']} equity: {(upd[self.quote]['total'] + self.calc_upnl_sum()):.4f} source: {source}"
+                    f"balance changed: {self.balance} -> {upd[self.quote]['total']} equity: {equity:.4f} source: {source}"
                 )
             self.balance = max(upd[self.quote]["total"], 1e-12)
         except Exception as e:
@@ -449,7 +512,6 @@ class Passivbot:
                         upd[key] = self.tickers[upd["symbol"]][key]
                 if "last" not in upd or upd["last"] is None:
                     upd["last"] = np.random.choice([upd["bid"], upd["ask"]])
-                self.upd_timestamps["tickers"][upd["symbol"]] = utc_ms()  # update timestamp
                 if (
                     upd["bid"] != self.tickers[upd["symbol"]]["bid"]
                     or upd["ask"] != self.tickers[upd["symbol"]]["ask"]
@@ -460,29 +522,22 @@ class Passivbot:
             else:
                 # upd on the form {sym: {bid, ask, ...}}
                 for sym in upd:
-                    if sym in self.symbols:
+                    if sym in self.approved_symbols:
                         self.handle_ticker_update(upd[sym])
 
     def calc_upnl_sum(self):
         try:
-            self.upnls = {}
-            for sym in self.positions:
-                self.upnls[sym] = (
-                    calc_pnl_long(
-                        self.positions[sym]["long"]["price"],
-                        self.tickers[sym]["last"],
-                        self.positions[sym]["long"]["size"],
-                        self.inverse,
-                        self.c_mults[sym],
-                    )
-                ) + calc_pnl_short(
-                    self.positions[sym]["short"]["price"],
-                    self.tickers[sym]["last"],
-                    self.positions[sym]["short"]["size"],
+            upnl_sum = 0.0
+            for elm in self.fetched_positions:
+                upnl_sum += calc_pnl(
+                    elm["position_side"],
+                    elm["price"],
+                    self.tickers[elm["symbol"]]["last"],
+                    elm["size"],
                     self.inverse,
-                    self.c_mults[sym],
+                    self.c_mults[elm["symbol"]],
                 )
-            return sum(self.upnls.values())
+            return upnl_sum
         except Exception as e:
             logging.error(f"error calculating upnl sum {e}")
             traceback.print_exc()
@@ -543,9 +598,12 @@ class Passivbot:
         return True
 
     async def update_open_orders(self):
+        if not hasattr(self, "open_orders"):
+            self.open_orders = {}
         res = await self.fetch_open_orders()
         if res in [None, False]:
             return False
+        self.fetched_open_orders = res
         open_orders = res
         oo_ids_old = {elm["id"] for sublist in self.open_orders.values() for elm in sublist}
         created_prints, cancelled_prints = [], []
@@ -553,114 +611,104 @@ class Passivbot:
             if oo["id"] not in oo_ids_old:
                 # there was a new open order not caught by websocket
                 created_prints.append(
-                    f"new order {oo['symbol']: <{self.sym_padding}} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
+                    f"new order {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
                 )
         oo_ids_new = {elm["id"] for elm in open_orders}
         for oo in [elm for sublist in self.open_orders.values() for elm in sublist]:
             if oo["id"] not in oo_ids_new:
                 # there was an order cancellation not caught by websocket
                 cancelled_prints.append(
-                    f"cancelled {oo['symbol']: <{self.sym_padding}} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
+                    f"cancelled {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
                 )
         self.open_orders = {symbol: [] for symbol in self.open_orders}
+        self.open_orders = {}
         for elm in open_orders:
-            if elm["symbol"] in self.open_orders:
-                self.open_orders[elm["symbol"]].append(elm)
-            else:
-                logging.debug(
-                    f"{elm['symbol']: <{self.sym_padding}} has open order {elm['position_side']} {elm['id']}, but is not under passivbot management"
-                )
-                logging.info(
-                    f"debug {elm['symbol']: <{self.sym_padding}} has open order {elm['position_side']} {elm['id']}, but is not under passivbot management"
-                )
+            if elm["symbol"] not in self.open_orders:
+                self.open_orders[elm["symbol"]] = []
+            self.open_orders[elm["symbol"]].append(elm)
         if len(created_prints) > 12:
             logging.info(f"{len(created_prints)} new open orders")
         else:
             for line in created_prints:
                 logging.info(line)
-        for line in cancelled_prints:
-            logging.info(line)
-        now = utc_ms()
-        self.upd_timestamps["open_orders"] = {k: now for k in self.upd_timestamps["open_orders"]}
+        if len(cancelled_prints) > 12:
+            logging.info(f"{len(created_prints)} cancelled open orders")
+        else:
+            for line in cancelled_prints:
+                logging.info(line)
+        self.upd_timestamps["open_orders"] = utc_ms()
         return True
 
     async def update_positions(self):
         # also updates balance
+        if not hasattr(self, "positions"):
+            self.positions = {}
         res = await self.fetch_positions()
         if all(x in [None, False] for x in res):
             return False
         positions_list_new, balance_new = res
+        self.fetched_positions = positions_list_new
         self.handle_balance_update({self.quote: {"total": balance_new}})
         positions_new = {
-            symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0, "price": 0.0}}
-            for symbol in self.positions
+            sym: {
+                "long": {"size": 0.0, "price": 0.0},
+                "short": {"size": 0.0, "price": 0.0},
+            }
+            for sym in set(list(self.positions) + self.active_symbols)
         }
         for elm in positions_list_new:
-            if elm["symbol"] not in self.positions:
-                print(
-                    f"debug {elm['symbol']: <{self.sym_padding}} has a {elm['position_side']} position, but is not under passivbot management"
-                )
-                logging.debug(
-                    f"debug {elm['symbol']: <{self.sym_padding}} has a {elm['position_side']} position, but is not under passivbot management"
-                )
-            else:
-                positions_new[elm["symbol"]][elm["position_side"]] = {
-                    "size": abs(elm["size"]) * (-1.0 if elm["position_side"] == "short" else 1.0),
-                    "price": elm["price"],
+            symbol, pside, pprice = elm["symbol"], elm["position_side"], elm["price"]
+            psize = abs(elm["size"]) * (-1.0 if elm["position_side"] == "short" else 1.0)
+            if symbol not in positions_new:
+                positions_new[symbol] = {
+                    "long": {"size": 0.0, "price": 0.0},
+                    "short": {"size": 0.0, "price": 0.0},
                 }
-
-        for symbol in self.positions:
-            for pside in self.positions[symbol]:
-                if self.positions[symbol][pside] != positions_new[symbol][pside]:
-                    wallet_exposure = (
-                        qty_to_cost(
-                            positions_new[symbol][pside]["size"],
-                            positions_new[symbol][pside]["price"],
-                            self.inverse,
-                            self.c_mults[symbol],
-                        )
-                        / self.balance
+            positions_new[symbol][pside] = {"size": psize, "price": pprice}
+            # check if changed
+            if symbol not in self.positions or self.positions[symbol][pside]["size"] != psize:
+                wallet_exposure = (
+                    qty_to_cost(
+                        positions_new[symbol][pside]["size"],
+                        positions_new[symbol][pside]["price"],
+                        self.inverse,
+                        self.c_mults[symbol],
                     )
+                    / self.balance
+                )
+                try:
                     WE_ratio = (
                         wallet_exposure / self.live_configs[symbol][pside]["wallet_exposure_limit"]
                     )
-                    if pside == "long":
-                        pprice_diff = (
-                            (
-                                1.0
-                                - self.tickers[symbol]["last"]
-                                / positions_new[symbol]["long"]["price"]
-                            )
-                            if positions_new[symbol]["long"]["price"] > 0.0
-                            else 0.0
-                        )
-                        upnl = calc_pnl_long(
-                            positions_new[symbol][pside]["price"],
-                            self.tickers[symbol]["last"],
-                            positions_new[symbol][pside]["size"],
-                            self.inverse,
-                            self.c_mults[symbol],
-                        )
-                    else:
-                        pprice_diff = (
-                            self.tickers[symbol]["last"] / positions_new[symbol]["short"]["price"]
-                            - 1.0
-                            if positions_new[symbol]["short"]["price"] > 0.0
-                            else 0.0
-                        )
-                        upnl = calc_pnl_short(
-                            positions_new[symbol][pside]["price"],
-                            self.tickers[symbol]["last"],
-                            positions_new[symbol][pside]["size"],
-                            self.inverse,
-                            self.c_mults[symbol],
-                        )
-                    logging.info(
-                        f"{symbol: <{self.sym_padding}} {pside} changed: {self.positions[symbol][pside]} -> {positions_new[symbol][pside]} WE ratio: {WE_ratio:.3f} pprice diff: {pprice_diff:.4f} upnl: {upnl:.4f}"
+                except:
+                    WE_ratio = 0.0
+                try:
+                    pprice_diff = calc_pprice_diff(pside, pprice, self.tickers[symbol]["last"])
+                except:
+                    pprice_diff = 0.0
+                try:
+                    upnl = calc_pnl(
+                        pside,
+                        pprice,
+                        self.tickers[symbol]["last"],
+                        psize,
+                        self.inverse,
+                        self.c_mults[symbol],
                     )
+                except:
+                    upnl = 0.0
+                line = f"{self.pad_sym(symbol)} {pside} changed:"
+                if symbol in self.positions:
+                    line += f" {self.positions[symbol][pside]}"
+                line += f" -> {positions_new[symbol][pside]}"
+                line += f" WE: {wallet_exposure:.4f}"
+                if WE_ratio:
+                    line += f" WE ratio: {WE_ratio:.3f}"
+                if pprice_diff:
+                    line += f" pprice diff: {pprice_diff:.4f} upnl: {upnl:.4f}"
+                logging.info(line)
         self.positions = positions_new
-        now = utc_ms()
-        self.upd_timestamps["positions"] = {k: now for k in self.upd_timestamps["positions"]}
+        self.upd_timestamps["positions"] = utc_ms()
         return True
 
     async def update_tickers(self):
@@ -668,15 +716,10 @@ class Passivbot:
         if res in [None, False]:
             return False
         tickers_new = res
-        for symbol in self.symbols:
-            if symbol not in tickers_new:
-                raise Exception(f"{symbol} missing from tickers")
+        for symbol in tickers_new:
             ticker_new = {k: tickers_new[symbol][k] for k in ["bid", "ask", "last"]}
-            if self.tickers[symbol] != ticker_new:
-                # logging.info(f"{symbol} ticker changed: {self.tickers[symbol]} -> {ticker_new}")
-                pass
             self.tickers[symbol] = ticker_new
-            self.upd_timestamps["tickers"][symbol] = utc_ms()
+        self.upd_timestamps["tickers"] = utc_ms()
         return True
 
     async def update_emas(self):
@@ -687,7 +730,7 @@ class Passivbot:
         if now_minute <= self.ema_minute:
             return True
         while self.ema_minute < int(round(now_minute - 1000 * 60)):
-            for symbol in self.symbols:
+            for symbol in self.approved_symbols:
                 self.emas_long[symbol] = calc_ema(
                     self.alphas_long[symbol],
                     self.alphas__long[symbol],
@@ -701,7 +744,7 @@ class Passivbot:
                     self.prev_prices[symbol],
                 )
             self.ema_minute += 1000 * 60
-        for symbol in self.symbols:
+        for symbol in self.approved_symbols:
             self.emas_long[symbol] = calc_ema(
                 self.alphas_long[symbol],
                 self.alphas__long[symbol],
@@ -724,7 +767,7 @@ class Passivbot:
         self.ema_spans_short, self.alphas_short, self.alphas__short, self.emas_short = {}, {}, {}, {}
         self.ema_minute = int(utc_ms() // (1000 * 60) * (1000 * 60))
         self.prev_prices = {}
-        for sym in self.symbols:
+        for sym in self.approved_symbols:
             self.ema_spans_long[sym] = [
                 self.live_configs[sym]["long"]["ema_span_0"],
                 self.live_configs[sym]["long"]["ema_span_1"],
@@ -750,31 +793,22 @@ class Passivbot:
             self.alphas__long[sym] = 1 - self.alphas_long[sym]
             self.alphas_short[sym] = 2 / (self.ema_spans_short[sym] + 1)
             self.alphas__short[sym] = 1 - self.alphas_short[sym]
-        if self.tickers[next(iter(self.symbols))]["last"] == 0.0:
+        if self.tickers[next(iter(self.tickers))]["last"] == 0.0:
             logging.info(f"updating tickers...")
             await self.update_tickers()
-        for sym in self.symbols:
+        for sym in self.approved_symbols:
             self.emas_long[sym] = np.repeat(self.tickers[sym]["last"], 3)
             self.emas_short[sym] = np.repeat(self.tickers[sym]["last"], 3)
             self.prev_prices[sym] = self.tickers[sym]["last"]
         ohs = None
         try:
-            logging.info(f"fetching 15 min ohlcv for all symbols, initiating EMAs.")
-            sym_list = list(self.symbols)
-            ohs = await asyncio.gather(
-                *[self.fetch_ohlcv(symbol, timeframe="15m") for symbol in sym_list]
-            )
-            for oh, sym in zip(ohs, sym_list):
-                self.dump_ohlcv_to_cache(sym, oh)
-            samples_1m = [
-                calc_samples(numpyize(oh)[:, [0, 5, 4]], sample_size_ms=60000) for oh in ohs
-            ]
-            for i in range(len(sym_list)):
-                self.emas_long[sym_list[i]] = calc_emas_last(
-                    samples_1m[i][:, 2], self.ema_spans_long[sym_list[i]]
+            for symbol in self.approved_symbols:
+                samples1m = calc_samples(
+                    numpyize(self.ohlcvs[symbol])[:, [0, 5, 4]], sample_size_ms=60000
                 )
-                self.emas_short[sym_list[i]] = calc_emas_last(
-                    samples_1m[i][:, 2], self.ema_spans_short[sym_list[i]]
+                self.emas_long[symbol] = calc_emas_last(samples1m[:, 2], self.ema_spans_long[symbol])
+                self.emas_short[symbol] = calc_emas_last(
+                    samples1m[:, 2], self.ema_spans_short[symbol]
                 )
             return True
         except Exception as e:
@@ -786,7 +820,7 @@ class Passivbot:
     def calc_ideal_orders(self):
         unstuck_close_order = None
         stuck_positions = []
-        for symbol in self.symbols:
+        for symbol in self.active_symbols:
             # check for stuck position
             if self.config["loss_allowance_pct"] == 0.0:
                 # no auto unstuck
@@ -843,22 +877,13 @@ class Passivbot:
                         round_dn(self.emas_short[sym].min(), self.price_steps[sym]),
                     )
                 )
-                upnl = (
-                    calc_pnl_long(
-                        self.positions[sym][pside]["price"],
-                        self.tickers[sym]["last"],
-                        self.positions[sym][pside]["size"],
-                        self.inverse,
-                        self.c_mults[sym],
-                    )
-                    if pside == "long"
-                    else calc_pnl_short(
-                        self.positions[sym][pside]["price"],
-                        self.tickers[sym]["last"],
-                        self.positions[sym][pside]["size"],
-                        self.inverse,
-                        self.c_mults[sym],
-                    )
+                upnl = calc_pnl(
+                    pside,
+                    self.positions[sym][pside]["price"],
+                    self.tickers[sym]["last"],
+                    self.positions[sym][pside]["size"],
+                    self.inverse,
+                    self.c_mults[sym],
                 )
                 AU_allowance_pct = 1.0 if upnl >= 0.0 else min(1.0, AU_allowance / abs(upnl))
                 AU_allowance_qty = round_(
@@ -905,8 +930,8 @@ class Passivbot:
                 except:
                     self.prev_AU_print_ms = 0.0
 
-        ideal_orders = {symbol: [] for symbol in self.symbols}
-        for symbol in self.symbols:
+        ideal_orders = {symbol: [] for symbol in self.active_symbols}
+        for symbol in self.active_symbols:
             if self.hedge_mode:
                 do_long = (
                     self.live_configs[symbol]["long"]["enabled"]
@@ -1178,16 +1203,9 @@ class Passivbot:
         coros_to_call = []
         now = utc_ms()
         for key in self.upd_timestamps:
-            if isinstance(self.upd_timestamps[key], dict):
-                for sym in self.upd_timestamps[key]:
-                    if now - self.upd_timestamps[key][sym] > self.force_update_age_millis:
-                        # logging.info(f"forcing update {key} {sym}")
-                        coros_to_call.append((key, getattr(self, f"update_{key}")()))
-                        break
-            else:
-                if now - self.upd_timestamps[key] > self.force_update_age_millis:
-                    # logging.info(f"forcing update {key}")
-                    coros_to_call.append((key, getattr(self, f"update_{key}")()))
+            if now - self.upd_timestamps[key] > self.force_update_age_millis:
+                # logging.info(f"forcing update {key}")
+                coros_to_call.append((key, getattr(self, f"update_{key}")()))
         if any(coros_to_call):
             self.set_wallet_exposure_limits()
         res = await asyncio.gather(*[x[1] for x in coros_to_call])
@@ -1201,10 +1219,8 @@ class Passivbot:
         self.previous_execution_ts = utc_ms()
         try:
             if self.recent_fill:
-                self.upd_timestamps["positions"] = {k: 0.0 for k in self.upd_timestamps["positions"]}
-                self.upd_timestamps["open_orders"] = {
-                    k: 0.0 for k in self.upd_timestamps["positions"]
-                }
+                self.upd_timestamps["positions"] = 0.0
+                self.upd_timestamps["open_orders"] = 0.0
                 self.upd_timestamps["pnls"] = 0.0
                 self.recent_fill = False
             update_res = await self.force_update()
@@ -1293,12 +1309,12 @@ class Passivbot:
             traceback.print_exc()
 
     def get_oldest_updated_ohlcv_symbol(self):
-        return sorted(self.ohlcv_symbols, key=lambda x: self.ohlcv_upd_timestamps[x])[0]
+        return sorted(self.approved_symbols, key=lambda x: self.ohlcv_upd_timestamps[x])[0]
 
     def calc_noisiness(self, symbol=None):
         if not hasattr(self, "noisiness"):
             self.noisiness = {}
-        symbols = self.ohlcv_symbols if symbol is None else [symbol]
+        symbols = self.approved_symbols if symbol is None else [symbol]
         for symbol in symbols:
             if symbol in self.ohlcvs and len(self.ohlcvs[symbol]) > 0:
                 self.noisiness[symbol] = np.mean([(x[2] - x[3]) / x[4] for x in self.ohlcvs[symbol]])
@@ -1306,13 +1322,15 @@ class Passivbot:
                 self.noisiness[symbol] = 0.0
 
     async def maintain_ohlcvs(self, timeframe="15m", sleep_interval=15):
-        for symbol in self.ohlcv_symbols:
+        self.ohlcvs = {}
+        self.ohlcv_upd_timestamps = {symbol: 0 for symbol in self.approved_symbols}
+        for symbol in self.approved_symbols:
             ohlcvs = self.load_ohlcv_from_cache(symbol, suppress_error_log=True)
             if ohlcvs:
                 self.ohlcvs[symbol] = ohlcvs
                 self.ohlcv_upd_timestamps[symbol] = get_file_mod_utc(self.get_ohlcv_fpath(symbol))
         while True:
-            missing_symbols = [s for s in self.ohlcv_symbols if s not in self.ohlcvs]
+            missing_symbols = [s for s in self.approved_symbols if s not in self.ohlcvs]
             if missing_symbols:
                 sleep_interval_ = 0.1
                 logging.info(
@@ -1336,11 +1354,13 @@ class Passivbot:
             # logging.info(f"updated ohlcvs for {symbol}")
             await asyncio.sleep(sleep_interval_)
 
-    def select_forager_symbols(self):
-        self.calc_noisiness()
-        n_symbols = 10
-        sorted_by_noisiness = sorted(self.noisiness.items(), key=lambda x: x[1])
-        return [x[0] for x in sorted_by_noisiness[-n_symbols:]]
+    async def close(self):
+        try:
+            self.ohlcv_maintainer.cancel()
+        except Exception as e:
+            logging.error(f"error stopping ohlcvs maintainer {e}")
+        await self.cca.close()
+        await self.ccp.close()
 
 
 async def main():
@@ -1378,7 +1398,7 @@ async def main():
     restarts = []
     while True:
         args = parser.parse_args()
-        config = hjson.load(open(args.hjson_config_path))
+        config = load_hjson_config(args.hjson_config_path)
         for key in [x[2] for x in parser_items]:
             if getattr(args, key) is not None:
                 if key == "symbols":
