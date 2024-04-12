@@ -70,6 +70,12 @@ def gprint(verbose):
 
 def process_single(file_location, verbose=False):
     print_ = gprint(verbose)
+    try:
+        result = json.load(open(file_location))
+        print_(json.dumps(result, indent=4))
+        return result
+    except:
+        pass
     with open(file_location) as f:
         lines = [x.strip() for x in f.readlines()]
     print_(f"n backtests: {len(lines)}")
