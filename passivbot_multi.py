@@ -517,7 +517,6 @@ class Passivbot:
                     or upd["ask"] != self.tickers[upd["symbol"]]["ask"]
                 ):
                     ticker_new = {k: upd[k] for k in ["bid", "ask", "last"]}
-                    # print(f"ticker changed {upd['symbol']: <16} {self.tickers[upd['symbol']]} -> {ticker_new}")
                     self.tickers[upd["symbol"]] = ticker_new
             else:
                 # upd on the form {sym: {bid, ask, ...}}
@@ -1333,9 +1332,6 @@ class Passivbot:
             missing_symbols = [s for s in self.approved_symbols if s not in self.ohlcvs]
             if missing_symbols:
                 sleep_interval_ = 0.1
-                logging.info(
-                    f"missing symbols for ohlcvs: {(missing_symbols if len(missing_symbols) < 10 else len(missing_symbols))}"
-                )
                 symbol = missing_symbols[0]
             else:
                 sleep_interval_ = sleep_interval
