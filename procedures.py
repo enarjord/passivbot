@@ -65,7 +65,7 @@ def load_config_files(config_paths: []) -> dict:
 
 def load_hjson_config(config_path: str) -> dict:
     try:
-        return hjson.load(open(config_path, encoding="utf-8"))
+        return remove_OD(hjson.load(open(config_path, encoding="utf-8")))
     except Exception as e:
         raise Exception(f"failed to load config file {config_path} {e}")
 
@@ -864,10 +864,6 @@ def fetch_market_specific_settings(config: dict):
     # import pprint
     # pprint.pprint(elm)
     return sort_dict_keys(settings_from_exchange)
-
-
-def load_hjson(fpath):
-    return remove_OD(hjson.load(open(fpath)))
 
 
 def main():
