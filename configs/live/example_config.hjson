@@ -34,8 +34,8 @@
   long_enabled: true
   short_enabled: false
 
-  // Symbols. May be given as list [COIN1, COIN2, ...] or dict with args {COIN1: -x X -y Y, COIN2: -x X -y Y}
-  // Args:
+  // Approved symbols. May be given as list [COIN1, COIN2, ...] or dict with args {COIN1: -x X -y Y, COIN2: -x X -y Y}
+  // Flags:
   // -lm str: long mode. Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
   // -sm str: short mode. Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
     // normal mode: passivbot manages the position as normal
@@ -46,7 +46,7 @@
   // -sw: float: wallet exposure limit short. Overrides value from live config.
   // -lev int: leverage set on exchange, if applicable. Default is 10.
   // -lc str: live config path. Specify live config path to override config from live_configs_dir and default_config_path.
-  symbols:
+  approved_symbols:
   {
     COIN1: -lm n -sm gs -lc configs/live/custom/COIN1USDT.json
     COIN2: -lm n -sm gs -sw 0.4
@@ -54,10 +54,13 @@
   }
 
   // Forager mode. Dynamically enable bots on markets of higher noisiness.
-  // Only select among symbols defined above. If symbols == [], all symbols are eligible.
+  // Only select among approved_symbols defined above. If approved_symbols == [], all symbols are eligible.
 
-  // explicitly avoid coins
-  forbidden_symbols: []
+  // explicitly avoid coins, even if there is a position
+  ignored_symbols: [
+    COIN4
+    COIN5
+  ]
 
   // if n_longs and n_shorts are both zero, disable forager mode.
   n_longs: 0
