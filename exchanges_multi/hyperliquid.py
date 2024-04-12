@@ -55,7 +55,7 @@ class HyperliquidBot(Passivbot):
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
             self.min_costs[symbol] = (
-                10.0 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
+                10.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
             )
             self.min_qtys[symbol] = (
                 elm["precision"]["amount"]
