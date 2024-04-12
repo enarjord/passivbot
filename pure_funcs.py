@@ -513,6 +513,10 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 "COIN2": "-lm n -sm gs -sw 0.4",
                 "COIN3": "-lm gs -sm n  -lw 0.15 -lev 12",
             },
+            "ignored_symbols": ["COIN4", "COIN5"],
+            "n_longs": 0,
+            "n_shorts": 0,
+            "minimum_market_age_days": 60,
             "live_configs_dir": "configs/live/multisymbol/no_AU/",
             "default_config_path": "configs/live/recursive_grid_mode.example.json",
             "universal_live_config": {
@@ -2281,3 +2285,7 @@ def remove_OD(d: dict) -> dict:
     if isinstance(d, list):
         return [remove_OD(x) for x in d]
     return d
+
+
+def dict_keysort(d: dict):
+    return sorted(d.items(), key=lambda x: x[1])
