@@ -49,9 +49,9 @@ class HyperliquidBot(Passivbot):
         self.hedge_mode = False
         self.significant_digits = {}
 
-    async def init_bot(self):
-        await self.init_symbols()
-        for symbol in self.symbols:
+    def set_market_specific_settings(self):
+        super().set_market_specific_settings()
+        for symbol in self.all_symbols:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
             self.min_costs[symbol] = (
@@ -65,22 +65,11 @@ class HyperliquidBot(Passivbot):
             self.qty_steps[symbol] = elm["precision"]["amount"]
             self.price_steps[symbol] = round_(10 ** -elm["precision"]["price"], 0.0000000001)
             self.c_mults[symbol] = elm["contractSize"]
-            self.coins[symbol] = symbol.replace(f"/{self.quote}:{self.quote}", "")
-            self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "last": 0.0}
-            self.open_orders[symbol] = []
-            self.positions[symbol] = {
-                "long": {"size": 0.0, "price": 0.0},
-                "short": {"size": 0.0, "price": 0.0},
-            }
-            self.upd_timestamps["open_orders"][symbol] = 0.0
-            self.upd_timestamps["tickers"][symbol] = 0.0
-            self.upd_timestamps["positions"][symbol] = 0.0
         self.n_decimal_places = 6
         self.n_significant_figures = 5
         self.coin2symbol_map = {
             self.markets_dict[symbol]["info"]["name"]: symbol for symbol in self.markets_dict
         }
-        await super().init_bot()
 
     async def start_websockets(self):
         await asyncio.gather(
@@ -121,7 +110,7 @@ class HyperliquidBot(Passivbot):
                 traceback.print_exc()
 
     async def watch_tickers(self, symbols=None):
-        symbols = list(self.symbols if symbols is None else symbols)
+        symbols = list(self.approved_symbols if symbols is None else symbols)
         await asyncio.gather(*[self.watch_ticker(symbol) for symbol in symbols])
 
     async def watch_ticker(self, symbol):
@@ -204,8 +193,7 @@ class HyperliquidBot(Passivbot):
                     "ask": float(fetched[coin]),
                     "last": float(fetched[coin]),
                 }
-                for coin in self.coin2symbol_map
-                if self.coin2symbol_map[coin] in self.symbols
+                for coin in fetched
             }
         except Exception as e:
             logging.error(f"error fetching tickers {e}")
@@ -351,7 +339,7 @@ class HyperliquidBot(Passivbot):
 
     async def update_exchange_config(self):
         coros_to_call_margin_mode = {}
-        for symbol in self.symbols:
+        for symbol in self.approved_symbols:
             try:
                 coros_to_call_margin_mode[symbol] = asyncio.create_task(
                     self.cca.set_margin_mode(
@@ -362,7 +350,7 @@ class HyperliquidBot(Passivbot):
                 )
             except Exception as e:
                 logging.error(f"{symbol}: error setting cross mode and leverage {e}")
-        for symbol in self.symbols:
+        for symbol in self.approved_symbols:
             res = None
             to_print = ""
             try:

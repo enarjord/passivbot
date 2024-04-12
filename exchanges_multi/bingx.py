@@ -40,9 +40,9 @@ class BingXBot(Passivbot):
         self.cca.options["defaultType"] = "swap"
         self.custom_id_max_length = 40
 
-    async def init_bot(self):
-        await self.init_symbols()
-        for symbol in self.symbols:
+    def set_market_specific_settings(self):
+        super().set_market_specific_settings()
+        for symbol in self.all_symbols:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
             self.price_steps[symbol] = round(1.0 / (10 ** elm["precision"]["price"]), 12)
@@ -50,17 +50,6 @@ class BingXBot(Passivbot):
             self.min_qtys[symbol] = elm["limits"]["amount"]["min"]
             self.min_costs[symbol] = elm["limits"]["cost"]["min"]
             self.c_mults[symbol] = 1.0
-            self.coins[symbol] = symbol.replace("/USDT:USDT", "")
-            self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "last": 0.0}
-            self.open_orders[symbol] = []
-            self.positions[symbol] = {
-                "long": {"size": 0.0, "price": 0.0},
-                "short": {"size": 0.0, "price": 0.0},
-            }
-            self.upd_timestamps["open_orders"][symbol] = 0.0
-            self.upd_timestamps["tickers"][symbol] = 0.0
-            self.upd_timestamps["positions"][symbol] = 0.0
-        await super().init_bot()
 
     async def start_websockets(self):
         await asyncio.gather(
@@ -105,7 +94,7 @@ class BingXBot(Passivbot):
                 traceback.print_exc()
 
     async def watch_tickers(self, symbols=None):
-        symbols = list(self.symbols if symbols is None else symbols)
+        symbols = list(self.approved_symbols if symbols is None else symbols)
         await asyncio.gather(*[self.watch_ticker(symbol) for symbol in symbols])
 
     async def watch_ticker(self, symbol):
@@ -341,7 +330,7 @@ class BingXBot(Passivbot):
 
     async def update_exchange_config(self):
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}
-        for symbol in self.symbols:
+        for symbol in self.approved_symbols:
             try:
                 coros_to_call_margin_mode[symbol] = asyncio.create_task(
                     self.cca.set_margin_mode(
@@ -371,7 +360,7 @@ class BingXBot(Passivbot):
                 )
             except Exception as e:
                 logging.error(f"{symbol}: a error setting leverage short {e}")
-        for symbol in self.symbols:
+        for symbol in self.approved_symbols:
             res = None
             to_print = ""
             try:

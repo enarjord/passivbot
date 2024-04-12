@@ -46,9 +46,9 @@ class OKXBot(Passivbot):
         }
         self.custom_id_max_length = 32
 
-    async def init_bot(self):
-        await self.init_symbols()
-        for symbol in self.symbols:
+    def set_market_specific_settings(self):
+        super().set_market_specific_settings()
+        for symbol in self.all_symbols:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
             self.min_costs[symbol] = (
@@ -58,17 +58,6 @@ class OKXBot(Passivbot):
             self.qty_steps[symbol] = elm["precision"]["amount"]
             self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
-            self.coins[symbol] = symbol.replace("/USDT:USDT", "")
-            self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "last": 0.0}
-            self.open_orders[symbol] = []
-            self.positions[symbol] = {
-                "long": {"size": 0.0, "price": 0.0},
-                "short": {"size": 0.0, "price": 0.0},
-            }
-            self.upd_timestamps["open_orders"][symbol] = 0.0
-            self.upd_timestamps["tickers"][symbol] = 0.0
-            self.upd_timestamps["positions"][symbol] = 0.0
-        await super().init_bot()
 
     async def start_websockets(self):
         await asyncio.gather(
@@ -108,7 +97,7 @@ class OKXBot(Passivbot):
                 traceback.print_exc()
 
     async def watch_tickers(self, symbols=None):
-        symbols = list(self.symbols if symbols is None else symbols)
+        symbols = list(self.approved_symbols if symbols is None else symbols)
         while True:
             try:
                 if self.stop_websocket:
@@ -345,7 +334,7 @@ class OKXBot(Passivbot):
                 logging.error(f"error setting hedge mode {e}")
 
         coros_to_call_margin_mode = {}
-        for symbol in self.symbols:
+        for symbol in self.approved_symbols:
             try:
                 coros_to_call_margin_mode[symbol] = asyncio.create_task(
                     self.cca.set_margin_mode(
@@ -356,7 +345,7 @@ class OKXBot(Passivbot):
                 )
             except Exception as e:
                 logging.error(f"{symbol}: error setting cross mode and leverage {e}")
-        for symbol in self.symbols:
+        for symbol in self.approved_symbols:
             res = None
             to_print = ""
             try:
@@ -381,7 +370,7 @@ class OKXBot(Passivbot):
             ideal_orders_tmp,
             key=lambda x: calc_diff(x["price"], self.tickers[x["symbol"]]["last"]),
         )[:100]
-        ideal_orders = {symbol: [] for symbol in self.symbols}
+        ideal_orders = {symbol: [] for symbol in self.active_symbols}
         for x in ideal_orders_tmp:
             ideal_orders[x["symbol"]].append(x)
         return ideal_orders

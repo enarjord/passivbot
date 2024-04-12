@@ -31,9 +31,9 @@ class BinanceBot(Passivbot):
             }
         )
 
-    async def init_bot(self):
-        await self.init_symbols()
-        for symbol in self.symbols:
+    def set_market_specific_settings(self):
+        super().set_market_specific_settings()
+        for symbol in self.all_symbols:
             elm = self.markets_dict[symbol]
             self.min_costs[symbol] = (
                 0.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
@@ -45,23 +45,13 @@ class BinanceBot(Passivbot):
                 elif felm["filterType"] == "MARKET_LOT_SIZE":
                     self.qty_steps[symbol] = float(felm["stepSize"])
             self.c_mults[symbol] = elm["contractSize"]
-            self.coins[symbol] = symbol.replace("/USDT:USDT", "")
-            self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "last": 0.0}
-            self.open_orders[symbol] = []
-            self.positions[symbol] = {
-                "long": {"size": 0.0, "price": 0.0},
-                "short": {"size": 0.0, "price": 0.0},
-            }
-            self.upd_timestamps["open_orders"][symbol] = 0.0
-            self.upd_timestamps["tickers"][symbol] = 0.0
-            self.upd_timestamps["positions"][symbol] = 0.0
-        await super().init_bot()
 
     async def get_active_symbols(self):
         # get symbols with open orders and/or positions
         positions, balance = await self.fetch_positions()
-        open_orders = await self.fetch_open_orders(all=True)
-        return sorted(set([elm["symbol"] for elm in positions + open_orders]))
+        return sorted(set(elm["symbol"] for elm in positions))
+        # open_orders = await self.fetch_open_orders(all=True)
+        # return sorted(set([elm["symbol"] for elm in positions + open_orders]))
 
     async def start_websockets(self):
         await asyncio.gather(
@@ -96,7 +86,7 @@ class BinanceBot(Passivbot):
                 traceback.print_exc()
 
     async def watch_tickers(self, symbols=None):
-        symbols = list(self.symbols if symbols is None else symbols)
+        symbols = list(self.approved_symbols if symbols is None else symbols)
         await asyncio.gather(*[self.watch_book_ticker(symbol) for symbol in symbols])
 
     async def watch_book_ticker(self, symbol: str, params={}):
@@ -127,14 +117,17 @@ class BinanceBot(Passivbot):
         fetched = None
         open_orders = {}
         try:
+            # binance has expensive fetch_open_orders without specified symbol
             if all:
                 self.cca.options["warnOnFetchOpenOrdersWithoutSymbol"] = False
                 logging.info(f"fetching all open orders for binance")
                 fetched = await self.cca.fetch_open_orders()
                 self.cca.options["warnOnFetchOpenOrdersWithoutSymbol"] = True
             else:
+                if not hasattr(self, "active_symbols"):
+                    return []
                 fetched = await asyncio.gather(
-                    *[self.cca.fetch_open_orders(symbol=symbol) for symbol in self.symbols]
+                    *[self.cca.fetch_open_orders(symbol=symbol) for symbol in self.active_symbols]
                 )
                 fetched = [x for sublist in fetched for x in sublist]
             for elm in fetched:
@@ -403,7 +396,7 @@ class BinanceBot(Passivbot):
                 logging.error(f"error setting hedge mode {e}")
 
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}
-        for symbol in self.symbols:
+        for symbol in self.approved_symbols:
             try:
                 coros_to_call_margin_mode[symbol] = asyncio.create_task(
                     self.cca.set_margin_mode("cross", symbol=symbol)
@@ -416,7 +409,7 @@ class BinanceBot(Passivbot):
                 )
             except Exception as e:
                 logging.error(f"{symbol}: a error setting leverage {e}")
-        for symbol in self.symbols:
+        for symbol in self.approved_symbols:
             res = None
             to_print = ""
             try:
