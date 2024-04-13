@@ -241,20 +241,23 @@ class Passivbot:
         self.set_live_configs()
         self.ohlcv_maintainer = asyncio.create_task(self.maintain_ohlcvs())
         for i in range(10000):
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(1)
             upd_timestamps = [v for k, v in self.ohlcv_upd_timestamps.items()]
             if all(upd_timestamps):
                 break
             if i == 0:
                 print()
-            print(
-                f"\r waiting for ohlcvs to be updated... {len([x for x in upd_timestamps if x])} / {len(upd_timestamps)}"
+            logging.info(
+                f"updating ohlcvs... {len([x for x in upd_timestamps if x])} / {len(upd_timestamps)}"
             )
 
         for f in ["exchange_config", "emas", "pnls"]:
             res = await getattr(self, f"update_{f}")()
             logging.info(f"initiating {f} {res}")
         self.set_wallet_exposure_limits()
+        if not self.forager_mode:
+            res = self.ohlcv_maintainer.cancel()
+            logging.info(f"not in foarger mode; cancelled ohlcv maintainer {res}")
 
     async def get_active_symbols(self):
         # get symbols with open orders and/or positions
@@ -309,10 +312,12 @@ class Passivbot:
             # use static symbol list
             # all approved symbols plus symbols with position on graceful stop
             self.active_symbols = sorted(set(self.approved_symbols))
+            self.forager_mode = False
         else:
             # forager mode
             # active symbols are symbols with position plus symbols with high noisiness
             self.active_symbols = symbols_with_pos_or_open_orders
+            self.forager_mode = True
             # ... TBC
         for symbol in self.active_symbols:
             if symbol not in self.positions:
