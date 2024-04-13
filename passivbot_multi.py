@@ -1001,6 +1001,14 @@ class Passivbot:
                     unstuck_close_order is not None
                     and unstuck_close_order["symbol"] == symbol
                     and unstuck_close_order["position_side"] == "long"
+                    and abs(
+                        calc_pprice_diff(
+                            unstuck_close_order["position_side"],
+                            unstuck_close_order["order"][1],
+                            self.tickers[unstuck_close_order["symbol"]]["last"],
+                        )
+                    )
+                    < 0.002
                 ):
                     ideal_orders[symbol].append(unstuck_close_order["order"])
                     psize_ = max(
@@ -1087,6 +1095,14 @@ class Passivbot:
                     unstuck_close_order is not None
                     and unstuck_close_order["symbol"] == symbol
                     and unstuck_close_order["position_side"] == "short"
+                    and abs(
+                        calc_pprice_diff(
+                            unstuck_close_order["position_side"],
+                            unstuck_close_order["order"][1],
+                            self.tickers[unstuck_close_order["symbol"]]["last"],
+                        )
+                    )
+                    < 0.002
                 ):
                     ideal_orders[symbol].append(unstuck_close_order["order"])
                     psize_ = -max(
