@@ -109,7 +109,7 @@ class BinanceBot(Passivbot):
                 fetched = await self.cca.fetch_open_orders()
                 self.cca.options["warnOnFetchOpenOrdersWithoutSymbol"] = True
             else:
-                if hasattr(self, "active_symbols"):
+                if hasattr(self, "active_symbols") and self.active_symbols:
                     symbols_ = self.active_symbols
                 else:
                     symbols_ = sorted(set(self.positions))
