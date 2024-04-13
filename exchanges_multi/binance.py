@@ -109,10 +109,12 @@ class BinanceBot(Passivbot):
                 fetched = await self.cca.fetch_open_orders()
                 self.cca.options["warnOnFetchOpenOrdersWithoutSymbol"] = True
             else:
-                if not hasattr(self, "active_symbols"):
-                    return []
+                if hasattr(self, "active_symbols"):
+                    symbols_ = self.active_symbols
+                else:
+                    symbols_ = sorted(set(self.positions))
                 fetched = await asyncio.gather(
-                    *[self.cca.fetch_open_orders(symbol=symbol) for symbol in self.active_symbols]
+                    *[self.cca.fetch_open_orders(symbol=symbol) for symbol in symbols_]
                 )
                 fetched = [x for sublist in fetched for x in sublist]
             for elm in fetched:
