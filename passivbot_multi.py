@@ -927,8 +927,8 @@ class Passivbot:
                     ),
                 }
                 try:
-                    if utc_ms() - self.prev_AU_print_ms > 1000 * 60:
-                        line = f"Auto unstuck allowance: {AU_allowance:.3f} {self.quote}. Placing {pside} unstucking order for {sym} at {close_price}. Last price: {self.tickers[sym]['last']}"
+                    if utc_ms() - self.prev_AU_print_ms > 1000 * 300:
+                        line = f"Auto unstuck allowance: {AU_allowance:.3f} {self.quote}. Will place {pside} unstucking order for {sym} at {close_price}. Last price: {self.tickers[sym]['last']}"
                         logging.info(line)
                         self.prev_AU_print_ms = utc_ms()
                 except:
