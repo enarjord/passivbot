@@ -1244,6 +1244,7 @@ class Passivbot:
             return True
         self.previous_execution_ts = utc_ms()
         try:
+            self.update_active_symbols()
             if self.recent_fill:
                 self.upd_timestamps["positions"] = 0.0
                 self.upd_timestamps["open_orders"] = 0.0
