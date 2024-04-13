@@ -99,6 +99,10 @@ class Passivbot:
         self.hedge_mode = True
         self.inverse = False
         self.active_symbols = []
+        self.fetched_positions = []
+        self.fetched_open_orders = []
+        self.open_orders = {}
+        self.positions = {}
         self.pnls = []
         self.tickers = {}
         self.emas_long = {}
@@ -235,9 +239,11 @@ class Passivbot:
         await self.init_market_dict()
         logging.info(f"initiating tickers...")
         await self.update_tickers()
-        logging.info(f"initiating balance, positions, open orders...")
-        await asyncio.gather(*[self.update_positions(), self.update_open_orders()])
-        await self.update_approved_symbols()  # parse flags
+        logging.info(f"initiating balance, positions...")
+        await self.update_positions()
+        logging.info(f"initiating open orders...")
+        await self.update_open_orders()
+        await self.update_approved_symbols()
         self.set_live_configs()
         self.ohlcv_maintainer = asyncio.create_task(self.maintain_ohlcvs())
         for i in range(10000):
@@ -1274,6 +1280,7 @@ class Passivbot:
                     self.add_new_order(elm, source="POST")
             if to_cancel or to_create:
                 await asyncio.gather(self.update_open_orders(), self.update_positions())
+
         except Exception as e:
             logging.error(f"error executing to exchange {e}")
             traceback.print_exc()
