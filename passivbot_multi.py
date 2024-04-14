@@ -357,7 +357,7 @@ class Passivbot:
 
         if self.config["minimum_market_age_days"] > 0:
             first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
-            for symbol in first_timestamps:
+            for symbol in sorted(first_timestamps):
                 first_timestamps[self.format_symbol(symbol)] = first_timestamps[symbol]
         else:
             first_timestamps = None
