@@ -46,6 +46,7 @@ from njit_funcs import (
 from njit_multisymbol import calc_AU_allowance
 from pure_funcs import (
     numpyize,
+    denumpyize,
     filter_orders,
     multi_replace,
     shorten_custom_id,
@@ -76,6 +77,7 @@ class Passivbot:
             ("n_longs", 0),
             ("n_shorts", 0),
             ("minimum_market_age_days", 0),
+            ("price_distance_threshold", 0.002),
         ]:
             if key not in self.config:
                 self.config[key] = default_val
@@ -515,25 +517,29 @@ class Passivbot:
             for x in upd:
                 self.handle_ticker_update(x)
         elif isinstance(upd, dict):
-            if len(upd) == 0:
-                return
-            if "symbol" in upd:
-                for key in ["bid", "ask"]:
-                    if key not in upd or upd[key] is None:
-                        upd[key] = self.tickers[upd["symbol"]][key]
+            if "bid" not in upd and "bids" in upd and "ask" not in upd and "asks" in upd:
+                # order book, not ticker
+                upd["bid"], upd["ask"] = upd["bids"][0][0], upd["asks"][0][0]
+            if all([key in upd for key in ["bid", "ask", "symbol"]]):
                 if "last" not in upd or upd["last"] is None:
                     upd["last"] = np.random.choice([upd["bid"], upd["ask"]])
-                if (
-                    upd["bid"] != self.tickers[upd["symbol"]]["bid"]
-                    or upd["ask"] != self.tickers[upd["symbol"]]["ask"]
-                ):
-                    ticker_new = {k: upd[k] for k in ["bid", "ask", "last"]}
-                    self.tickers[upd["symbol"]] = ticker_new
+                for key in ["bid", "ask", "last"]:
+                    if upd[key] is not None:
+                        self.tickers[upd["symbol"]][key] = upd[key]
+                    else:
+                        logging.info(f"ticker {upd['symbol']} {key} is None")
+
+                # if upd['bid'] is not None:
+                #    if upd['ask'] is not None:
+                #        if upd['last'] is not None:
+                #            self.tickers[upd['symbol']] = {k: upd[k] for k in ["bid", "ask", "last"]}
+                #            return
+                #        self.tickers[upd['symbol']] = {'bid': upd['bid'], 'ask': upd['ask'], 'last': np.random.choice([upd['bid'], upd['ask']])}
+                #        return
+                #    self.tickers[upd['symbol']] = {'bid': upd['bid'], 'ask': upd['bid'], 'last': upd['bid']}
+                #    return
             else:
-                # upd on the form {sym: {bid, ask, ...}}
-                for sym in upd:
-                    if sym in self.approved_symbols:
-                        self.handle_ticker_update(upd[sym])
+                logging.info(f"unexpected WS ticker formatting: {upd}")
 
     def calc_upnl_sum(self):
         try:
@@ -1305,6 +1311,22 @@ class Passivbot:
             if utc_ms() - self.execution_delay_millis > self.previous_execution_ts:
                 await self.execute_to_exchange()
             await asyncio.sleep(1.0)
+            # self.debug_dump_bot_state_to_disk()
+
+    def debug_dump_bot_state_to_disk(self):
+        if not hasattr(self, "tmp_debug_ts"):
+            self.tmp_debug_ts = 0
+            self.tmp_debug_cache = make_get_filepath(f"caches/{self.exchange}/{self.user}_debug/")
+        if utc_ms() - self.tmp_debug_ts > 60000:
+            logging.info(f"debug dumping bot state to disk")
+            for k, v in vars(self).items():
+                try:
+                    json.dump(
+                        denumpyize(v), open(os.path.join(self.tmp_debug_cache, k + ".json"), "w")
+                    )
+                except Exception as e:
+                    logging.error(f"debug failed to dump to disk {k} {e}")
+            self.tmp_debug_ts = utc_ms()
 
     async def start_bot(self):
         await self.init_bot()
