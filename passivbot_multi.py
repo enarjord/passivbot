@@ -517,6 +517,9 @@ class Passivbot:
             for x in upd:
                 self.handle_ticker_update(x)
         elif isinstance(upd, dict):
+            if len(upd) == 1:
+                # sometimes format is {symbol: {ticker}}
+                upd = upd[next(iter(upd))]
             if "bid" not in upd and "bids" in upd and "ask" not in upd and "asks" in upd:
                 # order book, not ticker
                 upd["bid"], upd["ask"] = upd["bids"][0][0], upd["asks"][0][0]
