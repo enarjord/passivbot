@@ -67,22 +67,6 @@ logging.basicConfig(
 class Passivbot:
     def __init__(self, config: dict):
         self.config = config
-        for key, default_val in [
-            ("auto_gs", True),
-            ("long_enabled", True),
-            ("short_enabled", True),
-            ("max_n_cancellations_per_batch", 8),
-            ("max_n_creations_per_batch", 4),
-            ("ignored_symbols", []),
-            ("n_longs", 0),
-            ("n_shorts", 0),
-            ("minimum_market_age_days", 0),
-            ("price_distance_threshold", 0.002),
-        ]:
-            if key not in self.config:
-                self.config[key] = default_val
-        if "approved_symbols" not in self.config and "symbols" in self.config:
-            self.config["approved_symbols"] = self.config["symbols"]
         self.user = config["user"]
         self.user_info = load_user_info(config["user"])
         self.exchange = self.user_info["exchange"]
@@ -1417,7 +1401,14 @@ async def main():
     parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
     parser.add_argument("hjson_config_path", type=str, help="path to hjson passivbot meta config")
     parser_items = [
-        ("s", "symbols", "symbols", str, ", comma separated (SYM1USDT,SYM2USDT,...)"),
+        (
+            "s",
+            "approved_symbols",
+            "approved_symbols",
+            str,
+            ", comma separated (SYM1USDT,SYM2USDT,...)",
+        ),
+        ("i", "ignored_symbols", "ignored_symbols", str, ", comma separated (SYM1USDT,SYM2USDT,...)"),
         ("le", "long_enabled", "long_enabled", str2bool, " (y/n or t/f)"),
         ("se", "short_enabled", "short_enabled", str2bool, " (y/n or t/f)"),
         ("tl", "total_wallet_exposure_long", "TWE_long", float, ""),
@@ -1449,11 +1440,30 @@ async def main():
     while True:
         args = parser.parse_args()
         config = load_hjson_config(args.hjson_config_path)
+
+        for key, default_val in [
+            ("auto_gs", True),
+            ("long_enabled", True),
+            ("short_enabled", True),
+            ("max_n_cancellations_per_batch", 8),
+            ("max_n_creations_per_batch", 4),
+            ("ignored_symbols", []),
+            ("n_longs", 0),
+            ("n_shorts", 0),
+            ("minimum_market_age_days", 0),
+            ("price_distance_threshold", 0.002),
+        ]:
+            if key not in config:
+                logging.info(f"adding missing config param: {key}: {default_val}")
+                config[key] = default_val
+        if "approved_symbols" not in config and "symbols" in config:
+            config["approved_symbols"] = config["symbols"]
+
         for key in [x[2] for x in parser_items]:
             if getattr(args, key) is not None:
-                if key == "symbols":
-                    old_value = sorted(set(config["symbols"]))
-                    new_value = sorted(set(args.symbols.split(",")))
+                if key.endswith("symbols"):
+                    old_value = sorted(set(config[key]))
+                    new_value = sorted(set(getattr(args, key).split(",")))
                 else:
                     old_value = config[key]
                     new_value = getattr(args, key)
