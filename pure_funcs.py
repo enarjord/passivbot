@@ -2243,6 +2243,11 @@ def symbol2coin(symbol: str) -> str:
     return coin
 
 
+def coin2symbol(coin: str, quote="USDT") -> str:
+    # ccxt formatting
+    return f"{coin}/{quote}:{quote}"
+
+
 def backtested_multiconfig2singleconfig(backtested_config: dict) -> dict:
     template = get_template_live_config("recursive_grid")
     for pside in ["long", "short"]:
