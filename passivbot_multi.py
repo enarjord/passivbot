@@ -75,7 +75,6 @@ class Passivbot:
         self.sym_padding = 17
         self.stop_websocket = False
         self.balance = 1e-12
-        self.upnls = {}
         self.upd_timestamps = {
             "pnls": 0.0,
             "open_orders": 0.0,
@@ -220,6 +219,18 @@ class Passivbot:
     def pad_sym(self, symbol):
         return f"{symbol: <{self.sym_padding}}"
 
+    def find_file_mod_utc_time_diff(self):
+        try:
+            fname = f"{self.user}_testfile_{uuid4().hex}.txt"
+            with open(fname, "w") as f:
+                f.write("\n")
+            now = utc_ms()
+            fmod_time = get_file_mod_utc(fname)
+            os.remove(fname)
+            return now - fmod_time
+        except Exception as e:
+            logging.error(f"error with find_file_mod_utc_time_diff {e}")
+
     async def init_bot(self):
         logging.info(f"initiating markets...")
         await self.init_market_dict()
@@ -234,11 +245,9 @@ class Passivbot:
         self.ohlcv_maintainer = asyncio.create_task(self.maintain_ohlcvs())
         for i in range(10000):
             await asyncio.sleep(1)
-            upd_timestamps = [v for k, v in self.ohlcv_upd_timestamps.items()]
+            upd_timestamps = [v for v in self.ohlcv_upd_timestamps.values()]
             if all(upd_timestamps):
                 break
-            if i == 0:
-                print()
             logging.info(
                 f"updating ohlcvs... {len([x for x in upd_timestamps if x])} / {len(upd_timestamps)}"
             )
@@ -1361,11 +1370,25 @@ class Passivbot:
     async def maintain_ohlcvs(self, timeframe="15m", sleep_interval=15):
         self.ohlcvs = {}
         self.ohlcv_upd_timestamps = {symbol: 0 for symbol in self.approved_symbols}
+        time_diff = self.find_file_mod_utc_time_diff()
+        if time_diff > 1000:
+            logging.info(
+                f"time diff between utc_ms() and get_file_mod_utc() is greater than one second"
+            )
+        force_update_syms = []
         for symbol in self.approved_symbols:
             ohlcvs = self.load_ohlcv_from_cache(symbol, suppress_error_log=True)
             if ohlcvs:
                 self.ohlcvs[symbol] = ohlcvs
                 self.ohlcv_upd_timestamps[symbol] = get_file_mod_utc(self.get_ohlcv_fpath(symbol))
+                if utc_ms() - self.ohlcv_upd_timestamps[symbol] > 1000 * 60 * 15:
+                    force_update_syms.append(symbol)
+                    self.ohlcv_upd_timestamps[symbol] = 0
+                    del self.ohlcvs[symbol]
+        if force_update_syms:
+            logging.info(
+                f"ohlcvs too old; forcing update for {','.join([symbol2coin(x) for x in force_update_syms])}"
+            )
         while True:
             missing_symbols = [s for s in self.approved_symbols if s not in self.ohlcvs]
             if missing_symbols:
