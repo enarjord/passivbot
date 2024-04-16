@@ -90,6 +90,7 @@ class BitgetBot(Passivbot):
                 for i in range(len(res)):
                     res[i]["position_side"] = res[i]["info"]["posSide"]
                     res[i]["qty"] = res[i]["amount"]
+                    res[i]["side"] = self.determine_side(res[i])
                 self.handle_order_update(res)
             except Exception as e:
                 print(f"exception watch_orders", e)
@@ -107,6 +108,21 @@ class BitgetBot(Passivbot):
                 print(f"exception watch_tickers {symbols}", e)
                 traceback.print_exc()
 
+    def determine_side(self, order: dict) -> str:
+        if "info" in order:
+            if all([x in order["info"] for x in ["tradeSide", "reduceOnly", "posSide"]]):
+                if order["info"]["tradeSide"] == "close":
+                    if order["info"]["posSide"] == "long":
+                        return "sell"
+                    elif order["info"]["posSide"] == "short":
+                        return "buy"
+                elif order["info"]["tradeSide"] == "open":
+                    if order["info"]["posSide"] == "long":
+                        return "buy"
+                    elif order["info"]["posSide"] == "short":
+                        return "sell"
+        raise Exception(f"failed to determine side {order}")
+
     async def fetch_open_orders(self, symbol: str = None):
         fetched = None
         open_orders = []
@@ -116,6 +132,7 @@ class BitgetBot(Passivbot):
                 fetched[i]["position_side"] = fetched[i]["info"]["posSide"]
                 fetched[i]["qty"] = fetched[i]["amount"]
                 fetched[i]["custom_id"] = fetched[i]["clientOrderId"]
+                fetched[i]["side"] = self.determine_side(fetched[i])
             return sorted(fetched, key=lambda x: x["timestamp"])
         except Exception as e:
             logging.error(f"error fetching open orders {e}")
