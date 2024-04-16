@@ -53,6 +53,7 @@ from pure_funcs import (
     determine_side_from_order_tuple,
     str2bool,
     symbol2coin,
+    add_missing_params_to_hjson_live_multi_config,
 )
 
 import logging
@@ -1313,7 +1314,7 @@ class Passivbot:
         if not hasattr(self, "tmp_debug_ts"):
             self.tmp_debug_ts = 0
             self.tmp_debug_cache = make_get_filepath(f"caches/{self.exchange}/{self.user}_debug/")
-        if utc_ms() - self.tmp_debug_ts > 60000:
+        if utc_ms() - self.tmp_debug_ts > 1000 * 60 * 3:
             logging.info(f"debug dumping bot state to disk")
             for k, v in vars(self).items():
                 try:
@@ -1463,24 +1464,9 @@ async def main():
     while True:
         args = parser.parse_args()
         config = load_hjson_config(args.hjson_config_path)
-
-        for key, default_val in [
-            ("auto_gs", True),
-            ("long_enabled", True),
-            ("short_enabled", True),
-            ("max_n_cancellations_per_batch", 8),
-            ("max_n_creations_per_batch", 4),
-            ("ignored_symbols", []),
-            ("n_longs", 0),
-            ("n_shorts", 0),
-            ("minimum_market_age_days", 0),
-            ("price_distance_threshold", 0.002),
-        ]:
-            if key not in config:
-                logging.info(f"adding missing config param: {key}: {default_val}")
-                config[key] = default_val
-        if "approved_symbols" not in config and "symbols" in config:
-            config["approved_symbols"] = config["symbols"]
+        config, logging_lines = add_missing_params_to_hjson_live_multi_config(config)
+        for line in logging_lines:
+            logging.info(line)
 
         for key in [x[2] for x in parser_items]:
             if getattr(args, key) is not None:
