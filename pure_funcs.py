@@ -2,6 +2,7 @@ import datetime
 import pprint
 from collections import OrderedDict
 from hashlib import sha256
+from copy import deepcopy
 
 import json
 import numpy as np
@@ -2270,8 +2271,9 @@ def backtested_multiconfig2singleconfig(backtested_config: dict) -> dict:
 
 def backtested_multiconfig2live_multiconfig(backtested_config: dict) -> dict:
     template = get_template_live_config("multi_hjson")
-    for key in ["long_enabled", "short_enabled", "symbols"]:
-        template[key] = backtested_config["args"][key]
+    template["long_enabled"] = backtested_config["args"]["long_enabled"]
+    template["short_enabled"] = backtested_config["args"]["short_enabled"]
+    template["approved_symbols"] = backtested_config["args"]["symbols"]
     for key in ["live_configs_dir", "default_config_path"]:
         template[key] = ""
     for key in backtested_config["live_config"]["global"]:
@@ -2283,6 +2285,30 @@ def backtested_multiconfig2live_multiconfig(backtested_config: dict) -> dict:
                     pside
                 ][key]
     return template
+
+
+def add_missing_params_to_hjson_live_multi_config(config: dict) -> (dict, [str]):
+    config_copy = deepcopy(config)
+    logging_lines = []
+    for key, default_val in [
+        ("auto_gs", True),
+        ("long_enabled", True),
+        ("short_enabled", True),
+        ("max_n_cancellations_per_batch", 8),
+        ("max_n_creations_per_batch", 4),
+        ("ignored_symbols", []),
+        ("n_longs", 0),
+        ("n_shorts", 0),
+        ("minimum_market_age_days", 0),
+        ("price_distance_threshold", 0.002),
+    ]:
+        if key not in config:
+            logging_lines.append(f"adding missing config param: {key}: {default_val}")
+            config_copy[key] = default_val
+    if "approved_symbols" not in config and "symbols" in config:
+        logging_lines.append(f"'symbols' -> 'approved_symbols'")
+        config_copy["approved_symbols"] = config["symbols"]
+    return config_copy, logging_lines
 
 
 def remove_OD(d: dict) -> dict:
