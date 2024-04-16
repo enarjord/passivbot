@@ -10,10 +10,12 @@ import argparse
 import signal
 import sys
 import traceback
+import os
 from deap import base, creator, tools, algorithms
 from collections import OrderedDict
-from procedures import utc_ms, make_get_filepath
+from procedures import utc_ms, make_get_filepath, load_hjson_config
 from multiprocessing import shared_memory
+from copy import deepcopy
 
 from pure_funcs import (
     live_config_dict_to_list_recursive_grid,
@@ -22,6 +24,7 @@ from pure_funcs import (
     ts_to_date_utc,
     denumpyize,
     tuplify,
+    calc_hash,
 )
 from backtest_multi import backtest_multi, prep_config_multi, prep_hlcs_mss_config
 from njit_multisymbol import backtest_multisymbol_recursive_grid
@@ -323,20 +326,26 @@ def get_individual_keys():
 
 
 def config_to_individual(config):
+    if "live_config" in config and all(
+        [x in config["live_config"] for x in ["global", "long", "short"]]
+    ):
+        config_ = deepcopy(config["live_config"])
+    else:
+        config_ = deepcopy(config)
     keys = get_individual_keys()
     individual = [0.0 for _ in range(len(keys))]
     for i, key in enumerate(keys):
         key_ = key[key.find("_") + 1 :]
         if key.startswith("global"):
-            if key_ in config:
-                individual[i] = config[key_]
-            elif "global" in config and key_ in config["global"]:
-                individual[i] = config["global"][key_]
+            if key_ in config_:
+                individual[i] = config_[key_]
+            elif "global" in config_ and key_ in config_["global"]:
+                individual[i] = config_["global"][key_]
             else:
-                print(f"warning: '{key_}' missing from config. Setting {key_} = 0.0")
+                raise Exception(f"error: '{key}' missing from config. ")
         else:
             pside = key[: key.find("_")]
-            individual[i] = config[pside][key_]
+            individual[i] = config_[pside][key_]
     return individual
 
 
@@ -405,15 +414,32 @@ def backtest_multi(hlcs, config):
     return res
 
 
-def add_starting_configs(pop, config, toolbox):
-    for cfg in config["starting_configs"]:
-        individual = config_to_individual(cfg)
-        ind = toolbox.individual()  # Create a new individual
-        for i, value in enumerate(individual):
-            ind[i] = value
-        ind.fitness.values = toolbox.evaluate(ind)
-        pop.append(ind)
-    return pop
+def get_starting_configs(config):
+    if config["starting_configs"] is None:
+        return []
+    cfgs = []
+    if os.path.isdir(config["starting_configs"]):
+        filenames = [f for f in os.listdir(config["starting_configs"])]
+    else:
+        filenames = [config["starting_configs"]]
+    for f in filenames:
+        path = os.path.join(config["starting_configs"], f)
+        try:
+            cfgs.append(load_hjson_config(path))
+        except Exception as e:
+            logging.error(f"failed to load live config {path} {e}")
+    return cfgs
+
+
+def cfgs2individuals(cfgs):
+    inds = {}
+    for cfg in cfgs:
+        try:
+            individual = config_to_individual(cfg)
+            inds[calc_hash(individual)] = individual
+        except Exception as e:
+            logging.error(f"error with config_to_individual {e}")
+    return list(inds.values())
 
 
 async def main():
@@ -447,8 +473,6 @@ async def main():
             default=None,
             help=f"specify {k1}{h}, overriding value from hjson config.",
         )
-    config = prep_config_multi(parser)
-    """
     parser.add_argument(
         "-t",
         "--start",
@@ -458,12 +482,12 @@ async def main():
         default=None,
         help="start with given live configs.  single json file or dir with multiple json files",
     )
-    """
+    config = prep_config_multi(parser)
     config["symbols"] = OrderedDict({k: v for k, v in sorted(config["symbols"].items())})
     config["results_cache_fname"] = make_get_filepath(
         f"results_multi/{ts_to_date_utc(utc_ms())[:19].replace(':', '_')}_all_results.txt"
     )
-    for key, default_val in [("worst_drawdown_lower_bound", 0.5)]:
+    for key, default_val in [("worst_drawdown_lower_bound", 0.25)]:
         if key not in config:
             config[key] = default_val
 
@@ -526,8 +550,18 @@ async def main():
         toolbox.register("map", pool.map)
 
         # Population setup
-        pop = toolbox.population(n=100)
-        # pop = add_starting_configs(pop, config)
+        starting_individuals = cfgs2individuals(get_starting_configs(config))
+        pop_size = 100
+        if len(starting_individuals) > pop_size:
+            logging.info(f"increasing population size: {pop_size} -> {len(starting_individuals)}")
+        pop = toolbox.population(n=max(len(starting_individuals), pop_size))
+        if starting_individuals:
+            for i in range(len(starting_individuals)):
+                adjusted = [
+                    max(min(x, BOUNDS[z][1]), BOUNDS[z][0])
+                    for z, x in enumerate(starting_individuals[i])
+                ]
+                pop[i] = creator.Individual(adjusted)
         hof = tools.HallOfFame(1)
         stats = tools.Statistics(lambda ind: ind.fitness.values)
         stats.register("avg", np.mean, axis=0)
