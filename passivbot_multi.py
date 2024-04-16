@@ -1227,12 +1227,12 @@ class Passivbot:
             to_cancel, key=lambda x: calc_diff(x["price"], self.tickers[x["symbol"]]["last"])
         ), sorted(to_create, key=lambda x: calc_diff(x["price"], self.tickers[x["symbol"]]["last"]))
 
-    async def force_update(self):
+    async def force_update(self, force=False):
         # if some information has not been updated in a while, force update via REST
         coros_to_call = []
         now = utc_ms()
         for key in self.upd_timestamps:
-            if now - self.upd_timestamps[key] > self.force_update_age_millis:
+            if force or now - self.upd_timestamps[key] > self.force_update_age_millis:
                 # logging.info(f"forcing update {key}")
                 coros_to_call.append((key, getattr(self, f"update_{key}")()))
         if any(coros_to_call):
