@@ -13,6 +13,7 @@ from pure_funcs import (
     ts_to_date_utc,
     calc_hash,
     shorten_custom_id,
+    coin2symbol,
 )
 from njit_funcs import (
     calc_diff,
@@ -67,9 +68,6 @@ class HyperliquidBot(Passivbot):
             self.c_mults[symbol] = elm["contractSize"]
         self.n_decimal_places = 6
         self.n_significant_figures = 5
-        self.coin2symbol_map = {
-            self.markets_dict[symbol]["info"]["name"]: symbol for symbol in self.markets_dict
-        }
 
     async def start_websockets(self):
         await asyncio.gather(
@@ -188,7 +186,7 @@ class HyperliquidBot(Passivbot):
                 body=json.dumps({"type": "allMids"}),
             )
             return {
-                self.coin2symbol_map[coin]: {
+                coin2symbol(coin, self.quote): {
                     "bid": float(fetched[coin]),
                     "ask": float(fetched[coin]),
                     "last": float(fetched[coin]),
