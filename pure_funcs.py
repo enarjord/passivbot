@@ -503,12 +503,13 @@ def get_template_live_config(passivbot_mode="neat_grid"):
             "execution_delay_seconds": 2,
             "max_n_cancellations_per_batch": 8,
             "max_n_creations_per_batch": 4,
+            "price_distance_threshold": 0.002,
             "auto_gs": True,
             "TWE_long": 2,
             "TWE_short": 0.1,
             "long_enabled": True,
             "short_enabled": False,
-            "symbols": {
+            "approved_symbols": {
                 "COIN1": "-lm n -sm gs -lc configs/live/custom/COIN1USDT.json",
                 "COIN2": "-lm n -sm gs -sw 0.4",
                 "COIN3": "-lm gs -sm n  -lw 0.15 -lev 12",
