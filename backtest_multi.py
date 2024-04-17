@@ -27,6 +27,8 @@ from pure_funcs import (
     str2bool,
     denumpyize,
     calc_hash,
+    add_missing_params_to_hjson_live_multi_config,
+    get_template_live_config,
 )
 from plotting import plot_pnls_stuck, plot_pnls_separate, plot_pnls_long_short, plot_fills_multi
 from collections import OrderedDict
@@ -121,8 +123,9 @@ def load_and_parse_config(path: str):
             symbol: {pside: loaded["live_config"][pside] for pside in ["long", "short"]}
             for symbol in formatted["symbols"]
         }
+        return formatted
 
-    elif all(
+    if all(
         [
             x in loaded
             for x in [
@@ -147,7 +150,8 @@ def load_and_parse_config(path: str):
         # hjson backtest config type
         formatted = loaded
         formatted["live_configs"] = {}
-    elif all(
+        return formatted
+    if all(
         [
             x in loaded
             for x in [
@@ -170,44 +174,33 @@ def load_and_parse_config(path: str):
         # hjson optimize config type
         formatted = loaded
         formatted["live_configs"] = {}
-    elif all(
-        [
-            x in loaded
-            for x in [
-                "user",
-                "pnls_max_lookback_days",
-                "loss_allowance_pct",
-                "stuck_threshold",
-                "unstuck_close_pct",
-                "execution_delay_seconds",
-                "max_n_cancellations_per_batch",
-                "max_n_creations_per_batch",
-                "auto_gs",
-                "TWE_long",
-                "TWE_short",
-                "long_enabled",
-                "short_enabled",
-                "symbols",
-                "live_configs_dir",
-                "default_config_path",
-                "universal_live_config",
-            ]
-        ]
-    ):
-        # hjson live multi config
-        formatted = loaded
-        formatted["exchange"] = "binance"
-        formatted["start_date"] = "2021-05-01"
-        formatted["end_date"] = "now"
-        formatted["starting_balance"] = 100000.0
-        formatted["base_dir"] = "backtests"
-        formatted["live_configs"] = {
-            symbol: {pside: loaded["universal_live_config"][pside] for pside in ["long", "short"]}
-            for symbol in formatted["symbols"]
-        }
-    else:
-        raise Exception("unknown config type")
-    return formatted
+        return formatted
+    try:
+        loaded, _ = add_missing_params_to_hjson_live_multi_config(loaded)
+        print(sorted(loaded.keys()))
+        print(sorted(get_template_live_config("multi_hjson")))
+        if all([x in loaded for x in get_template_live_config("multi_hjson")]):
+            # hjson live multi config
+            formatted = loaded
+            formatted["exchange"] = "binance"
+            formatted["start_date"] = "2021-05-01"
+            formatted["end_date"] = "now"
+            formatted["starting_balance"] = 100000.0
+            formatted["base_dir"] = "backtests"
+            if loaded["universal_live_config"]:
+                print("here")
+                formatted["live_configs"] = {
+                    symbol: {
+                        pside: loaded["universal_live_config"][pside] for pside in ["long", "short"]
+                    }
+                    for symbol in formatted["approved_symbols"]
+                }
+            else:
+                formatted["live_configs"] = {}
+            return formatted
+    except:
+        pass
+    raise Exception("unknown config type")
 
 
 def args2config(args):
