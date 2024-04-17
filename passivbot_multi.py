@@ -731,6 +731,8 @@ class Passivbot:
             return False
         tickers_new = res
         for symbol in tickers_new:
+            if tickers_new[symbol]["bid"] is None or tickers_new[symbol]["ask"] is None:
+                continue
             if "last" not in tickers_new[symbol] or tickers_new[symbol]["last"] is None:
                 tickers_new[symbol]["last"] = np.mean(
                     [tickers_new[symbol]["bid"], tickers_new[symbol]["ask"]]
