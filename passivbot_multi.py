@@ -519,10 +519,11 @@ class Passivbot:
                 upd["bid"], upd["ask"] = upd["bids"][0][0], upd["asks"][0][0]
             if all([key in upd for key in ["bid", "ask", "symbol"]]):
                 if "last" not in upd or upd["last"] is None:
-                    upd["last"] = np.random.choice([upd["bid"], upd["ask"]])
+                    upd["last"] = np.mean([upd["bid"], upd["ask"]])
                 for key in ["bid", "ask", "last"]:
                     if upd[key] is not None:
-                        self.tickers[upd["symbol"]][key] = upd[key]
+                        if upd[key] != self.tickers[upd["symbol"]][key]:
+                            self.tickers[upd["symbol"]][key] = upd[key]
                     else:
                         logging.info(f"ticker {upd['symbol']} {key} is None")
 
@@ -730,6 +731,10 @@ class Passivbot:
             return False
         tickers_new = res
         for symbol in tickers_new:
+            if "last" not in ticker_new[symbol] or tickers_new[symbol]["last"] is None:
+                tickers_new[symbol]["last"] = np.mean(
+                    [tickers_new[symbol]["bid"], tickers_new[symbol]["ask"]]
+                )
             ticker_new = {k: tickers_new[symbol][k] for k in ["bid", "ask", "last"]}
             self.tickers[symbol] = ticker_new
         self.upd_timestamps["tickers"] = utc_ms()
