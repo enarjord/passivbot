@@ -12,6 +12,7 @@ import pprint
 import numpy as np
 from uuid import uuid4
 from copy import deepcopy
+from collections import defaultdict
 
 from procedures import (
     load_broker_code,
@@ -268,7 +269,12 @@ class Passivbot:
         return sorted(set([elm["symbol"] for elm in positions + open_orders]))
 
     def format_symbol(self, symbol: str, suppress_log=False) -> str:
+        if not hasattr(self, "formatted_symbols_map"):
+            self.formatted_symbols_map = {}
+            self.formatted_symbols_map_inv = defaultdict(set)
         formatted = f"{symbol2coin(symbol)}/{self.quote}:{self.quote}"
+        self.formatted_symbols_map[symbol] = formatted
+        self.formatted_symbols_map_inv[formatted].add(symbol)
         if not suppress_log and symbol != formatted:
             logging.info(f"formatted {symbol} -> {formatted}")
         return formatted
@@ -348,6 +354,12 @@ class Passivbot:
         for symbol in sorted(set(approved_symbols)):
             if symbol not in self.markets_dict:
                 logging.info(f"{symbol} missing from {self.exchange}")
+                if symbol in self.formatted_symbols_map_inv:
+                    for x in self.formatted_symbols_map_inv[symbol]:
+                        if x in self.markets_dict:
+                            logging.info(f"changing {symbol} -> {x}")
+                            self.approved_symbols[x] = approved_symbols[symbol]
+                            break
             elif not self.markets_dict[symbol]["active"]:
                 logging.info(f"{symbol} not active")
             elif not self.markets_dict[symbol]["swap"]:
