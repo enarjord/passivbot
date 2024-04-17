@@ -275,18 +275,6 @@ class Passivbot:
 
     async def init_market_dict(self):
         self.markets_dict = await self.cca.load_markets()
-        self.all_symbols = []  # all active symbols on exchange
-        for symbol in self.markets_dict:
-            if all(
-                [
-                    self.markets_dict[symbol]["active"],
-                    self.markets_dict[symbol]["swap"],
-                    self.markets_dict[symbol]["linear"],
-                    symbol.endswith(f"/{self.quote}:{self.quote}"),
-                ]
-            ):
-                self.all_symbols.append(symbol)
-        self.all_symbols = sorted(set(self.all_symbols))
         self.set_market_specific_settings()
 
     def set_market_specific_settings(self):
@@ -346,7 +334,7 @@ class Passivbot:
                 )
         else:
             # all symbols are approved
-            for symbol in self.all_symbols:
+            for symbol in self.markets_dict:
                 approved_symbols[symbol] = ""
 
         if self.config["minimum_market_age_days"] > 0:
