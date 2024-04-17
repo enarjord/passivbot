@@ -12,7 +12,6 @@ import sys
 import traceback
 import os
 from deap import base, creator, tools, algorithms
-from collections import OrderedDict
 from procedures import utc_ms, make_get_filepath, load_hjson_config
 from multiprocessing import shared_memory
 from copy import deepcopy
@@ -25,6 +24,7 @@ from pure_funcs import (
     denumpyize,
     tuplify,
     calc_hash,
+    symbol2coin,
 )
 from backtest_multi import backtest_multi, prep_config_multi, prep_hlcs_mss_config
 from njit_multisymbol import backtest_multisymbol_recursive_grid
@@ -483,9 +483,12 @@ async def main():
         help="start with given live configs.  single json file or dir with multiple json files",
     )
     config = prep_config_multi(parser)
-    config["symbols"] = OrderedDict({k: v for k, v in sorted(config["symbols"].items())})
+    config["symbols"] = {k: v for k, v in sorted(config["symbols"].items())}
+    coins = [symbol2coin(s) for s in config["symbols"]]
+    coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
+    date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
     config["results_cache_fname"] = make_get_filepath(
-        f"results_multi/{ts_to_date_utc(utc_ms())[:19].replace(':', '_')}_all_results.txt"
+        f"results_multi/{date_fname}_{coins_fname}_all_results.txt"
     )
     for key, default_val in [("worst_drawdown_lower_bound", 0.25)]:
         if key not in config:
@@ -553,8 +556,9 @@ async def main():
         starting_individuals = cfgs2individuals(get_starting_configs(config))
         pop_size = 100
         if len(starting_individuals) > pop_size:
+            pop_size = len(starting_individuals)
             logging.info(f"increasing population size: {pop_size} -> {len(starting_individuals)}")
-        pop = toolbox.population(n=max(len(starting_individuals), pop_size))
+        pop = toolbox.population(n=pop_size)
         if starting_individuals:
             for i in range(len(starting_individuals)):
                 adjusted = [
