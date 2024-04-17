@@ -731,12 +731,12 @@ class Passivbot:
             return False
         tickers_new = res
         for symbol in tickers_new:
-            if "last" not in ticker_new[symbol] or tickers_new[symbol]["last"] is None:
+            if "last" not in tickers_new[symbol] or tickers_new[symbol]["last"] is None:
                 tickers_new[symbol]["last"] = np.mean(
                     [tickers_new[symbol]["bid"], tickers_new[symbol]["ask"]]
                 )
-            ticker_new = {k: tickers_new[symbol][k] for k in ["bid", "ask", "last"]}
-            self.tickers[symbol] = ticker_new
+            tickers_new = {k: tickers_new[symbol][k] for k in ["bid", "ask", "last"]}
+            self.tickers[symbol] = tickers_new
         self.upd_timestamps["tickers"] = utc_ms()
         return True
 
