@@ -91,7 +91,7 @@ class BinanceBot(Passivbot):
             try:
                 if self.stop_websocket:
                     break
-                res = await self.ccp.watch_order_book_for_symbols(symbols)
+                res = await self.ccp.watch_bids_asks(symbols)
                 self.handle_ticker_update(res)
             except Exception as e:
                 print(f"exception watch_tickers {symbols}", e)
