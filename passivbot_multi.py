@@ -735,8 +735,7 @@ class Passivbot:
                 tickers_new[symbol]["last"] = np.mean(
                     [tickers_new[symbol]["bid"], tickers_new[symbol]["ask"]]
                 )
-            tickers_new = {k: tickers_new[symbol][k] for k in ["bid", "ask", "last"]}
-            self.tickers[symbol] = tickers_new
+            self.tickers[symbol] = {k: tickers_new[symbol][k] for k in ["bid", "ask", "last"]}
         self.upd_timestamps["tickers"] = utc_ms()
         return True
 
