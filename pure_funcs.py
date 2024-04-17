@@ -2301,12 +2301,13 @@ def add_missing_params_to_hjson_live_multi_config(config: dict) -> (dict, [str])
         ("n_shorts", 0),
         ("minimum_market_age_days", 0),
         ("price_distance_threshold", 0.002),
+        ("universal_live_config", {}),
     ]:
         if key not in config:
             logging_lines.append(f"adding missing config param: {key}: {default_val}")
             config_copy[key] = default_val
     if "approved_symbols" not in config and "symbols" in config:
-        logging_lines.append(f"'symbols' -> 'approved_symbols'")
+        logging_lines.append(f"changed 'symbols' -> 'approved_symbols'")
         config_copy["approved_symbols"] = config["symbols"]
     return config_copy, logging_lines
 
