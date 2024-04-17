@@ -33,7 +33,7 @@ class BinanceBot(Passivbot):
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
-        for symbol in self.all_symbols:
+        for symbol in self.markets_dict:
             elm = self.markets_dict[symbol]
             self.min_costs[symbol] = (
                 0.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]

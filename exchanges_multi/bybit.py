@@ -33,7 +33,7 @@ class BybitBot(Passivbot):
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
-        for symbol in self.all_symbols:
+        for symbol in self.markets_dict:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
             self.min_costs[symbol] = (
