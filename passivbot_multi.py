@@ -310,6 +310,7 @@ class Passivbot:
             # use static symbol list
             # all approved symbols plus symbols with position on graceful stop
             self.active_symbols = sorted(set(self.approved_symbols))
+            self.set_wallet_exposure_limits()
             self.forager_mode = False
         else:
             # forager mode
@@ -389,9 +390,10 @@ class Passivbot:
                     ),
                     4,
                 )
-                for symbol in new_active_symbols:
+                for symbol in self.approved_symbols:
                     if "wallet_exposure_limit" not in self.live_configs[symbol][pside]:
                         self.live_configs[symbol][pside]["wallet_exposure_limit"] = 0.0
+                for symbol in new_active_symbols:
                     if getattr(self.args[symbol], f"WE_limit_{pside}") is None:
                         if self.live_configs[symbol][pside]["wallet_exposure_limit"] != new_WE_limit:
                             logging.info(
@@ -935,8 +937,8 @@ class Passivbot:
             self.emas_short[sym] = np.repeat(self.tickers[sym]["last"], 3)
             self.prev_prices[sym] = self.tickers[sym]["last"]
         ohs = None
-        try:
-            for symbol in self.approved_symbols:
+        for symbol in self.approved_symbols:
+            try:
                 samples1m = calc_samples(
                     numpyize(self.ohlcvs[symbol])[:, [0, 5, 4]], sample_size_ms=60000
                 )
@@ -944,10 +946,12 @@ class Passivbot:
                 self.emas_short[symbol] = calc_emas_last(
                     samples1m[:, 2], self.ema_spans_short[symbol]
                 )
-            return True
-        except Exception as e:
-            logging.error(f"error initiating EMAs {e}. Using latest prices as starting EMAs")
-            traceback.print_exc()
+            except Exception as e:
+                logging.error(
+                    f"{self.pad_sym(symbol)} error initiating EMAs {e}. Using latest prices as starting EMAs"
+                )
+                # traceback.print_exc()
+        return True
 
     def calc_ideal_orders(self):
         unstuck_close_order = None
@@ -1510,11 +1514,13 @@ class Passivbot:
             logging.info(
                 f"ohlcvs too old; forcing update for {','.join([symbol2coin(x) for x in force_update_syms])}"
             )
+        n_concurrent_symbols = 10
         while True:
             missing_symbols = [s for s in self.approved_symbols if s not in self.ohlcvs]
             if missing_symbols:
-                sleep_interval_ = 0.1
+                sleep_interval_ = 2.0
                 symbol = missing_symbols[0]
+                symbols_to_fetch = missing_symbols[:n_concurrent_symbols]
             else:
                 sleep_interval_ = sleep_interval
                 for _ in range(100):
@@ -1527,8 +1533,16 @@ class Passivbot:
                     logging.error(
                         f"more than 100 retries for getting most recently modified ohlcv symbol"
                     )
-            self.ohlcvs[symbol] = await self.fetch_ohlcv(symbol, timeframe=timeframe)
-            self.dump_ohlcv_to_cache(symbol, self.ohlcvs[symbol])
+                symbols_to_fetch = [symbol]
+            res = await asyncio.gather(
+                *[self.fetch_ohlcv(symbol, timeframe=timeframe) for symbol in symbols_to_fetch]
+            )
+            for s, r in zip(symbols_to_fetch, res):
+                self.ohlcvs[s] = r
+                self.dump_ohlcv_to_cache(s, self.ohlcvs[s])
+
+            # self.ohlcvs[symbol] = await self.fetch_ohlcv(symbol, timeframe=timeframe)
+            # self.dump_ohlcv_to_cache(symbol, self.ohlcvs[symbol])
             # logging.info(f"updated ohlcvs for {symbol}")
             await asyncio.sleep(sleep_interval_)
 
