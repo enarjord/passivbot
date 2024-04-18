@@ -2299,7 +2299,7 @@ def add_missing_params_to_hjson_live_multi_config(config: dict) -> (dict, [str])
 
     template = get_template_live_config("multi_hjson")
     for key, val in template.items():
-        if key not in config:
+        if key not in config_copy:
             logging_lines.append(f"adding missing config param: {key}: {val}")
             config_copy[key] = val
     return config_copy, logging_lines
