@@ -235,7 +235,7 @@ class Passivbot:
 
     async def init_bot(self):
         logging.info(f"initiating markets...")
-        await self.init_market_dict()
+        await self.init_markets_dict()
         logging.info(f"initiating tickers...")
         await self.update_tickers()
         logging.info(f"initiating balance, positions...")
@@ -279,7 +279,7 @@ class Passivbot:
             logging.info(f"formatted {symbol} -> {formatted}")
         return formatted
 
-    async def init_market_dict(self):
+    async def init_markets_dict(self):
         self.markets_dict = await self.cca.load_markets()
         self.set_market_specific_settings()
 
@@ -457,7 +457,7 @@ class Passivbot:
             elif not self.markets_dict[symbol]["active"]:
                 logging.info(f"{symbol} not active")
             elif not self.markets_dict[symbol]["swap"]:
-                logging.info(f"wrong market type for {symbol}: {self.market_dict[symbol]['type']}")
+                logging.info(f"wrong market type for {symbol}: {self.markets_dict[symbol]['type']}")
             elif not self.markets_dict[symbol]["linear"]:
                 logging.info(f"{symbol} is not a linear market")
             elif not symbol.endswith(f"/{self.quote}:{self.quote}"):
