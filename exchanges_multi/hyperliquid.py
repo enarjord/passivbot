@@ -79,6 +79,7 @@ class HyperliquidBot(Passivbot):
     async def watch_balance(self):
         # hyperliquid ccxt watch balance not supported.
         # relying instead on periodic REST updates
+        res = None
         while True:
             try:
                 if self.stop_websocket:
@@ -90,10 +91,11 @@ class HyperliquidBot(Passivbot):
                 self.handle_balance_update(res)
                 await asyncio.sleep(10)
             except Exception as e:
-                print(f"exception watch_balance", e)
+                logging.error(f"exception watch_balance {res} {e}")
                 traceback.print_exc()
 
     async def watch_orders(self):
+        res = None
         while True:
             try:
                 if self.stop_websocket:
@@ -104,7 +106,7 @@ class HyperliquidBot(Passivbot):
                     res[i]["qty"] = res[i]["amount"]
                 self.handle_order_update(res)
             except Exception as e:
-                print(f"exception watch_orders", e)
+                logging.error(f"exception watch_orders {res} {e}")
                 traceback.print_exc()
 
     async def watch_tickers(self, symbols=None):
@@ -112,15 +114,17 @@ class HyperliquidBot(Passivbot):
         await asyncio.gather(*[self.watch_ticker(symbol) for symbol in symbols])
 
     async def watch_ticker(self, symbol):
+        res = None
         while True:
             try:
                 if self.stop_websocket:
                     break
                 res = await self.ccp.watch_order_book(symbol)
-                res["bid"], res["ask"] = res["bids"][0][0], res["asks"][0][0]
-                self.handle_ticker_update(res)
+                if res["bids"] and res["asks"]:
+                    res["bid"], res["ask"] = res["bids"][0][0], res["asks"][0][0]
+                    self.handle_ticker_update(res)
             except Exception as e:
-                print(f"exception watch_ticker {symbol}", e)
+                logging.error(f"exception watch_ticker {symbol} {res} {e}")
                 traceback.print_exc()
 
     def determine_pos_side(self, order):
