@@ -307,11 +307,29 @@ class Passivbot:
                     self.approved_symbols[symbol] = "-lm m -sm m"
 
     async def update_active_symbols(self):
+        """
+        active symbols are longs/shorts with normal mode or which has position
+        if forager mode, update ideal actives based on noisiness
+        else, ideal actives is static list
+        """
+        if not hasattr(self, "gs_longs"):
+            self.gs_longs = []
+            self.gs_shorts = []
+            self.normal_longs = []
+            self.normal_shorts = []
+        self.ideal_actives = {"long": [], "short": []}
+        self.actual_actives = {"long": [], "short": []}
         if self.config["n_longs"] == 0 and self.config["n_shorts"] == 0:
             # forager is disabled
-            # use static symbol list
             # all approved symbols plus symbols with position on graceful stop
-            self.active_symbols = sorted(set(self.approved_symbols))
+            for pside in self.ideal_actives:
+                for symbol in self.approved_symbols:
+                    if self.config[f"{pside}_enabled"]:
+                        if self.live_configs[symbol][pside]["mode"] == "normal":
+                            self.ideal_actives[pside].append(symbol)
+            self.active_symbols = sorted(
+                set(self.ideal_actives["long"] + self.ideal_actives["short"])
+            )
             self.set_wallet_exposure_limits()
             self.forager_mode = False
         else:
@@ -328,7 +346,9 @@ class Passivbot:
                     symbol: {"long": None, "short": None} for symbol in self.approved_symbols
                 }
             for pside in on_gs:
-                ideal_actives = approved_symbols_sorted_by_noisiness[: self.config[f"n_{pside}s"]]
+                self.ideal_actives[pside] = ideal_actives = approved_symbols_sorted_by_noisiness[
+                    : self.config[f"n_{pside}s"]
+                ]
                 # print(pside, "ideal_actives", ideal_actives)
                 actual_actives = sorted(
                     set(
@@ -423,6 +443,9 @@ class Passivbot:
                 }
             if symbol not in self.open_orders:
                 self.open_orders[symbol] = []
+
+    def set_wallet_exposure_limits_new(self):
+        pass
 
     async def update_exchange_configs(self):
         if not hasattr(self, "already_updated_exchange_config_symbols"):
