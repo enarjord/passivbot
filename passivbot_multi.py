@@ -322,6 +322,7 @@ class Passivbot:
         if self.config["n_longs"] == 0 and self.config["n_shorts"] == 0:
             # forager is disabled
             # all approved symbols plus symbols with position on graceful stop
+            """
             for pside in self.ideal_actives:
                 for symbol in self.approved_symbols:
                     if self.config[f"{pside}_enabled"]:
@@ -330,6 +331,8 @@ class Passivbot:
             self.active_symbols = sorted(
                 set(self.ideal_actives["long"] + self.ideal_actives["short"])
             )
+            """
+            self.active_symbols = sorted(set(self.approved_symbols))
             self.set_wallet_exposure_limits()
             self.forager_mode = False
         else:
