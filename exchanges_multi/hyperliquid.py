@@ -335,9 +335,9 @@ class HyperliquidBot(Passivbot):
             print_async_exception(res)
             traceback.print_exc()
 
-    async def update_exchange_config(self):
+    async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_margin_mode = {}
-        for symbol in self.approved_symbols:
+        for symbol in symbols:
             try:
                 coros_to_call_margin_mode[symbol] = asyncio.create_task(
                     self.cca.set_margin_mode(
@@ -348,7 +348,7 @@ class HyperliquidBot(Passivbot):
                 )
             except Exception as e:
                 logging.error(f"{symbol}: error setting cross mode and leverage {e}")
-        for symbol in self.approved_symbols:
+        for symbol in symbols:
             res = None
             to_print = ""
             try:
@@ -361,6 +361,9 @@ class HyperliquidBot(Passivbot):
                     logging.error(f"{symbol} error setting cross mode {res} {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
+
+    async def update_exchange_config(self):
+        pass
 
     def calc_ideal_orders(self):
         # hyperliquid needs custom price rounding

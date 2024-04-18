@@ -328,6 +328,9 @@ class BitgetBot(Passivbot):
             orders, "execute_order", self.config["max_n_creations_per_batch"]
         )
 
+    async def update_exchange_config_by_symbols(self, symbols):
+        pass
+
     async def update_exchange_config(self):
         pass
 
