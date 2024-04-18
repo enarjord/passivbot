@@ -246,18 +246,19 @@ class Passivbot:
         self.set_live_configs()
         self.ohlcv_maintainer = asyncio.create_task(self.maintain_ohlcvs())
         for i in range(10000):
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.2)
             upd_timestamps = [v for v in self.ohlcv_upd_timestamps.values()]
             if all(upd_timestamps):
                 break
             logging.info(
                 f"updating ohlcvs... {len([x for x in upd_timestamps if x])} / {len(upd_timestamps)}"
             )
+            await asyncio.sleep(2)
 
-        for f in ["exchange_config", "emas", "pnls"]:
+        for f in ["emas", "pnls"]:
             res = await getattr(self, f"update_{f}")()
             logging.info(f"initiating {f} {res}")
-        self.update_active_symbols()
+        await self.update_active_symbols()
         if not self.forager_mode:
             res = self.ohlcv_maintainer.cancel()
             logging.info(f"not in foarger mode; cancelled ohlcv maintainer {res}")
@@ -303,7 +304,7 @@ class Passivbot:
                     logging.info(f"{self.pad_sym(symbol)} will be set to manual mode")
                     self.approved_symbols[symbol] = "-lm m -sm m"
 
-    def update_active_symbols(self):
+    async def update_active_symbols(self):
         if self.config["n_longs"] == 0 and self.config["n_shorts"] == 0:
             # forager is disabled
             # use static symbol list
@@ -409,6 +410,7 @@ class Passivbot:
                 set(self.prev_active_symbols["long"] + self.prev_active_symbols["short"])
             )
             self.forager_mode = True
+        await self.update_exchange_configs()
         for symbol in self.active_symbols:
             if symbol not in self.positions:
                 self.positions[symbol] = {
@@ -417,6 +419,25 @@ class Passivbot:
                 }
             if symbol not in self.open_orders:
                 self.open_orders[symbol] = []
+
+    async def update_exchange_configs(self):
+        if not hasattr(self, "already_updated_exchange_config_symbols"):
+            self.already_updated_exchange_config_symbols = set()
+            await self.update_exchange_config()
+        symbols_not_done = [
+            x for x in self.active_symbols if x not in self.already_updated_exchange_config_symbols
+        ]
+        if symbols_not_done:
+            await self.update_exchange_config_by_symbols(symbols_not_done)
+            self.already_updated_exchange_config_symbols.update(symbols_not_done)
+
+    async def update_exchange_config_by_symbols(self, symbols):
+        # defined by each exchange child class
+        pass
+
+    async def update_exchange_config(self):
+        # defined by each exchange child class
+        pass
 
     async def update_approved_symbols(self):
         # symbols are formatted to ccxt standard COIN/QUOTE:QUOTE
@@ -1343,7 +1364,7 @@ class Passivbot:
             return True
         self.previous_execution_ts = utc_ms()
         try:
-            self.update_active_symbols()
+            await self.update_active_symbols()
             if self.recent_fill:
                 self.upd_timestamps["positions"] = 0.0
                 self.upd_timestamps["open_orders"] = 0.0
