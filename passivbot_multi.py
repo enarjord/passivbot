@@ -125,6 +125,7 @@ class Passivbot:
             )
         else:
             live_configs_fnames = []
+        universal_configs_loaded = set()
         for symbol in self.approved_symbols:
             # look for an exact match first
             coin = symbol2coin(symbol)
@@ -154,9 +155,7 @@ class Passivbot:
             else:
                 try:
                     self.live_configs[symbol] = deepcopy(self.config["universal_live_config"])
-                    logging.info(
-                        f"{symbol: <{self.max_len_symbol}} loaded universal live config from hjson config"
-                    )
+                    universal_configs_loaded.add(symbol)
                 except Exception as e:
                     logging.error(f"failed to apply universal_live_config {e}")
                     raise Exception(f"no usable live config found for {symbol}")
@@ -203,6 +202,9 @@ class Passivbot:
                     ("backwards_tp", True),
                 ]:
                     self.live_configs[symbol][pside][key] = val
+        coins_universal = sorted([symbol2coin(s) for s in universal_configs_loaded])
+        if coins_universal:
+            logging.info(f"loaded universal config for {', '.join(coins_universal)}")
 
         # print symbols and modes
         modes = ["normal", "manual", "graceful_stop", "tp_only", "panic"]
