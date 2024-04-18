@@ -498,15 +498,15 @@ def get_template_live_config(passivbot_mode="neat_grid"):
         return {
             "user": "bybit_01",
             "pnls_max_lookback_days": 30,
-            "loss_allowance_pct": 0.002,
-            "stuck_threshold": 0.9,
-            "unstuck_close_pct": 0.01,
+            "loss_allowance_pct": 0.005,
+            "stuck_threshold": 0.89,
+            "unstuck_close_pct": 0.005,
             "execution_delay_seconds": 2,
             "max_n_cancellations_per_batch": 8,
             "max_n_creations_per_batch": 4,
             "price_distance_threshold": 0.002,
             "auto_gs": True,
-            "TWE_long": 2,
+            "TWE_long": 2.0,
             "TWE_short": 0.1,
             "long_enabled": True,
             "short_enabled": False,
@@ -519,32 +519,33 @@ def get_template_live_config(passivbot_mode="neat_grid"):
             "n_longs": 0,
             "n_shorts": 0,
             "minimum_market_age_days": 60,
+            "ohlcv_interval": "15m",
             "live_configs_dir": "configs/live/multisymbol/no_AU/",
             "default_config_path": "configs/live/recursive_grid_mode.example.json",
             "universal_live_config": {
                 "long": {
-                    "ddown_factor": 0.6038,
-                    "ema_span_0": 149.6,
-                    "ema_span_1": 667.6,
-                    "initial_eprice_ema_dist": 0.004734,
-                    "initial_qty_pct": 0.01,
-                    "markup_range": 0.002959,
-                    "min_markup": 0.003966,
-                    "n_close_orders": 2,
-                    "rentry_pprice_dist": 0.026,
-                    "rentry_pprice_dist_wallet_exposure_weighting": 1.464,
+                    "ddown_factor": 0.8783,
+                    "ema_span_0": 1054.0,
+                    "ema_span_1": 1307.0,
+                    "initial_eprice_ema_dist": -0.002641,
+                    "initial_qty_pct": 0.01151,
+                    "markup_range": 0.0008899,
+                    "min_markup": 0.007776,
+                    "n_close_orders": 3.724,
+                    "rentry_pprice_dist": 0.04745,
+                    "rentry_pprice_dist_wallet_exposure_weighting": 0.111,
                 },
                 "short": {
-                    "ddown_factor": 0.2415,
-                    "ema_span_0": 308.8,
-                    "ema_span_1": 1024,
-                    "initial_eprice_ema_dist": 0.004,
-                    "initial_qty_pct": 0.01,
-                    "markup_range": 0,
-                    "min_markup": 0.001939,
-                    "n_close_orders": 6,
-                    "rentry_pprice_dist": 0.03088,
-                    "rentry_pprice_dist_wallet_exposure_weighting": 3.257,
+                    "ddown_factor": 0.8783,
+                    "ema_span_0": 1054.0,
+                    "ema_span_1": 1307.0,
+                    "initial_eprice_ema_dist": -0.002641,
+                    "initial_qty_pct": 0.01151,
+                    "markup_range": 0.0008899,
+                    "min_markup": 0.007776,
+                    "n_close_orders": 3.724,
+                    "rentry_pprice_dist": 0.04745,
+                    "rentry_pprice_dist_wallet_exposure_weighting": 0.111,
                 },
             },
         }
@@ -2290,25 +2291,17 @@ def backtested_multiconfig2live_multiconfig(backtested_config: dict) -> dict:
 def add_missing_params_to_hjson_live_multi_config(config: dict) -> (dict, [str]):
     config_copy = deepcopy(config)
     logging_lines = []
-    for key, default_val in [
-        ("auto_gs", True),
-        ("long_enabled", True),
-        ("short_enabled", True),
-        ("max_n_cancellations_per_batch", 8),
-        ("max_n_creations_per_batch", 4),
-        ("ignored_symbols", []),
-        ("n_longs", 0),
-        ("n_shorts", 0),
-        ("minimum_market_age_days", 0),
-        ("price_distance_threshold", 0.002),
-        ("universal_live_config", {}),
-    ]:
-        if key not in config:
-            logging_lines.append(f"adding missing config param: {key}: {default_val}")
-            config_copy[key] = default_val
     if "approved_symbols" not in config and "symbols" in config:
         logging_lines.append(f"changed 'symbols' -> 'approved_symbols'")
         config_copy["approved_symbols"] = config["symbols"]
+    if "universal_live_config" not in config:
+        logging_lines.append(f"adding missing config param: 'universal_live_config': {{}}")
+
+    template = get_template_live_config("multi_hjson")
+    for key, val in template.items():
+        if key not in config:
+            logging_lines.append(f"adding missing config param: {key}: {val}")
+            config_copy[key] = val
     return config_copy, logging_lines
 
 
