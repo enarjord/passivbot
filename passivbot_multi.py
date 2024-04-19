@@ -271,15 +271,13 @@ class Passivbot:
         open_orders = await self.fetch_open_orders()
         return sorted(set([elm["symbol"] for elm in positions + open_orders]))
 
-    def format_symbol(self, symbol: str, suppress_log=False) -> str:
+    def format_symbol(self, symbol: str) -> str:
         if not hasattr(self, "formatted_symbols_map"):
             self.formatted_symbols_map = {}
             self.formatted_symbols_map_inv = defaultdict(set)
         formatted = f"{symbol2coin(symbol)}/{self.quote}:{self.quote}"
         self.formatted_symbols_map[symbol] = formatted
         self.formatted_symbols_map_inv[formatted].add(symbol)
-        if not suppress_log and symbol != formatted:
-            logging.info(f"formatted {symbol} -> {formatted}")
         return formatted
 
     async def init_markets_dict(self):
@@ -307,9 +305,10 @@ class Passivbot:
                     self.approved_symbols[symbol] = "-lm m -sm m"
 
     async def update_active_symbols_new(self):
-        # 1. find ideal actives
+        # 1. find ideal actives by noisiness among approved symbol
         # 2. find actual actives (pos and open orders)
         # 3. find available slots
+        # 4. if available slots, set to 'normal'
         pass
 
     async def update_active_symbols(self):
@@ -477,9 +476,7 @@ class Passivbot:
 
     async def update_approved_symbols(self):
         # symbols are formatted to ccxt standard COIN/QUOTE:QUOTE
-        self.ignored_symbols = [
-            self.format_symbol(x, suppress_log=True) for x in self.config["ignored_symbols"]
-        ]
+        self.ignored_symbols = [self.format_symbol(x) for x in self.config["ignored_symbols"]]
 
         approved_symbols = {}  # all symbols approved according to various conditions, with flags
         if self.config["approved_symbols"]:
@@ -1304,7 +1301,6 @@ class Passivbot:
             ):
                 if order[0] == 0.0:
                     continue
-
                 if any([x in order[2] for x in ["ientry", "unstuck"]]):
                     if (
                         calc_diff(order[1], self.tickers[symbol]["last"])
@@ -1509,7 +1505,7 @@ class Passivbot:
             self.noisiness = {}
         symbols = self.approved_symbols if symbol is None else [symbol]
         for symbol in symbols:
-            if symbol in self.ohlcvs and len(self.ohlcvs[symbol]) > 0:
+            if symbol in self.ohlcvs and self.ohlcvs[symbol] and len(self.ohlcvs[symbol]) > 0:
                 self.noisiness[symbol] = np.mean([(x[2] - x[3]) / x[4] for x in self.ohlcvs[symbol]])
             else:
                 self.noisiness[symbol] = 0.0
