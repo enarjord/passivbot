@@ -198,9 +198,6 @@ class BingXBot(Passivbot):
             logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
             end_time = fetched[0]["timestamp"]
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
-        return sorted(
-            [x for x in all_fetched.values() if x["pnl"] != 0.0], key=lambda x: x["timestamp"]
-        )
 
     async def fetch_pnl(
         self,
