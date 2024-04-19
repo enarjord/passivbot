@@ -119,6 +119,8 @@ def calc_pa_dist_mean(stats):
     elms = []
     for x in stats:
         for lp, sp, p in zip(x[1], x[2], x[3]):
+            if p == 0.0:
+                continue
             if lp[1]:
                 elms.append(abs(lp[1] - p) / p)
             if sp[1]:
