@@ -579,7 +579,7 @@ async def main():
         algorithms.eaMuPlusLambda(
             pop,
             toolbox,
-            mu=100,
+            mu=pop_size,
             lambda_=pop_size,
             cxpb=0.7,
             mutpb=0.3,
