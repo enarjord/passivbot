@@ -306,6 +306,12 @@ class Passivbot:
                     logging.info(f"{self.pad_sym(symbol)} will be set to manual mode")
                     self.approved_symbols[symbol] = "-lm m -sm m"
 
+    async def update_active_symbols_new(self):
+        # 1. find ideal actives
+        # 2. find actual actives (pos and open orders)
+        # 3. find available slots
+        pass
+
     async def update_active_symbols(self):
         """
         active symbols are longs/shorts with normal mode or which has position
@@ -1086,13 +1092,18 @@ class Passivbot:
                         f"unstuck_close_{pside}",
                     ),
                 }
-                try:
-                    if utc_ms() - self.prev_AU_print_ms > 1000 * 300:
-                        line = f"Auto unstuck allowance: {AU_allowance:.3f} {self.quote}. Will place {pside} unstucking order for {sym} at {close_price}. Last price: {self.tickers[sym]['last']}"
-                        logging.info(line)
-                        self.prev_AU_print_ms = utc_ms()
-                except:
+                if not hasattr(self, "prev_AU_print_ms"):
                     self.prev_AU_print_ms = 0.0
+                if utc_ms() - self.prev_AU_print_ms > 1000 * 60 * 5:
+                    line = f"Auto unstuck allowance: {AU_allowance:.3f} {self.quote}. Will place {pside} unstucking order for {sym} at {close_price}. Last price: {self.tickers[sym]['last']}"
+                    logging.info(line)
+                    self.prev_AU_print_ms = utc_ms()
+                if (
+                    calc_diff(close_price, self.tickers[sym]["last"])
+                    > self.config["price_distance_threshold"]
+                ):
+                    # don't place EMA based order if price is more than x% away from last price
+                    unstuck_close_order = None
 
         ideal_orders = {symbol: [] for symbol in self.active_symbols}
         for symbol in self.active_symbols:
@@ -1161,14 +1172,6 @@ class Passivbot:
                     unstuck_close_order is not None
                     and unstuck_close_order["symbol"] == symbol
                     and unstuck_close_order["position_side"] == "long"
-                    and abs(
-                        calc_pprice_diff(
-                            unstuck_close_order["position_side"],
-                            unstuck_close_order["order"][1],
-                            self.tickers[unstuck_close_order["symbol"]]["last"],
-                        )
-                    )
-                    < 0.002
                 ):
                     ideal_orders[symbol].append(unstuck_close_order["order"])
                     psize_ = max(
@@ -1178,9 +1181,6 @@ class Passivbot:
                             - abs(unstuck_close_order["order"][0]),
                             self.qty_steps[symbol],
                         ),
-                    )
-                    logging.debug(
-                        f"creating unstucking order for {symbol} long: {unstuck_close_order['order']}"
                     )
                 else:
                     psize_ = self.positions[symbol]["long"]["size"]
@@ -1255,14 +1255,6 @@ class Passivbot:
                     unstuck_close_order is not None
                     and unstuck_close_order["symbol"] == symbol
                     and unstuck_close_order["position_side"] == "short"
-                    and abs(
-                        calc_pprice_diff(
-                            unstuck_close_order["position_side"],
-                            unstuck_close_order["order"][1],
-                            self.tickers[unstuck_close_order["symbol"]]["last"],
-                        )
-                    )
-                    < 0.002
                 ):
                     ideal_orders[symbol].append(unstuck_close_order["order"])
                     psize_ = -max(
@@ -1304,28 +1296,33 @@ class Passivbot:
                 )
                 ideal_orders[symbol] += entries_short + closes_short
 
-        ideal_orders = {
-            symbol: sorted(
-                [x for x in ideal_orders[symbol] if x[0] != 0.0],
-                key=lambda x: calc_diff(x[1], self.tickers[symbol]["last"]),
-            )
-            for symbol in ideal_orders
-        }
-        return {
-            symbol: [
-                {
-                    "symbol": symbol,
-                    "side": determine_side_from_order_tuple(x),
-                    "position_side": "long" if "long" in x[2] else "short",
-                    "qty": abs(x[0]),
-                    "price": x[1],
-                    "reduce_only": "close" in x[2],
-                    "custom_id": x[2],
-                }
-                for x in ideal_orders[symbol]
-            ]
-            for symbol in ideal_orders
-        }
+        ideal_orders_f = {}
+        for symbol in ideal_orders:
+            ideal_orders_f[symbol] = []
+            for order in sorted(
+                ideal_orders[symbol], key=lambda x: calc_diff(x[1], self.tickers[symbol]["last"])
+            ):
+                if order[0] == 0.0:
+                    continue
+
+                if any([x in order[2] for x in ["ientry", "unstuck"]]):
+                    if (
+                        calc_diff(order[1], self.tickers[symbol]["last"])
+                        > self.config["price_distance_threshold"]
+                    ):
+                        continue
+                ideal_orders_f[symbol].append(
+                    {
+                        "symbol": symbol,
+                        "side": determine_side_from_order_tuple(order),
+                        "position_side": "long" if "long" in order[2] else "short",
+                        "qty": abs(order[0]),
+                        "price": order[1],
+                        "reduce_only": "close" in order[2],
+                        "custom_id": order[2],
+                    }
+                )
+        return ideal_orders_f
 
     def calc_orders_to_cancel_and_create(self):
         ideal_orders = self.calc_ideal_orders()
@@ -1610,6 +1607,7 @@ async def main():
         ("ag", "auto_gs", "auto_gs", str2bool, " enabled (y/n or t/f)"),
         ("nca", "max_n_cancellations_per_batch", "max_n_cancellations_per_batch", int, ""),
         ("ncr", "max_n_creations_per_batch", "max_n_creations_per_batch", int, ""),
+        ("pt", "price_threshold", "price_threshold", float, ""),
     ]
     for k0, k1, d, t, h in parser_items:
         parser.add_argument(
