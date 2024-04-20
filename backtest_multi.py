@@ -188,7 +188,6 @@ def load_and_parse_config(path: str):
             formatted["starting_balance"] = 100000.0
             formatted["base_dir"] = "backtests"
             if loaded["universal_live_config"]:
-                print("here")
                 formatted["live_configs"] = {
                     symbol: {
                         pside: loaded["universal_live_config"][pside] for pside in ["long", "short"]
