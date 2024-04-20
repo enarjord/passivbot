@@ -2296,6 +2296,7 @@ def add_missing_params_to_hjson_live_multi_config(config: dict) -> (dict, [str])
         config_copy["approved_symbols"] = config["symbols"]
     if "universal_live_config" not in config:
         logging_lines.append(f"adding missing config param: 'universal_live_config': {{}}")
+        config_copy["universal_live_config"] = {}
 
     template = get_template_live_config("multi_hjson")
     for key, val in template.items():
