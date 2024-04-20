@@ -2316,3 +2316,18 @@ def remove_OD(d: dict) -> dict:
 
 def dict_keysort(d: dict):
     return sorted(d.items(), key=lambda x: x[1])
+
+
+def expand_PB_mode(mode: str) -> str:
+    if mode.lower() == "gs":
+        return "graceful_stop"
+    elif mode.lower() == "m":
+        return "manual"
+    elif mode.lower() == "n":
+        return "normal"
+    elif mode.lower() == "p":
+        return "panic"
+    elif mode.lower() in ["t", "tp"]:
+        return "tp_only"
+    else:
+        raise Exception(f"unknown passivbot mode {mode}")
