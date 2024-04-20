@@ -167,20 +167,10 @@ class Passivbot:
                 self.live_configs[symbol]["leverage"] = max(1.0, float(self.args[symbol].leverage))
 
             for pside in ["long", "short"]:
-                if getattr(self.args[symbol], f"{pside}_mode") is None:
-                    self.live_configs[symbol][pside]["enabled"] = self.config[f"{pside}_enabled"]
-                    self.live_configs[symbol][pside]["mode"] = (
-                        "normal"
-                        if self.config[f"{pside}_enabled"]
-                        else ("graceful_stop" if self.config["auto_gs"] else "manual")
-                    )
-                else:
-                    self.live_configs[symbol][pside]["mode"] = getattr(
-                        self.args[symbol], f"{pside}_mode"
-                    )
-                    self.live_configs[symbol][pside]["enabled"] = (
-                        self.live_configs[symbol][pside] == "normal"
-                    )
+                self.live_configs[symbol][pside]["mode"] = self.get_mode_from_args(pside, symbol)
+                self.live_configs[symbol][pside]["enabled"] = (
+                    self.live_configs[symbol][pside] == "normal"
+                )
                 # disable timed AU and set backwards TP
                 for key, val in [
                     ("auto_unstuck_delay_minutes", 0.0),
@@ -299,18 +289,48 @@ class Passivbot:
                     logging.info(f"{self.pad_sym(symbol)} will be set to manual mode")
                     self.approved_symbols[symbol] = "-lm m -sm m"
 
+    def get_mode_from_args(self, pside, symbol):
+        if getattr(self.args[symbol], f"{pside}_mode") is None:
+            if self.config[f"{pside}_enabled"]:
+                return "normal"
+            else:
+                if self.config["auto_gs"]:
+                    return "graceful_stop"
+                else:
+                    return "manual"
+        else:
+            return getattr(self.args[symbol], f"{pside}_mode")
+
     async def update_active_symbols_new(self):
         # determine forager mode
         if not hasattr(self, "forager_mode"):
             self.forager_mode = self.config["n_longs"] > 0 or self.config["n_shorts"] > 0
+            self.ideal_actives = {"long": [], "short": []}
             self.on_gs = {"long": [], "short": []}
             self.on_normal = {"long": [], "short": []}
-            self.mode_from_args = {}
+            self.is_active = {"long": [], "short": []}
 
         if self.forager_mode:
             self.calc_noisiness()
+            approved_symbols_sorted_by_noisiness = sorted(
+                self.noisiness, key=lambda x: self.noisiness[x], reverse=True
+            )
         else:
-            pass
+            for pside in self.on_gs:
+                actual_actives = sorted(
+                    set([x["symbol"] for x in self.fetched_positions if x["position_side"] == pside])
+                )
+                for symbol in self.approved_symbols:
+                    self.live_configs[symbol][pside]["mode"] = self.get_mode_from_args(pside, symbol)
+                    if self.live_configs[symbol][pside]["mode"] == "graceful_stop":
+                        self.on_gs[pside].append(symbol)
+                    elif self.live_configs[symbol][pside]["mode"] == "normal":
+                        self.on_normal[pside].append(symbol)
+                        self.ideal_actives[pside].append(symbol)
+                    elif self.live_configs[symbol][pside]["mode"] in ["manual", "tp_only", "panic"]:
+                        pass
+                    if symbol in actual_actives:
+                        self.is_active[pside].append(symbol)
 
     async def update_active_symbols(self):
         """
@@ -934,6 +954,68 @@ class Passivbot:
         self.ema_minute = now_minute
         return True
 
+    async def init_emas_by_symbol(self, symbol):
+        if not hasattr(self, "ema_spans_long"):
+            self.ema_spans_long, self.alphas_long, self.alphas__long, self.emas_long = {}, {}, {}, {}
+            self.ema_spans_short, self.alphas_short, self.alphas__short, self.emas_short = (
+                {},
+                {},
+                {},
+                {},
+            )
+            self.ema_minute = int(utc_ms() // (1000 * 60) * (1000 * 60))
+            self.prev_prices = {}
+        if (
+            not hasattr(self, "tickers")
+            or self.tickers == {}
+            or self.tickers[next(iter(self.tickers))]["last"] == 0.0
+        ):
+            logging.info(f"updating tickers...")
+            await self.update_tickers()
+
+        self.ema_spans_long[symbol] = [
+            self.live_configs[symbol]["long"]["ema_span_0"],
+            self.live_configs[symbol]["long"]["ema_span_1"],
+        ]
+        self.ema_spans_long[symbol] = numpyize(
+            sorted(
+                self.ema_spans_long[symbol]
+                + [(self.ema_spans_long[symbol][0] * self.ema_spans_long[symbol][1]) ** 0.5]
+            )
+        )
+        self.ema_spans_short[symbol] = [
+            self.live_configs[symbol]["short"]["ema_span_0"],
+            self.live_configs[symbol]["short"]["ema_span_1"],
+        ]
+        self.ema_spans_short[symbol] = numpyize(
+            sorted(
+                self.ema_spans_short[symbol]
+                + [(self.ema_spans_short[symbol][0] * self.ema_spans_short[symbol][1]) ** 0.5]
+            )
+        )
+
+        self.alphas_long[symbol] = 2 / (self.ema_spans_long[symbol] + 1)
+        self.alphas__long[symbol] = 1 - self.alphas_long[symbol]
+        self.alphas_short[symbol] = 2 / (self.ema_spans_short[symbol] + 1)
+        self.alphas__short[symbol] = 1 - self.alphas_short[symbol]
+
+        self.emas_long[symbol] = np.repeat(self.tickers[symbol]["last"], 3)
+        self.emas_short[symbol] = np.repeat(self.tickers[symbol]["last"], 3)
+        self.prev_prices[symbol] = self.tickers[symbol]["last"]
+
+        try:
+            samples1m = calc_samples(
+                numpyize(self.ohlcvs[symbol])[:, [0, 5, 4]], sample_size_ms=60000
+            )
+            self.emas_long[symbol] = calc_emas_last(samples1m[:, 2], self.ema_spans_long[symbol])
+            self.emas_short[symbol] = calc_emas_last(samples1m[:, 2], self.ema_spans_short[symbol])
+        except Exception as e:
+            logging.error(
+                f"{self.pad_sym(symbol)} error initiating EMAs {e}. Using latest prices as starting EMAs"
+            )
+            # traceback.print_exc()
+        return True
+
     async def init_emas(self):
         self.ema_spans_long, self.alphas_long, self.alphas__long, self.emas_long = {}, {}, {}, {}
         self.ema_spans_short, self.alphas_short, self.alphas__short, self.emas_short = {}, {}, {}, {}
@@ -972,7 +1054,6 @@ class Passivbot:
             self.emas_long[sym] = np.repeat(self.tickers[sym]["last"], 3)
             self.emas_short[sym] = np.repeat(self.tickers[sym]["last"], 3)
             self.prev_prices[sym] = self.tickers[sym]["last"]
-        ohs = None
         for symbol in self.approved_symbols:
             try:
                 samples1m = calc_samples(
