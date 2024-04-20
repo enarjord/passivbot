@@ -235,6 +235,22 @@ class Passivbot:
         except Exception as e:
             logging.error(f"error with find_file_mod_utc_time_diff {e}")
 
+    async def start_ohlcv_maintainer(self):
+        self.ohlcv_maintainer = asyncio.create_task(self.maintain_ohlcvs())
+        for i in range(1000):
+            await asyncio.sleep(0.2)
+            upd_timestamps = [v for v in self.ohlcv_upd_timestamps.values()]
+            if all(upd_timestamps):
+                break
+            logging.info(
+                f"updating ohlcvs... {len([x for x in upd_timestamps if x])} / {len(upd_timestamps)}"
+            )
+            await asyncio.sleep(2)
+        return True
+
+    def stop_ohlcv_maintainer(self):
+        return self.ohlcv_maintainer.cancel()
+
     async def init_bot(self):
         logging.info(f"initiating markets...")
         await self.init_markets_dict()
@@ -246,24 +262,16 @@ class Passivbot:
         await self.update_open_orders()
         await self.update_approved_symbols()
         self.set_live_configs()
-        self.ohlcv_maintainer = asyncio.create_task(self.maintain_ohlcvs())
-        for i in range(10000):
-            await asyncio.sleep(0.2)
-            upd_timestamps = [v for v in self.ohlcv_upd_timestamps.values()]
-            if all(upd_timestamps):
-                break
-            logging.info(
-                f"updating ohlcvs... {len([x for x in upd_timestamps if x])} / {len(upd_timestamps)}"
-            )
-            await asyncio.sleep(2)
+        await self.start_ohlcv_maintainer()
 
         for f in ["emas", "pnls"]:
             res = await getattr(self, f"update_{f}")()
             logging.info(f"initiating {f} {res}")
         await self.update_active_symbols()
         if not self.forager_mode:
-            res = self.ohlcv_maintainer.cancel()
-            logging.info(f"not in foarger mode; cancelled ohlcv maintainer {res}")
+            logging.info(
+                f"not in foarger mode; cancelled ohlcv maintainer {self.stop_ohlcv_maintainer()}"
+            )
 
     async def get_active_symbols(self):
         # get symbols with open orders and/or positions
