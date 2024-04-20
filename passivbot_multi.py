@@ -55,6 +55,7 @@ from pure_funcs import (
     str2bool,
     symbol2coin,
     add_missing_params_to_hjson_live_multi_config,
+    expand_PB_mode,
 )
 
 import logging
@@ -174,26 +175,13 @@ class Passivbot:
                         else ("graceful_stop" if self.config["auto_gs"] else "manual")
                     )
                 else:
-                    if getattr(self.args[symbol], f"{pside}_mode") == "gs":
-                        self.live_configs[symbol][pside]["enabled"] = False
-                        self.live_configs[symbol][pside]["mode"] = "graceful_stop"
-                    elif getattr(self.args[symbol], f"{pside}_mode") == "m":
-                        self.live_configs[symbol][pside]["enabled"] = False
-                        self.live_configs[symbol][pside]["mode"] = "manual"
-                    elif getattr(self.args[symbol], f"{pside}_mode") == "n":
-                        self.live_configs[symbol][pside]["enabled"] = True
-                        self.live_configs[symbol][pside]["mode"] = "normal"
-                    elif getattr(self.args[symbol], f"{pside}_mode") == "p":
-                        self.live_configs[symbol][pside]["enabled"] = False
-                        self.live_configs[symbol][pside]["mode"] = "panic"
-                    elif getattr(self.args[symbol], f"{pside}_mode").lower() == "t":
-                        self.live_configs[symbol][pside]["enabled"] = False
-                        self.live_configs[symbol][pside]["mode"] = "tp_only"
-                    else:
-                        raise Exception(
-                            f"unknown {pside} mode: {getattr(self.args[symbol],f'{pside}_mode')}"
-                        )
-                # disable AU and set backwards TP
+                    self.live_configs[symbol][pside]["mode"] = getattr(
+                        self.args[symbol], f"{pside}_mode"
+                    )
+                    self.live_configs[symbol][pside]["enabled"] = (
+                        self.live_configs[symbol][pside] == "normal"
+                    )
+                # disable timed AU and set backwards TP
                 for key, val in [
                     ("auto_unstuck_delay_minutes", 0.0),
                     ("auto_unstuck_qty_pct", 0.0),
@@ -202,8 +190,7 @@ class Passivbot:
                     ("backwards_tp", True),
                 ]:
                     self.live_configs[symbol][pside][key] = val
-        coins_universal = sorted([symbol2coin(s) for s in universal_configs_loaded])
-        if coins_universal:
+        if coins_universal := sorted([symbol2coin(s) for s in universal_configs_loaded]):
             logging.info(f"loaded universal config for {', '.join(coins_universal)}")
 
         # print symbols and modes
@@ -313,11 +300,17 @@ class Passivbot:
                     self.approved_symbols[symbol] = "-lm m -sm m"
 
     async def update_active_symbols_new(self):
-        # 1. find ideal actives by noisiness among approved symbol
-        # 2. find actual actives (pos and open orders)
-        # 3. find available slots
-        # 4. if available slots, set to 'normal'
-        pass
+        # determine forager mode
+        if not hasattr(self, "forager_mode"):
+            self.forager_mode = self.config["n_longs"] > 0 or self.config["n_shorts"] > 0
+            self.on_gs = {"long": [], "short": []}
+            self.on_normal = {"long": [], "short": []}
+            self.mode_from_args = {}
+
+        if self.forager_mode:
+            self.calc_noisiness()
+        else:
+            pass
 
     async def update_active_symbols(self):
         """
@@ -543,8 +536,12 @@ class Passivbot:
 
         # this argparser is used only internally
         parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
-        parser.add_argument("-sm", type=str, required=False, dest="short_mode", default=None)
-        parser.add_argument("-lm", type=str, required=False, dest="long_mode", default=None)
+        parser.add_argument(
+            "-sm", type=expand_PB_mode, required=False, dest="short_mode", default=None
+        )
+        parser.add_argument(
+            "-lm", type=expand_PB_mode, required=False, dest="long_mode", default=None
+        )
         parser.add_argument("-lw", type=float, required=False, dest="WE_limit_long", default=None)
         parser.add_argument("-sw", type=float, required=False, dest="WE_limit_short", default=None)
         parser.add_argument("-lev", type=float, required=False, dest="leverage", default=None)
@@ -968,7 +965,7 @@ class Passivbot:
             self.alphas__long[sym] = 1 - self.alphas_long[sym]
             self.alphas_short[sym] = 2 / (self.ema_spans_short[sym] + 1)
             self.alphas__short[sym] = 1 - self.alphas_short[sym]
-        if self.tickers[next(iter(self.tickers))]["last"] == 0.0:
+        if self.tickers == {} or self.tickers[next(iter(self.tickers))]["last"] == 0.0:
             logging.info(f"updating tickers...")
             await self.update_tickers()
         for sym in self.approved_symbols:
