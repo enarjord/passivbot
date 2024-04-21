@@ -66,6 +66,9 @@ class HyperliquidBot(Passivbot):
             self.qty_steps[symbol] = elm["precision"]["amount"]
             self.price_steps[symbol] = round_(10 ** -elm["precision"]["price"], 0.0000000001)
             self.c_mults[symbol] = elm["contractSize"]
+            self.max_leverage[symbol] = (
+                int(elm["info"]["maxLeverage"]) if "maxLeverage" in elm["info"] else 0
+            )
         self.n_decimal_places = 6
         self.n_significant_figures = 5
 
@@ -347,7 +350,11 @@ class HyperliquidBot(Passivbot):
                     self.cca.set_margin_mode(
                         "cross",
                         symbol=symbol,
-                        params={"leverage": int(self.live_configs[symbol]["leverage"])},
+                        params={
+                            "leverage": int(
+                                min(self.max_leverage[symbol], self.live_configs[symbol]["leverage"])
+                            )
+                        },
                     )
                 )
             except Exception as e:
