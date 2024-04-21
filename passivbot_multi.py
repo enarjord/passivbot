@@ -103,6 +103,7 @@ class Passivbot:
         self.qty_steps = {}
         self.price_steps = {}
         self.c_mults = {}
+        self.max_leverage = {}
         self.live_configs = {}
         self.stop_bot = False
         self.pnls_cache_filepath = make_get_filepath(f"caches/{self.exchange}/{self.user}_pnls.json")
