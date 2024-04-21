@@ -182,9 +182,11 @@ class Passivbot:
                     ("backwards_tp", True),
                 ]:
                     self.live_configs[symbol][pside][key] = val
-        if coins_universal := sorted([symbol2coin(s) for s in universal_configs_loaded]):
+        coins_universal = sorted([symbol2coin(s) for s in universal_configs_loaded])
+        if len(coins_universal) > 20:
+            logging.info(f"loaded universal config for {len(coins_universal)} symbols")
+        elif len(coins_universal) > 0:
             logging.info(f"loaded universal config for {', '.join(coins_universal)}")
-
         # print symbols and modes
         modes = ["normal", "manual", "graceful_stop", "tp_only", "panic"]
         for mode in modes:
@@ -194,7 +196,11 @@ class Passivbot:
                     for s in self.live_configs
                     if self.live_configs[s][pside]["mode"] == mode
                 ]
-                if len(syms_) > 0:
+                if len(syms_) > 20:
+                    logging.info(
+                        f"{pside: <5} mode: {mode: <{max([len(x) for x in modes])}}: {len(syms_)} symbols"
+                    )
+                elif len(syms_) > 0:
                     logging.info(
                         f"{pside: <5} mode: {mode: <{max([len(x) for x in modes])}}: {', '.join(syms_)}"
                     )
@@ -522,6 +528,7 @@ class Passivbot:
             first_timestamps = None
 
         self.approved_symbols = {}
+        disapproved = {}
         for symbol in sorted(set(approved_symbols)):
             if symbol not in self.markets_dict:
                 logging.info(f"{symbol} missing from {self.exchange}")
@@ -532,26 +539,32 @@ class Passivbot:
                             self.approved_symbols[x] = approved_symbols[symbol]
                             break
             elif not self.markets_dict[symbol]["active"]:
-                logging.info(f"{symbol} not active")
+                disapproved[symbol] = "not active"
             elif not self.markets_dict[symbol]["swap"]:
-                logging.info(f"wrong market type for {symbol}: {self.markets_dict[symbol]['type']}")
+                disapproved[symbol] = "wrong market type"
             elif not self.markets_dict[symbol]["linear"]:
-                logging.info(f"{symbol} is not a linear market")
+                disapproved[symbol] = "not linear"
             elif not symbol.endswith(f"/{self.quote}:{self.quote}"):
-                logging.info(f"{symbol} has wrong formatting")
+                disapproved[symbol] = "wrong quote"
             elif self.format_symbol(symbol) in self.ignored_symbols:
-                logging.info(f"{symbol} is ignored")
+                disapproved[symbol] = "is ignored"
             elif first_timestamps:
                 if symbol not in first_timestamps:
-                    logging.info(f"{self.pad_sym(symbol)} missing from first timestamps")
+                    disapproved[symbol] = "missing from first timestamps"
                 elif utc_ms() - first_timestamps[symbol] < self.config["minimum_market_age_days"]:
-                    logging.info(
-                        f"{symbol} is younger than {self.config['minimum_market_age_days']} days"
+                    disapproved[symbol] = (
+                        f"younger than {self.config['minimum_market_age_days']} days"
                     )
                 else:
                     self.approved_symbols[symbol] = approved_symbols[symbol]
             else:
                 self.approved_symbols[symbol] = approved_symbols[symbol]
+        for line in set(disapproved.values()):
+            syms_ = [s for s in disapproved if disapproved[s] == line]
+            if len(syms_) > 20:
+                logging.info(f"{line}: {len(syms_)} symbols")
+            elif len(syms_) > 0:
+                logging.info(f"{line}: {','.join(sorted(set([s for s in syms_])))}")
 
         # add symbols on gs
         self.update_symbols_on_gs()
