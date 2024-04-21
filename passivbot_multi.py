@@ -933,7 +933,8 @@ class Passivbot:
                 ]
             )
         string = table.get_string()
-        print(string)
+        for line in string.splitlines():
+            logging.info(line)
         return string
 
     async def update_tickers(self):
