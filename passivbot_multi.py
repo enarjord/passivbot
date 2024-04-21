@@ -10,6 +10,7 @@ import json
 import hjson
 import pprint
 import numpy as np
+from prettytable import PrettyTable
 from uuid import uuid4
 from copy import deepcopy
 from collections import defaultdict
@@ -843,6 +844,7 @@ class Passivbot:
             }
             for sym in set(list(self.positions) + self.active_symbols)
         }
+        position_changes = []
         for elm in positions_list_new:
             symbol, pside, pprice = elm["symbol"], elm["position_side"], elm["price"]
             psize = abs(elm["size"]) * (-1.0 if elm["position_side"] == "short" else 1.0)
@@ -854,49 +856,85 @@ class Passivbot:
             positions_new[symbol][pside] = {"size": psize, "price": pprice}
             # check if changed
             if symbol not in self.positions or self.positions[symbol][pside]["size"] != psize:
-                wallet_exposure = (
-                    qty_to_cost(
-                        positions_new[symbol][pside]["size"],
-                        positions_new[symbol][pside]["price"],
-                        self.inverse,
-                        self.c_mults[symbol],
-                    )
-                    / self.balance
-                )
-                try:
-                    WE_ratio = (
-                        wallet_exposure / self.live_configs[symbol][pside]["wallet_exposure_limit"]
-                    )
-                except:
-                    WE_ratio = 0.0
-                try:
-                    pprice_diff = calc_pprice_diff(pside, pprice, self.tickers[symbol]["last"])
-                except:
-                    pprice_diff = 0.0
-                try:
-                    upnl = calc_pnl(
-                        pside,
-                        pprice,
-                        self.tickers[symbol]["last"],
-                        psize,
-                        self.inverse,
-                        self.c_mults[symbol],
-                    )
-                except:
-                    upnl = 0.0
-                line = f"{self.pad_sym(symbol)} {pside} changed:"
-                if symbol in self.positions:
-                    line += f" {self.positions[symbol][pside]}"
-                line += f" -> {positions_new[symbol][pside]}"
-                line += f" WE: {wallet_exposure:.4f}"
-                if WE_ratio:
-                    line += f" WE ratio: {WE_ratio:.3f}"
-                if pprice_diff:
-                    line += f" pprice diff: {pprice_diff:.4f} upnl: {upnl:.4f}"
-                logging.info(line)
+                position_changes.append((symbol, pside))
+        try:
+            self.log_position_changes(position_changes, positions_new)
+        except Exception as e:
+            logging.error(f"error printing position changes {e}")
         self.positions = positions_new
         self.upd_timestamps["positions"] = utc_ms()
         return True
+
+    def log_position_changes(self, position_changes, positions_new, rd=6) -> str:
+        if not position_changes:
+            return ""
+        table = PrettyTable()
+        table.border = False
+        table.header = False
+        table.padding_width = 0  # Reduces padding between columns to zero
+        for symbol, pside in position_changes:
+            wallet_exposure = (
+                qty_to_cost(
+                    positions_new[symbol][pside]["size"],
+                    positions_new[symbol][pside]["price"],
+                    self.inverse,
+                    self.c_mults[symbol],
+                )
+                / self.balance
+            )
+            try:
+                WE_ratio = wallet_exposure / self.live_configs[symbol][pside]["wallet_exposure_limit"]
+            except:
+                WE_ratio = 0.0
+            try:
+                pprice_diff = calc_pprice_diff(
+                    pside, positions_new[symbol][pside]["price"], self.tickers[symbol]["last"]
+                )
+            except:
+                pprice_diff = 0.0
+            try:
+                upnl = calc_pnl(
+                    pside,
+                    positions_new[symbol][pside]["price"],
+                    self.tickers[symbol]["last"],
+                    positions_new[symbol][pside]["size"],
+                    self.inverse,
+                    self.c_mults[symbol],
+                )
+            except Exception as e:
+                upnl = 0.0
+            table.add_row(
+                [
+                    symbol + " ",
+                    pside + " ",
+                    (
+                        round_dynamic(self.positions[symbol][pside]["size"], rd)
+                        if symbol in self.positions
+                        else 0.0
+                    ),
+                    " @ ",
+                    (
+                        round_dynamic(self.positions[symbol][pside]["price"], rd)
+                        if symbol in self.positions
+                        else 0.0
+                    ),
+                    " -> ",
+                    round_dynamic(positions_new[symbol][pside]["size"], rd),
+                    " @ ",
+                    round_dynamic(positions_new[symbol][pside]["price"], rd),
+                    " WE: ",
+                    round_dynamic(wallet_exposure, max(3, rd - 2)),
+                    " WE ratio: ",
+                    round(WE_ratio, 3),
+                    " PA dist: ",
+                    round(pprice_diff, 4),
+                    " upnl: ",
+                    round_dynamic(upnl, max(3, rd - 1)),
+                ]
+            )
+        string = table.get_string()
+        print(string)
+        return string
 
     async def update_tickers(self):
         res = await self.fetch_tickers()
