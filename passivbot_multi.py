@@ -170,7 +170,7 @@ class Passivbot:
             for pside in ["long", "short"]:
                 self.live_configs[symbol][pside]["mode"] = self.get_mode_from_args(pside, symbol)
                 self.live_configs[symbol][pside]["enabled"] = (
-                    self.live_configs[symbol][pside] == "normal"
+                    self.live_configs[symbol][pside]["mode"] == "normal"
                 )
                 # disable timed AU and set backwards TP
                 for key, val in [
