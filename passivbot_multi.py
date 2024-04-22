@@ -169,7 +169,7 @@ class Passivbot:
                 self.live_configs[symbol]["leverage"] = max(1.0, float(self.args[symbol].leverage))
 
             for pside in ["long", "short"]:
-                self.live_configs[symbol][pside]["mode"] = self.get_mode_from_args(pside, symbol)
+                self.live_configs[symbol][pside]["mode"] = self.get_PB_live_mode(pside, symbol)
                 self.live_configs[symbol][pside]["enabled"] = (
                     self.live_configs[symbol][pside]["mode"] == "normal"
                 )
@@ -297,48 +297,94 @@ class Passivbot:
                     logging.info(f"{self.pad_sym(symbol)} will be set to manual mode")
                     self.approved_symbols[symbol] = "-lm m -sm m"
 
-    def get_mode_from_args(self, pside, symbol):
-        if getattr(self.args[symbol], f"{pside}_mode") is None:
-            if self.config[f"{pside}_enabled"]:
-                return "normal"
+    def get_PB_live_mode(self, pside, symbol):
+        if symbol in self.approved_symbols:
+            # self.approved_symbols is unchanging after startup
+            # assume set(approved_symbols) == set(args)
+            if getattr(self.args[symbol], f"{pside}_mode") is None:
+                return (
+                    "normal"
+                    if self.config[f"{pside}_enabled"]
+                    else ("graceful_stop" if self.config["auto_gs"] else "manual")
+                )
             else:
-                if self.config["auto_gs"]:
-                    return "graceful_stop"
-                else:
-                    return "manual"
+                return getattr(self.args[symbol], f"{pside}_mode")
         else:
-            return getattr(self.args[symbol], f"{pside}_mode")
+            return "graceful_stop" if self.config["auto_gs"] else "manual"
 
     async def update_active_symbols_new(self):
         # determine forager mode
-        if not hasattr(self, "forager_mode"):
-            self.forager_mode = self.config["n_longs"] > 0 or self.config["n_shorts"] > 0
-            self.ideal_actives = {"long": [], "short": []}
-            self.on_gs = {"long": [], "short": []}
-            self.on_normal = {"long": [], "short": []}
-            self.is_active = {"long": [], "short": []}
+        # set ideal actives
+        # set normal/gs and other modes
+        # find actives
+        # set WE_limits
+        self.forager_mode = self.config["n_longs"] > 0 or self.config["n_shorts"] > 0
+        self.ideal_actives = {"long": set(), "short": set()}
+        self.on_gs = {"long": set(), "short": set()}
+        self.on_normal = {"long": set(), "short": set()}
+        self.on_other_modes = {"long": {}, "short": {}}
+        self.is_active = {"long": set(), "short": set()}
 
         if self.forager_mode:
             self.calc_noisiness()
             approved_symbols_sorted_by_noisiness = sorted(
                 self.noisiness, key=lambda x: self.noisiness[x], reverse=True
             )
+            for pside in self.on_gs:
+                # find symbols with pos
+                actual_actives = [
+                    x["symbol"]
+                    for x in self.fetched_positions + self.fetched_open_orders
+                    if x["position_side"] == pside
+                ]
+                # find forced PB live modes
+                forced_modes = {}
+                for symbol in self.args:
+                    if (mode := getattr(self.args[symbol], f"{pside}_mode")) is not None:
+                        forced_modes[symbol] = mode
+                        if mode == "normal":
+                            self.ideal_actives[pside].add(symbol)
+                            self.on_normal[pside].add(symbol)
+                            self.ideal_actives[pside].add(symbol)
+                        elif mode == "graceful_stop":
+                            self.on_gs[pside].add(symbol)
+                            if symbol in actual_actives:
+                                self.is_active[pside].add(symbol)
+                        else:
+                            self.on_other_modes[pside][symbol] = mode
+                            if symbol in actual_actives:
+                                self.is_active[pside].add(symbol)
+                for symbol in approved_symbols_sorted_by_noisiness:
+                    # add symbols to ideal_actives if not in any forced mode
+                    if len(self.ideal_actives[pside]) >= self.config[f"n_{pside}s"]:
+                        break
+                    if symbol not in forced_modes:
+                        self.ideal_actives[pside].add(symbol)
+                # TBC...
+
         else:
             for pside in self.on_gs:
-                actual_actives = sorted(
-                    set([x["symbol"] for x in self.fetched_positions if x["position_side"] == pside])
-                )
-                for symbol in self.approved_symbols:
-                    self.live_configs[symbol][pside]["mode"] = self.get_mode_from_args(pside, symbol)
-                    if self.live_configs[symbol][pside]["mode"] == "graceful_stop":
-                        self.on_gs[pside].append(symbol)
-                    elif self.live_configs[symbol][pside]["mode"] == "normal":
-                        self.on_normal[pside].append(symbol)
-                        self.ideal_actives[pside].append(symbol)
-                    elif self.live_configs[symbol][pside]["mode"] in ["manual", "tp_only", "panic"]:
-                        pass
-                    if symbol in actual_actives:
-                        self.is_active[pside].append(symbol)
+                actual_actives = [
+                    x["symbol"]
+                    for x in self.fetched_positions + self.fetched_open_orders
+                    if x["position_side"] == pside
+                ]
+                for symbol in sorted(set(actual_actives) | set(self.approved_symbols)):
+                    mode = self.get_PB_live_mode(pside, symbol)
+                    self.live_configs[symbol][pside]["mode"] = mode
+                    self.live_configs[symbol][pside]["enabled"] = mode == "normal"
+                    if mode == "normal":
+                        self.on_normal[pside].add(symbol)
+                        self.is_active[pside].add(symbol)
+                        self.ideal_actives[pside].add(symbol)
+                    elif mode == "graceful_stop":
+                        self.on_gs[pside].add(symbol)
+                        if symbol in actual_actives:
+                            self.is_active[pside].add(symbol)
+                    else:
+                        self.on_other_modes[pside][symbol] = mode
+                        if symbol in actual_actives:
+                            self.is_active[pside].add(symbol)
 
     async def update_active_symbols(self):
         """
