@@ -396,7 +396,7 @@ async def main():
                         all_args[symbol], f"WE_limit_{pside}"
                     )
                 config["live_configs"][symbol][pside]["wallet_exposure_limit"] = max(
-                    config["live_configs"][symbol][pside]["wallet_exposure_limit"], 0.01
+                    config["live_configs"][symbol][pside]["wallet_exposure_limit"], 0.001
                 )
 
     hlcs, mss, config = await prep_hlcs_mss_config(config)
