@@ -252,7 +252,8 @@ class Passivbot:
         for f in ["emas", "pnls"]:
             res = await getattr(self, f"update_{f}")()
             logging.info(f"initiating {f} {res}")
-        await self.update_active_symbols_old()
+        self.update_active_symbols_old()
+        await self.update_exchange_configs()
         if not self.forager_mode:
             logging.info(
                 f"not in foarger mode; cancelled ohlcv maintainer {self.stop_ohlcv_maintainer()}"
@@ -420,7 +421,7 @@ class Passivbot:
                 logging.info(f"{key} changed: {previous_fields[key]} -> {getattr(self, key)}")
         """
 
-    async def update_active_symbols_old(self):
+    def update_active_symbols_old(self):
         """
         active symbols are longs/shorts with normal mode or which has position
         if forager mode, update ideal actives based on noisiness
@@ -551,7 +552,6 @@ class Passivbot:
                 set(self.prev_active_symbols["long"] + self.prev_active_symbols["short"])
             )
             self.forager_mode = True
-        await self.update_exchange_configs()
         for symbol in self.active_symbols:
             if symbol not in self.positions:
                 self.positions[symbol] = {
@@ -1635,7 +1635,8 @@ class Passivbot:
             return True
         self.previous_execution_ts = utc_ms()
         try:
-            await self.update_active_symbols_old()
+            self.update_active_symbols_old()
+            await self.update_exchange_configs()
             if self.recent_fill:
                 self.upd_timestamps["positions"] = 0.0
                 self.upd_timestamps["open_orders"] = 0.0
