@@ -59,7 +59,7 @@
   // Forager mode. Dynamically enable bots on markets of higher noisiness.
   // Only select among approved_symbols defined above. If approved_symbols == [], all symbols are eligible.
 
-  // explicitly ignore coins, even if there is a position
+  // put on graceful_stop if auto_gs, else manual
   ignored_symbols: [
     COIN4
     COIN5
