@@ -188,23 +188,6 @@ class Passivbot:
             logging.info(f"loaded universal config for {len(coins_universal)} symbols")
         elif len(coins_universal) > 0:
             logging.info(f"loaded universal config for {', '.join(coins_universal)}")
-        # print symbols and modes
-        modes = ["normal", "manual", "graceful_stop", "tp_only", "panic"]
-        for mode in modes:
-            for pside in ["long", "short"]:
-                syms_ = [
-                    symbol2coin(s)
-                    for s in self.live_configs
-                    if self.live_configs[s][pside]["mode"] == mode
-                ]
-                if len(syms_) > 20:
-                    logging.info(
-                        f"{pside: <5} mode: {mode: <{max([len(x) for x in modes])}}: {len(syms_)} symbols"
-                    )
-                elif len(syms_) > 0:
-                    logging.info(
-                        f"{pside: <5} mode: {mode: <{max([len(x) for x in modes])}}: {', '.join(syms_)}"
-                    )
 
     def pad_sym(self, symbol):
         return f"{symbol: <{self.sym_padding}}"
@@ -424,12 +407,31 @@ class Passivbot:
             if symbol not in self.open_orders:
                 self.open_orders[symbol] = []
         self.set_wallet_exposure_limits()
-        # TBC...
-        """
-        for key in previous_fields:
-            if previous_fields[key] != getattr(self, key):
-                logging.info(f"{key} changed: {previous_fields[key]} -> {getattr(self, key)}")
-        """
+        max_len_keys = max([len(key) for key in keys])
+        for pside in ["long", "short"]:
+            for key in keys:
+                if previous_fields[key] is None:
+                    if isinstance(getattr(self, key)[pside], set):
+                        coins = ",".join(sorted([symbol2coin(s) for s in getattr(self, key)[pside]]))
+                    elif isinstance(getattr(self, key)[pside], dict):
+                        coins = sorted(
+                            {symbol2coin(k): v for k, v in getattr(self, key)[pside].items()}.items()
+                        )
+                    else:
+                        coins = getattr(self, key)[pside]
+                    if coins:
+                        logging.info(f"setting {pside: <5} {key: <{max_len_keys}}: {coins}")
+                else:
+                    for symbol in previous_fields[key][pside]:
+                        if symbol not in getattr(self, key)[pside]:
+                            logging.info(
+                                f"removing {pside: <5} {self.pad_sym(symbol)} from {key: <{max_len_keys}}"
+                            )
+                    for symbol in getattr(self, key)[pside]:
+                        if symbol not in previous_fields[key][pside]:
+                            logging.info(
+                                f"  adding {pside: <5} {self.pad_sym(symbol)}   to {key: <{max_len_keys}}"
+                            )
 
     def set_wallet_exposure_limits(self):
         for pside in ["long", "short"]:
