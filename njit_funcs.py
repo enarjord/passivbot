@@ -230,11 +230,11 @@ def calc_delay_between_fills_ms_ask(pprice, price, delay_between_fills_ms, delay
 @njit
 def calc_pprice_diff(pside: str, pprice: float, price: float):
     if pside == "long":
-        return (pprice / price - 1) if price > 0.0 else 0.0
+        return (1.0 - price / pprice) if pprice > 0.0 else 0.0
     elif pside == "short":
-        return (price / pprice - 1) if pprice > 0.0 else 0.0
+        return (price / pprice - 1.0) if pprice > 0.0 else 0.0
     else:
-        raise Exception("unknown pside" + pside)
+        raise Exception("unknown pside " + pside)
 
 
 @njit
