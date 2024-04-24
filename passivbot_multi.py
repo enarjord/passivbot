@@ -180,6 +180,7 @@ class Passivbot:
                     ("auto_unstuck_wallet_exposure_threshold", 0.0),
                     ("auto_unstuck_ema_dist", 0.0),
                     ("backwards_tp", True),
+                    ("wallet_exposure_limit", 0.0),
                 ]:
                     self.live_configs[symbol][pside][key] = val
         coins_universal = sorted([symbol2coin(s) for s in universal_configs_loaded])
@@ -252,7 +253,7 @@ class Passivbot:
         for f in ["emas", "pnls"]:
             res = await getattr(self, f"update_{f}")()
             logging.info(f"initiating {f} {res}")
-        self.update_active_symbols_old()
+        self.update_active_symbols()
         await self.update_exchange_configs()
         if not self.forager_mode:
             logging.info(
@@ -313,7 +314,7 @@ class Passivbot:
         else:
             return "graceful_stop" if self.config["auto_gs"] else "manual"
 
-    def update_active_symbols_new(self):
+    def update_active_symbols(self):
         # determine forager mode
         # set ideal actives
         # set normal/gs and other modes
@@ -413,145 +414,7 @@ class Passivbot:
                 self.live_configs[symbol][pside]["mode"] = "normal"
             for symbol in self.on_other_modes[pside]:
                 self.live_configs[symbol][pside]["mode"] = self.on_other_modes[pside][symbol]
-        self.set_wallet_exposure_limits_new()
-        # TBC...
-        """
-        for key in previous_fields:
-            if previous_fields[key] != getattr(self, key):
-                logging.info(f"{key} changed: {previous_fields[key]} -> {getattr(self, key)}")
-        """
-
-    def update_active_symbols_old(self):
-        """
-        active symbols are longs/shorts with normal mode or which has position
-        if forager mode, update ideal actives based on noisiness
-        else, ideal actives is static list
-        """
-        if not hasattr(self, "gs_longs"):
-            self.gs_longs = []
-            self.gs_shorts = []
-            self.normal_longs = []
-            self.normal_shorts = []
-        self.ideal_actives = {"long": [], "short": []}
-        self.actual_actives = {"long": [], "short": []}
-        if self.config["n_longs"] == 0 and self.config["n_shorts"] == 0:
-            # forager is disabled
-            # all approved symbols plus symbols with position on graceful stop
-            """
-            for pside in self.ideal_actives:
-                for symbol in self.approved_symbols:
-                    if self.config[f"{pside}_enabled"]:
-                        if self.live_configs[symbol][pside]["mode"] == "normal":
-                            self.ideal_actives[pside].append(symbol)
-            self.active_symbols = sorted(
-                set(self.ideal_actives["long"] + self.ideal_actives["short"])
-            )
-            """
-            self.active_symbols = sorted(set(self.approved_symbols))
-            self.set_wallet_exposure_limits_old()
-            self.forager_mode = False
-        else:
-            # forager mode
-            # active symbols are symbols with position plus symbols with high noisiness
-            self.calc_noisiness()
-            approved_symbols_sorted_by_noisiness = sorted(
-                self.noisiness, key=lambda x: self.noisiness[x], reverse=True
-            )
-            on_gs = {"long": [], "short": []}
-            on_normal = {"long": [], "short": []}
-            if not hasattr(self, "prev_mode"):
-                self.prev_mode = {
-                    symbol: {"long": None, "short": None} for symbol in self.approved_symbols
-                }
-            for pside in on_gs:
-                self.ideal_actives[pside] = ideal_actives = approved_symbols_sorted_by_noisiness[
-                    : self.config[f"n_{pside}s"]
-                ]
-                # print(pside, "ideal_actives", ideal_actives)
-                actual_actives = sorted(
-                    set(
-                        [
-                            x["symbol"]
-                            for x in self.fetched_positions + self.fetched_open_orders
-                            if x["position_side"] == pside
-                        ]
-                    )
-                )
-                on_gs[pside] = []
-                on_normal[pside] = []
-                for sym in actual_actives:
-                    if sym in ideal_actives:
-                        on_normal[pside].append(sym)
-                    else:
-                        on_gs[pside].append(sym)
-                while True:
-                    n_open_slots = (
-                        self.config[f"n_{pside}s"] - (len(on_gs[pside]) + len(on_normal[pside]))
-                        if self.config[f"{pside}_enabled"]
-                        else 0
-                    )
-                    if n_open_slots <= 0:
-                        break
-                    if not ideal_actives:
-                        break
-                    candidate = ideal_actives.pop(0)
-                    if candidate not in on_normal[pside] and candidate not in on_gs[pside]:
-                        on_normal[pside].append(candidate)
-                for symbol in on_gs[pside]:
-                    if self.prev_mode[symbol][pside] != "graceful_stop":
-                        logging.info(
-                            f"{self.pad_sym(symbol)} changing {pside} mode from {self.prev_mode[symbol][pside]} -> graceful_stop"
-                        )
-                        self.live_configs[symbol][pside]["mode"] = self.prev_mode[symbol][pside] = (
-                            "graceful_stop"
-                        )
-                for symbol in on_normal[pside]:
-                    if self.prev_mode[symbol][pside] != "normal":
-                        logging.info(
-                            f"{self.pad_sym(symbol)} changing {pside} mode from {self.prev_mode[symbol][pside]} -> normal"
-                        )
-                        self.live_configs[symbol][pside]["mode"] = self.prev_mode[symbol][pside] = (
-                            "normal"
-                        )
-                new_active_symbols = sorted(set(on_gs[pside] + on_normal[pside]))
-                if not hasattr(self, "prev_active_symbols"):
-                    self.prev_active_symbols = {"long": [], "short": []}
-                if new_active_symbols != self.prev_active_symbols[pside]:
-                    coin_str = ",".join([symbol2coin(x) for x in new_active_symbols])
-                    logging.info(f"new active {pside} symbols: {coin_str}")
-                    self.prev_active_symbols[pside] = new_active_symbols
-
-                # set WE limits
-                new_WE_limit = round_dynamic(
-                    (
-                        self.config[f"TWE_{pside}"] / len(new_active_symbols)
-                        if len(new_active_symbols) > 0
-                        else 0.001
-                    ),
-                    4,
-                )
-                for symbol in self.approved_symbols:
-                    if "wallet_exposure_limit" not in self.live_configs[symbol][pside]:
-                        self.live_configs[symbol][pside]["wallet_exposure_limit"] = 0.0
-                for symbol in new_active_symbols:
-                    if getattr(self.args[symbol], f"WE_limit_{pside}") is None:
-                        if self.live_configs[symbol][pside]["wallet_exposure_limit"] != new_WE_limit:
-                            logging.info(
-                                f"changing WE limit for {pside} {symbol}: {self.live_configs[symbol][pside]['wallet_exposure_limit']} -> {new_WE_limit}"
-                            )
-                            self.live_configs[symbol][pside]["wallet_exposure_limit"] = new_WE_limit
-                    else:
-                        self.live_configs[symbol][pside]["wallet_exposure_limit"] = getattr(
-                            self.args[symbol], f"WE_limit_{pside}"
-                        )
-                    self.live_configs[symbol][pside]["wallet_exposure_limit"] = max(
-                        self.live_configs[symbol][pside]["wallet_exposure_limit"], 0.001
-                    )
-
-            self.active_symbols = sorted(
-                set(self.prev_active_symbols["long"] + self.prev_active_symbols["short"])
-            )
-            self.forager_mode = True
+        self.active_symbols = sorted(self.is_active["long"] | self.is_active["short"])
         for symbol in self.active_symbols:
             if symbol not in self.positions:
                 self.positions[symbol] = {
@@ -560,8 +423,15 @@ class Passivbot:
                 }
             if symbol not in self.open_orders:
                 self.open_orders[symbol] = []
+        self.set_wallet_exposure_limits()
+        # TBC...
+        """
+        for key in previous_fields:
+            if previous_fields[key] != getattr(self, key):
+                logging.info(f"{key} changed: {previous_fields[key]} -> {getattr(self, key)}")
+        """
 
-    def set_wallet_exposure_limits_new(self):
+    def set_wallet_exposure_limits(self):
         for pside in ["long", "short"]:
             changed = {}
             n_actives = len(self.is_active[pside])
@@ -695,41 +565,6 @@ class Passivbot:
         # for prettier printing
         self.max_len_symbol = max([len(s) for s in self.approved_symbols])
         self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
-
-    def set_wallet_exposure_limits_old(self):
-        # an active bot has normal mode or graceful stop mode with position
-        for pside in ["long", "short"]:
-            n_actives = 0
-            for sym in self.live_configs:
-                if self.live_configs[sym][pside]["mode"] == "normal" or (
-                    self.live_configs[sym][pside]["mode"] == "graceful_stop"
-                    and (sym in self.positions and self.positions[sym][pside]["size"] != 0.0)
-                ):
-                    n_actives += 1
-            if not hasattr(self, "prev_n_actives"):
-                self.prev_n_actives = {"long": 0, "short": 0}
-            if self.prev_n_actives[pside] != n_actives:
-                logging.info(f"n active {pside} bots: {self.prev_n_actives[pside]} -> {n_actives}")
-                self.prev_n_actives[pside] = n_actives
-            new_WE_limit = round_(
-                self.config[f"TWE_{pside}"] / n_actives if n_actives > 0 else 0.01, 0.0001
-            )
-            for symbol in self.active_symbols:
-                if "wallet_exposure_limit" not in self.live_configs[symbol][pside]:
-                    self.live_configs[symbol][pside]["wallet_exposure_limit"] = 0.0
-                if getattr(self.args[symbol], f"WE_limit_{pside}") is None:
-                    if self.live_configs[symbol][pside]["wallet_exposure_limit"] != new_WE_limit:
-                        logging.info(
-                            f"changing WE limit for {pside} {symbol}: {self.live_configs[symbol][pside]['wallet_exposure_limit']} -> {new_WE_limit}"
-                        )
-                        self.live_configs[symbol][pside]["wallet_exposure_limit"] = new_WE_limit
-                else:
-                    self.live_configs[symbol][pside]["wallet_exposure_limit"] = getattr(
-                        self.args[symbol], f"WE_limit_{pside}"
-                    )
-                self.live_configs[symbol][pside]["wallet_exposure_limit"] = max(
-                    self.live_configs[symbol][pside]["wallet_exposure_limit"], 0.01
-                )
 
     def add_new_order(self, order, source="WS"):
         try:
@@ -1116,15 +951,19 @@ class Passivbot:
 
     async def init_emas_by_symbol(self, symbol):
         if not hasattr(self, "ema_spans_long"):
-            self.ema_spans_long, self.alphas_long, self.alphas__long, self.emas_long = {}, {}, {}, {}
-            self.ema_spans_short, self.alphas_short, self.alphas__short, self.emas_short = (
-                {},
-                {},
-                {},
-                {},
-            )
+            for key in [
+                "ema_spans_long",
+                "alphas_long",
+                "alphas__long",
+                "emas_long",
+                "ema_spans_short",
+                "alphas_short",
+                "alphas__short",
+                "emas_short",
+                "prev_prices",
+            ]:
+                setattr(self, key, {})
             self.ema_minute = int(utc_ms() // (1000 * 60) * (1000 * 60))
-            self.prev_prices = {}
         if (
             not hasattr(self, "tickers")
             or self.tickers == {}
@@ -1635,7 +1474,7 @@ class Passivbot:
             return True
         self.previous_execution_ts = utc_ms()
         try:
-            self.update_active_symbols_old()
+            self.update_active_symbols()
             await self.update_exchange_configs()
             if self.recent_fill:
                 self.upd_timestamps["positions"] = 0.0
