@@ -357,14 +357,14 @@ class Passivbot:
                 for symbol in set(actual_actives):
                     if symbol in forced_modes:
                         continue
-                    if symbol in self.ideal_actives[pside]:
-                        self.ideal_actives[pside].add(symbol)
+                    if symbol in self.ideal_actives[pside] and len(
+                        self.on_normal[pside] | self.on_gs[pside]
+                    ) < len(self.ideal_actives[pside]):
                         self.on_normal[pside].add(symbol)
                     else:
                         self.on_gs[pside].add(symbol)
                 for symbol in self.ideal_actives[pside]:
                     if symbol not in forced_modes:
-                        self.on_normal[pside].add(symbol)
                         self.is_active[pside].add(symbol)
 
         else:
