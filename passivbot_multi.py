@@ -1614,8 +1614,8 @@ class Passivbot:
             if ohlcvs:
                 self.ohlcvs[symbol] = ohlcvs
                 self.ohlcv_upd_timestamps[symbol] = get_file_mod_utc(self.get_ohlcv_fpath(symbol))
-                if utc_ms() - self.ohlcv_upd_timestamps[symbol] > 1000 * 60 * 15:
-                    # if ohlcvs are more than 15 minutes old, force update them before initiating EMAs
+                if utc_ms() - self.ohlcv_upd_timestamps[symbol] > 1000 * 60 * 60:
+                    # if ohlcvs are more than 1 hour old, force update them before initiating EMAs
                     force_update_syms.append(symbol)
                     self.ohlcv_upd_timestamps[symbol] = 0
                     del self.ohlcvs[symbol]
