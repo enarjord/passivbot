@@ -170,9 +170,6 @@ class Passivbot:
 
             for pside in ["long", "short"]:
                 self.live_configs[symbol][pside]["mode"] = self.get_PB_live_mode(pside, symbol)
-                self.live_configs[symbol][pside]["enabled"] = (
-                    self.live_configs[symbol][pside]["mode"] == "normal"
-                )
                 # disable timed AU and set backwards TP
                 for key, val in [
                     ("auto_unstuck_delay_minutes", 0.0),
@@ -377,7 +374,6 @@ class Passivbot:
                 for symbol in sorted(set(actual_actives) | set(self.approved_symbols)):
                     mode = self.get_PB_live_mode(pside, symbol)
                     self.live_configs[symbol][pside]["mode"] = mode
-                    self.live_configs[symbol][pside]["enabled"] = mode == "normal"
                     if mode == "normal":
                         self.on_normal[pside].add(symbol)
                         self.is_active[pside].add(symbol)
@@ -1074,16 +1070,13 @@ class Passivbot:
     def calc_ideal_orders(self):
         unstuck_close_order = None
         stuck_positions = []
-        for symbol in self.active_symbols:
-            # check for stuck position
+        for pside in ["long", "short"]:
             if self.config["loss_allowance_pct"] == 0.0:
                 # no auto unstuck
                 break
-            for pside in ["long", "short"]:
+            for symbol in self.is_active[pside]:
                 if self.live_configs[symbol][pside]["mode"] in ["manual", "panic", "tp_only"]:
                     # no auto unstuck in these modes
-                    continue
-                if self.live_configs[symbol][pside]["wallet_exposure_limit"] == 0.0:
                     continue
                 wallet_exposure = (
                     qty_to_cost(
@@ -1094,15 +1087,12 @@ class Passivbot:
                     )
                     / self.balance
                 )
-                if (
+                if self.live_configs[symbol][pside]["wallet_exposure_limit"] <= 0.0 or (
                     wallet_exposure / self.live_configs[symbol][pside]["wallet_exposure_limit"]
                     > self.config["stuck_threshold"]
                 ):
-                    pprice_diff = (
-                        1.0 - self.tickers[symbol]["last"] / self.positions[symbol]["long"]["price"]
-                        if pside == "long"
-                        else self.tickers[symbol]["last"] / self.positions[symbol]["short"]["price"]
-                        - 1.0
+                    pprice_diff = calc_pprice_diff(
+                        pside, self.positions[symbol][pside]["price"], self.tickers[symbol]["last"]
                     )
                     if pprice_diff > 0.0:
                         # don't unstuck if position is in profit
@@ -1193,11 +1183,11 @@ class Passivbot:
         for symbol in self.active_symbols:
             if self.hedge_mode:
                 do_long = (
-                    self.live_configs[symbol]["long"]["enabled"]
+                    self.live_configs[symbol]["long"]["mode"] == "normal"
                     or self.positions[symbol]["long"]["size"] != 0.0
                 )
                 do_short = (
-                    self.live_configs[symbol]["short"]["enabled"]
+                    self.live_configs[symbol]["short"]["mode"] == "normal"
                     or self.positions[symbol]["short"]["size"] != 0.0
                 )
             else:
@@ -1205,11 +1195,11 @@ class Passivbot:
                     self.positions[symbol]["long"]["size"] == 0.0
                     and self.positions[symbol]["short"]["size"] == 0.0
                 )
-                do_long = (no_pos and self.live_configs[symbol]["long"]["enabled"]) or self.positions[
-                    symbol
-                ]["long"]["size"] != 0.0
+                do_long = (
+                    no_pos and self.live_configs[symbol]["long"]["mode"] == "normal"
+                ) or self.positions[symbol]["long"]["size"] != 0.0
                 do_short = (
-                    no_pos and self.live_configs[symbol]["short"]["enabled"]
+                    no_pos and self.live_configs[symbol]["short"]["mode"] == "normal"
                 ) or self.positions[symbol]["short"]["size"] != 0.0
             if self.live_configs[symbol]["long"]["mode"] == "panic":
                 if self.positions[symbol]["long"]["size"] != 0.0:
