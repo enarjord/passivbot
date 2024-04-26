@@ -66,8 +66,8 @@
   ]
 
   // if n_longs and n_shorts are both zero, disable forager mode.
-  n_longs: 0
-  n_shorts: 0
+  n_longs: 0 // if > 0, overrides longs_enabled
+  n_shorts: 0 // if > 0, overrides shorts_enabled
 
   // minimum market age. Don't trade markets younger than x days. Set to zero to allow all markets.
   minimum_market_age_days: 60
