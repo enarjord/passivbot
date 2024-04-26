@@ -87,7 +87,7 @@ class Passivbot:
         }
         self.hedge_mode = True
         self.inverse = False
-        self.active_symbols = []
+        self.active_symbols = set()
         self.fetched_positions = []
         self.fetched_open_orders = []
         self.open_orders = {}
@@ -113,6 +113,10 @@ class Passivbot:
         self.execution_delay_millis = max(3000.0, self.config["execution_delay_seconds"] * 1000)
         self.force_update_age_millis = 60 * 1000  # force update once a minute
         self.quote = "USDT"
+        self.forager_mode = self.config["n_longs"] > 0 or self.config["n_shorts"] > 0
+        self.config["minimum_market_age_millis"] = (
+            self.config["minimum_market_age_days"] * 24 * 60 * 60 * 1000
+        )
 
     def set_live_configs(self):
         # live configs priority:
@@ -129,7 +133,7 @@ class Passivbot:
         else:
             live_configs_fnames = []
         universal_configs_loaded = set()
-        for symbol in self.approved_symbols:
+        for symbol in self.markets_dict:
             # look for an exact match first
             coin = symbol2coin(symbol)
             live_config_fname_l = [
@@ -170,6 +174,9 @@ class Passivbot:
 
             for pside in ["long", "short"]:
                 self.live_configs[symbol][pside]["mode"] = self.get_PB_live_mode(pside, symbol)
+                self.live_configs[symbol][pside]["enabled"] = (
+                    self.live_configs[symbol][pside]["mode"] == "normal"
+                )
                 # disable timed AU and set backwards TP
                 for key, val in [
                     ("auto_unstuck_delay_minutes", 0.0),
@@ -226,14 +233,15 @@ class Passivbot:
         await self.update_positions()
         logging.info(f"initiating open orders...")
         await self.update_open_orders()
-        await self.update_approved_symbols()
+        await self.init_approved_symbols()
+        self.update_symbols_on_gs()
         self.set_live_configs()
         await self.start_ohlcv_maintainer()
 
         for f in ["emas", "pnls"]:
             res = await getattr(self, f"update_{f}")()
             logging.info(f"initiating {f} {res}")
-        self.update_active_symbols()
+        self.update_PB_modes()
         await self.update_exchange_configs()
         if not self.forager_mode:
             logging.info(
@@ -247,6 +255,10 @@ class Passivbot:
         return sorted(set([elm["symbol"] for elm in positions + open_orders]))
 
     def format_symbol(self, symbol: str) -> str:
+        try:
+            return self.formatted_symbols_map[symbol]
+        except (KeyError, AttributeError):
+            pass
         if not hasattr(self, "formatted_symbols_map"):
             self.formatted_symbols_map = {}
             self.formatted_symbols_map_inv = defaultdict(set)
@@ -258,6 +270,8 @@ class Passivbot:
     async def init_markets_dict(self):
         self.markets_dict = await self.cca.load_markets()
         self.set_market_specific_settings()
+        for symbol in self.markets_dict:
+            self.format_symbol(symbol)
 
     def set_market_specific_settings(self):
         # set min cost, min qty, price step, qty step, c_mult
@@ -293,6 +307,157 @@ class Passivbot:
                 return getattr(self.args[symbol], f"{pside}_mode")
         else:
             return "graceful_stop" if self.config["auto_gs"] else "manual"
+
+    def update_PB_modes(self):
+
+        keys = [
+            "PB_modes",
+            "is_active",
+            "actual_actives",
+            "ideal_actives",
+        ]
+        if all([hasattr(self, k) for k in keys]):
+            previous_fields = {k: deepcopy(getattr(self, k)) for k in keys}
+        else:
+            previous_fields = {k: None for k in keys}
+
+        # set modes for all symbols
+        self.PB_modes = {"long": {}, "short": {}}
+        self.is_active = {"long": set(), "short": set()}
+        self.actual_actives = {"long": set(), "short": set()}
+        self.ideal_actives = {"long": {}, "short": {}}  # dicts becaouse they are ordered
+
+        # actual actives, symbols with pos and/or open orders
+        for elm in self.fetched_positions + self.fetched_open_orders:
+            self.actual_actives[elm["position_side"]].add(elm["symbol"])
+            self.is_active[elm["position_side"]].add(elm["symbol"])
+
+        # find ideal actives
+        for pside in self.ideal_actives:
+            for symbol in self.forced_modes[pside]:
+                # set forced modes first
+                if self.forced_modes[pside][symbol] == "normal":
+                    self.ideal_actives[pside][symbol] = ""
+                self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
+        if self.forager_mode:
+            self.calc_noisiness()  # ideal symbols are high noise symbols
+            for symbol in sorted(self.noisiness, key=lambda x: self.noisiness[x], reverse=True):
+                longs_full = len(self.ideal_actives["long"]) >= self.config[f"n_longs"]
+                shorts_full = len(self.ideal_actives["short"]) >= self.config[f"n_shorts"]
+                if longs_full and shorts_full:
+                    break
+                if not longs_full and symbol not in self.forced_modes["long"]:
+                    self.ideal_actives["long"][symbol] = ""
+                if not shorts_full and symbol not in self.forced_modes["short"]:
+                    self.ideal_actives["short"][symbol] = ""
+            for pside in self.actual_actives:
+                # actual actives fill slots first
+                for symbol in self.actual_actives[pside]:
+                    if symbol in self.PB_modes[pside]:
+                        continue
+                    if symbol in self.ideal_actives[pside]:
+                        self.PB_modes[pside][symbol] = "normal"
+                    else:
+                        self.PB_modes[pside][symbol] = (
+                            "graceful_stop" if self.config["auto_gs"] else "manual"
+                        )
+            for pside in self.ideal_actives:
+                # fill remaining slots with ideal actives
+                # a slot is filled if symbol in [normal, graceful_stop]
+                # symbols on other modes are ignored
+                for symbol in self.ideal_actives[pside]:
+                    if symbol in self.PB_modes[pside]:
+                        continue
+                    n_slots_filled = len(
+                        [
+                            s
+                            for s in self.PB_modes[pside]
+                            if self.PB_modes[pside][s] in ["normal", "graceful_stop"]
+                        ]
+                    )
+                    if n_slots_filled >= self.config[f"n_{pside}s"]:
+                        break
+                    self.PB_modes[pside][symbol] = "normal"
+        else:
+            # if not forager mode, all approved symbols are ideal symbols, unless symbol in forced_modes
+            for pside in ["long", "short"]:
+                if self.config[f"{pside}_enabled"]:
+                    for symbol in self.approved_symbols:
+                        if symbol not in self.forced_modes[pside]:
+                            self.PB_modes[pside][symbol] = "normal"
+                            self.ideal_actives[pside][symbol] = ""
+        for pside in self.PB_modes:
+            for symbol in self.PB_modes[pside]:
+                self.live_configs[symbol][pside]["mode"] = self.PB_modes[pside][symbol]
+                self.live_configs[symbol][pside]["enabled"] = self.PB_modes[pside][symbol] == "normal"
+                if self.live_configs[symbol][pside]["enabled"]:
+                    self.is_active[pside].add(symbol)
+        self.active_symbols = {s for subdict in self.PB_modes.values() for s in subdict.keys()}
+
+        for symbol in self.active_symbols:
+            if symbol not in self.positions:
+                self.positions[symbol] = {
+                    "long": {"size": 0.0, "price": 0.0},
+                    "short": {"size": 0.0, "price": 0.0},
+                }
+            if symbol not in self.open_orders:
+                self.open_orders[symbol] = []
+        self.set_wallet_exposure_limits()
+        max_len_keys = max([len(key) for key in keys])
+        for pside in ["long", "short"]:
+            for key in keys:
+                if previous_fields[key] is None:
+                    if isinstance(getattr(self, key)[pside], set):
+                        coins = ",".join(sorted([symbol2coin(s) for s in getattr(self, key)[pside]]))
+                    elif isinstance(getattr(self, key)[pside], dict):
+                        coins = sorted(
+                            {symbol2coin(k): v for k, v in getattr(self, key)[pside].items()}.items()
+                        )
+                    else:
+                        coins = getattr(self, key)[pside]
+                    if coins:
+                        logging.info(f"setting {pside: <5} {key: <{max_len_keys}}: {coins}")
+                else:
+                    for symbol in previous_fields[key][pside]:
+                        if symbol not in getattr(self, key)[pside]:
+                            logging.info(
+                                f"removing {pside: <5} {self.pad_sym(symbol)} from {key: <{max_len_keys}}"
+                            )
+                    for symbol in getattr(self, key)[pside]:
+                        if symbol not in previous_fields[key][pside]:
+                            logging.info(
+                                f"  adding {pside: <5} {self.pad_sym(symbol)}   to {key: <{max_len_keys}}"
+                            )
+
+    def set_wallet_exposure_limits(self):
+        for pside in ["long", "short"]:
+            changed = {}
+            n_actives = len(self.is_active[pside])
+            WE_limit_div = round_(
+                self.config[f"TWE_{pside}"] / n_actives if n_actives > 0 else 0.001, 0.0001
+            )
+            for symbol in self.is_active[pside]:
+                new_WE_limit = (
+                    getattr(self.args[symbol], f"WE_limit_{pside}")
+                    if symbol in self.args
+                    and getattr(self.args[symbol], f"WE_limit_{pside}") is not None
+                    else WE_limit_div
+                )
+                if "wallet_exposure_limit" not in self.live_configs[symbol][pside]:
+                    changed[symbol] = (0.0, new_WE_limit)
+                elif self.live_configs[symbol][pside]["wallet_exposure_limit"] != new_WE_limit:
+                    changed[symbol] = (
+                        self.live_configs[symbol][pside]["wallet_exposure_limit"],
+                        new_WE_limit,
+                    )
+                self.live_configs[symbol][pside]["wallet_exposure_limit"] = new_WE_limit
+            if changed:
+                inv = defaultdict(set)
+                for symbol in changed:
+                    inv[changed[symbol]].add(symbol)
+                for k, v in inv.items():
+                    syms = ", ".join(sorted([symbol2coin(s) for s in v]))
+                    logging.info(f"changed {pside} WE limit from {k[0]} to {k[1]} for {syms}")
 
     def update_active_symbols(self):
         # determine forager mode
@@ -374,6 +539,7 @@ class Passivbot:
                 for symbol in sorted(set(actual_actives) | set(self.approved_symbols)):
                     mode = self.get_PB_live_mode(pside, symbol)
                     self.live_configs[symbol][pside]["mode"] = mode
+                    self.live_configs[symbol][pside]["enabled"] = mode == "normal"
                     if mode == "normal":
                         self.on_normal[pside].add(symbol)
                         self.is_active[pside].add(symbol)
@@ -429,7 +595,7 @@ class Passivbot:
                                 f"  adding {pside: <5} {self.pad_sym(symbol)}   to {key: <{max_len_keys}}"
                             )
 
-    def set_wallet_exposure_limits(self):
+    def set_wallet_exposure_limits_old(self):
         for pside in ["long", "short"]:
             changed = {}
             n_actives = len(self.is_active[pside])
@@ -478,7 +644,7 @@ class Passivbot:
         # defined by each exchange child class
         pass
 
-    async def update_approved_symbols(self):
+    async def init_approved_symbols(self):
         # symbols are formatted to ccxt standard COIN/QUOTE:QUOTE
         self.ignored_symbols = [self.format_symbol(x) for x in self.config["ignored_symbols"]]
 
@@ -495,7 +661,7 @@ class Passivbot:
             for symbol in self.markets_dict:
                 approved_symbols[symbol] = ""
 
-        if self.config["minimum_market_age_days"] > 0:
+        if self.forager_mode and self.config["minimum_market_age_days"] > 0:
             first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
             for symbol in sorted(first_timestamps):
                 first_timestamps[self.format_symbol(symbol)] = first_timestamps[symbol]
@@ -503,7 +669,7 @@ class Passivbot:
             first_timestamps = None
 
         self.approved_symbols = {}
-        disapproved = {}
+        self.disapproved_symbols = {}
         for symbol in sorted(set(approved_symbols)):
             if symbol not in self.markets_dict:
                 logging.info(f"{symbol} missing from {self.exchange}")
@@ -514,35 +680,32 @@ class Passivbot:
                             self.approved_symbols[x] = approved_symbols[symbol]
                             break
             elif not self.markets_dict[symbol]["active"]:
-                disapproved[symbol] = "not active"
+                self.disapproved_symbols[symbol] = "not active"
             elif not self.markets_dict[symbol]["swap"]:
-                disapproved[symbol] = "wrong market type"
+                self.disapproved_symbols[symbol] = "wrong market type"
             elif not self.markets_dict[symbol]["linear"]:
-                disapproved[symbol] = "not linear"
+                self.disapproved_symbols[symbol] = "not linear"
             elif not symbol.endswith(f"/{self.quote}:{self.quote}"):
-                disapproved[symbol] = "wrong quote"
+                self.disapproved_symbols[symbol] = "wrong quote"
             elif self.format_symbol(symbol) in self.ignored_symbols:
-                disapproved[symbol] = "is ignored"
+                self.disapproved_symbols[symbol] = "is ignored"
             elif first_timestamps:
                 if symbol not in first_timestamps:
-                    disapproved[symbol] = "missing from first timestamps"
-                elif utc_ms() - first_timestamps[symbol] < self.config["minimum_market_age_days"]:
-                    disapproved[symbol] = (
+                    self.disapproved_symbols[symbol] = "missing from first timestamps"
+                elif utc_ms() - first_timestamps[symbol] < self.config["minimum_market_age_millis"]:
+                    self.disapproved_symbols[symbol] = (
                         f"younger than {self.config['minimum_market_age_days']} days"
                     )
                 else:
                     self.approved_symbols[symbol] = approved_symbols[symbol]
             else:
                 self.approved_symbols[symbol] = approved_symbols[symbol]
-        for line in set(disapproved.values()):
-            syms_ = [s for s in disapproved if disapproved[s] == line]
-            if len(syms_) > 20:
+        for line in set(self.disapproved_symbols.values()):
+            syms_ = [s for s in self.disapproved_symbols if self.disapproved_symbols[s] == line]
+            if len(syms_) > 12:
                 logging.info(f"{line}: {len(syms_)} symbols")
             elif len(syms_) > 0:
                 logging.info(f"{line}: {','.join(sorted(set([s for s in syms_])))}")
-
-        # add symbols on gs
-        self.update_symbols_on_gs()
 
         # this argparser is used only internally
         parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
@@ -557,9 +720,19 @@ class Passivbot:
         parser.add_argument("-lev", type=float, required=False, dest="leverage", default=None)
         parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
         self.args = {
-            symbol: parser.parse_args(self.approved_symbols[symbol].split())
-            for symbol in self.approved_symbols
+            symbol: parser.parse_args(
+                self.approved_symbols[symbol].split() if symbol in self.approved_symbols else ""
+            )
+            for symbol in self.markets_dict
         }
+
+        self.forced_modes = {"long": {}, "short": {}}
+        # forced modes
+        for symbol in self.args:
+            if self.args[symbol].long_mode is not None:
+                self.forced_modes["long"][symbol] = self.args[symbol].long_mode
+            if self.args[symbol].short_mode is not None:
+                self.forced_modes["short"][symbol] = self.args[symbol].short_mode
         # for prettier printing
         self.max_len_symbol = max([len(s) for s in self.approved_symbols])
         self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
@@ -796,7 +969,7 @@ class Passivbot:
                 "long": {"size": 0.0, "price": 0.0},
                 "short": {"size": 0.0, "price": 0.0},
             }
-            for sym in set(list(self.positions) + self.active_symbols)
+            for sym in set(list(self.positions) + list(self.active_symbols))
         }
         position_changes = []
         for elm in positions_list_new:
@@ -1070,13 +1243,16 @@ class Passivbot:
     def calc_ideal_orders(self):
         unstuck_close_order = None
         stuck_positions = []
-        for pside in ["long", "short"]:
+        for symbol in self.active_symbols:
+            # check for stuck position
             if self.config["loss_allowance_pct"] == 0.0:
                 # no auto unstuck
                 break
-            for symbol in self.is_active[pside]:
+            for pside in ["long", "short"]:
                 if self.live_configs[symbol][pside]["mode"] in ["manual", "panic", "tp_only"]:
                     # no auto unstuck in these modes
+                    continue
+                if self.live_configs[symbol][pside]["wallet_exposure_limit"] == 0.0:
                     continue
                 wallet_exposure = (
                     qty_to_cost(
@@ -1087,12 +1263,15 @@ class Passivbot:
                     )
                     / self.balance
                 )
-                if self.live_configs[symbol][pside]["wallet_exposure_limit"] <= 0.0 or (
+                if (
                     wallet_exposure / self.live_configs[symbol][pside]["wallet_exposure_limit"]
                     > self.config["stuck_threshold"]
                 ):
-                    pprice_diff = calc_pprice_diff(
-                        pside, self.positions[symbol][pside]["price"], self.tickers[symbol]["last"]
+                    pprice_diff = (
+                        1.0 - self.tickers[symbol]["last"] / self.positions[symbol]["long"]["price"]
+                        if pside == "long"
+                        else self.tickers[symbol]["last"] / self.positions[symbol]["short"]["price"]
+                        - 1.0
                     )
                     if pprice_diff > 0.0:
                         # don't unstuck if position is in profit
@@ -1183,11 +1362,11 @@ class Passivbot:
         for symbol in self.active_symbols:
             if self.hedge_mode:
                 do_long = (
-                    self.live_configs[symbol]["long"]["mode"] == "normal"
+                    self.live_configs[symbol]["long"]["enabled"]
                     or self.positions[symbol]["long"]["size"] != 0.0
                 )
                 do_short = (
-                    self.live_configs[symbol]["short"]["mode"] == "normal"
+                    self.live_configs[symbol]["short"]["enabled"]
                     or self.positions[symbol]["short"]["size"] != 0.0
                 )
             else:
@@ -1195,11 +1374,11 @@ class Passivbot:
                     self.positions[symbol]["long"]["size"] == 0.0
                     and self.positions[symbol]["short"]["size"] == 0.0
                 )
-                do_long = (
-                    no_pos and self.live_configs[symbol]["long"]["mode"] == "normal"
-                ) or self.positions[symbol]["long"]["size"] != 0.0
+                do_long = (no_pos and self.live_configs[symbol]["long"]["enabled"]) or self.positions[
+                    symbol
+                ]["long"]["size"] != 0.0
                 do_short = (
-                    no_pos and self.live_configs[symbol]["short"]["mode"] == "normal"
+                    no_pos and self.live_configs[symbol]["short"]["enabled"]
                 ) or self.positions[symbol]["short"]["size"] != 0.0
             if self.live_configs[symbol]["long"]["mode"] == "panic":
                 if self.positions[symbol]["long"]["size"] != 0.0:
@@ -1466,7 +1645,7 @@ class Passivbot:
             return True
         self.previous_execution_ts = utc_ms()
         try:
-            self.update_active_symbols()
+            self.update_PB_modes()
             await self.update_exchange_configs()
             if self.recent_fill:
                 self.upd_timestamps["positions"] = 0.0
