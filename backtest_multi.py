@@ -177,8 +177,6 @@ def load_and_parse_config(path: str):
         return formatted
     try:
         loaded, _ = add_missing_params_to_hjson_live_multi_config(loaded)
-        print(sorted(loaded.keys()))
-        print(sorted(get_template_live_config("multi_hjson")))
         if all([x in loaded for x in get_template_live_config("multi_hjson")]):
             # hjson live multi config
             formatted = loaded
@@ -187,6 +185,7 @@ def load_and_parse_config(path: str):
             formatted["end_date"] = "now"
             formatted["starting_balance"] = 100000.0
             formatted["base_dir"] = "backtests"
+            formatted["symbols"] = loaded["approved_symbols"]
             if loaded["universal_live_config"]:
                 formatted["live_configs"] = {
                     symbol: {
@@ -194,6 +193,9 @@ def load_and_parse_config(path: str):
                     }
                     for symbol in formatted["approved_symbols"]
                 }
+                for s in formatted["live_configs"]:
+                    for pside in ["long", "short"]:
+                        formatted["live_configs"][s][pside]["enabled"] = formatted[f"{pside}_enabled"]
             else:
                 formatted["live_configs"] = {}
             return formatted
