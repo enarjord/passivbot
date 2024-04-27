@@ -87,7 +87,7 @@ class Passivbot:
         }
         self.hedge_mode = True
         self.inverse = False
-        self.active_symbols = set()
+        self.active_symbols = []
         self.fetched_positions = []
         self.fetched_open_orders = []
         self.open_orders = {}
@@ -392,7 +392,9 @@ class Passivbot:
                 self.live_configs[symbol][pside]["enabled"] = self.PB_modes[pside][symbol] == "normal"
                 if self.live_configs[symbol][pside]["enabled"]:
                     self.is_active[pside].add(symbol)
-        self.active_symbols = {s for subdict in self.PB_modes.values() for s in subdict.keys()}
+        self.active_symbols = sorted(
+            {s for subdict in self.PB_modes.values() for s in subdict.keys()}
+        )
 
         for symbol in self.active_symbols:
             if symbol not in self.positions:
