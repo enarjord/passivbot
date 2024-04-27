@@ -93,20 +93,37 @@ class BingXBot(Passivbot):
                 print(f"exception watch_orders", e)
                 traceback.print_exc()
 
-    async def watch_tickers(self, symbols=None):
-        symbols = list(self.approved_symbols if symbols is None else symbols)
-        await asyncio.gather(*[self.watch_ticker(symbol) for symbol in symbols])
+    async def watch_tickers(self):
+        self.WS_ticker_tasks = {}
+        while not self.stop_websocket:
+            current_symbols = set(self.active_symbols)
+            started_symbols = set(self.WS_ticker_tasks.keys())
+
+            # Start watch_ticker tasks for new symbols
+            for symbol in current_symbols - started_symbols:
+                task = asyncio.create_task(self.watch_ticker(symbol))
+                self.WS_ticker_tasks[symbol] = task
+                logging.info(f"Started watching ticker for symbol: {symbol}")
+
+            # Cancel tasks for symbols that are no longer active
+            for symbol in started_symbols - current_symbols:
+                self.WS_ticker_tasks[symbol].cancel()
+                del self.WS_ticker_tasks[symbol]
+                logging.info(f"Stopped watching ticker for symbol: {symbol}")
+
+            # Wait a bit before checking again
+            await asyncio.sleep(1)  # Adjust sleep time as needed
 
     async def watch_ticker(self, symbol):
-        while True:
+        while not self.stop_websocket and symbol in self.active_symbols:
             try:
-                if self.stop_websocket:
-                    break
                 res = await self.ccp.watch_ticker(symbol)
                 self.handle_ticker_update(res)
             except Exception as e:
-                print(f"exception watch_ticker {symbol}", e)
+                logging.error(f"exception watch_ticker {symbol} {str(e)}")
                 traceback.print_exc()
+                await asyncio.sleep(1)
+            await asyncio.sleep(0.1)
 
     async def fetch_open_orders(self, symbol: str = None):
         fetched = None
