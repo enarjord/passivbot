@@ -295,6 +295,28 @@ class Passivbot:
 
     async def init_markets_dict(self):
         self.markets_dict = await self.cca.load_markets()
+        # remove ineligible symbols from markets dict
+        ineligible_symbols = {}
+        for symbol in list(self.markets_dict):
+            if not self.markets_dict[symbol]["active"]:
+                ineligible_symbols[symbol] = "not active"
+                del self.markets_dict[symbol]
+            elif not self.markets_dict[symbol]["swap"]:
+                ineligible_symbols[symbol] = "wrong market type"
+                del self.markets_dict[symbol]
+            elif not self.markets_dict[symbol]["linear"]:
+                ineligible_symbols[symbol] = "not linear"
+                del self.markets_dict[symbol]
+            elif not symbol.endswith(f"/{self.quote}:{self.quote}"):
+                ineligible_symbols[symbol] = "wrong quote"
+                del self.markets_dict[symbol]
+        for line in set(ineligible_symbols.values()):
+            syms_ = [s for s in ineligible_symbols if ineligible_symbols[s] == line]
+            if len(syms_) > 12:
+                logging.info(f"{line}: {len(syms_)} symbols")
+            elif len(syms_) > 0:
+                logging.info(f"{line}: {','.join(sorted(set([s for s in syms_])))}")
+
         self.set_market_specific_settings()
         for symbol in self.markets_dict:
             self.format_symbol(symbol)
@@ -335,17 +357,10 @@ class Passivbot:
             return "graceful_stop" if self.config["auto_gs"] else "manual"
 
     def update_PB_modes(self):
-
-        keys = [
-            "PB_modes",
-            "is_active",
-            "actual_actives",
-            "ideal_actives",
-        ]
-        if all([hasattr(self, k) for k in keys]):
-            previous_fields = {k: deepcopy(getattr(self, k)) for k in keys}
+        if hasattr(self, "PB_modes"):
+            previous_PB_modes = deepcopy(self.PB_modes)
         else:
-            previous_fields = {k: None for k in keys}
+            previous_PB_modes = None
 
         # set modes for all symbols
         self.PB_modes = {"long": {}, "short": {}}
@@ -428,8 +443,10 @@ class Passivbot:
                 else:
                     if self.config["auto_gs"]:
                         self.live_configs[symbol][pside]["mode"] = "graceful_stop"
+                        self.PB_modes[pside][symbol] = "graceful_stop"
                     else:
                         self.live_configs[symbol][pside]["mode"] = "manual"
+                        self.PB_modes[pside][symbol] = "manual"
 
                     self.live_configs[symbol][pside]["enabled"] = False
             if symbol not in self.positions:
@@ -440,199 +457,36 @@ class Passivbot:
             if symbol not in self.open_orders:
                 self.open_orders[symbol] = []
         self.set_wallet_exposure_limits()
-        max_len_keys = max([len(key) for key in keys])
-        for pside in ["long", "short"]:
-            for key in keys:
-                if previous_fields[key] is None:
-                    if isinstance(getattr(self, key)[pside], set):
-                        coins = ",".join(sorted([symbol2coin(s) for s in getattr(self, key)[pside]]))
-                    elif isinstance(getattr(self, key)[pside], dict):
-                        coins = sorted(
-                            {symbol2coin(k): v for k, v in getattr(self, key)[pside].items()}.items()
-                        )
-                    else:
-                        coins = getattr(self, key)[pside]
-                    if coins:
-                        logging.info(f"setting {pside: <5} {key: <{max_len_keys}}: {coins}")
-                else:
-                    for symbol in previous_fields[key][pside]:
-                        if symbol not in getattr(self, key)[pside]:
-                            logging.info(
-                                f"removing {pside: <5} {self.pad_sym(symbol)} from {key: <{max_len_keys}}"
-                            )
-                    for symbol in getattr(self, key)[pside]:
-                        if symbol not in previous_fields[key][pside]:
-                            logging.info(
-                                f"  adding {pside: <5} {self.pad_sym(symbol)}   to {key: <{max_len_keys}}"
-                            )
+        for pside in self.PB_modes:
+            if previous_PB_modes is None:
+                for mode in set(self.PB_modes[pside].values()):
+                    coins = [
+                        symbol2coin(s)
+                        for s in self.PB_modes[pside]
+                        if self.PB_modes[pside][s] == mode
+                    ]
+                    logging.info(f" setting {pside: <5} {mode}: {','.join(coins)}")
+            else:
+                if previous_PB_modes[pside] != self.PB_modes[pside]:
+                    for symbol in self.active_symbols:
+                        if symbol in self.PB_modes[pside]:
+                            if symbol in previous_PB_modes[pside]:
+                                if self.PB_modes[pside][symbol] != previous_PB_modes[pside][symbol]:
+                                    logging.info(
+                                        f"changing {pside: <5} {self.pad_sym(symbol)}: {previous_PB_modes[pside][symbol]} -> {self.PB_modes[pside][symbol]}"
+                                    )
+                            else:
+                                logging.info(
+                                    f" setting {pside: <5} {self.pad_sym(symbol)}: {self.PB_modes[pside][symbol]}"
+                                )
+                        else:
+                            if symbol in previous_PB_modes[pside]:
+                                logging.info(
+                                    f"removing {pside: <5} {self.pad_sym(symbol)}: {previous_PB_modes[pside][symbol]}"
+                                )
+        return
 
     def set_wallet_exposure_limits(self):
-        for pside in ["long", "short"]:
-            changed = {}
-            n_actives = len(self.is_active[pside])
-            WE_limit_div = round_(
-                self.config[f"TWE_{pside}"] / n_actives if n_actives > 0 else 0.001, 0.0001
-            )
-            for symbol in self.is_active[pside]:
-                new_WE_limit = (
-                    getattr(self.args[symbol], f"WE_limit_{pside}")
-                    if symbol in self.args
-                    and getattr(self.args[symbol], f"WE_limit_{pside}") is not None
-                    else WE_limit_div
-                )
-                if "wallet_exposure_limit" not in self.live_configs[symbol][pside]:
-                    changed[symbol] = (0.0, new_WE_limit)
-                elif self.live_configs[symbol][pside]["wallet_exposure_limit"] != new_WE_limit:
-                    changed[symbol] = (
-                        self.live_configs[symbol][pside]["wallet_exposure_limit"],
-                        new_WE_limit,
-                    )
-                self.live_configs[symbol][pside]["wallet_exposure_limit"] = new_WE_limit
-            if changed:
-                inv = defaultdict(set)
-                for symbol in changed:
-                    inv[changed[symbol]].add(symbol)
-                for k, v in inv.items():
-                    syms = ", ".join(sorted([symbol2coin(s) for s in v]))
-                    logging.info(f"changed {pside} WE limit from {k[0]} to {k[1]} for {syms}")
-
-    def update_active_symbols(self):
-        # determine forager mode
-        # set ideal actives
-        # set normal/gs and other modes
-        # find actives
-        # set WE_limits
-        keys = [
-            "ideal_actives",
-            "on_gs",
-            "on_normal",
-            "on_other_modes",
-            "is_active",
-        ]
-        if all([hasattr(self, k) for k in keys]):
-            previous_fields = {k: deepcopy(getattr(self, k)) for k in keys}
-        else:
-            previous_fields = {k: None for k in keys}
-        self.forager_mode = self.config["n_longs"] > 0 or self.config["n_shorts"] > 0
-        self.ideal_actives = {"long": set(), "short": set()}
-        self.on_gs = {"long": set(), "short": set()}
-        self.on_normal = {"long": set(), "short": set()}
-        self.on_other_modes = {"long": {}, "short": {}}
-        self.is_active = {"long": set(), "short": set()}
-
-        if self.forager_mode:
-            self.calc_noisiness()
-            approved_symbols_sorted_by_noisiness = sorted(
-                self.noisiness, key=lambda x: self.noisiness[x], reverse=True
-            )
-            for pside in self.on_gs:
-                # find symbols with pos
-                actual_actives = [
-                    x["symbol"]
-                    for x in self.fetched_positions + self.fetched_open_orders
-                    if x["position_side"] == pside
-                ]
-                for symbol in actual_actives:
-                    self.is_active[pside].add(symbol)
-                # find forced PB live modes
-                forced_modes = {}
-                for symbol in self.args:
-                    if (mode := getattr(self.args[symbol], f"{pside}_mode")) is not None:
-                        forced_modes[symbol] = mode
-                        if mode == "normal":
-                            self.ideal_actives[pside].add(symbol)
-                            self.on_normal[pside].add(symbol)
-                            self.is_active[pside].add(symbol)
-                        elif mode == "graceful_stop":
-                            self.on_gs[pside].add(symbol)
-                        else:
-                            self.on_other_modes[pside][symbol] = mode
-                for symbol in approved_symbols_sorted_by_noisiness:
-                    # add symbols to ideal_actives if not in any forced mode
-                    if len(self.ideal_actives[pside]) >= self.config[f"n_{pside}s"]:
-                        break
-                    if symbol not in forced_modes:
-                        self.ideal_actives[pside].add(symbol)
-                for symbol in set(actual_actives):
-                    if symbol in forced_modes:
-                        continue
-                    if symbol in self.ideal_actives[pside] and len(
-                        self.on_normal[pside] | self.on_gs[pside]
-                    ) < len(self.ideal_actives[pside]):
-                        self.on_normal[pside].add(symbol)
-                    else:
-                        self.on_gs[pside].add(symbol)
-                for symbol in self.ideal_actives[pside]:
-                    if symbol not in forced_modes:
-                        self.is_active[pside].add(symbol)
-
-        else:
-            for pside in self.on_gs:
-                actual_actives = [
-                    x["symbol"]
-                    for x in self.fetched_positions + self.fetched_open_orders
-                    if x["position_side"] == pside
-                ]
-                for symbol in sorted(set(actual_actives) | set(self.approved_symbols)):
-                    mode = self.get_PB_live_mode(pside, symbol)
-                    self.live_configs[symbol][pside]["mode"] = mode
-                    self.live_configs[symbol][pside]["enabled"] = mode == "normal"
-                    if mode == "normal":
-                        self.on_normal[pside].add(symbol)
-                        self.is_active[pside].add(symbol)
-                        self.ideal_actives[pside].add(symbol)
-                    elif mode == "graceful_stop":
-                        self.on_gs[pside].add(symbol)
-                        if symbol in actual_actives:
-                            self.is_active[pside].add(symbol)
-                    else:
-                        self.on_other_modes[pside][symbol] = mode
-                        if symbol in actual_actives:
-                            self.is_active[pside].add(symbol)
-        for pside in self.on_gs:
-            for symbol in self.on_gs[pside]:
-                self.live_configs[symbol][pside]["mode"] = "graceful_stop"
-            for symbol in self.on_normal[pside]:
-                self.live_configs[symbol][pside]["mode"] = "normal"
-            for symbol in self.on_other_modes[pside]:
-                self.live_configs[symbol][pside]["mode"] = self.on_other_modes[pside][symbol]
-        self.active_symbols = sorted(self.is_active["long"] | self.is_active["short"])
-        for symbol in self.active_symbols:
-            if symbol not in self.positions:
-                self.positions[symbol] = {
-                    "long": {"size": 0.0, "price": 0.0},
-                    "short": {"size": 0.0, "price": 0.0},
-                }
-            if symbol not in self.open_orders:
-                self.open_orders[symbol] = []
-        self.set_wallet_exposure_limits()
-        max_len_keys = max([len(key) for key in keys])
-        for pside in ["long", "short"]:
-            for key in keys:
-                if previous_fields[key] is None:
-                    if isinstance(getattr(self, key)[pside], set):
-                        coins = ",".join(sorted([symbol2coin(s) for s in getattr(self, key)[pside]]))
-                    elif isinstance(getattr(self, key)[pside], dict):
-                        coins = sorted(
-                            {symbol2coin(k): v for k, v in getattr(self, key)[pside].items()}.items()
-                        )
-                    else:
-                        coins = getattr(self, key)[pside]
-                    if coins:
-                        logging.info(f"setting {pside: <5} {key: <{max_len_keys}}: {coins}")
-                else:
-                    for symbol in previous_fields[key][pside]:
-                        if symbol not in getattr(self, key)[pside]:
-                            logging.info(
-                                f"removing {pside: <5} {self.pad_sym(symbol)} from {key: <{max_len_keys}}"
-                            )
-                    for symbol in getattr(self, key)[pside]:
-                        if symbol not in previous_fields[key][pside]:
-                            logging.info(
-                                f"  adding {pside: <5} {self.pad_sym(symbol)}   to {key: <{max_len_keys}}"
-                            )
-
-    def set_wallet_exposure_limits_old(self):
         for pside in ["long", "short"]:
             changed = {}
             n_actives = len(self.is_active[pside])
@@ -716,14 +570,6 @@ class Passivbot:
                             logging.info(f"changing {symbol} -> {x}")
                             self.approved_symbols[x] = approved_symbols[symbol]
                             break
-            elif not self.markets_dict[symbol]["active"]:
-                self.disapproved_symbols[symbol] = "not active"
-            elif not self.markets_dict[symbol]["swap"]:
-                self.disapproved_symbols[symbol] = "wrong market type"
-            elif not self.markets_dict[symbol]["linear"]:
-                self.disapproved_symbols[symbol] = "not linear"
-            elif not symbol.endswith(f"/{self.quote}:{self.quote}"):
-                self.disapproved_symbols[symbol] = "wrong quote"
             elif self.format_symbol(symbol) in self.ignored_symbols:
                 self.disapproved_symbols[symbol] = "is ignored"
             elif first_timestamps:
