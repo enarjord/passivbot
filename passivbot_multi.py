@@ -412,17 +412,26 @@ class Passivbot:
                         if symbol not in self.forced_modes[pside]:
                             self.PB_modes[pside][symbol] = "normal"
                             self.ideal_actives[pside][symbol] = ""
-        for pside in self.PB_modes:
-            for symbol in self.PB_modes[pside]:
-                self.live_configs[symbol][pside]["mode"] = self.PB_modes[pside][symbol]
-                self.live_configs[symbol][pside]["enabled"] = self.PB_modes[pside][symbol] == "normal"
-                if self.live_configs[symbol][pside]["enabled"]:
-                    self.is_active[pside].add(symbol)
         self.active_symbols = sorted(
             {s for subdict in self.PB_modes.values() for s in subdict.keys()}
         )
 
         for symbol in self.active_symbols:
+            for pside in self.PB_modes:
+                if symbol in self.PB_modes[pside]:
+                    self.live_configs[symbol][pside]["mode"] = self.PB_modes[pside][symbol]
+                    self.live_configs[symbol][pside]["enabled"] = (
+                        self.PB_modes[pside][symbol] == "normal"
+                    )
+                    if self.live_configs[symbol][pside]["enabled"]:
+                        self.is_active[pside].add(symbol)
+                else:
+                    if self.config["auto_gs"]:
+                        self.live_configs[symbol][pside]["mode"] = "graceful_stop"
+                    else:
+                        self.live_configs[symbol][pside]["mode"] = "manual"
+
+                    self.live_configs[symbol][pside]["enabled"] = False
             if symbol not in self.positions:
                 self.positions[symbol] = {
                     "long": {"size": 0.0, "price": 0.0},
