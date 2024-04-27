@@ -132,51 +132,70 @@ class Passivbot:
             )
         else:
             live_configs_fnames = []
-        universal_configs_loaded = set()
+        configs_loaded = {
+            "lc_flag": set(),
+            "live_configs_dir_exact_match": set(),
+            "live_configs_dir_partial_match": {},
+            "default_config_path": set(),
+            "universal_config": set(),
+        }
         for symbol in self.markets_dict:
-            # look for an exact match first
-            coin = symbol2coin(symbol)
-            live_config_fname_l = [
-                x for x in live_configs_fnames if x == coin + "USDT.json" or x == coin + ".json"
-            ]
-            if not live_config_fname_l:
-                # then look if coin name in filename
-                live_config_fname_l = [x for x in live_configs_fnames if coin in x]
-            live_configs_dir_fname = (
-                None
-                if live_config_fname_l == []
-                else os.path.join(self.config["live_configs_dir"], live_config_fname_l[0])
-            )
-            for path in [
-                self.args[symbol].live_config_path,
-                live_configs_dir_fname,
-                self.config["default_config_path"],
-            ]:
-                if path is not None and os.path.exists(path):
-                    try:
-                        self.live_configs[symbol] = deepcopy(load_live_config(path))
-                        logging.info(f"{symbol: <{self.max_len_symbol}} loaded live config: {path}")
-                        break
-                    except Exception as e:
-                        logging.error(f"failed to load live config {symbol} {path} {e}")
-            else:
-                try:
-                    self.live_configs[symbol] = deepcopy(self.config["universal_live_config"])
-                    universal_configs_loaded.add(symbol)
-                except Exception as e:
-                    logging.error(f"failed to apply universal_live_config {e}")
-                    raise Exception(f"no usable live config found for {symbol}")
-
+            # try to load live config: 1) -lc flag live_config_path, 2) live_configs_dir, 3) default_config_path, 4) universal live config
+            try:
+                self.live_configs[symbol] = load_live_config(self.args[symbol].live_config_path)
+                configs_loaded["lc_flag"].add(symbol)
+                continue
+            except:
+                pass
+            try:
+                # look for an exact match first
+                coin = symbol2coin(symbol)
+                live_config_fname_l = [
+                    x for x in live_configs_fnames if x == coin + "USDT.json" or x == coin + ".json"
+                ]
+                if live_config_fname_l:
+                    # exact match
+                    self.live_configs[symbol] = load_live_config(
+                        os.path.join(self.config["live_configs_dir"], live_config_fname_l[0])
+                    )
+                    configs_loaded["live_configs_dir_exact_match"].add(symbol)
+                    continue
+                else:
+                    # look for partial match, coin name in filename
+                    live_config_fname_l = [x for x in live_configs_fnames if coin in x]
+                    self.live_configs[symbol] = load_live_config(
+                        os.path.join(self.config["live_configs_dir"], live_config_fname_l[0])
+                    )
+                    configs_loaded["live_configs_dir_partial_match"][symbol] = live_config_fname_l[0]
+                    continue
+            except:
+                pass
+            try:
+                self.live_configs[symbol] = load_live_config(self.config["default_config_path"])
+                configs_loaded["default_config_path"].add(symbol)
+                continue
+            except:
+                pass
+            try:
+                self.live_configs[symbol] = deepcopy(self.config["universal_live_config"])
+                configs_loaded["universal_config"].add(symbol)
+                continue
+            except Exception as e:
+                logging.error(f"failed to apply universal_live_config {e}")
+                raise Exception(f"no usable live config found for {symbol}")
+        for symbol in self.live_configs:
             if self.args[symbol].leverage is None:
                 self.live_configs[symbol]["leverage"] = 10.0
             else:
                 self.live_configs[symbol]["leverage"] = max(1.0, float(self.args[symbol].leverage))
 
             for pside in ["long", "short"]:
+                """
                 self.live_configs[symbol][pside]["mode"] = self.get_PB_live_mode(pside, symbol)
                 self.live_configs[symbol][pside]["enabled"] = (
                     self.live_configs[symbol][pside]["mode"] == "normal"
                 )
+                """
                 # disable timed AU and set backwards TP
                 for key, val in [
                     ("auto_unstuck_delay_minutes", 0.0),
@@ -187,11 +206,18 @@ class Passivbot:
                     ("wallet_exposure_limit", 0.0),
                 ]:
                     self.live_configs[symbol][pside][key] = val
-        coins_universal = sorted([symbol2coin(s) for s in universal_configs_loaded])
-        if len(coins_universal) > 20:
-            logging.info(f"loaded universal config for {len(coins_universal)} symbols")
-        elif len(coins_universal) > 0:
-            logging.info(f"loaded universal config for {', '.join(coins_universal)}")
+        for key in configs_loaded:
+            if isinstance(configs_loaded[key], dict):
+                for symbol in configs_loaded[key]:
+                    logging.info(
+                        f"loaded {key} for {self.pad_sym(symbol)}: {configs_loaded[key][symbol]}"
+                    )
+            elif isinstance(configs_loaded[key], set):
+                coins_ = sorted([symbol2coin(s) for s in configs_loaded[key]])
+                if len(coins_) > 20:
+                    logging.info(f"loaded from {key} for {len(coins_)} symbols")
+                elif len(coins_) > 0:
+                    logging.info(f"loaded from {key} for {', '.join(coins_)}")
 
     def pad_sym(self, symbol):
         return f"{symbol: <{self.sym_padding}}"
