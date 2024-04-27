@@ -86,16 +86,24 @@ class BinanceBot(Passivbot):
                 traceback.print_exc()
 
     async def watch_tickers(self, symbols=None):
-        symbols = list(self.approved_symbols if symbols is None else symbols)
-        while True:
+        self.prev_active_symbols = set()
+        while not self.stop_websocket:
             try:
-                if self.stop_websocket:
-                    break
-                res = await self.ccp.watch_bids_asks(symbols)
+                if (actives := set(self.active_symbols)) != self.prev_active_symbols:
+                    for symbol in actives - self.prev_active_symbols:
+                        logging.info(f"Started watching ticker for symbol: {symbol}")
+                    for symbol in self.prev_active_symbols - actives:
+                        logging.info(f"Stopped watching ticker for symbol: {symbol}")
+                    self.prev_active_symbols = actives
+                res = await self.ccp.watch_bids_asks(self.active_symbols)
                 self.handle_ticker_update(res)
+                await asyncio.sleep(0.1)
             except Exception as e:
-                print(f"exception watch_tickers {symbols}", e)
+                logging.error(
+                    f"Exception in watch_tickers: {e}, active symbols: {len(self.active_symbols)}"
+                )
                 traceback.print_exc()
+                await asyncio.sleep(1)
 
     async def watch_tickersz(self, symbols=None):
         print("there")
