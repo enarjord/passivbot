@@ -14,6 +14,7 @@ from pure_funcs import (
     determine_pos_side_ccxt,
     shorten_custom_id,
 )
+from njit_funcs import calc_diff
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
@@ -370,6 +371,24 @@ class BitgetBot(Passivbot):
                 logging.error(f"{symbol} error setting cross mode {e} {res}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
+
+    def calc_ideal_orders(self):
+        # Bitget returns max 100 open orders per fetch_open_orders.
+        # Only create 100 open orders.
+        # Drop orders whose pprice diff is greatest.
+        ideal_orders = super().calc_ideal_orders()
+        ideal_orders_tmp = []
+        for s in ideal_orders:
+            for x in ideal_orders[s]:
+                ideal_orders_tmp.append({**x, **{"symbol": s}})
+        ideal_orders_tmp = sorted(
+            ideal_orders_tmp,
+            key=lambda x: calc_diff(x["price"], self.tickers[x["symbol"]]["last"]),
+        )[:100]
+        ideal_orders = {symbol: [] for symbol in self.active_symbols}
+        for x in ideal_orders_tmp:
+            ideal_orders[x["symbol"]].append(x)
+        return ideal_orders
 
     async def update_exchange_config(self):
         res = None
