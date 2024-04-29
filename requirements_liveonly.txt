@@ -2,6 +2,6 @@ websockets==10.1
 aiohttp==3.8.1
 numpy==1.22.4
 python-dateutil==2.8.2
-ccxt==4.2.88
+ccxt==4.3.11
 hjson==3.0.2
 prettytable==3.0.0
