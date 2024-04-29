@@ -1627,6 +1627,7 @@ class Passivbot:
             if not suppress_error_log:
                 logging.error(f"failed to load ohlcvs from cache for {symbol}")
                 traceback.print_exc()
+            return None
 
     def dump_ohlcv_to_cache(self, symbol, ohlcv):
         fpath = self.get_ohlcv_fpath(symbol)
@@ -1650,7 +1651,98 @@ class Passivbot:
             else:
                 self.noisiness[symbol] = 0.0
 
-    async def maintain_ohlcvs(self, timeframe="15m", sleep_interval=15):
+    async def maintain_EMAs(self):
+        # maintain EMAs for active symbols
+        # if a new symbol appears (e.g. new forager symbol or user manually opens a position), add this symbol to EMA maintainer
+        self.emas = {"long": {}, "short": {}}
+        self.ema_alphas = {"long": {}, "short": {}}
+        self.upd_minute_emas = {}
+
+    async def maintain_ohlcvs_new(self):
+        # if in forager mode, maintain ohlcvs for all candidate symbols
+        # else, fetch ohlcvs once for EMA initialization
+        pass
+
+    async def update_EMAs_multi(self, symbols, n_fetches=10):
+        all_res = []
+        for sym_sublist in [symbols[i : i + n_fetches] for i in range(0, n_fetches, n)]:
+            res = await asyncio.gather(*[self.update_EMAs_single(symbol) for symbol in sym_sublist])
+            all_res += res
+        return all_res
+
+    async def update_EMAs_single(self, symbol):
+        # updates EMAs for single symbol
+        try:
+            # if EMAs for symbol has not been initiated, initiate
+            if symbol not in self.emas["long"]:
+                # initiate EMA for symbol
+                await self.init_EMAs_single(symbol)
+            now_minute = int(utc_ms() // (1000 * 60) * (1000 * 60))
+            if now_minute <= self.upd_minute_emas[symbol]:
+                return True
+            for pside in ["long", "short"]:
+                self.emas[pside][symbol] = calc_ema(
+                    self.ema_alphas[pside][symbol][0],
+                    self.ema_alphas[pside][symbol][1],
+                    self.emas[pside][symbol],
+                    self.tickers[symbol]["last"],
+                )
+            self.upd_minute_emas[symbol] = now_minute
+            return True
+        except Exception as e:
+            logging.error(f"failed to update EMAs for {symbol}: {e}")
+            traceback.print_exc()
+            return False
+
+    async def init_EMAs_multi(self, symbols, n_fetches=10):
+        all_res = []
+        for sym_sublist in [symbols[i : i + n_fetches] for i in range(0, n_fetches, n)]:
+            res = await asyncio.gather(*[self.init_EMAs_single(symbol) for symbol in sym_sublist])
+            all_res += res
+        return all_res
+
+    async def init_EMAs_single(self, symbol):
+        # check if ohlcvs are in cache for symbol
+        # if not, or if too old, update them
+        # if it fails, print warning and use ticker as first EMA
+
+        ohlcvs_fpath = self.get_ohlcv_fpath(symbol)
+        ohlcvs = self.load_ohlcv_from_cache(symbol, suppress_error_log=True)
+        if ohlcvs is None or utc_ms() - self.get_file_mod_utc(ohlcvs_fpath) > 1000 * 60 * 60:
+            logging.info(f"ohlcvs for {self.pad_sym(symbol)} too old. Updating...")
+            await self.update_ohlcvs_single(symbol)
+            ohlcvs = self.ohlcvs[symbol]
+        samples1m = calc_samples(numpyize(ohlcvs)[:, [0, 5, 4]], sample_size_ms=60000)
+        ema_spans = {}
+        for pside in ["long", "short"]:
+            self.emas[pside][symbol] = np.repeat(self.tickers[symbol]["last"])
+            lc = self.live_configs[symbol][pside]
+            es = [lc["ema_span_0"], lc["ema_span_1"], (lc["ema_span_0"] * lc["ema_span_1"]) ** 0.5]
+            ema_spans[pside] = numpyize(sorted(es))
+            self.ema_alphas[pside][symbol] = (a := (2.0 / (ema_spans + 1)), 1.0 - a)
+            self.emas[pside][symbol] = calc_emas_last(samples1m[:, 2], ema_spans[pside])
+        logging.info(f"initiated EMAs for {symbol}")
+        self.upd_minute_emas[symbol] = int(utc_ms() // (1000 * 60) * (1000 * 60))
+
+    async def update_ohlcvs_multi(self, symbols, timeframe=None, n_fetches=10):
+        if timeframe is None:
+            timeframe = self.config["ohlcv_interval"]
+        for sym_sublist in [symbols[i : i + n_fetches] for i in range(0, n_fetches, n)]:
+            res = await asyncio.gather(
+                *[self.fetch_ohlcv(symbol, timeframe=timeframe) for symbol in sym_sublist]
+            )
+            for s, r in zip(sym_sublist, res):
+                self.ohlcvs[s] = r
+                self.dump_ohlcv_to_cache(s, self.ohlcvs[s])
+
+    async def update_ohlcvs_single(self, symbol, timeframe=None):
+        if timeframe is None:
+            timeframe = self.config["ohlcv_interval"]
+        return await update_ohlcvs_multi(self, [symbol], timeframe)
+
+    async def maintain_ohlcvs(self, timeframe=None, sleep_interval=15):
+        if timeframe is None:
+            timeframe = self.config["ohlcv_interval"]
         # keeps ohlcv data up to date for initial EMAs and forager mode noisiness
         self.ohlcvs = {}
         self.ohlcv_upd_timestamps = {symbol: 0 for symbol in self.approved_symbols}
