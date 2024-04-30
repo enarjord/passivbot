@@ -135,7 +135,6 @@ class Passivbot:
         configs_loaded = {
             "lc_flag": set(),
             "live_configs_dir_exact_match": set(),
-            "live_configs_dir_partial_match": {},
             "default_config_path": set(),
             "universal_config": set(),
         }
@@ -150,24 +149,16 @@ class Passivbot:
             try:
                 # look for an exact match first
                 coin = symbol2coin(symbol)
-                live_config_fname_l = [
-                    x for x in live_configs_fnames if x == coin + "USDT.json" or x == coin + ".json"
-                ]
-                if live_config_fname_l:
-                    # exact match
-                    self.live_configs[symbol] = load_live_config(
-                        os.path.join(self.config["live_configs_dir"], live_config_fname_l[0])
-                    )
-                    configs_loaded["live_configs_dir_exact_match"].add(symbol)
-                    continue
+                for x in live_configs_fnames:
+                    if coin == symbol2coin(x.replace(".json", "")):
+                        self.live_configs[symbol] = load_live_config(
+                            os.path.join(self.config["live_configs_dir"], x)
+                        )
+                        configs_loaded["live_configs_dir_exact_match"].add(symbol)
+                        break
                 else:
-                    # look for partial match, coin name in filename
-                    live_config_fname_l = [x for x in live_configs_fnames if coin in x]
-                    self.live_configs[symbol] = load_live_config(
-                        os.path.join(self.config["live_configs_dir"], live_config_fname_l[0])
-                    )
-                    configs_loaded["live_configs_dir_partial_match"][symbol] = live_config_fname_l[0]
-                    continue
+                    raise Exception
+                continue
             except:
                 pass
             try:
