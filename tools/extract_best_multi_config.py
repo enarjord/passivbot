@@ -122,7 +122,10 @@ def process_single(file_location, verbose=False):
     coins = [s.replace("USDT", "") for s in best_d["args"]["symbols"]]
     print_(file_location)
     fname = os.path.split(file_location)[-1].replace("_all_results.txt", "")
-    fname += "_" + ("_".join(coins) if len(coins) <= 5 else f"{len(coins)}_coins") + ".json"
+    coins_str = "_".join(coins) if len(coins) <= 5 else f"{len(coins)}_coins"
+    if coins_str not in fname:
+        fname += "_" + coins_str
+    fname += ".json"
     full_path = make_get_filepath(os.path.join("results_multi_analysis", fname))
     json.dump(best_d, open(full_path, "w"), indent=4, sort_keys=True)
     return best_d
@@ -130,7 +133,7 @@ def process_single(file_location, verbose=False):
 
 def main(args):
     if os.path.isdir(args.file_location):
-        for fname in os.listdir(args.file_location):
+        for fname in sorted(os.listdir(args.file_location), reverse=True):
             fpath = os.path.join(args.file_location, fname)
             try:
                 process_single(fpath)
