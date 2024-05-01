@@ -1436,7 +1436,7 @@ class Passivbot:
         logging.info("done initiating bot")
         asyncio.create_task(self.start_maintainer_ohlcvs())
         asyncio.create_task(self.start_maintainer_EMAs())
-        for i in range(20):
+        for i in range(30):
             await asyncio.sleep(1)
             if set(self.emas["long"]) == set(self.active_symbols):
                 break
