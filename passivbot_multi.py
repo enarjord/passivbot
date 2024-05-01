@@ -253,9 +253,8 @@ class Passivbot:
         self.set_live_configs()
         if self.forager_mode:
             await self.update_ohlcvs_multi(list(self.approved_symbols), verbose=True)
-        logging.info(f"initiating pnl history...")
         self.update_PB_modes()
-
+        logging.info(f"initiating pnl history...")
         await self.update_pnls()
         await self.update_exchange_configs()
 
@@ -538,11 +537,11 @@ class Passivbot:
                 approved_symbols[symbol] = ""
 
         if self.forager_mode and self.config["minimum_market_age_days"] > 0:
-            first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
-            for symbol in sorted(first_timestamps):
-                first_timestamps[self.format_symbol(symbol)] = first_timestamps[symbol]
+            self.first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
+            for symbol in sorted(self.first_timestamps):
+                self.first_timestamps[self.format_symbol(symbol)] = self.first_timestamps[symbol]
         else:
-            first_timestamps = None
+            self.first_timestamps = None
 
         self.approved_symbols = {}
         self.disapproved_symbols = {}
@@ -557,10 +556,10 @@ class Passivbot:
                             break
             elif self.format_symbol(symbol) in self.ignored_symbols:
                 self.disapproved_symbols[symbol] = "is ignored"
-            elif first_timestamps:
-                if symbol not in first_timestamps:
+            elif self.first_timestamps:
+                if symbol not in self.first_timestamps:
                     self.disapproved_symbols[symbol] = "missing from first timestamps"
-                elif utc_ms() - first_timestamps[symbol] < self.config["minimum_market_age_millis"]:
+                elif utc_ms() - self.first_timestamps[symbol] < self.config["minimum_market_age_millis"]:
                     self.disapproved_symbols[symbol] = (
                         f"younger than {self.config['minimum_market_age_days']} days"
                     )
