@@ -94,9 +94,6 @@ class Passivbot:
         self.positions = {}
         self.pnls = []
         self.tickers = {}
-        self.emas_long = {}
-        self.emas_short = {}
-        self.ema_minute = None
         self.symbol_ids = {}
         self.min_costs = {}
         self.min_qtys = {}
@@ -117,6 +114,11 @@ class Passivbot:
         self.config["minimum_market_age_millis"] = (
             self.config["minimum_market_age_days"] * 24 * 60 * 60 * 1000
         )
+        self.ohlcvs = {}
+        self.ohlcv_upd_timestamps = {}
+        self.emas = {"long": {}, "short": {}}
+        self.ema_alphas = {"long": {}, "short": {}}
+        self.upd_minute_emas = {}
 
     def set_live_configs(self):
         # live configs priority:
@@ -213,33 +215,29 @@ class Passivbot:
     def pad_sym(self, symbol):
         return f"{symbol: <{self.sym_padding}}"
 
-    def find_file_mod_utc_time_diff(self):
+    def stop_maintainer_ohlcvs(self):
+        return self.maintainer_ohlcvs.cancel()
+
+    async def start_maintainer_ohlcvs(self):
+        if self.forager_mode:
+            self.maintainer_ohlcvs = asyncio.create_task(self.maintain_ohlcvs())
+        else:
+            self.maintainer_ohlcvs = None
+
+    async def start_maintainer_EMAs(self):
+        self.maintainer_EMAs = asyncio.create_task(self.maintain_EMAs())
+
+    def stop_data_maintainers(self):
+        res = []
         try:
-            fname = f"{self.user}_testfile_{uuid4().hex}.txt"
-            with open(fname, "w") as f:
-                f.write("\n")
-            now = utc_ms()
-            fmod_time = get_file_mod_utc(fname)
-            os.remove(fname)
-            return now - fmod_time
+            res.append(self.maintainer_ohlcvs.cancel())
         except Exception as e:
-            logging.error(f"error with find_file_mod_utc_time_diff {e}")
-
-    async def start_ohlcv_maintainer(self):
-        self.ohlcv_maintainer = asyncio.create_task(self.maintain_ohlcvs())
-        for i in range(1000):
-            await asyncio.sleep(0.2)
-            upd_timestamps = [v for v in self.ohlcv_upd_timestamps.values()]
-            if all(upd_timestamps):
-                break
-            logging.info(
-                f"updating ohlcvs... {len([x for x in upd_timestamps if x])} / {len(upd_timestamps)}"
-            )
-            await asyncio.sleep(2)
-        return True
-
-    def stop_ohlcv_maintainer(self):
-        return self.ohlcv_maintainer.cancel()
+            logging.error(f"error stopping maintainer_ohlcvs {e}")
+        try:
+            res.append(self.maintainer_EMAs.cancel())
+        except Exception as e:
+            logging.error(f"error stopping maintainer_EMAs {e}")
+        return res
 
     async def init_bot(self):
         logging.info(f"initiating markets...")
@@ -253,17 +251,13 @@ class Passivbot:
         await self.init_approved_symbols()
         self.update_symbols_on_gs()
         self.set_live_configs()
-        await self.start_ohlcv_maintainer()
-
-        for f in ["emas", "pnls"]:
-            res = await getattr(self, f"update_{f}")()
-            logging.info(f"initiating {f} {res}")
+        if self.forager_mode:
+            await self.update_ohlcvs_multi(list(self.approved_symbols), verbose=True)
+        logging.info(f"initiating pnl history...")
         self.update_PB_modes()
+
+        await self.update_pnls()
         await self.update_exchange_configs()
-        if not self.forager_mode:
-            logging.info(
-                f"not in foarger mode; cancelled ohlcv maintainer {self.stop_ohlcv_maintainer()}"
-            )
 
     async def get_active_symbols(self):
         # get symbols with open orders and/or positions
@@ -954,166 +948,6 @@ class Passivbot:
         self.upd_timestamps["tickers"] = utc_ms()
         return True
 
-    async def update_emas(self):
-        if len(self.emas_long) == 0 or self.ema_minute is None:
-            await self.init_emas()
-            return True
-        now_minute = int(utc_ms() // (1000 * 60) * (1000 * 60))
-        if now_minute <= self.ema_minute:
-            return True
-        while self.ema_minute < int(round(now_minute - 1000 * 60)):
-            for symbol in self.approved_symbols:
-                self.emas_long[symbol] = calc_ema(
-                    self.alphas_long[symbol],
-                    self.alphas__long[symbol],
-                    self.emas_long[symbol],
-                    self.prev_prices[symbol],
-                )
-                self.emas_short[symbol] = calc_ema(
-                    self.alphas_short[symbol],
-                    self.alphas__short[symbol],
-                    self.emas_short[symbol],
-                    self.prev_prices[symbol],
-                )
-            self.ema_minute += 1000 * 60
-        for symbol in self.approved_symbols:
-            self.emas_long[symbol] = calc_ema(
-                self.alphas_long[symbol],
-                self.alphas__long[symbol],
-                self.emas_long[symbol],
-                self.tickers[symbol]["last"],
-            )
-            self.emas_short[symbol] = calc_ema(
-                self.alphas_short[symbol],
-                self.alphas__short[symbol],
-                self.emas_short[symbol],
-                self.tickers[symbol]["last"],
-            )
-            self.prev_prices[symbol] = self.tickers[symbol]["last"]
-
-        self.ema_minute = now_minute
-        return True
-
-    async def init_emas_by_symbol(self, symbol):
-        if not hasattr(self, "ema_spans_long"):
-            for key in [
-                "ema_spans_long",
-                "alphas_long",
-                "alphas__long",
-                "emas_long",
-                "ema_spans_short",
-                "alphas_short",
-                "alphas__short",
-                "emas_short",
-                "prev_prices",
-            ]:
-                setattr(self, key, {})
-            self.ema_minute = int(utc_ms() // (1000 * 60) * (1000 * 60))
-        if (
-            not hasattr(self, "tickers")
-            or self.tickers == {}
-            or self.tickers[next(iter(self.tickers))]["last"] == 0.0
-        ):
-            logging.info(f"updating tickers...")
-            await self.update_tickers()
-
-        self.ema_spans_long[symbol] = [
-            self.live_configs[symbol]["long"]["ema_span_0"],
-            self.live_configs[symbol]["long"]["ema_span_1"],
-        ]
-        self.ema_spans_long[symbol] = numpyize(
-            sorted(
-                self.ema_spans_long[symbol]
-                + [(self.ema_spans_long[symbol][0] * self.ema_spans_long[symbol][1]) ** 0.5]
-            )
-        )
-        self.ema_spans_short[symbol] = [
-            self.live_configs[symbol]["short"]["ema_span_0"],
-            self.live_configs[symbol]["short"]["ema_span_1"],
-        ]
-        self.ema_spans_short[symbol] = numpyize(
-            sorted(
-                self.ema_spans_short[symbol]
-                + [(self.ema_spans_short[symbol][0] * self.ema_spans_short[symbol][1]) ** 0.5]
-            )
-        )
-
-        self.alphas_long[symbol] = 2 / (self.ema_spans_long[symbol] + 1)
-        self.alphas__long[symbol] = 1 - self.alphas_long[symbol]
-        self.alphas_short[symbol] = 2 / (self.ema_spans_short[symbol] + 1)
-        self.alphas__short[symbol] = 1 - self.alphas_short[symbol]
-
-        self.emas_long[symbol] = np.repeat(self.tickers[symbol]["last"], 3)
-        self.emas_short[symbol] = np.repeat(self.tickers[symbol]["last"], 3)
-        self.prev_prices[symbol] = self.tickers[symbol]["last"]
-
-        try:
-            samples1m = calc_samples(
-                numpyize(self.ohlcvs[symbol])[:, [0, 5, 4]], sample_size_ms=60000
-            )
-            self.emas_long[symbol] = calc_emas_last(samples1m[:, 2], self.ema_spans_long[symbol])
-            self.emas_short[symbol] = calc_emas_last(samples1m[:, 2], self.ema_spans_short[symbol])
-        except Exception as e:
-            logging.error(
-                f"{self.pad_sym(symbol)} error initiating EMAs {e}. Using latest prices as starting EMAs"
-            )
-            # traceback.print_exc()
-        return True
-
-    async def init_emas(self):
-        self.ema_spans_long, self.alphas_long, self.alphas__long, self.emas_long = {}, {}, {}, {}
-        self.ema_spans_short, self.alphas_short, self.alphas__short, self.emas_short = {}, {}, {}, {}
-        self.ema_minute = int(utc_ms() // (1000 * 60) * (1000 * 60))
-        self.prev_prices = {}
-        for sym in self.approved_symbols:
-            self.ema_spans_long[sym] = [
-                self.live_configs[sym]["long"]["ema_span_0"],
-                self.live_configs[sym]["long"]["ema_span_1"],
-            ]
-            self.ema_spans_long[sym] = numpyize(
-                sorted(
-                    self.ema_spans_long[sym]
-                    + [(self.ema_spans_long[sym][0] * self.ema_spans_long[sym][1]) ** 0.5]
-                )
-            )
-            self.ema_spans_short[sym] = [
-                self.live_configs[sym]["short"]["ema_span_0"],
-                self.live_configs[sym]["short"]["ema_span_1"],
-            ]
-            self.ema_spans_short[sym] = numpyize(
-                sorted(
-                    self.ema_spans_short[sym]
-                    + [(self.ema_spans_short[sym][0] * self.ema_spans_short[sym][1]) ** 0.5]
-                )
-            )
-
-            self.alphas_long[sym] = 2 / (self.ema_spans_long[sym] + 1)
-            self.alphas__long[sym] = 1 - self.alphas_long[sym]
-            self.alphas_short[sym] = 2 / (self.ema_spans_short[sym] + 1)
-            self.alphas__short[sym] = 1 - self.alphas_short[sym]
-        if self.tickers == {} or self.tickers[next(iter(self.tickers))]["last"] == 0.0:
-            logging.info(f"updating tickers...")
-            await self.update_tickers()
-        for sym in self.approved_symbols:
-            self.emas_long[sym] = np.repeat(self.tickers[sym]["last"], 3)
-            self.emas_short[sym] = np.repeat(self.tickers[sym]["last"], 3)
-            self.prev_prices[sym] = self.tickers[sym]["last"]
-        for symbol in self.approved_symbols:
-            try:
-                samples1m = calc_samples(
-                    numpyize(self.ohlcvs[symbol])[:, [0, 5, 4]], sample_size_ms=60000
-                )
-                self.emas_long[symbol] = calc_emas_last(samples1m[:, 2], self.ema_spans_long[symbol])
-                self.emas_short[symbol] = calc_emas_last(
-                    samples1m[:, 2], self.ema_spans_short[symbol]
-                )
-            except Exception as e:
-                logging.error(
-                    f"{self.pad_sym(symbol)} error initiating EMAs {e}. Using latest prices as starting EMAs"
-                )
-                # traceback.print_exc()
-        return True
-
     def calc_ideal_orders(self):
         unstuck_close_order = None
         stuck_positions = []
@@ -1166,12 +1000,12 @@ class Passivbot:
                 close_price = (
                     max(
                         self.tickers[sym]["ask"],
-                        round_up(self.emas_long[sym].max(), self.price_steps[sym]),
+                        round_up(self.emas["long"][sym].max(), self.price_steps[sym]),
                     )
                     if pside == "long"
                     else min(
                         self.tickers[sym]["bid"],
-                        round_dn(self.emas_short[sym].min(), self.price_steps[sym]),
+                        round_dn(self.emas["short"][sym].min(), self.price_steps[sym]),
                     )
                 )
                 upnl = calc_pnl(
@@ -1277,7 +1111,7 @@ class Passivbot:
                     self.positions[symbol]["long"]["size"],
                     self.positions[symbol]["long"]["price"],
                     self.tickers[symbol]["bid"],
-                    self.emas_long[symbol].min(),
+                    self.emas["long"][symbol].min(),
                     self.inverse,
                     self.qty_steps[symbol],
                     self.price_steps[symbol],
@@ -1317,7 +1151,7 @@ class Passivbot:
                     psize_,
                     self.positions[symbol]["long"]["price"],
                     self.tickers[symbol]["ask"],
-                    self.emas_long[symbol].max(),
+                    self.emas["long"][symbol].max(),
                     0,
                     0,
                     self.inverse,
@@ -1358,7 +1192,7 @@ class Passivbot:
                     self.positions[symbol]["short"]["size"],
                     self.positions[symbol]["short"]["price"],
                     self.tickers[symbol]["ask"],
-                    self.emas_short[symbol].max(),
+                    self.emas["short"][symbol].max(),
                     self.inverse,
                     self.qty_steps[symbol],
                     self.price_steps[symbol],
@@ -1403,7 +1237,7 @@ class Passivbot:
                     psize_,
                     self.positions[symbol]["short"]["price"],
                     self.tickers[symbol]["bid"],
-                    self.emas_short[symbol].min(),
+                    self.emas["short"][symbol].min(),
                     0,
                     0,
                     self.inverse,
@@ -1528,7 +1362,6 @@ class Passivbot:
                 self.recent_fill = False
             update_res = await self.force_update()
             if not all(update_res):
-                print("debug", update_res)
                 for i, key in enumerate(self.upd_timestamps):
                     if not update_res[i]:
                         logging.error(f"error with {key}")
@@ -1577,7 +1410,7 @@ class Passivbot:
         while True:
             if self.stop_websocket:
                 break
-            await self.update_emas()
+            await self.add_new_symbols_to_maintainer_EMAs()
             if utc_ms() - self.execution_delay_millis > self.previous_execution_ts:
                 await self.execute_to_exchange()
             await asyncio.sleep(1.0)
@@ -1601,7 +1434,13 @@ class Passivbot:
     async def start_bot(self):
         await self.init_bot()
         logging.info("done initiating bot")
-        logging.info("starting websockets")
+        asyncio.create_task(self.start_maintainer_ohlcvs())
+        asyncio.create_task(self.start_maintainer_EMAs())
+        for i in range(20):
+            await asyncio.sleep(1)
+            if set(self.emas["long"]) == set(self.active_symbols):
+                break
+        logging.info("starting websockets...")
         await asyncio.gather(self.execution_loop(), self.start_websockets())
 
     def get_ohlcv_fpath(self, symbol) -> str:
@@ -1630,7 +1469,17 @@ class Passivbot:
             traceback.print_exc()
 
     def get_oldest_updated_ohlcv_symbol(self):
-        return sorted(self.approved_symbols, key=lambda x: self.ohlcv_upd_timestamps[x])[0]
+        for _ in range(100):
+            symbol = sorted(self.ohlcv_upd_timestamps.items(), key=lambda x: x[1])[0][0]
+            # check if has been modified by other PB instance
+            try:
+                self.ohlcv_upd_timestamps[symbol] = get_file_mod_utc(self.get_ohlcv_fpath(symbol))
+            except Exception as e:
+                logging.error(f"error with get_file_mod_utc {e}")
+                self.ohlcv_upd_timestamps[symbol] = 0.0
+            if symbol == sorted(self.ohlcv_upd_timestamps.items(), key=lambda x: x[1])[0][0]:
+                break
+        return symbol
 
     def calc_noisiness(self, symbol=None):
         if not hasattr(self, "noisiness"):
@@ -1642,7 +1491,7 @@ class Passivbot:
             else:
                 self.noisiness[symbol] = 0.0
 
-    async def add_new_symbols_to_EMA_maintainer(self, symbols=None):
+    async def add_new_symbols_to_maintainer_EMAs(self, symbols=None):
         if symbols is None:
             to_add = sorted(set(self.active_symbols) - set(self.emas["long"]))
         else:
@@ -1654,26 +1503,44 @@ class Passivbot:
     async def maintain_EMAs(self):
         # maintain EMAs for active symbols
         # if a new symbol appears (e.g. new forager symbol or user manually opens a position), add this symbol to EMA maintainer
-        self.emas = {"long": {}, "short": {}}
-        self.ema_alphas = {"long": {}, "short": {}}
-        self.upd_minute_emas = {}
         logging.info(f"initiating EMAs for {','.join([symbol2coin(s) for s in self.active_symbols])}")
         await self.init_EMAs_multi(sorted(self.active_symbols))
         logging.info(f"starting EMA maintainer...")
         while True:
             now_minute = int(utc_ms() // (1000 * 60) * (1000 * 60))
-            symbols_to_update = [s for s in self.emas["long"] if now_minute > self.upd_minute_emas[s]]
+            symbols_to_update = [
+                s
+                for s in self.emas["long"]
+                if s not in self.upd_minute_emas or now_minute > self.upd_minute_emas[s]
+            ]
             await self.update_EMAs_multi(symbols_to_update)
             await asyncio.sleep(30)
 
-    async def maintain_ohlcvs_new(self):
+    async def maintain_ohlcvs(self, timeframe=None):
+        timeframe = self.config["ohlcv_interval"] if timeframe is None else timeframe
         # if in forager mode, maintain ohlcvs for all candidate symbols
         # else, fetch ohlcvs once for EMA initialization
-        pass
+        if not self.forager_mode:
+            return
+        sleep_interval_sec = max(5.0, (60.0 * 60.0) / len(self.approved_symbols))
+        logging.info(
+            f"Starting ohlcvs maintainer. Will sleep {sleep_interval_sec:.1f}s between each fetch."
+        )
+        while True:
+            symbol = self.get_oldest_updated_ohlcv_symbol()
+            start_ts = utc_ms()
+            try:
+                res = await self.update_ohlcvs_single(
+                    symbol, age_limit_ms=(sleep_interval_sec * 1000)
+                )
+                # logging.info(f"updated ohlcvs for {symbol} {res}")
+            except Exception as e:
+                logging.error(f"error with update_ohlcvs_single for {symbol} {e}")
+            await asyncio.sleep(max(0.0, sleep_interval_sec - (utc_ms() - start_ts) / 1000))
 
     async def update_EMAs_multi(self, symbols, n_fetches=10):
         all_res = []
-        for sym_sublist in [symbols[i : i + n_fetches] for i in range(0, n_fetches, n_fetches)]:
+        for sym_sublist in [symbols[i : i + n_fetches] for i in range(0, len(symbols), n_fetches)]:
             res = await asyncio.gather(*[self.update_EMAs_single(symbol) for symbol in sym_sublist])
             all_res += res
         return all_res
@@ -1682,12 +1549,13 @@ class Passivbot:
         # updates EMAs for single symbol
         try:
             # if EMAs for symbol has not been initiated, initiate
-            if symbol not in self.emas["long"]:
+            if not all([symbol in x for x in [self.emas["long"], self.upd_minute_emas]]):
                 # initiate EMA for symbol
                 await self.init_EMAs_single(symbol)
             now_minute = int(utc_ms() // (1000 * 60) * (1000 * 60))
             if now_minute <= self.upd_minute_emas[symbol]:
                 return True
+            before = self.emas["long"][symbol].copy()
             for pside in ["long", "short"]:
                 self.emas[pside][symbol] = calc_ema(
                     self.ema_alphas[pside][symbol][0],
@@ -1695,6 +1563,7 @@ class Passivbot:
                     self.emas[pside][symbol],
                     self.tickers[symbol]["last"],
                 )
+            # logging.info(f"updated EMAs for {symbol} {before} -> {self.emas['long'][symbol]}")
             self.upd_minute_emas[symbol] = now_minute
             return True
         except Exception as e:
@@ -1704,7 +1573,7 @@ class Passivbot:
 
     async def init_EMAs_multi(self, symbols, n_fetches=10):
         all_res = []
-        for sym_sublist in [symbols[i : i + n_fetches] for i in range(0, n_fetches, n_fetches)]:
+        for sym_sublist in [symbols[i : i + n_fetches] for i in range(0, len(symbols), n_fetches)]:
             res = await asyncio.gather(*[self.init_EMAs_single(symbol) for symbol in sym_sublist])
             all_res += res
         return all_res
@@ -1714,110 +1583,69 @@ class Passivbot:
         # if not, or if too old, update them
         # if it fails, print warning and use ticker as first EMA
 
+        ema_spans = {}
         for pside in ["long", "short"]:
             # if computing EMAs from ohlcvs fails, use recent tickers
             self.emas[pside][symbol] = np.repeat(self.tickers[symbol]["last"], 3)
-
-        ohlcvs_fpath = self.get_ohlcv_fpath(symbol)
-        ohlcvs = self.load_ohlcv_from_cache(symbol, suppress_error_log=True)
-        if ohlcvs is None or utc_ms() - get_file_mod_utc(ohlcvs_fpath) > 1000 * 60 * 60:
-            logging.info(f"ohlcvs for {self.pad_sym(symbol)} missing or too old. Updating...")
-            await self.update_ohlcvs_single(symbol)
-            ohlcvs = self.ohlcvs[symbol]
-        samples1m = calc_samples(numpyize(ohlcvs)[:, [0, 5, 4]], sample_size_ms=60000)
-        ema_spans = {}
-        for pside in ["long", "short"]:
             lc = self.live_configs[symbol][pside]
             es = [lc["ema_span_0"], lc["ema_span_1"], (lc["ema_span_0"] * lc["ema_span_1"]) ** 0.5]
             ema_spans[pside] = numpyize(sorted(es))
-            self.ema_alphas[pside][symbol] = (a := (2.0 / (ema_spans + 1)), 1.0 - a)
-            self.emas[pside][symbol] = calc_emas_last(samples1m[:, 2], ema_spans[pside])
-        logging.info(f"initiated EMAs for {symbol}")
+            self.ema_alphas[pside][symbol] = (a := (2.0 / (ema_spans[pside] + 1)), 1.0 - a)
+        try:
+            # allow up to 5 mins old ohlcvs
+            await self.update_ohlcvs_single(symbol, age_limit_ms=1000 * 60 * 5)
+            samples1m = calc_samples(
+                numpyize(self.ohlcvs[symbol])[:, [0, 5, 4]], sample_size_ms=60000
+            )
+            for pside in ["long", "short"]:
+                self.emas[pside][symbol] = calc_emas_last(samples1m[:, 2], ema_spans[pside])
+            logging.info(f"initiated EMAs for {symbol}")
+        except Exception as e:
+            logging.error(f"error initiating EMAs for {self.pad_sym(symbol)}; using ticker as EMAs")
         self.upd_minute_emas[symbol] = int(utc_ms() // (1000 * 60) * (1000 * 60))
 
-    async def update_ohlcvs_multi(self, symbols, timeframe=None, n_fetches=10):
-        if timeframe is None:
-            timeframe = self.config["ohlcv_interval"]
-        for sym_sublist in [symbols[i : i + n_fetches] for i in range(0, n_fetches, n_fetches)]:
+    async def update_ohlcvs_multi(self, symbols, timeframe=None, n_fetches=10, verbose=False):
+        timeframe = self.config["ohlcv_interval"] if timeframe is None else timeframe
+        all_res = []
+        for sym_sublist in [symbols[i : i + n_fetches] for i in range(0, len(symbols), n_fetches)]:
             try:
                 res = await asyncio.gather(
-                    *[self.fetch_ohlcv(symbol, timeframe=timeframe) for symbol in sym_sublist]
+                    *[
+                        self.update_ohlcvs_single(symbol, timeframe=timeframe)
+                        for symbol in sym_sublist
+                    ]
                 )
-                for s, r in zip(sym_sublist, res):
-                    self.ohlcvs[s] = r
-                    self.dump_ohlcv_to_cache(s, self.ohlcvs[s])
+                all_res += res
+                if verbose:
+                    if any(res):
+                        logging.info(
+                            f"updated ohlcvs for {','.join([symbol2coin(s) for s, r in zip(sym_sublist, res) if r])}"
+                        )
             except Exception as e:
                 logging.error(f"error with fetch_ohlcv in update_ohlcvs_multi {sym_sublist} {e}")
 
-    async def update_ohlcvs_single(self, symbol, timeframe=None):
-        if timeframe is None:
-            timeframe = self.config["ohlcv_interval"]
-        return await self.update_ohlcvs_multi([symbol], timeframe)
-
-    async def maintain_ohlcvs(self, timeframe=None, sleep_interval=15):
-        if timeframe is None:
-            timeframe = self.config["ohlcv_interval"]
-        # keeps ohlcv data up to date for initial EMAs and forager mode noisiness
-        self.ohlcvs = {}
-        self.ohlcv_upd_timestamps = {symbol: 0 for symbol in self.approved_symbols}
-        time_diff = self.find_file_mod_utc_time_diff()
-        if time_diff > 1000:
-            # maybe utc_ms() and file mod timestamp are of different time zones...
-            logging.info(
-                f"time diff between utc_ms() and get_file_mod_utc() is greater than one second"
-            )
-        force_update_syms = []
-        for symbol in self.approved_symbols:
-            ohlcvs = self.load_ohlcv_from_cache(symbol, suppress_error_log=True)
-            if ohlcvs:
-                self.ohlcvs[symbol] = ohlcvs
-                self.ohlcv_upd_timestamps[symbol] = get_file_mod_utc(self.get_ohlcv_fpath(symbol))
-                if utc_ms() - self.ohlcv_upd_timestamps[symbol] > 1000 * 60 * 60:
-                    # if ohlcvs are more than 1 hour old, force update them before initiating EMAs
-                    force_update_syms.append(symbol)
-                    self.ohlcv_upd_timestamps[symbol] = 0
-                    del self.ohlcvs[symbol]
-        if force_update_syms:
-            logging.info(
-                f"ohlcvs too old; forcing update for {','.join([symbol2coin(x) for x in force_update_syms])}"
-            )
-        n_concurrent_symbols = 10
-        while True:
-            missing_symbols = [s for s in self.approved_symbols if s not in self.ohlcvs]
-            if missing_symbols:
-                sleep_interval_ = 2.0
-                symbol = missing_symbols[0]
-                symbols_to_fetch = missing_symbols[:n_concurrent_symbols]
+    async def update_ohlcvs_single(self, symbol, timeframe=None, age_limit_ms=1000 * 60 * 60):
+        timeframe = self.config["ohlcv_interval"] if timeframe is None else timeframe
+        last_ts_modified = 0.0
+        try:
+            last_ts_modified = get_file_mod_utc(self.get_ohlcv_fpath(symbol))
+        except:
+            pass
+        self.ohlcv_upd_timestamps[symbol] = last_ts_modified
+        try:
+            if utc_ms() - last_ts_modified > age_limit_ms:
+                self.ohlcvs[symbol] = await self.fetch_ohlcv(symbol, timeframe=timeframe)
+                self.dump_ohlcv_to_cache(symbol, self.ohlcvs[symbol])
+                return True
             else:
-                sleep_interval_ = sleep_interval
-                for _ in range(100):
-                    symbol = self.get_oldest_updated_ohlcv_symbol()
-                    # check if has been modified by other PB instance
-                    self.ohlcv_upd_timestamps[symbol] = get_file_mod_utc(self.get_ohlcv_fpath(symbol))
-                    if symbol == self.get_oldest_updated_ohlcv_symbol():
-                        break
-                else:
-                    logging.error(
-                        f"more than 100 retries for getting most recently modified ohlcv symbol"
-                    )
-                symbols_to_fetch = [symbol]
-            res = await asyncio.gather(
-                *[self.fetch_ohlcv(symbol, timeframe=timeframe) for symbol in symbols_to_fetch]
-            )
-            for s, r in zip(symbols_to_fetch, res):
-                self.ohlcvs[s] = r
-                self.dump_ohlcv_to_cache(s, self.ohlcvs[s])
-
-            # self.ohlcvs[symbol] = await self.fetch_ohlcv(symbol, timeframe=timeframe)
-            # self.dump_ohlcv_to_cache(symbol, self.ohlcvs[symbol])
-            # logging.info(f"updated ohlcvs for {symbol}")
-            await asyncio.sleep(sleep_interval_)
+                if symbol not in self.ohlcvs or not self.ohlcvs[symbol]:
+                    self.ohlcvs[symbol] = self.load_ohlcv_from_cache(symbol)
+        except Exception as e:
+            logging.error(f"error with update_ohlcvs_single {symbol} {e}")
+        return False
 
     async def close(self):
-        try:
-            self.ohlcv_maintainer.cancel()
-        except Exception as e:
-            logging.error(f"error stopping ohlcvs maintainer {e}")
+        logging.info(f"Stopped data maintainers: {bot.stop_data_maintainers()}")
         await self.cca.close()
         await self.ccp.close()
 
@@ -1914,6 +1742,7 @@ async def main():
             traceback.print_exc()
         finally:
             try:
+                bot.stop_data_maintainers()
                 await bot.ccp.close()
                 await bot.cca.close()
             except:
