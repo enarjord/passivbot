@@ -242,9 +242,8 @@ class Passivbot:
         await self.update_positions()
         logging.info(f"initiating open orders...")
         await self.update_open_orders()
-        self.init_forced_modes()
+        self.init_symbol_flags()
         await self.update_approved_symbols()
-        self.update_symbols_on_gs()
         self.set_live_configs()
         if self.forager_mode:
             await self.update_ohlcvs_multi(list(self.approved_symbols), verbose=True)
@@ -306,20 +305,6 @@ class Passivbot:
         self.symbol_ids = {symbol: self.markets_dict[symbol]["id"] for symbol in self.markets_dict}
         self.symbol_ids_inv = {v: k for k, v in self.symbol_ids.items()}
 
-    def update_symbols_on_gs(self):
-        symbols_with_pos_or_open_orders = sorted(
-            set([x["symbol"] for x in self.fetched_positions + self.fetched_open_orders])
-        )
-        # put on gs/manual mode
-        for symbol in symbols_with_pos_or_open_orders:
-            if symbol not in self.approved_symbols:
-                if self.config["auto_gs"]:
-                    logging.info(f"{self.pad_sym(symbol)} will be set to graceful stop mode")
-                    self.approved_symbols[symbol] = "-lm gs -sm gs"
-                else:
-                    logging.info(f"{self.pad_sym(symbol)} will be set to manual mode")
-                    self.approved_symbols[symbol] = "-lm m -sm m"
-
     def update_PB_modes(self):
         if hasattr(self, "PB_modes"):
             previous_PB_modes = deepcopy(self.PB_modes)
@@ -347,6 +332,8 @@ class Passivbot:
         if self.forager_mode:
             self.calc_noisiness()  # ideal symbols are high noise symbols
             for symbol in sorted(self.noisiness, key=lambda x: self.noisiness[x], reverse=True):
+                # if symbol not in self.approved_symbols:
+                #    continue
                 longs_full = len(self.ideal_actives["long"]) >= self.config[f"n_longs"]
                 shorts_full = len(self.ideal_actives["short"]) >= self.config[f"n_shorts"]
                 if longs_full and shorts_full:
@@ -499,17 +486,17 @@ class Passivbot:
         # defined by each exchange child class
         pass
 
-    def init_forced_modes(self):
+    def init_symbol_flags(self):
         self.ignored_symbols = {self.format_symbol(x) for x in self.config["ignored_symbols"]}
         if self.config["approved_symbols"]:
-            # limited list of approved symbols
+            # may have flags
             symbol_flags = (
                 {self.format_symbol(k): v for k, v in self.config["approved_symbols"].items()}
                 if isinstance(self.config["approved_symbols"], dict)
                 else {self.format_symbol(s): "" for s in self.config["approved_symbols"]}
             )
         else:
-            # all symbols are approved
+            # no flags
             symbol_flags = {s: "" for s in self.markets_dict}
 
         self.symbol_flags = {}
@@ -548,8 +535,10 @@ class Passivbot:
         parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
         self.forced_modes = {"long": {}, "short": {}}
         self.args = {}
-        for symbol in self.symbol_flags:
-            self.args[symbol] = parser.parse_args(self.symbol_flags[symbol].split())
+        for symbol in self.markets_dict:
+            self.args[symbol] = parser.parse_args(
+                self.symbol_flags[symbol].split() if symbol in self.symbol_flags else []
+            )
             for pside in ["long", "short"]:
                 if (mode := getattr(self.args[symbol], f"{pside}_mode")) is not None:
                     self.forced_modes[pside][symbol] = mode
@@ -571,7 +560,7 @@ class Passivbot:
         else:
             self.first_timestamps = None
 
-        self.approved_symbols = {}
+        self.approved_symbols = set()
 
         for symbol in sorted(self.symbol_flags):
             if self.first_timestamps:
@@ -584,9 +573,24 @@ class Passivbot:
                     # logging.info(f"{symbol} is too young")
                     continue
                 else:
-                    self.approved_symbols[symbol] = self.symbol_flags[symbol]
+                    self.approved_symbols.add(symbol)  # [symbol] = self.symbol_flags[symbol]
             else:
-                self.approved_symbols[symbol] = self.symbol_flags[symbol]
+                self.approved_symbols.add(symbol)  # [symbol] = self.symbol_flags[symbol]
+        """
+
+        symbols_with_pos_or_open_orders = sorted(
+            set([x["symbol"] for x in self.fetched_positions + self.fetched_open_orders])
+        )
+        # put on gs/manual mode
+        for symbol in symbols_with_pos_or_open_orders:
+            if symbol not in self.approved_symbols:
+                if self.config["auto_gs"]:
+                    logging.info(f"{self.pad_sym(symbol)} will be set to graceful stop mode")
+                    self.approved_symbols[symbol] = "-lm gs -sm gs"
+                else:
+                    logging.info(f"{self.pad_sym(symbol)} will be set to manual mode")
+                    self.approved_symbols[symbol] = "-lm m -sm m"
+        """
 
     def add_new_order(self, order, source="WS"):
         try:
@@ -623,8 +627,6 @@ class Passivbot:
     def handle_order_update(self, upd_list):
         try:
             for upd in upd_list:
-                if upd["symbol"] not in self.approved_symbols:
-                    return
                 if upd["status"] == "closed" or (
                     "filled" in upd and upd["filled"] is not None and upd["filled"] > 0.0
                 ):
@@ -1483,6 +1485,8 @@ class Passivbot:
         if to_add:
             logging.info(f"adding to EMA maintainer: {','.join([symbol2coin(s) for s in to_add])}")
             await self.init_EMAs_multi(to_add)
+            if self.forager_mode:
+                await self.update_ohlcvs_multi(to_add)
 
     async def maintain_EMAs(self):
         # maintain EMAs for active symbols
@@ -1511,16 +1515,24 @@ class Passivbot:
             f"Starting ohlcvs maintainer. Will sleep {sleep_interval_sec:.1f}s between each fetch."
         )
         while True:
-            symbol = self.get_oldest_updated_ohlcv_symbol()
-            start_ts = utc_ms()
-            try:
-                res = await self.update_ohlcvs_single(
-                    symbol, age_limit_ms=(sleep_interval_sec * 1000)
-                )
-                # logging.info(f"updated ohlcvs for {symbol} {res}")
-            except Exception as e:
-                logging.error(f"error with update_ohlcvs_single for {symbol} {e}")
-            await asyncio.sleep(max(0.0, sleep_interval_sec - (utc_ms() - start_ts) / 1000))
+            all_syms = set(self.active_symbols) | self.approved_symbols
+            missing_symbols = [s for s in all_syms if s not in self.ohlcv_upd_timestamps]
+            if missing_symbols:
+                coins_ = [symbol2coin(s) for s in missing_symbols]
+                logging.info(f"adding missing symbols to ohlcv maintainer: {','.join(coins_)}")
+                await self.update_ohlcvs_multi(missing_symbols)
+                await asyncio.sleep(3)
+            else:
+                symbol = self.get_oldest_updated_ohlcv_symbol()
+                start_ts = utc_ms()
+                try:
+                    res = await self.update_ohlcvs_single(
+                        symbol, age_limit_ms=(sleep_interval_sec * 1000)
+                    )
+                    # logging.info(f"updated ohlcvs for {symbol} {res}")
+                except Exception as e:
+                    logging.error(f"error with update_ohlcvs_single for {symbol} {e}")
+                await asyncio.sleep(max(0.0, sleep_interval_sec - (utc_ms() - start_ts) / 1000))
 
     async def update_EMAs_multi(self, symbols, n_fetches=10):
         all_res = []
