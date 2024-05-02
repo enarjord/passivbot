@@ -30,7 +30,9 @@ from njit_funcs import (
     calc_pnl_long,
     calc_pnl_short,
     round_,
+    round_up,
     calc_min_entry_qty,
+    calc_bankruptcy_price,
 )
 from njit_funcs_recursive_grid import calc_recursive_entry_long, calc_recursive_entry_short
 
@@ -818,3 +820,111 @@ def backtest_multisymbol_recursive_grid(
             )
         )
     return fills, stats
+
+
+@njit
+def backtest_fast_recursive(
+    hlcs,
+    starting_balance,
+    maker_fee,
+    qty_step,
+    price_step,
+    min_qty,
+    min_cost,
+    initial_qty_pct,
+    wallet_exposure_limit,
+    ddown_factor,
+    rentry_pprice_dist,
+    rentry_pprice_dist_wallet_exposure_weighting,
+    min_markup,
+):
+    # assume initial entry at first hlc close price
+    # break loop if position closes
+    # break loop if bankrupt
+    # break loop if pprice diff > threshold
+    pos_long = (
+        round_(
+            cost_to_qty(
+                starting_balance * wallet_exposure_limit * initial_qty_pct, hlcs[0][2], False, 1.0
+            ),
+            qty_step,
+        ),
+        hlcs[0][2],
+    )
+    entry_long = calc_recursive_entry_long(
+        starting_balance,
+        pos_long[0],
+        pos_long[1],
+        pos_long[1],
+        pos_long[1],
+        False,
+        qty_step,
+        price_step,
+        min_qty,
+        min_cost,
+        1.0,
+        initial_qty_pct,
+        0.0,
+        ddown_factor,
+        rentry_pprice_dist,
+        rentry_pprice_dist_wallet_exposure_weighting,
+        wallet_exposure_limit,
+        0.0,
+        0.0,
+        False,
+    )
+    close_long = (pos_long[0], round_up(pos_long[1] * (1 + min_markup), price_step))
+    bkr_price = calc_bankruptcy_price(
+        starting_balance, pos_long[0], pos_long[1], 0.0, 0.0, False, 1.0
+    )
+    pprice_diff_threshold_pct = 0.25  # max 25% pos price diff
+    pprice_diff_threshold = pos_long[1] * (1 - pprice_diff_threshold_pct)
+    fills = [(0, 0.0, bkr_price, pos_long[0], pos_long[1], "ientry_long")]
+
+    for k in range(1, len(hlcs)):
+        # check for fills
+        if hlcs[k][0] > close_long[1]:
+            pnl = calc_pnl_long(pos_long[1], close_long[1], close_long[0], False, 1.0)
+            fills.append((k, pnl, 0.0, close_long[0], close_long[1], "close_long"))
+            return fills
+        if hlcs[k][1] < entry_long[1]:
+            n_psize = round_(pos_long[0] + entry_long[0], qty_step)
+            n_pprice = pos_long[1] * (pos_long[0] / n_psize) + entry_long[1] * (
+                entry_long[0] / n_psize
+            )
+            bkr_price = calc_bankruptcy_price(
+                starting_balance, n_psize, n_pprice, 0.0, 0.0, False, 1.0
+            )
+            fills.append((k, 0.0, bkr_price, entry_long[0], entry_long[1], "rentry_long"))
+            pos_long = (n_psize, n_pprice)
+            entry_long = calc_recursive_entry_long(
+                starting_balance,
+                pos_long[0],
+                pos_long[1],
+                pos_long[1],
+                pos_long[1],
+                False,
+                qty_step,
+                price_step,
+                min_qty,
+                min_cost,
+                1.0,
+                initial_qty_pct,
+                0.0,
+                ddown_factor,
+                rentry_pprice_dist,
+                rentry_pprice_dist_wallet_exposure_weighting,
+                wallet_exposure_limit,
+                0.0,
+                0.0,
+                False,
+            )
+            close_long = (pos_long[0], round_up(pos_long[1] * (1 + min_markup), price_step))
+            pprice_diff_threshold = pos_long[1] * (1 - pprice_diff_threshold_pct)
+        if hlcs[k][1] <= bkr_price:
+            fills.append((k, -starting_balance, 0.0, pos_long[0], hlcs[k][1], "liquidation_long"))
+            return fills
+        if hlcs[k][1] <= pprice_diff_threshold:
+            fills.append((k, 0.0, bkr_price, 0.0, hlcs[k][1], "pprice diff break"))
+            return fills
+    return fills
