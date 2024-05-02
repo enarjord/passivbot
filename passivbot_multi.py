@@ -177,18 +177,12 @@ class Passivbot:
                 logging.error(f"failed to apply universal_live_config {e}")
                 raise Exception(f"no usable live config found for {symbol}")
         for symbol in self.live_configs:
-            if self.args[symbol].leverage is None:
+            if symbol not in self.args or self.args[symbol].leverage is None:
                 self.live_configs[symbol]["leverage"] = 10.0
             else:
                 self.live_configs[symbol]["leverage"] = max(1.0, float(self.args[symbol].leverage))
 
             for pside in ["long", "short"]:
-                """
-                self.live_configs[symbol][pside]["mode"] = self.get_PB_live_mode(pside, symbol)
-                self.live_configs[symbol][pside]["enabled"] = (
-                    self.live_configs[symbol][pside]["mode"] == "normal"
-                )
-                """
                 # disable timed AU and set backwards TP
                 for key, val in [
                     ("auto_unstuck_delay_minutes", 0.0),
@@ -248,7 +242,8 @@ class Passivbot:
         await self.update_positions()
         logging.info(f"initiating open orders...")
         await self.update_open_orders()
-        await self.init_approved_symbols()
+        self.init_forced_modes()
+        await self.update_approved_symbols()
         self.update_symbols_on_gs()
         self.set_live_configs()
         if self.forager_mode:
@@ -324,21 +319,6 @@ class Passivbot:
                 else:
                     logging.info(f"{self.pad_sym(symbol)} will be set to manual mode")
                     self.approved_symbols[symbol] = "-lm m -sm m"
-
-    def get_PB_live_mode(self, pside, symbol):
-        if symbol in self.approved_symbols:
-            # self.approved_symbols is unchanging after startup
-            # assume set(approved_symbols) == set(args)
-            if getattr(self.args[symbol], f"{pside}_mode") is None:
-                return (
-                    "normal"
-                    if self.config[f"{pside}_enabled"]
-                    else ("graceful_stop" if self.config["auto_gs"] else "manual")
-                )
-            else:
-                return getattr(self.args[symbol], f"{pside}_mode")
-        else:
-            return "graceful_stop" if self.config["auto_gs"] else "manual"
 
     def update_PB_modes(self):
         if hasattr(self, "PB_modes"):
@@ -519,60 +499,36 @@ class Passivbot:
         # defined by each exchange child class
         pass
 
-    async def init_approved_symbols(self):
-        # symbols are formatted to ccxt standard COIN/QUOTE:QUOTE
-        self.ignored_symbols = [self.format_symbol(x) for x in self.config["ignored_symbols"]]
-
-        approved_symbols = {}  # all symbols approved according to various conditions, with flags
+    def init_forced_modes(self):
+        self.ignored_symbols = {self.format_symbol(x) for x in self.config["ignored_symbols"]}
         if self.config["approved_symbols"]:
             # limited list of approved symbols
-            for symbol in self.config["approved_symbols"]:
-                approved_symbols[self.format_symbol(symbol)] = (
-                    self.config["approved_symbols"][symbol]
-                    if isinstance(self.config["approved_symbols"], dict)
-                    else ""
-                )
+            symbol_flags = (
+                {self.format_symbol(k): v for k, v in self.config["approved_symbols"].items()}
+                if isinstance(self.config["approved_symbols"], dict)
+                else {self.format_symbol(s): "" for s in self.config["approved_symbols"]}
+            )
         else:
             # all symbols are approved
-            for symbol in self.markets_dict:
-                approved_symbols[symbol] = ""
+            symbol_flags = {s: "" for s in self.markets_dict}
 
-        if self.forager_mode and self.config["minimum_market_age_days"] > 0:
-            self.first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
-            for symbol in sorted(self.first_timestamps):
-                self.first_timestamps[self.format_symbol(symbol)] = self.first_timestamps[symbol]
-        else:
-            self.first_timestamps = None
-
-        self.approved_symbols = {}
-        self.disapproved_symbols = {}
-        for symbol in sorted(set(approved_symbols)):
+        self.symbol_flags = {}
+        disapproved_symbols = {}
+        for symbol in sorted(set(symbol_flags)):
             if symbol not in self.markets_dict:
                 logging.info(f"{symbol} missing from {self.exchange}")
                 if symbol in self.formatted_symbols_map_inv:
                     for x in self.formatted_symbols_map_inv[symbol]:
                         if x in self.markets_dict:
                             logging.info(f"changing {symbol} -> {x}")
-                            self.approved_symbols[x] = approved_symbols[symbol]
+                            self.symbol_flags[x] = symbol_flags[symbol]
                             break
             elif self.format_symbol(symbol) in self.ignored_symbols:
-                self.disapproved_symbols[symbol] = "is ignored"
-            elif self.first_timestamps:
-                if symbol not in self.first_timestamps:
-                    self.disapproved_symbols[symbol] = "missing from first timestamps"
-                elif (
-                    utc_ms() - self.first_timestamps[symbol]
-                    < self.config["minimum_market_age_millis"]
-                ):
-                    self.disapproved_symbols[symbol] = (
-                        f"younger than {self.config['minimum_market_age_days']} days"
-                    )
-                else:
-                    self.approved_symbols[symbol] = approved_symbols[symbol]
+                disapproved_symbols[symbol] = "is ignored"
             else:
-                self.approved_symbols[symbol] = approved_symbols[symbol]
-        for line in set(self.disapproved_symbols.values()):
-            syms_ = [s for s in self.disapproved_symbols if self.disapproved_symbols[s] == line]
+                self.symbol_flags[symbol] = symbol_flags[symbol]
+        for line in set(disapproved_symbols.values()):
+            syms_ = [s for s in disapproved_symbols if disapproved_symbols[s] == line]
             if len(syms_) > 12:
                 logging.info(f"{line}: {len(syms_)} symbols")
             elif len(syms_) > 0:
@@ -590,25 +546,47 @@ class Passivbot:
         parser.add_argument("-sw", type=float, required=False, dest="WE_limit_short", default=None)
         parser.add_argument("-lev", type=float, required=False, dest="leverage", default=None)
         parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
-        self.args = {
-            symbol: parser.parse_args(
-                self.approved_symbols[symbol].split()
-                if symbol in self.approved_symbols
-                else ("-lm gs -sm gs" if self.config["auto_gs"] else "-lm m -sm m").split()
-            )
-            for symbol in self.markets_dict
-        }
-
         self.forced_modes = {"long": {}, "short": {}}
-        # forced modes
-        for symbol in self.args:
-            if self.args[symbol].long_mode is not None:
-                self.forced_modes["long"][symbol] = self.args[symbol].long_mode
-            if self.args[symbol].short_mode is not None:
-                self.forced_modes["short"][symbol] = self.args[symbol].short_mode
+        self.args = {}
+        for symbol in self.symbol_flags:
+            self.args[symbol] = parser.parse_args(self.symbol_flags[symbol].split())
+            for pside in ["long", "short"]:
+                if (mode := getattr(self.args[symbol], f"{pside}_mode")) is not None:
+                    self.forced_modes[pside][symbol] = mode
+
         # for prettier printing
-        self.max_len_symbol = max([len(s) for s in self.approved_symbols])
+        self.max_len_symbol = max([len(s) for s in self.markets_dict])
         self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
+
+    async def update_approved_symbols(self):
+
+        # TODO: check for newly listed symbols
+        # for now, require bot restart to include new listings
+
+        if self.forager_mode and self.config["minimum_market_age_days"] > 0:
+            if not hasattr(self, "first_timestamps"):
+                self.first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
+                for symbol in sorted(self.first_timestamps):
+                    self.first_timestamps[self.format_symbol(symbol)] = self.first_timestamps[symbol]
+        else:
+            self.first_timestamps = None
+
+        self.approved_symbols = {}
+
+        for symbol in sorted(self.symbol_flags):
+            if self.first_timestamps:
+                if symbol not in self.first_timestamps:
+                    continue
+                elif (
+                    utc_ms() - self.first_timestamps[symbol]
+                    < self.config["minimum_market_age_millis"]
+                ):
+                    # logging.info(f"{symbol} is too young")
+                    continue
+                else:
+                    self.approved_symbols[symbol] = self.symbol_flags[symbol]
+            else:
+                self.approved_symbols[symbol] = self.symbol_flags[symbol]
 
     def add_new_order(self, order, source="WS"):
         try:
@@ -1358,6 +1336,7 @@ class Passivbot:
             return True
         self.previous_execution_ts = utc_ms()
         try:
+            await self.update_approved_symbols()
             self.update_PB_modes()
             await self.update_exchange_configs()
             if self.recent_fill:
