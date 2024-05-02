@@ -378,6 +378,12 @@ class Passivbot:
                         if symbol not in self.forced_modes[pside]:
                             self.PB_modes[pside][symbol] = "normal"
                             self.ideal_actives[pside][symbol] = ""
+            for pside in self.actual_actives:
+                for symbol in self.actual_actives[pside]:
+                    if symbol not in self.PB_modes[pside]:
+                        self.PB_modes[pside][symbol] = (
+                            "graceful_stop" if self.config["auto_gs"] else "manual"
+                        )
         self.active_symbols = sorted(
             {s for subdict in self.PB_modes.values() for s in subdict.keys()}
         )
