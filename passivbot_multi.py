@@ -525,6 +525,7 @@ class Passivbot:
 
         approved_symbols = {}  # all symbols approved according to various conditions, with flags
         if self.config["approved_symbols"]:
+            # limited list of approved symbols
             for symbol in self.config["approved_symbols"]:
                 approved_symbols[self.format_symbol(symbol)] = (
                     self.config["approved_symbols"][symbol]
@@ -559,7 +560,10 @@ class Passivbot:
             elif self.first_timestamps:
                 if symbol not in self.first_timestamps:
                     self.disapproved_symbols[symbol] = "missing from first timestamps"
-                elif utc_ms() - self.first_timestamps[symbol] < self.config["minimum_market_age_millis"]:
+                elif (
+                    utc_ms() - self.first_timestamps[symbol]
+                    < self.config["minimum_market_age_millis"]
+                ):
                     self.disapproved_symbols[symbol] = (
                         f"younger than {self.config['minimum_market_age_days']} days"
                     )
@@ -588,7 +592,9 @@ class Passivbot:
         parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
         self.args = {
             symbol: parser.parse_args(
-                self.approved_symbols[symbol].split() if symbol in self.approved_symbols else ""
+                self.approved_symbols[symbol].split()
+                if symbol in self.approved_symbols
+                else ("-lm gs -sm gs" if self.config["auto_gs"] else "-lm m -sm m").split()
             )
             for symbol in self.markets_dict
         }
