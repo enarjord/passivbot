@@ -143,7 +143,7 @@ class Passivbot:
         for symbol in self.markets_dict:
             # try to load live config: 1) -lc flag live_config_path, 2) live_configs_dir, 3) default_config_path, 4) universal live config
             try:
-                self.live_configs[symbol] = load_live_config(self.args[symbol].live_config_path)
+                self.live_configs[symbol] = load_live_config(self.flags[symbol].live_config_path)
                 configs_loaded["lc_flag"].add(symbol)
                 continue
             except:
@@ -177,10 +177,10 @@ class Passivbot:
                 logging.error(f"failed to apply universal_live_config {e}")
                 raise Exception(f"no usable live config found for {symbol}")
         for symbol in self.live_configs:
-            if symbol not in self.args or self.args[symbol].leverage is None:
+            if symbol not in self.flags or self.flags[symbol].leverage is None:
                 self.live_configs[symbol]["leverage"] = 10.0
             else:
-                self.live_configs[symbol]["leverage"] = max(1.0, float(self.args[symbol].leverage))
+                self.live_configs[symbol]["leverage"] = max(1.0, float(self.flags[symbol].leverage))
 
             for pside in ["long", "short"]:
                 # disable timed AU and set backwards TP
@@ -236,17 +236,16 @@ class Passivbot:
     async def init_bot(self):
         logging.info(f"initiating markets...")
         await self.init_markets_dict()
+        await self.init_flags()
         logging.info(f"initiating tickers...")
         await self.update_tickers()
         logging.info(f"initiating balance, positions...")
         await self.update_positions()
         logging.info(f"initiating open orders...")
         await self.update_open_orders()
-        self.init_symbol_flags()
-        await self.update_approved_symbols()
         self.set_live_configs()
         if self.forager_mode:
-            await self.update_ohlcvs_multi(list(self.approved_symbols), verbose=True)
+            await self.update_ohlcvs_multi(list(self.eligible_symbols), verbose=True)
         self.update_PB_modes()
         logging.info(f"initiating pnl history...")
         await self.update_pnls()
@@ -298,150 +297,15 @@ class Passivbot:
         self.set_market_specific_settings()
         for symbol in self.markets_dict:
             self.format_symbol(symbol)
+        # for prettier printing
+        self.max_len_symbol = max([len(s) for s in self.markets_dict])
+        self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
 
     def set_market_specific_settings(self):
         # set min cost, min qty, price step, qty step, c_mult
         # defined individually for each exchange
         self.symbol_ids = {symbol: self.markets_dict[symbol]["id"] for symbol in self.markets_dict}
         self.symbol_ids_inv = {v: k for k, v in self.symbol_ids.items()}
-
-    def update_PB_modes(self):
-        if hasattr(self, "PB_modes"):
-            previous_PB_modes = deepcopy(self.PB_modes)
-        else:
-            previous_PB_modes = None
-
-        # set modes for all symbols
-        self.PB_modes = {"long": {}, "short": {}}
-        self.is_active = {"long": set(), "short": set()}
-        self.actual_actives = {"long": set(), "short": set()}
-        self.ideal_actives = {"long": {}, "short": {}}  # dicts becaouse they are ordered
-
-        # actual actives, symbols with pos and/or open orders
-        for elm in self.fetched_positions + self.fetched_open_orders:
-            self.actual_actives[elm["position_side"]].add(elm["symbol"])
-            self.is_active[elm["position_side"]].add(elm["symbol"])
-
-        # find ideal actives
-        for pside in self.ideal_actives:
-            for symbol in self.forced_modes[pside]:
-                # set forced modes first
-                if self.forced_modes[pside][symbol] == "normal":
-                    self.ideal_actives[pside][symbol] = ""
-                self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
-        if self.forager_mode:
-            self.calc_noisiness()  # ideal symbols are high noise symbols
-            for symbol in sorted(self.noisiness, key=lambda x: self.noisiness[x], reverse=True):
-                # if symbol not in self.approved_symbols:
-                #    continue
-                longs_full = len(self.ideal_actives["long"]) >= self.config[f"n_longs"]
-                shorts_full = len(self.ideal_actives["short"]) >= self.config[f"n_shorts"]
-                if longs_full and shorts_full:
-                    break
-                if not longs_full and symbol not in self.forced_modes["long"]:
-                    self.ideal_actives["long"][symbol] = ""
-                if not shorts_full and symbol not in self.forced_modes["short"]:
-                    self.ideal_actives["short"][symbol] = ""
-            for pside in self.actual_actives:
-                # actual actives fill slots first
-                for symbol in self.actual_actives[pside]:
-                    if symbol in self.PB_modes[pside]:
-                        continue
-                    if symbol in self.ideal_actives[pside]:
-                        self.PB_modes[pside][symbol] = "normal"
-                    else:
-                        self.PB_modes[pside][symbol] = (
-                            "graceful_stop" if self.config["auto_gs"] else "manual"
-                        )
-            for pside in self.ideal_actives:
-                # fill remaining slots with ideal actives
-                # a slot is filled if symbol in [normal, graceful_stop]
-                # symbols on other modes are ignored
-                for symbol in self.ideal_actives[pside]:
-                    if symbol in self.PB_modes[pside]:
-                        continue
-                    n_slots_filled = len(
-                        [
-                            s
-                            for s in self.PB_modes[pside]
-                            if self.PB_modes[pside][s] in ["normal", "graceful_stop"]
-                        ]
-                    )
-                    if n_slots_filled >= self.config[f"n_{pside}s"]:
-                        break
-                    self.PB_modes[pside][symbol] = "normal"
-        else:
-            # if not forager mode, all approved symbols are ideal symbols, unless symbol in forced_modes
-            for pside in ["long", "short"]:
-                if self.config[f"{pside}_enabled"]:
-                    for symbol in self.approved_symbols:
-                        if symbol not in self.forced_modes[pside]:
-                            self.PB_modes[pside][symbol] = "normal"
-                            self.ideal_actives[pside][symbol] = ""
-            for pside in self.actual_actives:
-                for symbol in self.actual_actives[pside]:
-                    if symbol not in self.PB_modes[pside]:
-                        self.PB_modes[pside][symbol] = (
-                            "graceful_stop" if self.config["auto_gs"] else "manual"
-                        )
-        self.active_symbols = sorted(
-            {s for subdict in self.PB_modes.values() for s in subdict.keys()}
-        )
-
-        for symbol in self.active_symbols:
-            for pside in self.PB_modes:
-                if symbol in self.PB_modes[pside]:
-                    self.live_configs[symbol][pside]["mode"] = self.PB_modes[pside][symbol]
-                    self.live_configs[symbol][pside]["enabled"] = (
-                        self.PB_modes[pside][symbol] == "normal"
-                    )
-                    if self.live_configs[symbol][pside]["enabled"]:
-                        self.is_active[pside].add(symbol)
-                else:
-                    if self.config["auto_gs"]:
-                        self.live_configs[symbol][pside]["mode"] = "graceful_stop"
-                        self.PB_modes[pside][symbol] = "graceful_stop"
-                    else:
-                        self.live_configs[symbol][pside]["mode"] = "manual"
-                        self.PB_modes[pside][symbol] = "manual"
-
-                    self.live_configs[symbol][pside]["enabled"] = False
-            if symbol not in self.positions:
-                self.positions[symbol] = {
-                    "long": {"size": 0.0, "price": 0.0},
-                    "short": {"size": 0.0, "price": 0.0},
-                }
-            if symbol not in self.open_orders:
-                self.open_orders[symbol] = []
-        self.set_wallet_exposure_limits()
-        for pside in self.PB_modes:
-            if previous_PB_modes is None:
-                for mode in set(self.PB_modes[pside].values()):
-                    coins = [
-                        symbol2coin(s)
-                        for s in self.PB_modes[pside]
-                        if self.PB_modes[pside][s] == mode
-                    ]
-                    logging.info(f" setting {pside: <5} {mode}: {','.join(coins)}")
-            else:
-                if previous_PB_modes[pside] != self.PB_modes[pside]:
-                    for symbol in self.active_symbols:
-                        if symbol in self.PB_modes[pside]:
-                            if symbol in previous_PB_modes[pside]:
-                                if self.PB_modes[pside][symbol] != previous_PB_modes[pside][symbol]:
-                                    logging.info(
-                                        f"changing {pside: <5} {self.pad_sym(symbol)}: {previous_PB_modes[pside][symbol]} -> {self.PB_modes[pside][symbol]}"
-                                    )
-                            else:
-                                logging.info(
-                                    f" setting {pside: <5} {self.pad_sym(symbol)}: {self.PB_modes[pside][symbol]}"
-                                )
-                        else:
-                            if symbol in previous_PB_modes[pside]:
-                                logging.info(
-                                    f"removing {pside: <5} {self.pad_sym(symbol)}: {previous_PB_modes[pside][symbol]}"
-                                )
-        return
 
     def set_wallet_exposure_limits(self):
         for pside in ["long", "short"]:
@@ -452,9 +316,9 @@ class Passivbot:
             )
             for symbol in self.is_active[pside]:
                 new_WE_limit = (
-                    getattr(self.args[symbol], f"WE_limit_{pside}")
-                    if symbol in self.args
-                    and getattr(self.args[symbol], f"WE_limit_{pside}") is not None
+                    getattr(self.flags[symbol], f"WE_limit_{pside}")
+                    if symbol in self.flags
+                    and getattr(self.flags[symbol], f"WE_limit_{pside}") is not None
                     else WE_limit_div
                 )
                 if "wallet_exposure_limit" not in self.live_configs[symbol][pside]:
@@ -492,40 +356,34 @@ class Passivbot:
         # defined by each exchange child class
         pass
 
-    def init_symbol_flags(self):
+    async def init_flags(self):
         self.ignored_symbols = {self.format_symbol(x) for x in self.config["ignored_symbols"]}
-        if self.config["approved_symbols"]:
-            # may have flags
-            symbol_flags = (
-                {self.format_symbol(k): v for k, v in self.config["approved_symbols"].items()}
-                if isinstance(self.config["approved_symbols"], dict)
-                else {self.format_symbol(s): "" for s in self.config["approved_symbols"]}
-            )
-        else:
-            # no flags
-            symbol_flags = {s: "" for s in self.markets_dict}
-
-        self.symbol_flags = {}
-        disapproved_symbols = {}
-        for symbol in sorted(set(symbol_flags)):
-            if symbol not in self.markets_dict:
+        self.flags = {}
+        self.eligible_symbols = set()  # symbols which may be approved for trading
+        for symbol in self.config["approved_symbols"]:
+            fsymbol = self.format_symbol(symbol)
+            if fsymbol not in self.markets_dict:
                 logging.info(f"{symbol} missing from {self.exchange}")
-                if symbol in self.formatted_symbols_map_inv:
-                    for x in self.formatted_symbols_map_inv[symbol]:
+                if fsymbol in self.formatted_symbols_map_inv:
+                    for x in self.formatted_symbols_map_inv[fsymbol]:
                         if x in self.markets_dict:
                             logging.info(f"changing {symbol} -> {x}")
-                            self.symbol_flags[x] = symbol_flags[symbol]
+                            self.flags[x] = (
+                                self.config["approved_symbols"][symbol]
+                                if isinstance(self.config["approved_symbols"], dict)
+                                else ""
+                            )
+                            self.eligible_symbols.add(x)
                             break
-            elif self.format_symbol(symbol) in self.ignored_symbols:
-                disapproved_symbols[symbol] = "is ignored"
             else:
-                self.symbol_flags[symbol] = symbol_flags[symbol]
-        for line in set(disapproved_symbols.values()):
-            syms_ = [s for s in disapproved_symbols if disapproved_symbols[s] == line]
-            if len(syms_) > 12:
-                logging.info(f"{line}: {len(syms_)} symbols")
-            elif len(syms_) > 0:
-                logging.info(f"{line}: {','.join(sorted(set([s for s in syms_])))}")
+                self.flags[fsymbol] = (
+                    self.config["approved_symbols"][symbol]
+                    if isinstance(self.config["approved_symbols"], dict)
+                    else ""
+                )
+                self.eligible_symbols.add(fsymbol)
+        if not self.config["approved_symbols"]:
+            self.eligible_symbols = set(self.markets_dict)
 
         # this argparser is used only internally
         parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
@@ -540,23 +398,13 @@ class Passivbot:
         parser.add_argument("-lev", type=float, required=False, dest="leverage", default=None)
         parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
         self.forced_modes = {"long": {}, "short": {}}
-        self.args = {}
         for symbol in self.markets_dict:
-            self.args[symbol] = parser.parse_args(
-                self.symbol_flags[symbol].split() if symbol in self.symbol_flags else []
+            self.flags[symbol] = parser.parse_args(
+                self.flags[symbol].split() if symbol in self.flags else []
             )
             for pside in ["long", "short"]:
-                if (mode := getattr(self.args[symbol], f"{pside}_mode")) is not None:
+                if (mode := getattr(self.flags[symbol], f"{pside}_mode")) is not None:
                     self.forced_modes[pside][symbol] = mode
-
-        # for prettier printing
-        self.max_len_symbol = max([len(s) for s in self.markets_dict])
-        self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
-
-    async def update_approved_symbols(self):
-
-        # TODO: check for newly listed symbols
-        # for now, require bot restart to include new listings
 
         if self.forager_mode and self.config["minimum_market_age_days"] > 0:
             if not hasattr(self, "first_timestamps"):
@@ -566,37 +414,159 @@ class Passivbot:
         else:
             self.first_timestamps = None
 
-        self.approved_symbols = set()
-
-        for symbol in sorted(self.symbol_flags):
-            if self.first_timestamps:
-                if symbol not in self.first_timestamps:
-                    continue
-                elif (
+    def is_old_enough(self, symbol):
+        if self.forager_mode and self.config["minimum_market_age_days"] > 0:
+            if symbol in self.first_timestamps:
+                #res = utc_ms() - self.first_timestamps[symbol] > self.config["minimum_market_age_millis"]
+                #logging.info(f"{symbol} {res}")
+                return (
                     utc_ms() - self.first_timestamps[symbol]
-                    < self.config["minimum_market_age_millis"]
-                ):
-                    # logging.info(f"{symbol} is too young")
-                    continue
-                else:
-                    self.approved_symbols.add(symbol)  # [symbol] = self.symbol_flags[symbol]
+                    > self.config["minimum_market_age_millis"]
+                )
             else:
-                self.approved_symbols.add(symbol)  # [symbol] = self.symbol_flags[symbol]
-        """
+                return False
+        else:
+            return True
 
-        symbols_with_pos_or_open_orders = sorted(
-            set([x["symbol"] for x in self.fetched_positions + self.fetched_open_orders])
+    def update_PB_modes(self):
+        # dynamically update passivbot modes for all symbols
+        if hasattr(self, "PB_modes"):
+            previous_PB_modes = deepcopy(self.PB_modes)
+        else:
+            previous_PB_modes = None
+
+        # set modes for all symbols
+        self.PB_modes = {
+            "long": {},
+            "short": {},
+        }  # options: normal, graceful_stop, manual, tp_only, panic
+        self.actual_actives = {"long": set(), "short": set()}  # symbols with position
+        self.is_active = {"long": set(), "short": set()}  # actual actives plus symbols on "normal""
+        self.ideal_actives = {"long": {}, "short": {}}  # dicts as ordered sets
+
+        # actual actives, symbols with pos and/or open orders
+        for elm in self.fetched_positions + self.fetched_open_orders:
+            self.actual_actives[elm["position_side"]].add(elm["symbol"])
+
+        # find ideal actives
+        # set forced modes first
+        for pside in self.forced_modes:
+            for symbol in self.forced_modes[pside]:
+                if self.forced_modes[pside][symbol] == "normal":
+                    self.ideal_actives[pside][symbol] = ""
+                self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
+        if self.forager_mode:
+            self.calc_noisiness()  # ideal symbols are high noise symbols
+            for symbol in sorted(self.noisiness, key=lambda x: self.noisiness[x], reverse=True):
+                if symbol not in self.eligible_symbols or not self.is_old_enough(symbol):
+                    continue
+                longs_full = len(self.ideal_actives["long"]) >= self.config[f"n_longs"]
+                shorts_full = len(self.ideal_actives["short"]) >= self.config[f"n_shorts"]
+                if longs_full and shorts_full:
+                    break
+                if not longs_full and symbol not in self.ideal_actives["long"]:
+                    self.ideal_actives["long"][symbol] = ""
+                if not shorts_full and symbol not in self.ideal_actives["short"]:
+                    self.ideal_actives["short"][symbol] = ""
+            for pside in self.actual_actives:
+                # actual actives fill slots first
+                for symbol in self.actual_actives[pside]:
+                    if symbol in self.PB_modes[pside]:
+                        continue  # is a forced mode
+                    if symbol in self.ideal_actives[pside]:
+                        self.PB_modes[pside][symbol] = "normal"
+                    else:
+                        self.PB_modes[pside][symbol] = (
+                            "graceful_stop" if self.config["auto_gs"] else "manual"
+                        )
+            for pside in self.ideal_actives:
+                # fill remaining slots with ideal actives
+                # a slot is filled if symbol in [normal, graceful_stop]
+                # symbols on other modes are ignored
+                for symbol in self.ideal_actives[pside]:
+                    if symbol in self.PB_modes[pside]:
+                        continue
+                    slots_filled = {
+                        k for k, v in self.PB_modes[pside].items() if v in ["normal", "graceful_stop"]
+                    }
+                    if len(slots_filled) >= self.config[f"n_{pside}s"]:
+                        break
+                    self.PB_modes[pside][symbol] = "normal"
+        else:
+            # if not forager mode, all eligible symbols are ideal symbols, unless symbol in forced_modes
+            for pside in ["long", "short"]:
+                if self.config[f"{pside}_enabled"]:
+                    for symbol in self.eligible_symbols:
+                        if symbol not in self.forced_modes[pside]:
+                            self.PB_modes[pside][symbol] = "normal"
+                            self.ideal_actives[pside][symbol] = ""
+                for symbol in self.actual_actives[pside]:
+                    if symbol not in self.PB_modes[pside]:
+                        self.PB_modes[pside][symbol] = (
+                            "graceful_stop" if self.config["auto_gs"] else "manual"
+                        )
+        self.active_symbols = sorted(
+            {s for subdict in self.PB_modes.values() for s in subdict.keys()}
         )
-        # put on gs/manual mode
-        for symbol in symbols_with_pos_or_open_orders:
-            if symbol not in self.approved_symbols:
-                if self.config["auto_gs"]:
-                    logging.info(f"{self.pad_sym(symbol)} will be set to graceful stop mode")
-                    self.approved_symbols[symbol] = "-lm gs -sm gs"
+        self.is_active = deepcopy(self.actual_actives)
+        for pside in self.PB_modes:
+            for symbol in self.PB_modes[pside]:
+                if self.PB_modes[pside][symbol] == "normal":
+                    self.is_active[pside].add(symbol)
+
+        for symbol in self.active_symbols:
+            for pside in self.PB_modes:
+                if symbol in self.PB_modes[pside]:
+                    self.live_configs[symbol][pside]["mode"] = self.PB_modes[pside][symbol]
+                    self.live_configs[symbol][pside]["enabled"] = (
+                        self.PB_modes[pside][symbol] == "normal"
+                    )
                 else:
-                    logging.info(f"{self.pad_sym(symbol)} will be set to manual mode")
-                    self.approved_symbols[symbol] = "-lm m -sm m"
-        """
+                    if self.config["auto_gs"]:
+                        self.live_configs[symbol][pside]["mode"] = "graceful_stop"
+                        self.PB_modes[pside][symbol] = "graceful_stop"
+                    else:
+                        self.live_configs[symbol][pside]["mode"] = "manual"
+                        self.PB_modes[pside][symbol] = "manual"
+
+                    self.live_configs[symbol][pside]["enabled"] = False
+            if symbol not in self.positions:
+                self.positions[symbol] = {
+                    "long": {"size": 0.0, "price": 0.0},
+                    "short": {"size": 0.0, "price": 0.0},
+                }
+            if symbol not in self.open_orders:
+                self.open_orders[symbol] = []
+        self.set_wallet_exposure_limits()
+
+        # log changes
+        for pside in self.PB_modes:
+            if previous_PB_modes is None:
+                for mode in set(self.PB_modes[pside].values()):
+                    coins = [
+                        symbol2coin(s)
+                        for s in self.PB_modes[pside]
+                        if self.PB_modes[pside][s] == mode
+                    ]
+                    logging.info(f" setting {pside: <5} {mode}: {','.join(coins)}")
+            else:
+                if previous_PB_modes[pside] != self.PB_modes[pside]:
+                    for symbol in self.active_symbols:
+                        if symbol in self.PB_modes[pside]:
+                            if symbol in previous_PB_modes[pside]:
+                                if self.PB_modes[pside][symbol] != previous_PB_modes[pside][symbol]:
+                                    logging.info(
+                                        f"changing {pside: <5} {self.pad_sym(symbol)}: {previous_PB_modes[pside][symbol]} -> {self.PB_modes[pside][symbol]}"
+                                    )
+                            else:
+                                logging.info(
+                                    f" setting {pside: <5} {self.pad_sym(symbol)}: {self.PB_modes[pside][symbol]}"
+                                )
+                        else:
+                            if symbol in previous_PB_modes[pside]:
+                                logging.info(
+                                    f"removing {pside: <5} {self.pad_sym(symbol)}: {previous_PB_modes[pside][symbol]}"
+                                )
 
     def add_new_order(self, order, source="WS"):
         try:
@@ -1344,7 +1314,6 @@ class Passivbot:
             return True
         self.previous_execution_ts = utc_ms()
         try:
-            await self.update_approved_symbols()
             self.update_PB_modes()
             await self.update_exchange_configs()
             if self.recent_fill:
@@ -1476,7 +1445,7 @@ class Passivbot:
     def calc_noisiness(self, symbol=None):
         if not hasattr(self, "noisiness"):
             self.noisiness = {}
-        symbols = self.approved_symbols if symbol is None else [symbol]
+        symbols = self.eligible_symbols if symbol is None else [symbol]
         for symbol in symbols:
             if symbol in self.ohlcvs and self.ohlcvs[symbol] and len(self.ohlcvs[symbol]) > 0:
                 self.noisiness[symbol] = np.mean([(x[2] - x[3]) / x[4] for x in self.ohlcvs[symbol]])
@@ -1516,12 +1485,12 @@ class Passivbot:
         # else, fetch ohlcvs once for EMA initialization
         if not self.forager_mode:
             return
-        sleep_interval_sec = max(5.0, (60.0 * 60.0) / len(self.approved_symbols))
+        sleep_interval_sec = max(5.0, (60.0 * 60.0) / len(self.eligible_symbols))
         logging.info(
             f"Starting ohlcvs maintainer. Will sleep {sleep_interval_sec:.1f}s between each fetch."
         )
         while True:
-            all_syms = set(self.active_symbols) | self.approved_symbols
+            all_syms = set(self.active_symbols) | self.eligible_symbols
             missing_symbols = [s for s in all_syms if s not in self.ohlcv_upd_timestamps]
             if missing_symbols:
                 coins_ = [symbol2coin(s) for s in missing_symbols]
