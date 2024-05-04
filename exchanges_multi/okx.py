@@ -2,6 +2,7 @@ from passivbot_multi import Passivbot, logging
 from uuid import uuid4
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
+
 import pprint
 import asyncio
 import traceback
@@ -15,7 +16,9 @@ from pure_funcs import (
     shorten_custom_id,
 )
 from njit_funcs import calc_diff
-from procedures import print_async_exception, utc_ms
+from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
+
+assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
 class OKXBot(Passivbot):
@@ -37,17 +40,15 @@ class OKXBot(Passivbot):
             }
         )
         self.cca.options["defaultType"] = "swap"
-        self.max_n_cancellations_per_batch = 3
-        self.max_n_creations_per_batch = 2
         self.order_side_map = {
             "buy": {"long": "open_long", "short": "close_short"},
             "sell": {"long": "close_long", "short": "open_short"},
         }
         self.custom_id_max_length = 32
 
-    async def init_bot(self):
-        await self.init_symbols()
-        for symbol in self.symbols:
+    def set_market_specific_settings(self):
+        super().set_market_specific_settings()
+        for symbol in self.markets_dict:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
             self.min_costs[symbol] = (
@@ -57,17 +58,6 @@ class OKXBot(Passivbot):
             self.qty_steps[symbol] = elm["precision"]["amount"]
             self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
-            self.coins[symbol] = symbol.replace("/USDT:USDT", "")
-            self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "last": 0.0}
-            self.open_orders[symbol] = []
-            self.positions[symbol] = {
-                "long": {"size": 0.0, "price": 0.0},
-                "short": {"size": 0.0, "price": 0.0},
-            }
-            self.upd_timestamps["open_orders"][symbol] = 0.0
-            self.upd_timestamps["tickers"][symbol] = 0.0
-            self.upd_timestamps["positions"][symbol] = 0.0
-        await super().init_bot()
 
     async def start_websockets(self):
         await asyncio.gather(
@@ -107,17 +97,25 @@ class OKXBot(Passivbot):
                 traceback.print_exc()
 
     async def watch_tickers(self, symbols=None):
-        symbols = list(self.symbols if symbols is None else symbols)
-        while True:
+        self.prev_active_symbols = set()
+        while not self.stop_websocket:
             try:
-                if self.stop_websocket:
-                    break
-                res = await self.ccp.watch_tickers(symbols)
+                if (actives := set(self.active_symbols)) != self.prev_active_symbols:
+                    for symbol in actives - self.prev_active_symbols:
+                        logging.info(f"Started watching ticker for symbol: {symbol}")
+                    for symbol in self.prev_active_symbols - actives:
+                        logging.info(f"Stopped watching ticker for symbol: {symbol}")
+                    self.prev_active_symbols = actives
+                res = await self.ccp.watch_tickers(self.active_symbols)
                 for k in res:
                     self.handle_ticker_update(res[k])
+                await asyncio.sleep(0.1)
             except Exception as e:
-                print(f"exception watch_tickers {symbols}", e)
+                logging.error(
+                    f"Exception in watch_tickers: {e}, active symbols: {len(self.active_symbols)}"
+                )
                 traceback.print_exc()
+                await asyncio.sleep(1)
 
     async def fetch_open_orders(self, symbol: str = None):
         fetched = None
@@ -272,16 +270,16 @@ class OKXBot(Passivbot):
             return {}
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        if len(orders) > self.max_n_cancellations_per_batch:
+        if len(orders) > self.config["max_n_cancellations_per_batch"]:
             # prioritize cancelling reduce-only orders
             try:
                 reduce_only_orders = [x for x in orders if x["reduce_only"]]
                 rest = [x for x in orders if not x["reduce_only"]]
-                orders = (reduce_only_orders + rest)[: self.max_n_cancellations_per_batch]
+                orders = (reduce_only_orders + rest)[: self.config["max_n_cancellations_per_batch"]]
             except Exception as e:
                 logging.error(f"debug filter cancellations {e}")
         return await self.execute_multiple(
-            orders, "execute_cancellation", self.max_n_cancellations_per_batch
+            orders, "execute_cancellation", self.config["max_n_cancellations_per_batch"]
         )
 
     async def execute_order(self, order: dict) -> dict:
@@ -292,7 +290,7 @@ class OKXBot(Passivbot):
             return []
         to_execute = []
         custom_ids_map = {}
-        for order in orders[: self.max_n_creations_per_batch]:
+        for order in orders[: self.config["max_n_creations_per_batch"]]:
             to_execute.append(
                 {
                     "type": "limit",
@@ -333,18 +331,9 @@ class OKXBot(Passivbot):
                 traceback.print_exc()
         return to_return
 
-    async def update_exchange_config(self):
-        try:
-            res = await self.cca.set_position_mode(True)
-            logging.info(f"set hedge mode {res}")
-        except Exception as e:
-            if '"code":"59000"' in e.args[0]:
-                logging.info(f"margin mode: {e}")
-            else:
-                logging.error(f"error setting hedge mode {e}")
-
+    async def update_exchange_config_by_symbols(self, symbols: [str]):
         coros_to_call_margin_mode = {}
-        for symbol in self.symbols:
+        for symbol in symbols:
             try:
                 coros_to_call_margin_mode[symbol] = asyncio.create_task(
                     self.cca.set_margin_mode(
@@ -355,7 +344,7 @@ class OKXBot(Passivbot):
                 )
             except Exception as e:
                 logging.error(f"{symbol}: error setting cross mode and leverage {e}")
-        for symbol in self.symbols:
+        for symbol in symbols:
             res = None
             to_print = ""
             try:
@@ -369,6 +358,16 @@ class OKXBot(Passivbot):
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 
+    async def update_exchange_config(self):
+        try:
+            res = await self.cca.set_position_mode(True)
+            logging.info(f"set hedge mode {res}")
+        except Exception as e:
+            if '"code":"59000"' in e.args[0]:
+                logging.info(f"margin mode: {e}")
+            else:
+                logging.error(f"error setting hedge mode {e}")
+
     def calc_ideal_orders(self):
         # okx has max 100 open orders. Drop orders whose pprice diff is greatest.
         ideal_orders = super().calc_ideal_orders()
@@ -380,7 +379,7 @@ class OKXBot(Passivbot):
             ideal_orders_tmp,
             key=lambda x: calc_diff(x["price"], self.tickers[x["symbol"]]["last"]),
         )[:100]
-        ideal_orders = {symbol: [] for symbol in self.symbols}
+        ideal_orders = {symbol: [] for symbol in self.active_symbols}
         for x in ideal_orders_tmp:
             ideal_orders[x["symbol"]].append(x)
         return ideal_orders

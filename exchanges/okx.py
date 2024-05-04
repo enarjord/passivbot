@@ -172,17 +172,17 @@ class OKXBot(Bot):
                         position["long"] = {
                             "size": p["contracts"],
                             "price": p["entryPrice"],
-                            "liquidation_price": p["liquidationPrice"]
-                            if p["liquidationPrice"]
-                            else 0.0,
+                            "liquidation_price": (
+                                p["liquidationPrice"] if p["liquidationPrice"] else 0.0
+                            ),
                         }
                     elif p["side"] == "short":
                         position["short"] = {
                             "size": p["contracts"],
                             "price": p["entryPrice"],
-                            "liquidation_price": p["liquidationPrice"]
-                            if p["liquidationPrice"]
-                            else 0.0,
+                            "liquidation_price": (
+                                p["liquidationPrice"] if p["liquidationPrice"] else 0.0
+                            ),
                         }
             for elm in balance["info"]["data"]:
                 for elm2 in elm["details"]:

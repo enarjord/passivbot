@@ -7,7 +7,9 @@ import asyncio
 import traceback
 import numpy as np
 from pure_funcs import multi_replace, floatify, ts_to_date_utc, calc_hash, determine_pos_side_ccxt
-from procedures import print_async_exception, utc_ms
+from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
+
+assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
 class BybitBot(Passivbot):
@@ -28,12 +30,10 @@ class BybitBot(Passivbot):
                 "headers": {"referer": self.broker_code} if self.broker_code else {},
             }
         )
-        self.max_n_cancellations_per_batch = 10
-        self.max_n_creations_per_batch = 6
 
-    async def init_bot(self):
-        await self.init_symbols()
-        for symbol in self.symbols:
+    def set_market_specific_settings(self):
+        super().set_market_specific_settings()
+        for symbol in self.markets_dict:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
             self.min_costs[symbol] = (
@@ -43,17 +43,6 @@ class BybitBot(Passivbot):
             self.qty_steps[symbol] = elm["precision"]["amount"]
             self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
-            self.coins[symbol] = symbol.replace("/USDT:USDT", "")
-            self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "last": 0.0}
-            self.open_orders[symbol] = []
-            self.positions[symbol] = {
-                "long": {"size": 0.0, "price": 0.0},
-                "short": {"size": 0.0, "price": 0.0},
-            }
-            self.upd_timestamps["open_orders"][symbol] = 0.0
-            self.upd_timestamps["tickers"][symbol] = 0.0
-            self.upd_timestamps["positions"][symbol] = 0.0
-        await super().init_bot()
 
     async def start_websockets(self):
         await asyncio.gather(
@@ -88,19 +77,24 @@ class BybitBot(Passivbot):
                 traceback.print_exc()
 
     async def watch_tickers(self, symbols=None):
-        symbols = list(self.symbols if symbols is None else symbols)
-        while True:
+        self.prev_active_symbols = set()
+        while not self.stop_websocket:
             try:
-                if self.stop_websocket:
-                    break
-                res = await self.ccp.watch_tickers(symbols)
-                for key in ["bid", "ask", "last"]:
-                    if res[key] is None:
-                        res[key] = self.tickers[res["symbol"]][key]
+                if (actives := set(self.active_symbols)) != self.prev_active_symbols:
+                    for symbol in actives - self.prev_active_symbols:
+                        logging.info(f"Started watching ticker for symbol: {symbol}")
+                    for symbol in self.prev_active_symbols - actives:
+                        logging.info(f"Stopped watching ticker for symbol: {symbol}")
+                    self.prev_active_symbols = actives
+                res = await self.ccp.watch_tickers(self.active_symbols)
                 self.handle_ticker_update(res)
+                await asyncio.sleep(0.1)
             except Exception as e:
-                print(f"exception watch_tickers {symbols}", e)
+                logging.error(
+                    f"Exception in watch_tickers: {e}, active symbols: {len(self.active_symbols)}"
+                )
                 traceback.print_exc()
+                await asyncio.sleep(1)
 
     async def fetch_open_orders(self, symbol: str = None) -> [dict]:
         fetched = None
@@ -325,16 +319,16 @@ class BybitBot(Passivbot):
             return {}
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        if len(orders) > self.max_n_cancellations_per_batch:
+        if len(orders) > self.config["max_n_cancellations_per_batch"]:
             # prioritize cancelling reduce-only orders
             try:
                 reduce_only_orders = [x for x in orders if x["reduce_only"]]
                 rest = [x for x in orders if not x["reduce_only"]]
-                orders = (reduce_only_orders + rest)[: self.max_n_cancellations_per_batch]
+                orders = (reduce_only_orders + rest)[: self.config["max_n_cancellations_per_batch"]]
             except Exception as e:
                 logging.error(f"debug filter cancellations {e}")
         return await self.execute_multiple(
-            orders, "execute_cancellation", self.max_n_cancellations_per_batch
+            orders, "execute_cancellation", self.config["max_n_cancellations_per_batch"]
         )
 
     async def execute_order(self, order: dict) -> dict:
@@ -364,17 +358,13 @@ class BybitBot(Passivbot):
             return {}
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_order", self.max_n_creations_per_batch)
+        return await self.execute_multiple(
+            orders, "execute_order", self.config["max_n_creations_per_batch"]
+        )
 
-    async def update_exchange_config(self):
-        try:
-            res = await self.cca.set_position_mode(True)
-            logging.info(f"set hedge mode {res}")
-        except Exception as e:
-            logging.error(f"error setting hedge mode {e}")
-
+    async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}
-        for symbol in self.symbols:
+        for symbol in symbols:
             try:
                 coros_to_call_margin_mode[symbol] = asyncio.create_task(
                     self.cca.set_margin_mode(
@@ -391,7 +381,7 @@ class BybitBot(Passivbot):
                 )
             except Exception as e:
                 logging.error(f"{symbol}: a error setting leverage {e}")
-        for symbol in self.symbols:
+        for symbol in symbols:
             res = None
             to_print = ""
             try:
@@ -412,3 +402,10 @@ class BybitBot(Passivbot):
                     logging.error(f"{symbol} error setting cross mode {res} {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
+
+    async def update_exchange_config(self):
+        try:
+            res = await self.cca.set_position_mode(True)
+            logging.info(f"set hedge mode {res}")
+        except Exception as e:
+            logging.error(f"error setting hedge mode {e}")

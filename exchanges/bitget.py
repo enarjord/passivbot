@@ -98,9 +98,9 @@ class BitgetBot(Bot):
             self.market_type += "_inverse_perpetual"
             self.product_type = "dmcbl"
             self.inverse = self.config["inverse"] = False
-            self.min_cost = self.config[
-                "min_cost"
-            ] = 6.0  # will complain with $5 even if order cost > $5
+            self.min_cost = self.config["min_cost"] = (
+                6.0  # will complain with $5 even if order cost > $5
+            )
         else:
             raise NotImplementedError("not yet implemented")
 
@@ -325,23 +325,23 @@ class BitgetBot(Bot):
                 if elm["holdSide"] == "long":
                     position["long"] = {
                         "size": round_(float(elm["total"]), self.qty_step),
-                        "price": 0.0
-                        if elm["averageOpenPrice"] is None
-                        else float(elm["averageOpenPrice"]),
-                        "liquidation_price": 0.0
-                        if elm["liquidationPrice"] is None
-                        else float(elm["liquidationPrice"]),
+                        "price": (
+                            0.0 if elm["averageOpenPrice"] is None else float(elm["averageOpenPrice"])
+                        ),
+                        "liquidation_price": (
+                            0.0 if elm["liquidationPrice"] is None else float(elm["liquidationPrice"])
+                        ),
                     }
 
                 elif elm["holdSide"] == "short":
                     position["short"] = {
                         "size": -abs(round_(float(elm["total"]), self.qty_step)),
-                        "price": 0.0
-                        if elm["averageOpenPrice"] is None
-                        else float(elm["averageOpenPrice"]),
-                        "liquidation_price": 0.0
-                        if elm["liquidationPrice"] is None
-                        else float(elm["liquidationPrice"]),
+                        "price": (
+                            0.0 if elm["averageOpenPrice"] is None else float(elm["averageOpenPrice"])
+                        ),
+                        "liquidation_price": (
+                            0.0 if elm["liquidationPrice"] is None else float(elm["liquidationPrice"])
+                        ),
                     }
             for elm in fetched_balance["data"]:
                 if elm["marginCoin"] == self.margin_coin:

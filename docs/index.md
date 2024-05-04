@@ -33,6 +33,8 @@ Currently the exchanges
 **Kucoin USDT margined perpetuals**  
 **Bybit Derivatives**  
 **Bybit Spot**  
+**BingX USDT margined perpetuals**  
+**Hyperliquid USDC margined perpetuals**  
 are implemented and supported.  
 
 Not all functionality is supported on all exchanges, depending on the APIs that exchanges expose and development efforts.

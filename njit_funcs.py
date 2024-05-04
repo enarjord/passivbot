@@ -29,6 +29,30 @@ def round_dynamic(n: float, d: int):
 
 
 @njit
+def round_dynamic_up(n: float, d: int) -> float:
+    if n == 0.0:
+        return n
+    # Calculate the scaling factor
+    shift = d - int(np.floor(np.log10(abs(n)))) - 1
+    scaled_n = n * (10**shift)
+    # Apply np.ceil to the scaled number and then scale back
+    rounded_n = np.ceil(scaled_n) / (10**shift)
+    return rounded_n
+
+
+@njit
+def round_dynamic_dn(n: float, d: int) -> float:
+    if n == 0.0:
+        return n
+    # Calculate the scaling factor
+    shift = d - int(np.floor(np.log10(abs(n)))) - 1
+    scaled_n = n * (10**shift)
+    # Apply np.floor to the scaled number and then scale back
+    rounded_n = np.floor(scaled_n) / (10**shift)
+    return rounded_n
+
+
+@njit
 def round_up(n, step, safety_rounding=10) -> float:
     return np.round(np.ceil(np.round(n / step, safety_rounding)) * step, safety_rounding)
 
@@ -138,6 +162,15 @@ def calc_pnl_short(entry_price, close_price, qty, inverse, c_mult) -> float:
 
 
 @njit
+def calc_pnl(pside, entry_price, close_price, qty, inverse, c_mult):
+    if pside == "long":
+        return calc_pnl_long(entry_price, close_price, qty, inverse, c_mult)
+    if pside == "short":
+        return calc_pnl_short(entry_price, close_price, qty, inverse, c_mult)
+    raise Exception("unknown position side " + pside)
+
+
+@njit
 def calc_equity(
     balance,
     psize_long,
@@ -192,6 +225,16 @@ def calc_delay_between_fills_ms_ask(pprice, price, delay_between_fills_ms, delay
     # reduce delay between asks in some proportion to diff between pos price and market price
     pprice_diff = (price / pprice - 1) if pprice > 0.0 else 0.0
     return max(60000.0, delay_between_fills_ms * min(1.0, (1 - pprice_diff * delay_weight)))
+
+
+@njit
+def calc_pprice_diff(pside: str, pprice: float, price: float):
+    if pside == "long":
+        return (1.0 - price / pprice) if pprice > 0.0 else 0.0
+    elif pside == "short":
+        return (price / pprice - 1.0) if pprice > 0.0 else 0.0
+    else:
+        raise Exception("unknown pside " + pside)
 
 
 @njit

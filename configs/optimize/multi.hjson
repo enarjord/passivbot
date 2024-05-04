@@ -34,39 +34,35 @@
   long_enabled: true
   short_enabled: true
 
-  # only backwards tp supported
-  backwards_tp_long: true
-  backwards_tp_short: true
-
   bounds:
   {
-    global_TWE_long: [0.0, 9.0]
-    global_TWE_short: [0.0, 9.0]
-    global_loss_allowance_pct: [0.001, 0.5]
-    global_stuck_threshold: [0.5, 0.95]
+    global_TWE_long: [0.0, 10.0]
+    global_TWE_short: [0.0, 10.0]
+    global_loss_allowance_pct: [0.001, 0.1]
+    global_stuck_threshold: [0.4, 0.95]
     global_unstuck_close_pct: [0.001, 0.01]
 
     long_ddown_factor: [0.1, 3.0]
     long_ema_span_0: [400.0, 1440.0]
     long_ema_span_1: [400.0, 1440.0]
-    long_initial_eprice_ema_dist: [-0.1, 0.003]
-    long_initial_qty_pct: [0.005, 0.02]
+    long_initial_eprice_ema_dist: [-0.1, 0.0]
+    long_initial_qty_pct: [0.01, 0.02]
     long_markup_range: [0.0, 0.01]
     long_min_markup: [0.001, 0.01]
-    long_n_close_orders: [2, 16]
-    long_rentry_pprice_dist: [0.005, 0.06]
-    long_rentry_pprice_dist_wallet_exposure_weighting: [0.0, 6.0]
+    long_n_close_orders: [1, 10]
+    long_rentry_pprice_dist: [0.005, 0.07]
+    long_rentry_pprice_dist_wallet_exposure_weighting: [0.0, 15.0]
 
     short_ddown_factor: [0.1, 3.0]
     short_ema_span_0: [400.0, 1440.0]
     short_ema_span_1: [400.0, 1440.0]
-    short_initial_eprice_ema_dist: [-0.1, 0.003]
-    short_initial_qty_pct: [0.005, 0.02]
+    short_initial_eprice_ema_dist: [-0.1, 0.0]
+    short_initial_qty_pct: [0.01, 0.02]
     short_markup_range: [0.0, 0.01]
     short_min_markup: [0.001, 0.01]
-    short_n_close_orders: [2, 16]
-    short_rentry_pprice_dist: [0.005, 0.06]
-    short_rentry_pprice_dist_wallet_exposure_weighting: [0.0, 6.0]
+    short_n_close_orders: [1, 10]
+    short_rentry_pprice_dist: [0.005, 0.07]
+    short_rentry_pprice_dist_wallet_exposure_weighting: [0.0, 15.0]
   }
 }
 

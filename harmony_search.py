@@ -128,9 +128,11 @@ class HarmonySearch:
                 # check if better than worst in harmony memory
                 worst_key_long = sorted(
                     self.hm,
-                    key=lambda x: self.hm[x]["long"]["score"]
-                    if type(self.hm[x]["long"]["score"]) != str
-                    else -np.inf,
+                    key=lambda x: (
+                        self.hm[x]["long"]["score"]
+                        if type(self.hm[x]["long"]["score"]) != str
+                        else -np.inf
+                    ),
                 )[-1]
                 if (
                     self.do_long
@@ -149,9 +151,11 @@ class HarmonySearch:
                     )
                 worst_key_short = sorted(
                     self.hm,
-                    key=lambda x: self.hm[x]["short"]["score"]
-                    if type(self.hm[x]["short"]["score"]) != str
-                    else -np.inf,
+                    key=lambda x: (
+                        self.hm[x]["short"]["score"]
+                        if type(self.hm[x]["short"]["score"]) != str
+                        else -np.inf
+                    ),
                 )[-1]
                 if (
                     self.do_short
@@ -170,15 +174,19 @@ class HarmonySearch:
                     )
             best_key_long = sorted(
                 self.hm,
-                key=lambda x: self.hm[x]["long"]["score"]
-                if type(self.hm[x]["long"]["score"]) != str
-                else np.inf,
+                key=lambda x: (
+                    self.hm[x]["long"]["score"]
+                    if type(self.hm[x]["long"]["score"]) != str
+                    else np.inf
+                ),
             )[0]
             best_key_short = sorted(
                 self.hm,
-                key=lambda x: self.hm[x]["short"]["score"]
-                if type(self.hm[x]["short"]["score"]) != str
-                else np.inf,
+                key=lambda x: (
+                    self.hm[x]["short"]["score"]
+                    if type(self.hm[x]["short"]["score"]) != str
+                    else np.inf
+                ),
             )[0]
             best_config = {
                 "long": deepcopy(self.hm[best_key_long]["long"]["config"]),
@@ -291,9 +299,9 @@ class HarmonySearch:
         )
 
         new_harmony["market_specific_settings"] = self.market_specific_settings[new_harmony["symbol"]]
-        new_harmony[
-            "ticks_cache_fname"
-        ] = f"{self.bt_dir}/{new_harmony['symbol']}/{self.ticks_cache_fname}"
+        new_harmony["ticks_cache_fname"] = (
+            f"{self.bt_dir}/{new_harmony['symbol']}/{self.ticks_cache_fname}"
+        )
         new_harmony["passivbot_mode"] = self.config["passivbot_mode"]
         self.workers[wi] = {
             "config": deepcopy(new_harmony),
@@ -394,9 +402,9 @@ class HarmonySearch:
                             config["market_specific_settings"] = self.market_specific_settings[
                                 config["symbol"]
                             ]
-                            config[
-                                "ticks_cache_fname"
-                            ] = f"{self.bt_dir}/{config['symbol']}/{self.ticks_cache_fname}"
+                            config["ticks_cache_fname"] = (
+                                f"{self.bt_dir}/{config['symbol']}/{self.ticks_cache_fname}"
+                            )
                             config["passivbot_mode"] = self.config["passivbot_mode"]
                             self.workers[wi] = {
                                 "config": config,

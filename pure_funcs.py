@@ -2,6 +2,7 @@ import datetime
 import pprint
 from collections import OrderedDict
 from hashlib import sha256
+from copy import deepcopy
 
 import json
 import numpy as np
@@ -441,9 +442,9 @@ def flatten_dict(d, parent_key="", sep="_"):
 
 
 def sort_dict_keys(d):
-    if type(d) == list:
+    if isinstance(d, list):
         return [sort_dict_keys(e) for e in d]
-    if type(d) != dict:
+    if not isinstance(d, dict):
         return d
     return {key: sort_dict_keys(d[key]) for key in sorted(d)}
 
@@ -493,7 +494,137 @@ def flatten(lst: list) -> list:
 
 
 def get_template_live_config(passivbot_mode="neat_grid"):
-    if passivbot_mode == "recursive_grid":
+    if passivbot_mode == "multi_hjson":
+        return {
+            "user": "bybit_01",
+            "pnls_max_lookback_days": 30,
+            "loss_allowance_pct": 0.005,
+            "stuck_threshold": 0.89,
+            "unstuck_close_pct": 0.005,
+            "execution_delay_seconds": 2,
+            "max_n_cancellations_per_batch": 8,
+            "max_n_creations_per_batch": 4,
+            "price_distance_threshold": 0.002,
+            "auto_gs": True,
+            "TWE_long": 2.0,
+            "TWE_short": 0.1,
+            "long_enabled": True,
+            "short_enabled": False,
+            "approved_symbols": {
+                "COIN1": "-lm n -sm gs -lc configs/live/custom/COIN1USDT.json",
+                "COIN2": "-lm n -sm gs -sw 0.4",
+                "COIN3": "-lm gs -sm n  -lw 0.15 -lev 12",
+            },
+            "ignored_symbols": ["COIN4", "COIN5"],
+            "n_longs": 0,
+            "n_shorts": 0,
+            "minimum_market_age_days": 60,
+            "ohlcv_interval": "15m",
+            "live_configs_dir": "configs/live/multisymbol/no_AU/",
+            "default_config_path": "configs/live/recursive_grid_mode.example.json",
+            "universal_live_config": {
+                "long": {
+                    "ddown_factor": 0.8783,
+                    "ema_span_0": 1054.0,
+                    "ema_span_1": 1307.0,
+                    "initial_eprice_ema_dist": -0.002641,
+                    "initial_qty_pct": 0.01151,
+                    "markup_range": 0.0008899,
+                    "min_markup": 0.007776,
+                    "n_close_orders": 3.724,
+                    "rentry_pprice_dist": 0.04745,
+                    "rentry_pprice_dist_wallet_exposure_weighting": 0.111,
+                },
+                "short": {
+                    "ddown_factor": 0.8783,
+                    "ema_span_0": 1054.0,
+                    "ema_span_1": 1307.0,
+                    "initial_eprice_ema_dist": -0.002641,
+                    "initial_qty_pct": 0.01151,
+                    "markup_range": 0.0008899,
+                    "min_markup": 0.007776,
+                    "n_close_orders": 3.724,
+                    "rentry_pprice_dist": 0.04745,
+                    "rentry_pprice_dist_wallet_exposure_weighting": 0.111,
+                },
+            },
+        }
+    elif passivbot_mode == "multi_json":
+        return {
+            "analysis": {
+                "adg": 0.003956322219722023,
+                "adg_weighted": 0.0028311504314386944,
+                "drawdowns_daily_mean": 0.017813249628287595,
+                "loss_profit_ratio": 0.11029048146750035,
+                "loss_profit_ratio_long": 0.11029048146750035,
+                "loss_profit_ratio_short": 1.0,
+                "n_days": 1073,
+                "n_iters": 30100,
+                "pnl_ratio_long_short": 1.0,
+                "pnl_ratios_symbols": {
+                    "AVAXUSDT": 0.27468845221661337,
+                    "MATICUSDT": 0.2296174818198483,
+                    "SOLUSDT": 0.2953751960870163,
+                    "SUSHIUSDT": 0.20031886987652528,
+                },
+                "price_action_distance_mean": 0.04008693098008042,
+                "sharpe_ratio": 0.16774229057551596,
+                "w_adg_weighted": -0.0028311504314386944,
+                "w_drawdowns_daily_mean": 0.017813249628287595,
+                "w_loss_profit_ratio": 0.11029048146750035,
+                "w_price_action_distance_mean": 0.04008693098008042,
+                "w_sharpe_ratio": -0.16774229057551596,
+                "worst_drawdown": 0.4964442148721724,
+            },
+            "args": {
+                "end_date": "2024-04-07",
+                "exchange": "binance",
+                "long_enabled": True,
+                "short_enabled": False,
+                "start_date": "2021-05-01",
+                "starting_balance": 1000000,
+                "symbols": ["AVAXUSDT", "MATICUSDT", "SOLUSDT", "SUSHIUSDT"],
+                "worst_drawdown_lower_bound": 0.5,
+            },
+            "live_config": {
+                "global": {
+                    "TWE_long": 1.5444230850628553,
+                    "TWE_short": 9.649688432169954,
+                    "loss_allowance_pct": 0.0026679762307641607,
+                    "stuck_threshold": 0.8821459931849173,
+                    "unstuck_close_pct": 0.0010155575341165876,
+                },
+                "long": {
+                    "ddown_factor": 2.629714810883098,
+                    "ema_span_0": 899.2508850110795,
+                    "ema_span_1": 421.7063898877953,
+                    "enabled": True,
+                    "initial_eprice_ema_dist": -0.1,
+                    "initial_qty_pct": 0.014476246820125136,
+                    "markup_range": 0.0053184619781202315,
+                    "min_markup": 0.007118561833656905,
+                    "n_close_orders": 1.8921222249558793,
+                    "rentry_pprice_dist": 0.053886357819123286,
+                    "rentry_pprice_dist_wallet_exposure_weighting": 2.399828941237894,
+                    "wallet_exposure_limit": 0.3861057712657138,
+                },
+                "short": {
+                    "ddown_factor": 2.4945922781706855,
+                    "ema_span_0": 455.44131691615075,
+                    "ema_span_1": 802.61831996626,
+                    "enabled": False,
+                    "initial_eprice_ema_dist": -0.1,
+                    "initial_qty_pct": 0.010939831544335615,
+                    "markup_range": 0.003907075073595213,
+                    "min_markup": 0.00126517818899668,
+                    "n_close_orders": 3.1853269137597926,
+                    "rentry_pprice_dist": 0.04288693053869011,
+                    "rentry_pprice_dist_wallet_exposure_weighting": 0.48577214018315135,
+                    "wallet_exposure_limit": 2.4124221080424886,
+                },
+            },
+        }
+    elif passivbot_mode == "recursive_grid":
         return sort_dict_keys(
             {
                 "config_name": "recursive_grid_test",
@@ -869,20 +1000,20 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
         "adg_per_exposure_short": adg_short / config["short"]["wallet_exposure_limit"],
         "n_days": n_days,
         "starting_balance": sdf.balance_long.iloc[0],
-        "pa_distance_mean_long": pa_distance_mean_long
-        if pa_distance_mean_long == pa_distance_mean_long
-        else 1.0,
+        "pa_distance_mean_long": (
+            pa_distance_mean_long if pa_distance_mean_long == pa_distance_mean_long else 1.0
+        ),
         "pa_distance_max_long": pa_dists_long.max(),
-        "pa_distance_std_long": pa_distance_std_long
-        if pa_distance_std_long == pa_distance_std_long
-        else 1.0,
-        "pa_distance_mean_short": pa_distance_mean_short
-        if pa_distance_mean_short == pa_distance_mean_short
-        else 1.0,
+        "pa_distance_std_long": (
+            pa_distance_std_long if pa_distance_std_long == pa_distance_std_long else 1.0
+        ),
+        "pa_distance_mean_short": (
+            pa_distance_mean_short if pa_distance_mean_short == pa_distance_mean_short else 1.0
+        ),
         "pa_distance_max_short": pa_dists_short.max(),
-        "pa_distance_std_short": pa_distance_std_short
-        if pa_distance_std_short == pa_distance_std_short
-        else 1.0,
+        "pa_distance_std_short": (
+            pa_distance_std_short if pa_distance_std_short == pa_distance_std_short else 1.0
+        ),
         "pa_distance_1pct_worst_mean_long": pa_dists_long.sort_values()
         .iloc[-max(1, len(sdf) // 100) :]
         .mean(),
@@ -891,12 +1022,12 @@ def analyze_fills_slim(fills_long: list, fills_short: list, stats: list, config:
         .mean(),
         "hrs_stuck_max_long": hrs_stuck_max_long,
         "hrs_stuck_max_short": hrs_stuck_max_short,
-        "loss_profit_ratio_long": abs(loss_sum_long) / profit_sum_long
-        if profit_sum_long > 0.0
-        else 1.0,
-        "loss_profit_ratio_short": abs(loss_sum_short) / profit_sum_short
-        if profit_sum_short > 0.0
-        else 1.0,
+        "loss_profit_ratio_long": (
+            abs(loss_sum_long) / profit_sum_long if profit_sum_long > 0.0 else 1.0
+        ),
+        "loss_profit_ratio_short": (
+            abs(loss_sum_short) / profit_sum_short if profit_sum_short > 0.0 else 1.0
+        ),
         "exposure_ratios_mean_long": exposure_ratios_mean_long,
         "exposure_ratios_mean_short": exposure_ratios_mean_short,
         "time_at_max_exposure_long": time_at_max_exposure_long,
@@ -1109,20 +1240,20 @@ def analyze_fills(
         "exchange": config["exchange"] if "exchange" in config else "unknown",
         "symbol": config["symbol"] if "symbol" in config else "unknown",
         "starting_balance": sdf.balance_long.iloc[0],
-        "pa_distance_mean_long": pa_distance_mean_long
-        if pa_distance_mean_long == pa_distance_mean_long
-        else 1.0,
+        "pa_distance_mean_long": (
+            pa_distance_mean_long if pa_distance_mean_long == pa_distance_mean_long else 1.0
+        ),
         "pa_distance_max_long": pa_dists_long.max(),
-        "pa_distance_std_long": pa_distance_std_long
-        if pa_distance_std_long == pa_distance_std_long
-        else 1.0,
-        "pa_distance_mean_short": pa_distance_mean_short
-        if pa_distance_mean_short == pa_distance_mean_short
-        else 1.0,
+        "pa_distance_std_long": (
+            pa_distance_std_long if pa_distance_std_long == pa_distance_std_long else 1.0
+        ),
+        "pa_distance_mean_short": (
+            pa_distance_mean_short if pa_distance_mean_short == pa_distance_mean_short else 1.0
+        ),
         "pa_distance_max_short": pa_dists_short.max(),
-        "pa_distance_std_short": pa_distance_std_short
-        if pa_distance_std_short == pa_distance_std_short
-        else 1.0,
+        "pa_distance_std_short": (
+            pa_distance_std_short if pa_distance_std_short == pa_distance_std_short else 1.0
+        ),
         "pa_distance_1pct_worst_mean_long": pa_dists_long.sort_values()
         .iloc[-max(1, len(sdf) // 100) :]
         .mean(),
@@ -1140,9 +1271,9 @@ def analyze_fills(
         "adg_weighted_per_exposure_long": adg_weighted_per_exposure_long,
         "gain_short": gain_short,
         "adg_short": adg_short if adg_short == adg_short else -1.0,
-        "adg_weighted_short": adg_weighted_short
-        if adg_weighted_short == adg_weighted_short
-        else -1.0,
+        "adg_weighted_short": (
+            adg_weighted_short if adg_weighted_short == adg_weighted_short else -1.0
+        ),
         "adg_per_exposure_short": adg_per_exposure_short,
         "adg_weighted_per_exposure_short": adg_weighted_per_exposure_short,
         "exposure_ratios_mean_long": exposure_ratios_mean_long,
@@ -1191,9 +1322,9 @@ def analyze_fills(
         "pnl_sum_long": pnl_sum_long,
         "pnl_sum_short": pnl_sum_short,
         "loss_profit_ratio_long": (abs(loss_sum_long) / profit_sum_long) if profit_sum_long else 1.0,
-        "loss_profit_ratio_short": (abs(loss_sum_short) / profit_sum_short)
-        if profit_sum_short
-        else 1.0,
+        "loss_profit_ratio_short": (
+            (abs(loss_sum_short) / profit_sum_short) if profit_sum_short else 1.0
+        ),
         "fee_sum_long": (fee_sum_long := longs.fee_paid.sum()),
         "fee_sum_short": (fee_sum_short := shorts.fee_paid.sum()),
         "net_pnl_plus_fees_long": pnl_sum_long + fee_sum_long,
@@ -2093,3 +2224,110 @@ def determine_side_from_order_tuple(order_tuple):
             raise Exception(f"malformed order tuple {order_tuple}")
     else:
         raise Exception(f"malformed order tuple {order_tuple}")
+
+
+def symbol2coin(symbol: str) -> str:
+    coin = symbol
+    for x in ["USDT", "USDC", "BUSD", "USD", "/:"]:
+        coin = coin.replace(x, "")
+    if "1000" in coin:
+        istart = coin.find("1000")
+        iend = istart + 1
+        while True:
+            if iend >= len(coin):
+                break
+            if coin[iend] != "0":
+                break
+            iend += 1
+        coin = coin[:istart] + coin[iend:]
+    if coin.startswith("k") and coin[1:].isupper():
+        # hyperliquid uses e.g. kSHIB instead of 1000SHIB
+        coin = coin[1:]
+    return coin
+
+
+def coin2symbol(coin: str, quote="USDT") -> str:
+    # ccxt formatting
+    return f"{coin}/{quote}:{quote}"
+
+
+def backtested_multiconfig2singleconfig(backtested_config: dict) -> dict:
+    template = get_template_live_config("recursive_grid")
+    for pside in ["long", "short"]:
+        for key, val in [
+            ("auto_unstuck_delay_minutes", 0.0),
+            ("auto_unstuck_qty_pct", 0.0),
+            ("auto_unstuck_wallet_exposure_threshold", 0.0),
+            ("auto_unstuck_ema_dist", 0.0),
+            ("backwards_tp", True),
+        ]:
+            template[pside][key] = val
+        for key in backtested_config["live_config"][pside]:
+            template[pside][key] = backtested_config["live_config"][pside][key]
+    template["config_name"] = "_".join(
+        [symbol2coin(sym) for sym in backtested_config["args"]["symbols"]]
+    )
+    return template
+
+
+def backtested_multiconfig2live_multiconfig(backtested_config: dict) -> dict:
+    template = get_template_live_config("multi_hjson")
+    template["long_enabled"] = backtested_config["args"]["long_enabled"]
+    template["short_enabled"] = backtested_config["args"]["short_enabled"]
+    template["approved_symbols"] = backtested_config["args"]["symbols"]
+    for key in ["live_configs_dir", "default_config_path"]:
+        template[key] = ""
+    for key in backtested_config["live_config"]["global"]:
+        template[key] = backtested_config["live_config"]["global"][key]
+    for pside in ["long", "short"]:
+        for key in backtested_config["live_config"][pside]:
+            if key in template["universal_live_config"][pside]:
+                template["universal_live_config"][pside][key] = backtested_config["live_config"][
+                    pside
+                ][key]
+    return template
+
+
+def add_missing_params_to_hjson_live_multi_config(config: dict) -> (dict, [str]):
+    config_copy = deepcopy(config)
+    logging_lines = []
+    if "approved_symbols" not in config and "symbols" in config:
+        logging_lines.append(f"changed 'symbols' -> 'approved_symbols'")
+        config_copy["approved_symbols"] = config["symbols"]
+    if "universal_live_config" not in config:
+        logging_lines.append(f"adding missing config param: 'universal_live_config': {{}}")
+        config_copy["universal_live_config"] = {}
+
+    template = get_template_live_config("multi_hjson")
+    for key, val in template.items():
+        if key not in config_copy:
+            logging_lines.append(f"adding missing config param: {key}: {val}")
+            config_copy[key] = val
+    return config_copy, logging_lines
+
+
+def remove_OD(d: dict) -> dict:
+    if isinstance(d, dict):
+        return {k: remove_OD(v) for k, v in d.items()}
+    if isinstance(d, list):
+        return [remove_OD(x) for x in d]
+    return d
+
+
+def dict_keysort(d: dict):
+    return sorted(d.items(), key=lambda x: x[1])
+
+
+def expand_PB_mode(mode: str) -> str:
+    if mode.lower() == "gs":
+        return "graceful_stop"
+    elif mode.lower() == "m":
+        return "manual"
+    elif mode.lower() == "n":
+        return "normal"
+    elif mode.lower() == "p":
+        return "panic"
+    elif mode.lower() in ["t", "tp"]:
+        return "tp_only"
+    else:
+        raise Exception(f"unknown passivbot mode {mode}")

@@ -1,14 +1,13 @@
 -r requirements_liveonly.txt
 matplotlib==3.5.1
 prospector==1.6.0
-prettytable==3.0.0
 colorama==0.4.4
 mkdocs==1.4.0
 mkdocs-material==8.1.8
 pymdown-extensions==9.1
 tqdm==4.62.3
 python-dateutil==2.8.2
-numba==0.58.1
+numba==0.59.1
 pandas==1.4.0
 PyYAML==6.0
 asyncio==3.4.3

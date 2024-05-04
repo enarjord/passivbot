@@ -14,7 +14,9 @@ from pure_funcs import (
     determine_pos_side_ccxt,
 )
 from njit_funcs import calc_diff, round_
-from procedures import print_async_exception, utc_ms
+from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
+
+assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
 class BingXBot(Passivbot):
@@ -36,33 +38,18 @@ class BingXBot(Passivbot):
             }
         )
         self.cca.options["defaultType"] = "swap"
-        self.max_n_cancellations_per_batch = 6
-        self.max_n_creations_per_batch = 3
         self.custom_id_max_length = 40
 
-    async def init_bot(self):
-        await self.init_symbols()
-        for symbol in self.symbols:
+    def set_market_specific_settings(self):
+        super().set_market_specific_settings()
+        for symbol in self.markets_dict:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
             self.price_steps[symbol] = round(1.0 / (10 ** elm["precision"]["price"]), 12)
             self.qty_steps[symbol] = round(1.0 / (10 ** elm["precision"]["amount"]), 12)
-            self.min_qtys[symbol] = elm["contractSize"]
-            self.min_costs[symbol] = (
-                2.2 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
-            )
+            self.min_qtys[symbol] = elm["limits"]["amount"]["min"]
+            self.min_costs[symbol] = elm["limits"]["cost"]["min"]
             self.c_mults[symbol] = 1.0
-            self.coins[symbol] = symbol.replace("/USDT:USDT", "")
-            self.tickers[symbol] = {"bid": 0.0, "ask": 0.0, "last": 0.0}
-            self.open_orders[symbol] = []
-            self.positions[symbol] = {
-                "long": {"size": 0.0, "price": 0.0},
-                "short": {"size": 0.0, "price": 0.0},
-            }
-            self.upd_timestamps["open_orders"][symbol] = 0.0
-            self.upd_timestamps["tickers"][symbol] = 0.0
-            self.upd_timestamps["positions"][symbol] = 0.0
-        await super().init_bot()
 
     async def start_websockets(self):
         await asyncio.gather(
@@ -72,14 +59,24 @@ class BingXBot(Passivbot):
         )
 
     async def watch_balance(self):
+        res = None
         while True:
             try:
                 if self.stop_websocket:
                     break
                 res = await self.ccp.watch_balance()
+                if "info" in res:
+                    if "data" in res["info"] and "balance" in res["info"]["data"]:
+                        res[self.quote]["total"] = float(res["info"]["data"]["balance"]["balance"])
+                    else:
+                        for elm in res["info"]:
+                            if elm["a"] == self.quote:
+                                res[self.quote]["total"] = float(elm["wb"])
+                                break
                 self.handle_balance_update(res)
             except Exception as e:
                 print(f"exception watch_balance", e)
+                print_async_exception(res)
                 traceback.print_exc()
 
     async def watch_orders(self):
@@ -96,21 +93,37 @@ class BingXBot(Passivbot):
                 print(f"exception watch_orders", e)
                 traceback.print_exc()
 
-    async def watch_tickers(self, symbols=None):
-        # ccxt hasn't implemented the needed WS endpoints... Relying instead on REST update of tickers.
-        symbols = list(self.symbols if symbols is None else symbols)
-        while True:
+    async def watch_tickers(self):
+        self.WS_ticker_tasks = {}
+        while not self.stop_websocket:
+            current_symbols = set(self.active_symbols)
+            started_symbols = set(self.WS_ticker_tasks.keys())
+
+            # Start watch_ticker tasks for new symbols
+            for symbol in current_symbols - started_symbols:
+                task = asyncio.create_task(self.watch_ticker(symbol))
+                self.WS_ticker_tasks[symbol] = task
+                logging.info(f"Started watching ticker for symbol: {symbol}")
+
+            # Cancel tasks for symbols that are no longer active
+            for symbol in started_symbols - current_symbols:
+                self.WS_ticker_tasks[symbol].cancel()
+                del self.WS_ticker_tasks[symbol]
+                logging.info(f"Stopped watching ticker for symbol: {symbol}")
+
+            # Wait a bit before checking again
+            await asyncio.sleep(1)  # Adjust sleep time as needed
+
+    async def watch_ticker(self, symbol):
+        while not self.stop_websocket and symbol in self.active_symbols:
             try:
-                if self.stop_websocket:
-                    break
-                res = await self.fetch_tickers()
-                res = {s: {k: res[s][k] for k in ["symbol", "bid", "ask", "last"]} for s in symbols}
-                for k in res:
-                    self.handle_ticker_update(res[k])
-                await asyncio.sleep(10)
+                res = await self.ccp.watch_ticker(symbol)
+                self.handle_ticker_update(res)
             except Exception as e:
-                print(f"exception watch_tickers {symbols}", e)
+                logging.error(f"exception watch_ticker {symbol} {str(e)}")
                 traceback.print_exc()
+                await asyncio.sleep(1)
+            await asyncio.sleep(0.1)
 
     async def fetch_open_orders(self, symbol: str = None):
         fetched = None
@@ -202,9 +215,6 @@ class BingXBot(Passivbot):
             logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
             end_time = fetched[0]["timestamp"]
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
-        return sorted(
-            [x for x in all_fetched.values() if x["pnl"] != 0.0], key=lambda x: x["timestamp"]
-        )
 
     async def fetch_pnl(
         self,
@@ -278,16 +288,16 @@ class BingXBot(Passivbot):
             return {}
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        if len(orders) > self.max_n_cancellations_per_batch:
+        if len(orders) > self.config["max_n_cancellations_per_batch"]:
             # prioritize cancelling reduce-only orders
             try:
                 reduce_only_orders = [x for x in orders if x["reduce_only"]]
                 rest = [x for x in orders if not x["reduce_only"]]
-                orders = (reduce_only_orders + rest)[: self.max_n_cancellations_per_batch]
+                orders = (reduce_only_orders + rest)[: self.config["max_n_cancellations_per_batch"]]
             except Exception as e:
                 logging.error(f"debug filter cancellations {e}")
         return await self.execute_multiple(
-            orders, "execute_cancellation", self.max_n_cancellations_per_batch
+            orders, "execute_cancellation", self.config["max_n_cancellations_per_batch"]
         )
 
     async def execute_order(self, order: dict) -> dict:
@@ -328,11 +338,14 @@ class BingXBot(Passivbot):
             return {}
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_order", self.max_n_creations_per_batch)
+        return await self.execute_multiple(
+            orders, "execute_order", self.config["max_n_creations_per_batch"]
+        )
 
-    async def update_exchange_config(self):
+    async def update_exchange_config_by_symbols(self, symbols):
+
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}
-        for symbol in self.symbols:
+        for symbol in symbols:
             try:
                 coros_to_call_margin_mode[symbol] = asyncio.create_task(
                     self.cca.set_margin_mode(
@@ -362,7 +375,7 @@ class BingXBot(Passivbot):
                 )
             except Exception as e:
                 logging.error(f"{symbol}: a error setting leverage short {e}")
-        for symbol in self.symbols:
+        for symbol in symbols:
             res = None
             to_print = ""
             try:
@@ -383,3 +396,6 @@ class BingXBot(Passivbot):
                     logging.error(f"{symbol} error setting cross mode {res} {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
+
+    async def update_exchange_config(self):
+        pass

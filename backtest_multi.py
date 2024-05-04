@@ -26,6 +26,9 @@ from pure_funcs import (
     calc_drawdowns,
     str2bool,
     denumpyize,
+    calc_hash,
+    add_missing_params_to_hjson_live_multi_config,
+    get_template_live_config,
 )
 from plotting import plot_pnls_stuck, plot_pnls_separate, plot_pnls_long_short, plot_fills_multi
 from collections import OrderedDict
@@ -120,8 +123,9 @@ def load_and_parse_config(path: str):
             symbol: {pside: loaded["live_config"][pside] for pside in ["long", "short"]}
             for symbol in formatted["symbols"]
         }
+        return formatted
 
-    elif all(
+    if all(
         [
             x in loaded
             for x in [
@@ -146,7 +150,8 @@ def load_and_parse_config(path: str):
         # hjson backtest config type
         formatted = loaded
         formatted["live_configs"] = {}
-    elif all(
+        return formatted
+    if all(
         [
             x in loaded
             for x in [
@@ -162,8 +167,6 @@ def load_and_parse_config(path: str):
                 "worst_drawdown_lower_bound",
                 "long_enabled",
                 "short_enabled",
-                "backwards_tp_long",
-                "backwards_tp_short",
                 "bounds",
             ]
         ]
@@ -171,9 +174,34 @@ def load_and_parse_config(path: str):
         # hjson optimize config type
         formatted = loaded
         formatted["live_configs"] = {}
-    else:
-        raise Exception("unknown config type")
-    return formatted
+        return formatted
+    try:
+        loaded, _ = add_missing_params_to_hjson_live_multi_config(loaded)
+        if all([x in loaded for x in get_template_live_config("multi_hjson")]):
+            # hjson live multi config
+            formatted = loaded
+            formatted["exchange"] = "binance"
+            formatted["start_date"] = "2021-05-01"
+            formatted["end_date"] = "now"
+            formatted["starting_balance"] = 100000.0
+            formatted["base_dir"] = "backtests"
+            formatted["symbols"] = loaded["approved_symbols"]
+            if loaded["universal_live_config"]:
+                formatted["live_configs"] = {
+                    symbol: {
+                        pside: loaded["universal_live_config"][pside] for pside in ["long", "short"]
+                    }
+                    for symbol in formatted["approved_symbols"]
+                }
+                for s in formatted["live_configs"]:
+                    for pside in ["long", "short"]:
+                        formatted["live_configs"][s][pside]["enabled"] = formatted[f"{pside}_enabled"]
+            else:
+                formatted["live_configs"] = {}
+            return formatted
+    except:
+        pass
+    raise Exception("unknown config type")
 
 
 def args2config(args):
@@ -215,13 +243,13 @@ def args2config(args):
 async def prep_hlcs_mss_config(config):
     if config["end_date"] in ["now", "", "today"]:
         config["end_date"] = ts_to_date_utc(utc_ms())[:10]
-    coins = [s.replace("USDT", "") for s in config["symbols"]]
+    coins = [s.replace("USDT", "") for s in sorted(set(config["symbols"]))]
     config["cache_fpath"] = make_get_filepath(
         oj(
             f"{config['base_dir']}",
             "multisymbol",
             config["exchange"],
-            f"{'_'.join(coins)}_{config['start_date']}_{config['end_date']}_hlc_cache.npy",
+            f"{calc_hash(coins)}_{config['start_date']}_{config['end_date']}_hlc_cache.npy",
         )
     )
 
@@ -370,7 +398,7 @@ async def main():
                         all_args[symbol], f"WE_limit_{pside}"
                     )
                 config["live_configs"][symbol][pside]["wallet_exposure_limit"] = max(
-                    config["live_configs"][symbol][pside]["wallet_exposure_limit"], 0.01
+                    config["live_configs"][symbol][pside]["wallet_exposure_limit"], 0.001
                 )
 
     hlcs, mss, config = await prep_hlcs_mss_config(config)

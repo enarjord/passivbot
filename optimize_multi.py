@@ -7,10 +7,14 @@ import pandas as pd
 import json
 import logging
 import argparse
+import signal
+import sys
+import traceback
+import os
 from deap import base, creator, tools, algorithms
-from collections import OrderedDict
-from procedures import utc_ms, make_get_filepath
+from procedures import utc_ms, make_get_filepath, load_hjson_config
 from multiprocessing import shared_memory
+from copy import deepcopy
 
 from pure_funcs import (
     live_config_dict_to_list_recursive_grid,
@@ -19,15 +23,104 @@ from pure_funcs import (
     ts_to_date_utc,
     denumpyize,
     tuplify,
+    calc_hash,
+    symbol2coin,
 )
 from backtest_multi import backtest_multi, prep_config_multi, prep_hlcs_mss_config
 from njit_multisymbol import backtest_multisymbol_recursive_grid
+
+
+def mutPolynomialBoundedWrapper(individual, eta, low, up, indpb):
+    """
+    A wrapper around DEAP's mutPolynomialBounded function to pre-process
+    bounds and handle the case where lower and upper bounds may be equal.
+
+    Args:
+        individual: Sequence individual to be mutated.
+        eta: Crowding degree of the mutation.
+        low: A value or sequence of values that is the lower bound of the search space.
+        up: A value or sequence of values that is the upper bound of the search space.
+        indpb: Independent probability for each attribute to be mutated.
+
+    Returns:
+        A tuple of one individual, mutated with consideration for equal lower and upper bounds.
+    """
+    # Convert low and up to numpy arrays for easier manipulation
+    low_array = np.array(low)
+    up_array = np.array(up)
+
+    # Identify dimensions where lower and upper bounds are equal
+    equal_bounds_mask = low_array == up_array
+
+    # Temporarily adjust bounds for those dimensions
+    # This adjustment is arbitrary and won't affect the outcome since the mutation
+    # won't be effective in these dimensions
+    temp_low = np.where(equal_bounds_mask, low_array - 1e-6, low_array)
+    temp_up = np.where(equal_bounds_mask, up_array + 1e-6, up_array)
+
+    # Call the original mutPolynomialBounded function with the temporarily adjusted bounds
+    tools.mutPolynomialBounded(individual, eta, list(temp_low), list(temp_up), indpb)
+
+    # Reset values in dimensions with originally equal bounds to ensure they remain unchanged
+    for i, equal in enumerate(equal_bounds_mask):
+        if equal:
+            individual[i] = low[i]
+
+    return (individual,)
+
+
+def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up):
+    """
+    A wrapper around DEAP's cxSimulatedBinaryBounded function to pre-process
+    bounds and handle the case where lower and upper bounds are equal.
+
+    Args:
+        ind1: The first individual participating in the crossover.
+        ind2: The second individual participating in the crossover.
+        eta: Crowding degree of the crossover.
+        low: A value or sequence of values that is the lower bound of the search space.
+        up: A value or sequence of values that is the upper bound of the search space.
+
+    Returns:
+        A tuple of two individuals after crossover operation.
+    """
+    # Convert low and up to numpy arrays for easier manipulation
+    low_array = np.array(low)
+    up_array = np.array(up)
+
+    # Identify dimensions where lower and upper bounds are equal
+    equal_bounds_mask = low_array == up_array
+
+    # Temporarily adjust bounds for those dimensions to prevent division by zero
+    # This adjustment is arbitrary and won't affect the outcome since the crossover
+    # won't modify these dimensions
+    low_array[equal_bounds_mask] -= 1e-6
+    up_array[equal_bounds_mask] += 1e-6
+
+    # Call the original cxSimulatedBinaryBounded function with adjusted bounds
+    tools.cxSimulatedBinaryBounded(ind1, ind2, eta, list(low_array), list(up_array))
+
+    # Ensure that values in dimensions with originally equal bounds are reset
+    # to the bound value (since they should not be modified)
+    for i, equal in enumerate(equal_bounds_mask):
+        if equal:
+            ind1[i] = low[i]
+            ind2[i] = low[i]
+
+    return ind1, ind2
+
+
+def signal_handler(signal, frame):
+    print("\nOptimization interrupted by user. Exiting gracefully...")
+    sys.exit(0)
 
 
 def calc_pa_dist_mean(stats):
     elms = []
     for x in stats:
         for lp, sp, p in zip(x[1], x[2], x[3]):
+            if p == 0.0:
+                continue
             if lp[1]:
                 elms.append(abs(lp[1] - p) / p)
             if sp[1]:
@@ -70,7 +163,9 @@ def analyze_fills_opti(fills, stats, config):
 
     loss_sum_long, profit_sum_long = 0.0, 0.0
     loss_sum_short, profit_sum_short = 0.0, 0.0
+    pnls_by_symbol = {symbol: 0.0 for symbol in config["symbols"]}
     for x in fills:
+        pnls_by_symbol[x[1]] += x[2]
         if "long" in x[10]:
             if x[2] > 0.0:
                 profit_sum_long += x[2]
@@ -94,6 +189,10 @@ def analyze_fills_opti(fills, stats, config):
     pnl_short = profit_sum_short + loss_sum_short
     pnl_sum = pnl_long + pnl_short
     pnl_ratio_long_short = pnl_long / pnl_sum if pnl_sum else 0.0
+    pnl_ratios_symbols = {
+        symbol: pnls_by_symbol[symbol] / pnl_sum if pnl_sum else 0.0 for symbol in config["symbols"]
+    }
+    pnl_ratios_symbols = {k: v for k, v in sorted(pnl_ratios_symbols.items(), key=lambda x: x[1])}
 
     worst_drawdown_mod = (
         max(config["worst_drawdown_lower_bound"], worst_drawdown)
@@ -116,6 +215,7 @@ def analyze_fills_opti(fills, stats, config):
         "loss_profit_ratio_long": loss_profit_ratio_long,
         "loss_profit_ratio_short": loss_profit_ratio_short,
         "pnl_ratio_long_short": pnl_ratio_long_short,
+        "pnl_ratios_symbols": pnl_ratios_symbols,
     }
 
 
@@ -228,20 +328,26 @@ def get_individual_keys():
 
 
 def config_to_individual(config):
+    if "live_config" in config and all(
+        [x in config["live_config"] for x in ["global", "long", "short"]]
+    ):
+        config_ = deepcopy(config["live_config"])
+    else:
+        config_ = deepcopy(config)
     keys = get_individual_keys()
     individual = [0.0 for _ in range(len(keys))]
     for i, key in enumerate(keys):
         key_ = key[key.find("_") + 1 :]
         if key.startswith("global"):
-            if key_ in config:
-                individual[i] = config[key_]
-            elif "global" in config and key_ in config["global"]:
-                individual[i] = config["global"][key_]
+            if key_ in config_:
+                individual[i] = config_[key_]
+            elif "global" in config_ and key_ in config_["global"]:
+                individual[i] = config_["global"][key_]
             else:
-                print(f"warning: '{key_}' missing from config. Setting {key_} = 0.0")
+                raise Exception(f"error: '{key}' missing from config. ")
         else:
             pside = key[: key.find("_")]
-            individual[i] = config[pside][key_]
+            individual[i] = config_[pside][key_]
     return individual
 
 
@@ -310,12 +416,36 @@ def backtest_multi(hlcs, config):
     return res
 
 
-def add_starting_configs(pop, config):
-    for cfg in config["starting_configs"]:
-        pass
+def get_starting_configs(config):
+    if config["starting_configs"] is None:
+        return []
+    cfgs = []
+    if os.path.isdir(config["starting_configs"]):
+        filenames = [f for f in os.listdir(config["starting_configs"])]
+    else:
+        filenames = [config["starting_configs"]]
+    for f in filenames:
+        path = os.path.join(config["starting_configs"], f)
+        try:
+            cfgs.append(load_hjson_config(path))
+        except Exception as e:
+            logging.error(f"failed to load live config {path} {e}")
+    return cfgs
+
+
+def cfgs2individuals(cfgs):
+    inds = {}
+    for cfg in cfgs:
+        try:
+            individual = config_to_individual(cfg)
+            inds[calc_hash(individual)] = individual
+        except Exception as e:
+            logging.error(f"error with config_to_individual {e}")
+    return list(inds.values())
 
 
 async def main():
+    signal.signal(signal.SIGINT, signal_handler)
     logging.basicConfig(
         format="%(asctime)s %(levelname)-8s %(message)s",
         level=logging.INFO,
@@ -345,8 +475,6 @@ async def main():
             default=None,
             help=f"specify {k1}{h}, overriding value from hjson config.",
         )
-    config = prep_config_multi(parser)
-    """
     parser.add_argument(
         "-t",
         "--start",
@@ -356,12 +484,15 @@ async def main():
         default=None,
         help="start with given live configs.  single json file or dir with multiple json files",
     )
-    """
-    config["symbols"] = OrderedDict({k: v for k, v in sorted(config["symbols"].items())})
+    config = prep_config_multi(parser)
+    config["symbols"] = {k: v for k, v in sorted(config["symbols"].items())}
+    coins = [symbol2coin(s) for s in config["symbols"]]
+    coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
+    date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
     config["results_cache_fname"] = make_get_filepath(
-        f"results_multi/{ts_to_date_utc(utc_ms())[:19].replace(':', '_')}_all_results.txt"
+        f"results_multi/{date_fname}_{coins_fname}_all_results.txt"
     )
-    for key, default_val in [("worst_drawdown_lower_bound", 0.5)]:
+    for key, default_val in [("worst_drawdown_lower_bound", 0.25)]:
         if key not in config:
             config[key] = default_val
 
@@ -382,10 +513,7 @@ async def main():
         evaluator = Evaluator(hlcs, config)
 
         NUMBER_OF_VARIABLES = len(config["bounds"])
-        BOUNDS = [
-            (x[0] * (1 - 1e-12), x[1] * (1 + 1e-12)) if x[0] == x[1] else (x[0], x[1])
-            for x in config["bounds"].values()
-        ]
+        BOUNDS = [(x[0], x[1]) for x in config["bounds"].values()]
         n_cpus = max(1, config["n_cpus"])  # Specify the number of CPUs to use
 
         # Define the problem as a multi-objective optimization
@@ -407,14 +535,14 @@ async def main():
         toolbox.register("evaluate", evaluator.evaluate)
         toolbox.register(
             "mate",
-            tools.cxSimulatedBinaryBounded,
+            cxSimulatedBinaryBoundedWrapper,
             low=[bound[0] for bound in BOUNDS],
             up=[bound[1] for bound in BOUNDS],
             eta=20.0,
         )
         toolbox.register(
             "mutate",
-            tools.mutPolynomialBounded,
+            mutPolynomialBoundedWrapper,
             low=[bound[0] for bound in BOUNDS],
             up=[bound[1] for bound in BOUNDS],
             eta=20.0,
@@ -427,37 +555,49 @@ async def main():
         toolbox.register("map", pool.map)
 
         # Population setup
-        pop = toolbox.population(n=100)
-        # pop = add_starting_configs(pop, config)
+        starting_individuals = cfgs2individuals(get_starting_configs(config))
+        pop_size = 100
+        if len(starting_individuals) > pop_size:
+            pop_size = len(starting_individuals)
+            logging.info(f"increasing population size: {pop_size} -> {len(starting_individuals)}")
+        pop = toolbox.population(n=pop_size)
+        if starting_individuals:
+            for i in range(len(starting_individuals)):
+                adjusted = [
+                    max(min(x, BOUNDS[z][1]), BOUNDS[z][0])
+                    for z, x in enumerate(starting_individuals[i])
+                ]
+                pop[i] = creator.Individual(adjusted)
         hof = tools.HallOfFame(1)
         stats = tools.Statistics(lambda ind: ind.fitness.values)
-        for i, w in enumerate(weights):
-            stats.register(f"avg{i}", lambda pop: sum(f[i] for f in pop) / len(pop))
-            if w < 0.0:
-                stats.register(f"min{i}", lambda pop: min(f[i] for f in pop))
-            else:
-                stats.register(f"max{i}", lambda pop: max(f[i] for f in pop))
-
+        stats.register("avg", np.mean, axis=0)
+        stats.register("std", np.std, axis=0)
+        stats.register("min", np.min, axis=0)
+        stats.register("max", np.max, axis=0)
         logging.info(f"starting optimize")
         # Run the algorithm
         algorithms.eaMuPlusLambda(
             pop,
             toolbox,
-            mu=100,
-            lambda_=200,
+            mu=pop_size,
+            lambda_=pop_size,
             cxpb=0.7,
             mutpb=0.3,
-            ngen=max(1, int(config["iters"] / 200)),
+            ngen=max(1, int(config["iters"] / pop_size)),
             stats=stats,
             halloffame=hof,
             verbose=True,
         )
+    except Exception as e:
+        print(e)
+        traceback.print_exc()
     finally:
         # Close the pool
         logging.info(f"attempting clean shutdown...")
         evaluator.cleanup()
-        pool.close()
-        pool.join()
+        sys.exit(0)
+        # pool.close()
+        # pool.join()
 
     return pop, stats, hof
 

@@ -244,17 +244,17 @@ class BingXBot(Bot):
                         position["long"] = {
                             "size": p["notional"],
                             "price": 0.0 if p["entryPrice"] is None else p["entryPrice"],
-                            "liquidation_price": p["liquidationPrice"]
-                            if p["liquidationPrice"]
-                            else 0.0,
+                            "liquidation_price": (
+                                p["liquidationPrice"] if p["liquidationPrice"] else 0.0
+                            ),
                         }
                     elif p["side"] == "short":
                         position["short"] = {
                             "size": -abs(p["notional"]),
                             "price": 0.0 if p["entryPrice"] is None else p["entryPrice"],
-                            "liquidation_price": p["liquidationPrice"]
-                            if p["liquidationPrice"]
-                            else 0.0,
+                            "liquidation_price": (
+                                p["liquidationPrice"] if p["liquidationPrice"] else 0.0
+                            ),
                         }
             position["wallet_balance"] = float(balance["data"]["balance"]["balance"])
             return position

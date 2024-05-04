@@ -279,9 +279,9 @@ class ParticleSwarmOptimization:
         new_position["market_specific_settings"] = self.market_specific_settings[
             new_position["symbol"]
         ]
-        new_position[
-            "ticks_cache_fname"
-        ] = f"{self.bt_dir}/{new_position['symbol']}/{self.ticks_cache_fname}"
+        new_position["ticks_cache_fname"] = (
+            f"{self.bt_dir}/{new_position['symbol']}/{self.ticks_cache_fname}"
+        )
         new_position["passivbot_mode"] = self.config["passivbot_mode"]
         new_position["swarm_key"] = swarm_key
         self.workers[wi] = {
@@ -416,9 +416,9 @@ class ParticleSwarmOptimization:
                             config["market_specific_settings"] = self.market_specific_settings[
                                 config["symbol"]
                             ]
-                            config[
-                                "ticks_cache_fname"
-                            ] = f"{self.bt_dir}/{config['symbol']}/{self.ticks_cache_fname}"
+                            config["ticks_cache_fname"] = (
+                                f"{self.bt_dir}/{config['symbol']}/{self.ticks_cache_fname}"
+                            )
                             config["passivbot_mode"] = self.config["passivbot_mode"]
                             self.workers[wi] = {
                                 "config": config,
