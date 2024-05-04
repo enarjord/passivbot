@@ -506,6 +506,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
             "max_n_creations_per_batch": 4,
             "price_distance_threshold": 0.002,
             "auto_gs": True,
+            "leverage": 10.0,
             "TWE_long": 2.0,
             "TWE_short": 0.1,
             "long_enabled": True,
