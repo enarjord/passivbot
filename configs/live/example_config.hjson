@@ -29,9 +29,12 @@
   // set all non-specified symbols on graceful stop
   auto_gs: true
 
+  // leverage set on exchange
+  leverage: 10.0
+
   // total wallet exposure limits long and short. Exposure limit for each bot will be TWE_pos_side / len(active_symbols_pos_side)
   TWE_long: 2.0
-  TWE_short: 0.1
+  TWE_short: 0.5
 
   // if true, mode defaults to 'normal'. If false, mode defaults to 'graceful_stop' if auto_gs=true, else 'manual'.
   long_enabled: true
@@ -65,12 +68,13 @@
     COIN5
   ]
 
+  // max number of positions to have open
   // if n_longs and n_shorts are both zero, disable forager mode.
   n_longs: 0 // if > 0, overrides longs_enabled
   n_shorts: 0 // if > 0, overrides shorts_enabled
 
   // minimum market age. Don't trade markets younger than x days. Set to zero to allow all markets.
-  minimum_market_age_days: 60
+  minimum_market_age_days: 30
 
   // interval in minutes for ohlcvs used for noisiness and EMAs
   ohlcv_interval: '15m'
@@ -93,29 +97,29 @@
   {
     long:
     {
-      ddown_factor: 0.8783
-      ema_span_0: 1054.0
-      ema_span_1: 1307.0
-      initial_eprice_ema_dist: -0.002641
-      initial_qty_pct: 0.01151
-      markup_range: 0.0008899
-      min_markup: 0.007776
-      n_close_orders: 3.724
-      rentry_pprice_dist: 0.04745
-      rentry_pprice_dist_wallet_exposure_weighting: 0.111
+      ddown_factor: 0.8697
+      ema_span_0:  776.7
+      ema_span_1:  774.3
+      initial_eprice_ema_dist:  -0.008465
+      initial_qty_pct:  0.01167
+      markup_range:  0.002187
+      min_markup:  0.008534
+      n_close_orders:  4.0
+      rentry_pprice_dist:  0.04938
+      rentry_pprice_dist_wallet_exposure_weighting:  2.143
     }
     short:
     {
-      ddown_factor: 0.8783
-      ema_span_0: 1054.0
-      ema_span_1: 1307.0
-      initial_eprice_ema_dist: -0.002641
-      initial_qty_pct: 0.01151
-      markup_range: 0.0008899
-      min_markup: 0.007776
-      n_close_orders: 3.724
-      rentry_pprice_dist: 0.04745
-      rentry_pprice_dist_wallet_exposure_weighting: 0.111
+      ddown_factor: 1.114
+      ema_span_0: 1074.0
+      ema_span_1: 786.2
+      initial_eprice_ema_dist: -0.07048
+      initial_qty_pct: 0.01296
+      markup_range: 0.006174
+      min_markup: 0.003647
+      n_close_orders: 1.675
+      rentry_pprice_dist: 0.05371
+      rentry_pprice_dist_wallet_exposure_weighting: 2.492
     }
   }
 }
