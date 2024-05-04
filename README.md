@@ -44,8 +44,6 @@ See also https://pbconfigdb.scud.dedyn.io/
 
 For more detailed information about Passivbot, see documentation on https://www.passivbot.com
 
-See also https://www.futuresboard.xyz/guides.html
-
 ## Support
 
 [![Discord](https://img.shields.io/badge/Discord-7289DA?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/QAF2H2UmzZ)
