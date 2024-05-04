@@ -177,10 +177,10 @@ class Passivbot:
                 logging.error(f"failed to apply universal_live_config {e}")
                 raise Exception(f"no usable live config found for {symbol}")
         for symbol in self.live_configs:
-            if symbol not in self.flags or self.flags[symbol].leverage is None:
-                self.live_configs[symbol]["leverage"] = 10.0
-            else:
+            if symbol in self.flags and self.flags[symbol].leverage is not None:
                 self.live_configs[symbol]["leverage"] = max(1.0, float(self.flags[symbol].leverage))
+            else:
+                self.live_configs[symbol]["leverage"] = max(1.0, float(self.config["leverage"]))
 
             for pside in ["long", "short"]:
                 # disable timed AU and set backwards TP
@@ -417,8 +417,8 @@ class Passivbot:
     def is_old_enough(self, symbol):
         if self.forager_mode and self.config["minimum_market_age_days"] > 0:
             if symbol in self.first_timestamps:
-                #res = utc_ms() - self.first_timestamps[symbol] > self.config["minimum_market_age_millis"]
-                #logging.info(f"{symbol} {res}")
+                # res = utc_ms() - self.first_timestamps[symbol] > self.config["minimum_market_age_millis"]
+                # logging.info(f"{symbol} {res}")
                 return (
                     utc_ms() - self.first_timestamps[symbol]
                     > self.config["minimum_market_age_millis"]
