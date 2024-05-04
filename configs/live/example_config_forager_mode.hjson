@@ -1,0 +1,120 @@
+{
+  // fetch API key/secret from api-keys.json
+  user: bybit_01
+
+  // multisym auto unstuck: will use profits from other positions to offset losses realized on stuck positions
+
+  // how far into the past to fetch pnl history
+  pnls_max_lookback_days: 30
+
+  // how much below past peak balance to allow losses (default 1% == 0.01). Set to 0.0 to disable multisym auto unstuck.
+  loss_allowance_pct: 0.00286
+
+  // if wallet_exposure / wallet_exposure_limit > stuck_threshold: consider position as stuck
+  stuck_threshold: 0.55
+
+  // percentage of balance * wallet_exposure_limit to close for each unstucking order (default 1% == 0.01)
+  unstuck_close_pct: 0.0046
+
+  // delay between executions to exchange. Set to 60 to simulate 1m ohlcv backtest.
+  execution_delay_seconds: 2
+
+  // how many executions in parallel per batch
+  max_n_cancellations_per_batch: 8
+  max_n_creations_per_batch: 4
+
+  // minimum distance to current price action required for EMA based limit orders
+  price_distance_threshold: 0.002
+
+  // set all non-specified symbols on graceful stop
+  auto_gs: true
+
+  // leverage set on exchange
+  leverage: 10.0
+
+  // total wallet exposure limits long and short. Exposure limit for each bot will be TWE_pos_side / len(active_symbols_pos_side)
+  TWE_long: 2.0
+  TWE_short: 0.5
+
+  // if true, mode defaults to 'normal'. If false, mode defaults to 'graceful_stop' if auto_gs=true, else 'manual'.
+  long_enabled: true
+  short_enabled: false
+
+  // Approved symbols. May be given as list [COIN1, COIN2, ...] or dict with args {COIN1: -x X -y Y, COIN2: -x X -y Y}
+  // Flags:
+  // -lm str: long mode. Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
+  // -sm str: short mode. Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
+    // normal mode: passivbot manages the position as normal
+    // manual mode: passivbot ignores the position
+    // graceful stop: if there is a position, passivbot will manage it, otherwise passivbot will not make new positions
+    // take profit only: passivbot will only manage closing orders
+  // -lw float: wallet exposure limit long. Overrides value from live config. If absent, WE long is TWE_long / len(active_symbols_long)
+  // -sw: float: wallet exposure limit short. Overrides value from live config.
+  // -lev int: leverage set on exchange, if applicable. Default is 10.
+  // -lc str: live config path. Specify live config path to override config from live_configs_dir and default_config_path.
+  approved_symbols: []
+
+  // Forager mode. Dynamically enable bots on markets of higher noisiness.
+  // Only select among approved_symbols defined above. If approved_symbols == [], all symbols are eligible.
+
+  // put on graceful_stop if auto_gs, else manual
+  ignored_symbols: [
+    COIN4
+    COIN5
+  ]
+
+  // max number of positions to have open
+  // if n_longs and n_shorts are both zero, disable forager mode.
+  n_longs: 5 // if > 0, overrides longs_enabled
+  n_shorts: 0 // if > 0, overrides shorts_enabled
+
+  // minimum market age. Don't trade markets younger than x days. Set to zero to allow all markets.
+  minimum_market_age_days: 30
+
+  // interval in minutes for ohlcvs used for noisiness and EMAs
+  ohlcv_interval: '15m'
+
+  // Live configs.
+  // Will try to find live configs in this order: 1. live_configs_dir, 2. default_config_path, 3. universal_live_config
+
+  // 1. Specify directory containing live configs.
+  // They are sorted alphabetically, then the first config whose filename includes symbol is selected.
+  // Set to "" to disable
+  live_configs_dir: ""
+
+  // 2. Specify single config file
+  // if symbol is missing from live_configs_dir, default to this config
+  // Set to "" to disable
+  default_config_path: ""
+
+  // 3. Specify live config for all symbols directly
+  universal_live_config:
+  {
+    long:
+    {
+      ddown_factor: 0.8697
+      ema_span_0:  776.7
+      ema_span_1:  774.3
+      initial_eprice_ema_dist:  -0.008465
+      initial_qty_pct:  0.01167
+      markup_range:  0.002187
+      min_markup:  0.008534
+      n_close_orders:  4.0
+      rentry_pprice_dist:  0.04938
+      rentry_pprice_dist_wallet_exposure_weighting:  2.143
+    }
+    short:
+    {
+      ddown_factor: 1.114
+      ema_span_0: 1074.0
+      ema_span_1: 786.2
+      initial_eprice_ema_dist: -0.07048
+      initial_qty_pct: 0.01296
+      markup_range: 0.006174
+      min_markup: 0.003647
+      n_close_orders: 1.675
+      rentry_pprice_dist: 0.05371
+      rentry_pprice_dist_wallet_exposure_weighting: 2.492
+    }
+  }
+}
