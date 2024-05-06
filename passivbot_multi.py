@@ -265,7 +265,7 @@ class Passivbot:
         if not hasattr(self, "formatted_symbols_map"):
             self.formatted_symbols_map = {}
             self.formatted_symbols_map_inv = defaultdict(set)
-        formatted = f"{symbol2coin(symbol)}/{self.quote}:{self.quote}"
+        formatted = f"{symbol2coin(symbol.replace(',', ''))}/{self.quote}:{self.quote}"
         self.formatted_symbols_map[symbol] = formatted
         self.formatted_symbols_map_inv[formatted].add(symbol)
         return formatted
