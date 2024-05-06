@@ -356,32 +356,38 @@ class Passivbot:
         # defined by each exchange child class
         pass
 
+    def reformat_symbol(self, symbol: str, verbose=False) -> str:
+        # tries to reformat symbol to correct variant for exchange
+        # (e.g. BONK -> 1000BONK/USDT:USDT, PEPE - kPEPE/USDC:USDC)
+        # if no reformatting is possible, return empty string
+        fsymbol = self.format_symbol(symbol)
+        if fsymbol in self.markets_dict:
+            return fsymbol
+        else:
+            if verbose:
+                logging.info(f"{symbol} missing from {self.exchange}")
+            if fsymbol in self.formatted_symbols_map_inv:
+                for x in self.formatted_symbols_map_inv[fsymbol]:
+                    if x in self.markets_dict:
+                        if verbose:
+                            logging.info(f"changing {symbol} -> {x}")
+                        return x
+        return ""
+
     async def init_flags(self):
-        self.ignored_symbols = {self.format_symbol(x) for x in self.config["ignored_symbols"]}
+        self.ignored_symbols = {self.reformat_symbol(x) for x in self.config["ignored_symbols"]}
         self.flags = {}
         self.eligible_symbols = set()  # symbols which may be approved for trading
+
         for symbol in self.config["approved_symbols"]:
-            fsymbol = self.format_symbol(symbol)
-            if fsymbol not in self.markets_dict:
-                logging.info(f"{symbol} missing from {self.exchange}")
-                if fsymbol in self.formatted_symbols_map_inv:
-                    for x in self.formatted_symbols_map_inv[fsymbol]:
-                        if x in self.markets_dict:
-                            logging.info(f"changing {symbol} -> {x}")
-                            self.flags[x] = (
-                                self.config["approved_symbols"][symbol]
-                                if isinstance(self.config["approved_symbols"], dict)
-                                else ""
-                            )
-                            self.eligible_symbols.add(x)
-                            break
-            else:
-                self.flags[fsymbol] = (
+            reformatted_symbol = self.reformat_symbol(symbol, verbose=True)
+            if reformatted_symbol:
+                self.flags[reformatted_symbol] = (
                     self.config["approved_symbols"][symbol]
                     if isinstance(self.config["approved_symbols"], dict)
                     else ""
                 )
-                self.eligible_symbols.add(fsymbol)
+                self.eligible_symbols.add(reformatted_symbol)
         if not self.config["approved_symbols"]:
             self.eligible_symbols = set(self.markets_dict)
 
@@ -403,7 +409,17 @@ class Passivbot:
                 self.flags[symbol].split() if symbol in self.flags else []
             )
             for pside in ["long", "short"]:
-                if (mode := getattr(self.flags[symbol], f"{pside}_mode")) is not None:
+                if (mode := getattr(self.flags[symbol], f"{pside}_mode")) is None:
+                    if symbol in self.ignored_symbols:
+                        setattr(
+                            self.flags[symbol],
+                            f"{pside}_mode",
+                            "graceful_stop" if self.config["auto_gs"] else "manual",
+                        )
+                        self.forced_modes[pside][symbol] = getattr(
+                            self.flags[symbol], f"{pside}_mode"
+                        )
+                else:
                     self.forced_modes[pside][symbol] = mode
 
         if self.forager_mode and self.config["minimum_market_age_days"] > 0:
