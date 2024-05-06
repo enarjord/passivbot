@@ -519,6 +519,8 @@ def get_template_live_config(passivbot_mode="neat_grid"):
             "ignored_symbols": ["COIN4", "COIN5"],
             "n_longs": 0,
             "n_shorts": 0,
+            "forced_mode_long": "",
+            "forced_mode_short": "",
             "minimum_market_age_days": 60,
             "ohlcv_interval": "15m",
             "live_configs_dir": "configs/live/multisymbol/no_AU/",
