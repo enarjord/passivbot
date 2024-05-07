@@ -1342,6 +1342,33 @@ async def prepare_multsymbol_data(
     return df.index[0], np.array([df.values[:, i : i + 3] for i in range(0, len(symbols) * 3, 3)])
 
 
+async def prepare_hlcs_forager(symbols, start_date, end_date, base_dir, exchange):
+    """ """
+    if end_date in ["today", "now", ""]:
+        end_date = ts_to_date_utc(utc_ms())[:10]
+    hlcsd = {}
+    interval_ms = 60000
+    for symbol in symbols:
+        data = await load_hlc_cache(symbol, False, start_date, end_date, base_dir, False, exchange)
+        assert (
+            np.diff(data[:, 0]) == interval_ms
+        ).all(), f"gaps in hlc data {symbol}"  # verify integrous 1m hlcs
+        hlcsd[symbol] = data
+
+    # hlcsd is {symbol: array([[timestamp, high, low, close]])}
+    first_timestamp = min([x[0][0] for x in hlcsd.values()])
+    last_timestamp = max([x[-1][0] for x in hlcsd.values()])
+    timestamps = np.arange(first_timestamp, last_timestamp + interval_ms, interval_ms)
+
+    unified_data = []
+    for symbol, data in hlcsd.items():
+        unified_data.append(np.zeros((len(timestamps), 3)))
+        offset = int((data[0][0] - timestamps[0]) // interval_ms)
+        unified_data[-1][offset : offset + len(data)] = data[:, 1:]
+
+    return np.array(unified_data).transpose(1, 0, 2)
+
+
 async def main():
     parser = argparse.ArgumentParser(
         prog="Downloader", description="Download ticks from exchange API."
