@@ -928,3 +928,143 @@ def backtest_fast_recursive(
             fills.append((k, 0.0, bkr_price, 0.0, hlcs[k][1], "pprice diff break"))
             return fills
     return fills
+
+
+def backtest_forager(
+    hlcs,
+    starting_balance,
+    maker_fee,
+    n_longs,
+    n_shorts,
+    c_mults,
+    symbols,
+    qty_steps,
+    price_steps,
+    min_costs,
+    min_qtys,
+    universal_live_config,
+    noisiness_timeframe,
+):
+    """
+    hlcs contains all eligible symbols, time frame is 1m
+    hlcs stucture: (n_minutes, n_markets, 3)
+    hlcs:
+    [
+        [
+            [sym0_high0, sym0_low0, sym0_close0],
+            [sym0_high1, sym0_low1, sym0_close1],
+            [...],
+        ],
+        [
+            [sym1_high0, sym1_low0, sym1_close0],
+            [sym1_high1, sym1_low1, sym1_close1],
+            [...],
+        ],
+        ...
+    ]
+
+    universal config for all symbols
+    new positions are placed according to noisiness
+
+    universal_live_config structure:
+    [
+        [
+            0 global_TWE_long
+            1 global_TWE_short
+            2 global_loss_allowance_pct
+            3 global_stuck_threshold
+            4 global_unstuck_close_pct
+        ],
+        [
+            0 long_ddown_factor
+            1 long_ema_span_0
+            2 long_ema_span_1
+            3 long_enabled
+            4 long_initial_eprice_ema_dist
+            5 long_initial_qty_pct
+            6 long_markup_range
+            7 long_min_markup
+            8 long_n_close_orders
+            9 long_rentry_pprice_dist
+            10 long_rentry_pprice_dist_wallet_exposure_weighting
+            11 long_wallet_exposure_limit
+        ],
+        [
+            0 short_ddown_factor
+            1 short_ema_span_0
+            2 short_ema_span_1
+            3 short_enabled
+            4 short_initial_eprice_ema_dist
+            5 short_initial_qty_pct
+            6 short_markup_range
+            7 short_min_markup
+            8 short_n_close_orders
+            9 short_rentry_pprice_dist
+            10 short_rentry_pprice_dist_wallet_exposure_weighting
+            11 short_wallet_exposure_limit
+        ],
+    ]
+    """
+
+    ulc = universal_live_config
+    spans_long = [ulc[1][1], ulc[1][2], (ulc[1][1] * ulc[1][2]) ** 0.5]
+    spans_long = np.array(sorted(spans_long))
+    spans_short = [ulc[2][1], ulc[2][2], (ulc[2][1] * ulc[2][2]) ** 0.5]
+    spans_short = np.array(sorted(spans_short))
+    assert max(spans_long) < len(hlcs), "ema span long larger than len(prices)"
+    assert max(spans_short) < len(hlcs), "ema span short larger than len(prices)"
+    spans_long = np.where(spans_long < 1.0, 1.0, spans_long)
+    spans_short = np.where(spans_short < 1.0, 1.0, spans_short)
+    emas_long = np.repeat(hlcs[0, :, 2][:, np.newaxis], 3, axis=1)
+    emas_short = np.repeat(hlcs[0, :, 2][:, np.newaxis], 3, axis=1)
+    alphas_long = 2.0 / (spans_long + 1.0)
+    alphas__long = 1.0 - alphas_long
+    alphas_short = 2.0 / (spans_short + 1.0)
+    alphas__short = 1.0 - alphas_short
+
+    noisiness = np.zeros(len(hlcs))
+
+    n_empty_slots_long = n_longs
+    n_empty_slots_short = n_shorts
+
+    positions_long = np.zeros((len(hlcs[0], 2)))
+    positions_short = np.zeros((len(hlcs[0], 2)))
+
+    open_orders_entry_long = [(0.0, 0.0, "") for _ in range(len(hlcs[0]))]
+    open_orders_entry_short = [(0.0, 0.0, "") for _ in range(len(hlcs[0]))]
+
+    open_orders_closes_long = [[(0.0, 0.0, "")] for _ in range(len(hlcs[0]))]
+    open_orders_closes_short = [[(0.0, 0.0, "")] for _ in range(len(hlcs[0]))]
+
+    fills = [
+        (
+            0,  # index
+            "",  # symbol
+            0.0,  # realized pnl
+            0.0,  # fee paid
+            0.0,  # balance after fill
+            0.0,  # equity
+            0.0,  # fill qty
+            0.0,  # fill price
+            0.0,  # psize after fill
+            0.0,  # pprice after fill
+            "",  # fill type
+            0.0,  # stuckness
+        )
+    ]
+
+    for k in range(len(hlcs)):
+        # calc emas
+        emas_long = calc_ema(alphas_long, alphas__long, emas_long, hlcs[k, :, 2])
+        emas_short = calc_ema(alphas_short, alphas__short, emas_short, hlcs[k, :, 2])
+
+        # calc noisiness
+        # only calc noisiness if there are empty position slots
+        if n_empty_slots_long or n_empty_slots_short:
+            pass
+
+        # check for fills
+        pass
+        # update open orders
+        # record stats
+        pass
