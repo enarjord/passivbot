@@ -41,6 +41,7 @@
   short_enabled: false
 
   // Approved symbols. May be given as list [COIN1, COIN2, ...] or dict with args {COIN1: -x X -y Y, COIN2: -x X -y Y}
+  // If passivbot mode flags are given, that mode is forced. E.g. 'COIN1: -lm n' will force COIN1 to normal mode.
   // Flags:
   // -lm str: long mode. Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
   // -sm str: short mode. Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
@@ -54,6 +55,9 @@
   // -lc str: live config path. Specify live config path to override config from live_configs_dir and default_config_path.
   approved_symbols: []
 
+  ///////////////////////////////////////////////////////////////////////////////////////////////////
+  ///////////////////////////////////////////////////////////////////////////////////////////////////
+
   // Forager mode. Dynamically enable bots on markets of higher noisiness.
   // Only select among approved_symbols defined above. If approved_symbols == [], all symbols are eligible.
 
@@ -63,10 +67,15 @@
     COIN5
   ]
 
-  // max number of positions to have open
-  // if n_longs and n_shorts are both zero, disable forager mode.
+  // Max number of positions to have open.
+  // If n_longs and n_shorts are both zero, forager mode is disabled.
   n_longs: 5 // if > 0, overrides longs_enabled
   n_shorts: 0 // if > 0, overrides shorts_enabled
+
+  // Force all positions to the same mode. Individually flagged modes take precedence.
+  // Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)]
+  forced_mode_long: ""
+  forced_mode_short: ""
 
   // minimum market age. Don't trade markets younger than x days. Set to zero to allow all markets.
   minimum_market_age_days: 30
