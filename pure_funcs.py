@@ -523,6 +523,8 @@ def get_template_live_config(passivbot_mode="neat_grid"):
             "forced_mode_short": "",
             "minimum_market_age_days": 60,
             "ohlcv_interval": "15m",
+            "relative_volume_filter_clip_pct": 0.1,
+            "n_ohlcvs": 100,
             "live_configs_dir": "configs/live/multisymbol/no_AU/",
             "default_config_path": "configs/live/recursive_grid_mode.example.json",
             "universal_live_config": {
