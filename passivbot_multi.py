@@ -419,6 +419,20 @@ class Passivbot:
                         self.forced_modes[pside][symbol] = getattr(
                             self.flags[symbol], f"{pside}_mode"
                         )
+                    elif self.config[f"forced_mode_{pside}"]:
+                        try:
+                            setattr(
+                                self.flags[symbol],
+                                f"{pside}_mode",
+                                expand_PB_mode(self.config[f"forced_mode_{pside}"]),
+                            )
+                            self.forced_modes[pside][symbol] = getattr(
+                                self.flags[symbol], f"{pside}_mode"
+                            )
+                        except Exception as e:
+                            logging.error(
+                                f"failed to set PB mode {self.config[f'forced_mode_{pside}']} {e}"
+                            )
                 else:
                     self.forced_modes[pside][symbol] = mode
 
@@ -470,7 +484,8 @@ class Passivbot:
             for symbol in self.forced_modes[pside]:
                 if self.forced_modes[pside][symbol] == "normal":
                     self.ideal_actives[pside][symbol] = ""
-                self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
+                if symbol in self.actual_actives[pside]:
+                    self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
         if self.forager_mode:
             self.calc_noisiness()  # ideal symbols are high noise symbols
             for symbol in sorted(self.noisiness, key=lambda x: self.noisiness[x], reverse=True):
@@ -487,7 +502,7 @@ class Passivbot:
             for pside in self.actual_actives:
                 # actual actives fill slots first
                 for symbol in self.actual_actives[pside]:
-                    if symbol in self.PB_modes[pside]:
+                    if symbol in self.forced_modes[pside]:
                         continue  # is a forced mode
                     if symbol in self.ideal_actives[pside]:
                         self.PB_modes[pside][symbol] = "normal"
@@ -500,7 +515,7 @@ class Passivbot:
                 # a slot is filled if symbol in [normal, graceful_stop]
                 # symbols on other modes are ignored
                 for symbol in self.ideal_actives[pside]:
-                    if symbol in self.PB_modes[pside]:
+                    if symbol in self.PB_modes[pside] or symbol in self.forced_modes[pside]:
                         continue
                     slots_filled = {
                         k for k, v in self.PB_modes[pside].items() if v in ["normal", "graceful_stop"]
