@@ -60,33 +60,10 @@
     COIN3: -lm gs -sm n  -lw 0.15 -lev 12
   }
 
-  ///////////////////////////////////////////////////////////////////////////////////////////////////
-  ///////////////////////////////////////////////////////////////////////////////////////////////////
-
-  // Forager mode. Dynamically enable bots on markets of higher noisiness.
-  // Only select among approved_symbols defined above. If approved_symbols == [], all symbols are eligible.
-
-  // put on graceful_stop if auto_gs, else manual
-  ignored_symbols: [
-    COIN4
-    COIN5
-  ]
-
-  // Max number of positions to have open.
-  // If n_longs and n_shorts are both zero, forager mode is disabled.
-  n_longs: 0 // if > 0, overrides longs_enabled
-  n_shorts: 0 // if > 0, overrides shorts_enabled
-
   // Force all positions to the same mode. Individually flagged modes take precedence.
   // Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)]
   forced_mode_long: ""
   forced_mode_short: ""
-
-  // minimum market age. Don't trade markets younger than x days. Set to zero to allow all markets.
-  minimum_market_age_days: 30
-
-  // interval in minutes for ohlcvs used for noisiness and EMAs
-  ohlcv_interval: '15m'
 
   // Live configs.
   // Will try to find live configs in this order: 1. live_configs_dir, 2. default_config_path, 3. universal_live_config
@@ -131,4 +108,31 @@
       rentry_pprice_dist_wallet_exposure_weighting: 2.492
     }
   }
+
+  ///////////////////////////////////////////////////////////////////////////////////////////////////
+  ///////////////////////////////////////////////////////////////////////////////////////////////////
+
+  // Forager mode. Dynamically enable bots on markets of higher noisiness.
+  // Only select among approved_symbols defined above. If approved_symbols == [], all symbols are eligible.
+
+  // put on graceful_stop if auto_gs, else manual
+  ignored_symbols: [
+    COIN4
+    COIN5
+  ]
+
+  // Max number of positions to have open.
+  // If n_longs and n_shorts are both zero, forager mode is disabled.
+  n_longs: 0 // if > 0, overrides longs_enabled
+  n_shorts: 0 // if > 0, overrides shorts_enabled
+
+  // minimum market age. Don't trade markets younger than x days. Set to zero to allow all markets.
+  minimum_market_age_days: 30
+
+  // interval in minutes and number of ohlcvs used for noisiness, volumes and EMAs
+  ohlcv_interval: '15m'
+  n_ohlcvs: 100
+
+  // Volume filter: disapprove the lowest relative volume symbols. Default 0.1 == 10%. Set to zero to allow all.
+  relative_volume_filter_clip_pct: 0.1
 }
