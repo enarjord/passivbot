@@ -487,8 +487,17 @@ class Passivbot:
                 if symbol in self.actual_actives[pside]:
                     self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
         if self.forager_mode:
+            if self.config["relative_volume_filter_clip_pct"] > 0.0:
+                self.calc_volumes()
+                # filter by relative volume
+                eligible_symbols = sorted(self.volumes, key=lambda x: self.volumes[x])[
+                    int(round(len(self.volumes) * self.config["relative_volume_filter_clip_pct"])) :
+                ]
+            else:
+                eligible_symbols = list(self.eligible_symbols)
             self.calc_noisiness()  # ideal symbols are high noise symbols
-            for symbol in sorted(self.noisiness, key=lambda x: self.noisiness[x], reverse=True):
+
+            for symbol in sorted(eligible_symbols, key=lambda x: self.noisiness[x], reverse=True):
                 if symbol not in self.eligible_symbols or not self.is_old_enough(symbol):
                     continue
                 longs_full = len(self.ideal_actives["long"]) >= self.config[f"n_longs"]
@@ -1483,6 +1492,15 @@ class Passivbot:
             else:
                 self.noisiness[symbol] = 0.0
 
+    def calc_volumes(self):
+        if not hasattr(self, "volumes"):
+            self.volumes = {}
+        for symbol in self.eligible_symbols:
+            if symbol in self.ohlcvs and self.ohlcvs[symbol] and len(self.ohlcvs[symbol]) > 0:
+                self.volumes[symbol] = sum([x[4] * x[5] for x in self.ohlcvs[symbol]])
+            else:
+                self.volumes[symbol] = 0.0
+
     async def add_new_symbols_to_maintainer_EMAs(self, symbols=None):
         if symbols is None:
             to_add = sorted(set(self.active_symbols) - set(self.emas["long"]))
@@ -1638,13 +1656,18 @@ class Passivbot:
             if utc_ms() - last_ts_modified > age_limit_ms:
                 self.ohlcvs[symbol] = await self.fetch_ohlcv(symbol, timeframe=timeframe)
                 self.dump_ohlcv_to_cache(symbol, self.ohlcvs[symbol])
-                return True
             else:
                 if symbol not in self.ohlcvs or not self.ohlcvs[symbol]:
                     self.ohlcvs[symbol] = self.load_ohlcv_from_cache(symbol)
+            if len(self.ohlcvs[symbol]) < self.config["n_ohlcvs"]:
+                logging.info(
+                    f"too few ohlcvs fetched for {symbol}: fetched {len(self.ohlcvs[symbol])}, ideally: {self.config['n_ohlcvs']}"
+                )
+            self.ohlcvs[symbol] = self.ohlcvs[symbol][-self.config["n_ohlcvs"] :]
+            return True
         except Exception as e:
             logging.error(f"error with update_ohlcvs_single {symbol} {e}")
-        return False
+            return False
 
     async def close(self):
         logging.info(f"Stopped data maintainers: {bot.stop_data_maintainers()}")
