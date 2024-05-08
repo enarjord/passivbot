@@ -1516,48 +1516,63 @@ class Passivbot:
     async def maintain_EMAs(self):
         # maintain EMAs for active symbols
         # if a new symbol appears (e.g. new forager symbol or user manually opens a position), add this symbol to EMA maintainer
-        logging.info(f"initiating EMAs for {','.join([symbol2coin(s) for s in self.active_symbols])}")
-        await self.init_EMAs_multi(sorted(self.active_symbols))
-        logging.info(f"starting EMA maintainer...")
-        while True:
-            now_minute = int(utc_ms() // (1000 * 60) * (1000 * 60))
-            symbols_to_update = [
-                s
-                for s in self.emas["long"]
-                if s not in self.upd_minute_emas or now_minute > self.upd_minute_emas[s]
-            ]
-            await self.update_EMAs_multi(symbols_to_update)
-            await asyncio.sleep(30)
+        try:
+            logging.info(
+                f"initiating EMAs for {','.join([symbol2coin(s) for s in self.active_symbols])}"
+            )
+            await self.init_EMAs_multi(sorted(self.active_symbols))
+            logging.info(f"starting EMA maintainer...")
+            while True:
+                now_minute = int(utc_ms() // (1000 * 60) * (1000 * 60))
+                symbols_to_update = [
+                    s
+                    for s in self.emas["long"]
+                    if s not in self.upd_minute_emas or now_minute > self.upd_minute_emas[s]
+                ]
+                await self.update_EMAs_multi(symbols_to_update)
+                await asyncio.sleep(30)
+        except Exception as e:
+            logging.error(f"Error with maintain_EMAs: {e}")
+            traceback.print_exc()
+            logging.info("restarting EMA maintainer in")
+            for i in range(10, 0, -1):
+                logging.info(f"{i} seconds")
+                await asyncio.sleep(1)
 
     async def maintain_ohlcvs(self, timeframe=None):
-        timeframe = self.config["ohlcv_interval"] if timeframe is None else timeframe
-        # if in forager mode, maintain ohlcvs for all candidate symbols
-        # else, fetch ohlcvs once for EMA initialization
-        if not self.forager_mode:
-            return
-        sleep_interval_sec = max(5.0, (60.0 * 60.0) / len(self.eligible_symbols))
-        logging.info(
-            f"Starting ohlcvs maintainer. Will sleep {sleep_interval_sec:.1f}s between each fetch."
-        )
-        while True:
-            all_syms = set(self.active_symbols) | self.eligible_symbols
-            missing_symbols = [s for s in all_syms if s not in self.ohlcv_upd_timestamps]
-            if missing_symbols:
-                coins_ = [symbol2coin(s) for s in missing_symbols]
-                logging.info(f"adding missing symbols to ohlcv maintainer: {','.join(coins_)}")
-                await self.update_ohlcvs_multi(missing_symbols)
-                await asyncio.sleep(3)
-            else:
-                symbol = self.get_oldest_updated_ohlcv_symbol()
-                start_ts = utc_ms()
-                try:
+        try:
+            timeframe = self.config["ohlcv_interval"] if timeframe is None else timeframe
+            # if in forager mode, maintain ohlcvs for all candidate symbols
+            # else, fetch ohlcvs once for EMA initialization
+            if not self.forager_mode:
+                return
+            sleep_interval_sec = max(5.0, (60.0 * 60.0) / len(self.eligible_symbols))
+            logging.info(
+                f"Starting ohlcvs maintainer. Will sleep {sleep_interval_sec:.1f}s between each fetch."
+            )
+            while True:
+                all_syms = set(self.active_symbols) | self.eligible_symbols
+                missing_symbols = [s for s in all_syms if s not in self.ohlcv_upd_timestamps]
+                if missing_symbols:
+                    coins_ = [symbol2coin(s) for s in missing_symbols]
+                    logging.info(f"adding missing symbols to ohlcv maintainer: {','.join(coins_)}")
+                    await self.update_ohlcvs_multi(missing_symbols)
+                    await asyncio.sleep(3)
+                else:
+                    symbol = self.get_oldest_updated_ohlcv_symbol()
+                    start_ts = utc_ms()
                     res = await self.update_ohlcvs_single(
                         symbol, age_limit_ms=(sleep_interval_sec * 1000)
                     )
                     # logging.info(f"updated ohlcvs for {symbol} {res}")
-                except Exception as e:
-                    logging.error(f"error with update_ohlcvs_single for {symbol} {e}")
-                await asyncio.sleep(max(0.0, sleep_interval_sec - (utc_ms() - start_ts) / 1000))
+                    await asyncio.sleep(max(0.0, sleep_interval_sec - (utc_ms() - start_ts) / 1000))
+        except Exception as e:
+            logging.error(f"Error with maintain_ohlcvs: {e}")
+            traceback.print_exc()
+            logging.info("restarting ohlcvs maintainer in")
+            for i in range(10, 0, -1):
+                logging.info(f"{i} seconds")
+                await asyncio.sleep(1)
 
     async def update_EMAs_multi(self, symbols, n_fetches=10):
         all_res = []
