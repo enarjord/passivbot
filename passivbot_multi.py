@@ -483,6 +483,7 @@ class Passivbot:
         for pside in self.forced_modes:
             for symbol in self.forced_modes[pside]:
                 if self.forced_modes[pside][symbol] == "normal":
+                    self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
                     self.ideal_actives[pside][symbol] = ""
                 if symbol in self.actual_actives[pside]:
                     self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
