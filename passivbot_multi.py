@@ -792,6 +792,20 @@ class Passivbot:
         self.upd_timestamps["pnls"] = utc_ms()
         return True
 
+    async def check_for_inactive_markets(self):
+        self.ineligible_symbols_with_pos = [
+            elm["symbol"]
+            for elm in self.fetched_positions + self.fetched_open_orders
+            if elm["symbol"] not in self.markets_dict
+        ]
+        if self.ineligible_symbols_with_pos:
+            logging.info(
+                f"Caught symbol with pos for ineligible market: {self.ineligible_symbols_with_pos}"
+            )
+            await self.init_markets_dict()
+            await self.init_flags()
+            self.set_live_configs()
+
     async def update_open_orders(self):
         if not hasattr(self, "open_orders"):
             self.open_orders = {}
@@ -799,6 +813,7 @@ class Passivbot:
         if res in [None, False]:
             return False
         self.fetched_open_orders = res
+        await self.check_for_inactive_markets()
         open_orders = res
         oo_ids_old = {elm["id"] for sublist in self.open_orders.values() for elm in sublist}
         created_prints, cancelled_prints = [], []
@@ -843,16 +858,7 @@ class Passivbot:
             return False
         positions_list_new, balance_new = res
         self.fetched_positions = positions_list_new
-        self.ineligible_symbols_with_pos = [
-            elm["symbol"] for elm in self.fetched_positions if elm["symbol"] not in self.markets_dict
-        ]
-        if self.ineligible_symbols_with_pos:
-            logging.info(
-                f"Caught symbol with pos for ineligible market: {self.ineligible_symbols_with_pos}"
-            )
-            await self.init_markets_dict()
-            await self.init_flags()
-            self.set_live_configs()
+        await self.check_for_inactive_markets()
         self.handle_balance_update({self.quote: {"total": balance_new}})
         positions_new = {
             sym: {
