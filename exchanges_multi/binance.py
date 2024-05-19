@@ -97,7 +97,6 @@ class BinanceBot(Passivbot):
                     self.prev_active_symbols = actives
                 res = await self.ccp.watch_bids_asks(self.active_symbols)
                 self.handle_ticker_update(res)
-                await asyncio.sleep(0.1)
             except Exception as e:
                 logging.error(
                     f"Exception in watch_tickers: {e}, active symbols: {len(self.active_symbols)}"
