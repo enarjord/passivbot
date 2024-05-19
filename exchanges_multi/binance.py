@@ -1,5 +1,6 @@
 from passivbot_multi import Passivbot, logging
 from uuid import uuid4
+from njit_funcs import round_
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
 import pprint
@@ -85,17 +86,43 @@ class BinanceBot(Passivbot):
                 print(f"exception watch_orders", e)
                 traceback.print_exc()
 
-    async def watch_tickers(self, symbols=None):
+    async def watch_tickers(self):
         self.prev_active_symbols = set()
         while not self.stop_websocket:
             try:
+                res = await self.ccp.watch_tickers(self.active_symbols)
+                res = res[next(iter(res))]
+                res["bid"] = round_(
+                    res["last"] - self.price_steps[res["symbol"]], self.price_steps[res["symbol"]]
+                )
+                res["ask"] = round_(
+                    res["last"] + self.price_steps[res["symbol"]], self.price_steps[res["symbol"]]
+                )
                 if (actives := set(self.active_symbols)) != self.prev_active_symbols:
                     for symbol in actives - self.prev_active_symbols:
                         logging.info(f"Started watching ticker for symbol: {symbol}")
                     for symbol in self.prev_active_symbols - actives:
                         logging.info(f"Stopped watching ticker for symbol: {symbol}")
                     self.prev_active_symbols = actives
+                self.handle_ticker_update(res)
+            except Exception as e:
+                logging.error(
+                    f"Exception in watch_tickers: {e}, active symbols: {len(self.active_symbols)}"
+                )
+                traceback.print_exc()
+                await asyncio.sleep(1)
+
+    async def watch_tickers_old(self, symbols=None):
+        self.prev_active_symbols = set()
+        while not self.stop_websocket:
+            try:
                 res = await self.ccp.watch_bids_asks(self.active_symbols)
+                if (actives := set(self.active_symbols)) != self.prev_active_symbols:
+                    for symbol in actives - self.prev_active_symbols:
+                        logging.info(f"Started watching ticker for symbol: {symbol}")
+                    for symbol in self.prev_active_symbols - actives:
+                        logging.info(f"Stopped watching ticker for symbol: {symbol}")
+                    self.prev_active_symbols = actives
                 self.handle_ticker_update(res)
             except Exception as e:
                 logging.error(
