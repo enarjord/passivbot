@@ -1315,7 +1315,7 @@ class Passivbot:
     def calc_orders_to_cancel_and_create(self):
         ideal_orders = self.calc_ideal_orders()
         actual_orders = {}
-        for symbol in self.open_orders:
+        for symbol in self.active_symbols:
             actual_orders[symbol] = []
             for x in self.open_orders[symbol]:
                 actual_orders[symbol].append(
