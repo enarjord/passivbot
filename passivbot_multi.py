@@ -1384,6 +1384,7 @@ class Passivbot:
         self.previous_execution_ts = utc_ms()
         try:
             self.update_PB_modes()
+            await self.add_new_symbols_to_maintainer_EMAs()
             await self.update_exchange_configs()
             if self.recent_fill:
                 self.upd_timestamps["positions"] = 0.0
@@ -1440,7 +1441,6 @@ class Passivbot:
         while True:
             if self.stop_websocket:
                 break
-            await self.add_new_symbols_to_maintainer_EMAs()
             if utc_ms() - self.execution_delay_millis > self.previous_execution_ts:
                 await self.execute_to_exchange()
             await asyncio.sleep(1.0)
