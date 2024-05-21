@@ -640,6 +640,8 @@ class Passivbot:
         try:
             if not order or "id" not in order:
                 return False
+            if order["symbol"] not in self.open_orders:
+                self.open_orders[order["symbol"]] = []
             if order["id"] in {x["id"] for x in self.open_orders[order["symbol"]]}:
                 self.open_orders[order["symbol"]] = [
                     x for x in self.open_orders[order["symbol"]] if x["id"] != order["id"]
