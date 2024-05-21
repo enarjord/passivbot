@@ -1317,7 +1317,7 @@ class Passivbot:
         actual_orders = {}
         for symbol in self.active_symbols:
             actual_orders[symbol] = []
-            for x in self.open_orders[symbol]:
+            for x in self.open_orders[symbol] if symbol in self.open_orders else []:
                 actual_orders[symbol].append(
                     {
                         "symbol": x["symbol"],
