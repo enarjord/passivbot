@@ -623,6 +623,9 @@ class Passivbot:
         try:
             if not order or "id" not in order:
                 return False
+            if "symbol" not in order or order["symbol"] is None:
+                logging.info(f"{order}")
+                return False
             if order["symbol"] not in self.open_orders:
                 self.open_orders[order["symbol"]] = []
             if order["id"] not in {x["id"] for x in self.open_orders[order["symbol"]]}:
@@ -639,6 +642,9 @@ class Passivbot:
     def remove_cancelled_order(self, order: dict, source="WS"):
         try:
             if not order or "id" not in order:
+                return False
+            if "symbol" not in order or order["symbol"] is None:
+                logging.info(f"{order}")
                 return False
             if order["symbol"] not in self.open_orders:
                 self.open_orders[order["symbol"]] = []
@@ -834,7 +840,6 @@ class Passivbot:
                 cancelled_prints.append(
                     f"cancelled {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
                 )
-        self.open_orders = {symbol: [] for symbol in self.open_orders}
         self.open_orders = {}
         for elm in open_orders:
             if elm["symbol"] not in self.open_orders:
