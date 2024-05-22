@@ -139,6 +139,7 @@ class HyperliquidBot(Passivbot):
                 res = await self.ccp.watch_order_book(symbol)
                 if res["bids"] and res["asks"]:
                     res["bid"], res["ask"] = res["bids"][0][0], res["asks"][0][0]
+                    res["last"] = (res["bid"] + res["ask"]) / 2
                     self.handle_ticker_update(res)
             except Exception as e:
                 logging.error(f"exception watch_ticker {symbol} {str(e)}")
