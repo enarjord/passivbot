@@ -2336,3 +2336,24 @@ def expand_PB_mode(mode: str) -> str:
         return "tp_only"
     else:
         raise Exception(f"unknown passivbot mode {mode}")
+
+
+def extract_and_sort_by_keys_recursive(nested_dict):
+    """
+    Extracts values from a nested dictionary of arbitrary depth, sorted by their keys.
+
+    Args:
+    nested_dict (dict): A dictionary where each value may be another dictionary.
+
+    Returns:
+    list: A list of values, where each value is a list of values from inner dictionaries sorted by their keys.
+    """
+    if not isinstance(nested_dict, dict):
+        return nested_dict
+
+    sorted_values = []
+    for key in sorted(nested_dict.keys()):
+        value = nested_dict[key]
+        sorted_values.append(extract_and_sort_by_keys_recursive(value))
+
+    return sorted_values
