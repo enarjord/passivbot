@@ -53,7 +53,7 @@ A template example config is found in configs/forager/example_config.hjson
 | `approved_symbols_long`			| If empty, allow all symbols for long.
 | `approved_symbols_short`			| If empty, allow all symbols for short.
 | `live_configs_dir_{long/short}`	| Search this directory for live configs whose filename contains symbol name. Leave as empty string to disable. If multiple matches, the first alphabetically sorted is selected.
-| `live_configs_map`				| Live configs to to use with particular symbols.
+| `live_configs_map`				| Live configs to use with particular symbols.
 | `live_configs_map_{long/short}`	| Overrides symbols from live_configs_map and live_configs_dir.
 
 Configs are chosen in the following priority:  
