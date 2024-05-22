@@ -1342,8 +1342,25 @@ async def prepare_multsymbol_data(
     return df.index[0], np.array([df.values[:, i : i + 3] for i in range(0, len(symbols) * 3, 3)])
 
 
-async def prepare_hlcs_forager(symbols, start_date, end_date, base_dir, exchange):
-    """ """
+async def prepare_hlcs_forager(
+    symbols, start_date, end_date, base_dir="backtests", exchange="binance"
+):
+    """
+    returns
+        [timestamp],
+        [
+            [
+                [sym0_high0, sym0_low0, sym0_close0],
+                [sym1_high0, sym1_low0, sym1_close0],
+                [sym2_high0, sym2_low0, sym2_close0],
+            ],
+            [
+                [sym0_high1, sym0_low1, sym0_close1],
+                [sym1_high1, sym1_low1, sym1_close1],
+                [sym2_high1, sym2_low1, sym2_close1],
+            ]
+        ]
+    """
     if end_date in ["today", "now", ""]:
         end_date = ts_to_date_utc(utc_ms())[:10]
     hlcsd = {}
@@ -1366,7 +1383,77 @@ async def prepare_hlcs_forager(symbols, start_date, end_date, base_dir, exchange
         offset = int((data[0][0] - timestamps[0]) // interval_ms)
         unified_data[-1][offset : offset + len(data)] = data[:, 1:]
 
-    return np.array(unified_data).transpose(1, 0, 2)
+    return timestamps, np.array(unified_data).transpose(1, 0, 2)
+
+
+def calc_noisiness(timestamps, hlcs, timeframe="15m"):
+    """
+    Takes 1m hlcs and timestamps as input and calculates noisiness aggregated over a specified timeframe.
+
+    Args:
+        timestamps (np.array): Array of timestamps.
+        hlcs (np.array): 3D array of shape (time, symbols, [high, low, close]).
+        timeframe (str): Aggregation timeframe ("15m", "5m", "1h", "4h", "1d").
+
+    Returns:
+        np.array: 2D array with adjusted timestamps and noisiness values for each symbol per new timeframe.
+    """
+
+    if timeframe == "15m":
+        n_mins, tf = 15, 1000 * 60 * 15
+    elif timeframe == "5m":
+        n_mins, tf = 5, 1000 * 60 * 5
+    elif timeframe == "1h":
+        n_mins, tf = 60, 1000 * 60 * 60
+    elif timeframe == "4h":
+        n_mins, tf = 60 * 4, 1000 * 60 * 60 * 4
+    elif timeframe == "1d":
+        n_mins, tf = 60 * 24, 1000 * 60 * 60 * 24
+    else:
+        raise Exception(f"unsupported timeframe: {timeframe}")
+
+    # Calculate the first and last timestamp for the new adjusted timeframe
+    first_ts = timestamps[0] // tf * tf
+    last_ts = timestamps[-1] // tf * tf
+    new_timestamps = np.arange(first_ts, last_ts + tf, tf)
+
+    # Number of symbols and the number of new timeframes
+    num_symbols = hlcs.shape[1]
+    num_periods = len(new_timestamps)
+
+    # Initialize the noisiness array
+    noisiness = np.zeros((num_periods - 1, num_symbols))
+
+    start_idx = timestamps[0] // tf * tf
+    for i in range(start_idx, len(hlcs) + tf, n_mins):
+        slice_ = hlcs[max(0, i - n_mins) : i]
+        high = slice_.max()
+        low = slice_.min()
+
+    # Process each symbol
+    for symbol_index in range(num_symbols):
+        # Aggregate high, low, and close for each timeframe
+        for i in range(1, num_periods):
+            # Determine indices in the original array that fall into the current timeframe bucket
+            mask = (timestamps >= new_timestamps[i - 1]) & (timestamps < new_timestamps[i])
+            if np.any(mask):
+                highs = hlcs[mask, symbol_index, 0]
+                lows = hlcs[mask, symbol_index, 1]
+                closes = hlcs[mask, symbol_index, 2]
+
+                # Compute high max, low min, and the last close in the interval
+                period_high = np.max(highs)
+                period_low = np.min(lows)
+                period_close = closes[-1]
+
+                # Calculate noisiness
+                if period_close == 0.0:
+                    noisiness[i - 1, symbol_index] = 0.0
+                else:
+                    noisiness[i - 1, symbol_index] = (period_high - period_low) / period_close
+
+    # Return adjusted timestamps (excluding the last since it doesn't complete the interval) and noisiness values
+    return new_timestamps[:-1], noisiness
 
 
 async def main():
