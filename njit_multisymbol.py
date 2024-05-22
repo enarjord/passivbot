@@ -16,9 +16,14 @@ if "NOJIT" in os.environ and os.environ["NOJIT"] == "true":
         else:
             return wrap
 
+    prange_ = np.arange
+
 else:
     print("using numba")
     from numba import njit
+    import numba as nb
+
+    prange_ = nb.prange
 
 from njit_funcs import (
     calc_ema,
@@ -37,7 +42,7 @@ from njit_funcs import (
 from njit_funcs_recursive_grid import calc_recursive_entry_long, calc_recursive_entry_short
 
 
-@njit
+@njit(cache=True)
 def calc_pnl_sum(poss_long, poss_short, lows, highs, c_mults):
     pnl_sum = 0.0
     for i in range(len(poss_long)):
@@ -185,7 +190,7 @@ def get_open_orders_short(
     return entries, closes
 
 
-@njit
+@njit(cache=True)
 def calc_fills(
     pside_idx,  # 0: long, 1: short
     k,
@@ -327,7 +332,7 @@ def calc_fills(
     return fills, new_pos, new_balance, new_equity
 
 
-@njit
+@njit(cache=True)
 def calc_AU_allowance(
     pnls: np.ndarray, balance: float, loss_allowance_pct=0.01, drop_since_peak_abs=-1.0
 ):
@@ -822,7 +827,7 @@ def backtest_multisymbol_recursive_grid(
     return fills, stats
 
 
-@njit
+@njit(cache=True)
 def backtest_fast_recursive(
     hlcs,
     starting_balance,
@@ -930,111 +935,247 @@ def backtest_fast_recursive(
     return fills
 
 
+@njit(parallel=True)
+def make_buckets(hlcs, bucket_size=15):
+    num_buckets = int(np.ceil(hlcs.shape[0] / bucket_size))
+    bucketed = np.zeros((num_buckets, hlcs.shape[1], hlcs.shape[2]))
+
+    for i in prange_(num_buckets):
+        start = i * bucket_size
+        end = (i + 1) * bucket_size
+        bucket = hlcs[start:end]
+
+        for j in range(hlcs.shape[1]):
+            bucketed[i, j, 0] = np.max(bucket[:, j, 0])
+            bucketed[i, j, 1] = np.min(bucket[:, j, 1])
+
+        bucketed[i, :, 2] = bucket[-1, :, 2]
+
+    return bucketed
+
+
+@njit(parallel=True)
+def calc_NRR(hlcs):
+    # returns normalized relative range
+    # (high - low) / close
+    nrr = np.zeros(hlcs.shape[:2])
+    for i in prange_(hlcs.shape[0]):
+        for j in range(hlcs.shape[1]):
+            if hlcs[i, j][2] != 0.0:
+                nrr[i, j] = (hlcs[i, j][0] - hlcs[i, j][1]) / hlcs[i, j][2]
+            else:
+                nrr[i, j] = 0.0
+    return nrr
+
+
+@njit
+def calc_rolling_mean(data, window=100):
+    """
+    Calculate the rolling mean of a 1D array with a specified window size, handling cases where data
+    length is less than the window size.
+
+    Args:
+        data (np.array): 1D numpy array of floats.
+        window (int): Size of the rolling window.
+
+    Returns:
+        np.array: 1D array containing the rolling mean values, same length as input data.
+    """
+    n = len(data)
+    result = np.empty(data.shape)
+    window_sums = np.zeros(data.shape[1])
+    window_count = 0
+
+    # Initialize the sum and count for the first window
+    for i in range(min(window, n)):
+        window_sums += data[i]
+        window_count += 1
+        result[i] = window_sums / window_count
+
+    # Calculate rolling mean for the rest of the data
+    for i in range(window, n):
+        window_sums += data[i] - data[i - window]
+        result[i] = window_sums / window
+
+    return result
+
+
+@njit
+def custom_repeat_rows(arr, n):
+    """
+    Custom repeat function to repeat each row of a 2D array `n` times.
+    """
+    repeated_arr = np.empty((arr.shape[0] * n, arr.shape[1]), dtype=arr.dtype)
+    for i in range(arr.shape[0]):
+        for j in range(n):
+            repeated_arr[i * n + j] = arr[i]
+    return repeated_arr
+
+
+@njit
+def repeat_elements_to_rows(arr, n):
+    """
+    Custom repeat function to repeat each element of a 1D array `n` times into separate rows.
+    """
+    result = np.empty((arr.shape[0], n), dtype=arr.dtype)
+    for i in range(arr.shape[0]):
+        for j in range(n):
+            result[i, j] = arr[i]
+    return result
+
+
+@njit
+def multiply_arrays(arr0, arr1):
+    result = np.empty((len(arr1), len(arr0)))
+    for i in range(len(arr1)):
+        for j in range(len(arr0)):
+            result[i, j] = arr1[i] * arr0[j]
+    return result
+
+
+@njit
+def calc_noisiness(hlcs, bucket_size=15, rolling_window=100):
+    bucketed = make_buckets(hlcs, bucket_size)  # bucket into bucket_size
+    noiseiness = calc_NRR(bucketed)  # compute normalized relative range for each bucket
+    rolling_mean = calc_rolling_mean(noiseiness, rolling_window)  # rolling mean
+    expanded = custom_repeat_rows(rolling_mean, bucket_size)  # expand to same length as hlcs
+    front_padding = custom_repeat_rows(expanded[:1], 15)  # repeat first bucket as first padding
+    shifted = np.concatenate((front_padding, expanded[:-15]))  # shift forwards
+    return shifted
+
+
+@njit
+def calc_next_ema_multiple(alphas, alphas_, emas, closes):
+    return multiply_arrays(alphas, closes) + alphas_ * emas
+
+
+@njit
+def prepare_emas_forager(spans_long, spans_short, hlcs_first):
+    """
+    spans: [span0, span1]
+    """
+    spans_long = [spans_long[0], spans_long[1], (spans_long[0] * spans_long[1]) ** 0.5]
+    spans_long = np.array(sorted(spans_long))
+    spans_short = [spans_short[0], spans_short[1], (spans_short[0] * spans_short[1]) ** 0.5]
+    spans_short = np.array(sorted(spans_short))
+    spans_long = np.where(spans_long < 1.0, 1.0, spans_long)
+    spans_short = np.where(spans_short < 1.0, 1.0, spans_short)
+    emas_long = repeat_elements_to_rows(hlcs_first[:, 2], 3)
+    emas_short = repeat_elements_to_rows(hlcs_first[:, 2], 3)
+    alphas_long = 2.0 / (spans_long + 1.0)
+    alphas__long = 1.0 - alphas_long
+    alphas_short = 2.0 / (spans_short + 1.0)
+    alphas__short = 1.0 - alphas_short
+    return emas_long, emas_short, alphas_long, alphas__long, alphas_short, alphas__short
+
+
+@njit
 def backtest_forager(
     hlcs,
+    noisiness,  # rolling mean normalized relative range [(high - low) / close]
     starting_balance,
     maker_fee,
-    n_longs,
-    n_shorts,
     c_mults,
     symbols,
     qty_steps,
     price_steps,
     min_costs,
     min_qtys,
-    universal_live_config,
-    noisiness_timeframe,
+    forager_live_config,
 ):
     """
     hlcs contains all eligible symbols, time frame is 1m
-    hlcs stucture: (n_minutes, n_markets, 3)
-    hlcs:
+    hlcs array shape: (n_minutes, n_markets, 3):
     [
         [
-            [sym0_high0, sym0_low0, sym0_close0],
-            [sym0_high1, sym0_low1, sym0_close1],
-            [...],
+            [sym0_high0, sym0_low0, sym0_close0, ...],
+            [sym1_high0, sym1_low0, sym1_close0, ...],
+            [sym2_high0, sym2_low0, sym2_close0, ...],
+            ...
         ],
         [
-            [sym1_high0, sym1_low0, sym1_close0],
-            [sym1_high1, sym1_low1, sym1_close1],
-            [...],
+            [sym0_high1, sym0_low1, sym0_close1, ...],
+            [sym1_high1, sym1_low1, sym1_close1, ...],
+            [sym2_high1, sym2_low1, sym2_close1, ...],
+            ...
+        ],
+        [
+            [sym0_high2, sym0_low2, sym0_close2, ...],
+            [sym1_high2, sym1_low2, sym1_close2, ...],
+            [sym2_high2, sym2_low2, sym2_close2, ...],
+            ...
         ],
         ...
     ]
 
-    universal config for all symbols
-    new positions are placed according to noisiness
 
-    universal_live_config structure:
+    noisiness contains pre-computed rolling mean of normalized relative range (high - low) / close for all symbols
+    timeframe is higher than 1m, e.g. 15m
+    noisiness array is shifted forwards by timeframe n, so at time step k, noisiness[k] is mean noisiness [k - n : k]
+    noisiness array shape: (n_minutes, n_markets):
+    [
+        [sym0_noise0, sym1_noise0, sym2_noise0, ...],
+        [sym0_noise1, sym1_noise1, sym2_noise1, ...],
+        [sym0_noise2, sym1_noise2, sym2_noise2, ...],
+        ...
+    ]
+
+
+    forager_live_config structure:
     [
         [
-            0 global_TWE_long
-            1 global_TWE_short
-            2 global_loss_allowance_pct
-            3 global_stuck_threshold
-            4 global_unstuck_close_pct
+            0 long_ddown_factor,
+            1 long_ema_span_0,
+            2 long_ema_span_1,
+            3 long_initial_eprice_ema_dist,
+            4 long_initial_qty_pct,
+            5 long_markup_range,
+            6 long_min_markup,
+            7 long_n_close_orders,
+            8 long_n_positions,
+            9 long_rentry_pprice_dist,
+            10 long_rentry_pprice_dist_wallet_exposure_weighting,
+            11 long_total_wallet_exposure_limit,
+            12 long_unstuck_close_pct,
+            13 long_unstuck_ema_dist,
+            14 long_unstuck_loss_allowance_pct,
+            15 long_unstuck_threshold,
         ],
         [
-            0 long_ddown_factor
-            1 long_ema_span_0
-            2 long_ema_span_1
-            3 long_enabled
-            4 long_initial_eprice_ema_dist
-            5 long_initial_qty_pct
-            6 long_markup_range
-            7 long_min_markup
-            8 long_n_close_orders
-            9 long_rentry_pprice_dist
-            10 long_rentry_pprice_dist_wallet_exposure_weighting
-            11 long_wallet_exposure_limit
-        ],
-        [
-            0 short_ddown_factor
-            1 short_ema_span_0
-            2 short_ema_span_1
-            3 short_enabled
-            4 short_initial_eprice_ema_dist
-            5 short_initial_qty_pct
-            6 short_markup_range
-            7 short_min_markup
-            8 short_n_close_orders
-            9 short_rentry_pprice_dist
-            10 short_rentry_pprice_dist_wallet_exposure_weighting
-            11 short_wallet_exposure_limit
-        ],
+            0 short_ddown_factor,
+            1 short_ema_span_0,
+            2 short_ema_span_1,
+            3 short_initial_eprice_ema_dist,
+            4 short_initial_qty_pct,
+            5 short_markup_range,
+            6 short_min_markup,
+            7 short_n_close_orders,
+            8 short_n_positions,
+            9 short_rentry_pprice_dist,
+            10 short_rentry_pprice_dist_wallet_exposure_weighting,
+            11 short_total_wallet_exposure_limit,
+            12 short_unstuck_close_pct,
+            13 short_unstuck_ema_dist,
+            14 short_unstuck_loss_allowance_pct,
+            15 short_unstuck_threshold,
     ]
     """
 
-    ulc = universal_live_config
-    spans_long = [ulc[1][1], ulc[1][2], (ulc[1][1] * ulc[1][2]) ** 0.5]
-    spans_long = np.array(sorted(spans_long))
-    spans_short = [ulc[2][1], ulc[2][2], (ulc[2][1] * ulc[2][2]) ** 0.5]
-    spans_short = np.array(sorted(spans_short))
-    assert max(spans_long) < len(hlcs), "ema span long larger than len(prices)"
-    assert max(spans_short) < len(hlcs), "ema span short larger than len(prices)"
-    spans_long = np.where(spans_long < 1.0, 1.0, spans_long)
-    spans_short = np.where(spans_short < 1.0, 1.0, spans_short)
-    emas_long = np.repeat(hlcs[0, :, 2][:, np.newaxis], 3, axis=1)
-    emas_short = np.repeat(hlcs[0, :, 2][:, np.newaxis], 3, axis=1)
-    alphas_long = 2.0 / (spans_long + 1.0)
-    alphas__long = 1.0 - alphas_long
-    alphas_short = 2.0 / (spans_short + 1.0)
-    alphas__short = 1.0 - alphas_short
+    flc = forager_live_config
+    emas_long, emas_short, alphas_long, alphas__long, alphas_short, alphas__short = (
+        prepare_emas_forager([flc[0][1], flc[0][2]], [flc[1][1], flc[1][2]], hlcs[0])
+    )
 
-    noisiness = np.zeros(len(hlcs))
+    assert len(symbols) == len(hlcs[0]), "length mismatch symbols, hlcs"
 
-    n_empty_slots_long = n_longs
-    n_empty_slots_short = n_shorts
+    positions_long = np.zeros((len(hlcs[0]), 2))
+    positions_short = np.zeros((len(hlcs[0]), 2))
 
-    positions_long = np.zeros((len(hlcs[0], 2)))
-    positions_short = np.zeros((len(hlcs[0], 2)))
+    open_orders_entry_long = [(0.0, 0.0, "")] * len(hlcs[0])
+    open_orders_entry_short = [(0.0, 0.0, "")] * len(hlcs[0])
 
-    open_orders_entry_long = [(0.0, 0.0, "") for _ in range(len(hlcs[0]))]
-    open_orders_entry_short = [(0.0, 0.0, "") for _ in range(len(hlcs[0]))]
-
-    open_orders_closes_long = [[(0.0, 0.0, "")] for _ in range(len(hlcs[0]))]
-    open_orders_closes_short = [[(0.0, 0.0, "")] for _ in range(len(hlcs[0]))]
+    open_orders_closes_long = [[(0.0, 0.0, ""), (0.0, 0.0, "")] for _ in range(len(hlcs[0]))]
+    open_orders_closes_short = [[(0.0, 0.0, ""), (0.0, 0.0, "")] for _ in range(len(hlcs[0]))]
 
     fills = [
         (
@@ -1052,19 +1193,16 @@ def backtest_forager(
             0.0,  # stuckness
         )
     ]
-
-    for k in range(len(hlcs)):
+    for k in range(1, len(hlcs)):
         # calc emas
-        emas_long = calc_ema(alphas_long, alphas__long, emas_long, hlcs[k, :, 2])
-        emas_short = calc_ema(alphas_short, alphas__short, emas_short, hlcs[k, :, 2])
-
-        # calc noisiness
-        # only calc noisiness if there are empty position slots
-        if n_empty_slots_long or n_empty_slots_short:
-            pass
+        # return alphas_long, alphas__long, emas_long, hlcs[k, :, 2]
+        emas_long = calc_next_ema_multiple(alphas_long, alphas__long, emas_long, hlcs[k, :, 2])
+        emas_short = calc_next_ema_multiple(alphas_short, alphas__short, emas_short, hlcs[k, :, 2])
 
         # check for fills
         pass
         # update open orders
+        pass
         # record stats
         pass
+        return emas_long
