@@ -9,6 +9,7 @@ import traceback
 import numpy as np
 import pandas as pd
 from downloader import prepare_multsymbol_data
+from copy import deepcopy
 from procedures import (
     load_live_config,
     utc_ms,
@@ -370,7 +371,11 @@ async def main():
                 except Exception as e:
                     logging.error(f"failed to load live config {symbol} {path} {e}")
         else:
-            raise Exception(f"no usable live config found for {symbol}")
+            try:
+                config["live_configs"][symbol] = deepcopy(config["universal_live_config"])
+            except Exception as e:
+                logging.error(f"failed to apply universal_live_config {e}")
+                raise Exception(f"no usable live config found for {symbol}")
         for pside in ["long", "short"]:
             if getattr(args, f"{pside}_mode") == "n":
                 config["live_configs"][symbol][pside]["enabled"] = True
@@ -393,16 +398,15 @@ async def main():
 
     for symbol in config["symbols"]:
         for pside in ["long", "short"]:
-            for symbol in config["symbols"]:
-                if getattr(all_args[symbol], f"WE_limit_{pside}") is None:
-                    config["live_configs"][symbol][pside]["wallet_exposure_limit"] = WE_limits[pside]
-                else:
-                    config["live_configs"][symbol][pside]["wallet_exposure_limit"] = getattr(
-                        all_args[symbol], f"WE_limit_{pside}"
-                    )
-                config["live_configs"][symbol][pside]["wallet_exposure_limit"] = max(
-                    config["live_configs"][symbol][pside]["wallet_exposure_limit"], 0.001
+            if getattr(all_args[symbol], f"WE_limit_{pside}") is None:
+                config["live_configs"][symbol][pside]["wallet_exposure_limit"] = WE_limits[pside]
+            else:
+                config["live_configs"][symbol][pside]["wallet_exposure_limit"] = getattr(
+                    all_args[symbol], f"WE_limit_{pside}"
                 )
+            config["live_configs"][symbol][pside]["wallet_exposure_limit"] = max(
+                config["live_configs"][symbol][pside]["wallet_exposure_limit"], 0.001
+            )
 
     hlcs, mss, config = await prep_hlcs_mss_config(config)
 
