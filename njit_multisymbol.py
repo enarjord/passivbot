@@ -16,14 +16,44 @@ if "NOJIT" in os.environ and os.environ["NOJIT"] == "true":
         else:
             return wrap
 
-    prange_ = np.arange
+    def prange(start, stop=None, step=1):
+        if stop is None:
+            return range(start)
+        return range(start, stop, step)
+
+    # Mock types class
+    class MockTypes:
+        int64 = int
+        float64 = float
+
+        @staticmethod
+        def Tuple(types):
+            return tuple
+
+        @staticmethod
+        def ListType(type):
+            return list
+
+    types = MockTypes
+
+    # Mock List class
+    class MockList(list):
+        def append(self, item):
+            super().append(item)
+
+        def extend(self, items):
+            super().extend(items)
+
+    List = MockList
 
 else:
     print("using numba")
-    from numba import njit
-    import numba as nb
+    from numba import njit, types, prange as nb_prange
+    from numba.typed import List as nb_List
 
-    prange_ = nb.prange
+    prange = nb_prange
+    List = nb_List
+
 
 from njit_funcs import (
     calc_ema,
@@ -940,7 +970,7 @@ def make_buckets(hlcs, bucket_size=15):
     num_buckets = int(np.ceil(hlcs.shape[0] / bucket_size))
     bucketed = np.zeros((num_buckets, hlcs.shape[1], hlcs.shape[2]))
 
-    for i in prange_(num_buckets):
+    for i in prange(num_buckets):
         start = i * bucket_size
         end = (i + 1) * bucket_size
         bucket = hlcs[start:end]
@@ -959,7 +989,7 @@ def calc_NRR(hlcs):
     # returns normalized relative range
     # (high - low) / close
     nrr = np.zeros(hlcs.shape[:2])
-    for i in prange_(hlcs.shape[0]):
+    for i in prange(hlcs.shape[0]):
         for j in range(hlcs.shape[1]):
             if hlcs[i, j][2] != 0.0:
                 nrr[i, j] = (hlcs[i, j][0] - hlcs[i, j][1]) / hlcs[i, j][2]
@@ -1034,14 +1064,16 @@ def multiply_arrays(arr0, arr1):
 
 
 @njit
-def calc_noisiness(hlcs, bucket_size=15, rolling_window=100):
+def calc_noisiness_argsort_indices(hlcs, bucket_size=15, rolling_window=100):
     bucketed = make_buckets(hlcs, bucket_size)  # bucket into bucket_size
-    noiseiness = calc_NRR(bucketed)  # compute normalized relative range for each bucket
-    rolling_mean = calc_rolling_mean(noiseiness, rolling_window)  # rolling mean
+    noisiness = calc_NRR(bucketed)  # compute normalized relative range for each bucket
+    rolling_mean = calc_rolling_mean(noisiness, rolling_window)  # rolling mean
     expanded = custom_repeat_rows(rolling_mean, bucket_size)  # expand to same length as hlcs
-    front_padding = custom_repeat_rows(expanded[:1], 15)  # repeat first bucket as first padding
-    shifted = np.concatenate((front_padding, expanded[:-15]))  # shift forwards
-    return shifted
+    # repeat first bucket as front padding
+    front_padding = custom_repeat_rows(expanded[:1], bucket_size)
+    # shift forwards, clip last buckets
+    shifted = np.concatenate((front_padding, expanded[:-bucket_size]))
+    return reverse_sorted_indices_parallel(shifted)  # return reverse argsort for each timestep
 
 
 @njit
@@ -1069,10 +1101,37 @@ def prepare_emas_forager(spans_long, spans_short, hlcs_first):
     return emas_long, emas_short, alphas_long, alphas__long, alphas_short, alphas__short
 
 
+@njit(parallel=True)
+def reverse_sorted_indices_parallel(arr):
+    x, y = arr.shape
+    sorted_indices_arr = np.empty((x, y), dtype=np.int64)
+
+    for i in prange(x):
+        row = arr[i, :]
+        indices = np.arange(y)
+        sorted_indices = np.empty(y, dtype=np.int64)
+
+        # Perform reverse argsort manually to avoid overhead
+        for j in range(y):
+            for k in range(j + 1, y):
+                if row[indices[j]] < row[indices[k]]:
+                    indices[j], indices[k] = indices[k], indices[j]
+
+        sorted_indices[:] = indices
+        sorted_indices_arr[i, :] = sorted_indices
+
+    return sorted_indices_arr
+
+
+def precompute_noisiest_indices(hlcs, bucket_size=15, rolling_window=100):
+    noisiness = calc_noisiness(hlcs, bucket_size, rolling_window)
+    sorted_indices = reverse_sorted_indices_parallel(noisiness)
+
+
 @njit
 def backtest_forager(
     hlcs,
-    noisiness,  # rolling mean normalized relative range [(high - low) / close]
+    noisiness_indices,  # noisiness for all symbols, argsort for each timestep
     starting_balance,
     maker_fee,
     c_mults,
@@ -1108,11 +1167,11 @@ def backtest_forager(
         ...
     ]
 
-
-    noisiness contains pre-computed rolling mean of normalized relative range (high - low) / close for all symbols
+    noisiness is rolling mean normalized relative range [(high - low) / close]
     timeframe is higher than 1m, e.g. 15m
     noisiness array is shifted forwards by timeframe n, so at time step k, noisiness[k] is mean noisiness [k - n : k]
-    noisiness array shape: (n_minutes, n_markets):
+    noisiness_indices is argsort for each timestep
+    noisiness_indices array shape: (n_minutes, n_markets):
     [
         [sym0_noise0, sym1_noise0, sym2_noise0, ...],
         [sym0_noise1, sym1_noise1, sym2_noise1, ...],
@@ -1161,6 +1220,8 @@ def backtest_forager(
     ]
     """
 
+    balance = starting_balance
+
     flc = forager_live_config
     emas_long, emas_short, alphas_long, alphas__long, alphas_short, alphas__short = (
         prepare_emas_forager([flc[0][1], flc[0][2]], [flc[1][1], flc[1][2]], hlcs[0])
@@ -1171,28 +1232,57 @@ def backtest_forager(
     positions_long = np.zeros((len(hlcs[0]), 2))
     positions_short = np.zeros((len(hlcs[0]), 2))
 
-    open_orders_entry_long = [(0.0, 0.0, "")] * len(hlcs[0])
-    open_orders_entry_short = [(0.0, 0.0, "")] * len(hlcs[0])
+    has_pos_long = List.empty_list(types.int64)
+    has_pos_short = List.empty_list(types.int64)
 
-    open_orders_closes_long = [[(0.0, 0.0, ""), (0.0, 0.0, "")] for _ in range(len(hlcs[0]))]
-    open_orders_closes_short = [[(0.0, 0.0, ""), (0.0, 0.0, "")] for _ in range(len(hlcs[0]))]
+    # has open orders
+    is_active_long = List.empty_list(types.int64)
+    is_active_short = List.empty_list(types.int64)
 
-    fills = [
-        (
-            0,  # index
-            "",  # symbol
-            0.0,  # realized pnl
-            0.0,  # fee paid
-            0.0,  # balance after fill
-            0.0,  # equity
-            0.0,  # fill qty
-            0.0,  # fill price
-            0.0,  # psize after fill
-            0.0,  # pprice after fill
-            "",  # fill type
-            0.0,  # stuckness
-        )
-    ]
+    # waiting for initial entry
+    unfilled_EMA_order_long = List.empty_list(types.int64)
+    unfilled_EMA_order_short = List.empty_list(types.int64)
+
+    is_stuck_long = List.empty_list(types.int64)
+    is_stuck_short = List.empty_list(types.int64)
+
+    open_orders_entry_long = List([(0.0, 0.0, "")] * len(hlcs[0]))
+    open_orders_entry_short = List([(0.0, 0.0, "")] * len(hlcs[0]))
+
+    open_orders_closes_long = List([[(0.0, 0.0, ""), (0.0, 0.0, "")] for _ in range(len(hlcs[0]))])
+    open_orders_closes_short = List([[(0.0, 0.0, ""), (0.0, 0.0, "")] for _ in range(len(hlcs[0]))])
+
+    fills = List(
+        [
+            (
+                0,  # index
+                "",  # symbol
+                0.0,  # realized pnl
+                0.0,  # fee paid
+                0.0,  # balance after fill
+                0.0,  # equity
+                0.0,  # fill qty
+                0.0,  # fill price
+                0.0,  # psize after fill
+                0.0,  # pprice after fill
+                "",  # fill type
+                0.0,  # stuckness
+            )
+        ]
+    )
+
+    stats = List(
+        [
+            (
+                0,  # minute
+                positions_long.copy(),
+                positions_short.copy(),
+                hlcs[0, :, 2],
+                balance,
+                balance,
+            )
+        ]
+    )
     for k in range(1, len(hlcs)):
         # calc emas
         # return alphas_long, alphas__long, emas_long, hlcs[k, :, 2]
@@ -1200,9 +1290,52 @@ def backtest_forager(
         emas_short = calc_next_ema_multiple(alphas_short, alphas__short, emas_short, hlcs[k, :, 2])
 
         # check for fills
-        pass
-        # update open orders
-        pass
-        # record stats
-        pass
-        return emas_long
+        any_fill = False
+        for ixl in is_active_long:
+            if hlcs[k][ixl][0] > open_orders_closes_long[ixl][0][1]:
+                # long close fill
+                any_fill = True
+            if hlcs[k][ixl][1] < open_orders_entry_long[ixl][1]:
+                # long entry fill
+                any_fill = True
+        for ixs in is_active_short:
+            if hlcs[k][ixs][1] < open_orders_closes_short[ixs][0][1]:
+                # short close fill
+                any_fill = True
+            if hlcs[k][ixs][0] > open_orders_entry_short[ixs][1]:
+                # short entry fill
+                any_fill = True
+
+        if any_fill:
+            # update all open orders
+            # update stuck list
+            pass
+        else:
+            # update only EMA based orders
+            if len(has_pos_long) < flc[0][8]:
+                # empty slot; check noisiness
+                pass
+            if len(has_pos_short) < flc[1][8]:
+                # empty slot; check noisiness
+                pass
+            for ixl in unfilled_EMA_order_long:
+                pass
+            for ixs in unfilled_EMA_order_short:
+                pass
+
+        if k % 60 == 0:
+            equity = balance + calc_pnl_sum(
+                positions_long, positions_short, hlcs[k, :, 1], hlcs[k, :, 0], c_mults
+            )
+            stats.append(
+                (
+                    k,  # minute
+                    positions_long.copy(),
+                    positions_short.copy(),
+                    hlcs[k, :, 2],
+                    balance,
+                    equity,
+                )
+            )
+
+        return any_fill
