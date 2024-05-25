@@ -1379,9 +1379,15 @@ async def prepare_hlcs_forager(
 
     unified_data = []
     for symbol, data in hlcsd.items():
-        unified_data.append(np.zeros((len(timestamps), 3)))
+        symbol_data = np.zeros((len(timestamps), 3))
         offset = int((data[0][0] - timestamps[0]) // interval_ms)
-        unified_data[-1][offset : offset + len(data)] = data[:, 1:]
+        # Backfill the data
+        if offset > 0:
+            backfill_value = np.repeat(data[0][2], 3)  # backfill with [close, close, close]
+            symbol_data[:offset] = backfill_value
+
+        symbol_data[offset : offset + len(data)] = data[:, 1:]
+        unified_data.append(symbol_data)
 
     return timestamps, np.array(unified_data).transpose(1, 0, 2)
 
