@@ -34,6 +34,10 @@ if "NOJIT" in os.environ and os.environ["NOJIT"] == "true":
         def ListType(type):
             return list
 
+        @staticmethod
+        def StringType(type):
+            return str
+
     types = MockTypes
 
     # Mock List class
@@ -70,6 +74,29 @@ from njit_funcs import (
     calc_bankruptcy_price,
 )
 from njit_funcs_recursive_grid import calc_recursive_entry_long, calc_recursive_entry_short
+
+
+# Define the tuple types outside the njit function
+order_type = types.Tuple((types.float64, types.float64, types.unicode_type))
+orders_type = types.Tuple((types.int64, types.ListType(order_type)))
+
+
+fills_type = types.Tuple(
+    (
+        types.int64,  # index minute
+        types.string,  # symbol
+        types.float64,  # realized pnl
+        types.float64,  # fee paid
+        types.float64,  # balance after fill
+        types.float64,  # equity
+        types.float64,  # fill qty
+        types.float64,  # fill price
+        types.float64,  # psize after fill
+        types.float64,  # pprice after fill
+        types.string,  # fill type
+        types.float64,  # stuckness
+    )
+)
 
 
 @njit(cache=True)
@@ -1220,9 +1247,16 @@ def backtest_forager(
     ]
     """
 
-    balance = starting_balance
-
     flc = forager_live_config
+    balance = starting_balance
+    inverse = False
+    auto_unstuck_ema_dist = 0.0
+    auto_unstuck_wallet_exposure_threshold = 0.0
+    auto_unstuck_on_timer = False
+    enabled_long = flc[0][8] > 0
+    enabled_short = flc[1][8] > 0
+    wallet_exposure_limit_long = flc[0][11] / flc[0][8] if enabled_long else 0.0
+    wallet_exposure_limit_short = flc[1][11] / flc[1][8] if enabled_short else 0.0
     emas_long, emas_short, alphas_long, alphas__long, alphas_short, alphas__short = (
         prepare_emas_forager([flc[0][1], flc[0][2]], [flc[1][1], flc[1][2]], hlcs[0])
     )
@@ -1246,30 +1280,16 @@ def backtest_forager(
     is_stuck_long = List.empty_list(types.int64)
     is_stuck_short = List.empty_list(types.int64)
 
-    open_orders_entry_long = List([(0.0, 0.0, "")] * len(hlcs[0]))
-    open_orders_entry_short = List([(0.0, 0.0, "")] * len(hlcs[0]))
+    # (idx, [(qty, price, type), (qty, price, type), ...])
+    # order_type = types.Tuple((types.float64, types.float64, types.unicode_type))
+    # orders_type = types.Tuple((types.int64, types.ListType(order_type)))
 
-    open_orders_closes_long = List([[(0.0, 0.0, ""), (0.0, 0.0, "")] for _ in range(len(hlcs[0]))])
-    open_orders_closes_short = List([[(0.0, 0.0, ""), (0.0, 0.0, "")] for _ in range(len(hlcs[0]))])
+    open_orders_entry_long = List.empty_list(orders_type)
+    open_orders_close_long = List.empty_list(orders_type)
+    open_orders_entry_short = List.empty_list(orders_type)
+    open_orders_close_short = List.empty_list(orders_type)
 
-    fills = List(
-        [
-            (
-                0,  # index
-                "",  # symbol
-                0.0,  # realized pnl
-                0.0,  # fee paid
-                0.0,  # balance after fill
-                0.0,  # equity
-                0.0,  # fill qty
-                0.0,  # fill price
-                0.0,  # psize after fill
-                0.0,  # pprice after fill
-                "",  # fill type
-                0.0,  # stuckness
-            )
-        ]
-    )
+    fills = List.empty_list(fills_type)
 
     stats = List(
         [
@@ -1277,44 +1297,82 @@ def backtest_forager(
                 0,  # minute
                 positions_long.copy(),
                 positions_short.copy(),
-                hlcs[0, :, 2],
-                balance,
-                balance,
+                hlcs[0, :, 2], # high, low, close at timestep
+                balance, # balance
+                balance, # equity
             )
         ]
     )
     for k in range(1, len(hlcs)):
-        # calc emas
-        # return alphas_long, alphas__long, emas_long, hlcs[k, :, 2]
-        emas_long = calc_next_ema_multiple(alphas_long, alphas__long, emas_long, hlcs[k, :, 2])
-        emas_short = calc_next_ema_multiple(alphas_short, alphas__short, emas_short, hlcs[k, :, 2])
-
-        # check for fills
         any_fill = False
-        for ixl in is_active_long:
-            if hlcs[k][ixl][0] > open_orders_closes_long[ixl][0][1]:
-                # long close fill
-                any_fill = True
-            if hlcs[k][ixl][1] < open_orders_entry_long[ixl][1]:
-                # long entry fill
-                any_fill = True
-        for ixs in is_active_short:
-            if hlcs[k][ixs][1] < open_orders_closes_short[ixs][0][1]:
-                # short close fill
-                any_fill = True
-            if hlcs[k][ixs][0] > open_orders_entry_short[ixs][1]:
-                # short entry fill
-                any_fill = True
+        if enabled_long:
+            # calc emas
+            emas_long = calc_next_ema_multiple(alphas_long, alphas__long, emas_long, hlcs[k, :, 2])
+            # check for fills
+            for entry in open_orders_entry_long:
+                if hlcs[k][entry[0]][1] < entry[1][0][1]:
+                    # long close fill
+                    any_fill = True
+            for close in open_orders_close_long:
+                if hlcs[k][entry[0]][0] > entry[1][0][1]:
+                    # long close fill
+                    any_fill = True
+        if enabled_short:
+            pass
+            '''
+            emas_short = calc_next_ema_multiple(
+                alphas_short, alphas__short, emas_short, hlcs[k, :, 2]
+            )
+            for ixs in is_active_short:
+                if hlcs[k][ixs][1] < open_orders_close_short[ixs][0][1]:
+                    # short close fill
+                    any_fill = True
+                if hlcs[k][ixs][0] > open_orders_entry_short[ixs][1]:
+                    # short entry fill
+                    any_fill = True
+            '''
 
         if any_fill:
             # update all open orders
-            # update stuck list
-            pass
+            if enabled_long:
+                open_orders_entry_long = List.empty_list(orders_type)
+                open_orders_close_long = List.empty_list(orders_type)
+                active_longs = calc_actives(flc[0][8], has_pos_long, noisiness_indices)
+                for idx in active_longs:
+                    entry = calc_recursive_entry_long(
+                        balance,
+                        positions_long[idx][0],
+                        positions_long[idx][1],
+                        hlcs[k - 1][idx][2],  # close of previous candle
+                        emas_long[idx].min(),
+                        inverse,
+                        qty_steps[idx],
+                        price_steps[idx],
+                        min_qtys[idx],
+                        min_costs[idx],
+                        c_mults[idx],
+                        flc[0][4],
+                        flc[0][3],
+                        flc[0][0],
+                        flc[0][9],
+                        flc[0][10],
+                        wallet_exposure_limit_long,
+                        auto_unstuck_ema_dist,
+                        auto_unstuck_wallet_exposure_threshold,
+                        auto_unstuck_on_timer,
+                    )
+                    open_orders_entry_long.append((idx, [entry]))
+            if enabled_short:
+                open_orders_entry_short = List.empty_list(orders_type)
+                open_orders_close_short = List.empty_list(orders_type)
+                active_shorts = calc_actives(flc[1][8], has_pos_short, noisiness_indices)
         else:
             # update only EMA based orders
-            if len(has_pos_long) < flc[0][8]:
-                # empty slot; check noisiness
+            n_available_slots_long = flc[0][8] - len(has_pos_long)
+            for _ in range(n_available_slots_long):
+                # empty slot(s); choose highest noise idx
                 pass
+
             if len(has_pos_short) < flc[1][8]:
                 # empty slot; check noisiness
                 pass
@@ -1337,5 +1395,27 @@ def backtest_forager(
                     equity,
                 )
             )
+        break
 
-        return any_fill
+    return open_orders_entry_long
+
+
+@njit
+def list_contains(lst, value):
+    for item in lst:
+        if item == value:
+            return True
+    return False
+
+@njit
+def calc_actives(max_n_slots, has_pos, noisiness_indices):
+    n_available_slots = max_n_slots - len(has_pos)
+    if n_available_slots > 0:
+        idxs_to_add = List.empty_list(types.int64)
+        for x in noisiness_indices:
+            if not list_contains(has_pos, x):
+                idxs_to_add.append(x)
+                if len(idxs_to_add) >= n_available_slots:
+                    break
+        return has_pos + idxs_to_add
+    return has_pos
