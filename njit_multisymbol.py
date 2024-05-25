@@ -1250,8 +1250,11 @@ def backtest_forager(
     flc = forager_live_config
     balance = starting_balance
     inverse = False
+    backwards_tp = True
     auto_unstuck_ema_dist = 0.0
     auto_unstuck_wallet_exposure_threshold = 0.0
+    auto_unstuck_delay_minutes = 0.0
+    auto_unstuck_qty_pct = 0.0
     auto_unstuck_on_timer = False
     enabled_long = flc[0][8] > 0
     enabled_short = flc[1][8] > 0
@@ -1263,8 +1266,8 @@ def backtest_forager(
 
     assert len(symbols) == len(hlcs[0]), "length mismatch symbols, hlcs"
 
-    positions_long = np.zeros((len(hlcs[0]), 2))
-    positions_short = np.zeros((len(hlcs[0]), 2))
+    positions_long = np.zeros((len(hlcs[0]), 2)) if enabled_long else np.zeros((0, 2))
+    positions_short = np.zeros((len(hlcs[0]), 2)) if enabled_short else np.zeros((0, 2))
 
     has_pos_long = List.empty_list(types.int64)
     has_pos_short = List.empty_list(types.int64)
@@ -1297,9 +1300,9 @@ def backtest_forager(
                 0,  # minute
                 positions_long.copy(),
                 positions_short.copy(),
-                hlcs[0, :, 2], # high, low, close at timestep
-                balance, # balance
-                balance, # equity
+                hlcs[0, :, 2],  # high, low, close at timestep
+                balance,  # balance
+                balance,  # equity
             )
         ]
     )
@@ -1309,17 +1312,82 @@ def backtest_forager(
             # calc emas
             emas_long = calc_next_ema_multiple(alphas_long, alphas__long, emas_long, hlcs[k, :, 2])
             # check for fills
-            for entry in open_orders_entry_long:
-                if hlcs[k][entry[0]][1] < entry[1][0][1]:
-                    # long close fill
-                    any_fill = True
-            for close in open_orders_close_long:
-                if hlcs[k][entry[0]][0] > entry[1][0][1]:
-                    # long close fill
-                    any_fill = True
+            for idx, entries in open_orders_entry_long:
+                for entry in entries:
+                    if hlcs[k][idx][1] < entry[1] and entry[0] != 0.0:
+                        # long entry fill
+                        any_fill = True
+                        fee_paid = -qty_to_cost(entry[0], entry[1], inverse, c_mults[idx]) * maker_fee
+                        balance += fee_paid
+                        equity = balance + calc_pnl_sum(
+                            positions_long, positions_short, hlcs[k, :, 1], hlcs[k, :, 0], c_mults
+                        )
+                        positions_long[idx][0], positions_long[idx][1] = calc_new_psize_pprice(
+                            positions_long[idx][0],
+                            positions_long[idx][1],
+                            entry[0],
+                            entry[1],
+                            qty_steps[idx],
+                        )
+                        fills.append(
+                            (
+                                k,  # index minute
+                                symbols[idx],  # symbol
+                                0.0,  # realized pnl
+                                fee_paid,  # fee paid
+                                balance,  # balance after fill
+                                equity,  # equity
+                                entry[0],  # fill qty
+                                entry[1],  # fill price
+                                positions_long[idx][0],  # psize after fill
+                                positions_long[idx][1],  # pprice after fill
+                                entry[2],  # fill type
+                                0.0,  # stuckness
+                            )
+                        )
+            for idx, closes in open_orders_close_long:
+                for close in closes:
+                    if hlcs[k][idx][0] > close[1] and close[0] != 0.0:
+                        # long close fill
+                        any_fill = True
+                        new_psize = round_(positions_long[idx][0] + close[0], qty_steps[idx])
+                        if new_psize < 0.0:
+                            print("warning: close qty greater than psize long")
+                            print("symbol", symbols[idx])
+                            print("new_psize", new_psize)
+                            print("close order", close)
+                            new_psize = 0.0
+                            close = (-positions_long[idx][0], close[1], close[2])
+                        fee_paid = -qty_to_cost(close[0], close[1], inverse, c_mults[idx]) * maker_fee
+                        pnl = calc_pnl_long(
+                            positions_long[idx][1], close[1], close[0], inverse, c_mults[idx]
+                        )
+                        balance += pnl + fee_paid
+                        equity = balance + calc_pnl_sum(
+                            positions_long, positions_short, hlcs[k, :, 1], hlcs[k, :, 0], c_mults
+                        )
+                        positions_long[idx][0] = new_psize
+                        if new_psize == 0.0:
+                            positions_long[idx][1] = 0.0
+                        fills.append(
+                            (
+                                k,  # index minute
+                                symbols[idx],  # symbol
+                                pnl,  # realized pnl
+                                fee_paid,  # fee paid
+                                balance,  # balance after fill
+                                equity,  # equity
+                                close[0],  # fill qty
+                                close[1],  # fill price
+                                positions_long[idx][0],  # psize after fill
+                                positions_long[idx][1],  # pprice after fill
+                                close[2],  # fill type
+                                0.0,  # stuckness
+                            )
+                        )
         if enabled_short:
             pass
-            '''
+            """
             emas_short = calc_next_ema_multiple(
                 alphas_short, alphas__short, emas_short, hlcs[k, :, 2]
             )
@@ -1330,20 +1398,21 @@ def backtest_forager(
                 if hlcs[k][ixs][0] > open_orders_entry_short[ixs][1]:
                     # short entry fill
                     any_fill = True
-            '''
+            """
 
         if any_fill:
             # update all open orders
             if enabled_long:
                 open_orders_entry_long = List.empty_list(orders_type)
                 open_orders_close_long = List.empty_list(orders_type)
-                active_longs = calc_actives(flc[0][8], has_pos_long, noisiness_indices)
+                unfilled_EMA_order_long = List.empty_list(types.int64)
+                active_longs = calc_actives(flc[0][8], has_pos_long, noisiness_indices[k])
                 for idx in active_longs:
                     entry = calc_recursive_entry_long(
                         balance,
                         positions_long[idx][0],
                         positions_long[idx][1],
-                        hlcs[k - 1][idx][2],  # close of previous candle
+                        hlcs[k - 1][idx][2],  # close of previous candle as highest_bid
                         emas_long[idx].min(),
                         inverse,
                         qty_steps[idx],
@@ -1361,26 +1430,78 @@ def backtest_forager(
                         auto_unstuck_wallet_exposure_threshold,
                         auto_unstuck_on_timer,
                     )
-                    open_orders_entry_long.append((idx, [entry]))
+                    open_orders_entry_long.append((idx, List([entry])))
+                    if idx not in has_pos_long:
+                        unfilled_EMA_order_long.append(idx)
+
+                    closes = calc_close_grid_long(
+                        backwards_tp,
+                        balance,
+                        positions_long[idx][0],
+                        positions_long[idx][1],
+                        hlcs[k - 1][idx][2],  # close of previous candle as lowest_ask
+                        emas_long[idx].max(),
+                        0.0,
+                        0.0,
+                        inverse,
+                        qty_steps[idx],
+                        price_steps[idx],
+                        min_qtys[idx],
+                        min_costs[idx],
+                        c_mults[idx],
+                        wallet_exposure_limit_long,
+                        flc[0][6],
+                        flc[0][5],
+                        flc[0][7],
+                        auto_unstuck_wallet_exposure_threshold,
+                        auto_unstuck_ema_dist,
+                        auto_unstuck_delay_minutes,
+                        auto_unstuck_qty_pct,
+                    )
+                    open_orders_close_long.append((idx, List(closes)))
+
             if enabled_short:
                 open_orders_entry_short = List.empty_list(orders_type)
                 open_orders_close_short = List.empty_list(orders_type)
-                active_shorts = calc_actives(flc[1][8], has_pos_short, noisiness_indices)
+                active_shorts = calc_actives(flc[1][8], has_pos_short, noisiness_indices[k])
         else:
             # update only EMA based orders
-            n_available_slots_long = flc[0][8] - len(has_pos_long)
-            for _ in range(n_available_slots_long):
-                # empty slot(s); choose highest noise idx
-                pass
-
-            if len(has_pos_short) < flc[1][8]:
-                # empty slot; check noisiness
-                pass
-            for ixl in unfilled_EMA_order_long:
-                pass
-            for ixs in unfilled_EMA_order_short:
-                pass
-
+            if enabled_long:
+                if len(has_pos_long) < flc[0][8]:
+                    # one or more empty slot; recalc actives by noisiness
+                    active_longs = calc_actives(flc[0][8], has_pos_long, noisiness_indices[k])
+                    new_open_orders_entry_long = List.empty_list(orders_type)
+                    skip = []
+                    for x in open_orders_entry_long:
+                        if x[0] in has_pos_long:
+                            new_open_orders_entry_long.append(x)
+                            skip.append(x[0])
+                    for idx in active_longs:
+                        if idx not in skip:
+                            entry = calc_recursive_entry_long(
+                                balance,
+                                positions_long[idx][0],
+                                positions_long[idx][1],
+                                hlcs[k - 1][idx][2],  # close of previous candle as highest_bid
+                                emas_long[idx].min(),
+                                inverse,
+                                qty_steps[idx],
+                                price_steps[idx],
+                                min_qtys[idx],
+                                min_costs[idx],
+                                c_mults[idx],
+                                flc[0][4],
+                                flc[0][3],
+                                flc[0][0],
+                                flc[0][9],
+                                flc[0][10],
+                                wallet_exposure_limit_long,
+                                auto_unstuck_ema_dist,
+                                auto_unstuck_wallet_exposure_threshold,
+                                auto_unstuck_on_timer,
+                            )
+                            new_open_orders_entry_long.append((idx, List([entry])))
+                    open_orders_entry_long = new_open_orders_entry_long
         if k % 60 == 0:
             equity = balance + calc_pnl_sum(
                 positions_long, positions_short, hlcs[k, :, 1], hlcs[k, :, 0], c_mults
@@ -1395,27 +1516,22 @@ def backtest_forager(
                     equity,
                 )
             )
-        break
 
-    return open_orders_entry_long
+    return fills
 
-
-@njit
-def list_contains(lst, value):
-    for item in lst:
-        if item == value:
-            return True
-    return False
 
 @njit
 def calc_actives(max_n_slots, has_pos, noisiness_indices):
     n_available_slots = max_n_slots - len(has_pos)
     if n_available_slots > 0:
-        idxs_to_add = List.empty_list(types.int64)
+        actives = List.empty_list(types.int64)
+        for x in has_pos:
+            actives.append(x)
         for x in noisiness_indices:
-            if not list_contains(has_pos, x):
-                idxs_to_add.append(x)
-                if len(idxs_to_add) >= n_available_slots:
+            # if not list_contains(has_pos, x):
+            if x not in has_pos:
+                actives.append(x)
+                if len(actives) >= max_n_slots:
                     break
-        return has_pos + idxs_to_add
+        return actives
     return has_pos
