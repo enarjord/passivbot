@@ -1246,7 +1246,6 @@ def backtest_forager(
             15 short_unstuck_threshold,
     ]
     """
-
     flc = forager_live_config
     balance = starting_balance
     inverse = False
@@ -1269,11 +1268,19 @@ def backtest_forager(
     positions_long = np.zeros((len(hlcs[0]), 2)) if enabled_long else np.zeros((0, 2))
     positions_short = np.zeros((len(hlcs[0]), 2)) if enabled_short else np.zeros((0, 2))
 
-    has_pos_long = List.empty_list(types.int64)
-    has_pos_short = List.empty_list(types.int64)
+    has_pos_long = set()
+    has_pos_short = set()
 
-    is_stuck_long = List.empty_list(types.int64)
-    is_stuck_short = List.empty_list(types.int64)
+    is_stuck_long = set()
+    is_stuck_short = set()
+
+    # to remove:for numbay type inference
+    has_pos_short.add(5)
+    has_pos_short.remove(5)
+    is_stuck_long.add(1)
+    is_stuck_long.remove(1)
+    is_stuck_short.add(1)
+    is_stuck_short.remove(1)
 
     # (idx, [(qty, price, type), (qty, price, type), ...])
     # order_type = types.Tuple((types.float64, types.float64, types.unicode_type))
@@ -1309,8 +1316,7 @@ def backtest_forager(
                     if hlcs[k][idx][1] < entry[1] and entry[0] != 0.0:
                         # long entry fill
                         any_fill = True
-                        if idx not in has_pos_long:
-                            has_pos_long.append(idx)
+                        has_pos_long.add(idx)
                         fee_paid = -qty_to_cost(entry[0], entry[1], inverse, c_mults[idx]) * maker_fee
                         balance += fee_paid
                         equity = balance + calc_pnl_sum(
@@ -1323,6 +1329,17 @@ def backtest_forager(
                             entry[1],
                             qty_steps[idx],
                         )
+                        wallet_exposure = (
+                            qty_to_cost(
+                                positions_long[idx][0], positions_long[idx][1], inverse, c_mults[idx]
+                            )
+                            / balance
+                        )
+                        stuckness = wallet_exposure / wallet_exposure_limit_long
+                        if stuckness > flc[0][15]:
+                            is_stuck_long.add(idx)
+                        elif idx in is_stuck_long:
+                            is_stuck_long.remove(idx)
                         fills.append(
                             (
                                 k,  # index minute
@@ -1336,7 +1353,7 @@ def backtest_forager(
                                 positions_long[idx][0],  # psize after fill
                                 positions_long[idx][1],  # pprice after fill
                                 entry[2],  # fill type
-                                0.0,  # stuckness
+                                stuckness,  # stuckness
                             )
                         )
             for idx, closes in open_orders_close_long:
@@ -1353,7 +1370,7 @@ def backtest_forager(
                             new_psize = 0.0
                             close = (-positions_long[idx][0], close[1], close[2])
                         if new_psize == 0.0:
-                            has_pos_long = List([x for x in has_pos_long if x != idx])
+                            has_pos_long.remove(idx)
                         fee_paid = -qty_to_cost(close[0], close[1], inverse, c_mults[idx]) * maker_fee
                         pnl = calc_pnl_long(
                             positions_long[idx][1], close[1], close[0], inverse, c_mults[idx]
@@ -1365,6 +1382,17 @@ def backtest_forager(
                         positions_long[idx][0] = new_psize
                         if new_psize == 0.0:
                             positions_long[idx][1] = 0.0
+                        wallet_exposure = (
+                            qty_to_cost(
+                                positions_long[idx][0], positions_long[idx][1], inverse, c_mults[idx]
+                            )
+                            / balance
+                        )
+                        stuckness = wallet_exposure / wallet_exposure_limit_long
+                        if stuckness > flc[0][15]:
+                            is_stuck_long.add(idx)
+                        elif idx in is_stuck_long:
+                            is_stuck_long.remove(idx)
                         fills.append(
                             (
                                 k,  # index minute
@@ -1378,7 +1406,7 @@ def backtest_forager(
                                 positions_long[idx][0],  # psize after fill
                                 positions_long[idx][1],  # pprice after fill
                                 close[2],  # fill type
-                                0.0,  # stuckness
+                                stuckness,  # stuckness
                             )
                         )
         if enabled_short:
@@ -1516,13 +1544,13 @@ def backtest_forager(
 def calc_actives(max_n_slots, has_pos, noisiness_indices):
     n_available_slots = max_n_slots - len(has_pos)
     if n_available_slots > 0:
-        actives = List.empty_list(types.int64)
+        actives = set()
         for x in has_pos:
-            actives.append(x)
+            actives.add(x)
         for x in noisiness_indices:
             # if not list_contains(has_pos, x):
             if x not in has_pos:
-                actives.append(x)
+                actives.add(x)
                 if len(actives) >= max_n_slots:
                     break
         return actives
