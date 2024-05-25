@@ -1272,14 +1272,6 @@ def backtest_forager(
     has_pos_long = List.empty_list(types.int64)
     has_pos_short = List.empty_list(types.int64)
 
-    # has open orders
-    is_active_long = List.empty_list(types.int64)
-    is_active_short = List.empty_list(types.int64)
-
-    # waiting for initial entry
-    unfilled_EMA_order_long = List.empty_list(types.int64)
-    unfilled_EMA_order_short = List.empty_list(types.int64)
-
     is_stuck_long = List.empty_list(types.int64)
     is_stuck_short = List.empty_list(types.int64)
 
@@ -1317,6 +1309,8 @@ def backtest_forager(
                     if hlcs[k][idx][1] < entry[1] and entry[0] != 0.0:
                         # long entry fill
                         any_fill = True
+                        if idx not in has_pos_long:
+                            has_pos_long.append(idx)
                         fee_paid = -qty_to_cost(entry[0], entry[1], inverse, c_mults[idx]) * maker_fee
                         balance += fee_paid
                         equity = balance + calc_pnl_sum(
@@ -1358,6 +1352,8 @@ def backtest_forager(
                             print("close order", close)
                             new_psize = 0.0
                             close = (-positions_long[idx][0], close[1], close[2])
+                        if new_psize == 0.0:
+                            has_pos_long = List([x for x in has_pos_long if x != idx])
                         fee_paid = -qty_to_cost(close[0], close[1], inverse, c_mults[idx]) * maker_fee
                         pnl = calc_pnl_long(
                             positions_long[idx][1], close[1], close[0], inverse, c_mults[idx]
@@ -1405,7 +1401,6 @@ def backtest_forager(
             if enabled_long:
                 open_orders_entry_long = List.empty_list(orders_type)
                 open_orders_close_long = List.empty_list(orders_type)
-                unfilled_EMA_order_long = List.empty_list(types.int64)
                 active_longs = calc_actives(flc[0][8], has_pos_long, noisiness_indices[k])
                 for idx in active_longs:
                     entry = calc_recursive_entry_long(
@@ -1431,9 +1426,6 @@ def backtest_forager(
                         auto_unstuck_on_timer,
                     )
                     open_orders_entry_long.append((idx, List([entry])))
-                    if idx not in has_pos_long:
-                        unfilled_EMA_order_long.append(idx)
-
                     closes = calc_close_grid_long(
                         backwards_tp,
                         balance,
