@@ -26,6 +26,9 @@
   // minimum distance to current price action required for EMA based limit orders
   price_distance_threshold: 0.002
 
+  // if true, will disallow symbols where balance * WE_limit * initial_qty_pct < min_effective_cost
+  filter_by_min_effective_cost: true
+
   // set all non-specified symbols on graceful stop
   auto_gs: true
 
