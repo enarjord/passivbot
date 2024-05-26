@@ -217,7 +217,9 @@ class OKXBot(Passivbot):
                 end_time = utc_ms() + 1000 * 60 * 60 * 24
             if start_time is None:
                 start_time = end_time - 1000 * 60 * 60 * 24 * 7
-            fetched = await self.cca.fetch_my_trades(since=start_time, params={"until": end_time})
+            fetched = await self.cca.fetch_my_trades(
+                since=int(start_time), params={"until": int(end_time)}
+            )
             for i in range(len(fetched)):
                 fetched[i]["pnl"] = float(fetched[i]["info"]["fillPnl"])
             return sorted(fetched, key=lambda x: x["timestamp"])

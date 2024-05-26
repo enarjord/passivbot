@@ -469,7 +469,7 @@ class Passivbot:
             return True
 
     def update_PB_modes(self):
-        # dynamically update passivbot modes for all symbols
+        # update passivbot modes for all symbols
         if hasattr(self, "PB_modes"):
             previous_PB_modes = deepcopy(self.PB_modes)
         else:
@@ -508,18 +508,23 @@ class Passivbot:
                 eligible_symbols = list(self.eligible_symbols)
             self.calc_noisiness()  # ideal symbols are high noise symbols
 
-            for symbol in sorted(eligible_symbols, key=lambda x: self.noisiness[x], reverse=True):
-                if symbol not in self.eligible_symbols or not self.is_old_enough(symbol):
-                    continue
-                longs_full = len(self.ideal_actives["long"]) >= self.config[f"n_longs"]
-                shorts_full = len(self.ideal_actives["short"]) >= self.config[f"n_shorts"]
-                if longs_full and shorts_full:
-                    break
-                if not longs_full and symbol not in self.ideal_actives["long"]:
-                    self.ideal_actives["long"][symbol] = ""
-                if not shorts_full and symbol not in self.ideal_actives["short"]:
-                    self.ideal_actives["short"][symbol] = ""
+            # calc ideal actives for long and short separately
             for pside in self.actual_actives:
+                if self.config[f"n_{pside}s"] > 0:
+                    self.warn_on_high_effective_min_cost(pside)
+                for symbol in sorted(eligible_symbols, key=lambda x: self.noisiness[x], reverse=True):
+                    if (
+                        symbol not in self.eligible_symbols
+                        or not self.is_old_enough(symbol)
+                        or not self.effective_min_cost_is_low_enough(pside, symbol)
+                    ):
+                        continue
+                    slots_full = len(self.ideal_actives[pside]) >= self.config[f"n_{pside}s"]
+                    if slots_full:
+                        break
+                    if symbol not in self.ideal_actives[pside]:
+                        self.ideal_actives[pside][symbol] = ""
+
                 # actual actives fill slots first
                 for symbol in self.actual_actives[pside]:
                     if symbol in self.forced_modes[pside]:
@@ -530,7 +535,6 @@ class Passivbot:
                         self.PB_modes[pside][symbol] = (
                             "graceful_stop" if self.config["auto_gs"] else "manual"
                         )
-            for pside in self.ideal_actives:
                 # fill remaining slots with ideal actives
                 # a slot is filled if symbol in [normal, graceful_stop]
                 # symbols on other modes are ignored
@@ -547,7 +551,10 @@ class Passivbot:
             # if not forager mode, all eligible symbols are ideal symbols, unless symbol in forced_modes
             for pside in ["long", "short"]:
                 if self.config[f"{pside}_enabled"]:
+                    self.warn_on_high_effective_min_cost(pside)
                     for symbol in self.eligible_symbols:
+                        if not self.effective_min_cost_is_low_enough(pside, symbol):
+                            continue
                         if symbol not in self.forced_modes[pside]:
                             self.PB_modes[pside][symbol] = "normal"
                             self.ideal_actives[pside][symbol] = ""
@@ -618,6 +625,43 @@ class Passivbot:
                                 logging.info(
                                     f"removing {pside: <5} {self.pad_sym(symbol)}: {previous_PB_modes[pside][symbol]}"
                                 )
+
+    def warn_on_high_effective_min_cost(self, pside):
+        if not self.config["filter_by_min_effective_cost"]:
+            return
+        eligible_symbols_filtered = [
+            x for x in self.eligible_symbols if self.effective_min_cost_is_low_enough(pside, x)
+        ]
+        if len(eligible_symbols_filtered) == 0:
+            logging.info(
+                f"Warning: No {pside} symbols are approved due to min effective cost too high. "
+                + f"Suggestions: 1) increase account balance, 2) "
+                + f"set 'filter_by_min_effective_cost' to false, 3) if in forager mode, reduce n_{pside}s"
+            )
+
+    def effective_min_cost_is_low_enough(self, pside, symbol):
+        if not self.config["filter_by_min_effective_cost"]:
+            return True
+        try:
+            WE_limit = self.live_configs[symbol][pside]["wallet_exposure_limit"]
+            assert WE_limit > 0.0
+        except:
+            if self.forager_mode:
+                WE_limit = (
+                    self.config[f"TWE_{pside}"] / self.config[f"n_{pside}s"]
+                    if self.config[f"n_{pside}s"] > 0
+                    else 0.0
+                )
+            else:
+                WE_limit = (
+                    self.config[f"TWE_{pside}"] / len(self.config["approved_symbols"])
+                    if len(self.config["approved_symbols"]) > 0
+                    else 0.0
+                )
+        return (
+            self.balance * WE_limit * self.live_configs[symbol][pside]["initial_qty_pct"]
+            >= self.tickers[symbol]["effective_min_cost"]
+        )
 
     def add_new_order(self, order, source="WS"):
         try:
@@ -982,6 +1026,22 @@ class Passivbot:
                     [tickers_new[symbol]["bid"], tickers_new[symbol]["ask"]]
                 )
             self.tickers[symbol] = {k: tickers_new[symbol][k] for k in ["bid", "ask", "last"]}
+            if symbol in self.markets_dict:
+                try:
+                    self.tickers[symbol]["effective_min_cost"] = max(
+                        qty_to_cost(
+                            self.min_qtys[symbol],
+                            tickers_new[symbol]["last"],
+                            self.inverse,
+                            self.c_mults[symbol],
+                        ),
+                        self.min_costs[symbol],
+                    )
+                except Exception as e:
+                    logging.info(f"debug effective_min_cost update tickers {symbol} {e}")
+                    self.tickers[symbol]["effective_min_cost"] = 0.0
+            else:
+                self.tickers[symbol]["effective_min_cost"] = 0.0
         self.upd_timestamps["tickers"] = utc_ms()
         return True
 
