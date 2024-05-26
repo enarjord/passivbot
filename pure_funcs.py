@@ -505,6 +505,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
             "max_n_cancellations_per_batch": 8,
             "max_n_creations_per_batch": 4,
             "price_distance_threshold": 0.002,
+            "filter_by_min_effective_cost": True,
             "auto_gs": True,
             "leverage": 10.0,
             "TWE_long": 2.0,
