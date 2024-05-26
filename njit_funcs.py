@@ -238,6 +238,16 @@ def calc_pprice_diff(pside: str, pprice: float, price: float):
 
 
 @njit(cache=True)
+def calc_pprice_diff_int(pside: int, pprice: float, price: float):
+    if pside == 0:  # long
+        return (1.0 - price / pprice) if pprice > 0.0 else 0.0
+    elif pside == 1:  # short
+        return (price / pprice - 1.0) if pprice > 0.0 else 0.0
+    else:
+        raise ValueError("unknown pside " + str(pside))
+
+
+@njit(cache=True)
 def calc_clock_qty(
     balance,
     wallet_exposure,
