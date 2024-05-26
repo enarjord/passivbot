@@ -21,42 +21,11 @@ if "NOJIT" in os.environ and os.environ["NOJIT"] == "true":
             return range(start)
         return range(start, stop, step)
 
-    # Mock types class
-    class MockTypes:
-        int64 = int
-        float64 = float
-
-        @staticmethod
-        def Tuple(types):
-            return tuple
-
-        @staticmethod
-        def ListType(type):
-            return list
-
-        @staticmethod
-        def StringType(type):
-            return str
-
-    types = MockTypes
-
-    # Mock List class
-    class MockList(list):
-        def append(self, item):
-            super().append(item)
-
-        def extend(self, items):
-            super().extend(items)
-
-    List = MockList
-
 else:
     print("using numba")
-    from numba import njit, types, prange as nb_prange
-    from numba.typed import List as nb_List
+    from numba import njit, prange as nb_prange
 
     prange = nb_prange
-    List = nb_List
 
 
 from njit_funcs import (
@@ -77,26 +46,26 @@ from njit_funcs_recursive_grid import calc_recursive_entry_long, calc_recursive_
 
 
 # Define the tuple types outside the njit function
-order_type = types.Tuple((types.float64, types.float64, types.unicode_type))
-orders_type = types.Tuple((types.int64, types.ListType(order_type)))
+#order_type = types.Tuple((types.float64, types.float64, types.unicode_type))
+#orders_type = types.Tuple((types.int64, types.ListType(order_type)))
 
 
-fills_type = types.Tuple(
-    (
-        types.int64,  # index minute
-        types.string,  # symbol
-        types.float64,  # realized pnl
-        types.float64,  # fee paid
-        types.float64,  # balance after fill
-        types.float64,  # equity
-        types.float64,  # fill qty
-        types.float64,  # fill price
-        types.float64,  # psize after fill
-        types.float64,  # pprice after fill
-        types.string,  # fill type
-        types.float64,  # stuckness
-    )
-)
+#fills_type = types.Tuple(
+#    (
+#        types.int64,  # index minute
+#        types.string,  # symbol
+#        types.float64,  # realized pnl
+#        types.float64,  # fee paid
+#        types.float64,  # balance after fill
+#        types.float64,  # equity
+#        types.float64,  # fill qty
+#        types.float64,  # fill price
+#        types.float64,  # psize after fill
+#        types.float64,  # pprice after fill
+#        types.string,  # fill type
+#        types.float64,  # stuckness
+#    )
+#)
 
 
 @njit(cache=True)
@@ -1274,7 +1243,12 @@ def backtest_forager(
     is_stuck_long = set()
     is_stuck_short = set()
 
-    # to remove:for numbay type inference
+
+    # (idx, [(qty, price, type), (qty, price, type), ...])
+    # order_type = types.Tuple((types.float64, types.float64, types.unicode_type))
+    # orders_type = types.Tuple((types.int64, types.ListType(order_type)))
+
+    # to remove:for numba type inference
     has_pos_short.add(5)
     has_pos_short.remove(5)
     is_stuck_long.add(1)
@@ -1282,14 +1256,15 @@ def backtest_forager(
     is_stuck_short.add(1)
     is_stuck_short.remove(1)
 
-    # (idx, [(qty, price, type), (qty, price, type), ...])
-    # order_type = types.Tuple((types.float64, types.float64, types.unicode_type))
-    # orders_type = types.Tuple((types.int64, types.ListType(order_type)))
+    open_orders_entry_long.append((3, [(1.0, 1.0, "none")]))
+    open_orders_close_long.append((3, [(1.0, 1.0, "none")]))
+    open_orders_entry_short.append((3, [(1.0, 1.0, "none")]))
+    open_orders_close_short.append((3, [(1.0, 1.0, "none")]))
 
-    open_orders_entry_long = List.empty_list(orders_type)
-    open_orders_close_long = List.empty_list(orders_type)
-    open_orders_entry_short = List.empty_list(orders_type)
-    open_orders_close_short = List.empty_list(orders_type)
+    open_orders_entry_long = []
+    open_orders_close_long = []
+    open_orders_entry_short = []
+    open_orders_close_short = []
 
     fills = List.empty_list(fills_type)
 
