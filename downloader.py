@@ -1342,6 +1342,39 @@ async def prepare_multsymbol_data(
     return df.index[0], np.array([df.values[:, i : i + 3] for i in range(0, len(symbols) * 3, 3)])
 
 
+def pad_hlcs(hlcs, timestamps):
+    start_timestamp = timestamps[0]
+    interval = 60000
+    num_timestamps = len(timestamps)
+
+    # Initialize the padded_hlcs array with NaNs
+    padded_hlcs = np.full((num_timestamps, 3), np.nan)
+
+    # Calculate the indices for where the hlcs data should be placed in the padded array
+    hlcs_start_idx = int((hlcs[0, 0] - start_timestamp) // interval)
+    hlcs_end_idx = int((hlcs[-1, 0] - start_timestamp) // interval)
+
+    # Fill the hlcs data into the padded array
+    padded_indices = ((hlcs[:, 0] - start_timestamp) // interval).astype(int)
+    padded_hlcs[padded_indices, :] = hlcs[:, 1:]
+
+    # Frontfill
+    front_fill_value = hlcs[0, 3]
+    padded_hlcs[:hlcs_start_idx, :] = front_fill_value
+
+    # Backfill
+    back_fill_value = hlcs[-1, 3]
+    padded_hlcs[hlcs_end_idx + 1 :, :] = back_fill_value
+
+    # Forward fill remaining NaNs using numpy's `np.nan_to_num` and `np.fmax.accumulate`
+    nan_mask = np.isnan(padded_hlcs[:, 0])
+    idx = np.where(~nan_mask, np.arange(num_timestamps), 0)
+    np.maximum.accumulate(idx, out=idx)
+    padded_hlcs = padded_hlcs[idx]
+
+    return padded_hlcs
+
+
 async def prepare_hlcs_forager(
     symbols, start_date, end_date, base_dir="backtests", exchange="binance"
 ):
@@ -1371,7 +1404,6 @@ async def prepare_hlcs_forager(
             np.diff(data[:, 0]) == interval_ms
         ).all(), f"gaps in hlc data {symbol}"  # verify integrous 1m hlcs
         hlcsd[symbol] = data
-
     # hlcsd is {symbol: array([[timestamp, high, low, close]])}
     first_timestamp = min([x[0][0] for x in hlcsd.values()])
     last_timestamp = max([x[-1][0] for x in hlcsd.values()])
@@ -1379,15 +1411,8 @@ async def prepare_hlcs_forager(
 
     unified_data = []
     for symbol, data in hlcsd.items():
-        symbol_data = np.zeros((len(timestamps), 3))
-        offset = int((data[0][0] - timestamps[0]) // interval_ms)
-        # Backfill the data
-        if offset > 0:
-            backfill_value = np.repeat(data[0][2], 3)  # backfill with [close, close, close]
-            symbol_data[:offset] = backfill_value
-
-        symbol_data[offset : offset + len(data)] = data[:, 1:]
-        unified_data.append(symbol_data)
+        padded_hlcs = pad_hlcs(data, timestamps)
+        unified_data.append(padded_hlcs)
 
     return timestamps, np.array(unified_data).transpose(1, 0, 2)
 
