@@ -39,6 +39,7 @@ from njit_funcs import (
     calc_pnl_short,
     round_,
     round_up,
+    round_dn,
     calc_min_entry_qty,
     calc_bankruptcy_price,
     calc_pprice_diff_int,
@@ -1037,7 +1038,7 @@ def multiply_arrays(arr0, arr1):
     return result
 
 
-@njit
+@njit(cache=True)
 def calc_noisiness_argsort_indices(hlcs, bucket_size=15, rolling_window=100):
     bucketed = make_buckets(hlcs, bucket_size)  # bucket into bucket_size
     noisiness = calc_NRR(bucketed)  # compute normalized relative range for each bucket
@@ -1229,6 +1230,11 @@ def backtest_forager(
     open_orders_entry_short = []
     open_orders_close_short = []
 
+    unstuck_order = (0, 0, (0.0, 0.0, ""))
+    unstuck_closes = [(0.0, 0.0, "")]
+    pnl_cumsum_max = 0.0
+    pnl_cumsum_running = 0.0
+
     fills = []
     stats = [
         (
@@ -1314,7 +1320,7 @@ def backtest_forager(
                             / balance
                         )
                         stuckness = wallet_exposure / wallet_exposure_limit_long
-                        if stuckness > flc[0][15]:
+                        if flc[0][14] != 0.0 and stuckness > flc[0][15]:
                             is_stuck_long.add(idx)
                         elif idx in is_stuck_long:
                             is_stuck_long.remove(idx)
@@ -1336,7 +1342,9 @@ def backtest_forager(
                         )
             for idx, closes in open_orders_close_long:
                 for close in closes:
-                    if hlcs[k][idx][0] > close[1] and close[0] != 0.0:
+                    if close[0] == 0.0:
+                        continue
+                    if hlcs[k][idx][0] > close[1]:
                         # long close fill
                         any_fill = True
                         new_psize = round_(positions_long[idx][0] + close[0], qty_steps[idx])
@@ -1351,6 +1359,8 @@ def backtest_forager(
                         pnl = calc_pnl_long(
                             positions_long[idx][1], close[1], close[0], inverse, c_mults[idx]
                         )
+                        pnl_cumsum_running += pnl
+                        pnl_cumsum_max = max(pnl_cumsum_max, pnl_cumsum_running)
                         balance += pnl + fee_paid
                         equity = balance + calc_pnl_sum(
                             positions_long, positions_short, hlcs[k, :, 1], hlcs[k, :, 0], c_mults
@@ -1366,7 +1376,7 @@ def backtest_forager(
                             / balance
                         )
                         stuckness = wallet_exposure / wallet_exposure_limit_long
-                        if stuckness > flc[0][15]:
+                        if flc[0][14] != 0.0 and stuckness > flc[0][15]:
                             is_stuck_long.add(idx)
                         elif idx in is_stuck_long:
                             is_stuck_long.remove(idx)
@@ -1386,6 +1396,8 @@ def backtest_forager(
                                 stuckness,  # stuckness
                             )
                         )
+                    else:
+                        break
         if enabled_short:
             pass
             """
@@ -1402,6 +1414,26 @@ def backtest_forager(
             """
 
         if any_fill:
+            # update unstuck order
+            unstuck_pside, unstuck_idx, unstuck_order = calc_unstuck_order(
+                c_mults,
+                qty_steps,
+                price_steps,
+                min_costs,
+                min_qtys,
+                flc,
+                wallet_exposure_limit_long,
+                wallet_exposure_limit_short,
+                balance,
+                pnl_cumsum_max - pnl_cumsum_running,
+                is_stuck_long,
+                is_stuck_short,
+                positions_long,
+                positions_short,
+                emas_long,
+                emas_short,
+                hlcs[k],
+            )
             # update all open orders
             if enabled_long:
                 open_orders_entry_long = open_orders_entry_long[:0]
@@ -1436,10 +1468,16 @@ def backtest_forager(
                         auto_unstuck_on_timer,
                     )
                     open_orders_entry_long.append((idx, [entry]))
-                    closes = calc_close_grid_long(
+                    closes = []
+                    if unstuck_pside == 0 and unstuck_idx == idx and unstuck_order[0] != 0.0:
+                        closes.append(unstuck_order)
+                        psize_adj = positions_long[idx][0] + unstuck_order[0]
+                    else:
+                        psize_adj = positions_long[idx][0]
+                    for close in calc_close_grid_long(
                         backwards_tp,
                         balance,
-                        positions_long[idx][0],
+                        psize_adj,
                         positions_long[idx][1],
                         hlcs[k - 1][idx][2],  # close of previous candle as lowest_ask
                         max(emas_long[idx]),
@@ -1459,7 +1497,11 @@ def backtest_forager(
                         auto_unstuck_ema_dist,
                         auto_unstuck_delay_minutes,
                         auto_unstuck_qty_pct,
-                    )
+                    ):
+                        closes.append(close)
+                    closes = [
+                        c for c in sorted(closes, key=lambda x: x[1])
+                    ]  # sort ascending by price
                     open_orders_close_long.append((idx, closes))
 
             if enabled_short:
@@ -1524,10 +1566,70 @@ def backtest_forager(
     return fills, stats
 
 
-"""
-@njit
-def calc_unstuck_order():
+@njit(cache=True)
+def calc_unstuck_order(
+    c_mults,
+    qty_steps,
+    price_steps,
+    min_costs,
+    min_qtys,
+    flc,
+    wallet_exposure_limit_long,
+    wallet_exposure_limit_short,
+    balance,
+    drop_since_peak_abs,
+    is_stuck_long,
+    is_stuck_short,
+    positions_long,
+    positions_short,
+    emas_long,
+    emas_short,
+    hlcs_k,
+) -> (int, int, (float, float, str)):
+    # returns (pside: int, idx: int, (qty: float, price: float, type: str))
+    if not (is_stuck_long or is_stuck_short):
+        return (0, 0, (0.0, 0.0, ""))
+    inverse = False
     pprice_diffs = []
     for idx in is_stuck_long:
-        pprice_diff = calc_pprice_diff_int(0, )
-"""
+        pprice_diff = calc_pprice_diff_int(0, positions_long[idx][1], hlcs_k[idx][2])
+        pprice_diffs.append((pprice_diff, 0, idx))
+    for idx in is_stuck_short:
+        pprice_diff = calc_pprice_diff_int(1, positions_short[idx][1], hlcs_k[idx][2])
+        pprice_diffs.append((pprice_diff, 1, idx))
+    pprice_diff, pside, idx = sorted(pprice_diffs)[0]
+    AU_allowance = calc_AU_allowance(
+        np.array([0.0]),
+        balance,
+        loss_allowance_pct=flc[pside][14],
+        drop_since_peak_abs=drop_since_peak_abs,
+    )
+    if AU_allowance <= 0.0:
+        return (0, 0, (0.0, 0.0, ""))
+    if pside == 0:
+        close_price = max(
+            hlcs_k[idx][2], round_up(max(emas_long[idx]) * (1.0 + flc[0][13]), price_steps[idx])
+        )
+        close_qty = -min(
+            positions_long[idx][0],
+            max(
+                calc_min_entry_qty(
+                    close_price, inverse, c_mults[idx], qty_steps[idx], min_qtys[idx], min_costs[idx]
+                ),
+                cost_to_qty(
+                    balance * wallet_exposure_limit_long * flc[0][12],
+                    close_price,
+                    inverse,
+                    c_mults[idx],
+                ),
+            ),
+        )
+        close_type = "unstuck_close_long"
+    else:
+        close_price = min(
+            hlcs_k[idx][2], round_dn(min(emas_short[idx]) * (1.0 - flc[1][13]), price_steps[idx])
+        )
+        close_qty = 0.01
+        close_type = "unstuck_close_short"
+
+    return (pside, idx, (close_qty, close_price, close_type))
