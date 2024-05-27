@@ -43,7 +43,7 @@ else:
     from numba import njit
 
 
-@njit(cache=True)
+@njit
 def calc_recursive_reentry_qty(
     balance,
     psize,
@@ -71,7 +71,7 @@ def calc_recursive_reentry_qty(
     )
 
 
-@njit(cache=True)
+@njit
 def calc_recursive_entry_long(
     balance,
     psize,
@@ -233,7 +233,7 @@ def calc_recursive_entry_long(
         return entry_qty, entry_price, "long_rentry"
 
 
-@njit(cache=True)
+@njit
 def calc_recursive_entry_short(
     balance,
     psize,
@@ -391,7 +391,7 @@ def calc_recursive_entry_short(
         return -entry_qty, entry_price, "short_rentry"
 
 
-@njit(cache=True)
+@njit
 def calc_recursive_entries_long(
     balance,
     psize,
@@ -465,7 +465,7 @@ def calc_recursive_entries_long(
     return entries
 
 
-@njit(cache=True)
+@njit
 def calc_recursive_entries_short(
     balance,
     psize,
@@ -539,7 +539,7 @@ def calc_recursive_entries_short(
     return entries
 
 
-@njit(cache=True)
+@njit
 def backtest_recursive_grid(
     ticks,
     starting_balance,
