@@ -21,14 +21,14 @@ else:
     from numba import njit
 
 
-@njit(cache=True)
+@njit
 def round_dynamic(n: float, d: int):
     if n == 0.0:
         return n
     return round(n, d - int(np.floor(np.log10(abs(n)))) - 1)
 
 
-@njit(cache=True)
+@njit
 def round_dynamic_up(n: float, d: int) -> float:
     if n == 0.0:
         return n
@@ -40,7 +40,7 @@ def round_dynamic_up(n: float, d: int) -> float:
     return rounded_n
 
 
-@njit(cache=True)
+@njit
 def round_dynamic_dn(n: float, d: int) -> float:
     if n == 0.0:
         return n
@@ -52,32 +52,32 @@ def round_dynamic_dn(n: float, d: int) -> float:
     return rounded_n
 
 
-@njit(cache=True)
+@njit
 def round_up(n, step, safety_rounding=10) -> float:
     return np.round(np.ceil(np.round(n / step, safety_rounding)) * step, safety_rounding)
 
 
-@njit(cache=True)
+@njit
 def round_dn(n, step, safety_rounding=10) -> float:
     return np.round(np.floor(np.round(n / step, safety_rounding)) * step, safety_rounding)
 
 
-@njit(cache=True)
+@njit
 def round_(n, step, safety_rounding=10) -> float:
     return np.round(np.round(n / step) * step, safety_rounding)
 
 
-@njit(cache=True)
+@njit
 def calc_diff(x, y):
     return abs(x - y) / abs(y)
 
 
-@njit(cache=True)
+@njit
 def nan_to_0(x) -> float:
     return x if x == x else 0.0
 
 
-@njit(cache=True)
+@njit
 def calc_min_entry_qty(price, inverse, c_mult, qty_step, min_qty, min_cost) -> float:
     return (
         min_qty
@@ -86,22 +86,22 @@ def calc_min_entry_qty(price, inverse, c_mult, qty_step, min_qty, min_cost) -> f
     )
 
 
-@njit(cache=True)
+@njit
 def cost_to_qty(cost, price, inverse, c_mult):
     return (cost * price if inverse else (cost / price if price > 0.0 else 0.0)) / c_mult
 
 
-@njit(cache=True)
+@njit
 def qty_to_cost(qty, price, inverse, c_mult) -> float:
     return ((abs(qty / price) if price > 0.0 else 0.0) if inverse else abs(qty * price)) * c_mult
 
 
-@njit(cache=True)
+@njit
 def calc_ema(alpha, alpha_, prev_ema, new_val) -> float:
     return prev_ema * alpha_ + new_val * alpha
 
 
-@njit(cache=True)
+@njit
 def calc_samples(ticks: np.ndarray, sample_size_ms: int = 1000) -> np.ndarray:
     # ticks [[timestamp, qty, price]]
     sampled_timestamps = np.arange(
@@ -130,7 +130,7 @@ def calc_samples(ticks: np.ndarray, sample_size_ms: int = 1000) -> np.ndarray:
     return samples
 
 
-@njit(cache=True)
+@njit
 def calc_emas(xs, spans):
     emas = np.zeros((len(xs), len(spans)))
     alphas = 2 / (spans + 1)
@@ -141,7 +141,7 @@ def calc_emas(xs, spans):
     return emas
 
 
-@njit(cache=True)
+@njit
 def calc_pnl_long(entry_price, close_price, qty, inverse, c_mult) -> float:
     if inverse:
         if entry_price == 0.0 or close_price == 0.0:
@@ -151,7 +151,7 @@ def calc_pnl_long(entry_price, close_price, qty, inverse, c_mult) -> float:
         return abs(qty) * c_mult * (close_price - entry_price)
 
 
-@njit(cache=True)
+@njit
 def calc_pnl_short(entry_price, close_price, qty, inverse, c_mult) -> float:
     if inverse:
         if entry_price == 0.0 or close_price == 0.0:
@@ -161,7 +161,7 @@ def calc_pnl_short(entry_price, close_price, qty, inverse, c_mult) -> float:
         return abs(qty) * c_mult * (entry_price - close_price)
 
 
-@njit(cache=True)
+@njit
 def calc_pnl(pside, entry_price, close_price, qty, inverse, c_mult):
     if pside == "long":
         return calc_pnl_long(entry_price, close_price, qty, inverse, c_mult)
@@ -170,7 +170,7 @@ def calc_pnl(pside, entry_price, close_price, qty, inverse, c_mult):
     raise Exception("unknown position side " + pside)
 
 
-@njit(cache=True)
+@njit
 def calc_equity(
     balance,
     psize_long,
@@ -189,7 +189,7 @@ def calc_equity(
     return equity
 
 
-@njit(cache=True)
+@njit
 def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> (float, float):
     if qty == 0.0:
         return psize, pprice
@@ -204,14 +204,14 @@ def calc_new_psize_pprice(psize, pprice, qty, price, qty_step) -> (float, float)
     )
 
 
-@njit(cache=True)
+@njit
 def calc_wallet_exposure_if_filled(balance, psize, pprice, qty, price, inverse, c_mult, qty_step):
     psize, qty = round_(abs(psize), qty_step), round_(abs(qty), qty_step)
     new_psize, new_pprice = calc_new_psize_pprice(psize, pprice, qty, price, qty_step)
     return qty_to_cost(new_psize, new_pprice, inverse, c_mult) / balance
 
 
-@njit(cache=True)
+@njit
 def calc_delay_between_fills_ms_bid(pprice, price, delay_between_fills_ms, delay_weight):
     # lowest delay is 1 minute
     # reduce delay between bids in some proportion to diff between pos price and market price
@@ -219,7 +219,7 @@ def calc_delay_between_fills_ms_bid(pprice, price, delay_between_fills_ms, delay
     return max(60000.0, delay_between_fills_ms * min(1.0, (1 - pprice_diff * delay_weight)))
 
 
-@njit(cache=True)
+@njit
 def calc_delay_between_fills_ms_ask(pprice, price, delay_between_fills_ms, delay_weight):
     # lowest delay is 1 minute
     # reduce delay between asks in some proportion to diff between pos price and market price
@@ -227,7 +227,7 @@ def calc_delay_between_fills_ms_ask(pprice, price, delay_between_fills_ms, delay
     return max(60000.0, delay_between_fills_ms * min(1.0, (1 - pprice_diff * delay_weight)))
 
 
-@njit(cache=True)
+@njit
 def calc_pprice_diff(pside: str, pprice: float, price: float):
     if pside == "long":
         return (1.0 - price / pprice) if pprice > 0.0 else 0.0
@@ -237,7 +237,7 @@ def calc_pprice_diff(pside: str, pprice: float, price: float):
         raise Exception("unknown pside " + pside)
 
 
-@njit(cache=True)
+@njit
 def calc_pprice_diff_int(pside: int, pprice: float, price: float):
     if pside == 0:  # long
         return (1.0 - price / pprice) if pprice > 0.0 else 0.0
@@ -247,7 +247,7 @@ def calc_pprice_diff_int(pside: int, pprice: float, price: float):
         raise ValueError("unknown pside " + str(pside))
 
 
-@njit(cache=True)
+@njit
 def calc_clock_qty(
     balance,
     wallet_exposure,
@@ -269,7 +269,7 @@ def calc_clock_qty(
     )
 
 
-@njit(cache=True)
+@njit
 def calc_auto_unstuck_entry_long(
     balance,
     psize,
@@ -310,7 +310,7 @@ def calc_auto_unstuck_entry_long(
     )
 
 
-@njit(cache=True)
+@njit
 def calc_auto_unstuck_entry_short(
     balance,
     psize,
@@ -501,7 +501,7 @@ def calc_close_grid_short(
         )
 
 
-@njit(cache=True)
+@njit
 def calc_auto_unstuck_close_long(
     balance,
     psize,
@@ -577,7 +577,7 @@ def calc_auto_unstuck_close_long(
     return (0.0, 0.0, "unstuck_close_long")
 
 
-@njit(cache=True)
+@njit
 def calc_auto_unstuck_close_short(
     balance,
     psize,
@@ -758,7 +758,7 @@ def calc_close_grid_backwards_long(
     return sorted(closes, key=lambda x: x[1])
 
 
-@njit(cache=True)
+@njit
 def calc_close_grid_frontwards_long(
     balance,
     psize,
@@ -958,7 +958,7 @@ def calc_close_grid_backwards_short(
     return sorted(closes, key=lambda x: x[1], reverse=True)
 
 
-@njit(cache=True)
+@njit
 def calc_close_grid_frontwards_short(
     balance,
     psize,
@@ -1053,14 +1053,14 @@ def calc_close_grid_frontwards_short(
     return closes if closes else [(0.0, 0.0, "")]
 
 
-@njit(cache=True)
+@njit
 def calc_upnl(psize_long, pprice_long, psize_short, pprice_short, last_price, inverse, c_mult):
     return calc_pnl_long(pprice_long, last_price, psize_long, inverse, c_mult) + calc_pnl_short(
         pprice_short, last_price, psize_short, inverse, c_mult
     )
 
 
-@njit(cache=True)
+@njit
 def calc_emas_last(xs, spans):
     alphas = 2.0 / (spans + 1.0)
     alphas_ = 1.0 - alphas
@@ -1070,7 +1070,7 @@ def calc_emas_last(xs, spans):
     return emas
 
 
-@njit(cache=True)
+@njit
 def calc_bankruptcy_price(
     balance, psize_long, pprice_long, psize_short, pprice_short, inverse, c_mult
 ):
@@ -1095,7 +1095,7 @@ def calc_bankruptcy_price(
     return max(0.0, bankruptcy_price)
 
 
-@njit(cache=True)
+@njit
 def basespace(start, end, base, n):
     if base == 1.0:
         return np.linspace(start, end, n)
@@ -1109,7 +1109,7 @@ def basespace(start, end, base, n):
     return a * (end - start) + start
 
 
-@njit(cache=True)
+@njit
 def calc_initial_entry_qty(
     balance,
     initial_entry_price,
@@ -1135,7 +1135,7 @@ def calc_initial_entry_qty(
     )
 
 
-@njit(cache=True)
+@njit
 def interpolate(x, xs, ys):
     return np.sum(
         np.array(
@@ -1148,7 +1148,7 @@ def interpolate(x, xs, ys):
     )
 
 
-@njit(cache=True)
+@njit
 def find_close_qty_long_bringing_wallet_exposure_to_target(
     balance,
     psize,
@@ -1257,7 +1257,7 @@ def find_close_qty_long_bringing_wallet_exposure_to_target(
     return evals_guesses[0][1]
 
 
-@njit(cache=True)
+@njit
 def find_close_qty_short_bringing_wallet_exposure_to_target(
     balance,
     psize,
@@ -1367,7 +1367,7 @@ def find_close_qty_short_bringing_wallet_exposure_to_target(
     return evals_guesses[0][1]
 
 
-@njit(cache=True)
+@njit
 def find_entry_qty_bringing_wallet_exposure_to_target(
     balance,
     psize,
