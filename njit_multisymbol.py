@@ -47,7 +47,7 @@ from njit_funcs import (
 from njit_funcs_recursive_grid import calc_recursive_entry_long, calc_recursive_entry_short
 
 
-@njit(cache=True)
+@njit
 def calc_pnl_sum(poss_long, poss_short, lows, highs, c_mults):
     pnl_sum = 0.0
     for i in range(len(poss_long)):
@@ -195,7 +195,7 @@ def get_open_orders_short(
     return entries, closes
 
 
-@njit(cache=True)
+@njit
 def calc_fills(
     pside_idx,  # 0: long, 1: short
     k,
@@ -337,7 +337,7 @@ def calc_fills(
     return fills, new_pos, new_balance, new_equity
 
 
-@njit(cache=True)
+@njit
 def calc_AU_allowance(
     pnls: np.ndarray, balance: float, loss_allowance_pct=0.01, drop_since_peak_abs=-1.0
 ):
@@ -832,7 +832,7 @@ def backtest_multisymbol_recursive_grid(
     return fills, stats
 
 
-@njit(cache=True)
+@njit
 def backtest_fast_recursive(
     hlcs,
     starting_balance,
@@ -940,12 +940,12 @@ def backtest_fast_recursive(
     return fills
 
 
-@njit(parallel=True)
+@njit
 def make_buckets(hlcs, bucket_size=15):
     num_buckets = int(np.ceil(hlcs.shape[0] / bucket_size))
     bucketed = np.zeros((num_buckets, hlcs.shape[1], hlcs.shape[2]))
 
-    for i in prange(num_buckets):
+    for i in range(num_buckets):
         start = i * bucket_size
         end = (i + 1) * bucket_size
         bucket = hlcs[start:end]
@@ -959,12 +959,12 @@ def make_buckets(hlcs, bucket_size=15):
     return bucketed
 
 
-@njit(parallel=True)
+@njit
 def calc_NRR(hlcs):
     # returns normalized relative range
     # (high - low) / close
     nrr = np.zeros(hlcs.shape[:2])
-    for i in prange(hlcs.shape[0]):
+    for i in range(hlcs.shape[0]):
         for j in range(hlcs.shape[1]):
             if hlcs[i, j][2] != 0.0:
                 nrr[i, j] = (hlcs[i, j][0] - hlcs[i, j][1]) / hlcs[i, j][2]
@@ -1038,7 +1038,7 @@ def multiply_arrays(arr0, arr1):
     return result
 
 
-@njit(cache=True)
+@njit
 def calc_noisiness_argsort_indices(hlcs, bucket_size=15, rolling_window=100):
     bucketed = make_buckets(hlcs, bucket_size)  # bucket into bucket_size
     noisiness = calc_NRR(bucketed)  # compute normalized relative range for each bucket
@@ -1076,12 +1076,12 @@ def prepare_emas_forager(spans_long, spans_short, hlcs_first):
     return emas_long, emas_short, alphas_long, alphas__long, alphas_short, alphas__short
 
 
-@njit(parallel=True)
+@njit
 def reverse_sorted_indices_parallel(arr):
     x, y = arr.shape
     sorted_indices_arr = np.empty((x, y), dtype=np.int64)
 
-    for i in prange(x):
+    for i in range(x):
         row = arr[i, :]
         indices = np.arange(y)
         sorted_indices = np.empty(y, dtype=np.int64)
@@ -1566,7 +1566,7 @@ def backtest_forager(
     return fills, stats
 
 
-@njit(cache=True)
+@njit
 def calc_unstuck_order(
     c_mults,
     qty_steps,
