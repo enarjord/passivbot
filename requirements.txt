@@ -19,3 +19,4 @@ PyYAML==6.0
 asyncio==3.4.3
 pyecharts==1.9.1
 deap==1.4.1
+maturin==1.5.1
