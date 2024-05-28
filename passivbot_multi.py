@@ -603,19 +603,25 @@ class Passivbot:
                             self.first_timestamps[self.format_symbol(symbol)] = self.first_timestamps[symbol]
                         await self.update_tickers()
             
-            if not no_symbols_to_trade:
-                for symbol in eligible_symbols:
-                    if symbol not in self.eligible_symbols:
-                        continue
-                    longs_full = len(self.ideal_actives["long"]) >= self.config[f"n_longs"]
-                    shorts_full = len(self.ideal_actives["short"]) >= self.config[f"n_shorts"]
-                    if longs_full and shorts_full:
-                        break
-                    if not longs_full and symbol not in self.ideal_actives["long"]:
-                        self.ideal_actives["long"][symbol] = ""
-                    if not shorts_full and symbol not in self.ideal_actives["short"]:
-                        self.ideal_actives["short"][symbol] = ""
+           
+            # calc ideal actives for long and short separately
             for pside in self.actual_actives:
+                if not no_symbols_to_trade: 
+                    if self.config[f"n_{pside}s"] > 0:
+                        self.warn_on_high_effective_min_cost(pside)
+                    for symbol in eligible_symbols:
+                        if (
+                            symbol not in self.eligible_symbols
+                            or not self.is_old_enough(symbol)
+                            or not self.effective_min_cost_is_low_enough(pside, symbol)
+                        ):
+                            continue
+                        slots_full = len(self.ideal_actives[pside]) >= self.config[f"n_{pside}s"]
+                        if slots_full:
+                            break
+                        if symbol not in self.ideal_actives[pside]:
+                            self.ideal_actives[pside][symbol] = ""
+    
                 # actual actives fill slots first
                 for symbol in self.actual_actives[pside]:
                     if symbol in self.forced_modes[pside]:
@@ -626,7 +632,6 @@ class Passivbot:
                         self.PB_modes[pside][symbol] = (
                             "graceful_stop" if self.config["auto_gs"] else "manual"
                         )
-            for pside in self.ideal_actives:
                 # fill remaining slots with ideal actives
                 # a slot is filled if symbol in [normal, graceful_stop]
                 # symbols on other modes are ignored
