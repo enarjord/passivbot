@@ -8,16 +8,16 @@
   pnls_max_lookback_days: 30
 
   // how much below past peak balance to allow losses (default 1% == 0.01). Set to 0.0 to disable multisym auto unstuck.
-  loss_allowance_pct: 0.00286
+  loss_allowance_pct: 0.05513732935406687
 
   // if wallet_exposure / wallet_exposure_limit > stuck_threshold: consider position as stuck
-  stuck_threshold: 0.55
+  stuck_threshold: 0.4189169048451155
 
   // percentage of balance * wallet_exposure_limit to close for each unstucking order (default 1% == 0.01)
-  unstuck_close_pct: 0.0046
+  unstuck_close_pct: 0.0010458680854878034
 
   // delay between executions to exchange. Set to 60 to simulate 1m ohlcv backtest.
-  execution_delay_seconds: 2
+  execution_delay_seconds: 3
 
   // how many executions in parallel per batch
   max_n_cancellations_per_batch: 8
@@ -36,8 +36,8 @@
   leverage: 10.0
 
   // total wallet exposure limits long and short. Exposure limit for each bot will be TWE_pos_side / len(active_symbols_pos_side)
-  TWE_long: 2.0
-  TWE_short: 0.5
+  TWE_long: 1.2609089832866571
+  TWE_short: 0.30371972748580983
 
   // if true, mode defaults to 'normal'. If false, mode defaults to 'graceful_stop' if auto_gs=true, else 'manual'.
   long_enabled: true
@@ -81,29 +81,29 @@
   {
     long:
     {
-      ddown_factor: 0.8697
-      ema_span_0:  776.7
-      ema_span_1:  774.3
-      initial_eprice_ema_dist:  -0.008465
-      initial_qty_pct:  0.01167
-      markup_range:  0.002187
-      min_markup:  0.008534
-      n_close_orders:  4.0
-      rentry_pprice_dist:  0.04938
-      rentry_pprice_dist_wallet_exposure_weighting:  2.143
+      ddown_factor: 0.8431401818920167
+      ema_span_0: 904.3194994115283
+      ema_span_1: 661.3811078906467
+      initial_eprice_ema_dist: -0.007812366786191505
+      initial_qty_pct: 0.011488689284057437
+      markup_range: 0.009169446074458739
+      min_markup: 0.001881615113374259
+      n_close_orders: 7.212769107475559
+      rentry_pprice_dist: 0.046193458275164696
+      rentry_pprice_dist_wallet_exposure_weighting: 0.054045084472447186
     }
     short:
     {
-      ddown_factor: 1.114
-      ema_span_0: 1074.0
-      ema_span_1: 786.2
-      initial_eprice_ema_dist: -0.07048
-      initial_qty_pct: 0.01296
-      markup_range: 0.006174
-      min_markup: 0.003647
-      n_close_orders: 1.675
-      rentry_pprice_dist: 0.05371
-      rentry_pprice_dist_wallet_exposure_weighting: 2.492
+      ddown_factor: 1.4980570521489778
+      ema_span_0: 810.883201939391
+      ema_span_1: 1054.790940833631
+      initial_eprice_ema_dist: -0.07165663783658187
+      initial_qty_pct: 0.011131718496001832
+      markup_range: 0.00976878155598317
+      min_markup: 0.0010914762393926098
+      n_close_orders: 1.9133320168872971
+      rentry_pprice_dist: 0.04093802724373973
+      rentry_pprice_dist_wallet_exposure_weighting: 4.849666203718392
     }
   }
 
@@ -121,7 +121,7 @@
 
   // Max number of positions to have open.
   // If n_longs and n_shorts are both zero, forager mode is disabled.
-  n_longs: 5 // if > 0, overrides longs_enabled
+  n_longs: 10 // if > 0, overrides longs_enabled
   n_shorts: 0 // if > 0, overrides shorts_enabled
 
   // minimum market age. Don't trade markets younger than x days. Set to zero to allow all markets.
