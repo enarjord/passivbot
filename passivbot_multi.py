@@ -207,6 +207,8 @@ class Passivbot:
                     logging.info(f"loaded from {key} for {len(coins_)} symbols")
                 elif len(coins_) > 0:
                     logging.info(f"loaded from {key} for {', '.join(coins_)}")
+                    
+        self.configs_loaded = configs_loaded
 
     def pad_sym(self, symbol):
         return f"{symbol: <{self.sym_padding}}"
@@ -512,38 +514,32 @@ class Passivbot:
         if self.forager_mode:
             eligible_symbols = []
             no_symbols_to_trade = False
-            original_exec_time = self.execution_delay_millis
 
             while len(eligible_symbols) == 0:
+
                 eligible_symbols = list(self.eligible_symbols)
+
                 eligible_symbols = [symbol for symbol in eligible_symbols if self.is_old_enough(symbol) is not False]
                 print('N eligilble symbols after is_old_enough filter', len(eligible_symbols))
-              #  print(eligible_symbols)
-             #   print(':::::::::::::: BEFORE FILTERING ::::::::::::::::::::::')
-              #  print('N eligilble symbols', len(eligible_symbols))
-                ##### customize -> COPY TRADING BLACK LIST #####
+
+                if self.config["whitelist_from_config_dir_filter"]: 
+                    eligible_symbols = [symbol for symbol in eligible_symbols if symbol in self.configs_loaded["live_configs_dir_exact_match"]]
+                    print('N eligilble symbols after whitelist_from_config_dir filter', len(eligible_symbols))
+
                 if self.config["copy_trading_symbols_filter"]: 
                     self.copy_trading_blacklist()
                     eligible_symbols = [symbol for symbol in eligible_symbols if self.ct_allowed[symbol]]
-               #     print(':::::::::::::: CT BLACK LIST ::::::::::::::::::::::')
                     print('N eligilble symbols after copy trading filter', len(eligible_symbols))
-                ##### customize -> COPY TRADING BLACK LIST #####
-                
-                ##### customize -> TOP MC LIST FILTER #####
+
                 if self.config["top_mc_filter"] > 0.0 : 
                     self.get_top_coin_data()
                     eligible_symbols = [symbol for symbol in eligible_symbols if self.market_cap[symbol] < self.config["top_mc_filter"]]
-                 #   print(':::::::::::::: TOP MC LIST FILTER ::::::::::::::::::::::')
                     print('N eligilble symbols after MC filter', len(eligible_symbols))
-                ##### customize -> TOP MC LIST FILTER #####    
-                
-                ##### customize -> FUNDING RATES FILTER #####
+               
                 if self.config["funding_rate_filter"] > 0.0 : 
-                  #  await self.fetch_funding_rate()
                     eligible_symbols = [symbol for symbol in eligible_symbols if abs(self.fund_rates[symbol]) <= self.config["funding_rate_filter"]]
-                   # print(':::::::::::::: FUNDING RATES FILTER ::::::::::::::::::::::')
                     print('N eligilble symbols after funding rate filter', len(eligible_symbols))
-                ##### customize -> FUNDING RATES  FILTER ##### 
+               
                 self.calc_volumes()
        
                 ##### customize -> min 1m Volume  #####
@@ -606,21 +602,19 @@ class Passivbot:
                         for symbol in sorted(self.first_timestamps):
                             self.first_timestamps[self.format_symbol(symbol)] = self.first_timestamps[symbol]
                         await self.update_tickers()
-
-            for symbol in eligible_symbols:
-                if symbol not in self.eligible_symbols:
-                    continue
-                ###
-                if no_symbols_to_trade: continue
-                ###
-                longs_full = len(self.ideal_actives["long"]) >= self.config[f"n_longs"]
-                shorts_full = len(self.ideal_actives["short"]) >= self.config[f"n_shorts"]
-                if longs_full and shorts_full:
-                    break
-                if not longs_full and symbol not in self.ideal_actives["long"]:
-                    self.ideal_actives["long"][symbol] = ""
-                if not shorts_full and symbol not in self.ideal_actives["short"]:
-                    self.ideal_actives["short"][symbol] = ""
+            
+            if not no_symbols_to_trade:
+                for symbol in eligible_symbols:
+                    if symbol not in self.eligible_symbols:
+                        continue
+                    longs_full = len(self.ideal_actives["long"]) >= self.config[f"n_longs"]
+                    shorts_full = len(self.ideal_actives["short"]) >= self.config[f"n_shorts"]
+                    if longs_full and shorts_full:
+                        break
+                    if not longs_full and symbol not in self.ideal_actives["long"]:
+                        self.ideal_actives["long"][symbol] = ""
+                    if not shorts_full and symbol not in self.ideal_actives["short"]:
+                        self.ideal_actives["short"][symbol] = ""
             for pside in self.actual_actives:
                 # actual actives fill slots first
                 for symbol in self.actual_actives[pside]:
@@ -649,7 +643,10 @@ class Passivbot:
             # if not forager mode, all eligible symbols are ideal symbols, unless symbol in forced_modes
             for pside in ["long", "short"]:
                 if self.config[f"{pside}_enabled"]:
+                    self.warn_on_high_effective_min_cost(pside)
                     for symbol in self.eligible_symbols:
+                        if not self.effective_min_cost_is_low_enough(pside, symbol):
+                            continue
                         if symbol not in self.forced_modes[pside]:
                             self.PB_modes[pside][symbol] = "normal"
                             self.ideal_actives[pside][symbol] = ""
@@ -720,6 +717,43 @@ class Passivbot:
                                 logging.info(
                                     f"removing {pside: <5} {self.pad_sym(symbol)}: {previous_PB_modes[pside][symbol]}"
                                 )
+
+    def warn_on_high_effective_min_cost(self, pside):
+        if not self.config["filter_by_min_effective_cost"]:
+            return
+        eligible_symbols_filtered = [
+            x for x in self.eligible_symbols if self.effective_min_cost_is_low_enough(pside, x)
+        ]
+        if len(eligible_symbols_filtered) == 0:
+            logging.info(
+                f"Warning: No {pside} symbols are approved due to min effective cost too high. "
+                + f"Suggestions: 1) increase account balance, 2) "
+                + f"set 'filter_by_min_effective_cost' to false, 3) if in forager mode, reduce n_{pside}s"
+            )
+
+    def effective_min_cost_is_low_enough(self, pside, symbol):
+        if not self.config["filter_by_min_effective_cost"]:
+            return True
+        try:
+            WE_limit = self.live_configs[symbol][pside]["wallet_exposure_limit"]
+            assert WE_limit > 0.0
+        except:
+            if self.forager_mode:
+                WE_limit = (
+                    self.config[f"TWE_{pside}"] / self.config[f"n_{pside}s"]
+                    if self.config[f"n_{pside}s"] > 0
+                    else 0.0
+                )
+            else:
+                WE_limit = (
+                    self.config[f"TWE_{pside}"] / len(self.config["approved_symbols"])
+                    if len(self.config["approved_symbols"]) > 0
+                    else 0.0
+                )
+        return (
+            self.balance * WE_limit * self.live_configs[symbol][pside]["initial_qty_pct"]
+            >= self.tickers[symbol]["effective_min_cost"]
+        )
 
     def add_new_order(self, order, source="WS"):
         try:
