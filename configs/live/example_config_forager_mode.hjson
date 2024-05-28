@@ -133,4 +133,11 @@
 
   // Volume filter: disapprove the lowest relative volume symbols. Default 0.1 == 10%. Set to zero to allow all.
   relative_volume_filter_clip_pct: 0.1
+
+  // customized forager parameters
+  min_1m_volume_filter: 10000
+  funding_rate_filter: 0.0002
+  top_mc_filter: 0
+  copy_trading_symbols_filter: false
+  whitelist_from_config_dir_filter: false
 }
