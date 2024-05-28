@@ -522,6 +522,10 @@ class Passivbot:
                 eligible_symbols = [symbol for symbol in eligible_symbols if self.is_old_enough(symbol) is not False]
                 print('N eligilble symbols after is_old_enough filter', len(eligible_symbols))
 
+                if self.config["filter_by_min_effective_cost"]:
+                    eligible_symbols = [symbol for symbol in eligible_symbols if self.effective_min_cost_is_low_enough("long", symbol)]
+                    print('N eligilble symbols after filter_by_min_effective_cost long configs', len(eligible_symbols))
+                
                 if self.config["whitelist_from_config_dir_filter"]: 
                     eligible_symbols = [symbol for symbol in eligible_symbols if symbol in self.configs_loaded["live_configs_dir_exact_match"]]
                     print('N eligilble symbols after whitelist_from_config_dir filter', len(eligible_symbols))
