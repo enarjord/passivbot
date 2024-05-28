@@ -1,0 +1,36 @@
+from setuptools import setup, find_packages
+from setuptools_rust import RustExtension
+
+setup(
+    name="passivbot",
+    version="0.1.0",
+    packages=find_packages(where="src"),
+    package_dir={"": "src"},
+    rust_extensions=[RustExtension("passivbot_rust", path="passivbot-rust/Cargo.toml", binding="pyo3")],
+    install_requires=[
+        "matplotlib==3.5.1",
+        "prospector==1.6.0",
+        "colorama==0.4.4",
+        "mkdocs==1.4.0",
+        "mkdocs-material==8.1.8",
+        "pymdown-extensions==9.1",
+        "tqdm==4.62.3",
+        "python-dateutil==2.8.2",
+        "numba==0.59.1",
+        "pandas==1.4.0",
+        "PyYAML==6.0",
+        "asyncio==3.4.3",
+        "pyecharts==1.9.1",
+        "deap==1.4.1",
+        "websockets==10.1",
+        "aiohttp==3.8.1",
+        "numpy==1.22.4",
+        "python-dateutil==2.8.2",
+        "ccxt==4.3.24",
+        "hjson==3.0.2",
+        "prettytable==3.0.0",
+    ],
+    setup_requires=["setuptools-rust>=1.9.0", "wheel"],
+    include_package_data=True,
+    zip_safe=False,
+)
