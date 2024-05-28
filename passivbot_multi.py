@@ -520,29 +520,29 @@ class Passivbot:
                 eligible_symbols = list(self.eligible_symbols)
 
                 eligible_symbols = [symbol for symbol in eligible_symbols if self.is_old_enough(symbol) is not False]
-                print('N eligilble symbols after is_old_enough filter', len(eligible_symbols))
+                print('N eligible symbols after is_old_enough filter', len(eligible_symbols))
 
                 if self.config["filter_by_min_effective_cost"]:
                     eligible_symbols = [symbol for symbol in eligible_symbols if self.effective_min_cost_is_low_enough("long", symbol)]
-                    print('N eligilble symbols after filter_by_min_effective_cost long configs', len(eligible_symbols))
+                    print('N eligible symbols after filter_by_min_effective_cost long configs', len(eligible_symbols))
                 
                 if self.config["whitelist_from_config_dir_filter"]: 
                     eligible_symbols = [symbol for symbol in eligible_symbols if symbol in self.configs_loaded["live_configs_dir_exact_match"]]
-                    print('N eligilble symbols after whitelist_from_config_dir filter', len(eligible_symbols))
+                    print('N eligible symbols after whitelist_from_config_dir filter', len(eligible_symbols))
 
                 if self.config["copy_trading_symbols_filter"]: 
                     self.copy_trading_blacklist()
                     eligible_symbols = [symbol for symbol in eligible_symbols if self.ct_allowed[symbol]]
-                    print('N eligilble symbols after copy trading filter', len(eligible_symbols))
+                    print('N eligible symbols after copy trading filter', len(eligible_symbols))
 
                 if self.config["top_mc_filter"] > 0.0 : 
                     self.get_top_coin_data()
                     eligible_symbols = [symbol for symbol in eligible_symbols if self.market_cap[symbol] < self.config["top_mc_filter"]]
-                    print('N eligilble symbols after MC filter', len(eligible_symbols))
+                    print('N eligible symbols after MC filter', len(eligible_symbols))
                
                 if self.config["funding_rate_filter"] > 0.0 : 
                     eligible_symbols = [symbol for symbol in eligible_symbols if abs(self.fund_rates[symbol]) <= self.config["funding_rate_filter"]]
-                    print('N eligilble symbols after funding rate filter', len(eligible_symbols))
+                    print('N eligible symbols after funding rate filter', len(eligible_symbols))
                
                 self.calc_volumes()
        
@@ -564,7 +564,7 @@ class Passivbot:
                         sym_no_min_vol = [symbol for symbol in eligible_symbols if (self.volumes[symbol]/len(self.ohlcvs[symbol])) < ((self.config["min_1m_volume_filter"] * interval_map[self.config["ohlcv_interval"]]))]
                         
                         eligible_symbols = [symbol for symbol in eligible_symbols if (self.volumes[symbol]/len(self.ohlcvs[symbol])) >= ((self.config["min_1m_volume_filter"] * interval_map[self.config["ohlcv_interval"]]))]
-                        print('N eligilble symbols after min volume filter', len(eligible_symbols))
+                        print('N eligible symbols after min volume filter', len(eligible_symbols))
                     except Exception as e:
                         print('Error on min vol: ', e)
 
@@ -573,7 +573,7 @@ class Passivbot:
                     eligible_symbols = sorted(eligible_symbols, key=lambda symbol: self.volumes[symbol])
                     clip_tres = float(self.config["relative_volume_filter_clip_pct"])
                     eligible_symbols = eligible_symbols[int(round(len(eligible_symbols) * clip_tres)):]
-                    print('N eligilble symbols after volume clip filter', len(eligible_symbols))
+                    print('N eligible symbols after volume clip filter', len(eligible_symbols))
 
                 self.calc_noisiness()  # ideal symbols are high noise symbols
        
