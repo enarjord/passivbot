@@ -4,7 +4,7 @@
 
 :warning: **Used at one's own risk** :warning:
 
-v6.1.4
+v7.0.0
 
 
 ## Overview
@@ -13,7 +13,7 @@ Passivbot is a cryptocurrency trading bot written in Python, intended to require
 
 It operates on perpetual futures derivatives markets, automatically creating and cancelling limit buy and sell orders on behalf of the user. It does not try to predict future price movements, it does not use technical indicators, nor does it follow trends. Rather, it is a contrarian market maker, providing resistance to price changes in both directions, thereby "serving the market" as a price stabilizer.  
 
-Passivbot's behavior may be backtested on historical price data, using the included backtester whose CPU heavy functions are written compatible with Numba for speed. Also included is an optimizer, which finds better configurations by iterating thousands of backtests with different candidates, converging on the optimal ones with an evolutionary algorithm.  
+Passivbot's behavior may be backtested on historical price data, using the included backtester whose CPU heavy functions are written in Rust for speed. Also included is an optimizer, which finds better configurations by iterating thousands of backtests with different candidates, converging on the optimal ones with an evolutionary algorithm.  
 
 ## Strategy
 
@@ -25,12 +25,75 @@ The Forager feature dynamically chooses the most volatile markets on which to op
 ### Unstucking Mechanism
 Passivbot manages underperforming, or "stuck", positions by realizing small losses over time. If multiple positions are stuck, the bot prioritizes positions with the smallest gap between the entry price and current market price for "unstucking". Losses are limited by ensuring that the account balance does not fall under a set percentage below the past peak balance.  
 
-## Controlling the bot
 
-Passivbot is controlled via terminal commands.  
-To let Passivbot run on multiple markets simultaneously, use passivbot_multi (see docs/passivbot_multi.md)  
-There is also an integrated manager for controlling multiple single symbol bots (see docs/manager.md).  
-See also https://github.com/msei99/pbgui/ for a web based Passivbot GUI.  
+## Installation
+
+To install Passivbot and its dependencies, follow the steps below.
+
+### Step 1: Clone the Repository
+
+First, clone the Passivbot repository to your local machine:
+
+```sh
+git clone https://github.com/enarjord/passivbot.git
+cd passivbot
+```
+
+### Step 2: Create and Activate a Virtual Environment
+
+Create a virtual environment to manage dependencies:
+
+```sh
+python3 -m venv venv
+```
+
+Activate the virtual environment:
+
+- On Windows:
+  ```sh
+  .\venv\Scripts\activate
+  ```
+- On macOS and Linux:
+  ```sh
+  source venv/bin/activate
+  ```
+
+### Step 3: Install Python Dependencies
+
+Install all the required Python dependencies listed in the `requirements.txt` file:
+
+```sh
+pip install -r requirements.txt
+```
+
+### Step 4: Build Rust Extensions
+
+Navigate to the `passivbot-rust` directory and build the Rust extensions using `maturin`:
+
+```sh
+cd passivbot-rust
+maturin develop
+```
+
+### Step 5: Add API keys
+
+Make a copy of the api-keys template file:
+
+```sh
+cp api-keys.json.example api-keys.json
+```
+
+Add your keys to api-keys.json.
+
+### Step 6: Run Passivbot
+
+Make a live configuration file, using `configs/live/example_config.hjson` as a template.
+
+To start the bot, run:
+
+```sh
+python src/passivbot.py configs/live/example_config.hjson
+```
 
 ## Requirements
 
@@ -39,13 +102,13 @@ See also https://github.com/msei99/pbgui/ for a web based Passivbot GUI.
 
 ## Pre-optimized configurations
 
-Pre-optimized configurations for Passivbot can be found in the directory `configs/live/`
+Coming soon...
 
 See also https://pbconfigdb.scud.dedyn.io/
 
 ## Documentation:
 
-For more detailed information about Passivbot, see documentation on https://www.passivbot.com
+For more detailed information about Passivbot, see documentation files here: [docs/](docs/) or on www.passivbot.com
 
 ## Support
 
@@ -56,7 +119,7 @@ For more detailed information about Passivbot, see documentation on https://www.
 ## Third Party Links, Referrals and Tip Jar
 
 **Passivbot Manager Service:**  
-For user uncomfortable with or unwilling to run the robot themselves, there is a paid manager service to run Passivbot on the user's behalf.  
+There is a paid manager service to run Passivbot on the user's behalf:  
 www.passivbotmanager.com  
 
 **Referrals:**  
