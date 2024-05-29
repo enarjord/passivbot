@@ -39,8 +39,7 @@ class Info(CLICommand):
 
         if len(flags) > 0:
             lines.append("\nFlags:")
-            lines.extend([f"  {flags[i]}: { flags[i + 1]}"
-                          for i in range(0, len(flags), 2)])
+            lines.extend([f"  {flags[i]}: { flags[i + 1]}" for i in range(0, len(flags), 2)])
 
         for line in lines:
             logger.info(line)

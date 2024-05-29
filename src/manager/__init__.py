@@ -50,7 +50,9 @@ class Manager:
         return len(list(filter(filter_fn, iterable))), len(iterable)
 
     def count_running(self, instances: List[Instance] = None, format=False) -> Union[int, str]:
-        def filter(i): return i.is_running()
+        def filter(i):
+            return i.is_running()
+
         running, total = self.count(filter, instances)
 
         if not format:
@@ -58,8 +60,12 @@ class Manager:
 
         return f"{running}/{total} running"
 
-    def count_unsynced(self, instances: List[Instance] = None, format: bool = False) -> Union[int, str]:
-        def filter(i): return not i.is_in_config()
+    def count_unsynced(
+        self, instances: List[Instance] = None, format: bool = False
+    ) -> Union[int, str]:
+        def filter(i):
+            return not i.is_in_config()
+
         unsynced, total = self.count(filter, instances)
 
         if not format:
@@ -106,12 +112,7 @@ class Manager:
                 it = iter(args[3:])
                 flags = dict(zip(it, it))
 
-            instance = Instance({
-                "user": user,
-                "symbol": symbol,
-                "config": config,
-                "flags": flags
-            })
+            instance = Instance({"user": user, "symbol": symbol, "config": config, "flags": flags})
             if instance.is_running():
                 instanaces.append(instance)
 

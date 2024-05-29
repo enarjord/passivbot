@@ -78,8 +78,7 @@ class CLI:
             logger.info("\nAborted")
         except:
             self.on_exit()
-            logger.error(
-                "\nSomething went wrong, there should be possible reasons above")
+            logger.error("\nSomething went wrong, there should be possible reasons above")
 
     def run(self, args: List):
         if len(args) == 0:
@@ -117,8 +116,7 @@ class CLI:
             running = self.manager.count_running(group, format=True)
             user = Color.apply(Color.CYAN, user)
             lines.append(f"- {user} ({running})")
-            lines.extend([self.format_instance(instance)
-                          for instance in group])
+            lines.extend([self.format_instance(instance) for instance in group])
 
         return lines
 
@@ -147,12 +145,10 @@ class CLI:
             instances = self.manager.query_instances(self.args)
 
         if callable(filter):
-            instances = [
-                instance for instance in instances if filter(instance)]
+            instances = [instance for instance in instances if filter(instance)]
 
         if len(instances) == 0:
-            logger.warn(
-                f"No instances matched the given arguments: {' '.join(self.args)}")
+            logger.warn(f"No instances matched the given arguments: {' '.join(self.args)}")
 
         return instances
 
@@ -164,7 +160,7 @@ class CLI:
             return True
 
         def action_message(message):
-            return f"Action \"{action}\" will be perfromed on {message}"
+            return f'Action "{action}" will be perfromed on {message}'
 
         logger.info(action_message(f"{len(instances)} instance(s). Continue?"))
 
@@ -189,7 +185,8 @@ class CLI:
                 return True
             elif answer in ["list", "l"]:
                 lines = self.format_instnaces(
-                    instances,  title=f"\n{action_message('these instances')}")
+                    instances, title=f"\n{action_message('these instances')}"
+                )
                 for line in lines:
                     logger.info(line)
             elif answer in ["no", "n"]:
@@ -233,17 +230,14 @@ class CLICommand:
         lines = []
 
         if self.doc != "":
-            lines.extend([f"{line.strip()}"
-                         for line in self.doc.split("\n")])
+            lines.extend([f"{line.strip()}" for line in self.doc.split("\n")])
 
         args_line = []
         if hasattr(self, "args_required") and len(self.args_required) > 0:
-            args_line.extend([f"<{arg.strip()}>"
-                              for arg in self.args_required])
+            args_line.extend([f"<{arg.strip()}>" for arg in self.args_required])
 
         if hasattr(self, "args_optional") and len(self.args_optional) > 0:
-            args_line.extend([f"[ {arg.strip()} ]"
-                              for arg in self.args_optional])
+            args_line.extend([f"[ {arg.strip()} ]" for arg in self.args_optional])
 
         if len(args_line) > 0:
             lines.append(f"Args: {' '.join(args_line)}")

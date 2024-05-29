@@ -65,8 +65,7 @@ class Instance:
 
     def is_running(self) -> bool:
         if self.is_running_ is None:
-            self.is_running_ = ProcessManager.is_running(
-                self.get_pid_signature())
+            self.is_running_ = ProcessManager.is_running(self.get_pid_signature())
 
         return self.is_running_
 
@@ -120,8 +119,7 @@ class Instance:
     def start(self, silent: bool = False) -> bool:
         self.reset_state()
 
-        log_file = os.path.join(
-            PASSIVBOT_PATH, f"logs/{self.get_user()}/{self.get_symbol()}.log")
+        log_file = os.path.join(PASSIVBOT_PATH, f"logs/{self.get_user()}/{self.get_symbol()}.log")
 
         try:
             if not os.path.exists(os.path.dirname(log_file)):

@@ -1,4 +1,5 @@
 from sys import path, argv
+
 path.append(".")
 
 from .cli import CLI
@@ -24,24 +25,24 @@ class ManagerCLI(CLI):
         self.add_command("init", Init)
         self.add_command("help", Help)
 
-        self.add_flag("all", ["-a", "--all"],
-                      "perform action on all instances")
+        self.add_flag("all", ["-a", "--all"], "perform action on all instances")
 
-        self.add_flag("unsynced", ["-u", "--unsynced"],
-                      "perform action on unsynced instances")
+        self.add_flag("unsynced", ["-u", "--unsynced"], "perform action on unsynced instances")
 
         self.add_flag("yes", ["-y", "--yes"], "skip confirmation")
 
-        self.add_flag("silent", ["-s", "--silent"],
-                      "disiable logging for affected instances")
+        self.add_flag("silent", ["-s", "--silent"], "disiable logging for affected instances")
 
         self.add_flag("force", ["-f", "--force"], "force an action")
 
-        self.add_flag("modifiers", ["-m", "--modify"],
-                      "modify flags of affected instances", type=str)
+        self.add_flag("modifiers", ["-m", "--modify"], "modify flags of affected instances", type=str)
 
-        self.add_flag("config_path", ["-c", "--config"],
-                      "specify an absolute path to a manager config", type=str)
+        self.add_flag(
+            "config_path",
+            ["-c", "--config"],
+            "specify an absolute path to a manager config",
+            type=str,
+        )
 
         self.add_flag("help", ["-h", "--help"], "show help for a command")
 

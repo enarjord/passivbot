@@ -13,8 +13,7 @@ class Start(CLICommand):
 
         logger.info("Looking for stopped instances...")
 
-        instances_to_start = cli.get_instances_for_action(
-            lambda i: not i.is_running())
+        instances_to_start = cli.get_instances_for_action(lambda i: not i.is_running())
         if len(instances_to_start) == 0:
             return
 

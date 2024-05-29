@@ -32,8 +32,7 @@ class Restart(CLICommand):
             else:
                 failed.append(instance.get_id())
 
-            progress.update(
-                f"restarted {len(restarted_instances)}/{len(instances_to_restart)}")
+            progress.update(f"restarted {len(restarted_instances)}/{len(instances_to_restart)}")
 
         progress.finish(f"Restarted {len(restarted_instances)} instance(s)")
 

@@ -24,17 +24,14 @@ class List(CLICommand):
                 instances_unsynced.append(instance)
 
         if len(instances_synced) > 0:
-            lines.extend(cli.format_instnaces(
-                instances_synced, title="Instances"))
+            lines.extend(cli.format_instnaces(instances_synced, title="Instances"))
 
         if len(instances_unsynced) > 0:
-            lines.extend(cli.format_instnaces(
-                instances_unsynced, title="\nUnsynced"))
+            lines.extend(cli.format_instnaces(instances_unsynced, title="\nUnsynced"))
 
         lines.append(f"\n{cli.manager.count_running(instances, format=True)}")
         lines.append(f"{cli.manager.count_unsynced(instances, format=True)}")
-        lines.append(
-            '\nUse "manager info" to get more info about a particular instance')
+        lines.append('\nUse "manager info" to get more info about a particular instance')
 
         for line in lines:
             logger.info(line)

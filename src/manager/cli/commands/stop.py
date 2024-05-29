@@ -14,8 +14,7 @@ class Stop(CLICommand):
 
         logger.info("Seeking for running instances...")
 
-        instances_to_stop = cli.get_instances_for_action(
-            lambda i: i.is_running())
+        instances_to_stop = cli.get_instances_for_action(lambda i: i.is_running())
         if len(instances_to_stop) == 0:
             return
 
@@ -32,8 +31,7 @@ class Stop(CLICommand):
             else:
                 failed.append(instance.get_id())
 
-            progress.update(
-                f"stopped {len(stopped_instances)}/{len(instances_to_stop)}")
+            progress.update(f"stopped {len(stopped_instances)}/{len(instances_to_stop)}")
 
         progress.finish(f"Stopped {len(stopped_instances)} instance(s)")
 
