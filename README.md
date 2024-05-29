@@ -92,7 +92,7 @@ Make a live configuration file, using `configs/live/example_config.hjson` as a t
 To start the bot, run:
 
 ```sh
-python src/passivbot.py configs/live/example_config.hjson
+python src/main.py configs/live/example_config.hjson
 ```
 
 ## Requirements
