@@ -670,7 +670,7 @@ def assert_correct_ccxt_version(version=None, ccxt=None):
 
 def load_ccxt_version():
     try:
-        with open("requirements_liveonly.txt") as f:
+        with open("requirements.txt") as f:
             lines = f.readlines()
         ccxt_line = [line for line in lines if "ccxt" in line][0].strip()
         return ccxt_line[ccxt_line.find("==") + 2 :]
