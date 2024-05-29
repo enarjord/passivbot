@@ -10,6 +10,7 @@ import json
 import hjson
 import pprint
 import numpy as np
+import passivbot_rust as pbr
 from prettytable import PrettyTable
 from uuid import uuid4
 from copy import deepcopy
@@ -319,7 +320,7 @@ class Passivbot:
         for pside in ["long", "short"]:
             changed = {}
             n_actives = len(self.is_active[pside])
-            WE_limit_div = round_(
+            WE_limit_div = pbr.round_(
                 self.config[f"TWE_{pside}"] / n_actives if n_actives > 0 else 0.001, 0.0001
             )
             for symbol in self.is_active[pside]:
@@ -1114,7 +1115,7 @@ class Passivbot:
                     self.c_mults[sym],
                 )
                 AU_allowance_pct = 1.0 if upnl >= 0.0 else min(1.0, AU_allowance / abs(upnl))
-                AU_allowance_qty = round_(
+                AU_allowance_qty = pbr.round_(
                     abs(self.positions[sym][pside]["size"]) * AU_allowance_pct, self.qty_steps[sym]
                 )
                 close_qty = max(
@@ -1128,7 +1129,7 @@ class Passivbot:
                     ),
                     min(
                         abs(AU_allowance_qty),
-                        round_(
+                        pbr.round_(
                             cost_to_qty(
                                 self.balance
                                 * self.live_configs[sym][pside]["wallet_exposure_limit"]
@@ -1234,7 +1235,7 @@ class Passivbot:
                     ideal_orders[symbol].append(unstuck_close_order["order"])
                     psize_ = max(
                         0.0,
-                        round_(
+                        pbr.round_(
                             abs(self.positions[symbol]["long"]["size"])
                             - abs(unstuck_close_order["order"][0]),
                             self.qty_steps[symbol],
@@ -1317,7 +1318,7 @@ class Passivbot:
                     ideal_orders[symbol].append(unstuck_close_order["order"])
                     psize_ = -max(
                         0.0,
-                        round_(
+                        pbr.round_(
                             abs(self.positions[symbol]["short"]["size"])
                             - abs(unstuck_close_order["order"][0]),
                             self.qty_steps[symbol],
