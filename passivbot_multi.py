@@ -518,6 +518,7 @@ class Passivbot:
             while len(eligible_symbols) == 0:
 
                 eligible_symbols = list(self.eligible_symbols)
+                print('N eligible symbols before filters', len(eligible_symbols))
 
                 eligible_symbols = [symbol for symbol in eligible_symbols if self.is_old_enough(symbol) is not False]
                 print('N eligible symbols after is_old_enough filter', len(eligible_symbols))
