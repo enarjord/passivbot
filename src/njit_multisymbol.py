@@ -223,6 +223,9 @@ def calc_fills(
     pos = poss_long[idx] if pside_idx == 0 else poss_short[idx]
     new_pos = (pos[0], pos[1])
     new_balance = balance
+    new_equity = new_balance + calc_pnl_sum(
+        poss_long, poss_short, hlc[:, 1], hlc[:, 0], c_mults
+    )  # compute total equity at this time step
     while entry[0] != 0.0 and (
         (pside_idx == 0 and hlc[idx][1] < entry[1]) or (pside_idx == 1 and hlc[idx][0] > entry[1])
     ):
@@ -235,9 +238,6 @@ def calc_fills(
         )
         fee_paid = -qty_to_cost(entry[0], entry[1], inverse, c_mults[idx]) * maker_fee
         new_balance = max(new_balance * 1e-6, new_balance + fee_paid)
-        new_equity = new_balance + calc_pnl_sum(
-            poss_long, poss_short, hlc[:, 1], hlc[:, 0], c_mults
-        )  # compute total equity
         wallet_exposure = qty_to_cost(new_pos[0], new_pos[1], inverse, c_mults[idx]) / new_balance
         fills.append(
             (
@@ -313,9 +313,6 @@ def calc_fills(
         )
         new_pos = new_pos_
         new_balance = max(new_balance * 1e-6, new_balance + fee_paid + pnl)
-        new_equity = new_balance + calc_pnl_sum(
-            poss_long, poss_short, hlc[:, 1], hlc[:, 0], c_mults
-        )  # compute total equity
         wallet_exposure = qty_to_cost(new_pos[0], new_pos[1], inverse, c_mults[idx]) / new_balance
         fills.append(
             (
