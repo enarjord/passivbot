@@ -670,8 +670,16 @@ def assert_correct_ccxt_version(version=None, ccxt=None):
 
 def load_ccxt_version():
     try:
-        with open("requirements.txt") as f:
+        # Get the directory of the current script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        # Construct the path to the requirements.txt file
+        requirements_path = os.path.join(script_dir, "..", "requirements.txt")
+
+        # Open and read the requirements.txt file
+        with open(requirements_path, "r") as f:
             lines = f.readlines()
+
+        # Find the line with 'ccxt' and extract the version number
         ccxt_line = [line for line in lines if "ccxt" in line][0].strip()
         return ccxt_line[ccxt_line.find("==") + 2 :]
     except Exception as e:
