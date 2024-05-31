@@ -1056,7 +1056,7 @@ async def download_ohlcvs_bybit(symbol, start_date, end_date, spot=False, downlo
             if (cand := f"{symbol}{'_' if spot else ''}{day}.csv.gz") in webpage
         ]
         if len(filenames) > 0:
-            n_concurrent_fetches = 10
+            n_concurrent_fetches = 2
             for i in range(0, len(filenames), 10):
                 filenames_sublist = filenames[i : i + n_concurrent_fetches]
                 print(
