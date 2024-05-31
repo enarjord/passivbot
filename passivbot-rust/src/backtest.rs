@@ -1,6 +1,7 @@
 use ndarray::s;
 use numpy::{PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods};
 use pyo3::prelude::*;
+use pyo3::types::PyAny;
 use pyo3::types::PyDict;
 
 #[pyclass]
@@ -72,11 +73,13 @@ impl BacktestConfig {
 pub fn run_backtest(
     hlcs: PyReadonlyArray3<f64>,
     noisiness_indices: PyReadonlyArray2<i32>,
-    config: &PyDict,
+    config: &Bound<PyAny>, // Use Bound<PyAny> instead of PyDict
 ) -> PyResult<()> {
+    // Use `extract` method to convert `&Bound<PyAny>` to `&PyDict`
+    let dict: &PyDict = config.extract()?;
     let shape_hlcs = hlcs.shape();
     let shape_noisiness_indices = noisiness_indices.shape();
-    let config = BacktestConfig::new(config)?;
+    let config = BacktestConfig::new(dict)?;
 
     println!("Shape of the hlcs PyArray3: {:?}", shape_hlcs);
     println!(
