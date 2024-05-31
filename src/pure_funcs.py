@@ -494,6 +494,43 @@ def flatten(lst: list) -> list:
 
 
 def get_template_live_config(passivbot_mode="neat_grid"):
+    if passivbot_mode == "v7_live_config":
+        return {
+            "long": {
+                "close_drawdown_pct": 0.003,
+                "close_threshold_pct": 0.004,
+                "ema_span_0": 600.0,
+                "ema_span_1": 1200.0,
+                "initial_ema_dist": -0.002,
+                "initial_qty_pct": 0.01,
+                "n_positions": 5,
+                "reentry_ddown_factor": 0.9,
+                "reentry_exposure_weighting": 0.111,
+                "reentry_spacing_factor": 0.04745,
+                "total_wallet_exposure_limit": 2.0,
+                "unstuck_close_pct": 0.001,
+                "unstuck_ema_dist": 0.0,
+                "unstuck_loss_allowance_pct": 0.01,
+                "unstuck_threshold": 0.6
+            },
+            "short": {
+                "close_drawdown_pct": 0.003,
+                "close_threshold_pct": 0.004,
+                "ema_span_0": 600.0,
+                "ema_span_1": 1200.0,
+                "initial_ema_dist": -0.002,
+                "initial_qty_pct": 0.01,
+                "n_positions": 5,
+                "reentry_ddown_factor": 0.9,
+                "reentry_exposure_weighting": 0.111,
+                "reentry_spacing_factor": 0.04745,
+                "total_wallet_exposure_limit": 2.0,
+                "unstuck_close_pct": 0.001,
+                "unstuck_ema_dist": 0.0,
+                "unstuck_loss_allowance_pct": 0.01,
+                "unstuck_threshold": 0.6
+            }
+        }
     if passivbot_mode == "multi_hjson":
         return {
             "user": "bybit_01",
