@@ -1,28 +1,30 @@
+use ndarray::s;
+use numpy::PyArray2;
+use numpy::PyArray3;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 #[pyclass]
 #[derive(Debug)]
-struct ForagerConfig {
-    total_wallet_exposure_limit: f64,
-    n_positions: i32,
-    unstuck_loss_allowance_pct: f64,
-    unstuck_threshold: f64,
-    unstuck_close_pct: f64,
-    unstuck_ema_dist: f64,
-    ddown_factor: f64,
+pub struct BacktestConfig {
+    close_drawdown_pct: f64,
+    close_threshold_pct: f64,
     ema_span_0: f64,
     ema_span_1: f64,
-    initial_eprice_ema_dist: f64,
+    initial_ema_dist: f64,
     initial_qty_pct: f64,
-    markup_range: f64,
-    min_markup: f64,
-    n_close_orders: i32,
-    rentry_pprice_dist: f64,
-    rentry_pprice_dist_wallet_exposure_weighting: f64,
+    n_positions: i32,
+    reentry_ddown_factor: f64,
+    reentry_exposure_weighting: f64,
+    reentry_spacing_factor: f64,
+    total_wallet_exposure_limit: f64,
+    unstuck_close_pct: f64,
+    unstuck_ema_dist: f64,
+    unstuck_loss_allowance_pct: f64,
+    unstuck_threshold: f64,
 }
 
-fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a Bound<PyDict>, key: &str) -> PyResult<T> {
+fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a &PyDict, key: &str) -> PyResult<T> {
     dict.get_item(key).map_err(|err| err)?.map_or_else(
         || {
             Err(PyErr::new::<pyo3::exceptions::PyKeyError, _>(format!(
@@ -34,58 +36,78 @@ fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a Bound<PyDict>, key: &s
     )
 }
 
-impl ForagerConfig {
-    fn new(dict: Bound<PyDict>) -> PyResult<Self> {
-        let total_wallet_exposure_limit = extract_value(&dict, "total_wallet_exposure_limit")?;
-        let n_positions = extract_value(&dict, "n_positions")?;
-        let unstuck_loss_allowance_pct = extract_value(&dict, "unstuck_loss_allowance_pct")?;
-        let unstuck_threshold = extract_value(&dict, "unstuck_threshold")?;
-        let unstuck_close_pct = extract_value(&dict, "unstuck_close_pct")?;
-        let unstuck_ema_dist = extract_value(&dict, "unstuck_ema_dist")?;
-        let ddown_factor = extract_value(&dict, "ddown_factor")?;
+impl BacktestConfig {
+    fn new(dict: &PyDict) -> PyResult<Self> {
+        let close_drawdown_pct = extract_value(&dict, "close_drawdown_pct")?;
+        let close_threshold_pct = extract_value(&dict, "close_threshold_pct")?;
         let ema_span_0 = extract_value(&dict, "ema_span_0")?;
         let ema_span_1 = extract_value(&dict, "ema_span_1")?;
-        let initial_eprice_ema_dist = extract_value(&dict, "initial_eprice_ema_dist")?;
+        let initial_ema_dist = extract_value(&dict, "initial_ema_dist")?;
         let initial_qty_pct = extract_value(&dict, "initial_qty_pct")?;
-        let markup_range = extract_value(&dict, "markup_range")?;
-        let min_markup = extract_value(&dict, "min_markup")?;
-        let n_close_orders = extract_value(&dict, "n_close_orders")?;
-        let rentry_pprice_dist = extract_value(&dict, "rentry_pprice_dist")?;
-        let rentry_pprice_dist_wallet_exposure_weighting =
-            extract_value(&dict, "rentry_pprice_dist_wallet_exposure_weighting")?;
+        let n_positions = extract_value(&dict, "n_positions")?;
+        let reentry_ddown_factor = extract_value(&dict, "reentry_ddown_factor")?;
+        let reentry_exposure_weighting = extract_value(&dict, "reentry_exposure_weighting")?;
+        let reentry_spacing_factor = extract_value(&dict, "reentry_spacing_factor")?;
+        let total_wallet_exposure_limit = extract_value(&dict, "total_wallet_exposure_limit")?;
+        let unstuck_close_pct = extract_value(&dict, "unstuck_close_pct")?;
+        let unstuck_ema_dist = extract_value(&dict, "unstuck_ema_dist")?;
+        let unstuck_loss_allowance_pct = extract_value(&dict, "unstuck_loss_allowance_pct")?;
+        let unstuck_threshold = extract_value(&dict, "unstuck_threshold")?;
 
-        Ok(ForagerConfig {
-            total_wallet_exposure_limit,
-            n_positions,
-            unstuck_loss_allowance_pct,
-            unstuck_threshold,
-            unstuck_close_pct,
-            unstuck_ema_dist,
-            ddown_factor,
+        Ok(BacktestConfig {
+            close_drawdown_pct,
+            close_threshold_pct,
             ema_span_0,
             ema_span_1,
-            initial_eprice_ema_dist,
+            initial_ema_dist,
             initial_qty_pct,
-            markup_range,
-            min_markup,
-            n_close_orders,
-            rentry_pprice_dist,
-            rentry_pprice_dist_wallet_exposure_weighting,
+            n_positions,
+            reentry_ddown_factor,
+            reentry_exposure_weighting,
+            reentry_spacing_factor,
+            total_wallet_exposure_limit,
+            unstuck_close_pct,
+            unstuck_ema_dist,
+            unstuck_loss_allowance_pct,
+            unstuck_threshold,
         })
     }
 }
 
 #[pyfunction]
-pub fn to_struct(dict: Bound<PyDict>) -> PyResult<ForagerConfig> {
-    let forager_config = ForagerConfig::new(dict)?;
-    println!("{:?}", forager_config);
-    Ok(forager_config)
-}
+pub fn run_backtest(
+    hlcs: &PyArray3<f64>,
+    noisiness_indices: &PyArray2<i32>,
+    config: &PyDict,
+) -> PyResult<()> {
+    let shape_hlcs = hlcs.shape();
+    let shape_noisiness_indices = noisiness_indices.shape();
+    let config = BacktestConfig::new(config)?;
 
-#[pyfunction]
-pub fn print_dict(dict: Bound<PyDict>) -> PyResult<()> {
-    for (key, value) in dict.iter() {
-        println!("Key: {:?}, Value: {:?}", key, value);
+    println!("Shape of the hlcs PyArray3: {:?}", shape_hlcs);
+    println!(
+        "Shape of the noisiness_indices PyArray2: {:?}",
+        shape_noisiness_indices
+    );
+    println!("{:?}", config);
+
+    if shape_hlcs[0] > 0 && shape_hlcs[1] > 0 && shape_hlcs[2] > 0 {
+        println!(
+            "First element of hlcs: {:?}",
+            hlcs.readonly().as_array().slice(s![0, 0, 0])
+        );
+    } else {
+        println!("hlcs array is empty");
     }
+
+    if shape_noisiness_indices[0] > 0 && shape_noisiness_indices[1] > 0 {
+        println!(
+            "First element of noisiness_indices: {:?}",
+            noisiness_indices.readonly().as_array().slice(s![0, 0])
+        );
+    } else {
+        println!("noisiness_indices array is empty");
+    }
+
     Ok(())
 }

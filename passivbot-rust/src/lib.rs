@@ -10,7 +10,7 @@ use utils::*;
 #[pymodule]
 fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(round_up, m)?)?;
-    m.add_function(wrap_pyfunction!(print_dict, m)?)?;
-    m.add_function(wrap_pyfunction!(to_struct, m)?)?;
+    m.add_function(wrap_pyfunction!(run_backtest, m)?)?;
+
     Ok(())
 }
