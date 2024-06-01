@@ -1,4 +1,5 @@
 use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2};
+use numpy::PyArray2;
 use numpy::{PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
@@ -228,12 +229,42 @@ fn prepare_emas_forager(
 //    multiply_arrays(alphas, closes) + alphas_ * emas
 //}
 
+fn multiply_arrays(arr0: &Array1<f64>, arr1: &Array2<f64>) -> PyResult<Array2<f64>> {
+    let arr0_reshaped = arr0
+        .clone()
+        .into_shape((arr0.len(), 1))
+        .map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("Reshaping arr0 failed"))?;
+    if let Some(arr0_broadcast) = arr0_reshaped.broadcast(arr1.raw_dim()) {
+        Ok(arr1 * &arr0_broadcast)
+    } else {
+        Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Broadcasting failed",
+        ))
+    }
+}
+
+fn calc_next_ema_multiple(
+    alphas: &Array1<f64>,
+    alphas_: &Array1<f64>,
+    emas: &Array2<f64>,
+    closes: &Array1<f64>,
+) -> PyResult<Array2<f64>> {
+    let alphas_broadcast = alphas
+        .broadcast((emas.nrows(), alphas.len()))
+        .ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>("Broadcasting alphas failed")
+        })?;
+    let multiplied_arrays = multiply_arrays(closes, &alphas_broadcast.to_owned())?;
+    Ok(multiplied_arrays + emas * alphas_.mapv(|x| x))
+}
+
 #[pyfunction]
 pub fn run_backtest(
+    py: Python,
     hlcs: PyReadonlyArray3<f64>,
     noisiness_indices: PyReadonlyArray2<i32>,
-    config: &Bound<PyAny>, // Use Bound<PyAny> instead of PyDict
-) -> PyResult<()> {
+    config: &Bound<PyAny>,
+) -> PyResult<Vec<Py<PyArray2<f64>>>> {
     // Use `extract` method to convert `&Bound<PyAny>` to `&PyDict`
     let shape_hlcs = hlcs.shape();
     let shape_noisiness_indices = noisiness_indices.shape();
@@ -316,47 +347,24 @@ pub fn run_backtest(
         alphas_inv_short,
     ) = prepare_emas_forager(spans_long, spans_short, hlcs_first.view());
 
-    // start python code
-    //tmp_emas = [emas_long]
-    //for k in range(1, len(hlcs)):
-    //    if enabled_long:
-    //        # calc emas
-    //        emas_long = calc_next_ema_multiple(alphas_long, alphas__long, emas_long, hlcs[k, :, 2])
-    //        tmp_emas.append(emas_long)
-    //return tmp_emas
-    // end python code
-
-    println!("emas_long:\n{:?}", emas_long);
-    println!("emas_short:\n{:?}", emas_short);
-    println!("alphas_long:\n{:?}", alphas_long);
-    println!("alphas_inv_long:\n{:?}", alphas_inv_long);
-    println!("alphas_short:\n{:?}", alphas_short);
-    println!("alphas_inv_short:\n{:?}", alphas_inv_short);
-
-    println!("Shape of the hlcs PyArray3: {:?}", shape_hlcs);
-    println!(
-        "Shape of the noisiness_indices PyArray2: {:?}",
-        shape_noisiness_indices
-    );
-    println!("{:?}", config);
-
-    if shape_hlcs[0] > 0 && shape_hlcs[1] > 0 && shape_hlcs[2] > 0 {
-        println!(
-            "First element of hlcs: {:?}",
-            hlcs.as_array().slice(s![0, 0, 0])
-        );
-    } else {
-        println!("hlcs array is empty");
+    let mut tmp_emas = vec![emas_long.clone()];
+    for k in 1..hlcs_array.shape()[0] {
+        if enabled_long {
+            // calc emas
+            emas_long = calc_next_ema_multiple(
+                &alphas_long,
+                &alphas_inv_long,
+                &emas_long,
+                &hlcs_array.slice(s![k, .., 2]).to_owned(),
+            )?;
+            tmp_emas.push(emas_long.clone());
+        }
     }
 
-    if shape_noisiness_indices[0] > 0 && shape_noisiness_indices[1] > 0 {
-        println!(
-            "First element of noisiness_indices: {:?}",
-            noisiness_indices.as_array().slice(s![0, 0])
-        );
-    } else {
-        println!("noisiness_indices array is empty");
-    }
+    let py_emas: Vec<Py<PyArray2<f64>>> = tmp_emas
+        .into_iter()
+        .map(|ema| PyArray2::from_owned_array(py, ema).to_owned())
+        .collect();
 
-    Ok(())
+    Ok(py_emas)
 }
