@@ -204,6 +204,36 @@ pub fn run_backtest(
 
     let enabled_long = config.long.n_positions > 0;
     let enabled_short = config.short.n_positions > 0;
+    let wallet_exposure_limit_long = if enabled_long {
+        config.long.total_wallet_exposure_limit / config.long.n_positions as f64
+    } else {
+        0.0
+    };
+    let wallet_exposure_limit_short = if enabled_short {
+        config.short.total_wallet_exposure_limit / config.short.n_positions as f64
+    } else {
+        0.0
+    };
+
+    let mut positions_long: Array1<Position> =
+        Array1::from_elem(hlcs.shape()[0], Position::default());
+    let mut positions_short: Array1<Position> =
+        Array1::from_elem(hlcs.shape()[0], Position::default());
+
+    let mut has_pos_long: HashSet<i32> = HashSet::new();
+    let mut has_pos_short: HashSet<i32> = HashSet::new();
+    let mut is_stuck_long: HashSet<i32> = HashSet::new();
+    let mut is_stuck_short: HashSet<i32> = HashSet::new();
+    let mut active_longs: HashSet<i32> = HashSet::new();
+    let mut active_shorts: HashSet<i32> = HashSet::new();
+
+    let mut open_orders_entry_long: Vec<OpenOrder> = Vec::new();
+    let mut open_orders_close_long: Vec<OpenOrder> = Vec::new();
+    let mut open_orders_entry_short: Vec<OpenOrder> = Vec::new();
+    let mut open_orders_close_short: Vec<OpenOrder> = Vec::new();
+
+    let mut fills: Vec<Fill> = Vec::new();
+    let mut stats: Vec<Stat> = Vec::new();
 
     let hlcs_array = hlcs.as_array();
     let spans_long = [config.long.ema_span_0, config.long.ema_span_1];
