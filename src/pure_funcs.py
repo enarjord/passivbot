@@ -499,8 +499,8 @@ def get_template_live_config(passivbot_mode="neat_grid"):
             "long": {
                 "close_drawdown_pct": 0.003,
                 "close_threshold_pct": 0.004,
-                "ema_span_0": 600.0,
-                "ema_span_1": 1200.0,
+                "ema_span_0": 400.0,
+                "ema_span_1": 1440.0,
                 "initial_ema_dist": -0.002,
                 "initial_qty_pct": 0.01,
                 "n_positions": 5,
@@ -511,13 +511,13 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 "unstuck_close_pct": 0.001,
                 "unstuck_ema_dist": 0.0,
                 "unstuck_loss_allowance_pct": 0.01,
-                "unstuck_threshold": 0.6
+                "unstuck_threshold": 0.6,
             },
             "short": {
                 "close_drawdown_pct": 0.003,
                 "close_threshold_pct": 0.004,
-                "ema_span_0": 600.0,
-                "ema_span_1": 1200.0,
+                "ema_span_0": 400.0,
+                "ema_span_1": 1440.0,
                 "initial_ema_dist": -0.002,
                 "initial_qty_pct": 0.01,
                 "n_positions": 5,
@@ -528,8 +528,8 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 "unstuck_close_pct": 0.001,
                 "unstuck_ema_dist": 0.0,
                 "unstuck_loss_allowance_pct": 0.01,
-                "unstuck_threshold": 0.6
-            }
+                "unstuck_threshold": 0.6,
+            },
         }
     if passivbot_mode == "multi_hjson":
         return {
