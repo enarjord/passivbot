@@ -49,6 +49,11 @@ class HyperliquidBot(Passivbot):
         self.quote = "USDC"
         self.hedge_mode = False
         self.significant_digits = {}
+        if "is_vault" not in self.user_info:
+            logging.info(
+                f"parameter 'is_vault' missing from api-keys.json for user {self.user}. Setting to 'false'"
+            )
+            self.user_info["is_vault"] = False
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
@@ -308,7 +313,15 @@ class HyperliquidBot(Passivbot):
             syms = sorted(by_symbol)
             res = await asyncio.gather(
                 *[
-                    self.cca.cancel_orders([x["id"] for x in by_symbol[sym]], symbol=sym)
+                    self.cca.cancel_orders(
+                        [x["id"] for x in by_symbol[sym]],
+                        symbol=sym,
+                        params=(
+                            {"vaultAddress": self.user_info["wallet_address"]}
+                            if self.user_info["is_vault"]
+                            else {}
+                        ),
+                    )
                     for sym in syms
                 ]
             )
@@ -345,14 +358,22 @@ class HyperliquidBot(Passivbot):
                             # "orderType": {"limit": {"tif": "Alo"}},
                             # "cloid": order["custom_id"],
                             "reduceOnly": order["reduce_only"],
+                            "timeInForce": "Alo",
                         },
                     }
                 )
-            res = await self.cca.create_orders(to_execute)
+            res = await self.cca.create_orders(
+                to_execute,
+                params=(
+                    {"vaultAddress": self.user_info["wallet_address"]}
+                    if self.user_info["is_vault"]
+                    else {}
+                ),
+            )
             executed = []
-            for i, order in enumerate(orders):
-                if "info" in res[i] and "filled" in res[i]["info"] or "resting" in res[i]["info"]:
-                    executed.append({**res[i], **order})
+            for ex, order in zip(res, orders):
+                if "info" in ex and "filled" in ex["info"] or "resting" in ex["info"]:
+                    executed.append({**ex, **order})
             return executed
         except Exception as e:
             logging.error(f"error executing orders {e}")
