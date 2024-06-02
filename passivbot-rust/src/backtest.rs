@@ -1,6 +1,5 @@
-use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2};
-use numpy::PyArray2;
-use numpy::{PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods};
+use ndarray::{s, Array1, Array2, Array3, ArrayView1, ArrayView2};
+use numpy::{PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pyo3::types::PyDict;
@@ -210,52 +209,20 @@ fn prepare_emas_forager(
     )
 }
 
-//fn multiply_arrays(arr0: &Array1<f64>, arr1: &Array1<f64>) -> Array2<f64> {
-//    let mut result = Array2::<f64>::zeros((arr1.len(), arr0.len()));
-//    for i in 0..arr1.len() {
-//        for j in 0..arr0.len() {
-//            result[(i, j)] = arr1[i] * arr0[j];
-//        }
-//    }
-//    result
-//}
-//
-//fn calc_next_ema_multiple(
-//    alphas: &Array1<f64>,
-//    alphas_: &Array1<f64>,
-//    emas: &Array2<f64>,
-//    closes: &Array1<f64>,
-//) -> Array2<f64> {
-//    multiply_arrays(alphas, closes) + alphas_ * emas
-//}
-
-fn multiply_arrays(arr0: &Array1<f64>, arr1: &Array2<f64>) -> PyResult<Array2<f64>> {
-    let arr0_reshaped = arr0
-        .clone()
-        .into_shape((arr0.len(), 1))
-        .map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("Reshaping arr0 failed"))?;
-    if let Some(arr0_broadcast) = arr0_reshaped.broadcast(arr1.raw_dim()) {
-        Ok(arr1 * &arr0_broadcast)
-    } else {
-        Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Broadcasting failed",
-        ))
+fn update_emas_inplace(
+    previous_emas: &mut Array2<f64>,
+    alphas_long: &[f64],
+    alphas_inv_long: &[f64],
+    current_prices: &[f64],
+) {
+    for (mut emas, &price) in previous_emas.outer_iter_mut().zip(current_prices) {
+        for (ema, (&alpha, &alpha_inv)) in emas
+            .iter_mut()
+            .zip(alphas_long.iter().zip(alphas_inv_long.iter()))
+        {
+            *ema = *ema * alpha_inv + price * alpha;
+        }
     }
-}
-
-fn calc_next_ema_multiple(
-    alphas: &Array1<f64>,
-    alphas_: &Array1<f64>,
-    emas: &Array2<f64>,
-    closes: &Array1<f64>,
-) -> PyResult<Array2<f64>> {
-    let alphas_broadcast = alphas
-        .broadcast((emas.nrows(), alphas.len()))
-        .ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>("Broadcasting alphas failed")
-        })?;
-    let multiplied_arrays = multiply_arrays(closes, &alphas_broadcast.to_owned())?;
-    Ok(multiplied_arrays + emas * alphas_.mapv(|x| x))
 }
 
 #[pyfunction]
@@ -347,23 +314,26 @@ pub fn run_backtest(
         alphas_inv_short,
     ) = prepare_emas_forager(spans_long, spans_short, hlcs_first.view());
 
-    let mut tmp_emas = vec![emas_long.clone()];
-    for k in 1..hlcs_array.shape()[0] {
+    let num_steps = hlcs_array.shape()[0];
+    let mut tmp_emas = Array3::zeros((num_steps, emas_long.shape()[0], emas_long.shape()[1]));
+    for k in 0..num_steps {
         if enabled_long {
-            // calc emas
-            emas_long = calc_next_ema_multiple(
-                &alphas_long,
-                &alphas_inv_long,
-                &emas_long,
-                &hlcs_array.slice(s![k, .., 2]).to_owned(),
-            )?;
-            tmp_emas.push(emas_long.clone());
+            update_emas_inplace(
+                &mut emas_long,
+                alphas_long.as_slice().unwrap(),
+                alphas_inv_long.as_slice().unwrap(),
+                &hlcs_array
+                    .slice(s![k, .., 2])
+                    .to_owned()
+                    .as_slice()
+                    .unwrap(),
+            );
+            tmp_emas.slice_mut(s![k, .., ..]).assign(&emas_long);
         }
     }
-
     let py_emas: Vec<Py<PyArray2<f64>>> = tmp_emas
-        .into_iter()
-        .map(|ema| PyArray2::from_owned_array(py, ema).to_owned())
+        .outer_iter()
+        .map(|ema| PyArray2::from_owned_array(py, ema.to_owned()).to_owned())
         .collect();
 
     Ok(py_emas)
