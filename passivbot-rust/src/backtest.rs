@@ -47,6 +47,15 @@ pub struct Position {
     price: f64,
 }
 
+impl Default for Position {
+    fn default() -> Self {
+        Position {
+            size: 0.0,
+            price: 0.0,
+        }
+    }
+}
+
 #[pyclass]
 #[derive(Debug)]
 pub struct OpenOrder {
@@ -74,8 +83,8 @@ pub struct Fill {
 #[derive(Debug)]
 pub struct Stat {
     minute: i32,
-    positions_long: Vec<Position>,
-    positions_short: Vec<Position>,
+    positions_long: Array1<Position>,
+    positions_short: Array1<Position>,
     hlc: Array2<f64>,
     balance: f64,
     equity: f64,
@@ -233,8 +242,6 @@ pub fn run_backtest(
     config: &Bound<PyAny>,
 ) -> PyResult<Vec<Py<PyArray2<f64>>>> {
     // Use `extract` method to convert `&Bound<PyAny>` to `&PyDict`
-    let shape_hlcs = hlcs.shape();
-    let shape_noisiness_indices = noisiness_indices.shape();
     let dict: &PyDict = config.extract()?;
     let config = BacktestConfig::new(dict)?;
 
@@ -251,20 +258,10 @@ pub fn run_backtest(
         0.0
     };
 
-    let mut positions_long: Vec<Position> = vec![
-        Position {
-            size: 0.0,
-            price: 0.0
-        };
-        hlcs.shape()[0]
-    ];
-    let mut positions_short: Vec<Position> = vec![
-        Position {
-            size: 0.0,
-            price: 0.0
-        };
-        hlcs.shape()[0]
-    ];
+    let mut positions_long: Array1<Position> =
+        Array1::from_elem(hlcs.shape()[0], Position::default());
+    let mut positions_short: Array1<Position> =
+        Array1::from_elem(hlcs.shape()[0], Position::default());
 
     let mut has_pos_long: HashSet<i32> = HashSet::new();
     let mut has_pos_short: HashSet<i32> = HashSet::new();
@@ -290,12 +287,6 @@ pub fn run_backtest(
             order_type: String::from(""),
         },
     );
-
-    let mut unstuck_closes: Vec<OpenOrder> = vec![OpenOrder {
-        qty: 0.0,
-        price: 0.0,
-        order_type: String::from(""),
-    }];
 
     let mut pnl_cumsum_max: f64 = 0.0;
     let mut pnl_cumsum_running: f64 = 0.0;
