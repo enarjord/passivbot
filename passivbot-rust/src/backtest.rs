@@ -14,7 +14,7 @@ pub struct LiveConfig {
     ema_span_1: f64,
     initial_ema_dist: f64,
     initial_qty_pct: f64,
-    n_positions: i32,
+    n_positions: usize,
     reentry_ddown_factor: f64,
     reentry_exposure_weighting: f64,
     reentry_spacing_factor: f64,
@@ -253,7 +253,10 @@ pub fn run_backtest(
     let mut tmp_emas = Array3::zeros((num_steps, emas_long.shape()[0], emas_long.shape()[1]));
 
     for k in 0..num_steps {
+        let mut any_fill = false;
         if enabled_long {
+            // check for fills long
+            // update EMAs
             let current_prices = hlcs_array.slice(s![k, .., 2]).to_owned();
             update_emas_inplace(
                 &mut emas_long,
@@ -262,6 +265,21 @@ pub fn run_backtest(
                 current_prices.as_slice().unwrap(),
             );
             tmp_emas.slice_mut(s![k, .., ..]).assign(&emas_long);
+            // update open orders
+        }
+        if enabled_short {
+            // pass
+        }
+        if any_fill {
+            // update all open orders
+        } else {
+            // update only EMA based orders
+            if has_pos_long.len() < config.long.n_positions {
+                // available slots; recalc actives
+            }
+            if has_pos_short.len() < config.short.n_positions {
+                // pass
+            }
         }
     }
 
