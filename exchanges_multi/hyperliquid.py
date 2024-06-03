@@ -49,9 +49,9 @@ class HyperliquidBot(Passivbot):
         self.quote = "USDC"
         self.hedge_mode = False
         self.significant_digits = {}
-        if "is_vault" not in self.user_info:
+        if "is_vault" not in self.user_info or self.user_info["is_vault"] == "":
             logging.info(
-                f"parameter 'is_vault' missing from api-keys.json for user {self.user}. Setting to 'false'"
+                f"parameter 'is_vault' missing from api-keys.json for user {self.user}. Setting to false"
             )
             self.user_info["is_vault"] = False
 
