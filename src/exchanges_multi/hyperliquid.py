@@ -384,16 +384,18 @@ class HyperliquidBot(Passivbot):
         coros_to_call_margin_mode = {}
         for symbol in symbols:
             try:
-                coros_to_call_margin_mode[symbol] = asyncio.create_task(
-                    self.cca.set_margin_mode(
-                        "cross",
-                        symbol=symbol,
-                        params={
-                            "leverage": int(
-                                min(self.max_leverage[symbol], self.live_configs[symbol]["leverage"])
-                            )
-                        },
+                params = {
+                    "leverage": int(
+                        min(
+                            self.max_leverage[symbol],
+                            self.live_configs[symbol]["leverage"],
+                        )
                     )
+                }
+                if self.user_info["is_vault"]:
+                    params["vaultAddress"] = self.user_info["wallet_address"]
+                coros_to_call_margin_mode[symbol] = asyncio.create_task(
+                    self.cca.set_margin_mode("cross", symbol=symbol, params=params)
                 )
             except Exception as e:
                 logging.error(f"{symbol}: error setting cross mode and leverage {e}")
