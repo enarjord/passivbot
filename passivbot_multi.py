@@ -235,6 +235,8 @@ class Passivbot:
         return res
 
     async def init_bot(self):
+        logging.info(f"setting hedge mode...")
+        await self.update_exchange_config()
         logging.info(f"initiating markets...")
         await self.init_markets_dict()
         await self.init_flags()
@@ -348,7 +350,6 @@ class Passivbot:
     async def update_exchange_configs(self):
         if not hasattr(self, "already_updated_exchange_config_symbols"):
             self.already_updated_exchange_config_symbols = set()
-            await self.update_exchange_config()
         symbols_not_done = [
             x for x in self.active_symbols if x not in self.already_updated_exchange_config_symbols
         ]
