@@ -1,292 +1,102 @@
-use ndarray::{s, Array1, Array2, Array3, ArrayView1, ArrayView2};
-use numpy::{PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods};
-use pyo3::prelude::*;
-use pyo3::types::PyAny;
-use pyo3::types::PyDict;
-use std::collections::HashSet;
+use ndarray::ArrayD;
+use std::collections::HashMap;
 
-#[pyclass]
-#[derive(Debug, Default)]
-pub struct LiveConfig {
-    close_drawdown_pct: f64,
-    close_threshold_pct: f64,
-    ema_span_0: f64,
-    ema_span_1: f64,
-    initial_ema_dist: f64,
-    initial_qty_pct: f64,
-    n_positions: usize,
-    reentry_ddown_factor: f64,
-    reentry_exposure_weighting: f64,
-    reentry_spacing_factor: f64,
-    total_wallet_exposure_limit: f64,
-    unstuck_close_pct: f64,
-    unstuck_ema_dist: f64,
-    unstuck_loss_allowance_pct: f64,
-    unstuck_threshold: f64,
-}
-
-impl LiveConfig {
-    fn from_dict(dict: &PyDict) -> PyResult<Self> {
-        Ok(LiveConfig {
-            close_drawdown_pct: extract_value(dict, "close_drawdown_pct")?,
-            close_threshold_pct: extract_value(dict, "close_threshold_pct")?,
-            ema_span_0: extract_value(dict, "ema_span_0")?,
-            ema_span_1: extract_value(dict, "ema_span_1")?,
-            initial_ema_dist: extract_value(dict, "initial_ema_dist")?,
-            initial_qty_pct: extract_value(dict, "initial_qty_pct")?,
-            n_positions: extract_value(dict, "n_positions")?,
-            reentry_ddown_factor: extract_value(dict, "reentry_ddown_factor")?,
-            reentry_exposure_weighting: extract_value(dict, "reentry_exposure_weighting")?,
-            reentry_spacing_factor: extract_value(dict, "reentry_spacing_factor")?,
-            total_wallet_exposure_limit: extract_value(dict, "total_wallet_exposure_limit")?,
-            unstuck_close_pct: extract_value(dict, "unstuck_close_pct")?,
-            unstuck_ema_dist: extract_value(dict, "unstuck_ema_dist")?,
-            unstuck_loss_allowance_pct: extract_value(dict, "unstuck_loss_allowance_pct")?,
-            unstuck_threshold: extract_value(dict, "unstuck_threshold")?,
-        })
-    }
-}
-
-#[pyclass]
-#[derive(Debug, Default)]
-pub struct BacktestConfig {
-    long: LiveConfig,
-    short: LiveConfig,
-    starting_balance: f64,
-    maker_fee: f64,
-    c_mults: Vec<f64>,
+struct Backtest {
     symbols: Vec<String>,
-    qty_steps: Vec<f64>,
-    price_steps: Vec<f64>,
-    min_costs: Vec<f64>,
-    min_qtys: Vec<f64>,
+    emas: HashMap<String, f64>,
+    fills: Vec<Fill>,
+    stats: Vec<Stat>,
+    open_orders: OpenOrders,
+    positions: Positions,
 }
 
-impl BacktestConfig {
-    fn from_dict(dict: &PyDict) -> PyResult<Self> {
-        Ok(BacktestConfig {
-            long: LiveConfig::from_dict(extract_value(dict, "long")?)?,
-            short: LiveConfig::from_dict(extract_value(dict, "short")?)?,
-            starting_balance: extract_value(dict, "starting_balance")?,
-            maker_fee: extract_value(dict, "maker_fee")?,
-            c_mults: extract_value(dict, "c_mults")?,
-            symbols: extract_value(dict, "symbols")?,
-            qty_steps: extract_value(dict, "qty_steps")?,
-            price_steps: extract_value(dict, "price_steps")?,
-            min_costs: extract_value(dict, "min_costs")?,
-            min_qtys: extract_value(dict, "min_qtys")?,
-        })
-    }
+struct Fill {
+    // Define fields for Fill
 }
 
-#[pyclass]
-#[derive(Debug, Clone, Default)]
-pub struct Position {
-    size: f64,
-    price: f64,
+struct Stat {
+    // Define fields for Stat
 }
 
-#[pyclass]
-#[derive(Debug)]
-pub struct OpenOrder {
-    qty: f64,
-    price: f64,
-    order_type: String,
+struct OpenOrders {
+    long: Orders,
+    short: Orders,
 }
 
-#[pyclass]
-#[derive(Debug)]
-pub struct Fill {
-    minute: i32,
-    symbol: String,
-    realized_pnl: f64,
-    fee_paid: f64,
-    balance_after_fill: f64,
-    equity_after_fill: f64,
-    fill_qty: f64,
-    fill_price: f64,
-    psize_after_fill: f64,
-    pprice_after_fill: f64,
+struct Orders {
+    entries: HashMap<String, Vec<Order>>,
+    closes: HashMap<String, Vec<Order>>,
 }
 
-#[pyclass]
-#[derive(Debug)]
-pub struct Stat {
-    minute: i32,
-    positions_long: Array1<Position>,
-    positions_short: Array1<Position>,
-    hlc: Array2<f64>,
-    balance: f64,
-    equity: f64,
+struct Order {
+    // Define fields for Order
 }
 
-fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a PyDict, key: &str) -> PyResult<T> {
-    dict.get_item(key)
-        .map_err(|_| {
-            PyErr::new::<pyo3::exceptions::PyKeyError, _>(format!("Key '{}' not found", key))
-        })?
-        .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Value is None"))
-        .and_then(pyo3::FromPyObject::extract)
+struct Positions {
+    long: HashMap<String, (f64, f64)>,
+    short: HashMap<String, (f64, f64)>,
 }
 
-fn repeat_elements_to_rows(arr: ArrayView1<f64>, n: usize) -> Array2<f64> {
-    let rows = arr.len();
-    Array2::from_shape_fn((rows, n), |(i, _)| arr[i])
-}
-
-fn prepare_emas_forager(
-    spans_long: [f64; 2],
-    spans_short: [f64; 2],
-    hlcs_first: ArrayView2<f64>,
-) -> (
-    Array2<f64>,
-    Array2<f64>,
-    Array1<f64>,
-    Array1<f64>,
-    Array1<f64>,
-    Array1<f64>,
-) {
-    let prepare_spans = |spans: [f64; 2]| -> Array1<f64> {
-        let mut vec = vec![spans[0], spans[1], (spans[0] * spans[1]).sqrt()];
-        vec.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        Array1::from_vec(vec).mapv(|x| if x < 1.0 { 1.0 } else { x })
-    };
-
-    let spans_long = prepare_spans(spans_long);
-    let spans_short = prepare_spans(spans_short);
-
-    let hlcs_first_col2 = hlcs_first.column(2);
-    let emas_long = repeat_elements_to_rows(hlcs_first_col2, 3);
-    let emas_short = repeat_elements_to_rows(hlcs_first_col2, 3);
-
-    let compute_alphas = |spans: &Array1<f64>| {
-        let alphas = spans.mapv(|x| 2.0 / (x + 1.0));
-        let alphas_inv = alphas.mapv(|x| 1.0 - x);
-        (alphas, alphas_inv)
-    };
-
-    let (alphas_long, alphas_inv_long) = compute_alphas(&spans_long);
-    let (alphas_short, alphas_inv_short) = compute_alphas(&spans_short);
-
-    (
-        emas_long,
-        emas_short,
-        alphas_long,
-        alphas_inv_long,
-        alphas_short,
-        alphas_inv_short,
-    )
-}
-
-fn update_emas_inplace(
-    previous_emas: &mut Array2<f64>,
-    alphas: &[f64],
-    alphas_inv: &[f64],
-    current_prices: &[f64],
-) {
-    for (mut emas, &price) in previous_emas.outer_iter_mut().zip(current_prices) {
-        for (ema, (&alpha, &alpha_inv)) in emas.iter_mut().zip(alphas.iter().zip(alphas_inv.iter()))
-        {
-            *ema = *ema * alpha_inv + price * alpha;
-        }
-    }
-}
-
-#[pyfunction]
-pub fn run_backtest(
-    py: Python,
-    hlcs: PyReadonlyArray3<f64>,
-    noisiness_indices: PyReadonlyArray2<i32>,
-    config: &Bound<PyAny>,
-) -> PyResult<Vec<Py<PyArray2<f64>>>> {
-    let dict: &PyDict = config.extract()?;
-    let config = BacktestConfig::from_dict(dict)?;
-
-    let enabled_long = config.long.n_positions > 0;
-    let enabled_short = config.short.n_positions > 0;
-    let wallet_exposure_limit_long = if enabled_long {
-        config.long.total_wallet_exposure_limit / config.long.n_positions as f64
-    } else {
-        0.0
-    };
-    let wallet_exposure_limit_short = if enabled_short {
-        config.short.total_wallet_exposure_limit / config.short.n_positions as f64
-    } else {
-        0.0
-    };
-
-    let mut positions_long: Array1<Position> =
-        Array1::from_elem(hlcs.shape()[0], Position::default());
-    let mut positions_short: Array1<Position> =
-        Array1::from_elem(hlcs.shape()[0], Position::default());
-
-    let mut has_pos_long: HashSet<i32> = HashSet::new();
-    let mut has_pos_short: HashSet<i32> = HashSet::new();
-    let mut is_stuck_long: HashSet<i32> = HashSet::new();
-    let mut is_stuck_short: HashSet<i32> = HashSet::new();
-    let mut active_longs: HashSet<i32> = HashSet::new();
-    let mut active_shorts: HashSet<i32> = HashSet::new();
-
-    let mut open_orders_entry_long: Vec<OpenOrder> = Vec::new();
-    let mut open_orders_close_long: Vec<OpenOrder> = Vec::new();
-    let mut open_orders_entry_short: Vec<OpenOrder> = Vec::new();
-    let mut open_orders_close_short: Vec<OpenOrder> = Vec::new();
-
-    let mut fills: Vec<Fill> = Vec::new();
-    let mut stats: Vec<Stat> = Vec::new();
-
-    let hlcs_array = hlcs.as_array();
-    let spans_long = [config.long.ema_span_0, config.long.ema_span_1];
-    let spans_short = [config.short.ema_span_0, config.short.ema_span_1];
-    let hlcs_first = hlcs_array.slice(s![0, .., ..]).to_owned();
-
-    let (
-        mut emas_long,
-        mut emas_short,
-        alphas_long,
-        alphas_inv_long,
-        alphas_short,
-        alphas_inv_short,
-    ) = prepare_emas_forager(spans_long, spans_short, hlcs_first.view());
-
-    let num_steps = hlcs_array.shape()[0];
-    let mut tmp_emas = Array3::zeros((num_steps, emas_long.shape()[0], emas_long.shape()[1]));
-
-    for k in 0..num_steps {
-        let mut any_fill = false;
-        if enabled_long {
-            // check for fills long
-            // update EMAs
-            let current_prices = hlcs_array.slice(s![k, .., 2]).to_owned();
-            update_emas_inplace(
-                &mut emas_long,
-                alphas_long.as_slice().unwrap(),
-                alphas_inv_long.as_slice().unwrap(),
-                current_prices.as_slice().unwrap(),
-            );
-            tmp_emas.slice_mut(s![k, .., ..]).assign(&emas_long);
-            // update open orders
-        }
-        if enabled_short {
-            // pass
-        }
-        if any_fill {
-            // update all open orders
-        } else {
-            // update only EMA based orders
-            if has_pos_long.len() < config.long.n_positions {
-                // available slots; recalc actives
-            }
-            if has_pos_short.len() < config.short.n_positions {
-                // pass
-            }
+impl Backtest {
+    fn new(symbols: Vec<String>) -> Self {
+        Backtest {
+            symbols,
+            emas: HashMap::new(),
+            fills: Vec::new(),
+            stats: Vec::new(),
+            open_orders: OpenOrders {
+                long: Orders {
+                    entries: HashMap::new(),
+                    closes: HashMap::new(),
+                },
+                short: Orders {
+                    entries: HashMap::new(),
+                    closes: HashMap::new(),
+                },
+            },
+            positions: Positions {
+                long: HashMap::new(),
+                short: HashMap::new(),
+            },
         }
     }
 
-    let py_emas: Vec<Py<PyArray2<f64>>> = tmp_emas
-        .outer_iter()
-        .map(|ema| PyArray2::from_owned_array(py, ema.to_owned()).to_owned())
-        .collect();
+    fn backtest(&mut self, hlcs: &ArrayD<f64>) -> (&Vec<Fill>, &Vec<Stat>) {
+        self.prep_emas();
 
-    Ok(py_emas)
+        for k in 1..hlcs.len() {
+            self.check_for_fills();
+            self.fills.extend(self.new_fills());
+            self.update_emas();
+            self.update_open_orders();
+            self.update_stats();
+        }
+
+        (&self.fills, &self.stats)
+    }
+
+    fn prep_emas(&mut self) {
+        // Prepare EMAs
+    }
+
+    fn check_for_fills(&mut self) {
+        // Check for fills and update positions and open orders
+    }
+
+    fn new_fills(&self) -> Vec<Fill> {
+        // Return new fills
+        Vec::new()
+    }
+
+    fn update_emas(&mut self) {
+        // Update EMAs
+    }
+
+    fn update_open_orders(&mut self) {
+        // Update open orders
+    }
+
+    fn update_stats(&mut self) {
+        // Update stats
+    }
 }
