@@ -249,31 +249,6 @@ class BitgetBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def execute_multiple(self, orders: [dict], type_: str, max_n_executions: int):
-        if not orders:
-            return []
-        executions = []
-        for order in orders[:max_n_executions]:  # sorted by PA dist
-            execution = None
-            try:
-                execution = asyncio.create_task(getattr(self, type_)(order))
-                executions.append((order, execution))
-            except Exception as e:
-                logging.error(f"error executing {type_} {order} {e}")
-                print_async_exception(execution)
-                traceback.print_exc()
-        results = []
-        for execution in executions:
-            result = None
-            try:
-                result = await execution[1]
-                results.append(result)
-            except Exception as e:
-                logging.error(f"error executing {type_} {execution} {e}")
-                print_async_exception(result)
-                traceback.print_exc()
-        return results
-
     async def execute_cancellation(self, order: dict) -> dict:
         executed = None
         try:

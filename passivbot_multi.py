@@ -207,6 +207,8 @@ class Passivbot:
                     logging.info(f"loaded from {key} for {len(coins_)} symbols")
                 elif len(coins_) > 0:
                     logging.info(f"loaded from {key} for {', '.join(coins_)}")
+                    
+        self.configs_loaded = configs_loaded
 
     def pad_sym(self, symbol):
         return f"{symbol: <{self.sym_padding}}"
@@ -236,6 +238,8 @@ class Passivbot:
         return res
 
     async def init_bot(self):
+        logging.info(f"setting hedge mode...")
+        await self.update_exchange_config()
         logging.info(f"initiating markets...")
         await self.init_markets_dict()
         await self.init_flags()
@@ -349,7 +353,6 @@ class Passivbot:
     async def update_exchange_configs(self):
         if not hasattr(self, "already_updated_exchange_config_symbols"):
             self.already_updated_exchange_config_symbols = set()
-            await self.update_exchange_config()
         symbols_not_done = [
             x for x in self.active_symbols if x not in self.already_updated_exchange_config_symbols
         ]
@@ -512,38 +515,37 @@ class Passivbot:
         if self.forager_mode:
             eligible_symbols = []
             no_symbols_to_trade = False
-            original_exec_time = self.execution_delay_millis
 
             while len(eligible_symbols) == 0:
+
                 eligible_symbols = list(self.eligible_symbols)
+                print('N eligible symbols before filters', len(eligible_symbols))
+
                 eligible_symbols = [symbol for symbol in eligible_symbols if self.is_old_enough(symbol) is not False]
-                print('N eligilble symbols after is_old_enough filter', len(eligible_symbols))
-              #  print(eligible_symbols)
-             #   print(':::::::::::::: BEFORE FILTERING ::::::::::::::::::::::')
-              #  print('N eligilble symbols', len(eligible_symbols))
-                ##### customize -> COPY TRADING BLACK LIST #####
+                print('N eligible symbols after is_old_enough filter', len(eligible_symbols))
+
+              #  if self.config["filter_by_min_effective_cost"]:
+               #     eligible_symbols = [symbol for symbol in eligible_symbols if self.effective_min_cost_is_low_enough("long", symbol)]
+                #    print('N eligible symbols after filter_by_min_effective_cost long configs', len(eligible_symbols))
+                
+                if self.config["whitelist_from_config_dir_filter"]: 
+                    eligible_symbols = [symbol for symbol in eligible_symbols if symbol in self.configs_loaded["live_configs_dir_exact_match"]]
+                    print('N eligible symbols after whitelist_from_config_dir filter', len(eligible_symbols))
+
                 if self.config["copy_trading_symbols_filter"]: 
                     self.copy_trading_blacklist()
                     eligible_symbols = [symbol for symbol in eligible_symbols if self.ct_allowed[symbol]]
-               #     print(':::::::::::::: CT BLACK LIST ::::::::::::::::::::::')
-                    print('N eligilble symbols after copy trading filter', len(eligible_symbols))
-                ##### customize -> COPY TRADING BLACK LIST #####
-                
-                ##### customize -> TOP MC LIST FILTER #####
+                    print('N eligible symbols after copy trading filter', len(eligible_symbols))
+
                 if self.config["top_mc_filter"] > 0.0 : 
                     self.get_top_coin_data()
                     eligible_symbols = [symbol for symbol in eligible_symbols if self.market_cap[symbol] < self.config["top_mc_filter"]]
-                 #   print(':::::::::::::: TOP MC LIST FILTER ::::::::::::::::::::::')
-                    print('N eligilble symbols after MC filter', len(eligible_symbols))
-                ##### customize -> TOP MC LIST FILTER #####    
-                
-                ##### customize -> FUNDING RATES FILTER #####
+                    print('N eligible symbols after MC filter', len(eligible_symbols))
+               
                 if self.config["funding_rate_filter"] > 0.0 : 
-                  #  await self.fetch_funding_rate()
                     eligible_symbols = [symbol for symbol in eligible_symbols if abs(self.fund_rates[symbol]) <= self.config["funding_rate_filter"]]
-                   # print(':::::::::::::: FUNDING RATES FILTER ::::::::::::::::::::::')
-                    print('N eligilble symbols after funding rate filter', len(eligible_symbols))
-                ##### customize -> FUNDING RATES  FILTER ##### 
+                    print('N eligible symbols after funding rate filter', len(eligible_symbols))
+               
                 self.calc_volumes()
        
                 ##### customize -> min 1m Volume  #####
@@ -564,16 +566,21 @@ class Passivbot:
                         sym_no_min_vol = [symbol for symbol in eligible_symbols if (self.volumes[symbol]/len(self.ohlcvs[symbol])) < ((self.config["min_1m_volume_filter"] * interval_map[self.config["ohlcv_interval"]]))]
                         
                         eligible_symbols = [symbol for symbol in eligible_symbols if (self.volumes[symbol]/len(self.ohlcvs[symbol])) >= ((self.config["min_1m_volume_filter"] * interval_map[self.config["ohlcv_interval"]]))]
-                        print('N eligilble symbols after min volume filter', len(eligible_symbols))
+                        print('N eligible symbols after min volume filter', len(eligible_symbols))
                     except Exception as e:
                         print('Error on min vol: ', e)
 
                         
                 if self.config["relative_volume_filter_clip_pct"] > 0.0:
-                    eligible_symbols = sorted(eligible_symbols, key=lambda symbol: self.volumes[symbol])
-                    clip_tres = float(self.config["relative_volume_filter_clip_pct"])
-                    eligible_symbols = eligible_symbols[int(round(len(eligible_symbols) * clip_tres)):]
-                    print('N eligilble symbols after volume clip filter', len(eligible_symbols))
+                    eligible_symbols = sorted(eligible_symbols, key=lambda symbol: self.volumes[symbol], reverse=True)
+                  #  for symbol in eligible_symbols: print(f"{symbol}: {self.volumes[symbol]}")
+                    clip_tres = 1-float(self.config["relative_volume_filter_clip_pct"])
+                    syms_to_keep = max(self.config["n_longs"],int(round(len(eligible_symbols) * clip_tres)))
+                    if len(eligible_symbols) < syms_to_keep: syms_to_keep = len(eligible_symbols)
+                    print("syms_to_keep", syms_to_keep)
+                    eligible_symbols = eligible_symbols[:syms_to_keep]
+                    print('N eligible symbols after volume clip filter', len(eligible_symbols))
+               #     print("eli_sym: ", eligible_symbols)
 
                 self.calc_noisiness()  # ideal symbols are high noise symbols
        
@@ -589,39 +596,25 @@ class Passivbot:
                         print('...will look for symbols to trade again in 5 min...')
                         await asyncio.sleep(300.0)
                         print('...trying again. looking for symbols to trade...')
-                        await self.init_markets_dict()
-                        self.eligible_symbols = set(self.markets_dict)
-
-                        await self.init_flags()
-                        self.set_live_configs()
-                        all_syms = set(self.active_symbols) | self.eligible_symbols
-                        missing_symbols = [s for s in all_syms if s not in self.ohlcv_upd_timestamps]
-                        if missing_symbols:
-                           coins_ = [symbol2coin(s) for s in missing_symbols]
-                           logging.info(f"adding missing symbols to ohlcv maintainer: {','.join(coins_)}")
-                           await self.update_ohlcvs_multi(missing_symbols)
-                           await asyncio.sleep(3)
-                        await self.update_ohlcvs_multi(list(self.eligible_symbols), verbose=True)
-                        self.first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
-                        for symbol in sorted(self.first_timestamps):
-                            self.first_timestamps[self.format_symbol(symbol)] = self.first_timestamps[symbol]
-                        await self.update_tickers()
-
-            for symbol in eligible_symbols:
-                if symbol not in self.eligible_symbols:
-                    continue
-                ###
-                if no_symbols_to_trade: continue
-                ###
-                longs_full = len(self.ideal_actives["long"]) >= self.config[f"n_longs"]
-                shorts_full = len(self.ideal_actives["short"]) >= self.config[f"n_shorts"]
-                if longs_full and shorts_full:
-                    break
-                if not longs_full and symbol not in self.ideal_actives["long"]:
-                    self.ideal_actives["long"][symbol] = ""
-                if not shorts_full and symbol not in self.ideal_actives["short"]:
-                    self.ideal_actives["short"][symbol] = ""
+            
+            # calc ideal actives for long and short separately
             for pside in self.actual_actives:
+                if not no_symbols_to_trade: 
+                    if self.config[f"n_{pside}s"] > 0:
+                        self.warn_on_high_effective_min_cost(pside)
+                    for symbol in eligible_symbols:
+                        if (
+                            symbol not in self.eligible_symbols
+                            or not self.is_old_enough(symbol)
+                            or not self.effective_min_cost_is_low_enough(pside, symbol)
+                        ):
+                            continue
+                        slots_full = len(self.ideal_actives[pside]) >= self.config[f"n_{pside}s"]
+                        if slots_full:
+                            break
+                        if symbol not in self.ideal_actives[pside]:
+                            self.ideal_actives[pside][symbol] = ""
+    
                 # actual actives fill slots first
                 for symbol in self.actual_actives[pside]:
                     if symbol in self.forced_modes[pside]:
@@ -632,7 +625,6 @@ class Passivbot:
                         self.PB_modes[pside][symbol] = (
                             "graceful_stop" if self.config["auto_gs"] else "manual"
                         )
-            for pside in self.ideal_actives:
                 # fill remaining slots with ideal actives
                 # a slot is filled if symbol in [normal, graceful_stop]
                 # symbols on other modes are ignored
@@ -649,7 +641,10 @@ class Passivbot:
             # if not forager mode, all eligible symbols are ideal symbols, unless symbol in forced_modes
             for pside in ["long", "short"]:
                 if self.config[f"{pside}_enabled"]:
+                    self.warn_on_high_effective_min_cost(pside)
                     for symbol in self.eligible_symbols:
+                        if not self.effective_min_cost_is_low_enough(pside, symbol):
+                            continue
                         if symbol not in self.forced_modes[pside]:
                             self.PB_modes[pside][symbol] = "normal"
                             self.ideal_actives[pside][symbol] = ""
@@ -720,6 +715,43 @@ class Passivbot:
                                 logging.info(
                                     f"removing {pside: <5} {self.pad_sym(symbol)}: {previous_PB_modes[pside][symbol]}"
                                 )
+
+    def warn_on_high_effective_min_cost(self, pside):
+        if not self.config["filter_by_min_effective_cost"]:
+            return
+        eligible_symbols_filtered = [
+            x for x in self.eligible_symbols if self.effective_min_cost_is_low_enough(pside, x)
+        ]
+        if len(eligible_symbols_filtered) == 0:
+            logging.info(
+                f"Warning: No {pside} symbols are approved due to min effective cost too high. "
+                + f"Suggestions: 1) increase account balance, 2) "
+                + f"set 'filter_by_min_effective_cost' to false, 3) if in forager mode, reduce n_{pside}s"
+            )
+
+    def effective_min_cost_is_low_enough(self, pside, symbol):
+        if not self.config["filter_by_min_effective_cost"]:
+            return True
+        try:
+            WE_limit = self.live_configs[symbol][pside]["wallet_exposure_limit"]
+            assert WE_limit > 0.0
+        except:
+            if self.forager_mode:
+                WE_limit = (
+                    self.config[f"TWE_{pside}"] / self.config[f"n_{pside}s"]
+                    if self.config[f"n_{pside}s"] > 0
+                    else 0.0
+                )
+            else:
+                WE_limit = (
+                    self.config[f"TWE_{pside}"] / len(self.config["approved_symbols"])
+                    if len(self.config["approved_symbols"]) > 0
+                    else 0.0
+                )
+        return (
+            self.balance * WE_limit * self.live_configs[symbol][pside]["initial_qty_pct"]
+            >= self.tickers[symbol]["effective_min_cost"]
+        )
 
     def add_new_order(self, order, source="WS"):
         try:
@@ -1921,6 +1953,31 @@ class Passivbot:
         except Exception as e:
             logging.error(f"error with update_ohlcvs_single {symbol} {e}")
             return False
+
+    async def execute_multiple(self, orders: [dict], type_: str, max_n_executions: int):
+        if not orders:
+            return []
+        executions = []
+        for order in orders[:max_n_executions]:  # sorted by PA dist
+            execution = None
+            try:
+                execution = asyncio.create_task(getattr(self, type_)(order))
+                executions.append((order, execution))
+            except Exception as e:
+                logging.error(f"error executing {type_} {order} {e}")
+                print_async_exception(execution)
+                traceback.print_exc()
+        results = []
+        for execution in executions:
+            result = None
+            try:
+                result = await execution[1]
+                results.append(result)
+            except Exception as e:
+                logging.error(f"error executing {type_} {execution} {e}")
+                print_async_exception(result)
+                traceback.print_exc()
+        return results
 
     async def close(self):
         logging.info(f"Stopped data maintainers: {bot.stop_data_maintainers()}")

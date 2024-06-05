@@ -48,6 +48,7 @@
     "hyperliquid_01" : {
         "exchange": "hyperliquid",
         "wallet_address": "wallet_address",
-        "private_key": "private_key"
+        "private_key": "private_key",
+        "is_vault": false
     }
 }
