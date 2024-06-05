@@ -574,7 +574,7 @@ class Passivbot:
                     eligible_symbols = sorted(eligible_symbols, key=lambda symbol: self.volumes[symbol], reverse=True)
                     for symbol in eligible_symbols: print(f"{symbol}: {self.volumes[symbol]}")
                     clip_tres = 1-float(self.config["relative_volume_filter_clip_pct"])
-                    syms_to_keep = max(self.config["n_longs"],int(round(len(eligible_symbols) * clip_tres))))
+                    syms_to_keep = max(self.config["n_longs"],int(round(len(eligible_symbols) * clip_tres)))
                     if len(eligible_symbols) < syms_to_keep: syms_to_keep = len(eligible_symbols)
                     print("syms_to_keep", syms_to_keep)
                     eligible_symbols = eligible_symbols[:syms_to_keep]
