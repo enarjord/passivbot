@@ -513,6 +513,7 @@ class Passivbot:
                     self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
         if self.forager_mode:
             eligible_symbols = []
+            no_symbols_to_trade = False
 
             while len(eligible_symbols) == 0:
 
@@ -581,6 +582,7 @@ class Passivbot:
             
                 if not eligible_symbols:
                     print('no coins to trade...')
+                    no_symbols_to_trade = True
                     eligible_symbols = await self.get_active_symbols()
                     if eligible_symbols:
                         print('Active symbols to GS: ', eligible_symbols)
