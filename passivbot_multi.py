@@ -513,7 +513,6 @@ class Passivbot:
                     self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
         if self.forager_mode:
             eligible_symbols = []
-            no_symbols_to_trade = False
 
             while len(eligible_symbols) == 0:
 
@@ -573,7 +572,7 @@ class Passivbot:
                 if self.config["relative_volume_filter_clip_pct"] > 0.0:
                     eligible_symbols = sorted(eligible_symbols, key=lambda symbol: self.volumes[symbol])
                     clip_tres = float(self.config["relative_volume_filter_clip_pct"])
-                    eligible_symbols = eligible_symbols[int(round(len(eligible_symbols) * clip_tres)):]
+                    eligible_symbols = eligible_symbols[max(self.config["n_longs"],int(round(len(eligible_symbols) * clip_tres))):]
                     print('N eligible symbols after volume clip filter', len(eligible_symbols))
 
                 self.calc_noisiness()  # ideal symbols are high noise symbols
@@ -582,7 +581,6 @@ class Passivbot:
             
                 if not eligible_symbols:
                     print('no coins to trade...')
-                    no_symbols_to_trade = True
                     eligible_symbols = await self.get_active_symbols()
                     if eligible_symbols:
                         print('Active symbols to GS: ', eligible_symbols)
@@ -590,25 +588,7 @@ class Passivbot:
                         print('...will look for symbols to trade again in 5 min...')
                         await asyncio.sleep(300.0)
                         print('...trying again. looking for symbols to trade...')
-                        await self.init_markets_dict()
-                        self.eligible_symbols = set(self.markets_dict)
-
-                        await self.init_flags()
-                        self.set_live_configs()
-                        all_syms = set(self.active_symbols) | self.eligible_symbols
-                        missing_symbols = [s for s in all_syms if s not in self.ohlcv_upd_timestamps]
-                        if missing_symbols:
-                           coins_ = [symbol2coin(s) for s in missing_symbols]
-                           logging.info(f"adding missing symbols to ohlcv maintainer: {','.join(coins_)}")
-                           await self.update_ohlcvs_multi(missing_symbols)
-                           await asyncio.sleep(3)
-                        await self.update_ohlcvs_multi(list(self.eligible_symbols), verbose=True)
-                        self.first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
-                        for symbol in sorted(self.first_timestamps):
-                            self.first_timestamps[self.format_symbol(symbol)] = self.first_timestamps[symbol]
-                        await self.update_tickers()
             
-           
             # calc ideal actives for long and short separately
             for pside in self.actual_actives:
                 if not no_symbols_to_trade: 
