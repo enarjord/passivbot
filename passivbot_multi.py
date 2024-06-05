@@ -571,11 +571,13 @@ class Passivbot:
 
                         
                 if self.config["relative_volume_filter_clip_pct"] > 0.0:
-                    eligible_symbols = sorted(eligible_symbols, key=lambda symbol: self.volumes[symbol])
-                    clip_tres = float(self.config["relative_volume_filter_clip_pct"])
+                    eligible_symbols = sorted(eligible_symbols, key=lambda symbol: self.volumes[symbol], reverse=True)
+                    for symbol in eligible_symbols: print(f"{symbol}: {self.volumes[symbol]}")
+                    clip_tres = 1-float(self.config["relative_volume_filter_clip_pct"])
                     print("n_syms", max(self.config["n_longs"],int(round(len(eligible_symbols) * clip_tres))))
-                    eligible_symbols = eligible_symbols[max(self.config["n_longs"],int(round(len(eligible_symbols) * clip_tres))):]
+                    eligible_symbols = eligible_symbols[:max(self.config["n_longs"],int(round(len(eligible_symbols) * clip_tres)))]
                     print('N eligible symbols after volume clip filter', len(eligible_symbols))
+                    print("eli_sym: ", eligible_symbols)
 
                 self.calc_noisiness()  # ideal symbols are high noise symbols
        
