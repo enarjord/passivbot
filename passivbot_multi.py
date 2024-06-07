@@ -582,6 +582,8 @@ class Passivbot:
                     print('N eligible symbols after volume clip filter', len(eligible_symbols))
                #     print("eli_sym: ", eligible_symbols)
 
+                if len(eligible_symbols) < self.config["n_longs"]: print(f"n eligible_symbols {len(eligible_symbols)} < n_longs {self.config['n_longs']}")
+
                 self.calc_noisiness()  # ideal symbols are high noise symbols
        
                 eligible_symbols = sorted(eligible_symbols, key=lambda x: self.noisiness[x], reverse=True)
