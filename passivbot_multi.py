@@ -587,6 +587,8 @@ class Passivbot:
                 self.calc_noisiness()  # ideal symbols are high noise symbols
        
                 eligible_symbols = sorted(eligible_symbols, key=lambda x: self.noisiness[x], reverse=True)
+
+                print('Symbols to trade: ', eligible_symbols[:syms_to_keep])
             
                 if not eligible_symbols:
                     print('no coins to trade...')
