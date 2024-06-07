@@ -588,7 +588,7 @@ class Passivbot:
        
                 eligible_symbols = sorted(eligible_symbols, key=lambda x: self.noisiness[x], reverse=True)
 
-                print('Symbols to trade: ', eligible_symbols[:syms_to_keep])
+                print('Symbols to trade: ', eligible_symbols[:min(self.config["n_longs"],int(round(len(eligible_symbols) * clip_tres)))])
             
                 if not eligible_symbols:
                     print('no coins to trade...')
