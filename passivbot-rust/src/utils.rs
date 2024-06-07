@@ -11,23 +11,37 @@ fn round_to_decimal_places(value: f64, decimal_places: usize) -> f64 {
 #[pyfunction]
 pub fn round_up(n: f64, step: f64) -> f64 {
     let result = (n / step).ceil() * step;
-    round_to_decimal_places(result, 14)
+    round_to_decimal_places(result, 12)
 }
 
 /// Rounds a number to the nearest multiple of the given step.
 #[pyfunction]
 pub fn round_(n: f64, step: f64) -> f64 {
     let result = (n / step).round() * step;
-    round_to_decimal_places(result, 14)
+    round_to_decimal_places(result, 12)
 }
 
 /// Rounds down a number to the nearest multiple of the given step.
 #[pyfunction]
 pub fn round_dn(n: f64, step: f64) -> f64 {
     let result = (n / step).floor() * step;
-    round_to_decimal_places(result, 14)
+    round_to_decimal_places(result, 12)
 }
 
+#[pyfunction]
+pub fn calc_diff(x: f64, y: f64) -> f64 {
+    if y == 0.0 {
+        if x == 0.0 {
+            0.0
+        } else {
+            f64::INFINITY
+        }
+    } else {
+        (x - y).abs() / y.abs()
+    }
+}
+
+#[pyfunction]
 pub fn cost_to_qty(cost: f64, price: f64, c_mult: f64) -> f64 {
     if price > 0.0 {
         (cost / price) / c_mult
@@ -36,6 +50,7 @@ pub fn cost_to_qty(cost: f64, price: f64, c_mult: f64) -> f64 {
     }
 }
 
+#[pyfunction]
 pub fn qty_to_cost(qty: f64, price: f64, c_mult: f64) -> f64 {
     (qty.abs() * price) * c_mult
 }
@@ -69,6 +84,7 @@ pub fn calc_wallet_exposure_if_filled(
     qty_to_cost(new_psize, new_pprice, exchange_params.c_mult) / balance
 }
 
+#[pyfunction]
 pub fn calc_new_psize_pprice(
     psize: f64,
     pprice: f64,
@@ -98,4 +114,23 @@ fn nan_to_0(value: f64) -> f64 {
     } else {
         value
     }
+}
+
+pub fn interpolate(x: f64, xs: &[f64], ys: &[f64]) -> f64 {
+    assert_eq!(xs.len(), ys.len(), "xs and ys must have the same length");
+
+    let n = xs.len();
+    let mut result = 0.0;
+
+    for i in 0..n {
+        let mut term = ys[i];
+        for j in 0..n {
+            if i != j {
+                term *= (x - xs[j]) / (xs[i] - xs[j]);
+            }
+        }
+        result += term;
+    }
+
+    result
 }

@@ -16,6 +16,11 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(round_, m)?)?;
     m.add_function(wrap_pyfunction!(round_up, m)?)?;
     m.add_function(wrap_pyfunction!(round_dn, m)?)?;
+    m.add_function(wrap_pyfunction!(calc_diff, m)?)?;
+    m.add_function(wrap_pyfunction!(qty_to_cost, m)?)?;
+    m.add_function(wrap_pyfunction!(cost_to_qty, m)?)?;
+    m.add_function(wrap_pyfunction!(calc_new_psize_pprice, m)?)?;
+    m.add_function(wrap_pyfunction!(calc_next_grid_entry_long_py, m)?)?;
 
     Ok(())
 }
