@@ -69,6 +69,18 @@ pub fn calc_min_entry_qty(initial_entry_price: f64, exchange_params: &ExchangePa
     )
 }
 
+pub fn calc_wallet_exposure(
+    c_mult: f64,
+    balance: f64,
+    position_size: f64,
+    position_price: f64,
+) -> f64 {
+    if balance <= 0.0 || position_size == 0.0 {
+        return 0.0;
+    }
+    qty_to_cost(position_size, position_price, c_mult) / balance
+}
+
 pub fn calc_wallet_exposure_if_filled(
     balance: f64,
     psize: f64,
@@ -81,7 +93,7 @@ pub fn calc_wallet_exposure_if_filled(
     let qty = round_(qty.abs(), exchange_params.qty_step);
     let (new_psize, new_pprice) =
         calc_new_psize_pprice(psize, pprice, qty, price, exchange_params.qty_step);
-    qty_to_cost(new_psize, new_pprice, exchange_params.c_mult) / balance
+    calc_wallet_exposure(exchange_params.c_mult, balance, new_psize, new_pprice)
 }
 
 #[pyfunction]

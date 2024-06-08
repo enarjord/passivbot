@@ -1,6 +1,7 @@
 use crate::utils::{
-    calc_min_entry_qty, calc_new_psize_pprice, calc_wallet_exposure_if_filled, cost_to_qty,
-    interpolate, qty_to_cost, round_, round_dn, round_up,
+    calc_min_entry_qty, calc_new_psize_pprice, calc_wallet_exposure,
+    calc_wallet_exposure_if_filled, cost_to_qty, interpolate, qty_to_cost, round_, round_dn,
+    round_up,
 };
 
 pub struct ExchangeParams {
@@ -139,8 +140,12 @@ pub fn calc_next_grid_entry_long(
         return initial_entry;
     }
 
-    let wallet_exposure =
-        qty_to_cost(position.size, position.price, exchange_params.c_mult) / state_params.balance;
+    let wallet_exposure = calc_wallet_exposure(
+        exchange_params.c_mult,
+        state_params.balance,
+        position.size,
+        position.price,
+    );
     if wallet_exposure >= bot_params.wallet_exposure_limit * 0.999 {
         return Order::default();
     }
@@ -164,9 +169,6 @@ pub fn calc_next_grid_entry_long(
         reentry_order.price,
         exchange_params.qty_step,
     );
-    let next_wallet_exposure =
-        qty_to_cost(next_psize, next_pprice, exchange_params.c_mult) / state_params.balance;
-
     let (next_reentry_order, next_wallet_exposure_if_filled, next_is_cropped) = calc_reentry_order(
         &exchange_params,
         &bot_params,
@@ -203,7 +205,7 @@ pub fn calc_next_grid_entry_long(
     }
 }
 
-fn calc_reentry_qty(
+pub fn calc_reentry_qty(
     entry_price: f64,
     balance: f64,
     position_size: f64,
@@ -212,7 +214,7 @@ fn calc_reentry_qty(
 ) -> f64 {
     f64::max(
         calc_min_entry_qty(entry_price, &exchange_params),
-        round_dn(
+        round_(
             f64::max(
                 position_size * bot_params.entry_grid_double_down_factor,
                 cost_to_qty(balance, entry_price, exchange_params.c_mult)
@@ -254,8 +256,12 @@ fn calc_reentry_order(
     initial_entry: &Order,
 ) -> (Order, f64, bool) {
     // returns (Order, is_cropped)
-    let wallet_exposure =
-        qty_to_cost(position.size, position.price, exchange_params.c_mult) / state_params.balance;
+    let wallet_exposure = calc_wallet_exposure(
+        exchange_params.c_mult,
+        state_params.balance,
+        position.size,
+        position.price,
+    );
     if wallet_exposure >= bot_params.wallet_exposure_limit * 0.999 {
         return (Order::default(), 0.0, false);
     }
