@@ -164,7 +164,7 @@ class CLI:
             return True
 
         def action_message(message):
-            return f"Action \"{action}\" will be perfromed on {message}"
+            return f"Action \"{action}\" will be performed on {message}"
 
         logger.info(action_message(f"{len(instances)} instance(s). Continue?"))
 
