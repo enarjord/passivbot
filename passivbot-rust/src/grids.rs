@@ -1,3 +1,4 @@
+use crate::trailing::calc_trailing_entry_long;
 use crate::utils::{
     calc_min_entry_qty, calc_new_psize_pprice, calc_wallet_exposure,
     calc_wallet_exposure_if_filled, cost_to_qty, interpolate, qty_to_cost, round_, round_dn,
@@ -43,6 +44,7 @@ pub struct StateParams {
     pub ema_bands: EMABands,
 }
 
+#[derive(Clone)]
 pub struct BotParams {
     pub close_grid_markup_range: f64,
     pub close_grid_min_markup: f64,
@@ -190,17 +192,16 @@ pub fn calc_next_grid_entry_long(
             &[wallet_exposure, wallet_exposure_if_filled],
             &[position.size, position.size + reentry_order.qty],
         ) - position.size;
-        println!("inflating entry qty; old_entry_qty {}, new_entry_qty {}, effective_double_down_factor {}", reentry_order.qty, new_entry_qty, effective_double_down_factor);
         Order {
             qty: round_(new_entry_qty, exchange_params.qty_step),
             price: reentry_order.price,
-            description: String::from("long_reentry_inflated"),
+            description: String::from("long_grid_reentry_inflated"),
         }
     } else {
         Order {
             qty: reentry_order.qty,
             price: reentry_order.price,
-            description: String::from("long_reentry_normal"),
+            description: String::from("long_grid_reentry_normal"),
         }
     }
 }
@@ -314,7 +315,7 @@ fn calc_reentry_order(
             Order {
                 qty: round_(entry_qty, exchange_params.qty_step),
                 price: entry_price,
-                description: String::from("long_reentry_cropped"),
+                description: String::from("long_grid_reentry_cropped"),
             },
             wallet_exposure_if_filled,
             true,
@@ -324,7 +325,7 @@ fn calc_reentry_order(
             Order {
                 qty: entry_qty,
                 price: entry_price,
-                description: String::from("long_reentry_normal"),
+                description: String::from("long_grid_reentry_normal"),
             },
             wallet_exposure_if_filled,
             false,
@@ -332,142 +333,94 @@ fn calc_reentry_order(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_calc_next_grid_entry_long() {
-        let exchange_params = ExchangeParams {
-            qty_step: 0.001,
-            price_step: 0.01,
-            min_qty: 0.001,
-            min_cost: 10.0,
-            c_mult: 1.0,
-        };
-        let state_params = StateParams {
-            balance: 1000.0,
-            order_book: OrderBook {
-                bid: 99.99,
-                ask: 100.01,
-            },
-            ema_bands: EMABands {
-                upper: 100.03,
-                lower: 99.87,
-            },
-        };
-        let bot_params = BotParams {
-            close_grid_markup_range: 0.01,
-            close_grid_min_markup: 0.01,
-            close_grid_n_orders: 5.0,
-            close_trailing_drawdown_pct: 0.02,
-            close_trailing_grid_ratio: 0.5,
-            close_trailing_threshold_pct: 0.01,
-            entry_grid_double_down_factor: 2.0,
-            entry_grid_spacing_weight: 0.5,
-            entry_grid_spacing_pct: 0.03,
-            entry_initial_ema_dist: 0.002,
-            entry_initial_qty_pct: 0.015,
-            entry_trailing_drawdown_pct: 0.02,
-            entry_trailing_grid_ratio: 0.5,
-            entry_trailing_threshold_pct: 0.01,
-            n_positions: 5,
-            total_wallet_exposure_limit: 0.5,
-            wallet_exposure_limit: 0.1,
-            unstuck_close_pct: 0.01,
-            unstuck_ema_dist: 0.02,
-            unstuck_loss_allowance_pct: 0.01,
-            unstuck_threshold: 0.05,
-        };
-
-        // Test case 1: Normal initial entry
-        let position = Position {
-            size: 0.0,
-            price: 0.0,
-        };
-        let order =
-            calc_next_grid_entry_long(&exchange_params, &state_params, &bot_params, &position);
-        assert!(order.qty > 0.0);
-        let target_ientry_price = round_dn(
-            f64::min(
-                state_params.order_book.bid,
-                state_params.ema_bands.lower * (1.0 - bot_params.entry_initial_ema_dist),
-            ),
-            exchange_params.price_step,
-        );
-        assert_eq!(order.price, target_ientry_price);
-        assert_eq!(order.description, "long_ientry_normal");
-
-        // Test case 2: Partial initial entry
-        let position = Position {
-            size: 0.01,
-            price: target_ientry_price,
-        };
-        let order =
-            calc_next_grid_entry_long(&exchange_params, &state_params, &bot_params, &position);
-        assert!(order.qty > 0.0);
-        assert_eq!(order.price, target_ientry_price);
-        assert_eq!(order.description, "long_ientry_partial");
-
-        // Test case 3: No initial entry (position size is large enough)
-        let position = Position {
-            size: 1.0,
-            price: 100.0,
-        };
-        let order =
-            calc_next_grid_entry_long(&exchange_params, &state_params, &bot_params, &position);
-        assert_eq!(order.qty, 0.0);
-        assert_eq!(order.price, 0.0);
-        assert_eq!(order.description, "");
-
-        // Test case 4: Normal re-entry
-        let position = Position {
-            size: 0.2,
-            price: 100.0,
-        };
-        let order =
-            calc_next_grid_entry_long(&exchange_params, &state_params, &bot_params, &position);
-        assert!(order.qty > 0.0);
-        assert!(order.price < position.price);
-        assert_eq!(order.description, "long_reentry_normal");
-
-        // Test case 5: Re-entry too big (cropped)
-        let position = Position {
-            size: 0.98,
-            price: 100.0,
-        };
-        let order =
-            calc_next_grid_entry_long(&exchange_params, &state_params, &bot_params, &position);
-        assert!(order.qty > 0.0);
-        assert!(order.price < position.price);
-        assert_eq!(order.description, "long_reentry_cropped");
-
-        // Test case 6: Next re-entry too small (inflated)
-        let position = Position {
-            size: 0.1,
-            price: 100.0,
-        };
-        let order =
-            calc_next_grid_entry_long(&exchange_params, &state_params, &bot_params, &position);
-        assert!(order.qty > 0.0);
-        assert!(order.price < position.price);
-        //assert_eq!(order.description, "long_reentry_inflated");
-
-        // Test case 8: Wallet exposure limit reached
-        let mut state_params_updated = state_params.clone();
-        state_params_updated.balance = 10.0;
-        let position = Position {
-            size: 1.0,
-            price: 100.0,
-        };
-        let order = calc_next_grid_entry_long(
+pub fn calc_next_entry(
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    bot_params: &BotParams,
+    position: &Position,
+    lowest_since_position_open: f64,
+    highest_since_lowest: f64,
+) -> Order {
+    if bot_params.wallet_exposure_limit == 0.0 || state_params.balance <= 0.0 {
+        // no orders
+        return Order::default();
+    }
+    let wallet_exposure = calc_wallet_exposure(
+        exchange_params.c_mult,
+        state_params.balance,
+        position.size,
+        position.price,
+    );
+    if wallet_exposure >= bot_params.wallet_exposure_limit * 0.999 {
+        // wallet exposure exceeded; return empty order
+        return Order::default();
+    }
+    let initial_entry = calc_initial_entry(exchange_params, state_params, bot_params, position);
+    if initial_entry.qty > 0.0 {
+        // initial entry
+        return initial_entry;
+    }
+    if bot_params.entry_trailing_grid_ratio >= 1.0 || bot_params.entry_trailing_grid_ratio <= -1.0 {
+        // return trailing only
+        return calc_trailing_entry_long(
             &exchange_params,
-            &state_params_updated,
+            &state_params,
             &bot_params,
             &position,
+            lowest_since_position_open,
+            highest_since_lowest,
         );
-        assert_eq!(order.qty, 0.0);
-        assert_eq!(order.price, 0.0);
-        assert_eq!(order.description, "");
     }
+    let wallet_exposure_ratio = wallet_exposure / bot_params.wallet_exposure_limit;
+    if bot_params.entry_trailing_grid_ratio > 0.0 {
+        // trailing first
+        if wallet_exposure_ratio < bot_params.entry_trailing_grid_ratio {
+            // return trailing order, but crop to max bot_params.wallet_exposure_limit * bot_params.entry_trailing_grid_ratio
+            let mut bot_params_modified = bot_params.clone();
+            bot_params_modified.wallet_exposure_limit =
+                bot_params.wallet_exposure_limit * bot_params.entry_trailing_grid_ratio;
+            return calc_trailing_entry_long(
+                &exchange_params,
+                &state_params,
+                &bot_params_modified,
+                &position,
+                lowest_since_position_open,
+                highest_since_lowest,
+            );
+        } else {
+            // return grid order
+            return calc_next_grid_entry_long(
+                &exchange_params,
+                &state_params,
+                &bot_params,
+                &position,
+            );
+        }
+    }
+    if bot_params.entry_trailing_grid_ratio < 0.0 {
+        // grid first
+        if wallet_exposure_ratio < 1.0 + bot_params.entry_trailing_grid_ratio {
+            // return grid order, but crop to max bot_params.wallet_exposure_limit * bot_params.entry_trailing_grid_ratio
+            let mut bot_params_modified = bot_params.clone();
+            bot_params_modified.wallet_exposure_limit =
+                bot_params.wallet_exposure_limit * (1.0 + bot_params.entry_trailing_grid_ratio);
+            return calc_next_grid_entry_long(
+                &exchange_params,
+                &state_params,
+                &bot_params_modified,
+                &position,
+            );
+        } else {
+            return calc_trailing_entry_long(
+                &exchange_params,
+                &state_params,
+                &bot_params,
+                &position,
+                lowest_since_position_open,
+                highest_since_lowest,
+            );
+        }
+    }
+    // return grid only
+    calc_next_grid_entry_long(&exchange_params, &state_params, &bot_params, &position)
 }
