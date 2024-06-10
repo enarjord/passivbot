@@ -28,7 +28,7 @@ When you first checkout the project, you will need to setup your exchange creden
 The backtest needs a connection to the exchange to be able to download the trade data required for the backtest.
 
 In the `configs/backtest/default.hjson`, the account name (specified in `api-keys.json`) needs to be provided. After updating
-the `configs/backtest/default.hjson` with your account name, you should be able to succesfully run a backtest.
+the `configs/backtest/default.hjson` with your account name, you should be able to successfully run a backtest.
 
 Apart from the account name, there are a number of other parameters you can specify in the backtest configuration file:
 
