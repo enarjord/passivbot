@@ -14,6 +14,7 @@ import os
 from deap import base, creator, tools, algorithms
 from procedures import utc_ms, make_get_filepath, load_hjson_config
 from multiprocessing import shared_memory
+from uuid import uuid4
 from copy import deepcopy
 
 from pure_funcs import (
@@ -492,6 +493,10 @@ async def main():
     config["results_cache_fname"] = make_get_filepath(
         f"results_multi/{date_fname}_{coins_fname}_all_results.txt"
     )
+    #hash_snippet = uuid4().hex[:8]
+    #config["results_cache_fname"] = make_get_filepath(
+    #    f"results_multi/{date_fname}_{hash_snippet}_{coins_fname}_all_results.txt"
+    #)
     for key, default_val in [("worst_drawdown_lower_bound", 0.25)]:
         if key not in config:
             config[key] = default_val
