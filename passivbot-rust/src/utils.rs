@@ -1,4 +1,4 @@
-use crate::grids::ExchangeParams;
+use crate::types::ExchangeParams;
 use pyo3::prelude::*;
 
 /// Rounds a number to the specified number of decimal places.

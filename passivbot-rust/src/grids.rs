@@ -1,73 +1,12 @@
 use crate::trailing::calc_trailing_entry_long;
+use crate::types::{
+    BotParams, EMABands, ExchangeParams, Order, OrderBook, OrderType, Position, StateParams,
+};
 use crate::utils::{
     calc_min_entry_qty, calc_new_psize_pprice, calc_wallet_exposure,
     calc_wallet_exposure_if_filled, cost_to_qty, interpolate, qty_to_cost, round_, round_dn,
     round_up,
 };
-
-pub struct ExchangeParams {
-    pub qty_step: f64,
-    pub price_step: f64,
-    pub min_qty: f64,
-    pub min_cost: f64,
-    pub c_mult: f64,
-}
-
-pub struct Position {
-    pub size: f64,
-    pub price: f64,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct EMABands {
-    pub upper: f64,
-    pub lower: f64,
-}
-
-#[derive(Debug, Default)]
-pub struct Order {
-    pub qty: f64,
-    pub price: f64,
-    pub description: String,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct OrderBook {
-    pub bid: f64,
-    pub ask: f64,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct StateParams {
-    pub balance: f64,
-    pub order_book: OrderBook,
-    pub ema_bands: EMABands,
-}
-
-#[derive(Clone)]
-pub struct BotParams {
-    pub close_grid_markup_range: f64,
-    pub close_grid_min_markup: f64,
-    pub close_grid_n_orders: f64,
-    pub close_trailing_drawdown_pct: f64,
-    pub close_trailing_grid_ratio: f64,
-    pub close_trailing_threshold_pct: f64,
-    pub entry_grid_double_down_factor: f64,
-    pub entry_grid_spacing_weight: f64,
-    pub entry_grid_spacing_pct: f64,
-    pub entry_initial_ema_dist: f64,
-    pub entry_initial_qty_pct: f64,
-    pub entry_trailing_drawdown_pct: f64,
-    pub entry_trailing_grid_ratio: f64,
-    pub entry_trailing_threshold_pct: f64,
-    pub n_positions: usize,
-    pub total_wallet_exposure_limit: f64,
-    pub wallet_exposure_limit: f64, // is total_wallet_exposure_limit / n_positions
-    pub unstuck_close_pct: f64,
-    pub unstuck_ema_dist: f64,
-    pub unstuck_loss_allowance_pct: f64,
-    pub unstuck_threshold: f64,
-}
 
 fn calc_initial_entry(
     exchange_params: &ExchangeParams,
@@ -75,11 +14,6 @@ fn calc_initial_entry(
     bot_params: &BotParams,
     position: &Position,
 ) -> Order {
-    let x = round_dn(
-        state_params.ema_bands.lower * (1.0 - bot_params.entry_initial_ema_dist),
-        exchange_params.price_step,
-    );
-
     let initial_entry_price = f64::min(
         state_params.order_book.bid,
         round_dn(
@@ -109,7 +43,7 @@ fn calc_initial_entry(
         Order {
             qty: initial_entry_qty,
             price: initial_entry_price,
-            description: String::from("long_ientry_normal"),
+            order_type: OrderType::EntryInitialNormalLong,
         }
     } else if position.size < initial_entry_qty * 0.8 {
         // partial initial entry
@@ -120,10 +54,54 @@ fn calc_initial_entry(
         Order {
             qty: entry_qty,
             price: initial_entry_price,
-            description: String::from("long_ientry_partial"),
+            order_type: OrderType::EntryInitialPartialLong,
         }
     } else {
         Order::default()
+    }
+}
+
+pub fn calc_next_grid_close_long(
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    bot_params: &BotParams,
+    position: &Position,
+) -> Order {
+    if position.size == 0.0 {
+        return Order::default();
+    }
+    if bot_params.close_grid_markup_range <= 0.0 {
+        return Order {
+            qty: -position.size,
+            price: f64::max(
+                state_params.order_book.ask,
+                round_up(
+                    position.price * bot_params.close_grid_min_markup,
+                    exchange_params.price_step,
+                ),
+            ),
+            order_type: OrderType::CloseGridLong,
+        };
+    }
+    let wallet_exposure = calc_wallet_exposure(
+        exchange_params.c_mult,
+        state_params.balance,
+        position.size,
+        position.price,
+    );
+    let wallet_exposure_ratio = f64::min(1.0, wallet_exposure / bot_params.wallet_exposure_limit);
+    let close_price = position.price
+        * (1.0
+            + bot_params.close_grid_min_markup
+            + bot_params.close_grid_markup_range * (1.0 - wallet_exposure_ratio));
+    let close_qty = f64::min(
+        position.size,
+        cost_to_qty(state_params.balance, position.price, exchange_params.c_mult),
+    );
+    Order {
+        qty: round_(close_qty, exchange_params.qty_step),
+        price: round_up(close_price, exchange_params.price_step),
+        order_type: OrderType::CloseGridLong,
     }
 }
 
@@ -195,13 +173,13 @@ pub fn calc_next_grid_entry_long(
         Order {
             qty: round_(new_entry_qty, exchange_params.qty_step),
             price: reentry_order.price,
-            description: String::from("long_grid_reentry_inflated"),
+            order_type: OrderType::EntryGridInflatedLong,
         }
     } else {
         Order {
             qty: reentry_order.qty,
             price: reentry_order.price,
-            description: String::from("long_grid_reentry_normal"),
+            order_type: OrderType::EntryGridNormalLong,
         }
     }
 }
@@ -280,7 +258,7 @@ fn calc_reentry_order(
             Order {
                 qty: 0.0,
                 price: 0.0,
-                description: String::new(),
+                order_type: OrderType::Empty,
             },
             0.0,
             false,
@@ -315,7 +293,7 @@ fn calc_reentry_order(
             Order {
                 qty: round_(entry_qty, exchange_params.qty_step),
                 price: entry_price,
-                description: String::from("long_grid_reentry_cropped"),
+                order_type: OrderType::EntryGridCroppedLong,
             },
             wallet_exposure_if_filled,
             true,
@@ -325,7 +303,7 @@ fn calc_reentry_order(
             Order {
                 qty: entry_qty,
                 price: entry_price,
-                description: String::from("long_grid_reentry_normal"),
+                order_type: OrderType::EntryGridNormalLong,
             },
             wallet_exposure_if_filled,
             false,

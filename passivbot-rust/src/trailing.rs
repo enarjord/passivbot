@@ -1,4 +1,5 @@
-use crate::grids::{calc_reentry_qty, BotParams, ExchangeParams, Order, Position, StateParams};
+use crate::grids::calc_reentry_qty;
+use crate::types::{BotParams, ExchangeParams, Order, OrderType, Position, StateParams};
 use crate::utils::{
     calc_wallet_exposure, calc_wallet_exposure_if_filled, interpolate, round_, round_dn, round_up,
 };
@@ -13,6 +14,25 @@ pub fn calc_trailing_close_long(
 ) -> Order {
     if position.size == 0.0 {
         return Order::default();
+    }
+    if bot_params.close_trailing_drawdown_pct == 0.0 {
+        return Order {
+            qty: -position.size,
+            price: f64::max(
+                state_params.order_book.ask,
+                round_up(
+                    position.price
+                        * (1.0
+                            + f64::max(
+                                0.0,
+                                bot_params.close_trailing_threshold_pct
+                                    - bot_params.close_trailing_drawdown_pct,
+                            )),
+                    exchange_params.price_step,
+                ),
+            ),
+            order_type: OrderType::CloseTrailingLong,
+        };
     }
     if highest_since_position_open
         < position.price * (1.0 + bot_params.close_trailing_threshold_pct)
@@ -29,11 +49,17 @@ pub fn calc_trailing_close_long(
         price: f64::max(
             state_params.order_book.ask,
             round_up(
-                position.price * (1.0 + bot_params.close_trailing_threshold_pct),
+                position.price
+                    * (1.0
+                        + f64::max(
+                            0.0,
+                            bot_params.close_trailing_threshold_pct
+                                - bot_params.close_trailing_drawdown_pct,
+                        )),
                 exchange_params.price_step,
             ),
         ),
-        description: String::from("long_trailing_close"),
+        order_type: OrderType::CloseTrailingLong,
     }
 }
 
@@ -94,11 +120,13 @@ pub fn calc_trailing_entry_long(
             price: f64::min(
                 state_params.order_book.bid,
                 round_dn(
-                    position.price * (1.0 - bot_params.entry_trailing_threshold_pct),
+                    position.price
+                        * (1.0 - bot_params.entry_trailing_threshold_pct
+                            + bot_params.entry_trailing_drawdown_pct),
                     exchange_params.price_step,
                 ),
             ),
-            description: String::from("long_trailing_reentry_cropped"),
+            order_type: OrderType::EntryTrailingCroppedLong,
         }
     } else {
         Order {
@@ -106,11 +134,13 @@ pub fn calc_trailing_entry_long(
             price: f64::min(
                 state_params.order_book.bid,
                 round_dn(
-                    position.price * (1.0 - bot_params.entry_trailing_threshold_pct),
+                    position.price
+                        * (1.0 - bot_params.entry_trailing_threshold_pct
+                            + bot_params.entry_trailing_drawdown_pct),
                     exchange_params.price_step,
                 ),
             ),
-            description: String::from("long_trailing_reentry_normal"),
+            order_type: OrderType::EntryTrailingNormalLong,
         }
     }
 }

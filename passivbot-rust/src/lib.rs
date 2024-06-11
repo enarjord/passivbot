@@ -2,6 +2,7 @@ mod backtest;
 mod grids;
 mod python;
 mod trailing;
+mod types;
 mod utils;
 
 use backtest::*;

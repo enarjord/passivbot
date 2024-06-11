@@ -1,7 +1,7 @@
 use ndarray::ArrayD;
 use std::collections::HashMap;
 
-struct Backtest {
+pub struct Backtest {
     symbols: Vec<String>,
     emas: HashMap<String, f64>,
     fills: Vec<Fill>,
@@ -10,11 +10,11 @@ struct Backtest {
     positions: Positions,
 }
 
-struct Fill {
+pub struct Fill {
     // Define fields for Fill
 }
 
-struct Stat {
+pub struct Stat {
     // Define fields for Stat
 }
 
@@ -38,7 +38,7 @@ struct Positions {
 }
 
 impl Backtest {
-    fn new(symbols: Vec<String>) -> Self {
+    pub fn new(symbols: Vec<String>) -> Self {
         Backtest {
             symbols,
             emas: HashMap::new(),
@@ -61,15 +61,25 @@ impl Backtest {
         }
     }
 
-    fn backtest(&mut self, hlcs: &ArrayD<f64>) -> (&Vec<Fill>, &Vec<Stat>) {
+    pub fn backtest(
+        &mut self,
+        hlcs: &ArrayD<f64>,
+        noisiness_indices: &ArrayD<usize>,
+    ) -> (&Vec<Fill>, &Vec<Stat>) {
         self.prep_emas();
 
         for k in 1..hlcs.len() {
-            self.check_for_fills();
-            self.fills.extend(self.new_fills());
-            self.update_emas();
-            self.update_open_orders();
-            self.update_stats();
+            if k == 11 || k == 4356 {
+                println!(
+                    "hlcs, noisiness_indices at k={}: {}, {}",
+                    k, hlcs[k], noisiness_indices[k]
+                );
+            }
+            //self.check_for_fills();
+            //self.fills.extend(self.new_fills());
+            //self.update_emas();
+            //self.update_open_orders();
+            //self.update_stats();
         }
 
         (&self.fills, &self.stats)
