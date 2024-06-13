@@ -563,6 +563,10 @@ class Passivbot:
                             "1d": 1440,
                             "1w": 10080,
                         }
+                        for sym in eligible_symbols: 
+                            if not self.ohlcvs[sym]: 
+                                eligible_symbols.remove(sym)
+                                
                         sym_no_min_vol = [symbol for symbol in eligible_symbols if (self.volumes[symbol]/len(self.ohlcvs[symbol])) < ((self.config["min_1m_volume_filter"] * interval_map[self.config["ohlcv_interval"]]))]
                         
                         eligible_symbols = [symbol for symbol in eligible_symbols if (self.volumes[symbol]/len(self.ohlcvs[symbol])) >= ((self.config["min_1m_volume_filter"] * interval_map[self.config["ohlcv_interval"]]))]
