@@ -61,6 +61,12 @@ pub struct StateParams {
 }
 
 #[derive(Clone, Default)]
+pub struct BotParamsLongShort {
+    pub long: BotParams,
+    pub short: BotParams,
+}
+
+#[derive(Clone, Default)]
 pub struct BotParams {
     pub close_grid_markup_range: f64,
     pub close_grid_min_markup: f64,
@@ -76,6 +82,8 @@ pub struct BotParams {
     pub entry_trailing_drawdown_pct: f64,
     pub entry_trailing_grid_ratio: f64,
     pub entry_trailing_threshold_pct: f64,
+    pub ema_span0: f64,
+    pub ema_span1: f64,
     pub n_positions: usize,
     pub total_wallet_exposure_limit: f64,
     pub wallet_exposure_limit: f64, // is total_wallet_exposure_limit / n_positions

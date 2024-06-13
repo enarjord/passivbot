@@ -1,13 +1,92 @@
-use crate::backtest::{Backtest, Fill, Stat};
+use crate::backtest::Backtest;
 use crate::grids::{
     calc_next_close, calc_next_entry, calc_next_grid_close_long, calc_next_grid_entry_long,
 };
 use crate::trailing::{calc_trailing_close_long, calc_trailing_entry_long};
-use crate::types::{BotParams, EMABands, ExchangeParams, Order, OrderBook, Position, StateParams};
-use ndarray::ArrayD;
-use numpy::PyArray;
+use crate::types::{
+    BotParams, BotParamsLongShort, EMABands, ExchangeParams, Order, OrderBook, Position,
+    StateParams,
+};
+use ndarray::{Array2, ArrayBase, ArrayD};
+use numpy::{IntoPyArray, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use pyo3::wrap_pyfunction;
+
+#[pyfunction]
+pub fn run_backtest(
+    hlcs: PyReadonlyArray3<f64>,
+    noisiness_indices: &PyAny,
+    bot_params_long_short_dict: &PyDict,
+) -> PyResult<()> {
+    let hlcs_rust = hlcs.as_array();
+
+    let noisiness_indices_rust: Array2<i32> =
+        if let Ok(arr) = noisiness_indices.downcast::<PyArray2<i32>>() {
+            unsafe { arr.as_array().to_owned() }
+        } else if let Ok(arr) = noisiness_indices.downcast::<PyArray2<i64>>() {
+            let noisiness_indices_i64: ArrayBase<_, _> = unsafe { arr.as_array() };
+            noisiness_indices_i64.mapv(|x| x as i32)
+        } else {
+            return Err(PyValueError::new_err(
+                "Unsupported data type for noisiness_indices",
+            ));
+        };
+
+    let bot_params_long_short = bot_params_long_short_from_dict(bot_params_long_short_dict)?;
+    let backtest = Backtest::new(
+        hlcs_rust.to_owned(),
+        noisiness_indices_rust,
+        bot_params_long_short,
+    );
+    backtest.run();
+    Ok(())
+}
+
+fn bot_params_long_short_from_dict(dict: &PyDict) -> PyResult<BotParamsLongShort> {
+    Ok(BotParamsLongShort {
+        long: bot_params_from_dict(extract_value(dict, "long")?)?,
+        short: bot_params_from_dict(extract_value(dict, "short")?)?,
+    })
+}
+
+fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
+    Ok(BotParams {
+        close_grid_markup_range: extract_value(dict, "close_grid_markup_range")?,
+        close_grid_min_markup: extract_value(dict, "close_grid_min_markup")?,
+        close_grid_qty_pct: extract_value(dict, "close_grid_qty_pct")?,
+        close_trailing_drawdown_pct: extract_value(dict, "close_trailing_drawdown_pct")?,
+        close_trailing_grid_ratio: extract_value(dict, "close_trailing_grid_ratio")?,
+        close_trailing_threshold_pct: extract_value(dict, "close_trailing_threshold_pct")?,
+        entry_grid_double_down_factor: extract_value(dict, "entry_grid_double_down_factor")?,
+        entry_grid_spacing_weight: extract_value(dict, "entry_grid_spacing_weight")?,
+        entry_grid_spacing_pct: extract_value(dict, "entry_grid_spacing_pct")?,
+        entry_initial_ema_dist: extract_value(dict, "entry_initial_ema_dist")?,
+        entry_initial_qty_pct: extract_value(dict, "entry_initial_qty_pct")?,
+        entry_trailing_drawdown_pct: extract_value(dict, "entry_trailing_drawdown_pct")?,
+        entry_trailing_grid_ratio: extract_value(dict, "entry_trailing_grid_ratio")?,
+        entry_trailing_threshold_pct: extract_value(dict, "entry_trailing_threshold_pct")?,
+        ema_span0: extract_value(dict, "ema_span0")?,
+        ema_span1: extract_value(dict, "ema_span1")?,
+        n_positions: extract_value(dict, "n_positions")?,
+        total_wallet_exposure_limit: extract_value(dict, "total_wallet_exposure_limit")?,
+        wallet_exposure_limit: extract_value(dict, "wallet_exposure_limit")?,
+        unstuck_close_pct: extract_value(dict, "unstuck_close_pct")?,
+        unstuck_ema_dist: extract_value(dict, "unstuck_ema_dist")?,
+        unstuck_loss_allowance_pct: extract_value(dict, "unstuck_loss_allowance_pct")?,
+        unstuck_threshold: extract_value(dict, "unstuck_threshold")?,
+    })
+}
+
+fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a PyDict, key: &str) -> PyResult<T> {
+    dict.get_item(key)
+        .map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyKeyError, _>(format!("Key '{}' not found", key))
+        })?
+        .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Value is None"))
+        .and_then(pyo3::FromPyObject::extract)
+}
 
 #[pyfunction]
 pub fn calc_next_grid_close_long_py(

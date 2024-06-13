@@ -383,8 +383,9 @@ pub fn calc_next_close(
         if wallet_exposure_ratio < 1.0 + bot_params.close_trailing_grid_ratio {
             // return grid order, but crop to max bot_params.wallet_exposure_limit * (1.0 + bot_params.close_trailing_grid_ratio) + 1%
             let mut bot_params_modified = bot_params.clone();
-            bot_params_modified.wallet_exposure_limit =
-                bot_params.wallet_exposure_limit * (1.0 + bot_params.close_trailing_grid_ratio) * 1.01;
+            bot_params_modified.wallet_exposure_limit = bot_params.wallet_exposure_limit
+                * (1.0 + bot_params.close_trailing_grid_ratio)
+                * 1.01;
             return calc_next_grid_close_long(
                 &exchange_params,
                 &state_params,
@@ -476,8 +477,9 @@ pub fn calc_next_entry(
         if wallet_exposure_ratio < 1.0 + bot_params.entry_trailing_grid_ratio {
             // return grid order, but crop to max bot_params.wallet_exposure_limit * (1.0 + bot_params.entry_trailing_grid_ratio) + 1%
             let mut bot_params_modified = bot_params.clone();
-            bot_params_modified.wallet_exposure_limit =
-                bot_params.wallet_exposure_limit * (1.0 + bot_params.entry_trailing_grid_ratio) * 1.01;
+            bot_params_modified.wallet_exposure_limit = bot_params.wallet_exposure_limit
+                * (1.0 + bot_params.entry_trailing_grid_ratio)
+                * 1.01;
             return calc_next_grid_entry_long(
                 &exchange_params,
                 &state_params,
