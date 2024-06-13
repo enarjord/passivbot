@@ -61,7 +61,7 @@ pub struct StateParams {
 }
 
 #[derive(Clone, Default)]
-pub struct BotParamsLongShort {
+pub struct BotParamsAll {
     pub long: BotParams,
     pub short: BotParams,
 }

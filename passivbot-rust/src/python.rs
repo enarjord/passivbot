@@ -4,8 +4,7 @@ use crate::grids::{
 };
 use crate::trailing::{calc_trailing_close_long, calc_trailing_entry_long};
 use crate::types::{
-    BotParams, BotParamsLongShort, EMABands, ExchangeParams, Order, OrderBook, Position,
-    StateParams,
+    BotParams, BotParamsAll, EMABands, ExchangeParams, Order, OrderBook, Position, StateParams,
 };
 use ndarray::{Array2, ArrayBase, ArrayD};
 use numpy::{IntoPyArray, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3};
@@ -18,7 +17,7 @@ use pyo3::wrap_pyfunction;
 pub fn run_backtest(
     hlcs: PyReadonlyArray3<f64>,
     noisiness_indices: &PyAny,
-    bot_params_long_short_dict: &PyDict,
+    bot_params_all_dict: &PyDict,
 ) -> PyResult<()> {
     let hlcs_rust = hlcs.as_array();
 
@@ -34,18 +33,14 @@ pub fn run_backtest(
             ));
         };
 
-    let bot_params_long_short = bot_params_long_short_from_dict(bot_params_long_short_dict)?;
-    let backtest = Backtest::new(
-        hlcs_rust.to_owned(),
-        noisiness_indices_rust,
-        bot_params_long_short,
-    );
+    let bot_params_all = bot_params_all_from_dict(bot_params_all_dict)?;
+    let mut backtest = Backtest::new(hlcs_rust.to_owned(), noisiness_indices_rust, bot_params_all);
     backtest.run();
     Ok(())
 }
 
-fn bot_params_long_short_from_dict(dict: &PyDict) -> PyResult<BotParamsLongShort> {
-    Ok(BotParamsLongShort {
+fn bot_params_all_from_dict(dict: &PyDict) -> PyResult<BotParamsAll> {
+    Ok(BotParamsAll {
         long: bot_params_from_dict(extract_value(dict, "long")?)?,
         short: bot_params_from_dict(extract_value(dict, "short")?)?,
     })
