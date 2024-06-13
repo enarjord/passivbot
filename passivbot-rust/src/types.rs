@@ -64,7 +64,7 @@ pub struct StateParams {
 pub struct BotParams {
     pub close_grid_markup_range: f64,
     pub close_grid_min_markup: f64,
-    pub close_grid_n_orders: f64,
+    pub close_grid_qty_pct: f64,
     pub close_trailing_drawdown_pct: f64,
     pub close_trailing_grid_ratio: f64,
     pub close_trailing_threshold_pct: f64,

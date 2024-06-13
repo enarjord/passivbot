@@ -1,112 +1,169 @@
-use ndarray::ArrayD;
 use std::collections::HashMap;
+use std::f64::INFINITY;
 
-pub struct Backtest {
+struct Config {
+    starting_balance: f64,
+    long: LongConfig,
     symbols: Vec<String>,
-    emas: HashMap<String, f64>,
-    fills: Vec<Fill>,
-    stats: Vec<Stat>,
-    open_orders: OpenOrders,
-    positions: Positions,
+}
+
+struct LongConfig {
+    n_positions: usize,
+}
+
+#[derive(Clone)]
+struct Order {
+    price: f64,
+    size: f64,
+    order_type: OrderType,
+}
+
+#[derive(Clone)]
+enum OrderType {
+    Grid,
+    // Add other order types as needed
 }
 
 pub struct Fill {
-    // Define fields for Fill
+    //
 }
 
 pub struct Stat {
-    // Define fields for Stat
+    //
+}
+
+pub struct Backtest {
+    config: Config,
+    hlcs: Vec<Vec<[f64; 3]>>,
+    noisiness_indices: Vec<Vec<usize>>,
+    emas: HashMap<String, [f64; 3]>,
+    ema_alphas: HashMap<String, [f64; 3]>,
+    fills: Vec<Order>,
+    stats: Vec<()>, // Update with appropriate stats type
+    balance: f64,
+    pnl_cumsum_max: f64,
+    pnl_cumsum_running: f64,
+    positions: HashMap<String, [f64; 2]>,
+    open_orders: OpenOrders,
+    trailing_data: HashMap<String, TrailingData>,
+    actives: Actives,
+    k: usize,
 }
 
 struct OpenOrders {
-    long: Orders,
-    short: Orders,
+    entry: HashMap<String, Order>,
+    close: HashMap<String, Order>,
+    unstuck: Order,
 }
 
-struct Orders {
-    entries: HashMap<String, Vec<Order>>,
-    closes: HashMap<String, Vec<Order>>,
+struct TrailingData {
+    min_price_since_open: f64,
+    max_price_since_min: f64,
+    max_price_since_open: f64,
+    min_price_since_max: f64,
 }
 
-struct Order {
-    // Define fields for Order
-}
-
-struct Positions {
-    long: HashMap<String, (f64, f64)>,
-    short: HashMap<String, (f64, f64)>,
+struct Actives {
+    longs: Vec<usize>,
 }
 
 impl Backtest {
-    pub fn new(symbols: Vec<String>) -> Self {
+    fn new(hlcs: Vec<Vec<[f64; 3]>>, noisiness_indices: Vec<Vec<usize>>, config: Config) -> Self {
+        let symbols = config.symbols.clone();
+        let emas = symbols
+            .iter()
+            .map(|symbol| (symbol.clone(), [hlcs[0][0][2]; 3]))
+            .collect();
+
         Backtest {
-            symbols,
-            emas: HashMap::new(),
+            config,
+            hlcs,
+            noisiness_indices,
+            emas,
+            ema_alphas: HashMap::new(),
             fills: Vec::new(),
             stats: Vec::new(),
+            balance: 0.0,
+            pnl_cumsum_max: 0.0,
+            pnl_cumsum_running: 0.0,
+            positions: symbols
+                .iter()
+                .map(|symbol| (symbol.clone(), [0.0, 0.0]))
+                .collect(),
             open_orders: OpenOrders {
-                long: Orders {
-                    entries: HashMap::new(),
-                    closes: HashMap::new(),
-                },
-                short: Orders {
-                    entries: HashMap::new(),
-                    closes: HashMap::new(),
+                entry: HashMap::new(),
+                close: HashMap::new(),
+                unstuck: Order {
+                    price: 0.0,
+                    size: 0.0,
+                    order_type: OrderType::Grid,
                 },
             },
-            positions: Positions {
-                long: HashMap::new(),
-                short: HashMap::new(),
-            },
+            trailing_data: symbols
+                .iter()
+                .map(|symbol| {
+                    (
+                        symbol.clone(),
+                        TrailingData {
+                            min_price_since_open: 0.0,
+                            max_price_since_min: 0.0,
+                            max_price_since_open: 0.0,
+                            min_price_since_max: INFINITY,
+                        },
+                    )
+                })
+                .collect(),
+            actives: Actives { longs: Vec::new() },
+            k: 0,
         }
-    }
-
-    pub fn backtest(
-        &mut self,
-        hlcs: &ArrayD<f64>,
-        noisiness_indices: &ArrayD<usize>,
-    ) -> (&Vec<Fill>, &Vec<Stat>) {
-        self.prep_emas();
-
-        for k in 1..hlcs.len() {
-            if k == 11 || k == 4356 {
-                println!(
-                    "hlcs, noisiness_indices at k={}: {}, {}",
-                    k, hlcs[k], noisiness_indices[k]
-                );
-            }
-            //self.check_for_fills();
-            //self.fills.extend(self.new_fills());
-            //self.update_emas();
-            //self.update_open_orders();
-            //self.update_stats();
-        }
-
-        (&self.fills, &self.stats)
     }
 
     fn prep_emas(&mut self) {
-        // Prepare EMAs
-    }
-
-    fn check_for_fills(&mut self) {
-        // Check for fills and update positions and open orders
-    }
-
-    fn new_fills(&self) -> Vec<Fill> {
-        // Return new fills
-        Vec::new()
+        // Implement prep_emas logic
     }
 
     fn update_emas(&mut self) {
-        // Update EMAs
+        // Implement update_emas logic
+    }
+
+    fn process_fill(&mut self, close: &Order) {
+        // Implement process_fill logic
+    }
+
+    fn check_for_fills(&mut self) {
+        // Implement check_for_fills logic
+    }
+
+    fn update_trailing_data(&mut self) {
+        // Implement update_trailing_data logic
+    }
+
+    fn update_actives(&mut self) {
+        // Implement update_actives logic
+    }
+
+    fn update_entry_order(&mut self, symbol: &str) {
+        // Implement update_entry_order logic
     }
 
     fn update_open_orders(&mut self) {
-        // Update open orders
+        // Implement update_open_orders logic
     }
 
     fn update_stats(&mut self) {
-        // Update stats
+        // Implement update_stats logic
+    }
+
+    fn run(&mut self) -> (Vec<()>, Vec<Order>) {
+        self.prep_emas();
+        for k in 1..self.hlcs.len() {
+            self.k = k;
+            self.check_for_fills();
+            self.update_actives();
+            self.update_trailing_data();
+            self.update_open_orders();
+            self.update_stats();
+        }
+        (self.stats.clone(), self.fills.clone())
     }
 }

@@ -27,6 +27,8 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calc_trailing_entry_long_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_next_entry_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_trailing_close_long_py, m)?)?;
+    m.add_function(wrap_pyfunction!(calc_next_grid_close_long_py, m)?)?;
+    m.add_function(wrap_pyfunction!(calc_next_close_py, m)?)?;
 
     Ok(())
 }

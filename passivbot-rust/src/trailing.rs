@@ -9,8 +9,8 @@ pub fn calc_trailing_close_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
-    highest_since_position_open: f64,
-    lowest_since_highest: f64,
+    max_price_since_open: f64,
+    min_price_since_max: f64,
 ) -> Order {
     if position.size == 0.0 {
         return Order::default();
@@ -34,14 +34,10 @@ pub fn calc_trailing_close_long(
             order_type: OrderType::CloseTrailingLong,
         };
     }
-    if highest_since_position_open
-        < position.price * (1.0 + bot_params.close_trailing_threshold_pct)
-    {
+    if max_price_since_open < position.price * (1.0 + bot_params.close_trailing_threshold_pct) {
         return Order::default();
     }
-    if lowest_since_highest
-        > highest_since_position_open * (1.0 - bot_params.close_trailing_drawdown_pct)
-    {
+    if min_price_since_max > max_price_since_open * (1.0 - bot_params.close_trailing_drawdown_pct) {
         return Order::default();
     }
     Order {
@@ -68,20 +64,17 @@ pub fn calc_trailing_entry_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
-    lowest_since_position_open: f64,
-    highest_since_lowest: f64,
+    min_price_since_open: f64,
+    max_price_since_min: f64,
 ) -> Order {
     // it is assumed there is a position
     if position.size == 0.0 || bot_params.wallet_exposure_limit <= 0.0 {
         return Order::default();
     }
-    if lowest_since_position_open > position.price * (1.0 - bot_params.entry_trailing_threshold_pct)
-    {
+    if min_price_since_open > position.price * (1.0 - bot_params.entry_trailing_threshold_pct) {
         return Order::default();
     }
-    if highest_since_lowest
-        < lowest_since_position_open * (1.0 + bot_params.entry_trailing_drawdown_pct)
-    {
+    if max_price_since_min < min_price_since_open * (1.0 + bot_params.entry_trailing_drawdown_pct) {
         return Order::default();
     }
     let wallet_exposure = calc_wallet_exposure(
