@@ -88,6 +88,7 @@ impl Backtest {
         ema_spans_long.sort_by(|a, b| a.partial_cmp(b).unwrap());
     }
 
+    #[inline]
     fn update_emas(&mut self, k: usize) {
         for i in 0..self.n_markets {
             let close_price = self.hlcs[[k, i, 2]];
@@ -97,19 +98,12 @@ impl Backtest {
             let short_alphas = &self.ema_alphas.short.alphas;
             let short_alphas_inv = &self.ema_alphas.short.alphas_inv;
 
-            self.emas[i].long[0] =
-                close_price * long_alphas[0] + self.emas[i].long[0] * long_alphas_inv[0];
-            self.emas[i].long[1] =
-                close_price * long_alphas[1] + self.emas[i].long[1] * long_alphas_inv[1];
-            self.emas[i].long[2] =
-                close_price * long_alphas[2] + self.emas[i].long[2] * long_alphas_inv[2];
+            let emas = &mut self.emas[i];
 
-            self.emas[i].short[0] =
-                close_price * short_alphas[0] + self.emas[i].short[0] * short_alphas_inv[0];
-            self.emas[i].short[1] =
-                close_price * short_alphas[1] + self.emas[i].short[1] * short_alphas_inv[1];
-            self.emas[i].short[2] =
-                close_price * short_alphas[2] + self.emas[i].short[2] * short_alphas_inv[2];
+            for z in 0..3 {
+                emas.long[z] = close_price * long_alphas[z] + emas.long[z] * long_alphas_inv[z];
+                emas.short[z] = close_price * short_alphas[z] + emas.short[z] * short_alphas_inv[z];
+            }
         }
     }
 }
