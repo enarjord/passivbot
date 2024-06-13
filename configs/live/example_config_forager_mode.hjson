@@ -8,13 +8,13 @@
   pnls_max_lookback_days: 30
 
   // how much below past peak balance to allow losses (default 1% == 0.01). Set to 0.0 to disable multisym auto unstuck.
-  loss_allowance_pct: 0.05513732935406687
+  loss_allowance_pct: 0.04999999979182668
 
   // if wallet_exposure / wallet_exposure_limit > stuck_threshold: consider position as stuck
-  stuck_threshold: 0.4189169048451155
+  stuck_threshold: 0.40797855636885233
 
   // percentage of balance * wallet_exposure_limit to close for each unstucking order (default 1% == 0.01)
-  unstuck_close_pct: 0.0010458680854878034
+  unstuck_close_pct: 0.0011862912589166842
 
   // delay between executions to exchange. Set to 60 to simulate 1m ohlcv backtest.
   execution_delay_seconds: 3
@@ -36,8 +36,8 @@
   leverage: 10.0
 
   // total wallet exposure limits long and short. Exposure limit for each bot will be TWE_pos_side / len(active_symbols_pos_side)
-  TWE_long: 1.2609089832866571
-  TWE_short: 0.30371972748580983
+  TWE_long: 1.2647931411543223
+  TWE_short: 0.4901278088650084
 
   // if true, mode defaults to 'normal'. If false, mode defaults to 'graceful_stop' if auto_gs=true, else 'manual'.
   long_enabled: true
@@ -81,29 +81,29 @@
   {
     long:
     {
-      ddown_factor: 0.8431401818920167
-      ema_span_0: 904.3194994115283
-      ema_span_1: 661.3811078906467
-      initial_eprice_ema_dist: -0.007812366786191505
-      initial_qty_pct: 0.011488689284057437
-      markup_range: 0.009169446074458739
-      min_markup: 0.001881615113374259
-      n_close_orders: 7.212769107475559
+      ddown_factor: 0.8505508851226058
+      ema_span_0: 945.4450463231693
+      ema_span_1: 658.2414762185865
+      initial_eprice_ema_dist: -0.007871416739643977
+      initial_qty_pct: 0.012361327269367194
+      markup_range: 0.009169536354874741
+      min_markup: 0.002236427680190847
+      n_close_orders: 7.560291498030253
       rentry_pprice_dist: 0.046193458275164696
-      rentry_pprice_dist_wallet_exposure_weighting: 0.054045084472447186
+      rentry_pprice_dist_wallet_exposure_weighting: 0.09015237828960086
     }
     short:
     {
-      ddown_factor: 1.4980570521489778
-      ema_span_0: 810.883201939391
-      ema_span_1: 1054.790940833631
-      initial_eprice_ema_dist: -0.07165663783658187
-      initial_qty_pct: 0.011131718496001832
-      markup_range: 0.00976878155598317
-      min_markup: 0.0010914762393926098
-      n_close_orders: 1.9133320168872971
-      rentry_pprice_dist: 0.04093802724373973
-      rentry_pprice_dist_wallet_exposure_weighting: 4.849666203718392
+      ddown_factor: 1.4980571200045454
+      ema_span_0: 767.8366045879187
+      ema_span_1: 1122.4810442813648
+      initial_eprice_ema_dist: -0.09911232414096734
+      initial_qty_pct: 0.01113152837884185
+      markup_range: 0.009538300153523962
+      min_markup: 0.0010193822061913035
+      n_close_orders: 1.857299483138112
+      rentry_pprice_dist: 0.0409665079300848
+      rentry_pprice_dist_wallet_exposure_weighting: 3.83490301250521
     }
   }
 
