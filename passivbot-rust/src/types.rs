@@ -40,12 +40,23 @@ pub struct EMABands {
     pub lower: f64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Order {
     pub qty: f64,
     pub price: f64,
     pub order_type: OrderType,
 }
+
+impl Order {
+    pub fn new(qty: f64, price: f64, order_type: OrderType) -> Self {
+        Order {
+            qty,
+            price,
+            order_type,
+        }
+    }
+}
+
 impl Default for Order {
     fn default() -> Self {
         Order {
@@ -102,7 +113,7 @@ pub struct BotParams {
     pub unstuck_threshold: f64,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum OrderType {
     EntryInitialNormalLong,
     EntryInitialPartialLong,
@@ -157,4 +168,17 @@ impl fmt::Display for OrderType {
             OrderType::Empty => write!(f, "empty"),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Fill {
+    pub index: usize,
+    pub pnl: f64,
+    pub fee_paid: f64,
+    pub balance: f64,
+    pub fill_qty: f64,
+    pub fill_price: f64,
+    pub position_size: f64,
+    pub position_price: f64,
+    pub order_type: OrderType,
 }

@@ -1,9 +1,9 @@
 use crate::grids::{calc_next_close_long, calc_next_entry_long};
 use crate::types::{
-    BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Order, OrderBook, Position,
-    StateParams,
+    BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Fill, Order, OrderBook,
+    Position, StateParams,
 };
-use crate::utils::{cost_to_qty, qty_to_cost};
+use crate::utils::{calc_pnl_long, calc_pnl_short, cost_to_qty, qty_to_cost, round_};
 use ndarray::s;
 use ndarray::{Array1, Array2, Array3};
 use std::collections::{HashMap, HashSet};
@@ -93,6 +93,9 @@ pub struct Backtest {
     open_orders: OpenOrders, // keys are symbol indices
     trailing_prices: TrailingPrices,
     actives: Actives,
+    pnl_cumsum_running: f64,
+    pnl_cumsum_max: f64,
+    fills: Vec<Fill>,
 }
 
 impl Backtest {
@@ -127,18 +130,34 @@ impl Backtest {
             open_orders: OpenOrders::default(),
             trailing_prices: TrailingPrices::default(),
             actives: Actives::default(),
+            pnl_cumsum_running: 0.0,
+            pnl_cumsum_max: 0.0,
+            fills: Vec::new(),
         }
     }
 
     pub fn run(&mut self) {
+        for idx in 0..self.n_markets {
+            self.trailing_prices
+                .long
+                .insert(idx, TrailingPriceBundle::default());
+            self.trailing_prices
+                .short
+                .insert(idx, TrailingPriceBundle::default());
+        }
         for k in 1..self.hlcs.shape()[0] {
             if k % 100000 == 0 {
-                println!("k     {:?}", k);
-                println!("hlcs  {:?}", self.hlcs.slice(s![k, .., ..]));
-                println!("noise {:?}", self.noisiness_indices.slice(s![k, ..]));
-                println!("emas  {:?}", self.emas);
-                println!("actvs {:?}", self.actives);
-                println!("oos   {:?}", self.open_orders);
+                println!("k           {:?}", k);
+                println!("hlcs        {:?}", self.hlcs.slice(s![k, .., ..]));
+                println!("noise       {:?}", self.noisiness_indices.slice(s![k, ..]));
+                println!("emas        {:?}", self.emas);
+                println!("actvs       {:?}", self.actives);
+                println!("oos         {:?}", self.open_orders);
+                if let Some(last_fill) = self.fills.last() {
+                    println!("Last fill: {:?}", last_fill);
+                } else {
+                    println!("No fills available.");
+                }
             }
             let any_fill = false;
             self.check_for_fills(k);
@@ -192,31 +211,71 @@ impl Backtest {
     }
 
     fn check_for_fills(&mut self, k: usize) {
-        // if closed whole pos, reset trailing data, remove idx from self.positions
+        // Collect keys into a vector to break the immutable borrow
+        let open_orders_keys_long: Vec<usize> = self.open_orders.long.keys().cloned().collect();
 
-        // begin pseudo code
-        //for idx in self.open_orders.long:
-        //    if self.open_orders.long[idx].close.qty != 0.0:
-        //        if self.hlcs[k][idx][HIGH] > self.open_orders.long[idx].close.price:
-        //            // long close fill
-        //            new_psize = round_(self.positions.long[idx].size + self.open_orders.long[idx].close.qty, self.exchange_params_list[idx].qty_step)
-        //            if new_psize < 0.0:
-        //                print("warning: close qty greater than psize long")
-        //                print("symbols", self.backtest_params)
-        //                print("new_psize", new_psize)
-        //                print("close order", self.open_orders.long[idx].close)
-        //                new_psize = 0.0
-        //                self.open_orders.long[idx].close = (-self.positions.long[idx].size, self.open_orders.long[idx].close.price, self.open_orders.long[idx].close.order_type)
-        //            fee_paid = -qty_to_cost(close[0], close[1], c_mults[idx]) * maker_fee
-        //            pnl = calc_pnl_long(
-        //                positions_long[idx][1], close[1], close[0], inverse, c_mults[idx]
-        //            )
-        // end pseudo code
+        // Iterate over the collected keys
+        for idx in open_orders_keys_long {
+            if self.open_orders.long[&idx].close.qty != 0.0
+                && self.hlcs[[k, idx, HIGH]] > self.open_orders.long[&idx].close.price
+            {
+                // long close fill
+                let mut new_psize = round_(
+                    self.positions.long[&idx].size + self.open_orders.long[&idx].close.qty,
+                    self.exchange_params_list[idx].qty_step,
+                );
+                if new_psize < 0.0 {
+                    println!("warning: close qty greater than psize long");
+                    println!("symbol: {}", self.backtest_params.symbols[idx]);
+                    println!("new_psize: {}", new_psize);
+                    println!("close order: {:?}", self.open_orders.long[&idx].close);
+                    new_psize = 0.0;
+                    self.open_orders.long.get_mut(&idx).unwrap().close = Order::new(
+                        -self.positions.long[&idx].size,
+                        self.open_orders.long[&idx].close.price,
+                        self.open_orders.long[&idx].close.order_type.clone(),
+                    );
+                }
+                let fee_paid = -qty_to_cost(
+                    self.open_orders.long[&idx].close.qty,
+                    self.open_orders.long[&idx].close.price,
+                    self.exchange_params_list[idx].c_mult,
+                ) * self.backtest_params.maker_fee;
+                let pnl = calc_pnl_long(
+                    self.positions.long[&idx].price,
+                    self.open_orders.long[&idx].close.price,
+                    self.open_orders.long[&idx].close.qty,
+                    self.exchange_params_list[idx].c_mult,
+                );
+                self.pnl_cumsum_running += pnl;
+                self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
+                self.balance += pnl + fee_paid;
+
+                if new_psize == 0.0 {
+                    self.positions.long.remove(&idx);
+                } else {
+                    self.positions.long.get_mut(&idx).unwrap().size = new_psize;
+                }
+
+                self.fills.push(Fill {
+                    index: k,                                                         // index minute
+                    pnl,                                                 // realized pnl
+                    fee_paid,                                            // fee paid
+                    balance: self.balance,                               // balance after fill
+                    fill_qty: self.open_orders.long[&idx].close.qty,     // fill qty
+                    fill_price: self.open_orders.long[&idx].close.price, // fill price
+                    position_size: self.positions.long[&idx].size,       // psize after fill
+                    position_price: self.positions.long[&idx].price,     // pprice after fill
+                    order_type: self.open_orders.long[&idx].close.order_type.clone(), // fill type
+                });
+            }
+        }
     }
 
     fn update_open_orders(&mut self, k: usize, any_fill: bool) {
         // update all orders every time (optimizations later)
         if self.positions.long.len() < self.bot_params_pair.long.n_positions {
+            // there are empty slots
             self.update_actives_long(k);
         }
         let default_position = Position::default();
