@@ -1,6 +1,7 @@
-use crate::types::{BotParams, BotParamsAll, ExchangeParams};
+use crate::types::{BotParams, BotParamsAll, ExchangeParams, Order, Position};
 use ndarray::s;
 use ndarray::{Array1, Array2, Array3};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Default, Copy, Debug)]
 pub struct EmaAlphas {
@@ -20,13 +21,36 @@ pub struct EMAs {
     pub short: [f64; 3],
 }
 
+#[derive(Debug, Default)]
+pub struct Positions {
+    pub long: HashMap<usize, Position>,
+    pub short: HashMap<usize, Position>,
+}
+
+#[derive(Debug, Default)]
+pub struct OpenOrders {
+    pub entry: Order,
+    pub close: Order,
+    pub unstuck: Order,
+}
+
+#[derive(Default, Debug)]
+pub struct Actives {
+    long: HashSet<usize>,
+    short: HashSet<usize>,
+}
+
 pub struct Backtest {
     hlcs: Array3<f64>,              // 3D array: (n_timesteps, n_markets, 3)
     noisiness_indices: Array2<i32>, // 2D array: (n_timesteps, n_markets)
     bot_params_all: BotParamsAll,
+    exchange_params_list: Vec<ExchangeParams>,
     n_markets: usize,
     ema_alphas: EmaAlphas,
     emas: Vec<EMAs>,
+    positions: Positions,
+    open_orders: HashMap<usize, OpenOrders>, // keys are market indices
+    actives: Actives,
 }
 
 impl Backtest {
@@ -34,6 +58,7 @@ impl Backtest {
         hlcs: Array3<f64>,
         noisiness_indices: Array2<i32>,
         bot_params_all: BotParamsAll,
+        exchange_params_list: Vec<ExchangeParams>,
     ) -> Self {
         let n_markets = hlcs.shape()[1];
         let initial_emas = (0..n_markets)
@@ -49,33 +74,44 @@ impl Backtest {
             hlcs,
             noisiness_indices,
             bot_params_all: bot_params_all.clone(),
+            exchange_params_list,
             n_markets,
             ema_alphas: calc_ema_alphas(&bot_params_all),
             emas: initial_emas,
+            positions: Positions::default(),
+            open_orders: HashMap::new(),
+            actives: Actives::default(),
         }
     }
 
     pub fn run(&mut self) {
         for k in 1..self.hlcs.shape()[0] {
-            if k == 15 {
+            if k == 500001 {
                 println!(
-                    "{} {:?} {:?} {:?}",
+                    "{} {:?} {:?} {:?} {:?} {:?} {:?}",
                     k,
                     self.hlcs.slice(s![k, .., ..]),
                     self.noisiness_indices.slice(s![k, ..]),
-                    self.ema_alphas
+                    self.ema_alphas,
+                    self.exchange_params_list,
+                    self.bot_params_all,
+                    self.actives,
                 );
             }
             if k % 100000 == 0 {
                 println!(
-                    "{} {:?} {:?} {:?}",
+                    "{} {:?} {:?} {:?} {:?}",
                     k,
                     self.hlcs.slice(s![k, .., ..]),
                     self.noisiness_indices.slice(s![k, ..]),
-                    self.emas
+                    self.emas,
+                    self.actives,
                 );
             }
+            let any_fill = false;
             self.update_emas(k);
+            self.update_actives(k);
+            self.update_open_orders(k, any_fill);
         }
     }
 
@@ -86,6 +122,52 @@ impl Backtest {
             (self.bot_params_all.long.ema_span0 * self.bot_params_all.long.ema_span1).sqrt(),
         ];
         ema_spans_long.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    }
+
+    fn update_actives(&mut self, k: usize) {
+        if self.positions.long.len() < self.bot_params_all.long.n_positions {
+            // there are free slots
+            if !self.actives.long.is_empty() {
+                self.actives.long.clear();
+            }
+            for &market_idx in self.positions.long.keys() {
+                self.actives.long.insert(market_idx);
+            }
+            // Adding additional markets based on noisiness_indices until reaching the limit
+            for &market_idx in self.noisiness_indices.row(k).iter() {
+                if self.actives.long.len() < self.bot_params_all.long.n_positions {
+                    self.actives.long.insert(market_idx as usize);
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if self.positions.short.len() < self.bot_params_all.short.n_positions {
+            // there are free slots
+            if !self.actives.short.is_empty() {
+                self.actives.short.clear();
+            }
+            for &market_idx in self.positions.short.keys() {
+                self.actives.short.insert(market_idx);
+            }
+            // Adding additional markets based on noisiness_indices until reaching the limit
+            for &market_idx in self.noisiness_indices.row(k).iter() {
+                if self.actives.short.len() < self.bot_params_all.short.n_positions {
+                    self.actives.short.insert(market_idx as usize);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    fn update_open_orders(&mut self, k: usize, any_fill: bool) {
+        if any_fill {
+            // update all open orders
+        } else {
+            // update only EMA based orders and trailing orders
+        }
     }
 
     #[inline]

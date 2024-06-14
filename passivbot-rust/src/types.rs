@@ -1,5 +1,6 @@
 use std::fmt;
 
+#[derive(Debug)]
 pub struct ExchangeParams {
     pub qty_step: f64,
     pub price_step: f64,
@@ -20,6 +21,7 @@ impl Default for ExchangeParams {
     }
 }
 
+#[derive(Default, Debug)]
 pub struct Position {
     pub size: f64,
     pub price: f64,
@@ -60,13 +62,13 @@ pub struct StateParams {
     pub ema_bands: EMABands,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct BotParamsAll {
     pub long: BotParams,
     pub short: BotParams,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct BotParams {
     pub close_grid_markup_range: f64,
     pub close_grid_min_markup: f64,

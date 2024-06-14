@@ -10,7 +10,7 @@ use ndarray::{Array2, ArrayBase, ArrayD};
 use numpy::{IntoPyArray, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 use pyo3::wrap_pyfunction;
 
 #[pyfunction]
@@ -18,6 +18,7 @@ pub fn run_backtest(
     hlcs: PyReadonlyArray3<f64>,
     noisiness_indices: &PyAny,
     bot_params_all_dict: &PyDict,
+    exchange_params_list: &PyAny,
 ) -> PyResult<()> {
     let hlcs_rust = hlcs.as_array();
 
@@ -34,9 +35,47 @@ pub fn run_backtest(
         };
 
     let bot_params_all = bot_params_all_from_dict(bot_params_all_dict)?;
-    let mut backtest = Backtest::new(hlcs_rust.to_owned(), noisiness_indices_rust, bot_params_all);
+    // convert exchange_params_dict to Vector<ExchangeParams>
+    // the python type is list of dicts: [{str: float}]
+    let exchange_params = {
+        let mut params_vec = Vec::new();
+        if let Ok(py_list) = exchange_params_list.downcast::<PyList>() {
+            for py_dict in py_list.iter() {
+                if let Ok(dict) = py_dict.downcast::<PyDict>() {
+                    let params = exchange_params_from_dict(dict)?;
+                    params_vec.push(params);
+                } else {
+                    return Err(PyValueError::new_err(
+                        "Unsupported data type in exchange_params_list",
+                    ));
+                }
+            }
+        } else {
+            return Err(PyValueError::new_err(
+                "Unsupported data type for exchange_params_list",
+            ));
+        }
+        params_vec
+    };
+
+    let mut backtest = Backtest::new(
+        hlcs_rust.to_owned(),
+        noisiness_indices_rust,
+        bot_params_all,
+        exchange_params,
+    );
     backtest.run();
     Ok(())
+}
+
+fn exchange_params_from_dict(dict: &PyDict) -> PyResult<ExchangeParams> {
+    Ok(ExchangeParams {
+        qty_step: extract_value(dict, "qty_step").unwrap_or_default(),
+        price_step: extract_value(dict, "price_step").unwrap_or_default(),
+        min_qty: extract_value(dict, "min_qty").unwrap_or_default(),
+        min_cost: extract_value(dict, "min_cost").unwrap_or_default(),
+        c_mult: extract_value(dict, "c_mult").unwrap_or_default(),
+    })
 }
 
 fn bot_params_all_from_dict(dict: &PyDict) -> PyResult<BotParamsAll> {
