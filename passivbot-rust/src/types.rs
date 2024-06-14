@@ -21,6 +21,13 @@ impl Default for ExchangeParams {
     }
 }
 
+#[derive(Clone)]
+pub struct BacktestParams {
+    pub starting_balance: f64,
+    pub maker_fee: f64,
+    pub symbols: Vec<String>,
+}
+
 #[derive(Default, Debug)]
 pub struct Position {
     pub size: f64,
@@ -63,7 +70,7 @@ pub struct StateParams {
 }
 
 #[derive(Clone, Default, Debug)]
-pub struct BotParamsAll {
+pub struct BotParamsPair {
     pub long: BotParams,
     pub short: BotParams,
 }

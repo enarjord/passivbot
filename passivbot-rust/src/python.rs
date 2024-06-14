@@ -1,10 +1,12 @@
 use crate::backtest::Backtest;
 use crate::grids::{
-    calc_next_close, calc_next_entry, calc_next_grid_close_long, calc_next_grid_entry_long,
+    calc_next_close_long, calc_next_entry_long, calc_next_grid_close_long,
+    calc_next_grid_entry_long,
 };
 use crate::trailing::{calc_trailing_close_long, calc_trailing_entry_long};
 use crate::types::{
-    BotParams, BotParamsAll, EMABands, ExchangeParams, Order, OrderBook, Position, StateParams,
+    BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Order, OrderBook, Position,
+    StateParams,
 };
 use ndarray::{Array2, ArrayBase, ArrayD};
 use numpy::{IntoPyArray, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3};
@@ -17,8 +19,9 @@ use pyo3::wrap_pyfunction;
 pub fn run_backtest(
     hlcs: PyReadonlyArray3<f64>,
     noisiness_indices: &PyAny,
-    bot_params_all_dict: &PyDict,
+    bot_params_pair_dict: &PyDict,
     exchange_params_list: &PyAny,
+    backtest_params_dict: &PyDict,
 ) -> PyResult<()> {
     let hlcs_rust = hlcs.as_array();
 
@@ -34,7 +37,7 @@ pub fn run_backtest(
             ));
         };
 
-    let bot_params_all = bot_params_all_from_dict(bot_params_all_dict)?;
+    let bot_params_pair = bot_params_pair_from_dict(bot_params_pair_dict)?;
     // convert exchange_params_dict to Vector<ExchangeParams>
     // the python type is list of dicts: [{str: float}]
     let exchange_params = {
@@ -58,14 +61,25 @@ pub fn run_backtest(
         params_vec
     };
 
+    let backtest_params = backtest_params_from_dict(backtest_params_dict)?;
+
     let mut backtest = Backtest::new(
         hlcs_rust.to_owned(),
         noisiness_indices_rust,
-        bot_params_all,
+        bot_params_pair,
         exchange_params,
+        &backtest_params,
     );
     backtest.run();
     Ok(())
+}
+
+fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
+    Ok(BacktestParams {
+        starting_balance: extract_value(dict, "starting_balance").unwrap_or_default(),
+        maker_fee: extract_value(dict, "maker_fee").unwrap_or_default(),
+        symbols: extract_value(dict, "symbols").unwrap_or_default(),
+    })
 }
 
 fn exchange_params_from_dict(dict: &PyDict) -> PyResult<ExchangeParams> {
@@ -78,8 +92,8 @@ fn exchange_params_from_dict(dict: &PyDict) -> PyResult<ExchangeParams> {
     })
 }
 
-fn bot_params_all_from_dict(dict: &PyDict) -> PyResult<BotParamsAll> {
-    Ok(BotParamsAll {
+fn bot_params_pair_from_dict(dict: &PyDict) -> PyResult<BotParamsPair> {
+    Ok(BotParamsPair {
         long: bot_params_from_dict(extract_value(dict, "long")?)?,
         short: bot_params_from_dict(extract_value(dict, "short")?)?,
     })
@@ -326,7 +340,7 @@ pub fn calc_trailing_entry_long_py(
 }
 
 #[pyfunction]
-pub fn calc_next_entry_py(
+pub fn calc_next_entry_long_py(
     qty_step: f64,
     price_step: f64,
     min_qty: f64,
@@ -385,7 +399,7 @@ pub fn calc_next_entry_py(
         price: position_price,
     };
 
-    let next_entry = calc_next_entry(
+    let next_entry = calc_next_entry_long(
         &exchange_params,
         &state_params,
         &bot_params,
@@ -402,7 +416,7 @@ pub fn calc_next_entry_py(
 }
 
 #[pyfunction]
-pub fn calc_next_close_py(
+pub fn calc_next_close_long_py(
     qty_step: f64,
     price_step: f64,
     min_qty: f64,
@@ -452,7 +466,7 @@ pub fn calc_next_close_py(
         price: position_price,
     };
 
-    let next_entry = calc_next_close(
+    let next_entry = calc_next_close_long(
         &exchange_params,
         &state_params,
         &bot_params,

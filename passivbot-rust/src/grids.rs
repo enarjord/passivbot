@@ -323,7 +323,7 @@ fn calc_reentry_order(
     }
 }
 
-pub fn calc_next_close(
+pub fn calc_next_close_long(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
@@ -407,7 +407,7 @@ pub fn calc_next_close(
     calc_next_grid_close_long(&exchange_params, &state_params, &bot_params, &position)
 }
 
-pub fn calc_next_entry(
+pub fn calc_next_entry_long(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
