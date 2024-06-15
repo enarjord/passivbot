@@ -170,9 +170,10 @@ impl fmt::Display for OrderType {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Fill {
     pub index: usize,
+    pub symbol: String,
     pub pnl: f64,
     pub fee_paid: f64,
     pub balance: f64,

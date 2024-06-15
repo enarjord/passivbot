@@ -138,7 +138,7 @@ impl Backtest {
         }
     }
 
-    pub fn run(&mut self) {
+    pub fn run(&mut self) -> Vec<Fill> {
         for idx in 0..self.n_markets {
             self.trailing_prices
                 .long
@@ -148,24 +148,25 @@ impl Backtest {
                 .insert(idx, TrailingPriceBundle::default());
         }
         for k in 1..self.hlcs.shape()[0] {
-            if k % 100000 == 0 {
-                println!("k           {:?}", k);
-                println!("hlcs        {:?}", self.hlcs.slice(s![k, .., ..]));
-                println!("noise       {:?}", self.noisiness_indices.slice(s![k, ..]));
-                println!("emas        {:?}", self.emas);
-                println!("actvs       {:?}", self.actives);
-                println!("oos         {:?}", self.open_orders);
-                if let Some(last_fill) = self.fills.last() {
-                    println!("Last fill: {:?}", last_fill);
-                } else {
-                    println!("No fills available.");
-                }
-            }
+            //if k % 100000 == 0 {
+            //    println!("k           {:?}", k);
+            //    println!("hlcs        {:?}", self.hlcs.slice(s![k, .., ..]));
+            //    println!("noise       {:?}", self.noisiness_indices.slice(s![k, ..]));
+            //    println!("emas        {:?}", self.emas);
+            //    println!("actvs       {:?}", self.actives);
+            //    println!("oos         {:?}", self.open_orders);
+            //    if let Some(last_fill) = self.fills.last() {
+            //        println!("Last fill: {:?}", last_fill);
+            //    } else {
+            //        println!("No fills available.");
+            //    }
+            //}
             let any_fill = false;
             self.check_for_fills(k);
             self.update_emas(k);
             self.update_open_orders(k, any_fill);
         }
+        self.fills.clone()
     }
 
     fn prepare_emas(&self) {
@@ -222,6 +223,7 @@ impl Backtest {
                 && self.hlcs[[k, idx, HIGH]] > self.open_orders.long[&idx].close.price
             {
                 // long close fill
+
                 let mut new_psize = round_(
                     self.positions.long[&idx].size + self.open_orders.long[&idx].close.qty,
                     self.exchange_params_list[idx].qty_step,
@@ -261,6 +263,7 @@ impl Backtest {
                 }
                 self.fills.push(Fill {
                     index: k,                                                         // index minute
+                    symbol: self.backtest_params.symbols[idx].clone(),                // symbol
                     pnl,                                                 // realized pnl
                     fee_paid,                                            // fee paid
                     balance: self.balance,                               // balance after fill
@@ -298,6 +301,7 @@ impl Backtest {
                 self.positions.long.get_mut(&idx).unwrap().price = new_pprice;
                 self.fills.push(Fill {
                     index: k,                                                         // index minute
+                    symbol: self.backtest_params.symbols[idx].clone(),                // symbol
                     pnl: 0.0,                                            // realized pnl
                     fee_paid,                                            // fee paid
                     balance: self.balance,                               // balance after fill
@@ -322,17 +326,17 @@ impl Backtest {
 
     fn update_open_orders(&mut self, k: usize, any_fill: bool) {
         // update all orders every time (optimizations later)
-        if self.positions.long.len() < self.bot_params_pair.long.n_positions {
-            // there are empty slots
-            self.update_actives_long(k);
-        }
-        // todo: remove open orders from inactive symbols
+        //if self.positions.long.len() < self.bot_params_pair.long.n_positions {
+        //    // there are empty slots
+        //    self.update_actives_long(k);
+        //}
+
+        self.update_actives_long(k);
 
         // Remove open orders from inactive symbols
-        let active_set: std::collections::HashSet<_> = self.actives.long.iter().cloned().collect();
         self.open_orders
             .long
-            .retain(|&idx, _| active_set.contains(&idx));
+            .retain(|&idx, _| self.actives.long.contains(&idx));
 
         let default_position = Position::default();
         for &idx in &self.actives.long {

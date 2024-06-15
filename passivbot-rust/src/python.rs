@@ -22,7 +22,7 @@ pub fn run_backtest(
     bot_params_pair_dict: &PyDict,
     exchange_params_list: &PyAny,
     backtest_params_dict: &PyDict,
-) -> PyResult<()> {
+) -> PyResult<Py<PyArray2<PyObject>>> {
     let hlcs_rust = hlcs.as_array();
 
     let noisiness_indices_rust: Array2<i32> =
@@ -70,8 +70,26 @@ pub fn run_backtest(
         exchange_params,
         &backtest_params,
     );
-    backtest.run();
-    Ok(())
+    let fills = backtest.run();
+    // Convert fills to a 2D array with mixed types
+    Python::with_gil(|py| {
+        let mut py_fills = Array2::from_elem((fills.len(), 10), py.None());
+
+        for (i, fill) in fills.iter().enumerate() {
+            py_fills[(i, 0)] = fill.index.into_py(py);
+            py_fills[(i, 1)] = <String as Clone>::clone(&fill.symbol).into_py(py);
+            py_fills[(i, 2)] = fill.pnl.into_py(py);
+            py_fills[(i, 3)] = fill.fee_paid.into_py(py);
+            py_fills[(i, 4)] = fill.balance.into_py(py);
+            py_fills[(i, 5)] = fill.fill_qty.into_py(py);
+            py_fills[(i, 6)] = fill.fill_price.into_py(py);
+            py_fills[(i, 7)] = fill.position_size.into_py(py);
+            py_fills[(i, 8)] = fill.position_price.into_py(py);
+            py_fills[(i, 9)] = fill.order_type.to_string().into_py(py);
+        }
+
+        Ok(py_fills.into_pyarray(py).to_owned())
+    })
 }
 
 fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
