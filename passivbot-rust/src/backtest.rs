@@ -3,7 +3,9 @@ use crate::types::{
     BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Fill, Order, OrderBook,
     Position, StateParams,
 };
-use crate::utils::{calc_pnl_long, calc_pnl_short, cost_to_qty, qty_to_cost, round_};
+use crate::utils::{
+    calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, cost_to_qty, qty_to_cost, round_,
+};
 use ndarray::s;
 use ndarray::{Array1, Array2, Array3};
 use std::collections::{HashMap, HashSet};
@@ -251,12 +253,12 @@ impl Backtest {
                 self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
                 self.balance += pnl + fee_paid;
 
+                let current_pprice = self.positions.long[&idx].price;
                 if new_psize == 0.0 {
                     self.positions.long.remove(&idx);
                 } else {
                     self.positions.long.get_mut(&idx).unwrap().size = new_psize;
                 }
-
                 self.fills.push(Fill {
                     index: k,                                                         // index minute
                     pnl,                                                 // realized pnl
@@ -264,12 +266,58 @@ impl Backtest {
                     balance: self.balance,                               // balance after fill
                     fill_qty: self.open_orders.long[&idx].close.qty,     // fill qty
                     fill_price: self.open_orders.long[&idx].close.price, // fill price
-                    position_size: self.positions.long[&idx].size,       // psize after fill
-                    position_price: self.positions.long[&idx].price,     // pprice after fill
+                    position_size: new_psize,                            // psize after fill
+                    position_price: current_pprice,                      // pprice after fill
                     order_type: self.open_orders.long[&idx].close.order_type.clone(), // fill type
                 });
+                self.reset_trailing_prices_long(idx);
+            }
+            if self.open_orders.long[&idx].entry.qty != 0.0
+                && self.hlcs[[k, idx, LOW]] < self.open_orders.long[&idx].entry.price
+            {
+                // long entry fill
+                let fee_paid = -qty_to_cost(
+                    self.open_orders.long[&idx].entry.qty,
+                    self.open_orders.long[&idx].entry.price,
+                    self.exchange_params_list[idx].c_mult,
+                ) * self.backtest_params.maker_fee;
+                self.balance += fee_paid;
+                let position_entry = self
+                    .positions
+                    .long
+                    .entry(idx)
+                    .or_insert(Position::default());
+                let (new_psize, new_pprice) = calc_new_psize_pprice(
+                    position_entry.size,
+                    position_entry.price,
+                    self.open_orders.long[&idx].entry.qty,
+                    self.open_orders.long[&idx].entry.price,
+                    self.exchange_params_list[idx].qty_step,
+                );
+                self.positions.long.get_mut(&idx).unwrap().size = new_psize;
+                self.positions.long.get_mut(&idx).unwrap().price = new_pprice;
+                self.fills.push(Fill {
+                    index: k,                                                         // index minute
+                    pnl: 0.0,                                            // realized pnl
+                    fee_paid,                                            // fee paid
+                    balance: self.balance,                               // balance after fill
+                    fill_qty: self.open_orders.long[&idx].entry.qty,     // fill qty
+                    fill_price: self.open_orders.long[&idx].entry.price, // fill price
+                    position_size: self.positions.long[&idx].size,       // psize after fill
+                    position_price: self.positions.long[&idx].price,     // pprice after fill
+                    order_type: self.open_orders.long[&idx].entry.order_type.clone(), // fill type
+                });
+                self.reset_trailing_prices_long(idx);
             }
         }
+    }
+
+    fn reset_trailing_prices_long(&mut self, idx: usize) {
+        let trailing_price_bundle = self.trailing_prices.long.entry(idx).or_default();
+        trailing_price_bundle.min_price_since_open = f64::INFINITY;
+        trailing_price_bundle.max_price_since_min = 0.0;
+        trailing_price_bundle.max_price_since_open = 0.0;
+        trailing_price_bundle.min_price_since_max = f64::INFINITY;
     }
 
     fn update_open_orders(&mut self, k: usize, any_fill: bool) {
@@ -278,6 +326,14 @@ impl Backtest {
             // there are empty slots
             self.update_actives_long(k);
         }
+        // todo: remove open orders from inactive symbols
+
+        // Remove open orders from inactive symbols
+        let active_set: std::collections::HashSet<_> = self.actives.long.iter().cloned().collect();
+        self.open_orders
+            .long
+            .retain(|&idx, _| active_set.contains(&idx));
+
         let default_position = Position::default();
         for &idx in &self.actives.long {
             let close_price = self.hlcs[[k, idx, CLOSE]];
