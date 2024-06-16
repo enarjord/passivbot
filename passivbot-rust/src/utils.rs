@@ -55,20 +55,6 @@ pub fn qty_to_cost(qty: f64, price: f64, c_mult: f64) -> f64 {
     (qty.abs() * price) * c_mult
 }
 
-pub fn calc_min_entry_qty(initial_entry_price: f64, exchange_params: &ExchangeParams) -> f64 {
-    f64::max(
-        exchange_params.min_qty,
-        round_up(
-            cost_to_qty(
-                exchange_params.min_cost,
-                initial_entry_price,
-                exchange_params.c_mult,
-            ),
-            exchange_params.qty_step,
-        ),
-    )
-}
-
 pub fn calc_wallet_exposure(
     c_mult: f64,
     balance: f64,
@@ -153,4 +139,39 @@ pub fn calc_pnl_long(entry_price: f64, close_price: f64, qty: f64, c_mult: f64) 
 
 pub fn calc_pnl_short(entry_price: f64, close_price: f64, qty: f64, c_mult: f64) -> f64 {
     qty.abs() * c_mult * (entry_price - close_price)
+}
+
+pub fn calc_pprice_diff_int(pside: i32, pprice: f64, price: f64) -> f64 {
+    match pside {
+        0 => {
+            // long
+            if pprice > 0.0 {
+                1.0 - price / pprice
+            } else {
+                0.0
+            }
+        }
+        1 => {
+            // short
+            if pprice > 0.0 {
+                price / pprice - 1.0
+            } else {
+                0.0
+            }
+        }
+        _ => panic!("unknown pside {}", pside),
+    }
+}
+
+pub fn calc_auto_unstuck_allowance(
+    balance: f64,
+    loss_allowance_pct: f64,
+    pnl_cumsum_max: f64,
+    pnl_cumsum_last: f64,
+) -> f64 {
+    // allow up to 1% drop from balance peak for auto unstuck
+
+    let balance_peak = balance + (pnl_cumsum_max - pnl_cumsum_last);
+    let drop_since_peak_pct = balance / balance_peak - 1.0;
+    (balance_peak * (loss_allowance_pct + drop_since_peak_pct)).max(0.0)
 }

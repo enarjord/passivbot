@@ -1,16 +1,16 @@
 mod backtest;
-mod grids;
+mod closes;
+mod entries;
 mod python;
-mod trailing;
 mod types;
 mod utils;
 
 use backtest::*;
-use grids::*;
+use closes::*;
+use entries::*;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use python::*;
-use trailing::*;
 use utils::*;
 
 /// A Python module implemented in Rust.

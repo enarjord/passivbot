@@ -1,10 +1,12 @@
-use crate::grids::{calc_next_close_long, calc_next_entry_long};
+use crate::closes::calc_next_close_long;
+use crate::entries::calc_next_entry_long;
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Fill, Order, OrderBook,
     Position, StateParams,
 };
 use crate::utils::{
-    calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, cost_to_qty, qty_to_cost, round_,
+    calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
+    calc_pprice_diff_int, calc_wallet_exposure, cost_to_qty, qty_to_cost, round_, round_up,
 };
 use ndarray::s;
 use ndarray::{Array1, Array2, Array3};
@@ -53,6 +55,12 @@ pub struct OpenOrderBundle {
 
 #[derive(Default, Debug)]
 pub struct Actives {
+    long: HashSet<usize>,
+    short: HashSet<usize>,
+}
+
+#[derive(Default, Debug)]
+pub struct IsStuck {
     long: HashSet<usize>,
     short: HashSet<usize>,
 }
@@ -419,6 +427,72 @@ impl Backtest {
             }
         }
     }
+
+    fn calc_unstuck_order(&mut self, k: usize) {
+        // idx, pside long=0/short=1, pprice_diff
+        let mut stuck_positions = Vec::<(usize, usize, f64)>::new();
+        for idx in self.positions.long.keys() {
+            let wallet_exposure = calc_wallet_exposure(
+                self.exchange_params_list[*idx].c_mult,
+                self.balance,
+                self.positions.long[idx].size,
+                self.positions.long[idx].price,
+            );
+            if wallet_exposure / self.bot_params_pair.long.wallet_exposure_limit
+                > self.bot_params_pair.long.unstuck_threshold
+            {
+                let pprice_diff = calc_pprice_diff_int(
+                    0,
+                    self.positions.long[idx].price,
+                    self.hlcs[[k, *idx, CLOSE]],
+                );
+                stuck_positions.push((*idx, 0, pprice_diff));
+            }
+        }
+        for idx in self.positions.short.keys() {
+            let wallet_exposure = calc_wallet_exposure(
+                self.exchange_params_list[*idx].c_mult,
+                self.balance,
+                self.positions.short[idx].size,
+                self.positions.short[idx].price,
+            );
+            if wallet_exposure / self.bot_params_pair.short.wallet_exposure_limit
+                > self.bot_params_pair.short.unstuck_threshold
+            {
+                let pprice_diff = calc_pprice_diff_int(
+                    1,
+                    self.positions.short[idx].price,
+                    self.hlcs[[k, *idx, CLOSE]],
+                );
+                stuck_positions.push((*idx, 1, pprice_diff));
+            }
+        }
+        if stuck_positions.is_empty() {
+            return;
+        }
+        stuck_positions.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+        let (idx, pside, pprice_diff) = stuck_positions[0];
+        if pside == 0 {
+            let auto_unstuck_allowance = calc_auto_unstuck_allowance(
+                self.balance,
+                self.bot_params_pair.long.unstuck_loss_allowance_pct,
+                self.pnl_cumsum_max,
+                self.pnl_cumsum_running,
+            );
+            if auto_unstuck_allowance <= 0.0 {
+                return;
+            }
+            //let close_price = f64::max(self.hlcs[[k, idx, CLOSE]], round_up());
+            let close_qty = 0.0;
+        } else {
+            let auto_unstuck_allowance = calc_auto_unstuck_allowance(
+                self.balance,
+                self.bot_params_pair.short.unstuck_loss_allowance_pct,
+                self.pnl_cumsum_max,
+                self.pnl_cumsum_running,
+            );
+        }
+    }
 }
 
 fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
@@ -453,3 +527,72 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
         },
     }
 }
+/*
+@njit
+def calc_unstuck_order(
+    c_mults,
+    qty_steps,
+    price_steps,
+    min_costs,
+    min_qtys,
+    flc,
+    wallet_exposure_limit_long,
+    wallet_exposure_limit_short,
+    balance,
+    drop_since_peak_abs,
+    is_stuck_long,
+    is_stuck_short,
+    positions_long,
+    positions_short,
+    emas_long,
+    emas_short,
+    hlcs_k,
+) -> (int, int, (float, float, str)):
+    # returns (pside: int, idx: int, (qty: float, price: float, type: str))
+    if not (is_stuck_long or is_stuck_short):
+        return (0, 0, (0.0, 0.0, ""))
+    inverse = False
+    pprice_diffs = []
+    for idx in is_stuck_long:
+        pprice_diff = calc_pprice_diff_int(0, positions_long[idx][1], hlcs_k[idx][2])
+        pprice_diffs.append((pprice_diff, 0, idx))
+    for idx in is_stuck_short:
+        pprice_diff = calc_pprice_diff_int(1, positions_short[idx][1], hlcs_k[idx][2])
+        pprice_diffs.append((pprice_diff, 1, idx))
+    pprice_diff, pside, idx = sorted(pprice_diffs)[0]
+    AU_allowance = calc_AU_allowance(
+        np.array([0.0]),
+        balance,
+        loss_allowance_pct=flc[pside][14],
+        drop_since_peak_abs=drop_since_peak_abs,
+    )
+    if AU_allowance <= 0.0:
+        return (0, 0, (0.0, 0.0, ""))
+    if pside == 0:
+        close_price = max(
+            hlcs_k[idx][2], round_up(max(emas_long[idx]) * (1.0 + flc[0][13]), price_steps[idx])
+        )
+        close_qty = -min(
+            positions_long[idx][0],
+            max(
+                calc_min_entry_qty(
+                    close_price, inverse, c_mults[idx], qty_steps[idx], min_qtys[idx], min_costs[idx]
+                ),
+                cost_to_qty(
+                    balance * wallet_exposure_limit_long * flc[0][12],
+                    close_price,
+                    inverse,
+                    c_mults[idx],
+                ),
+            ),
+        )
+        close_type = "unstuck_close_long"
+    else:
+        close_price = min(
+            hlcs_k[idx][2], round_dn(min(emas_short[idx]) * (1.0 - flc[1][13]), price_steps[idx])
+        )
+        close_qty = 0.01
+        close_type = "unstuck_close_short"
+
+    return (pside, idx, (close_qty, close_price, close_type))
+*/

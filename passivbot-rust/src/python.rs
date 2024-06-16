@@ -1,9 +1,6 @@
 use crate::backtest::Backtest;
-use crate::grids::{
-    calc_next_close_long, calc_next_entry_long, calc_next_grid_close_long,
-    calc_next_grid_entry_long,
-};
-use crate::trailing::{calc_trailing_close_long, calc_trailing_entry_long};
+use crate::closes::{calc_next_close_long, calc_next_grid_close_long, calc_trailing_close_long};
+use crate::entries::{calc_next_entry_long, calc_next_grid_entry_long, calc_trailing_entry_long};
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Order, OrderBook, Position,
     StateParams,
