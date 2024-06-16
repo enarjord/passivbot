@@ -1,4 +1,5 @@
-use crate::closes::calc_next_close_long;
+use crate::closes::{calc_next_close_long, determine_position_for_unstucking};
+use crate::constants::{CLOSE, HIGH, LOW};
 use crate::entries::calc_next_entry_long;
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Fill, Order, OrderBook,
@@ -11,10 +12,6 @@ use crate::utils::{
 use ndarray::s;
 use ndarray::{Array1, Array2, Array3};
 use std::collections::{HashMap, HashSet};
-
-pub const HIGH: usize = 0;
-pub const LOW: usize = 1;
-pub const CLOSE: usize = 2;
 
 #[derive(Clone, Default, Copy, Debug)]
 pub struct EmaAlphas {
@@ -347,6 +344,14 @@ impl Backtest {
             .retain(|&idx, _| self.actives.long.contains(&idx));
 
         let default_position = Position::default();
+        let (unstucking_idx, unstucking_pside) = determine_position_for_unstucking(
+            &self.positions.long,
+            &self.positions.short,
+            &self.exchange_params_list,
+            self.balance,
+            &self.bot_params_pair,
+            &self.hlcs.slice(s![k, .., ..]).to_owned(),
+        );
         for &idx in &self.actives.long {
             let close_price = self.hlcs[[k, idx, CLOSE]];
             let state_params = StateParams {
@@ -425,72 +430,6 @@ impl Backtest {
                 emas.long[z] = close_price * long_alphas[z] + emas.long[z] * long_alphas_inv[z];
                 emas.short[z] = close_price * short_alphas[z] + emas.short[z] * short_alphas_inv[z];
             }
-        }
-    }
-
-    fn calc_unstuck_order(&mut self, k: usize) {
-        // idx, pside long=0/short=1, pprice_diff
-        let mut stuck_positions = Vec::<(usize, usize, f64)>::new();
-        for idx in self.positions.long.keys() {
-            let wallet_exposure = calc_wallet_exposure(
-                self.exchange_params_list[*idx].c_mult,
-                self.balance,
-                self.positions.long[idx].size,
-                self.positions.long[idx].price,
-            );
-            if wallet_exposure / self.bot_params_pair.long.wallet_exposure_limit
-                > self.bot_params_pair.long.unstuck_threshold
-            {
-                let pprice_diff = calc_pprice_diff_int(
-                    0,
-                    self.positions.long[idx].price,
-                    self.hlcs[[k, *idx, CLOSE]],
-                );
-                stuck_positions.push((*idx, 0, pprice_diff));
-            }
-        }
-        for idx in self.positions.short.keys() {
-            let wallet_exposure = calc_wallet_exposure(
-                self.exchange_params_list[*idx].c_mult,
-                self.balance,
-                self.positions.short[idx].size,
-                self.positions.short[idx].price,
-            );
-            if wallet_exposure / self.bot_params_pair.short.wallet_exposure_limit
-                > self.bot_params_pair.short.unstuck_threshold
-            {
-                let pprice_diff = calc_pprice_diff_int(
-                    1,
-                    self.positions.short[idx].price,
-                    self.hlcs[[k, *idx, CLOSE]],
-                );
-                stuck_positions.push((*idx, 1, pprice_diff));
-            }
-        }
-        if stuck_positions.is_empty() {
-            return;
-        }
-        stuck_positions.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
-        let (idx, pside, pprice_diff) = stuck_positions[0];
-        if pside == 0 {
-            let auto_unstuck_allowance = calc_auto_unstuck_allowance(
-                self.balance,
-                self.bot_params_pair.long.unstuck_loss_allowance_pct,
-                self.pnl_cumsum_max,
-                self.pnl_cumsum_running,
-            );
-            if auto_unstuck_allowance <= 0.0 {
-                return;
-            }
-            //let close_price = f64::max(self.hlcs[[k, idx, CLOSE]], round_up());
-            let close_qty = 0.0;
-        } else {
-            let auto_unstuck_allowance = calc_auto_unstuck_allowance(
-                self.balance,
-                self.bot_params_pair.short.unstuck_loss_allowance_pct,
-                self.pnl_cumsum_max,
-                self.pnl_cumsum_running,
-            );
         }
     }
 }
