@@ -1,3 +1,4 @@
+use crate::constants::{CLOSE, LONG, NO_POS, SHORT};
 use crate::types::ExchangeParams;
 use pyo3::prelude::*;
 
@@ -141,9 +142,9 @@ pub fn calc_pnl_short(entry_price: f64, close_price: f64, qty: f64, c_mult: f64)
     qty.abs() * c_mult * (entry_price - close_price)
 }
 
-pub fn calc_pprice_diff_int(pside: i32, pprice: f64, price: f64) -> f64 {
+pub fn calc_pprice_diff_int(pside: usize, pprice: f64, price: f64) -> f64 {
     match pside {
-        0 => {
+        LONG => {
             // long
             if pprice > 0.0 {
                 1.0 - price / pprice
@@ -151,7 +152,7 @@ pub fn calc_pprice_diff_int(pside: i32, pprice: f64, price: f64) -> f64 {
                 0.0
             }
         }
-        1 => {
+        SHORT => {
             // short
             if pprice > 0.0 {
                 price / pprice - 1.0

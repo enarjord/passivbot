@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 
 #[derive(Debug)]
@@ -32,6 +33,12 @@ pub struct BacktestParams {
 pub struct Position {
     pub size: f64,
     pub price: f64,
+}
+
+#[derive(Debug, Default)]
+pub struct Positions {
+    pub long: HashMap<usize, Position>,
+    pub short: HashMap<usize, Position>,
 }
 
 #[derive(Debug, Default, Clone)]

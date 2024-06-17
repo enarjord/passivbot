@@ -1,10 +1,14 @@
-use crate::constants::CLOSE;
+use crate::constants::{CLOSE, LONG, NO_POS, SHORT};
 use crate::entries::calc_min_entry_qty;
 use crate::types::{
-    BotParams, BotParamsPair, ExchangeParams, Order, OrderType, Position, StateParams,
+    BotParams, BotParamsPair, EMABands, ExchangeParams, Order, OrderType, Position, Positions,
+    StateParams,
 };
-use crate::utils::{calc_pprice_diff_int, calc_wallet_exposure, cost_to_qty, round_up};
-use ndarray::Array2;
+use crate::utils::{
+    calc_auto_unstuck_allowance, calc_pprice_diff_int, calc_wallet_exposure, cost_to_qty, round_dn,
+    round_up,
+};
+use ndarray::{Array1, Array2};
 use std::collections::HashMap;
 
 pub fn calc_next_grid_close_long(
@@ -203,76 +207,97 @@ pub fn calc_trailing_close_long(
 }
 
 pub fn determine_position_for_unstucking(
-    positions_long: &HashMap<usize, Position>,
-    positions_short: &HashMap<usize, Position>,
+    positions: &Positions,
     exchange_params_list: &[ExchangeParams],
     balance: f64,
     bot_params_pair: &BotParamsPair,
     hlcs_k: &Array2<f64>,
-) -> (isize, isize) {
+) -> (usize, usize) {
     let mut stuck_positions = Vec::<(usize, usize, f64)>::new();
-
-    for idx in positions_long.keys() {
+    for idx in positions.long.keys() {
         let wallet_exposure = calc_wallet_exposure(
             exchange_params_list[*idx].c_mult,
             balance,
-            positions_long[idx].size,
-            positions_long[idx].price,
+            positions.long[idx].size,
+            positions.long[idx].price,
         );
         if wallet_exposure / bot_params_pair.long.wallet_exposure_limit
             > bot_params_pair.long.unstuck_threshold
+            && hlcs_k[[*idx, CLOSE]] < positions.long[idx].price
         {
             let pprice_diff =
-                calc_pprice_diff_int(0, positions_long[idx].price, hlcs_k[[*idx, CLOSE]]);
-            stuck_positions.push((*idx, 0, pprice_diff));
+                calc_pprice_diff_int(LONG, positions.long[idx].price, hlcs_k[[*idx, CLOSE]]);
+            stuck_positions.push((*idx, LONG, pprice_diff));
         }
     }
-
-    for idx in positions_short.keys() {
+    for idx in positions.short.keys() {
         let wallet_exposure = calc_wallet_exposure(
             exchange_params_list[*idx].c_mult,
             balance,
-            positions_short[idx].size,
-            positions_short[idx].price,
+            positions.short[idx].size,
+            positions.short[idx].price,
         );
         if wallet_exposure / bot_params_pair.short.wallet_exposure_limit
             > bot_params_pair.short.unstuck_threshold
         {
             let pprice_diff =
-                calc_pprice_diff_int(1, positions_short[idx].price, hlcs_k[[*idx, CLOSE]]);
-            stuck_positions.push((*idx, 1, pprice_diff));
+                calc_pprice_diff_int(SHORT, positions.short[idx].price, hlcs_k[[*idx, CLOSE]]);
+            stuck_positions.push((*idx, SHORT, pprice_diff));
         }
     }
-
     if stuck_positions.is_empty() {
-        return (-1, -1);
+        return (NO_POS, NO_POS);
     }
-
     stuck_positions.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
     let (idx, pside, _pprice_diff) = stuck_positions[0];
-    (idx as isize, pside as isize)
+    (idx as usize, pside as usize)
 }
 
-pub fn calc_unstuck_close() {
-
-    //if pside == 0 {
-    //    let auto_unstuck_allowance = calc_auto_unstuck_allowance(
-    //        self.balance,
-    //        self.bot_params_pair.long.unstuck_loss_allowance_pct,
-    //        self.pnl_cumsum_max,
-    //        self.pnl_cumsum_running,
-    //    );
-    //    if auto_unstuck_allowance <= 0.0 {
-    //        return;
-    //    }
-    //    //let close_price = f64::max(self.hlcs[[k, idx, CLOSE]], round_up());
-    //    let close_qty = 0.0;
-    //} else {
-    //    let auto_unstuck_allowance = calc_auto_unstuck_allowance(
-    //        self.balance,
-    //        self.bot_params_pair.short.unstuck_loss_allowance_pct,
-    //        self.pnl_cumsum_max,
-    //        self.pnl_cumsum_running,
-    //    );
-    //}
+pub fn calc_unstuck_close_long(
+    exchange_params: &ExchangeParams,
+    bot_params: &BotParams,
+    hlcs_k_idx: &Array1<f64>,
+    ema_band_upper: f64,
+    position: &Position,
+    balance: f64,
+    pnl_cumsum_max: f64,
+    pnl_cumsum_last: f64,
+) -> Order {
+    let auto_unstuck_allowance = calc_auto_unstuck_allowance(
+        balance,
+        bot_params.unstuck_loss_allowance_pct,
+        pnl_cumsum_max,
+        pnl_cumsum_last,
+    );
+    if auto_unstuck_allowance <= 0.0 {
+        return Order::default();
+    }
+    let close_price = f64::max(
+        hlcs_k_idx[CLOSE],
+        round_up(
+            ema_band_upper * (1.0 + bot_params.unstuck_ema_dist),
+            exchange_params.price_step,
+        ),
+    );
+    let close_qty = -f64::min(
+        position.size,
+        f64::max(
+            calc_min_entry_qty(close_price, exchange_params),
+            round_dn(
+                cost_to_qty(
+                    balance * bot_params.wallet_exposure_limit * bot_params.unstuck_close_pct,
+                    close_price,
+                    exchange_params.c_mult,
+                ),
+                exchange_params.qty_step,
+            ),
+        ),
+    );
+    Order {
+        qty: close_qty,
+        price: close_price,
+        order_type: OrderType::CloseUnstuckLong,
+    }
 }
+
+pub fn calc_unstuck_close_short() {}

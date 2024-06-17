@@ -1,9 +1,12 @@
-use crate::closes::{calc_next_close_long, determine_position_for_unstucking};
-use crate::constants::{CLOSE, HIGH, LOW};
+use crate::closes::{
+    calc_next_close_long, calc_unstuck_close_long, calc_unstuck_close_short,
+    determine_position_for_unstucking,
+};
+use crate::constants::{CLOSE, HIGH, LONG, LOW, NO_POS, SHORT};
 use crate::entries::calc_next_entry_long;
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Fill, Order, OrderBook,
-    Position, StateParams,
+    Position, Positions, StateParams,
 };
 use crate::utils::{
     calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
@@ -29,12 +32,6 @@ pub struct Alphas {
 pub struct EMAs {
     pub long: [f64; 3],
     pub short: [f64; 3],
-}
-
-#[derive(Debug, Default)]
-pub struct Positions {
-    pub long: HashMap<usize, Position>,
-    pub short: HashMap<usize, Position>,
 }
 
 #[derive(Debug, Default)]
@@ -219,10 +216,7 @@ impl Backtest {
     }
 
     fn check_for_fills(&mut self, k: usize) {
-        // Collect keys into a vector to break the immutable borrow
         let open_orders_keys_long: Vec<usize> = self.open_orders.long.keys().cloned().collect();
-
-        // Iterate over the collected keys
         for idx in open_orders_keys_long {
             if self.open_orders.long[&idx].close.qty != 0.0
                 && self.hlcs[[k, idx, HIGH]] > self.open_orders.long[&idx].close.price
@@ -331,27 +325,39 @@ impl Backtest {
 
     fn update_open_orders(&mut self, k: usize, any_fill: bool) {
         // update all orders every time (optimizations later)
-        //if self.positions.long.len() < self.bot_params_pair.long.n_positions {
-        //    // there are empty slots
-        //    self.update_actives_long(k);
-        //}
-
         self.update_actives_long(k);
-
         // Remove open orders from inactive symbols
         self.open_orders
             .long
             .retain(|&idx, _| self.actives.long.contains(&idx));
-
         let default_position = Position::default();
         let (unstucking_idx, unstucking_pside) = determine_position_for_unstucking(
-            &self.positions.long,
-            &self.positions.short,
+            &self.positions,
             &self.exchange_params_list,
             self.balance,
             &self.bot_params_pair,
             &self.hlcs.slice(s![k, .., ..]).to_owned(),
         );
+        let mut unstucking_close = Order::default();
+        if unstucking_pside == LONG {
+            unstucking_close = calc_unstuck_close_long(
+                &self.exchange_params_list[unstucking_idx],
+                &self.bot_params_pair.long,
+                &self.hlcs.slice(s![k, unstucking_idx, ..]).to_owned(),
+                *self.emas[unstucking_idx]
+                    .long
+                    .iter()
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(&f64::NEG_INFINITY),
+                &self.positions.long[&(unstucking_idx)],
+                self.balance,
+                self.pnl_cumsum_max,
+                self.pnl_cumsum_running,
+            );
+        } else if unstucking_pside == SHORT {
+            // TODO impl short
+            unstucking_close = Order::default();
+        }
         for &idx in &self.actives.long {
             let close_price = self.hlcs[[k, idx, CLOSE]];
             let state_params = StateParams {
@@ -403,14 +409,18 @@ impl Backtest {
                 self.trailing_prices.long[&idx].min_price_since_open,
                 self.trailing_prices.long[&idx].max_price_since_min,
             );
-            order_bundle.close = calc_next_close_long(
-                &self.exchange_params_list[idx],
-                &state_params,
-                &self.bot_params_pair.long,
-                position,
-                self.trailing_prices.long[&idx].max_price_since_open,
-                self.trailing_prices.long[&idx].min_price_since_max,
-            );
+            if unstucking_idx == idx && unstucking_pside == LONG && unstucking_close.qty != 0.0 {
+                order_bundle.close = unstucking_close.clone();
+            } else {
+                order_bundle.close = calc_next_close_long(
+                    &self.exchange_params_list[idx],
+                    &state_params,
+                    &self.bot_params_pair.long,
+                    position,
+                    self.trailing_prices.long[&idx].max_price_since_open,
+                    self.trailing_prices.long[&idx].min_price_since_max,
+                );
+            }
         }
     }
 
@@ -466,72 +476,4 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
         },
     }
 }
-/*
-@njit
-def calc_unstuck_order(
-    c_mults,
-    qty_steps,
-    price_steps,
-    min_costs,
-    min_qtys,
-    flc,
-    wallet_exposure_limit_long,
-    wallet_exposure_limit_short,
-    balance,
-    drop_since_peak_abs,
-    is_stuck_long,
-    is_stuck_short,
-    positions_long,
-    positions_short,
-    emas_long,
-    emas_short,
-    hlcs_k,
-) -> (int, int, (float, float, str)):
-    # returns (pside: int, idx: int, (qty: float, price: float, type: str))
-    if not (is_stuck_long or is_stuck_short):
-        return (0, 0, (0.0, 0.0, ""))
-    inverse = False
-    pprice_diffs = []
-    for idx in is_stuck_long:
-        pprice_diff = calc_pprice_diff_int(0, positions_long[idx][1], hlcs_k[idx][2])
-        pprice_diffs.append((pprice_diff, 0, idx))
-    for idx in is_stuck_short:
-        pprice_diff = calc_pprice_diff_int(1, positions_short[idx][1], hlcs_k[idx][2])
-        pprice_diffs.append((pprice_diff, 1, idx))
-    pprice_diff, pside, idx = sorted(pprice_diffs)[0]
-    AU_allowance = calc_AU_allowance(
-        np.array([0.0]),
-        balance,
-        loss_allowance_pct=flc[pside][14],
-        drop_since_peak_abs=drop_since_peak_abs,
-    )
-    if AU_allowance <= 0.0:
-        return (0, 0, (0.0, 0.0, ""))
-    if pside == 0:
-        close_price = max(
-            hlcs_k[idx][2], round_up(max(emas_long[idx]) * (1.0 + flc[0][13]), price_steps[idx])
-        )
-        close_qty = -min(
-            positions_long[idx][0],
-            max(
-                calc_min_entry_qty(
-                    close_price, inverse, c_mults[idx], qty_steps[idx], min_qtys[idx], min_costs[idx]
-                ),
-                cost_to_qty(
-                    balance * wallet_exposure_limit_long * flc[0][12],
-                    close_price,
-                    inverse,
-                    c_mults[idx],
-                ),
-            ),
-        )
-        close_type = "unstuck_close_long"
-    else:
-        close_price = min(
-            hlcs_k[idx][2], round_dn(min(emas_short[idx]) * (1.0 - flc[1][13]), price_steps[idx])
-        )
-        close_qty = 0.01
-        close_type = "unstuck_close_short"
 
-    return (pside, idx, (close_qty, close_price, close_type))
-*/

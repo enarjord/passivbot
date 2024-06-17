@@ -57,13 +57,13 @@ pub fn calc_initial_entry(
     }
 }
 
-pub fn calc_min_entry_qty(initial_entry_price: f64, exchange_params: &ExchangeParams) -> f64 {
+pub fn calc_min_entry_qty(entry_price: f64, exchange_params: &ExchangeParams) -> f64 {
     f64::max(
         exchange_params.min_qty,
         round_up(
             cost_to_qty(
                 exchange_params.min_cost,
-                initial_entry_price,
+                entry_price,
                 exchange_params.c_mult,
             ),
             exchange_params.qty_step,
