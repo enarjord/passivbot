@@ -6,7 +6,7 @@ use crate::constants::{CLOSE, HIGH, LONG, LOW, NO_POS, SHORT};
 use crate::entries::calc_next_entry_long;
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Fill, Order, OrderBook,
-    Position, Positions, StateParams,
+    OrderType, Position, Positions, StateParams,
 };
 use crate::utils::{
     calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
@@ -278,41 +278,100 @@ impl Backtest {
                 && self.hlcs[[k, idx, LOW]] < self.open_orders.long[&idx].entry.price
             {
                 // long entry fill
-                let fee_paid = -qty_to_cost(
-                    self.open_orders.long[&idx].entry.qty,
-                    self.open_orders.long[&idx].entry.price,
-                    self.exchange_params_list[idx].c_mult,
-                ) * self.backtest_params.maker_fee;
-                self.balance += fee_paid;
-                let position_entry = self
-                    .positions
-                    .long
-                    .entry(idx)
-                    .or_insert(Position::default());
-                let (new_psize, new_pprice) = calc_new_psize_pprice(
-                    position_entry.size,
-                    position_entry.price,
-                    self.open_orders.long[&idx].entry.qty,
-                    self.open_orders.long[&idx].entry.price,
-                    self.exchange_params_list[idx].qty_step,
-                );
-                self.positions.long.get_mut(&idx).unwrap().size = new_psize;
-                self.positions.long.get_mut(&idx).unwrap().price = new_pprice;
-                self.fills.push(Fill {
-                    index: k,                                                         // index minute
-                    symbol: self.backtest_params.symbols[idx].clone(),                // symbol
-                    pnl: 0.0,                                            // realized pnl
-                    fee_paid,                                            // fee paid
-                    balance: self.balance,                               // balance after fill
-                    fill_qty: self.open_orders.long[&idx].entry.qty,     // fill qty
-                    fill_price: self.open_orders.long[&idx].entry.price, // fill price
-                    position_size: self.positions.long[&idx].size,       // psize after fill
-                    position_price: self.positions.long[&idx].price,     // pprice after fill
-                    order_type: self.open_orders.long[&idx].entry.order_type.clone(), // fill type
-                });
+                self.process_long_entry_fill(k, idx);
                 self.reset_trailing_prices_long(idx);
+                // Check for subsequent grid entry fills
+                if self.open_orders.long[&idx].entry.order_type == OrderType::EntryGridNormalLong
+                    || self.open_orders.long[&idx].entry.order_type
+                        == OrderType::EntryInitialNormalLong
+                {
+                    loop {
+                        let next_grid_entry = self.compute_next_grid_entry_long(k, idx);
+                        if next_grid_entry.qty == 0.0
+                            || self.hlcs[[k, idx, LOW]] >= next_grid_entry.price
+                        {
+                            break;
+                        }
+                        if next_grid_entry.order_type == OrderType::EntryTrailingNormalLong
+                            || next_grid_entry.order_type == OrderType::EntryTrailingCroppedLong
+                        {
+                            break;
+                        }
+                        self.open_orders.long.get_mut(&idx).unwrap().entry = next_grid_entry;
+                        self.process_long_entry_fill(k, idx);
+                    }
+                }
             }
         }
+    }
+
+    fn process_long_entry_fill(&mut self, k: usize, idx: usize) {
+        // long entry fill
+        let fee_paid = -qty_to_cost(
+            self.open_orders.long[&idx].entry.qty,
+            self.open_orders.long[&idx].entry.price,
+            self.exchange_params_list[idx].c_mult,
+        ) * self.backtest_params.maker_fee;
+        self.balance += fee_paid;
+        let position_entry = self
+            .positions
+            .long
+            .entry(idx)
+            .or_insert(Position::default());
+        let (new_psize, new_pprice) = calc_new_psize_pprice(
+            position_entry.size,
+            position_entry.price,
+            self.open_orders.long[&idx].entry.qty,
+            self.open_orders.long[&idx].entry.price,
+            self.exchange_params_list[idx].qty_step,
+        );
+        self.positions.long.get_mut(&idx).unwrap().size = new_psize;
+        self.positions.long.get_mut(&idx).unwrap().price = new_pprice;
+        self.fills.push(Fill {
+            index: k,                                                         // index minute
+            symbol: self.backtest_params.symbols[idx].clone(),                // symbol
+            pnl: 0.0,                                                         // realized pnl
+            fee_paid,                                                         // fee paid
+            balance: self.balance,                                            // balance after fill
+            fill_qty: self.open_orders.long[&idx].entry.qty,                  // fill qty
+            fill_price: self.open_orders.long[&idx].entry.price,              // fill price
+            position_size: self.positions.long[&idx].size,                    // psize after fill
+            position_price: self.positions.long[&idx].price,                  // pprice after fill
+            order_type: self.open_orders.long[&idx].entry.order_type.clone(), // fill type
+        });
+    }
+
+    fn compute_next_grid_entry_long(&self, k: usize, idx: usize) -> Order {
+        let close_price = self.hlcs[[k, idx, CLOSE]];
+        let state_params = StateParams {
+            balance: self.balance,
+            order_book: OrderBook {
+                bid: close_price,
+                ask: close_price,
+            },
+            ema_bands: EMABands {
+                upper: *self.emas[idx]
+                    .long
+                    .iter()
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(&f64::NEG_INFINITY),
+                lower: *self.emas[idx]
+                    .long
+                    .iter()
+                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(&f64::INFINITY),
+            },
+        };
+        let binding = Position::default();
+        let position = self.positions.long.get(&idx).unwrap_or(&binding);
+        calc_next_entry_long(
+            &self.exchange_params_list[idx],
+            &state_params,
+            &self.bot_params_pair.long,
+            position,
+            self.trailing_prices.long[&idx].min_price_since_open,
+            self.trailing_prices.long[&idx].max_price_since_min,
+        )
     }
 
     fn reset_trailing_prices_long(&mut self, idx: usize) {
@@ -476,4 +535,3 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
         },
     }
 }
-
