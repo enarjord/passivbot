@@ -191,7 +191,7 @@ class Passivbot:
                     ("auto_unstuck_qty_pct", 0.0),
                     ("auto_unstuck_wallet_exposure_threshold", 0.0),
                     ("auto_unstuck_ema_dist", 0.0),
-                    ("backwards_tp", True),
+                 #   ("backwards_tp", True),
                     ("wallet_exposure_limit", 0.0),
                 ]:
                     self.live_configs[symbol][pside][key] = val
