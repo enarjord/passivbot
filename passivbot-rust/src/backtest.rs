@@ -163,8 +163,7 @@ impl Backtest {
             //        println!("No fills available.");
             //    }
             //}
-            let any_fill = false;
-            self.check_for_fills(k);
+            let any_fill = self.check_for_fills(k);
             self.update_emas(k);
             self.update_open_orders(k, any_fill);
         }
@@ -215,14 +214,15 @@ impl Backtest {
         }
     }
 
-    fn check_for_fills(&mut self, k: usize) {
+    fn check_for_fills(&mut self, k: usize) -> bool {
+        let mut any_fill = false;
         let open_orders_keys_long: Vec<usize> = self.open_orders.long.keys().cloned().collect();
         for idx in open_orders_keys_long {
             if self.open_orders.long[&idx].close.qty != 0.0
                 && self.hlcs[[k, idx, HIGH]] > self.open_orders.long[&idx].close.price
             {
                 // long close fill
-
+                any_fill = true;
                 let mut new_psize = round_(
                     self.positions.long[&idx].size + self.open_orders.long[&idx].close.qty,
                     self.exchange_params_list[idx].qty_step,
@@ -278,6 +278,7 @@ impl Backtest {
                 && self.hlcs[[k, idx, LOW]] < self.open_orders.long[&idx].entry.price
             {
                 // long entry fill
+                any_fill = true;
                 self.process_long_entry_fill(k, idx);
                 self.reset_trailing_prices_long(idx);
                 // Check for subsequent grid entry fills
@@ -303,6 +304,7 @@ impl Backtest {
                 }
             }
         }
+        any_fill
     }
 
     fn process_long_entry_fill(&mut self, k: usize, idx: usize) {
@@ -382,14 +384,23 @@ impl Backtest {
         trailing_price_bundle.min_price_since_max = f64::INFINITY;
     }
 
-    fn update_open_orders(&mut self, k: usize, any_fill: bool) {
-        // update all orders every time (optimizations later)
-        self.update_actives_long(k);
-        // Remove open orders from inactive symbols
-        self.open_orders
-            .long
-            .retain(|&idx, _| self.actives.long.contains(&idx));
-        let default_position = Position::default();
+    fn update_trailing_prices_long(&mut self, k: usize, idx: usize) {
+        let trailing_price_bundle = self.trailing_prices.long.entry(idx).or_default();
+        if self.hlcs[[k, idx, LOW]] < trailing_price_bundle.min_price_since_open {
+            trailing_price_bundle.min_price_since_open = self.hlcs[[k, idx, LOW]];
+            trailing_price_bundle.max_price_since_min = self.hlcs[[k, idx, CLOSE]];
+        } else {
+            trailing_price_bundle.max_price_since_min = self.hlcs[[k, idx, HIGH]];
+        }
+        if self.hlcs[[k, idx, HIGH]] > trailing_price_bundle.max_price_since_open {
+            trailing_price_bundle.max_price_since_open = self.hlcs[[k, idx, HIGH]];
+            trailing_price_bundle.min_price_since_max = self.hlcs[[k, idx, CLOSE]];
+        } else {
+            trailing_price_bundle.min_price_since_max = self.hlcs[[k, idx, LOW]];
+        }
+    }
+
+    fn calc_unstucking_close(&mut self, k: usize) -> (usize, usize, Order) {
         let (unstucking_idx, unstucking_pside) = determine_position_for_unstucking(
             &self.positions,
             &self.exchange_params_list,
@@ -417,7 +428,127 @@ impl Backtest {
             // TODO impl short
             unstucking_close = Order::default();
         }
-        for &idx in &self.actives.long {
+        (unstucking_idx, unstucking_pside, unstucking_close)
+    }
+
+    fn update_open_orders_long_single(
+        &mut self,
+        k: usize,
+        idx: usize,
+        unstucking_idx: usize,
+        unstucking_pside: usize,
+        unstucking_close: Order,
+    ) {
+        let default_position = Position::default();
+        let close_price = self.hlcs[[k, idx, CLOSE]];
+        let state_params = StateParams {
+            balance: self.balance,
+            order_book: OrderBook {
+                bid: close_price,
+                ask: close_price,
+            },
+            ema_bands: EMABands {
+                upper: *self.emas[idx]
+                    .long
+                    .iter()
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(&f64::NEG_INFINITY),
+                lower: *self.emas[idx]
+                    .long
+                    .iter()
+                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(&f64::INFINITY),
+            },
+        };
+        let position = self
+            .positions
+            .long
+            .get(&idx)
+            .cloned()
+            .unwrap_or(default_position);
+
+        // Update trailing prices if position size is not zero
+        if position.size != 0.0 {
+            self.update_trailing_prices_long(k, idx);
+        }
+
+        let order_bundle = self
+            .open_orders
+            .long
+            .entry(idx)
+            .or_insert_with(OpenOrderBundle::default);
+        order_bundle.entry = calc_next_entry_long(
+            &self.exchange_params_list[idx],
+            &state_params,
+            &self.bot_params_pair.long,
+            &position,
+            self.trailing_prices.long[&idx].min_price_since_open,
+            self.trailing_prices.long[&idx].max_price_since_min,
+        );
+        if unstucking_idx == idx && unstucking_pside == LONG && unstucking_close.qty != 0.0 {
+            order_bundle.close = unstucking_close.clone();
+        } else {
+            order_bundle.close = calc_next_close_long(
+                &self.exchange_params_list[idx],
+                &state_params,
+                &self.bot_params_pair.long,
+                &position,
+                self.trailing_prices.long[&idx].max_price_since_open,
+                self.trailing_prices.long[&idx].min_price_since_max,
+            );
+        }
+    }
+
+    fn update_open_orders(&mut self, k: usize, any_fill: bool) {
+        /*
+        if any_fill {
+            // update everything for all symbols
+            // - trailing data for positions
+            // - update actives
+            // - remove open orders from inactive symbols
+            // - unstuck close
+            // - entries
+            // - closes
+            let positions_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
+            for idx in positions_long_indices {
+                self.update_trailing_prices_long(k, idx);
+            }
+            self.update_actives_long(k);
+            self.open_orders
+                .long
+                .retain(|&idx, _| self.actives.long.contains(&idx));
+            let (unstucking_idx, unstucking_pside, unstucking_close) = self.calc_unstucking_close(k);
+            let default_position = Position::default();
+        } else {
+            // update selectively:
+            // - actives if len(positions) < n_positions
+            // - trailing data for symbols with open trailing orders
+            // - entries for symbols with open trailing entries
+            // - closes for symbols with open trailing closes
+        }
+        */
+        // update all orders every time (optimizations later)
+        let positions_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
+        for idx in positions_long_indices {
+            self.update_trailing_prices_long(k, idx);
+        }
+        self.update_actives_long(k);
+        // Remove open orders from inactive symbols
+        self.open_orders
+            .long
+            .retain(|&idx, _| self.actives.long.contains(&idx));
+        let (unstucking_idx, unstucking_pside, unstucking_close) = self.calc_unstucking_close(k);
+        let default_position = Position::default();
+        let active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
+        //for &idx in &self.actives.long {
+        for &idx in &active_long_indices {
+            //self.update_open_orders_long_single(
+            //    k,
+            //    idx,
+            //    unstucking_idx,
+            //    unstucking_pside,
+            //    unstucking_close,
+            //);
             let close_price = self.hlcs[[k, idx, CLOSE]];
             let state_params = StateParams {
                 balance: self.balance,
@@ -438,21 +569,16 @@ impl Backtest {
                         .unwrap_or(&f64::INFINITY),
                 },
             };
-            let position = self.positions.long.get(&idx).unwrap_or(&default_position);
+            let position = self
+                .positions
+                .long
+                .get(&idx)
+                .cloned()
+                .unwrap_or(default_position);
+
+            // Update trailing prices if position size is not zero
             if position.size != 0.0 {
-                let trailing_price_bundle = self.trailing_prices.long.entry(idx).or_default();
-                if self.hlcs[[k, idx, LOW]] < trailing_price_bundle.min_price_since_open {
-                    trailing_price_bundle.min_price_since_open = self.hlcs[[k, idx, LOW]];
-                    trailing_price_bundle.max_price_since_min = self.hlcs[[k, idx, CLOSE]];
-                } else {
-                    trailing_price_bundle.max_price_since_min = self.hlcs[[k, idx, HIGH]];
-                }
-                if self.hlcs[[k, idx, HIGH]] > trailing_price_bundle.max_price_since_open {
-                    trailing_price_bundle.max_price_since_open = self.hlcs[[k, idx, HIGH]];
-                    trailing_price_bundle.min_price_since_max = self.hlcs[[k, idx, CLOSE]];
-                } else {
-                    trailing_price_bundle.min_price_since_max = self.hlcs[[k, idx, LOW]];
-                }
+                self.update_trailing_prices_long(k, idx);
             }
 
             let order_bundle = self
@@ -464,7 +590,7 @@ impl Backtest {
                 &self.exchange_params_list[idx],
                 &state_params,
                 &self.bot_params_pair.long,
-                position,
+                &position,
                 self.trailing_prices.long[&idx].min_price_since_open,
                 self.trailing_prices.long[&idx].max_price_since_min,
             );
@@ -475,7 +601,7 @@ impl Backtest {
                     &self.exchange_params_list[idx],
                     &state_params,
                     &self.bot_params_pair.long,
-                    position,
+                    &position,
                     self.trailing_prices.long[&idx].max_price_since_open,
                     self.trailing_prices.long[&idx].min_price_since_max,
                 );

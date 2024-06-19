@@ -29,7 +29,7 @@ pub struct BacktestParams {
     pub symbols: Vec<String>,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct Position {
     pub size: f64,
     pub price: f64,
