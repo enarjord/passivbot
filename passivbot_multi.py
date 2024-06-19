@@ -324,8 +324,9 @@ class Passivbot:
         for pside in ["long", "short"]:
             changed = {}
             n_actives = len(self.is_active[pside])
+            n_coins = max(n_actives, self.config["n_longs"])
             WE_limit_div = round_(
-                self.config[f"TWE_{pside}"] / n_actives if n_actives > 0 else 0.001, 0.0001
+                self.config[f"TWE_{pside}"] / n_coins if n_coins > 0 else 0.001, 0.0001
             )
             for symbol in self.is_active[pside]:
                 new_WE_limit = (
