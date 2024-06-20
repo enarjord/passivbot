@@ -384,10 +384,18 @@ pub fn calc_trailing_entry_long(
         return Order::default();
     }
     if min_price_since_open > position.price * (1.0 - bot_params.entry_trailing_threshold_pct) {
-        return Order::default();
+        return Order {
+            qty: 0.0,
+            price: 0.0,
+            order_type: OrderType::EntryTrailingNormalLong,
+        };
     }
     if max_price_since_min < min_price_since_open * (1.0 + bot_params.entry_trailing_drawdown_pct) {
-        return Order::default();
+        return Order {
+            qty: 0.0,
+            price: 0.0,
+            order_type: OrderType::EntryTrailingNormalLong,
+        };
     }
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
