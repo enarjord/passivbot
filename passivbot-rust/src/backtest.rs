@@ -44,7 +44,6 @@ pub struct OpenOrders {
 pub struct OpenOrderBundle {
     pub entry: Order,
     pub close: Order,
-    pub unstuck: Order,
 }
 
 #[derive(Default, Debug)]
@@ -100,6 +99,7 @@ pub struct Backtest {
     pnl_cumsum_running: f64,
     pnl_cumsum_max: f64,
     fills: Vec<Fill>,
+    is_stuck: IsStuck,
 }
 
 impl Backtest {
@@ -137,6 +137,7 @@ impl Backtest {
             pnl_cumsum_running: 0.0,
             pnl_cumsum_max: 0.0,
             fills: Vec::new(),
+            is_stuck: IsStuck::default(),
         }
     }
 
@@ -179,7 +180,8 @@ impl Backtest {
         ema_spans_long.sort_by(|a, b| a.partial_cmp(b).unwrap());
     }
 
-    fn update_actives_long(&mut self, k: usize) {
+    fn update_actives_long(&mut self, k: usize) -> Vec<usize> {
+        let mut actives_without_pos = Vec::<usize>::new();
         if !self.actives.long.is_empty() {
             self.actives.long.clear();
         }
@@ -190,10 +192,12 @@ impl Backtest {
         for &market_idx in self.noisiness_indices.row(k).iter() {
             if self.actives.long.len() < self.bot_params_pair.long.n_positions {
                 self.actives.long.insert(market_idx as usize);
+                actives_without_pos.push(market_idx as usize);
             } else {
                 break;
             }
         }
+        actives_without_pos
     }
 
     fn update_actives_short(&mut self, k: usize) {
@@ -216,13 +220,15 @@ impl Backtest {
 
     fn check_for_fills(&mut self, k: usize) -> bool {
         let mut any_fill = false;
-        let open_orders_keys_long: Vec<usize> = self.open_orders.long.keys().cloned().collect();
+        let mut open_orders_keys_long: Vec<usize> = self.open_orders.long.keys().cloned().collect();
+        open_orders_keys_long.sort();
         for idx in open_orders_keys_long {
             if self.open_orders.long[&idx].close.qty != 0.0
                 && self.hlcs[[k, idx, HIGH]] > self.open_orders.long[&idx].close.price
             {
                 // long close fill
                 any_fill = true;
+                self.reset_trailing_prices_long(idx);
                 let mut new_psize = round_(
                     self.positions.long[&idx].size + self.open_orders.long[&idx].close.qty,
                     self.exchange_params_list[idx].qty_step,
@@ -272,15 +278,27 @@ impl Backtest {
                     position_price: current_pprice,                      // pprice after fill
                     order_type: self.open_orders.long[&idx].close.order_type.clone(), // fill type
                 });
-                self.reset_trailing_prices_long(idx);
+                let wallet_exposure = calc_wallet_exposure(
+                    self.exchange_params_list[idx].c_mult,
+                    self.balance,
+                    new_psize,
+                    current_pprice,
+                );
+                if wallet_exposure / self.bot_params_pair.long.wallet_exposure_limit
+                    > self.bot_params_pair.long.unstuck_threshold
+                {
+                    self.is_stuck.long.insert(idx);
+                } else if self.is_stuck.long.contains(&idx) {
+                    self.is_stuck.long.remove(&idx);
+                }
             }
             if self.open_orders.long[&idx].entry.qty != 0.0
                 && self.hlcs[[k, idx, LOW]] < self.open_orders.long[&idx].entry.price
             {
                 // long entry fill
                 any_fill = true;
-                self.process_long_entry_fill(k, idx);
                 self.reset_trailing_prices_long(idx);
+                self.process_long_entry_fill(k, idx);
                 // Check for subsequent grid entry fills
                 if self.open_orders.long[&idx].entry.order_type == OrderType::EntryGridNormalLong
                     || self.open_orders.long[&idx].entry.order_type
@@ -301,6 +319,19 @@ impl Backtest {
                         self.open_orders.long.get_mut(&idx).unwrap().entry = next_grid_entry;
                         self.process_long_entry_fill(k, idx);
                     }
+                }
+                let wallet_exposure = calc_wallet_exposure(
+                    self.exchange_params_list[idx].c_mult,
+                    self.balance,
+                    self.positions.long[&idx].size,
+                    self.positions.long[&idx].price,
+                );
+                if wallet_exposure / self.bot_params_pair.long.wallet_exposure_limit
+                    > self.bot_params_pair.long.unstuck_threshold
+                {
+                    self.is_stuck.long.insert(idx);
+                } else if self.is_stuck.long.contains(&idx) {
+                    self.is_stuck.long.remove(&idx);
                 }
             }
         }
@@ -437,7 +468,7 @@ impl Backtest {
         idx: usize,
         unstucking_idx: usize,
         unstucking_pside: usize,
-        unstucking_close: Order,
+        unstucking_close: &Order,
     ) {
         let default_position = Position::default();
         let close_price = self.hlcs[[k, idx, CLOSE]];
@@ -467,11 +498,6 @@ impl Backtest {
             .cloned()
             .unwrap_or(default_position);
 
-        // Update trailing prices if position size is not zero
-        if position.size != 0.0 {
-            self.update_trailing_prices_long(k, idx);
-        }
-
         let order_bundle = self
             .open_orders
             .long
@@ -500,7 +526,8 @@ impl Backtest {
     }
 
     fn update_open_orders(&mut self, k: usize, any_fill: bool) {
-        /*
+        //let any_fillz = true;
+        let positions_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
         if any_fill {
             // update everything for all symbols
             // - trailing data for positions
@@ -509,103 +536,109 @@ impl Backtest {
             // - unstuck close
             // - entries
             // - closes
-            let positions_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
             for idx in positions_long_indices {
                 self.update_trailing_prices_long(k, idx);
             }
             self.update_actives_long(k);
+            // remove open orders from inactive symbols
             self.open_orders
                 .long
                 .retain(|&idx, _| self.actives.long.contains(&idx));
-            let (unstucking_idx, unstucking_pside, unstucking_close) = self.calc_unstucking_close(k);
-            let default_position = Position::default();
-        } else {
-            // update selectively:
-            // - actives if len(positions) < n_positions
-            // - trailing data for symbols with open trailing orders
-            // - entries for symbols with open trailing entries
-            // - closes for symbols with open trailing closes
-        }
-        */
-        // update all orders every time (optimizations later)
-        let positions_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
-        for idx in positions_long_indices {
-            self.update_trailing_prices_long(k, idx);
-        }
-        self.update_actives_long(k);
-        // Remove open orders from inactive symbols
-        self.open_orders
-            .long
-            .retain(|&idx, _| self.actives.long.contains(&idx));
-        let (unstucking_idx, unstucking_pside, unstucking_close) = self.calc_unstucking_close(k);
-        let default_position = Position::default();
-        let active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
-        //for &idx in &self.actives.long {
-        for &idx in &active_long_indices {
-            //self.update_open_orders_long_single(
-            //    k,
-            //    idx,
-            //    unstucking_idx,
-            //    unstucking_pside,
-            //    unstucking_close,
-            //);
-            let close_price = self.hlcs[[k, idx, CLOSE]];
-            let state_params = StateParams {
-                balance: self.balance,
-                order_book: OrderBook {
-                    bid: close_price,
-                    ask: close_price,
-                },
-                ema_bands: EMABands {
-                    upper: *self.emas[idx]
-                        .long
-                        .iter()
-                        .max_by(|a, b| a.partial_cmp(b).unwrap())
-                        .unwrap_or(&f64::NEG_INFINITY),
-                    lower: *self.emas[idx]
-                        .long
-                        .iter()
-                        .min_by(|a, b| a.partial_cmp(b).unwrap())
-                        .unwrap_or(&f64::INFINITY),
-                },
-            };
-            let position = self
-                .positions
-                .long
-                .get(&idx)
-                .cloned()
-                .unwrap_or(default_position);
-
-            // Update trailing prices if position size is not zero
-            if position.size != 0.0 {
-                self.update_trailing_prices_long(k, idx);
-            }
-
-            let order_bundle = self
-                .open_orders
-                .long
-                .entry(idx)
-                .or_insert_with(OpenOrderBundle::default);
-            order_bundle.entry = calc_next_entry_long(
-                &self.exchange_params_list[idx],
-                &state_params,
-                &self.bot_params_pair.long,
-                &position,
-                self.trailing_prices.long[&idx].min_price_since_open,
-                self.trailing_prices.long[&idx].max_price_since_min,
-            );
-            if unstucking_idx == idx && unstucking_pside == LONG && unstucking_close.qty != 0.0 {
-                order_bundle.close = unstucking_close.clone();
-            } else {
-                order_bundle.close = calc_next_close_long(
-                    &self.exchange_params_list[idx],
-                    &state_params,
-                    &self.bot_params_pair.long,
-                    &position,
-                    self.trailing_prices.long[&idx].max_price_since_open,
-                    self.trailing_prices.long[&idx].min_price_since_max,
+            let (unstucking_idx, unstucking_pside, unstucking_close) =
+                self.calc_unstucking_close(k);
+            let active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
+            for &idx in &active_long_indices {
+                self.update_open_orders_long_single(
+                    k,
+                    idx,
+                    unstucking_idx,
+                    unstucking_pside,
+                    &unstucking_close,
                 );
             }
+        } else {
+            // update selectively:
+            // - trailing data for symbols with open trailing orders
+            // - actives if len(positions) < n_positions
+            // - unstuck close if any stuck
+            // - entries for symbols with open trailing entries
+            // - closes for symbols with open trailing closes
+            for idx in &positions_long_indices {
+                if self.open_orders.long[&idx].entry.order_type
+                    == OrderType::EntryTrailingNormalLong
+                    || self.open_orders.long[&idx].entry.order_type
+                        == OrderType::EntryTrailingCroppedLong
+                    || self.open_orders.long[&idx].close.order_type == OrderType::CloseTrailingLong
+                {
+                    self.update_trailing_prices_long(k, *idx);
+                }
+            }
+            let mut actives_without_pos = Vec::<usize>::new();
+            if positions_long_indices.len() < self.bot_params_pair.long.n_positions {
+                actives_without_pos = self.update_actives_long(k);
+                self.open_orders
+                    .long
+                    .retain(|&idx, _| self.actives.long.contains(&idx));
+            }
+            let active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
+            let (mut unstucking_idx, mut unstucking_pside, mut unstucking_close) =
+                (NO_POS, NO_POS, Order::default());
+            if !self.is_stuck.long.is_empty() {
+                (unstucking_idx, unstucking_pside, unstucking_close) =
+                    self.calc_unstucking_close(k);
+                for idx in &active_long_indices {
+                    if actives_without_pos.contains(idx)
+                        || (unstucking_pside != NO_POS && *idx == unstucking_idx)
+                        || (self.open_orders.long[idx].close.order_type
+                            == OrderType::CloseUnstuckLong)
+                        || self.open_orders.long[&idx].entry.order_type
+                            == OrderType::EntryTrailingNormalLong
+                        || self.open_orders.long[&idx].entry.order_type
+                            == OrderType::EntryTrailingCroppedLong
+                        || self.open_orders.long[&idx].close.order_type
+                            == OrderType::CloseTrailingLong
+                    {
+                        self.update_open_orders_long_single(
+                            k,
+                            *idx,
+                            unstucking_idx,
+                            unstucking_pside,
+                            &unstucking_close,
+                        );
+                    }
+                }
+            } else {
+                for idx in &active_long_indices {
+                    if actives_without_pos.contains(idx)
+                        || self.open_orders.long[&idx].entry.order_type
+                            == OrderType::EntryTrailingNormalLong
+                        || self.open_orders.long[&idx].entry.order_type
+                            == OrderType::EntryTrailingCroppedLong
+                        || self.open_orders.long[&idx].close.order_type
+                            == OrderType::CloseTrailingLong
+                    {
+                        self.update_open_orders_long_single(
+                            k,
+                            *idx,
+                            unstucking_idx,
+                            unstucking_pside,
+                            &unstucking_close,
+                        );
+                    }
+                }
+            }
+        }
+        let active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
+        if k > 143 && k < 160 {
+            for idx in active_long_indices {
+                let binding = Position::default();
+                let position = self.positions.long.get(&idx).unwrap_or(&binding);
+                println!(
+                    "{:?} {:?} {:?} {:?}",
+                    k, position, self.backtest_params.symbols[idx], self.open_orders.long[&idx],
+                );
+            }
+            println!(" ");
         }
     }
 

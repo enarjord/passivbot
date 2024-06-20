@@ -182,10 +182,18 @@ pub fn calc_trailing_close_long(
         };
     }
     if max_price_since_open < position.price * (1.0 + bot_params.close_trailing_threshold_pct) {
-        return Order::default();
+        return Order {
+            qty: 0.0,
+            price: 0.0,
+            order_type: OrderType::CloseTrailingLong,
+        };
     }
     if min_price_since_max > max_price_since_open * (1.0 - bot_params.close_trailing_drawdown_pct) {
-        return Order::default();
+        return Order {
+            qty: 0.0,
+            price: 0.0,
+            order_type: OrderType::CloseTrailingLong,
+        };
     }
     Order {
         qty: -position.size,
