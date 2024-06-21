@@ -161,6 +161,16 @@ async def main():
         help="set n backtest slices to plot",
     )
     parser.add_argument(
+        "-sb",
+        "--start_balance",
+        "--start_balance",
+        type=int,
+        required=False,
+        dest="start_balance",
+        default=None,
+        help="set --start_balance",
+    )
+    parser.add_argument(
         "-dp",
         "--disable_plotting",
         "--disable-plotting",
@@ -170,6 +180,8 @@ async def main():
     args = parser.parse_args()
     live_config_paths = args.live_config_path.split(",")
     config = prepare_backtest_config(args)
+
+    
     for ix, live_config_path in enumerate(live_config_paths):
         for symbol in config["symbols"]:
             if "symbol" not in config or symbol != config["symbol"] or ix > 0:
@@ -177,7 +189,10 @@ async def main():
                 args.symbols = symbol
                 config = prepare_backtest_config(args)
             config["n_parts"] = args.n_parts
+            config["starting_balance"] = args.start_balance
             live_config = load_live_config(live_config_path)
+            config['config_hash'] = os.path.splitext(os.path.basename(args.live_config_path))[0]
+
             if "spot" in config["market_type"]:
                 live_config = spotify_config(live_config)
             config.update(live_config)
