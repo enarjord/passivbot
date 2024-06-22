@@ -430,3 +430,44 @@ def plot_pnls_stuck(sdf, fdf, symbol=None, start_pct=0.0, end_pct=1.0, unstuck_t
     sdfc[~any_stuck].balance.plot(style="b.")
     ax.legend(["equity", "balance_with_any_stuck", "balance_with_none_stuck"])
     return plt
+
+
+def plot_fills_forager(fdf: pd.DataFrame, hlcs_df: pd.DataFrame, start_pct=0.0, end_pct=1.0):
+    plt.clf()
+    hlcc = hlcs_df.loc[fdf.iloc[0].minute : fdf.iloc[-1].minute]
+    fdfc = fdf.set_index("minute")
+
+    start_minute = int(hlcc.index[0] + hlcc.index[-1] * start_pct)
+    end_minute = int(hlcc.index[0] + hlcc.index[-1] * end_pct)
+    hlcc = hlcc.loc[start_minute:end_minute]
+    fdfc = fdfc.loc[start_minute:end_minute]
+    longs = fdfc[fdfc.type.str.contains("long")]
+    shorts = fdfc[fdfc.type.str.contains("short")]
+    pprices_long = hlcc.join(longs[["pprice"]]).ffill()
+    pprices_long.loc[pprices_long.pprice.pct_change() != 0.0, "pprice"] = np.nan
+    pprices_long = pprices_long.pprice
+    pprices_short = hlcc.join(shorts[["pprice"]]).ffill()
+    pprices_short.loc[pprices_short.pprice.pct_change() != 0.0, "pprice"] = np.nan
+    pprices_short = pprices_short.pprice
+
+    ax = hlcc.close.plot(style="y-")
+    longs[longs.type.str.contains("entry")].price.plot(style="b.")
+    longs[longs.type.str.contains("close")].price.plot(style="r.")
+    pprices_long.plot(style="b--")
+
+    shorts[shorts.type.str.contains("entry")].price.plot(style="mx")
+    shorts[shorts.type.str.contains("close")].price.plot(style="cx")
+    pprices_short.plot(style="r--")
+
+    ax.legend(
+        [
+            "price",
+            "entries_long",
+            "closes_long",
+            "pprices_long",
+            "entries_short",
+            "closes_short",
+            "pprices_short",
+        ]
+    )
+    return plt
