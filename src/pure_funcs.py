@@ -2395,3 +2395,74 @@ def extract_and_sort_by_keys_recursive(nested_dict):
         sorted_values.append(extract_and_sort_by_keys_recursive(value))
 
     return sorted_values
+
+
+def process_forager_fills(fills):
+    fdf = pd.DataFrame(
+        fills,
+        columns=[
+            "minute",
+            "symbol",
+            "pnl",
+            "fee_paid",
+            "balance",
+            "qty",
+            "price",
+            "psize",
+            "pprice",
+            "type",
+        ],
+    )
+    symbols = fdf.symbol.unique()
+    for symbol in symbols:
+        fdfc = fdf[fdf.symbol == symbol].copy()
+        pprice_diffs = 1.0 - fdfc.price / fdfc.pprice.shift()
+        fdfc.loc[:, "pprice_diff"] = pprice_diffs
+        fdfc.loc[fdfc.type == "entry_initial_normal_long", "pprice_diff"] = 0.0
+        fdf.loc[fdfc.index, "pprice_diff"] = fdfc.pprice_diff
+    return fdf
+
+
+def calc_equity_forager(symbols, hlcs, fdf):
+    # Creating the base balance dataframe
+    dfb = (
+        fdf[["minute", "balance"]].drop_duplicates(subset="minute", keep="first").set_index("minute")
+    )
+    full_index = pd.RangeIndex(start=0, stop=len(hlcs), step=1)
+    dfb = dfb.reindex(full_index).ffill().bfill()
+    upnls = np.zeros(len(hlcs))
+    for i, symbol in enumerate(symbols):
+        fdfc = fdf[fdf.symbol == symbol]
+        dfc = pd.DataFrame(hlcs[:, i, :], columns=["high", "low", "close"])
+        fdfc_grouped = fdfc.groupby("minute").last()
+        dfc = dfc.join(fdfc_grouped[["psize", "pprice"]], how="left").ffill()
+        dfc["upnl"] = dfc["psize"] * (dfc["low"] - dfc["pprice"])
+        upnls += dfc["upnl"].fillna(0.0).values
+    dfb["equity"] = dfb["balance"] + upnls
+    return dfb
+
+
+def analyze_fills_forager(symbols, hlcs, fdf):
+    tdf = fdf[fdf.type.str.contains("close_t")]
+    tpp = tdf.pprice_diff
+    tp_costs = (tdf.qty * tdf.price).abs() / tdf.balance
+    tpp_w_mean = (tpp * tp_costs).sum() / tp_costs.sum()
+    tpp.max(), tpp.min(), tpp.mean(), tpp.median(), tpp_w_mean
+
+    balance_and_equity = calc_equity_forager(symbols, hlcs, fdf)
+    drawdowns = calc_drawdowns(balance_and_equity.equity)
+    daily_eqs = balance_and_equity.groupby(balance_and_equity.index // (60 * 24)).equity.mean()
+    daily_eqs_pct_change = daily_eqs.pct_change()
+    adg = daily_eqs_pct_change.mean()
+    sharpe_ratio = adg / daily_eqs_pct_change.std()
+    return {
+        "TP_pprice_diff_max": tpp.max(),
+        "TP_pprice_diff_min": tpp.min(),
+        "TP_pprice_diff_mean": tpp.mean(),
+        "TP_pprice_diff_median": tpp.median(),
+        "TP_pprice_diff_weighted_mean": tpp_w_mean,
+        "drawdown_worst": abs(drawdowns.min()),
+        "drawdown_mean": abs(drawdowns.mean()),
+        "adg": adg,
+        "sharpe_ratio": sharpe_ratio,
+    }
