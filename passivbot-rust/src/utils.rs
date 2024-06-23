@@ -45,7 +45,7 @@ pub fn calc_diff(x: f64, y: f64) -> f64 {
 #[pyfunction]
 pub fn cost_to_qty(cost: f64, price: f64, c_mult: f64) -> f64 {
     if price > 0.0 {
-        (cost / price) / c_mult
+        (cost.abs() / price) / c_mult
     } else {
         0.0
     }
