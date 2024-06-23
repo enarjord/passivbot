@@ -67,9 +67,9 @@ pub fn run_backtest(
         exchange_params,
         &backtest_params,
     );
-    let fills = backtest.run();
     // Convert fills to a 2D array with mixed types
     Python::with_gil(|py| {
+        let fills = backtest.run();
         let mut py_fills = Array2::from_elem((fills.len(), 10), py.None());
 
         for (i, fill) in fills.iter().enumerate() {
