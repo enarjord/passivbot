@@ -1,6 +1,6 @@
 use crate::backtest::Backtest;
 use crate::closes::{calc_next_close_long, calc_next_grid_close_long, calc_trailing_close_long};
-use crate::entries::{calc_next_entry_long, calc_next_grid_entry_long, calc_trailing_entry_long};
+use crate::entries::{calc_grid_entry_long, calc_next_entry_long, calc_trailing_entry_long};
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Order, OrderBook, Position,
     StateParams,
@@ -242,7 +242,7 @@ pub fn calc_trailing_close_long_py(
 }
 
 #[pyfunction]
-pub fn calc_next_grid_entry_long_py(
+pub fn calc_grid_entry_long_py(
     qty_step: f64,
     price_step: f64,
     min_qty: f64,
@@ -292,7 +292,7 @@ pub fn calc_next_grid_entry_long_py(
         price: position_price,
     };
 
-    let order = calc_next_grid_entry_long(&exchange_params, &state_params, &bot_params, &position);
+    let order = calc_grid_entry_long(&exchange_params, &state_params, &bot_params, &position);
     (order.qty, order.price, order.order_type.to_string())
 }
 

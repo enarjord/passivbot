@@ -176,3 +176,27 @@ pub fn calc_auto_unstuck_allowance(
     let drop_since_peak_pct = balance / balance_peak - 1.0;
     (balance_peak * (loss_allowance_pct + drop_since_peak_pct)).max(0.0)
 }
+
+pub fn calc_ema_price_bid(
+    price_step: f64,
+    order_book_bid: f64,
+    ema_bands_lower: f64,
+    ema_dist: f64,
+) -> f64 {
+    f64::min(
+        order_book_bid,
+        round_dn(ema_bands_lower * (1.0 - ema_dist), price_step),
+    )
+}
+
+pub fn calc_ema_price_ask(
+    price_step: f64,
+    order_book_ask: f64,
+    ema_bands_upper: f64,
+    ema_dist: f64,
+) -> f64 {
+    f64::max(
+        order_book_ask,
+        round_up(ema_bands_upper * (1.0 + ema_dist), price_step),
+    )
+}

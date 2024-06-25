@@ -24,7 +24,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(qty_to_cost, m)?)?;
     m.add_function(wrap_pyfunction!(cost_to_qty, m)?)?;
     m.add_function(wrap_pyfunction!(calc_new_psize_pprice, m)?)?;
-    m.add_function(wrap_pyfunction!(calc_next_grid_entry_long_py, m)?)?;
+    m.add_function(wrap_pyfunction!(calc_grid_entry_long_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_trailing_entry_long_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_next_entry_long_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_trailing_close_long_py, m)?)?;
