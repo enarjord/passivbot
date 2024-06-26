@@ -120,7 +120,8 @@ def get_open_orders_long(
         cfgl[2],  # auto_unstuck_qty_pct,
     )
     if unstucking_close[0]:
-        closes = [unstucking_close] + closes
+        # closes = [unstucking_close] + closes
+        closes = sorted([unstucking_close] + closes, key=lambda x: x[1])
     return entries, closes
 
 
@@ -540,12 +541,7 @@ def backtest_multisymbol_recursive_grid(
                 wallet_exposure = (
                     qty_to_cost(poss_long[i][0], poss_long[i][1], inverse, c_mults[i]) / balance
                 )
-                if (
-                    loss_allowance_pct > 0.0
-                    and wallet_exposure / ll[i][16] > stuck_threshold
-                    and hlcs[i][k][2] < poss_long[i][1]
-                ):
-                    # is stuck and not in profit
+                if loss_allowance_pct > 0.0 and wallet_exposure / ll[i][16] > stuck_threshold:
                     any_stuck = True
                     stuck_positions_long[i] = 1.0
                 else:
@@ -597,12 +593,7 @@ def backtest_multisymbol_recursive_grid(
                 wallet_exposure = (
                     qty_to_cost(poss_short[i][0], poss_short[i][1], inverse, c_mults[i]) / balance
                 )
-                if (
-                    loss_allowance_pct > 0.0
-                    and wallet_exposure / ls[i][16] > stuck_threshold
-                    and hlcs[i][k][2] > poss_short[i][1]
-                ):
-                    # is stuck and not in profit
+                if loss_allowance_pct > 0.0 and wallet_exposure / ls[i][16] > stuck_threshold:
                     any_stuck = True
                     stuck_positions_short[i] = 1.0
                 else:
@@ -627,11 +618,13 @@ def backtest_multisymbol_recursive_grid(
                 # find which position to unstuck
                 # lowest pprice diff is chosen
                 s_pside = 0  # 0==long, 1==short
-                s_i = 0  # index
+                s_i = -1  # index
                 lowest_pprice_diff = 100.0
                 for i in idxs_long:
                     if stuck_positions_long[i]:
                         # long is stuck
+                        if hlcs[i][k][2] > poss_long[i][1]:
+                            continue  # no unstucking if price > pprice
                         pprice_diff = 1.0 - hlcs[i][k][2] / poss_long[i][1]
                         if pprice_diff < lowest_pprice_diff:
                             lowest_pprice_diff = pprice_diff
@@ -640,6 +633,8 @@ def backtest_multisymbol_recursive_grid(
                 for i in idxs_short:
                     if stuck_positions_short[i]:
                         # short is stuck
+                        if hlcs[i][k][2] < poss_short[i][1]:
+                            continue  # no unstucking if price < pprice
                         pprice_diff = hlcs[i][k][2] / poss_short[i][1] - 1.0
                         if pprice_diff < lowest_pprice_diff:
                             lowest_pprice_diff = pprice_diff
@@ -651,9 +646,11 @@ def backtest_multisymbol_recursive_grid(
                     loss_allowance_pct=loss_allowance_pct,
                     drop_since_peak_abs=(pnl_cumsum_max - pnl_cumsum_running),
                 )
-                if AU_allowance > 0.0:
+                if AU_allowance > 0.0 and s_i != -1:
                     if s_pside:  # short
-                        close_price = min(hlcs[s_i][k][2], emas_short[s_i].min())  # lower ema band
+                        close_price = min(
+                            hlcs[s_i][k][2], round_dn(emas_short[s_i].min(), price_steps[s_i])
+                        )  # lower ema band
                         upnl = calc_pnl_short(
                             poss_short[s_i][1],
                             hlcs[s_i][k][2],
@@ -693,7 +690,9 @@ def backtest_multisymbol_recursive_grid(
                             "unstuck_close_short",
                         )
                     else:  # long
-                        close_price = max(hlcs[s_i][k][2], emas_long[s_i].max())  # upper ema band
+                        close_price = max(
+                            hlcs[s_i][k][2], round_up(emas_long[s_i].max(), price_steps[s_i])
+                        )  # upper ema band
                         upnl = calc_pnl_long(
                             poss_long[s_i][1],
                             hlcs[s_i][k][2],
