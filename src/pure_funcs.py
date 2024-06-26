@@ -496,83 +496,76 @@ def flatten(lst: list) -> list:
 def get_template_live_config(passivbot_mode="neat_grid"):
     if passivbot_mode == "v7":
         return {
-            "backtest": {
-                "start_date": "2021-05-01",
-                "end_date": "now",
-                "starting_balance": 100000.0,
-                "exchange": "binance",
-                "base_dir": "backtests",
+            "start_date": "2021-05-01",
+            "end_date": "now",
+            "starting_balance": 100000.0,
+            "exchange": "binance",
+            "base_dir": "backtests",
+            "user": "hyperliquid_01",
+            "pnls_max_lookback_days": 30.0,
+            "execution_delay_seconds": 2.0,
+            "max_n_cancellations_per_batch": 5,
+            "max_n_creations_per_batch": 3,
+            "price_distance_threshold": 0.002,
+            "filter_by_min_effective_cost": True,
+            "auto_gs": True,
+            "leverage": 10.0,
+            "forced_mode_long": "",
+            "forced_mode_short": "",
+            "ignored_symbols": [],
+            "approved_symbols": [],
+            "symbol_flags": {},
+            "minimum_market_age_days": 7.0,
+            "ohlcv_interval": "15m",
+            "n_ohlcvs": 100,
+            "relative_volume_filter_clip_pct": 0.1,
+            "long": {
+                "close_grid_markup_range": 0.0255,
+                "close_grid_min_markup": 0.0089,
+                "close_grid_qty_pct": 0.125,
+                "close_trailing_drawdown_pct": 0.002,
+                "close_trailing_grid_ratio": 0.0,
+                "close_trailing_threshold_pct": 0.008,
+                "entry_grid_double_down_factor": 0.894,
+                "entry_grid_spacing_weight": 0.697,
+                "entry_grid_spacing_pct": 0.04,
+                "entry_initial_ema_dist": -0.00738,
+                "entry_initial_qty_pct": 0.00592,
+                "entry_trailing_drawdown_pct": 0.04,
+                "entry_trailing_grid_ratio": 0.0,
+                "entry_trailing_threshold_pct": 0.01,
+                "ema_span_0": 1318.0,
+                "ema_span_1": 1435.0,
+                "n_positions": 10,
+                "total_wallet_exposure_limit": 1.7,
+                "unstuck_close_pct": 0.001,
+                "unstuck_ema_dist": 0.0,
+                "unstuck_loss_allowance_pct": 0.03,
+                "unstuck_threshold": 0.916,
             },
-            "live": {
-                "user": "hyperliquid_01",
-                "pnls_max_lookback_days": 30.0,
-                "execution_delay_seconds": 2.0,
-                "max_n_cancellations_per_batch": 5,
-                "max_n_creations_per_batch": 3,
-                "price_distance_threshold": 0.002,
-                "filter_by_min_effective_cost": True,
-                "auto_gs": True,
-                "leverage": 10.0,
-                "forced_mode_long": "",
-                "forced_mode_short": "",
-                "ignored_symbols": [],
-                "symbol_flags": {},
-            },
-            "common": {
-                "minimum_market_age_days": 7.0,
-                "ohlcv_interval": "15m",
-                "n_ohlcvs": 100,
-                "relative_volume_filter_clip_pct": 0.1,
-            },
-            "bot": {
-                "long": {
-                    "close_grid_markup_range": 0.0255,
-                    "close_grid_min_markup": 0.0089,
-                    "close_grid_qty_pct": 0.125,
-                    "close_trailing_drawdown_pct": 0.002,
-                    "close_trailing_grid_ratio": 0.0,
-                    "close_trailing_threshold_pct": 0.008,
-                    "entry_grid_double_down_factor": 0.894,
-                    "entry_grid_spacing_weight": 0.697,
-                    "entry_grid_spacing_pct": 0.04,
-                    "entry_initial_ema_dist": -0.00738,
-                    "entry_initial_qty_pct": 0.00592,
-                    "entry_trailing_drawdown_pct": 0.04,
-                    "entry_trailing_grid_ratio": 0.0,
-                    "entry_trailing_threshold_pct": 0.01,
-                    "ema_span0": 1318.0,
-                    "ema_span1": 1435.0,
-                    "n_positions": 10,
-                    "total_wallet_exposure_limit": 1.7,
-                    "unstuck_close_pct": 0.001,
-                    "unstuck_ema_dist": 0.0,
-                    "unstuck_loss_allowance_pct": 0.03,
-                    "unstuck_threshold": 0.916,
-                },
-                "short": {
-                    "close_grid_markup_range": 0.0255,
-                    "close_grid_min_markup": 0.0089,
-                    "close_grid_qty_pct": 0.125,
-                    "close_trailing_drawdown_pct": 0.002,
-                    "close_trailing_grid_ratio": 0.0,
-                    "close_trailing_threshold_pct": 0.008,
-                    "entry_grid_double_down_factor": 0.894,
-                    "entry_grid_spacing_weight": 0.697,
-                    "entry_grid_spacing_pct": 0.04,
-                    "entry_initial_ema_dist": -0.00738,
-                    "entry_initial_qty_pct": 0.00592,
-                    "entry_trailing_drawdown_pct": 0.04,
-                    "entry_trailing_grid_ratio": 0.0,
-                    "entry_trailing_threshold_pct": 0.01,
-                    "ema_span0": 1318.0,
-                    "ema_span1": 1435.0,
-                    "n_positions": 10,
-                    "total_wallet_exposure_limit": 1.7,
-                    "unstuck_close_pct": 0.001,
-                    "unstuck_ema_dist": 0.0,
-                    "unstuck_loss_allowance_pct": 0.03,
-                    "unstuck_threshold": 0.916,
-                },
+            "short": {
+                "close_grid_markup_range": 0.0255,
+                "close_grid_min_markup": 0.0089,
+                "close_grid_qty_pct": 0.125,
+                "close_trailing_drawdown_pct": 0.002,
+                "close_trailing_grid_ratio": 0.0,
+                "close_trailing_threshold_pct": 0.008,
+                "entry_grid_double_down_factor": 0.894,
+                "entry_grid_spacing_weight": 0.697,
+                "entry_grid_spacing_pct": 0.04,
+                "entry_initial_ema_dist": -0.00738,
+                "entry_initial_qty_pct": 0.00592,
+                "entry_trailing_drawdown_pct": 0.04,
+                "entry_trailing_grid_ratio": 0.0,
+                "entry_trailing_threshold_pct": 0.01,
+                "ema_span_0": 1318.0,
+                "ema_span_1": 1435.0,
+                "n_positions": 10,
+                "total_wallet_exposure_limit": 1.7,
+                "unstuck_close_pct": 0.001,
+                "unstuck_ema_dist": 0.0,
+                "unstuck_loss_allowance_pct": 0.03,
+                "unstuck_threshold": 0.916,
             },
         }
     elif passivbot_mode == "multi_hjson":
@@ -2510,3 +2503,36 @@ def analyze_fills_forager(symbols, hlcs, fdf):
         "adg": adg,
         "sharpe_ratio": sharpe_ratio,
     }
+
+
+def convert_to_v7(cfg: dict):
+    template = get_template_live_config("v7")
+    if all([k in cfg for k in ["analysis", "args", "live_config"]]):
+        cmap = {
+            "ddown_factor": "entry_grid_double_down_factor",
+            "initial_eprice_ema_dist": "entry_initial_ema_dist",
+            "initial_qty_pct": "entry_initial_qty_pct",
+            "markup_range": "close_grid_markup_range",
+            "min_markup": "close_grid_min_markup",
+            "rentry_pprice_dist": "entry_grid_spacing_pct",
+            "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_weight",
+        }
+        for pside in ["long", "short"]:
+            for key in cfg["live_config"][pside]:
+                if key in template[pside]:
+                    template[pside][key] = cfg["live_config"][pside][key]
+                elif key in cmap:
+                    template[pside][cmap[key]] = cfg["live_config"][pside][key]
+            template[pside]["close_grid_qty_pct"] = 1.0 / cfg["live_config"][pside]["n_close_orders"]
+            template[pside]["unstuck_close_pct"] = cfg["live_config"]["global"]["unstuck_close_pct"]
+            template[pside]["unstuck_loss_allowance_pct"] = cfg["live_config"]["global"][
+                "loss_allowance_pct"
+            ]
+            template[pside]["unstuck_threshold"] = cfg["live_config"]["global"]["stuck_threshold"]
+            template[pside]["total_wallet_exposure_limit"] = cfg["live_config"]["global"][
+                f"TWE_{pside}"
+            ]
+        for key in ["start_date", "end_date", "starting_balance", "exchange"]:
+            template[key] = cfg["args"][key]
+        template["approved_symbols"] = cfg["args"]["symbols"]
+    return template
