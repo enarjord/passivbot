@@ -239,72 +239,75 @@ impl Backtest {
         let mut open_orders_keys_long: Vec<usize> = self.open_orders.long.keys().cloned().collect();
         open_orders_keys_long.sort();
         for idx in open_orders_keys_long {
-            if self.open_orders.long[&idx].close.qty != 0.0
+            // Process close fills
+            while self.open_orders.long[&idx].close.qty != 0.0
                 && self.hlcs[[k, idx, HIGH]] > self.open_orders.long[&idx].close.price
             {
-                // long close fill
                 any_fill = true;
                 self.reset_trailing_prices_long(idx);
                 self.process_close_fill_long(k, idx);
-                // check for subsequent grid close fills
-                if self.open_orders.long[&idx].close.order_type == OrderType::CloseGridLong {
-                    loop {
-                        let next_grid_close = self.calc_next_grid_close_long(k, idx);
-                        if next_grid_close.qty == 0.0 {
-                            break;
-                        }
-                        if next_grid_close.order_type == OrderType::CloseTrailingLong {
-                            break;
-                        }
-                        self.open_orders.long.get_mut(&idx).unwrap().close = next_grid_close;
-                        self.process_close_fill_long(k, idx);
+
+                if !self.positions.long.contains_key(&idx) {
+                    break;
+                } else if self.open_orders.long[&idx].close.order_type == OrderType::CloseGridLong {
+                    let next_grid_close = self.calc_next_grid_close_long(k, idx);
+                    if next_grid_close.order_type == OrderType::CloseTrailingLong {
+                        break;
                     }
+                    self.open_orders.long.get_mut(&idx).unwrap().close = next_grid_close;
+                } else {
+                    break;
                 }
             }
-            if self.open_orders.long[&idx].entry.qty != 0.0
+
+            // Process entry fills
+            while self.open_orders.long[&idx].entry.qty != 0.0
                 && self.hlcs[[k, idx, LOW]] < self.open_orders.long[&idx].entry.price
             {
-                // long entry fill
                 any_fill = true;
                 self.reset_trailing_prices_long(idx);
                 self.process_entry_fill_long(k, idx);
-                // Check for subsequent grid entry fills
+
                 if self.open_orders.long[&idx].entry.order_type == OrderType::EntryGridNormalLong
                     || self.open_orders.long[&idx].entry.order_type
                         == OrderType::EntryInitialNormalLong
                 {
-                    loop {
-                        let next_grid_entry = self.calc_next_grid_entry_long(k, idx);
-                        if next_grid_entry.qty == 0.0
-                            || self.hlcs[[k, idx, LOW]] >= next_grid_entry.price
-                        {
-                            break;
-                        }
-                        if next_grid_entry.order_type == OrderType::EntryTrailingNormalLong
-                            || next_grid_entry.order_type == OrderType::EntryTrailingCroppedLong
-                        {
-                            break;
-                        }
-                        self.open_orders.long.get_mut(&idx).unwrap().entry = next_grid_entry;
-                        self.process_entry_fill_long(k, idx);
+                    let next_grid_entry = self.calc_next_grid_entry_long(k, idx);
+                    if next_grid_entry.qty == 0.0
+                        || next_grid_entry.order_type == OrderType::EntryTrailingNormalLong
+                        || next_grid_entry.order_type == OrderType::EntryTrailingCroppedLong
+                    {
+                        break;
                     }
-                }
-                let wallet_exposure = calc_wallet_exposure(
-                    self.exchange_params_list[idx].c_mult,
-                    self.balance,
-                    self.positions.long[&idx].size,
-                    self.positions.long[&idx].price,
-                );
-                if wallet_exposure / self.bot_params_pair.long.wallet_exposure_limit
-                    > self.bot_params_pair.long.unstuck_threshold
-                {
-                    self.is_stuck.long.insert(idx);
-                } else if self.is_stuck.long.contains(&idx) {
-                    self.is_stuck.long.remove(&idx);
+                    self.open_orders.long.get_mut(&idx).unwrap().entry = next_grid_entry;
+                } else {
+                    break;
                 }
             }
         }
         any_fill
+    }
+
+    fn update_stuck_status(&mut self, idx: usize) {
+        if !self.positions.long.contains_key(&idx) {
+            if self.is_stuck.long.contains(&idx) {
+                self.is_stuck.long.remove(&idx);
+            }
+            return;
+        }
+        let wallet_exposure = calc_wallet_exposure(
+            self.exchange_params_list[idx].c_mult,
+            self.balance,
+            self.positions.long[&idx].size,
+            self.positions.long[&idx].price,
+        );
+        if wallet_exposure / self.bot_params_pair.long.wallet_exposure_limit
+            > self.bot_params_pair.long.unstuck_threshold
+        {
+            self.is_stuck.long.insert(idx);
+        } else if self.is_stuck.long.contains(&idx) {
+            self.is_stuck.long.remove(&idx);
+        }
     }
 
     fn process_close_fill_long(&mut self, k: usize, idx: usize) {
@@ -357,19 +360,6 @@ impl Backtest {
             position_price: current_pprice,                                   // pprice after fill
             order_type: self.open_orders.long[&idx].close.order_type.clone(), // fill type
         });
-        let wallet_exposure = calc_wallet_exposure(
-            self.exchange_params_list[idx].c_mult,
-            self.balance,
-            new_psize,
-            current_pprice,
-        );
-        if wallet_exposure / self.bot_params_pair.long.wallet_exposure_limit
-            > self.bot_params_pair.long.unstuck_threshold
-        {
-            self.is_stuck.long.insert(idx);
-        } else if self.is_stuck.long.contains(&idx) {
-            self.is_stuck.long.remove(&idx);
-        }
     }
 
     fn process_entry_fill_long(&mut self, k: usize, idx: usize) {
@@ -627,10 +617,11 @@ impl Backtest {
             self.open_orders
                 .long
                 .retain(|&idx, _| self.actives.long.contains(&idx));
+            let active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
             let (unstucking_idx, unstucking_pside, unstucking_close) =
                 self.calc_unstucking_close(k);
-            let active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
             for &idx in &active_long_indices {
+                self.update_stuck_status(idx);
                 self.update_open_orders_long_single(
                     k,
                     idx,
