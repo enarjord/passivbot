@@ -185,9 +185,9 @@ impl Backtest {
 
     fn prepare_emas(&self) {
         let mut ema_spans_long = [
-            self.bot_params_pair.long.ema_span0,
-            self.bot_params_pair.long.ema_span1,
-            (self.bot_params_pair.long.ema_span0 * self.bot_params_pair.long.ema_span1).sqrt(),
+            self.bot_params_pair.long.ema_span_0,
+            self.bot_params_pair.long.ema_span_1,
+            (self.bot_params_pair.long.ema_span_0 * self.bot_params_pair.long.ema_span_1).sqrt(),
         ];
         ema_spans_long.sort_by(|a, b| a.partial_cmp(b).unwrap());
     }
@@ -245,67 +245,20 @@ impl Backtest {
                 // long close fill
                 any_fill = true;
                 self.reset_trailing_prices_long(idx);
-                let mut new_psize = round_(
-                    self.positions.long[&idx].size + self.open_orders.long[&idx].close.qty,
-                    self.exchange_params_list[idx].qty_step,
-                );
-                if new_psize < 0.0 {
-                    println!("warning: close qty greater than psize long");
-                    println!("symbol: {}", self.backtest_params.symbols[idx]);
-                    println!("new_psize: {}", new_psize);
-                    println!("close order: {:?}", self.open_orders.long[&idx].close);
-                    new_psize = 0.0;
-                    self.open_orders.long.get_mut(&idx).unwrap().close = Order::new(
-                        -self.positions.long[&idx].size,
-                        self.open_orders.long[&idx].close.price,
-                        self.open_orders.long[&idx].close.order_type.clone(),
-                    );
-                }
-                let fee_paid = -qty_to_cost(
-                    self.open_orders.long[&idx].close.qty,
-                    self.open_orders.long[&idx].close.price,
-                    self.exchange_params_list[idx].c_mult,
-                ) * self.backtest_params.maker_fee;
-                let pnl = calc_pnl_long(
-                    self.positions.long[&idx].price,
-                    self.open_orders.long[&idx].close.price,
-                    self.open_orders.long[&idx].close.qty,
-                    self.exchange_params_list[idx].c_mult,
-                );
-                self.pnl_cumsum_running += pnl;
-                self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
-                self.balance += pnl + fee_paid;
-
-                let current_pprice = self.positions.long[&idx].price;
-                if new_psize == 0.0 {
-                    self.positions.long.remove(&idx);
-                } else {
-                    self.positions.long.get_mut(&idx).unwrap().size = new_psize;
-                }
-                self.fills.push(Fill {
-                    index: k,                                                         // index minute
-                    symbol: self.backtest_params.symbols[idx].clone(),                // symbol
-                    pnl,                                                 // realized pnl
-                    fee_paid,                                            // fee paid
-                    balance: self.balance,                               // balance after fill
-                    fill_qty: self.open_orders.long[&idx].close.qty,     // fill qty
-                    fill_price: self.open_orders.long[&idx].close.price, // fill price
-                    position_size: new_psize,                            // psize after fill
-                    position_price: current_pprice,                      // pprice after fill
-                    order_type: self.open_orders.long[&idx].close.order_type.clone(), // fill type
-                });
-                let wallet_exposure = calc_wallet_exposure(
-                    self.exchange_params_list[idx].c_mult,
-                    self.balance,
-                    new_psize,
-                    current_pprice,
-                );
-                if wallet_exposure / self.bot_params_pair.long.wallet_exposure_limit
-                    > self.bot_params_pair.long.unstuck_threshold
-                {
-                    self.is_stuck.long.insert(idx);
-                } else if self.is_stuck.long.contains(&idx) {
-                    self.is_stuck.long.remove(&idx);
+                self.process_close_fill_long(k, idx);
+                // check for subsequent grid close fills
+                if self.open_orders.long[&idx].close.order_type == OrderType::CloseGridLong {
+                    loop {
+                        let next_grid_close = self.calc_next_grid_close_long(k, idx);
+                        if next_grid_close.qty == 0.0 {
+                            break;
+                        }
+                        if next_grid_close.order_type == OrderType::CloseTrailingLong {
+                            break;
+                        }
+                        self.open_orders.long.get_mut(&idx).unwrap().close = next_grid_close;
+                        self.process_close_fill_long(k, idx);
+                    }
                 }
             }
             if self.open_orders.long[&idx].entry.qty != 0.0
@@ -314,14 +267,14 @@ impl Backtest {
                 // long entry fill
                 any_fill = true;
                 self.reset_trailing_prices_long(idx);
-                self.process_long_entry_fill(k, idx);
+                self.process_entry_fill_long(k, idx);
                 // Check for subsequent grid entry fills
                 if self.open_orders.long[&idx].entry.order_type == OrderType::EntryGridNormalLong
                     || self.open_orders.long[&idx].entry.order_type
                         == OrderType::EntryInitialNormalLong
                 {
                     loop {
-                        let next_grid_entry = self.compute_next_grid_entry_long(k, idx);
+                        let next_grid_entry = self.calc_next_grid_entry_long(k, idx);
                         if next_grid_entry.qty == 0.0
                             || self.hlcs[[k, idx, LOW]] >= next_grid_entry.price
                         {
@@ -333,7 +286,7 @@ impl Backtest {
                             break;
                         }
                         self.open_orders.long.get_mut(&idx).unwrap().entry = next_grid_entry;
-                        self.process_long_entry_fill(k, idx);
+                        self.process_entry_fill_long(k, idx);
                     }
                 }
                 let wallet_exposure = calc_wallet_exposure(
@@ -354,7 +307,72 @@ impl Backtest {
         any_fill
     }
 
-    fn process_long_entry_fill(&mut self, k: usize, idx: usize) {
+    fn process_close_fill_long(&mut self, k: usize, idx: usize) {
+        let mut new_psize = round_(
+            self.positions.long[&idx].size + self.open_orders.long[&idx].close.qty,
+            self.exchange_params_list[idx].qty_step,
+        );
+        if new_psize < 0.0 {
+            println!("warning: close qty greater than psize long");
+            println!("symbol: {}", self.backtest_params.symbols[idx]);
+            println!("new_psize: {}", new_psize);
+            println!("close order: {:?}", self.open_orders.long[&idx].close);
+            new_psize = 0.0;
+            self.open_orders.long.get_mut(&idx).unwrap().close = Order::new(
+                -self.positions.long[&idx].size,
+                self.open_orders.long[&idx].close.price,
+                self.open_orders.long[&idx].close.order_type.clone(),
+            );
+        }
+        let fee_paid = -qty_to_cost(
+            self.open_orders.long[&idx].close.qty,
+            self.open_orders.long[&idx].close.price,
+            self.exchange_params_list[idx].c_mult,
+        ) * self.backtest_params.maker_fee;
+        let pnl = calc_pnl_long(
+            self.positions.long[&idx].price,
+            self.open_orders.long[&idx].close.price,
+            self.open_orders.long[&idx].close.qty,
+            self.exchange_params_list[idx].c_mult,
+        );
+        self.pnl_cumsum_running += pnl;
+        self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
+        self.balance += pnl + fee_paid;
+
+        let current_pprice = self.positions.long[&idx].price;
+        if new_psize == 0.0 {
+            self.positions.long.remove(&idx);
+        } else {
+            self.positions.long.get_mut(&idx).unwrap().size = new_psize;
+        }
+        self.fills.push(Fill {
+            index: k,                                                         // index minute
+            symbol: self.backtest_params.symbols[idx].clone(),                // symbol
+            pnl,                                                              // realized pnl
+            fee_paid,                                                         // fee paid
+            balance: self.balance,                                            // balance after fill
+            fill_qty: self.open_orders.long[&idx].close.qty,                  // fill qty
+            fill_price: self.open_orders.long[&idx].close.price,              // fill price
+            position_size: new_psize,                                         // psize after fill
+            position_price: current_pprice,                                   // pprice after fill
+            order_type: self.open_orders.long[&idx].close.order_type.clone(), // fill type
+        });
+        let wallet_exposure = calc_wallet_exposure(
+            self.exchange_params_list[idx].c_mult,
+            self.balance,
+            new_psize,
+            current_pprice,
+        );
+        if wallet_exposure / self.bot_params_pair.long.wallet_exposure_limit
+            > self.bot_params_pair.long.unstuck_threshold
+        {
+            self.is_stuck.long.insert(idx);
+        } else if self.is_stuck.long.contains(&idx) {
+            self.is_stuck.long.remove(&idx);
+        }
+    }
+
+    fn process_entry_fill_long(&mut self, k: usize, idx: usize) {
         // long entry fill
         let fee_paid = -qty_to_cost(
             self.open_orders.long[&idx].entry.qty,
@@ -390,7 +408,7 @@ impl Backtest {
         });
     }
 
-    fn compute_next_grid_entry_long(&self, k: usize, idx: usize) -> Order {
+    fn calc_next_grid_entry_long(&self, k: usize, idx: usize) -> Order {
         let close_price = self.hlcs[[k, idx, CLOSE]];
         let state_params = StateParams {
             balance: self.balance,
@@ -420,6 +438,39 @@ impl Backtest {
             position,
             self.trailing_prices.long[&idx].min_price_since_open,
             self.trailing_prices.long[&idx].max_price_since_min,
+        )
+    }
+
+    fn calc_next_grid_close_long(&self, k: usize, idx: usize) -> Order {
+        let close_price = self.hlcs[[k, idx, CLOSE]];
+        let state_params = StateParams {
+            balance: self.balance,
+            order_book: OrderBook {
+                bid: close_price,
+                ask: close_price,
+            },
+            ema_bands: EMABands {
+                upper: *self.emas[idx]
+                    .long
+                    .iter()
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(&f64::MIN),
+                lower: *self.emas[idx]
+                    .long
+                    .iter()
+                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(&f64::MAX),
+            },
+        };
+        let binding = Position::default();
+        let position = self.positions.long.get(&idx).unwrap_or(&binding);
+        calc_next_close_long(
+            &self.exchange_params_list[idx],
+            &state_params,
+            &self.bot_params_pair.long,
+            &position,
+            self.trailing_prices.long[&idx].max_price_since_open,
+            self.trailing_prices.long[&idx].min_price_since_max,
         )
     }
 
@@ -667,16 +718,16 @@ impl Backtest {
 
 fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
     let mut ema_spans_long = [
-        bot_params_pair.long.ema_span0,
-        bot_params_pair.long.ema_span1,
-        (bot_params_pair.long.ema_span0 * bot_params_pair.long.ema_span1).sqrt(),
+        bot_params_pair.long.ema_span_0,
+        bot_params_pair.long.ema_span_1,
+        (bot_params_pair.long.ema_span_0 * bot_params_pair.long.ema_span_1).sqrt(),
     ];
     ema_spans_long.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
     let mut ema_spans_short = [
-        bot_params_pair.short.ema_span0,
-        bot_params_pair.short.ema_span1,
-        (bot_params_pair.short.ema_span0 * bot_params_pair.short.ema_span1).sqrt(),
+        bot_params_pair.short.ema_span_0,
+        bot_params_pair.short.ema_span_1,
+        (bot_params_pair.short.ema_span_0 * bot_params_pair.short.ema_span_1).sqrt(),
     ];
     ema_spans_short.sort_by(|a, b| a.partial_cmp(b).unwrap());
 

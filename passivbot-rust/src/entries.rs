@@ -549,19 +549,28 @@ pub fn calc_next_entry_long(
         // trailing first
         if wallet_exposure_ratio < bot_params.entry_trailing_grid_ratio {
             // return trailing order, but crop to max bot_params.wallet_exposure_limit * bot_params.entry_trailing_grid_ratio + 1%
-            let mut bot_params_modified = bot_params.clone();
-            if wallet_exposure != 0.0 {
+            if wallet_exposure == 0.0 {
+                calc_trailing_entry_long(
+                    &exchange_params,
+                    &state_params,
+                    &bot_params,
+                    &position,
+                    min_price_since_open,
+                    max_price_since_min,
+                )
+            } else {
+                let mut bot_params_modified = bot_params.clone();
                 bot_params_modified.wallet_exposure_limit =
                     bot_params.wallet_exposure_limit * bot_params.entry_trailing_grid_ratio * 1.01;
+                calc_trailing_entry_long(
+                    &exchange_params,
+                    &state_params,
+                    &bot_params_modified,
+                    &position,
+                    min_price_since_open,
+                    max_price_since_min,
+                )
             }
-            calc_trailing_entry_long(
-                &exchange_params,
-                &state_params,
-                &bot_params_modified,
-                &position,
-                min_price_since_open,
-                max_price_since_min,
-            )
         } else {
             // return grid order
             calc_grid_entry_long(&exchange_params, &state_params, &bot_params, &position)
@@ -570,18 +579,22 @@ pub fn calc_next_entry_long(
         // grid first
         if wallet_exposure_ratio < 1.0 + bot_params.entry_trailing_grid_ratio {
             // return grid order, but crop to max bot_params.wallet_exposure_limit * (1.0 + bot_params.entry_trailing_grid_ratio) + 1%
-            let mut bot_params_modified = bot_params.clone();
-            if wallet_exposure != 0.0 {
-                bot_params_modified.wallet_exposure_limit = bot_params.wallet_exposure_limit
-                    * (1.0 + bot_params.entry_trailing_grid_ratio)
-                    * 1.01;
+            if wallet_exposure == 0.0 {
+                calc_grid_entry_long(&exchange_params, &state_params, &bot_params, &position)
+            } else {
+                let mut bot_params_modified = bot_params.clone();
+                if wallet_exposure != 0.0 {
+                    bot_params_modified.wallet_exposure_limit = bot_params.wallet_exposure_limit
+                        * (1.0 + bot_params.entry_trailing_grid_ratio)
+                        * 1.01;
+                }
+                calc_grid_entry_long(
+                    &exchange_params,
+                    &state_params,
+                    &bot_params_modified,
+                    &position,
+                )
             }
-            calc_grid_entry_long(
-                &exchange_params,
-                &state_params,
-                &bot_params_modified,
-                &position,
-            )
         } else {
             calc_trailing_entry_long(
                 &exchange_params,
