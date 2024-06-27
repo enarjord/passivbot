@@ -11,7 +11,7 @@ use crate::utils::{
 use ndarray::{Array1, Array2};
 use std::collections::HashMap;
 
-pub fn calc_next_grid_close_long(
+pub fn calc_grid_close_long(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
@@ -36,23 +36,23 @@ pub fn calc_next_grid_close_long(
             order_type: OrderType::CloseGridLong,
         };
     }
-    let min_close_price = round_up(
+    let close_prices_start = round_up(
         position.price * (1.0 + bot_params.close_grid_min_markup),
         exchange_params.price_step,
     );
-    let max_close_price = round_up(
+    let close_prices_end = round_up(
         position.price
             * (1.0 + bot_params.close_grid_min_markup + bot_params.close_grid_markup_range),
         exchange_params.price_step,
     );
-    if min_close_price == max_close_price {
+    if close_prices_start == close_prices_end {
         return Order {
             qty: -position.size,
-            price: f64::max(state_params.order_book.ask, min_close_price),
+            price: f64::max(state_params.order_book.ask, close_prices_start),
             order_type: OrderType::CloseGridLong,
         };
     }
-    let n_steps = ((max_close_price - min_close_price) / exchange_params.price_step).ceil();
+    let n_steps = ((close_prices_end - close_prices_start) / exchange_params.price_step).ceil();
     let close_grid_qty_pct_modified = f64::max(bot_params.close_grid_qty_pct, 1.0 / n_steps);
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
@@ -85,90 +85,6 @@ pub fn calc_next_grid_close_long(
         price: close_price,
         order_type: OrderType::CloseGridLong,
     }
-}
-
-pub fn calc_next_close_long(
-    exchange_params: &ExchangeParams,
-    state_params: &StateParams,
-    bot_params: &BotParams,
-    position: &Position,
-    max_price_since_open: f64,
-    min_price_since_max: f64,
-) -> Order {
-    if position.size == 0.0 {
-        // no position
-        return Order::default();
-    }
-    let wallet_exposure = calc_wallet_exposure(
-        exchange_params.c_mult,
-        state_params.balance,
-        position.size,
-        position.price,
-    );
-    if bot_params.close_trailing_grid_ratio >= 1.0 || bot_params.close_trailing_grid_ratio <= -1.0 {
-        // return trailing only
-        return calc_trailing_close_long(
-            &exchange_params,
-            &state_params,
-            &bot_params,
-            &position,
-            max_price_since_open,
-            min_price_since_max,
-        );
-    }
-    let wallet_exposure_ratio = wallet_exposure / bot_params.wallet_exposure_limit;
-    if bot_params.close_trailing_grid_ratio > 0.0 {
-        // trailing first
-        if wallet_exposure_ratio < bot_params.close_trailing_grid_ratio {
-            // return trailing order, but crop to max bot_params.wallet_exposure_limit * bot_params.close_trailing_grid_ratio + 1%
-            let mut bot_params_modified = bot_params.clone();
-            bot_params_modified.wallet_exposure_limit =
-                bot_params.wallet_exposure_limit * bot_params.close_trailing_grid_ratio * 1.01;
-            return calc_trailing_close_long(
-                &exchange_params,
-                &state_params,
-                &bot_params_modified,
-                &position,
-                max_price_since_open,
-                min_price_since_max,
-            );
-        } else {
-            // return grid order
-            return calc_next_grid_close_long(
-                &exchange_params,
-                &state_params,
-                &bot_params,
-                &position,
-            );
-        }
-    }
-    if bot_params.close_trailing_grid_ratio < 0.0 {
-        // grid first
-        if wallet_exposure_ratio < 1.0 + bot_params.close_trailing_grid_ratio {
-            // return grid order, but crop to max bot_params.wallet_exposure_limit * (1.0 + bot_params.close_trailing_grid_ratio) + 1%
-            let mut bot_params_modified = bot_params.clone();
-            bot_params_modified.wallet_exposure_limit = bot_params.wallet_exposure_limit
-                * (1.0 + bot_params.close_trailing_grid_ratio)
-                * 1.01;
-            return calc_next_grid_close_long(
-                &exchange_params,
-                &state_params,
-                &bot_params_modified,
-                &position,
-            );
-        } else {
-            return calc_trailing_close_long(
-                &exchange_params,
-                &state_params,
-                &bot_params,
-                &position,
-                max_price_since_open,
-                min_price_since_max,
-            );
-        }
-    }
-    // return grid only
-    calc_next_grid_close_long(&exchange_params, &state_params, &bot_params, &position)
 }
 
 pub fn calc_trailing_close_long(
@@ -232,6 +148,300 @@ pub fn calc_trailing_close_long(
         ),
         order_type: OrderType::CloseTrailingLong,
     }
+}
+
+pub fn calc_next_close_long(
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    bot_params: &BotParams,
+    position: &Position,
+    max_price_since_open: f64,
+    min_price_since_max: f64,
+) -> Order {
+    if position.size == 0.0 {
+        // no position
+        return Order::default();
+    }
+    let wallet_exposure = calc_wallet_exposure(
+        exchange_params.c_mult,
+        state_params.balance,
+        position.size,
+        position.price,
+    );
+    if bot_params.close_trailing_grid_ratio >= 1.0 || bot_params.close_trailing_grid_ratio <= -1.0 {
+        // return trailing only
+        return calc_trailing_close_long(
+            &exchange_params,
+            &state_params,
+            &bot_params,
+            &position,
+            max_price_since_open,
+            min_price_since_max,
+        );
+    }
+    let wallet_exposure_ratio = wallet_exposure / bot_params.wallet_exposure_limit;
+    if bot_params.close_trailing_grid_ratio > 0.0 {
+        // trailing first
+        if wallet_exposure_ratio < bot_params.close_trailing_grid_ratio {
+            // return trailing order, but crop to max bot_params.wallet_exposure_limit * bot_params.close_trailing_grid_ratio + 1%
+            let mut bot_params_modified = bot_params.clone();
+            bot_params_modified.wallet_exposure_limit =
+                bot_params.wallet_exposure_limit * bot_params.close_trailing_grid_ratio * 1.01;
+            return calc_trailing_close_long(
+                &exchange_params,
+                &state_params,
+                &bot_params_modified,
+                &position,
+                max_price_since_open,
+                min_price_since_max,
+            );
+        } else {
+            // return grid order
+            return calc_grid_close_long(&exchange_params, &state_params, &bot_params, &position);
+        }
+    }
+    if bot_params.close_trailing_grid_ratio < 0.0 {
+        // grid first
+        if wallet_exposure_ratio < 1.0 + bot_params.close_trailing_grid_ratio {
+            // return grid order, but crop to max bot_params.wallet_exposure_limit * (1.0 + bot_params.close_trailing_grid_ratio) + 1%
+            let mut bot_params_modified = bot_params.clone();
+            bot_params_modified.wallet_exposure_limit = bot_params.wallet_exposure_limit
+                * (1.0 + bot_params.close_trailing_grid_ratio)
+                * 1.01;
+            return calc_grid_close_long(
+                &exchange_params,
+                &state_params,
+                &bot_params_modified,
+                &position,
+            );
+        } else {
+            return calc_trailing_close_long(
+                &exchange_params,
+                &state_params,
+                &bot_params,
+                &position,
+                max_price_since_open,
+                min_price_since_max,
+            );
+        }
+    }
+    // return grid only
+    calc_grid_close_long(&exchange_params, &state_params, &bot_params, &position)
+}
+
+pub fn calc_grid_close_short(
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    bot_params: &BotParams,
+    position: &Position,
+) -> Order {
+    let position_size_abs = position.size.abs();
+    if position_size_abs == 0.0 {
+        return Order::default();
+    }
+    if bot_params.close_grid_markup_range <= 0.0
+        || bot_params.close_grid_qty_pct < 0.0
+        || bot_params.close_grid_qty_pct >= 1.0
+    {
+        return Order {
+            qty: position_size_abs,
+            price: f64::min(
+                state_params.order_book.bid,
+                round_dn(
+                    position.price * (1.0 - bot_params.close_grid_min_markup),
+                    exchange_params.price_step,
+                ),
+            ),
+            order_type: OrderType::CloseGridShort,
+        };
+    }
+    let close_prices_start = round_dn(
+        position.price * (1.0 - bot_params.close_grid_min_markup),
+        exchange_params.price_step,
+    );
+    let close_prices_end = round_dn(
+        position.price
+            * (1.0 - bot_params.close_grid_min_markup - bot_params.close_grid_markup_range),
+        exchange_params.price_step,
+    );
+    if close_prices_start == close_prices_end {
+        return Order {
+            qty: position_size_abs,
+            price: f64::min(state_params.order_book.bid, close_prices_start),
+            order_type: OrderType::CloseGridShort,
+        };
+    }
+    let n_steps = ((close_prices_start - close_prices_end) / exchange_params.price_step).ceil();
+    let close_grid_qty_pct_modified = f64::max(bot_params.close_grid_qty_pct, 1.0 / n_steps);
+    let wallet_exposure = calc_wallet_exposure(
+        exchange_params.c_mult,
+        state_params.balance,
+        position_size_abs,
+        position.price,
+    );
+    let wallet_exposure_ratio = f64::min(1.0, wallet_exposure / bot_params.wallet_exposure_limit);
+    let close_price = position.price
+        * (1.0
+            - bot_params.close_grid_min_markup
+            - bot_params.close_grid_markup_range * (1.0 - wallet_exposure_ratio));
+    let close_price = round_dn(close_price, exchange_params.price_step);
+    let full_psize = cost_to_qty(
+        state_params.balance * bot_params.wallet_exposure_limit,
+        position.price,
+        exchange_params.c_mult,
+    );
+    let leftover = f64::max(0.0, position_size_abs - full_psize);
+    let close_qty = f64::max(
+        calc_min_entry_qty(close_price, &exchange_params),
+        round_up(
+            full_psize * close_grid_qty_pct_modified + leftover,
+            exchange_params.qty_step,
+        ),
+    );
+    let close_qty = f64::min(position_size_abs, close_qty);
+    Order {
+        qty: close_qty,
+        price: close_price,
+        order_type: OrderType::CloseGridShort,
+    }
+}
+
+pub fn calc_trailing_close_short(
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    bot_params: &BotParams,
+    position: &Position,
+    min_price_since_open: f64,
+    max_price_since_min: f64,
+) -> Order {
+    let position_size_abs = position.size.abs();
+    if position_size_abs == 0.0 {
+        return Order::default();
+    }
+    if bot_params.close_trailing_drawdown_pct == 0.0 {
+        return Order {
+            qty: position_size_abs,
+            price: f64::min(
+                state_params.order_book.bid,
+                round_dn(
+                    position.price * (1.0 - f64::max(0.0, bot_params.close_trailing_threshold_pct)),
+                    exchange_params.price_step,
+                ),
+            ),
+            order_type: OrderType::CloseTrailingShort,
+        };
+    }
+    if min_price_since_open > position.price * (1.0 - bot_params.close_trailing_threshold_pct) {
+        return Order {
+            qty: 0.0,
+            price: 0.0,
+            order_type: OrderType::CloseTrailingShort,
+        };
+    }
+    if max_price_since_min < min_price_since_open * (1.0 + bot_params.close_trailing_drawdown_pct) {
+        return Order {
+            qty: 0.0,
+            price: 0.0,
+            order_type: OrderType::CloseTrailingShort,
+        };
+    }
+    Order {
+        qty: position_size_abs,
+        price: f64::min(
+            state_params.order_book.bid,
+            round_dn(
+                position.price
+                    * (1.0
+                        - f64::max(
+                            0.0,
+                            bot_params.close_trailing_threshold_pct
+                                - bot_params.close_trailing_drawdown_pct,
+                        )),
+                exchange_params.price_step,
+            ),
+        ),
+        order_type: OrderType::CloseTrailingShort,
+    }
+}
+
+pub fn calc_next_close_short(
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    bot_params: &BotParams,
+    position: &Position,
+    min_price_since_open: f64,
+    max_price_since_min: f64,
+) -> Order {
+    let position_size_abs = position.size.abs();
+    if position_size_abs == 0.0 {
+        // no position
+        return Order::default();
+    }
+    let wallet_exposure = calc_wallet_exposure(
+        exchange_params.c_mult,
+        state_params.balance,
+        position_size_abs,
+        position.price,
+    );
+    if bot_params.close_trailing_grid_ratio >= 1.0 || bot_params.close_trailing_grid_ratio <= -1.0 {
+        // return trailing only
+        return calc_trailing_close_short(
+            &exchange_params,
+            &state_params,
+            &bot_params,
+            &position,
+            min_price_since_open,
+            max_price_since_min,
+        );
+    }
+    let wallet_exposure_ratio = wallet_exposure / bot_params.wallet_exposure_limit;
+    if bot_params.close_trailing_grid_ratio > 0.0 {
+        // trailing first
+        if wallet_exposure_ratio < bot_params.close_trailing_grid_ratio {
+            // return trailing order, but crop to max bot_params.wallet_exposure_limit * bot_params.close_trailing_grid_ratio + 1%
+            let mut bot_params_modified = bot_params.clone();
+            bot_params_modified.wallet_exposure_limit =
+                bot_params.wallet_exposure_limit * bot_params.close_trailing_grid_ratio * 1.01;
+            return calc_trailing_close_short(
+                &exchange_params,
+                &state_params,
+                &bot_params_modified,
+                &position,
+                min_price_since_open,
+                max_price_since_min,
+            );
+        } else {
+            // return grid order
+            return calc_grid_close_short(&exchange_params, &state_params, &bot_params, &position);
+        }
+    }
+    if bot_params.close_trailing_grid_ratio < 0.0 {
+        // grid first
+        if wallet_exposure_ratio < 1.0 + bot_params.close_trailing_grid_ratio {
+            // return grid order, but crop to max bot_params.wallet_exposure_limit * (1.0 + bot_params.close_trailing_grid_ratio) + 1%
+            let mut bot_params_modified = bot_params.clone();
+            bot_params_modified.wallet_exposure_limit = bot_params.wallet_exposure_limit
+                * (1.0 + bot_params.close_trailing_grid_ratio)
+                * 1.01;
+            return calc_grid_close_short(
+                &exchange_params,
+                &state_params,
+                &bot_params_modified,
+                &position,
+            );
+        } else {
+            return calc_trailing_close_short(
+                &exchange_params,
+                &state_params,
+                &bot_params,
+                &position,
+                min_price_since_open,
+                max_price_since_min,
+            );
+        }
+    }
+    // return grid only
+    calc_grid_close_short(&exchange_params, &state_params, &bot_params, &position)
 }
 
 pub fn determine_position_for_unstucking(

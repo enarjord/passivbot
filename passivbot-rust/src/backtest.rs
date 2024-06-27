@@ -250,7 +250,7 @@ impl Backtest {
                 if !self.positions.long.contains_key(&idx) {
                     break;
                 } else if self.open_orders.long[&idx].close.order_type == OrderType::CloseGridLong {
-                    let next_grid_close = self.calc_next_grid_close_long(k, idx);
+                    let next_grid_close = self.calc_grid_close_long(k, idx);
                     if next_grid_close.order_type == OrderType::CloseTrailingLong {
                         break;
                     }
@@ -431,7 +431,7 @@ impl Backtest {
         )
     }
 
-    fn calc_next_grid_close_long(&self, k: usize, idx: usize) -> Order {
+    fn calc_grid_close_long(&self, k: usize, idx: usize) -> Order {
         let close_price = self.hlcs[[k, idx, CLOSE]];
         let state_params = StateParams {
             balance: self.balance,
