@@ -2480,7 +2480,7 @@ def calc_equity_forager(symbols, hlcs, fdf):
 
 
 def analyze_fills_forager(symbols, hlcs, fdf):
-    tdf = fdf[fdf.type.str.contains("close_t")]
+    tdf = fdf[fdf.type.str.contains("close")]
     tpp = tdf.pprice_diff
     tp_costs = (tdf.qty * tdf.price).abs() / tdf.balance
     tpp_w_mean = (tpp * tp_costs).sum() / tp_costs.sum()
@@ -2492,7 +2492,7 @@ def analyze_fills_forager(symbols, hlcs, fdf):
     daily_eqs_pct_change = daily_eqs.pct_change()
     adg = daily_eqs_pct_change.mean()
     sharpe_ratio = adg / daily_eqs_pct_change.std()
-    return {
+    analysis = {
         "TP_pprice_diff_max": tpp.max(),
         "TP_pprice_diff_min": tpp.min(),
         "TP_pprice_diff_mean": tpp.mean(),
@@ -2503,6 +2503,7 @@ def analyze_fills_forager(symbols, hlcs, fdf):
         "adg": adg,
         "sharpe_ratio": sharpe_ratio,
     }
+    return analysis, balance_and_equity
 
 
 def convert_to_v7(cfg: dict):
@@ -2532,6 +2533,8 @@ def convert_to_v7(cfg: dict):
             template[pside]["total_wallet_exposure_limit"] = cfg["live_config"]["global"][
                 f"TWE_{pside}"
             ]
+            template[pside]["close_trailing_grid_ratio"] = 0.0
+            template[pside]["entry_trailing_grid_ratio"] = 0.0
         for key in ["start_date", "end_date", "starting_balance", "exchange"]:
             template[key] = cfg["args"][key]
         template["approved_symbols"] = cfg["args"]["symbols"]
