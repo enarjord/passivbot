@@ -119,7 +119,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         close_grid_markup_range: extract_value(dict, "close_grid_markup_range")?,
         close_grid_min_markup: extract_value(dict, "close_grid_min_markup")?,
         close_grid_qty_pct: extract_value(dict, "close_grid_qty_pct")?,
-        close_trailing_drawdown_pct: extract_value(dict, "close_trailing_drawdown_pct")?,
+        close_trailing_retracement_pct: extract_value(dict, "close_trailing_retracement_pct")?,
         close_trailing_grid_ratio: extract_value(dict, "close_trailing_grid_ratio")?,
         close_trailing_threshold_pct: extract_value(dict, "close_trailing_threshold_pct")?,
         entry_grid_double_down_factor: extract_value(dict, "entry_grid_double_down_factor")?,
@@ -127,7 +127,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         entry_grid_spacing_pct: extract_value(dict, "entry_grid_spacing_pct")?,
         entry_initial_ema_dist: extract_value(dict, "entry_initial_ema_dist")?,
         entry_initial_qty_pct: extract_value(dict, "entry_initial_qty_pct")?,
-        entry_trailing_drawdown_pct: extract_value(dict, "entry_trailing_drawdown_pct")?,
+        entry_trailing_retracement_pct: extract_value(dict, "entry_trailing_retracement_pct")?,
         entry_trailing_grid_ratio: extract_value(dict, "entry_trailing_grid_ratio")?,
         entry_trailing_threshold_pct: extract_value(dict, "entry_trailing_threshold_pct")?,
         ema_span_0: extract_value(dict, "ema_span_0")?,
@@ -205,7 +205,7 @@ pub fn calc_trailing_close_long_py(
     max_price_since_open: f64,
     min_price_since_max: f64,
     close_trailing_threshold_pct: f64,
-    close_trailing_drawdown_pct: f64,
+    close_trailing_retracement_pct: f64,
     position_size: f64,
     position_price: f64,
 ) -> (f64, f64, String) {
@@ -221,7 +221,7 @@ pub fn calc_trailing_close_long_py(
         ..Default::default()
     };
     let bot_params = BotParams {
-        close_trailing_drawdown_pct: close_trailing_drawdown_pct,
+        close_trailing_retracement_pct: close_trailing_retracement_pct,
         close_trailing_threshold_pct: close_trailing_threshold_pct,
         ..Default::default()
     };
@@ -313,7 +313,7 @@ pub fn calc_trailing_entry_long_py(
     min_price_since_open: f64,
     max_price_since_min: f64,
     entry_trailing_threshold_pct: f64,
-    entry_trailing_drawdown_pct: f64,
+    entry_trailing_retracement_pct: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
         qty_step,
@@ -334,7 +334,7 @@ pub fn calc_trailing_entry_long_py(
         entry_grid_double_down_factor,
         entry_initial_qty_pct,
         entry_trailing_threshold_pct,
-        entry_trailing_drawdown_pct,
+        entry_trailing_retracement_pct,
         wallet_exposure_limit,
         ..Default::default()
     };
@@ -366,7 +366,7 @@ pub fn calc_next_entry_long_py(
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
-    entry_trailing_drawdown_pct: f64,
+    entry_trailing_retracement_pct: f64,
     entry_trailing_grid_ratio: f64,
     entry_trailing_threshold_pct: f64,
     wallet_exposure_limit: f64,
@@ -403,7 +403,7 @@ pub fn calc_next_entry_long_py(
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
-        entry_trailing_drawdown_pct,
+        entry_trailing_retracement_pct,
         entry_trailing_grid_ratio,
         entry_trailing_threshold_pct,
         wallet_exposure_limit,
@@ -440,7 +440,7 @@ pub fn calc_next_close_long_py(
     close_grid_markup_range: f64,
     close_grid_min_markup: f64,
     close_grid_qty_pct: f64,
-    close_trailing_drawdown_pct: f64,
+    close_trailing_retracement_pct: f64,
     close_trailing_grid_ratio: f64,
     close_trailing_threshold_pct: f64,
     wallet_exposure_limit: f64,
@@ -470,7 +470,7 @@ pub fn calc_next_close_long_py(
         close_grid_markup_range,
         close_grid_min_markup,
         close_grid_qty_pct,
-        close_trailing_drawdown_pct,
+        close_trailing_retracement_pct,
         close_trailing_grid_ratio,
         close_trailing_threshold_pct,
         wallet_exposure_limit,

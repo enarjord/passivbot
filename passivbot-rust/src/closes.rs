@@ -98,7 +98,7 @@ pub fn calc_trailing_close_long(
     if position.size == 0.0 {
         return Order::default();
     }
-    if bot_params.close_trailing_drawdown_pct == 0.0 {
+    if bot_params.close_trailing_retracement_pct == 0.0 {
         return Order {
             qty: -position.size,
             price: f64::max(
@@ -109,7 +109,7 @@ pub fn calc_trailing_close_long(
                             + f64::max(
                                 0.0,
                                 bot_params.close_trailing_threshold_pct
-                                    - bot_params.close_trailing_drawdown_pct,
+                                    - bot_params.close_trailing_retracement_pct,
                             )),
                     exchange_params.price_step,
                 ),
@@ -124,7 +124,9 @@ pub fn calc_trailing_close_long(
             order_type: OrderType::CloseTrailingLong,
         };
     }
-    if min_price_since_max > max_price_since_open * (1.0 - bot_params.close_trailing_drawdown_pct) {
+    if min_price_since_max
+        > max_price_since_open * (1.0 - bot_params.close_trailing_retracement_pct)
+    {
         return Order {
             qty: 0.0,
             price: 0.0,
@@ -141,7 +143,7 @@ pub fn calc_trailing_close_long(
                         + f64::max(
                             0.0,
                             bot_params.close_trailing_threshold_pct
-                                - bot_params.close_trailing_drawdown_pct,
+                                - bot_params.close_trailing_retracement_pct,
                         )),
                 exchange_params.price_step,
             ),
@@ -318,7 +320,7 @@ pub fn calc_trailing_close_short(
     if position_size_abs == 0.0 {
         return Order::default();
     }
-    if bot_params.close_trailing_drawdown_pct == 0.0 {
+    if bot_params.close_trailing_retracement_pct == 0.0 {
         return Order {
             qty: position_size_abs,
             price: f64::min(
@@ -338,7 +340,9 @@ pub fn calc_trailing_close_short(
             order_type: OrderType::CloseTrailingShort,
         };
     }
-    if max_price_since_min < min_price_since_open * (1.0 + bot_params.close_trailing_drawdown_pct) {
+    if max_price_since_min
+        < min_price_since_open * (1.0 + bot_params.close_trailing_retracement_pct)
+    {
         return Order {
             qty: 0.0,
             price: 0.0,
@@ -355,7 +359,7 @@ pub fn calc_trailing_close_short(
                         - f64::max(
                             0.0,
                             bot_params.close_trailing_threshold_pct
-                                - bot_params.close_trailing_drawdown_pct,
+                                - bot_params.close_trailing_retracement_pct,
                         )),
                 exchange_params.price_step,
             ),
