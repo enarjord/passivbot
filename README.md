@@ -72,7 +72,7 @@ Navigate to the `passivbot-rust` directory and build the Rust extensions using `
 
 ```sh
 cd passivbot-rust
-maturin develop
+maturin develop --release
 ```
 
 ### Step 5: Add API keys
