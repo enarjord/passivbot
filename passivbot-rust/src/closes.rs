@@ -5,8 +5,8 @@ use crate::types::{
     StateParams,
 };
 use crate::utils::{
-    calc_auto_unstuck_allowance, calc_pprice_diff_int, calc_wallet_exposure, cost_to_qty, round_dn,
-    round_up,
+    calc_auto_unstuck_allowance, calc_pprice_diff_int, calc_wallet_exposure, cost_to_qty, round_,
+    round_dn, round_up,
 };
 use ndarray::{Array1, Array2};
 use std::collections::HashMap;
@@ -61,27 +61,31 @@ pub fn calc_grid_close_long(
         position.price,
     );
     let wallet_exposure_ratio = f64::min(1.0, wallet_exposure / bot_params.wallet_exposure_limit);
-    let close_price = position.price
-        * (1.0
-            + bot_params.close_grid_min_markup
-            + bot_params.close_grid_markup_range * (1.0 - wallet_exposure_ratio));
-    let close_price = round_up(close_price, exchange_params.price_step);
+    let close_price = round_up(
+        position.price
+            * (1.0
+                + bot_params.close_grid_min_markup
+                + bot_params.close_grid_markup_range * (1.0 - wallet_exposure_ratio)),
+        exchange_params.price_step,
+    );
     let full_psize = cost_to_qty(
         state_params.balance * bot_params.wallet_exposure_limit,
         position.price,
         exchange_params.c_mult,
     );
     let leftover = f64::max(0.0, position.size - full_psize);
-    let close_qty = f64::max(
-        calc_min_entry_qty(close_price, &exchange_params),
-        round_up(
-            full_psize * close_grid_qty_pct_modified + leftover,
-            exchange_params.qty_step,
+    let close_qty = -f64::min(
+        position.size,
+        f64::max(
+            calc_min_entry_qty(close_price, &exchange_params),
+            round_up(
+                full_psize * close_grid_qty_pct_modified + leftover,
+                exchange_params.qty_step,
+            ),
         ),
     );
-    let close_qty = -f64::min(position.size, close_qty);
     Order {
-        qty: close_qty,
+        qty: round_(close_qty, exchange_params.qty_step),
         price: close_price,
         order_type: OrderType::CloseGridLong,
     }
@@ -246,7 +250,7 @@ pub fn calc_grid_close_short(
         || bot_params.close_grid_qty_pct >= 1.0
     {
         return Order {
-            qty: position_size_abs,
+            qty: round_(position_size_abs, exchange_params.qty_step),
             price: f64::min(
                 state_params.order_book.bid,
                 round_dn(
@@ -268,7 +272,7 @@ pub fn calc_grid_close_short(
     );
     if close_prices_start == close_prices_end {
         return Order {
-            qty: position_size_abs,
+            qty: round_(position_size_abs, exchange_params.qty_step),
             price: f64::min(state_params.order_book.bid, close_prices_start),
             order_type: OrderType::CloseGridShort,
         };
@@ -282,27 +286,31 @@ pub fn calc_grid_close_short(
         position.price,
     );
     let wallet_exposure_ratio = f64::min(1.0, wallet_exposure / bot_params.wallet_exposure_limit);
-    let close_price = position.price
-        * (1.0
-            - bot_params.close_grid_min_markup
-            - bot_params.close_grid_markup_range * (1.0 - wallet_exposure_ratio));
-    let close_price = round_dn(close_price, exchange_params.price_step);
+    let close_price = round_dn(
+        position.price
+            * (1.0
+                - bot_params.close_grid_min_markup
+                - bot_params.close_grid_markup_range * (1.0 - wallet_exposure_ratio)),
+        exchange_params.price_step,
+    );
     let full_psize = cost_to_qty(
         state_params.balance * bot_params.wallet_exposure_limit,
         position.price,
         exchange_params.c_mult,
     );
     let leftover = f64::max(0.0, position_size_abs - full_psize);
-    let close_qty = f64::max(
-        calc_min_entry_qty(close_price, &exchange_params),
-        round_up(
-            full_psize * close_grid_qty_pct_modified + leftover,
-            exchange_params.qty_step,
+    let close_qty = f64::min(
+        position_size_abs,
+        f64::max(
+            calc_min_entry_qty(close_price, &exchange_params),
+            round_up(
+                full_psize * close_grid_qty_pct_modified + leftover,
+                exchange_params.qty_step,
+            ),
         ),
     );
-    let close_qty = f64::min(position_size_abs, close_qty);
     Order {
-        qty: close_qty,
+        qty: round_(close_qty, exchange_params.qty_step),
         price: close_price,
         order_type: OrderType::CloseGridShort,
     }
