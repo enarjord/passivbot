@@ -507,9 +507,9 @@ pub fn calc_unstuck_close_long(
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
     hlcs_k_idx: &Array1<f64>,
+    balance: f64,
     ema_band_upper: f64,
     position: &Position,
-    balance: f64,
     pnl_cumsum_max: f64,
     pnl_cumsum_last: f64,
 ) -> Order {
@@ -550,4 +550,151 @@ pub fn calc_unstuck_close_long(
     }
 }
 
-pub fn calc_unstuck_close_short() {}
+pub fn calc_unstuck_close_short(
+    exchange_params: &ExchangeParams,
+    bot_params: &BotParams,
+    hlcs_k_idx: &Array1<f64>,
+    ema_band_lower: f64,
+    position: &Position,
+    balance: f64,
+    pnl_cumsum_max: f64,
+    pnl_cumsum_last: f64,
+) -> Order {
+    let auto_unstuck_allowance = calc_auto_unstuck_allowance(
+        balance,
+        bot_params.unstuck_loss_allowance_pct,
+        pnl_cumsum_max,
+        pnl_cumsum_last,
+    );
+    if auto_unstuck_allowance <= 0.0 {
+        return Order::default();
+    }
+    let close_price = f64::min(
+        hlcs_k_idx[CLOSE],
+        round_dn(
+            ema_band_lower * (1.0 - bot_params.unstuck_ema_dist),
+            exchange_params.price_step,
+        ),
+    );
+    let close_qty = f64::min(
+        position.size.abs(),
+        f64::max(
+            calc_min_entry_qty(close_price, exchange_params),
+            round_dn(
+                cost_to_qty(
+                    balance * bot_params.wallet_exposure_limit * bot_params.unstuck_close_pct,
+                    close_price,
+                    exchange_params.c_mult,
+                ),
+                exchange_params.qty_step,
+            ),
+        ),
+    );
+    Order {
+        qty: close_qty,
+        price: close_price,
+        order_type: OrderType::CloseUnstuckShort,
+    }
+}
+
+pub fn calc_closes_long(
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    bot_params: &BotParams,
+    position: &Position,
+    max_price_since_open: f64,
+    min_price_since_max: f64,
+) -> Vec<Order> {
+    let mut closes = Vec::<Order>::new();
+    let mut psize = position.size;
+    let mut ask = state_params.order_book.ask;
+    for _ in 0..500 {
+        let position_mod = Position {
+            size: psize,
+            price: position.price,
+        };
+        let mut state_params_mod = state_params.clone();
+        state_params_mod.order_book.ask = ask;
+        let close = calc_next_close_long(
+            exchange_params,
+            &state_params_mod,
+            bot_params,
+            &position_mod,
+            max_price_since_open,
+            min_price_since_max,
+        );
+        if close.qty == 0.0 {
+            break;
+        }
+        psize = round_(psize + close.qty, exchange_params.qty_step);
+        ask = ask.max(close.price);
+        if !closes.is_empty() {
+            if close.order_type == OrderType::CloseTrailingLong {
+                break;
+            }
+            if closes[closes.len() - 1].price == close.price {
+                let previous_close = closes.pop();
+                let merged_close = Order {
+                    qty: previous_close.unwrap().qty + close.qty,
+                    price: close.price,
+                    order_type: close.order_type,
+                };
+                closes.push(merged_close);
+                continue;
+            }
+        }
+        closes.push(close);
+    }
+    closes
+}
+
+pub fn calc_closes_short(
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    bot_params: &BotParams,
+    position: &Position,
+    min_price_since_open: f64,
+    max_price_since_min: f64,
+) -> Vec<Order> {
+    let mut closes = Vec::<Order>::new();
+    let mut psize = position.size;
+    let mut bid = state_params.order_book.bid;
+    for _ in 0..500 {
+        let position_mod = Position {
+            size: psize,
+            price: position.price,
+        };
+        let mut state_params_mod = state_params.clone();
+        state_params_mod.order_book.bid = bid;
+        let close = calc_next_close_short(
+            exchange_params,
+            &state_params_mod,
+            bot_params,
+            &position_mod,
+            min_price_since_open,
+            max_price_since_min,
+        );
+        if close.qty == 0.0 {
+            break;
+        }
+        psize = round_(psize + close.qty, exchange_params.qty_step);
+        bid = bid.min(close.price);
+        if !closes.is_empty() {
+            if close.order_type == OrderType::CloseTrailingShort {
+                break;
+            }
+            if closes[closes.len() - 1].price == close.price {
+                let previous_close = closes.pop();
+                let merged_close = Order {
+                    qty: previous_close.unwrap().qty + close.qty,
+                    price: close.price,
+                    order_type: close.order_type,
+                };
+                closes.push(merged_close);
+                continue;
+            }
+        }
+        closes.push(close);
+    }
+    closes
+}

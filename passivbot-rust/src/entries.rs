@@ -854,3 +854,109 @@ pub fn calc_next_entry_short(
         }
     }
 }
+
+pub fn calc_entries_long(
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    bot_params: &BotParams,
+    position: &Position,
+    min_price_since_open: f64,
+    max_price_since_min: f64,
+) -> Vec<Order> {
+    let mut entries = Vec::<Order>::new();
+    let mut psize = position.size;
+    let mut pprice = position.price;
+    let mut bid = state_params.order_book.bid;
+    for _ in 0..500 {
+        let position_mod = Position {
+            size: psize,
+            price: pprice,
+        };
+        let mut state_params_mod = state_params.clone();
+        state_params_mod.order_book.bid = bid;
+        let entry = calc_next_entry_long(
+            exchange_params,
+            &state_params_mod,
+            bot_params,
+            &position_mod,
+            min_price_since_open,
+            max_price_since_min,
+        );
+        if entry.qty == 0.0 {
+            break;
+        }
+        if !entries.is_empty() {
+            if entry.order_type == OrderType::EntryTrailingNormalLong
+                || entry.order_type == OrderType::EntryTrailingCroppedLong
+            {
+                break;
+            }
+            if entries[entries.len() - 1].price == entry.price {
+                break;
+            }
+        }
+        (psize, pprice) = calc_new_psize_pprice(
+            psize,
+            pprice,
+            entry.qty,
+            entry.price,
+            exchange_params.qty_step,
+        );
+        bid = bid.min(entry.price);
+        entries.push(entry);
+    }
+    entries
+}
+
+pub fn calc_entries_short(
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    bot_params: &BotParams,
+    position: &Position,
+    max_price_since_open: f64,
+    min_price_since_max: f64,
+) -> Vec<Order> {
+    let mut entries = Vec::<Order>::new();
+    let mut psize = position.size;
+    let mut pprice = position.price;
+    let mut ask = state_params.order_book.ask;
+    for _ in 0..500 {
+        let position_mod = Position {
+            size: psize,
+            price: pprice,
+        };
+        let mut state_params_mod = state_params.clone();
+        state_params_mod.order_book.ask = ask;
+        let entry = calc_next_entry_short(
+            exchange_params,
+            &state_params_mod,
+            bot_params,
+            &position_mod,
+            max_price_since_open,
+            min_price_since_max,
+        );
+        if entry.qty == 0.0 {
+            break;
+        }
+        if !entries.is_empty() {
+            if entry.order_type == OrderType::EntryTrailingNormalShort
+                || entry.order_type == OrderType::EntryTrailingCroppedShort
+            {
+                break;
+            }
+            if entries[entries.len() - 1].price == entry.price {
+                break;
+            }
+        }
+        (psize, pprice) = calc_new_psize_pprice(
+            psize,
+            pprice,
+            entry.qty,
+            entry.price,
+            exchange_params.qty_step,
+        );
+        ask = ask.max(entry.price);
+        entries.push(entry);
+    }
+    entries
+}

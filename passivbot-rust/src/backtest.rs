@@ -502,13 +502,13 @@ impl Backtest {
                 &self.exchange_params_list[unstucking_idx],
                 &self.bot_params_pair.long,
                 &self.hlcs.slice(s![k, unstucking_idx, ..]).to_owned(),
+                self.balance,
                 *self.emas[unstucking_idx]
                     .long
                     .iter()
                     .max_by(|a, b| a.partial_cmp(b).unwrap())
                     .unwrap_or(&f64::MIN),
                 &self.positions.long[&(unstucking_idx)],
-                self.balance,
                 self.pnl_cumsum_max,
                 self.pnl_cumsum_running,
             );
