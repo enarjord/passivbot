@@ -406,6 +406,10 @@ pub fn calc_next_close_short(
             max_price_since_min,
         );
     }
+    if bot_params.close_trailing_grid_ratio == 0.0 {
+        // return grid only
+        return calc_grid_close_short(&exchange_params, &state_params, &bot_params, &position);
+    }
     let wallet_exposure_ratio = wallet_exposure / bot_params.wallet_exposure_limit;
     if bot_params.close_trailing_grid_ratio > 0.0 {
         // trailing first
@@ -414,20 +418,19 @@ pub fn calc_next_close_short(
             let mut bot_params_modified = bot_params.clone();
             bot_params_modified.wallet_exposure_limit =
                 bot_params.wallet_exposure_limit * bot_params.close_trailing_grid_ratio * 1.01;
-            return calc_trailing_close_short(
+            calc_trailing_close_short(
                 &exchange_params,
                 &state_params,
                 &bot_params_modified,
                 &position,
                 min_price_since_open,
                 max_price_since_min,
-            );
+            )
         } else {
             // return grid order
-            return calc_grid_close_short(&exchange_params, &state_params, &bot_params, &position);
+            calc_grid_close_short(&exchange_params, &state_params, &bot_params, &position)
         }
-    }
-    if bot_params.close_trailing_grid_ratio < 0.0 {
+    } else {
         // grid first
         if wallet_exposure_ratio < 1.0 + bot_params.close_trailing_grid_ratio {
             // return grid order, but crop to max bot_params.wallet_exposure_limit * (1.0 + bot_params.close_trailing_grid_ratio) + 1%
@@ -435,25 +438,23 @@ pub fn calc_next_close_short(
             bot_params_modified.wallet_exposure_limit = bot_params.wallet_exposure_limit
                 * (1.0 + bot_params.close_trailing_grid_ratio)
                 * 1.01;
-            return calc_grid_close_short(
+            calc_grid_close_short(
                 &exchange_params,
                 &state_params,
                 &bot_params_modified,
                 &position,
-            );
+            )
         } else {
-            return calc_trailing_close_short(
+            calc_trailing_close_short(
                 &exchange_params,
                 &state_params,
                 &bot_params,
                 &position,
                 min_price_since_open,
                 max_price_since_min,
-            );
+            )
         }
     }
-    // return grid only
-    calc_grid_close_short(&exchange_params, &state_params, &bot_params, &position)
 }
 
 pub fn determine_position_for_unstucking(
@@ -554,9 +555,9 @@ pub fn calc_unstuck_close_short(
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
     hlcs_k_idx: &Array1<f64>,
+    balance: f64,
     ema_band_lower: f64,
     position: &Position,
-    balance: f64,
     pnl_cumsum_max: f64,
     pnl_cumsum_last: f64,
 ) -> Order {
