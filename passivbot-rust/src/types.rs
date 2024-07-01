@@ -120,6 +120,24 @@ pub struct BotParams {
     pub unstuck_threshold: f64,
 }
 
+#[derive(Debug)]
+pub struct TrailingPriceBundle {
+    pub min_price_since_open: f64,
+    pub max_price_since_min: f64,
+    pub max_price_since_open: f64,
+    pub min_price_since_max: f64,
+}
+impl Default for TrailingPriceBundle {
+    fn default() -> Self {
+        TrailingPriceBundle {
+            min_price_since_open: f64::MAX,
+            max_price_since_min: 0.0,
+            max_price_since_open: 0.0,
+            min_price_since_max: f64::MAX,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum OrderType {
     EntryInitialNormalLong,

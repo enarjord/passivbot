@@ -9,7 +9,7 @@ use crate::entries::{
 };
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Order, OrderBook, Position,
-    StateParams,
+    StateParams, TrailingPriceBundle,
 };
 use ndarray::{Array2, ArrayBase, ArrayD};
 use numpy::{IntoPyArray, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3};
@@ -235,14 +235,17 @@ pub fn calc_trailing_close_long_py(
         size: position_size,
         price: position_price,
     };
-
+    let trailing_price_bundle = TrailingPriceBundle {
+        max_price_since_open: max_price_since_open,
+        min_price_since_max: min_price_since_max,
+        ..Default::default()
+    };
     let order = calc_trailing_close_long(
         &exchange_params,
         &state_params,
         &bot_params,
         &position,
-        max_price_since_open,
-        min_price_since_max,
+        &trailing_price_bundle,
     );
     (order.qty, order.price, order.order_type.to_string())
 }
@@ -348,14 +351,17 @@ pub fn calc_trailing_entry_long_py(
         size: position_size,
         price: position_price,
     };
-
+    let trailing_price_bundle = TrailingPriceBundle {
+        min_price_since_open: min_price_since_open,
+        max_price_since_min: max_price_since_min,
+        ..Default::default()
+    };
     let order = calc_trailing_entry_long(
         &exchange_params,
         &state_params,
         &bot_params,
         &position,
-        min_price_since_open,
-        max_price_since_min,
+        &trailing_price_bundle,
     );
     (order.qty, order.price, order.order_type.to_string())
 }
@@ -419,14 +425,17 @@ pub fn calc_next_entry_long_py(
         size: position_size,
         price: position_price,
     };
-
+    let trailing_price_bundle = TrailingPriceBundle {
+        min_price_since_open: min_price_since_open,
+        max_price_since_min: max_price_since_min,
+        ..Default::default()
+    };
     let next_entry = calc_next_entry_long(
         &exchange_params,
         &state_params,
         &bot_params,
         &position,
-        min_price_since_open,
-        max_price_since_min,
+        &trailing_price_bundle,
     );
 
     (
@@ -486,14 +495,17 @@ pub fn calc_next_close_long_py(
         size: position_size,
         price: position_price,
     };
-
+    let trailing_price_bundle = TrailingPriceBundle {
+        max_price_since_open: max_price_since_open,
+        min_price_since_max: min_price_since_max,
+        ..Default::default()
+    };
     let next_entry = calc_next_close_long(
         &exchange_params,
         &state_params,
         &bot_params,
         &position,
-        max_price_since_open,
-        min_price_since_max,
+        &trailing_price_bundle,
     );
     (
         next_entry.qty,
@@ -561,14 +573,17 @@ pub fn calc_next_entry_short_py(
         size: position_size,
         price: position_price,
     };
-
+    let trailing_price_bundle = TrailingPriceBundle {
+        max_price_since_open: max_price_since_open,
+        min_price_since_max: min_price_since_max,
+        ..Default::default()
+    };
     let next_entry = calc_next_entry_short(
         &exchange_params,
         &state_params,
         &bot_params,
         &position,
-        max_price_since_open,
-        min_price_since_max,
+        &trailing_price_bundle,
     );
 
     (
@@ -628,14 +643,17 @@ pub fn calc_next_close_short_py(
         size: position_size,
         price: position_price,
     };
-
+    let trailing_price_bundle = TrailingPriceBundle {
+        min_price_since_open: min_price_since_open,
+        max_price_since_min: max_price_since_min,
+        ..Default::default()
+    };
     let next_entry = calc_next_close_short(
         &exchange_params,
         &state_params,
         &bot_params,
         &position,
-        min_price_since_open,
-        max_price_since_min,
+        &trailing_price_bundle,
     );
     (
         next_entry.qty,
@@ -706,14 +724,17 @@ pub fn calc_entries_long_py(
         size: position_size,
         price: position_price,
     };
-
+    let trailing_price_bundle = TrailingPriceBundle {
+        min_price_since_open: min_price_since_open,
+        max_price_since_min: max_price_since_min,
+        ..Default::default()
+    };
     let entries = calc_entries_long(
         &exchange_params,
         &state_params,
         &bot_params,
         &position,
-        min_price_since_open,
-        max_price_since_min,
+        &trailing_price_bundle,
     );
 
     // Convert entries to Python-compatible format
@@ -785,14 +806,17 @@ pub fn calc_entries_short_py(
         size: position_size,
         price: position_price,
     };
-
+    let trailing_price_bundle = TrailingPriceBundle {
+        max_price_since_open: max_price_since_open,
+        min_price_since_max: min_price_since_max,
+        ..Default::default()
+    };
     let entries = calc_entries_short(
         &exchange_params,
         &state_params,
         &bot_params,
         &position,
-        max_price_since_open,
-        min_price_since_max,
+        &trailing_price_bundle,
     );
 
     // Convert entries to Python-compatible format
@@ -855,14 +879,17 @@ pub fn calc_closes_long_py(
         size: position_size,
         price: position_price,
     };
-
+    let trailing_price_bundle = TrailingPriceBundle {
+        max_price_since_open: max_price_since_open,
+        min_price_since_max: min_price_since_max,
+        ..Default::default()
+    };
     let closes = calc_closes_long(
         &exchange_params,
         &state_params,
         &bot_params,
         &position,
-        max_price_since_open,
-        min_price_since_max,
+        &trailing_price_bundle,
     );
 
     // Convert closes to Python-compatible format
@@ -920,19 +947,21 @@ pub fn calc_closes_short_py(
         wallet_exposure_limit,
         ..Default::default()
     };
-
     let position = Position {
         size: position_size,
         price: position_price,
     };
-
+    let trailing_price_bundle = TrailingPriceBundle {
+        min_price_since_open: min_price_since_open,
+        max_price_since_min: max_price_since_min,
+        ..Default::default()
+    };
     let closes = calc_closes_short(
         &exchange_params,
         &state_params,
         &bot_params,
         &position,
-        min_price_since_open,
-        max_price_since_min,
+        &trailing_price_bundle,
     );
 
     // Convert closes to Python-compatible format

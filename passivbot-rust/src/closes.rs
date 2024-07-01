@@ -2,7 +2,7 @@ use crate::constants::{CLOSE, LONG, NO_POS, SHORT};
 use crate::entries::calc_min_entry_qty;
 use crate::types::{
     BotParams, BotParamsPair, EMABands, ExchangeParams, Order, OrderType, Position, Positions,
-    StateParams,
+    StateParams, TrailingPriceBundle,
 };
 use crate::utils::{
     calc_auto_unstuck_allowance, calc_pprice_diff_int, calc_wallet_exposure, cost_to_qty, round_,
@@ -96,8 +96,7 @@ pub fn calc_trailing_close_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
-    max_price_since_open: f64,
-    min_price_since_max: f64,
+    trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
     if position.size == 0.0 {
         return Order::default();
@@ -121,15 +120,18 @@ pub fn calc_trailing_close_long(
             order_type: OrderType::CloseTrailingLong,
         };
     }
-    if max_price_since_open < position.price * (1.0 + bot_params.close_trailing_threshold_pct) {
+    if trailing_price_bundle.max_price_since_open
+        < position.price * (1.0 + bot_params.close_trailing_threshold_pct)
+    {
         return Order {
             qty: 0.0,
             price: 0.0,
             order_type: OrderType::CloseTrailingLong,
         };
     }
-    if min_price_since_max
-        > max_price_since_open * (1.0 - bot_params.close_trailing_retracement_pct)
+    if trailing_price_bundle.min_price_since_max
+        > trailing_price_bundle.max_price_since_open
+            * (1.0 - bot_params.close_trailing_retracement_pct)
     {
         return Order {
             qty: 0.0,
@@ -161,8 +163,7 @@ pub fn calc_next_close_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
-    max_price_since_open: f64,
-    min_price_since_max: f64,
+    trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
     if position.size == 0.0 {
         // no position
@@ -181,8 +182,7 @@ pub fn calc_next_close_long(
             &state_params,
             &bot_params,
             &position,
-            max_price_since_open,
-            min_price_since_max,
+            &trailing_price_bundle,
         );
     }
     let wallet_exposure_ratio = wallet_exposure / bot_params.wallet_exposure_limit;
@@ -198,8 +198,7 @@ pub fn calc_next_close_long(
                 &state_params,
                 &bot_params_modified,
                 &position,
-                max_price_since_open,
-                min_price_since_max,
+                &trailing_price_bundle,
             );
         } else {
             // return grid order
@@ -226,8 +225,7 @@ pub fn calc_next_close_long(
                 &state_params,
                 &bot_params,
                 &position,
-                max_price_since_open,
-                min_price_since_max,
+                &trailing_price_bundle,
             );
         }
     }
@@ -321,8 +319,7 @@ pub fn calc_trailing_close_short(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
-    min_price_since_open: f64,
-    max_price_since_min: f64,
+    trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
     let position_size_abs = position.size.abs();
     if position_size_abs == 0.0 {
@@ -341,15 +338,18 @@ pub fn calc_trailing_close_short(
             order_type: OrderType::CloseTrailingShort,
         };
     }
-    if min_price_since_open > position.price * (1.0 - bot_params.close_trailing_threshold_pct) {
+    if trailing_price_bundle.min_price_since_open
+        > position.price * (1.0 - bot_params.close_trailing_threshold_pct)
+    {
         return Order {
             qty: 0.0,
             price: 0.0,
             order_type: OrderType::CloseTrailingShort,
         };
     }
-    if max_price_since_min
-        < min_price_since_open * (1.0 + bot_params.close_trailing_retracement_pct)
+    if trailing_price_bundle.max_price_since_min
+        < trailing_price_bundle.min_price_since_open
+            * (1.0 + bot_params.close_trailing_retracement_pct)
     {
         return Order {
             qty: 0.0,
@@ -381,8 +381,7 @@ pub fn calc_next_close_short(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
-    min_price_since_open: f64,
-    max_price_since_min: f64,
+    trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
     let position_size_abs = position.size.abs();
     if position_size_abs == 0.0 {
@@ -402,8 +401,7 @@ pub fn calc_next_close_short(
             &state_params,
             &bot_params,
             &position,
-            min_price_since_open,
-            max_price_since_min,
+            &trailing_price_bundle,
         );
     }
     if bot_params.close_trailing_grid_ratio == 0.0 {
@@ -423,8 +421,7 @@ pub fn calc_next_close_short(
                 &state_params,
                 &bot_params_modified,
                 &position,
-                min_price_since_open,
-                max_price_since_min,
+                &trailing_price_bundle,
             )
         } else {
             // return grid order
@@ -450,8 +447,7 @@ pub fn calc_next_close_short(
                 &state_params,
                 &bot_params,
                 &position,
-                min_price_since_open,
-                max_price_since_min,
+                &trailing_price_bundle,
             )
         }
     }
@@ -603,8 +599,7 @@ pub fn calc_closes_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
-    max_price_since_open: f64,
-    min_price_since_max: f64,
+    trailing_price_bundle: &TrailingPriceBundle,
 ) -> Vec<Order> {
     let mut closes = Vec::<Order>::new();
     let mut psize = position.size;
@@ -621,8 +616,7 @@ pub fn calc_closes_long(
             &state_params_mod,
             bot_params,
             &position_mod,
-            max_price_since_open,
-            min_price_since_max,
+            &trailing_price_bundle,
         );
         if close.qty == 0.0 {
             break;
@@ -654,8 +648,7 @@ pub fn calc_closes_short(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
-    min_price_since_open: f64,
-    max_price_since_min: f64,
+    trailing_price_bundle: &TrailingPriceBundle,
 ) -> Vec<Order> {
     let mut closes = Vec::<Order>::new();
     let mut psize = position.size;
@@ -672,8 +665,7 @@ pub fn calc_closes_short(
             &state_params_mod,
             bot_params,
             &position_mod,
-            min_price_since_open,
-            max_price_since_min,
+            &trailing_price_bundle,
         );
         if close.qty == 0.0 {
             break;

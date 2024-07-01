@@ -1,4 +1,6 @@
-use crate::types::{BotParams, ExchangeParams, Order, OrderType, Position, StateParams};
+use crate::types::{
+    BotParams, ExchangeParams, Order, OrderType, Position, StateParams, TrailingPriceBundle,
+};
 use crate::utils::{
     calc_ema_price_ask, calc_ema_price_bid, calc_new_psize_pprice, calc_wallet_exposure,
     calc_wallet_exposure_if_filled, cost_to_qty, interpolate, round_, round_dn, round_up,
@@ -294,8 +296,7 @@ pub fn calc_next_entry_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
-    min_price_since_open: f64,
-    max_price_since_min: f64,
+    trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
     // determines whether trailing or grid order, returns Order
     if bot_params.wallet_exposure_limit == 0.0 || state_params.balance <= 0.0 {
@@ -309,8 +310,7 @@ pub fn calc_next_entry_long(
             &state_params,
             &bot_params,
             &position,
-            min_price_since_open,
-            max_price_since_min,
+            &trailing_price_bundle,
         );
     } else if bot_params.entry_trailing_grid_ratio == 0.0 {
         // return grid only
@@ -333,8 +333,7 @@ pub fn calc_next_entry_long(
                     &state_params,
                     &bot_params,
                     &position,
-                    min_price_since_open,
-                    max_price_since_min,
+                    &trailing_price_bundle,
                 )
             } else {
                 let mut bot_params_modified = bot_params.clone();
@@ -345,8 +344,7 @@ pub fn calc_next_entry_long(
                     &state_params,
                     &bot_params_modified,
                     &position,
-                    min_price_since_open,
-                    max_price_since_min,
+                    &trailing_price_bundle,
                 )
             }
         } else {
@@ -379,8 +377,7 @@ pub fn calc_next_entry_long(
                 &state_params,
                 &bot_params,
                 &position,
-                min_price_since_open,
-                max_price_since_min,
+                &trailing_price_bundle,
             )
         }
     }
@@ -391,8 +388,7 @@ pub fn calc_trailing_entry_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
-    min_price_since_open: f64,
-    max_price_since_min: f64,
+    trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
     let initial_entry_price = calc_ema_price_bid(
         exchange_params.price_step,
@@ -426,15 +422,18 @@ pub fn calc_trailing_entry_long(
             order_type: OrderType::EntryInitialPartialLong,
         };
     }
-    if min_price_since_open > position.price * (1.0 - bot_params.entry_trailing_threshold_pct) {
+    if trailing_price_bundle.min_price_since_open
+        > position.price * (1.0 - bot_params.entry_trailing_threshold_pct)
+    {
         return Order {
             qty: 0.0,
             price: 0.0,
             order_type: OrderType::EntryTrailingNormalLong,
         };
     }
-    if max_price_since_min
-        < min_price_since_open * (1.0 + bot_params.entry_trailing_retracement_pct)
+    if trailing_price_bundle.max_price_since_min
+        < trailing_price_bundle.min_price_since_open
+            * (1.0 + bot_params.entry_trailing_retracement_pct)
     {
         return Order {
             qty: 0.0,
@@ -651,8 +650,7 @@ pub fn calc_trailing_entry_short(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
-    max_price_since_open: f64,
-    min_price_since_max: f64,
+    trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
     let initial_entry_price = calc_ema_price_ask(
         exchange_params.price_step,
@@ -690,15 +688,18 @@ pub fn calc_trailing_entry_short(
             order_type: OrderType::EntryInitialPartialShort,
         };
     }
-    if max_price_since_open < position.price * (1.0 + bot_params.entry_trailing_threshold_pct) {
+    if trailing_price_bundle.max_price_since_open
+        < position.price * (1.0 + bot_params.entry_trailing_threshold_pct)
+    {
         return Order {
             qty: 0.0,
             price: 0.0,
             order_type: OrderType::EntryTrailingNormalShort,
         };
     }
-    if min_price_since_max
-        > max_price_since_open * (1.0 - bot_params.entry_trailing_retracement_pct)
+    if trailing_price_bundle.min_price_since_max
+        > trailing_price_bundle.max_price_since_open
+            * (1.0 - bot_params.entry_trailing_retracement_pct)
     {
         return Order {
             qty: 0.0,
@@ -763,8 +764,7 @@ pub fn calc_next_entry_short(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
-    max_price_since_open: f64,
-    min_price_since_max: f64,
+    trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
     // determines whether trailing or grid order, returns Order
     if bot_params.wallet_exposure_limit == 0.0 || state_params.balance <= 0.0 {
@@ -778,8 +778,7 @@ pub fn calc_next_entry_short(
             &state_params,
             &bot_params,
             &position,
-            max_price_since_open,
-            min_price_since_max,
+            &trailing_price_bundle,
         );
     } else if bot_params.entry_trailing_grid_ratio == 0.0 {
         // return grid only
@@ -801,8 +800,7 @@ pub fn calc_next_entry_short(
                     &state_params,
                     &bot_params,
                     &position,
-                    max_price_since_open,
-                    min_price_since_max,
+                    &trailing_price_bundle,
                 )
             } else {
                 // return trailing order, but crop to max bot_params.wallet_exposure_limit * bot_params.entry_trailing_grid_ratio + 1%
@@ -814,8 +812,7 @@ pub fn calc_next_entry_short(
                     &state_params,
                     &bot_params_modified,
                     &position,
-                    max_price_since_open,
-                    min_price_since_max,
+                    &trailing_price_bundle,
                 )
             }
         } else {
@@ -848,8 +845,7 @@ pub fn calc_next_entry_short(
                 &state_params,
                 &bot_params,
                 &position,
-                max_price_since_open,
-                min_price_since_max,
+                &trailing_price_bundle,
             )
         }
     }
@@ -860,8 +856,7 @@ pub fn calc_entries_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
-    min_price_since_open: f64,
-    max_price_since_min: f64,
+    trailing_price_bundle: &TrailingPriceBundle,
 ) -> Vec<Order> {
     let mut entries = Vec::<Order>::new();
     let mut psize = position.size;
@@ -879,8 +874,7 @@ pub fn calc_entries_long(
             &state_params_mod,
             bot_params,
             &position_mod,
-            min_price_since_open,
-            max_price_since_min,
+            &trailing_price_bundle,
         );
         if entry.qty == 0.0 {
             break;
@@ -913,8 +907,7 @@ pub fn calc_entries_short(
     state_params: &StateParams,
     bot_params: &BotParams,
     position: &Position,
-    max_price_since_open: f64,
-    min_price_since_max: f64,
+    trailing_price_bundle: &TrailingPriceBundle,
 ) -> Vec<Order> {
     let mut entries = Vec::<Order>::new();
     let mut psize = position.size;
@@ -932,8 +925,7 @@ pub fn calc_entries_short(
             &state_params_mod,
             bot_params,
             &position_mod,
-            max_price_since_open,
-            min_price_since_max,
+            &trailing_price_bundle,
         );
         if entry.qty == 0.0 {
             break;
