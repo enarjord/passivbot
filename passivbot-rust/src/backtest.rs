@@ -643,10 +643,7 @@ impl Backtest {
         } else {
             self.trailing_prices.short.entry(idx).or_default()
         };
-        trailing_price_bundle.min_price_since_open = f64::MAX;
-        trailing_price_bundle.max_price_since_min = 0.0;
-        trailing_price_bundle.max_price_since_open = 0.0;
-        trailing_price_bundle.min_price_since_max = f64::MAX;
+        *trailing_price_bundle = TrailingPriceBundle::default();
     }
 
     fn update_trailing_prices(&mut self, k: usize, idx: usize, pside: usize) {
@@ -840,16 +837,30 @@ impl Backtest {
     fn should_update_orders(
         &self,
         idx: usize,
+        pside: usize,
         actives_without_pos: &[usize],
         unstucking_idx: usize,
         unstucking_pside: usize,
     ) -> bool {
-        actives_without_pos.contains(&idx)
-            || (unstucking_pside != NO_POS && idx == unstucking_idx)
-            || self.open_orders.long[&idx].close.order_type == OrderType::CloseUnstuckLong
-            || self.open_orders.long[&idx].entry.order_type == OrderType::EntryTrailingNormalLong
-            || self.open_orders.long[&idx].entry.order_type == OrderType::EntryTrailingCroppedLong
-            || self.open_orders.long[&idx].close.order_type == OrderType::CloseTrailingLong
+        if pside == LONG {
+            actives_without_pos.contains(&idx)
+                || (unstucking_pside == pside && idx == unstucking_idx)
+                || self.open_orders.long[&idx].close.order_type == OrderType::CloseUnstuckLong
+                || self.open_orders.long[&idx].entry.order_type
+                    == OrderType::EntryTrailingNormalLong
+                || self.open_orders.long[&idx].entry.order_type
+                    == OrderType::EntryTrailingCroppedLong
+                || self.open_orders.long[&idx].close.order_type == OrderType::CloseTrailingLong
+        } else {
+            actives_without_pos.contains(&idx)
+                || (unstucking_pside == pside && idx == unstucking_idx)
+                || self.open_orders.short[&idx].close.order_type == OrderType::CloseUnstuckShort
+                || self.open_orders.short[&idx].entry.order_type
+                    == OrderType::EntryTrailingNormalShort
+                || self.open_orders.short[&idx].entry.order_type
+                    == OrderType::EntryTrailingCroppedShort
+                || self.open_orders.short[&idx].close.order_type == OrderType::CloseTrailingShort
+        }
     }
 
     fn update_open_orders_any_fill(&mut self, k: usize) {
@@ -904,46 +915,25 @@ impl Backtest {
         }
     }
 
-    fn update_open_orders_no_fill(&mut self, k: usize) {}
-
-    fn update_open_orders(&mut self, k: usize, any_fill: bool) {
-        let positions_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
-        if self.trailing_enabled.long {
-            for idx in &positions_long_indices {
-                self.update_trailing_prices(k, *idx, LONG);
+    fn update_open_orders_no_fill(&mut self, k: usize) {
+        // update selectively:
+        // - actives if len(positions) < n_positions
+        // - unstuck close if any stuck
+        // - entries for symbols with open trailing entries
+        // - closes for symbols with open trailing closes
+        let (unstucking_idx, unstucking_pside, unstucking_close) =
+            if !(self.is_stuck.long.is_empty() && self.is_stuck.short.is_empty()) {
+                self.calc_unstucking_close(k)
+            } else {
+                (NO_POS, NO_POS, Order::default())
+            };
+        if self.trading_enabled.long {
+            let positions_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
+            if self.trailing_enabled.long {
+                for idx in &positions_long_indices {
+                    self.update_trailing_prices(k, *idx, LONG);
+                }
             }
-        }
-        if any_fill {
-            // update everything for all symbols
-            // - update actives
-            // - remove open orders from inactive symbols
-            // - unstuck close
-            // - entries
-            // - closes
-            self.update_actives(k, LONG);
-            // remove open orders from inactive symbols
-            self.open_orders
-                .long
-                .retain(|&idx, _| self.actives.long.contains(&idx));
-            let active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
-            let (unstucking_idx, unstucking_pside, unstucking_close) =
-                self.calc_unstucking_close(k);
-            for &idx in &active_long_indices {
-                self.update_stuck_status(idx);
-                self.update_open_orders_long_single(
-                    k,
-                    idx,
-                    unstucking_idx,
-                    unstucking_pside,
-                    &unstucking_close,
-                );
-            }
-        } else {
-            // update selectively:
-            // - actives if len(positions) < n_positions
-            // - unstuck close if any stuck
-            // - entries for symbols with open trailing entries
-            // - closes for symbols with open trailing closes
             let mut actives_without_pos = Vec::<usize>::new();
             if positions_long_indices.len() < self.bot_params_pair.long.n_positions {
                 actives_without_pos = self.update_actives(k, LONG);
@@ -952,19 +942,10 @@ impl Backtest {
                     .retain(|&idx, _| self.actives.long.contains(&idx));
             }
             let active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
-            //let (mut unstucking_idx, mut unstucking_pside, mut unstucking_close) =
-            //    (NO_POS, NO_POS, Order::default());
-
-            let (unstucking_idx, unstucking_pside, unstucking_close) =
-                if !self.is_stuck.long.is_empty() {
-                    self.calc_unstucking_close(k)
-                } else {
-                    (NO_POS, NO_POS, Order::default())
-                };
-
             for idx in active_long_indices {
                 if self.should_update_orders(
                     idx,
+                    LONG,
                     &actives_without_pos,
                     unstucking_idx,
                     unstucking_pside,
@@ -978,6 +959,48 @@ impl Backtest {
                     );
                 }
             }
+        }
+        if self.trading_enabled.short {
+            let positions_short_indices: Vec<usize> =
+                self.positions.short.keys().cloned().collect();
+            if self.trailing_enabled.short {
+                for idx in &positions_short_indices {
+                    self.update_trailing_prices(k, *idx, SHORT);
+                }
+            }
+            let mut actives_without_pos = Vec::<usize>::new();
+            if positions_short_indices.len() < self.bot_params_pair.short.n_positions {
+                actives_without_pos = self.update_actives(k, SHORT);
+                self.open_orders
+                    .short
+                    .retain(|&idx, _| self.actives.short.contains(&idx));
+            }
+            let active_short_indices: Vec<usize> = self.actives.short.iter().cloned().collect();
+            for idx in active_short_indices {
+                if self.should_update_orders(
+                    idx,
+                    SHORT,
+                    &actives_without_pos,
+                    unstucking_idx,
+                    unstucking_pside,
+                ) {
+                    self.update_open_orders_short_single(
+                        k,
+                        idx,
+                        unstucking_idx,
+                        unstucking_pside,
+                        &unstucking_close,
+                    );
+                }
+            }
+        }
+    }
+
+    fn update_open_orders(&mut self, k: usize, any_fill: bool) {
+        if any_fill {
+            self.update_open_orders_any_fill(k);
+        } else {
+            self.update_open_orders_no_fill(k);
         }
     }
 
