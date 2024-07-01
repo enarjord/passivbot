@@ -443,12 +443,12 @@ def plot_fills_forager(fdf: pd.DataFrame, hlcs_df: pd.DataFrame, start_pct=0.0, 
     fdfc = fdfc.loc[start_minute:end_minute]
     longs = fdfc[fdfc.type.str.contains("long")]
     shorts = fdfc[fdfc.type.str.contains("short")]
-    pprices_long = hlcc.join(longs[["pprice"]]).ffill()
+    pprices_long = hlcc.join(longs[["pprice", "psize"]]).ffill()
     pprices_long.loc[pprices_long.pprice.pct_change() != 0.0, "pprice"] = np.nan
-    pprices_long = pprices_long.pprice
-    pprices_short = hlcc.join(shorts[["pprice"]]).ffill()
+    pprices_long = pprices_long[pprices_long.psize != 0.0].pprice
+    pprices_short = hlcc.join(shorts[["pprice", "psize"]]).ffill()
     pprices_short.loc[pprices_short.pprice.pct_change() != 0.0, "pprice"] = np.nan
-    pprices_short = pprices_short.pprice
+    pprices_short = pprices_short[pprices_short.psize != 0.0].pprice
 
     ax = hlcc.close.plot(style="y-")
     longs[longs.type.str.contains("entry")].price.plot(style="b.")
