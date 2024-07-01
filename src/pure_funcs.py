@@ -2461,7 +2461,6 @@ def process_forager_fills(fills):
 
 
 def calc_equity_forager(symbols, hlcs, fdf):
-    # Creating the base balance dataframe
     dfb = (
         fdf[["minute", "balance"]].drop_duplicates(subset="minute", keep="first").set_index("minute")
     )
@@ -2469,11 +2468,18 @@ def calc_equity_forager(symbols, hlcs, fdf):
     dfb = dfb.reindex(full_index).ffill().bfill()
     upnls = np.zeros(len(hlcs))
     for i, symbol in enumerate(symbols):
-        fdfc = fdf[fdf.symbol == symbol]
+        fdfc = fdf[(fdf.symbol == symbol) & (fdf.type.str.contains("long"))]
         dfc = pd.DataFrame(hlcs[:, i, :], columns=["high", "low", "close"])
         fdfc_grouped = fdfc.groupby("minute").last()
         dfc = dfc.join(fdfc_grouped[["psize", "pprice"]], how="left").ffill()
         dfc["upnl"] = dfc["psize"] * (dfc["low"] - dfc["pprice"])
+        upnls += dfc["upnl"].fillna(0.0).values
+    for i, symbol in enumerate(symbols):
+        fdfc = fdf[(fdf.symbol == symbol) & (fdf.type.str.contains("short"))]
+        dfc = pd.DataFrame(hlcs[:, i, :], columns=["high", "low", "close"])
+        fdfc_grouped = fdfc.groupby("minute").last()
+        dfc = dfc.join(fdfc_grouped[["psize", "pprice"]], how="left").ffill()
+        dfc["upnl"] = dfc["psize"].abs() * (dfc["pprice"] - dfc["high"])
         upnls += dfc["upnl"].fillna(0.0).values
     dfb["equity"] = dfb["balance"] + upnls
     return dfb
