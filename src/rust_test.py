@@ -162,22 +162,21 @@ async def main():
             "close_grid_markup_range": 0.005,
             "close_grid_min_markup": 0.005,
             "close_grid_qty_pct": 0.1,
-            "close_trailing_retracement_pct": 0.002,
-            "close_trailing_grid_ratio": -0.5,
+            "close_trailing_retracement_pct": 0.003,
+            "close_trailing_grid_ratio": 0.5,
             "close_trailing_threshold_pct": 0.006,
             "entry_grid_double_down_factor": 1.0,
-            "entry_grid_spacing_weight": 0.7,
+            "entry_grid_spacing_weight": 0.1,
             "entry_grid_spacing_pct": 0.05,
-            "entry_initial_ema_dist": 0.0,
-            "entry_initial_qty_pct": 0.01,
-            "entry_trailing_retracement_pct": 0.04,
+            "entry_initial_ema_dist": 0.001,
+            "entry_initial_qty_pct": 0.005,
+            "entry_trailing_retracement_pct": 0.03,
             "entry_trailing_grid_ratio": -0.5,
-            "entry_trailing_threshold_pct": 0.01,
+            "entry_trailing_threshold_pct": 0.08,
             "ema_span_0": 500.0,
             "ema_span_1": 1400.0,
-            "n_positions": 4,
+            "n_positions": 6,
             "total_wallet_exposure_limit": 1.0,
-            "wallet_exposure_limit": 0.1,
             "unstuck_close_pct": 0.01,
             "unstuck_ema_dist": 0.0,
             "unstuck_loss_allowance_pct": 0.01,
@@ -187,22 +186,21 @@ async def main():
             "close_grid_markup_range": 0.005,
             "close_grid_min_markup": 0.005,
             "close_grid_qty_pct": 0.1,
-            "close_trailing_retracement_pct": 0.002,
+            "close_trailing_retracement_pct": 0.003,
             "close_trailing_grid_ratio": 0.5,
-            "close_trailing_threshold_pct": 0.005,
+            "close_trailing_threshold_pct": 0.006,
             "entry_grid_double_down_factor": 1.0,
-            "entry_grid_spacing_weight": 0.0,
-            "entry_grid_spacing_pct": 0.03,
-            "entry_initial_ema_dist": 0.0,
-            "entry_initial_qty_pct": 0.01,
-            "entry_trailing_retracement_pct": 0.06,
-            "entry_trailing_grid_ratio": 0.5,
-            "entry_trailing_threshold_pct": 0.01,
+            "entry_grid_spacing_weight": 0.1,
+            "entry_grid_spacing_pct": 0.05,
+            "entry_initial_ema_dist": 0.001,
+            "entry_initial_qty_pct": 0.005,
+            "entry_trailing_retracement_pct": 0.03,
+            "entry_trailing_grid_ratio": -0.5,
+            "entry_trailing_threshold_pct": 0.08,
             "ema_span_0": 500.0,
             "ema_span_1": 1400.0,
-            "n_positions": 4,
-            "total_wallet_exposure_limit": 1.0,
-            "wallet_exposure_limit": 0.1,
+            "n_positions": 6,
+            "total_wallet_exposure_limit": 0.5,
             "unstuck_close_pct": 0.01,
             "unstuck_ema_dist": 0.0,
             "unstuck_loss_allowance_pct": 0.01,
@@ -210,67 +208,12 @@ async def main():
         },
     }
 
-    test_cfg = {
-        "global": {
-            "TWE_long": 1.649150349955539,
-            "TWE_short": 0.5461130423894401,
-            "loss_allowance_pct": 0.030356105376388203,
-            "stuck_threshold": 0.9032459325737405,
-            "unstuck_close_pct": 0.0010362824817124615,
-        },
-        "long": {
-            "ddown_factor": 0.8936387714354014,
-            "ema_span_0": 1271.2663482275093,
-            "ema_span_1": 1428.4535867322945,
-            "enabled": True,
-            "initial_eprice_ema_dist": -0.007382354354263459,
-            "initial_qty_pct": 0.005906306470579139,
-            "markup_range": 0.002550118763673771,
-            "min_markup": 0.008914201262921613,
-            "n_close_orders": 7.932703766366651,
-            "rentry_pprice_dist": 0.04001250660570497,
-            "rentry_pprice_dist_wallet_exposure_weighting": 0.697427454582351,
-            "wallet_exposure_limit": 0.02355929071365056,
-        },
-        "short": {
-            "ddown_factor": 1.0544207959002343,
-            "ema_span_0": 622.3473566716106,
-            "ema_span_1": 1147.7218302828032,
-            "enabled": False,
-            "initial_eprice_ema_dist": -0.07579989730180586,
-            "initial_qty_pct": 0.005791393875474918,
-            "markup_range": 0.014670555173325061,
-            "min_markup": 0.018138132504695016,
-            "n_close_orders": 2.8627768735676375,
-            "rentry_pprice_dist": 0.022932445063267314,
-            "rentry_pprice_dist_wallet_exposure_weighting": 0.956995998033384,
-            "wallet_exposure_limit": 0.007801614891277717,
-        },
-    }
-
-    bot_params["long"]["entry_grid_double_down_factor"] = test_cfg["long"]["ddown_factor"]
-    bot_params["long"]["ema_span_0"] = test_cfg["long"]["ema_span_0"]
-    bot_params["long"]["ema_span_1"] = test_cfg["long"]["ema_span_1"]
-    bot_params["long"]["entry_initial_ema_dist"] = test_cfg["long"]["initial_eprice_ema_dist"]
-    bot_params["long"]["entry_initial_qty_pct"] = test_cfg["long"]["initial_qty_pct"]
-    bot_params["long"]["close_grid_markup_range"] = test_cfg["long"]["markup_range"]
-    bot_params["long"]["close_grid_min_markup"] = test_cfg["long"]["min_markup"]
-    bot_params["long"]["close_grid_qty_pct"] = 1.0 / test_cfg["long"]["n_close_orders"]
-    bot_params["long"]["entry_grid_spacing_pct"] = test_cfg["long"]["rentry_pprice_dist"]
-    bot_params["long"]["entry_grid_spacing_weight"] = test_cfg["long"][
-        "rentry_pprice_dist_wallet_exposure_weighting"
-    ]
-
-    bot_params["long"]["unstuck_close_pct"] = test_cfg["global"]["unstuck_close_pct"]
-    bot_params["long"]["unstuck_loss_allowance_pct"] = test_cfg["global"]["loss_allowance_pct"]
-    bot_params["long"]["unstuck_threshold"] = test_cfg["global"]["stuck_threshold"]
-
-    bot_params["long"]["entry_trailing_grid_ratio"] = 1.0
-    bot_params["long"]["close_trailing_grid_ratio"] = 1.0
-    bot_params["long"]["n_positions"] = 5
-    bot_params["long"]["total_wallet_exposure_limit"] = test_cfg["global"]["TWE_long"]
     bot_params["long"]["wallet_exposure_limit"] = (
         bot_params["long"]["total_wallet_exposure_limit"] / bot_params["long"]["n_positions"]
+    )
+
+    bot_params["short"]["wallet_exposure_limit"] = (
+        bot_params["short"]["total_wallet_exposure_limit"] / bot_params["short"]["n_positions"]
     )
 
     starting_balance = 100000.0
