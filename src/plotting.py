@@ -441,33 +441,39 @@ def plot_fills_forager(fdf: pd.DataFrame, hlcs_df: pd.DataFrame, start_pct=0.0, 
     end_minute = int(hlcc.index[0] + hlcc.index[-1] * end_pct)
     hlcc = hlcc.loc[start_minute:end_minute]
     fdfc = fdfc.loc[start_minute:end_minute]
+    ax = hlcc.close.plot(style="y-")
     longs = fdfc[fdfc.type.str.contains("long")]
     shorts = fdfc[fdfc.type.str.contains("short")]
-    pprices_long = hlcc.join(longs[["pprice", "psize"]]).ffill()
-    pprices_long.loc[pprices_long.pprice.pct_change() != 0.0, "pprice"] = np.nan
-    pprices_long = pprices_long[pprices_long.psize != 0.0].pprice
-    pprices_short = hlcc.join(shorts[["pprice", "psize"]]).ffill()
-    pprices_short.loc[pprices_short.pprice.pct_change() != 0.0, "pprice"] = np.nan
-    pprices_short = pprices_short[pprices_short.psize != 0.0].pprice
-
-    ax = hlcc.close.plot(style="y-")
-    longs[longs.type.str.contains("entry")].price.plot(style="b.")
-    longs[longs.type.str.contains("close")].price.plot(style="r.")
-    pprices_long.plot(style="b--")
-
-    shorts[shorts.type.str.contains("entry")].price.plot(style="mx")
-    shorts[shorts.type.str.contains("close")].price.plot(style="cx")
-    pprices_short.plot(style="r--")
-
-    ax.legend(
-        [
-            "price",
-            "entries_long",
-            "closes_long",
-            "pprices_long",
-            "entries_short",
-            "closes_short",
-            "pprices_short",
-        ]
-    )
+    if len(longs) == 0 and len(shorts) == 0:
+        return plt
+    legend = ["price"]
+    if len(longs) > 0:
+        pprices_long = hlcc.join(longs[["pprice", "psize"]]).ffill()
+        pprices_long.loc[pprices_long.pprice.pct_change() != 0.0, "pprice"] = np.nan
+        pprices_long = pprices_long[pprices_long.psize != 0.0].pprice
+        longs[longs.type.str.contains("entry")].price.plot(style="b.")
+        longs[longs.type.str.contains("close")].price.plot(style="r.")
+        pprices_long.plot(style="b--")
+        legend.extend(
+            [
+                "entries_long",
+                "closes_long",
+                "pprices_long",
+            ]
+        )
+    if len(shorts) > 0:
+        pprices_short = hlcc.join(shorts[["pprice", "psize"]]).ffill()
+        pprices_short.loc[pprices_short.pprice.pct_change() != 0.0, "pprice"] = np.nan
+        pprices_short = pprices_short[pprices_short.psize != 0.0].pprice
+        shorts[shorts.type.str.contains("entry")].price.plot(style="mx")
+        shorts[shorts.type.str.contains("close")].price.plot(style="cx")
+        pprices_short.plot(style="r--")
+        legend.extend(
+            [
+                "entries_short",
+                "closes_short",
+                "pprices_short",
+            ]
+        )
+    ax.legend(legend)
     return plt
