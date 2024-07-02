@@ -496,23 +496,27 @@ def flatten(lst: list) -> list:
 def get_template_live_config(passivbot_mode="neat_grid"):
     if passivbot_mode == "v7":
         return {
-            "start_date": "2021-05-01",
-            "end_date": "now",
-            "starting_balance": 100000.0,
-            "exchange": "binance",
-            "base_dir": "backtests",
-            "user": "hyperliquid_01",
-            "pnls_max_lookback_days": 30.0,
-            "execution_delay_seconds": 2.0,
-            "max_n_cancellations_per_batch": 5,
-            "max_n_creations_per_batch": 3,
-            "price_distance_threshold": 0.002,
-            "filter_by_min_effective_cost": True,
-            "auto_gs": True,
-            "leverage": 10.0,
-            "forced_mode_long": "",
-            "forced_mode_short": "",
-            "ignored_symbols": [],
+            "backtest": {
+                "start_date": "2021-05-01",
+                "end_date": "now",
+                "starting_balance": 100000.0,
+                "exchange": "binance",
+                "base_dir": "backtests",
+            },
+            "live": {
+                "user": "hyperliquid_01",
+                "pnls_max_lookback_days": 30.0,
+                "execution_delay_seconds": 2.0,
+                "max_n_cancellations_per_batch": 5,
+                "max_n_creations_per_batch": 3,
+                "price_distance_threshold": 0.002,
+                "filter_by_min_effective_cost": True,
+                "auto_gs": True,
+                "leverage": 10.0,
+                "forced_mode_long": "",
+                "forced_mode_short": "",
+                "ignored_symbols": [],
+            },
             "approved_symbols": [],
             "symbol_flags": {},
             "minimum_market_age_days": 7.0,
@@ -2461,9 +2465,9 @@ def process_forager_fills(fills):
 
 
 def calc_equity_forager(symbols, hlcs, fdf):
-    dfb = (
-        fdf[["minute", "balance"]].drop_duplicates(subset="minute", keep="first").set_index("minute")
-    )
+    dfb = fdf[["minute", "balance"]].drop_duplicates(subset="minute", keep="first")
+    dfb["minute"] = pd.to_numeric(dfb["minute"], errors="coerce")  # Convert to numeric
+    dfb = dfb.set_index("minute")
     full_index = pd.RangeIndex(start=0, stop=len(hlcs), step=1)
     dfb = dfb.reindex(full_index).ffill().bfill()
     upnls = np.zeros(len(hlcs))
@@ -2490,8 +2494,6 @@ def analyze_fills_forager(symbols, hlcs, fdf):
     tpp = tdf.pprice_diff
     tp_costs = (tdf.qty * tdf.price).abs() / tdf.balance
     tpp_w_mean = (tpp * tp_costs).sum() / tp_costs.sum()
-    tpp.max(), tpp.min(), tpp.mean(), tpp.median(), tpp_w_mean
-
     balance_and_equity = calc_equity_forager(symbols, hlcs, fdf)
     drawdowns = calc_drawdowns(balance_and_equity.equity)
     daily_eqs = balance_and_equity.groupby(balance_and_equity.index // (60 * 24)).equity.mean()
@@ -2510,38 +2512,3 @@ def analyze_fills_forager(symbols, hlcs, fdf):
         "sharpe_ratio": sharpe_ratio,
     }
     return analysis, balance_and_equity
-
-
-def convert_to_v7(cfg: dict):
-    template = get_template_live_config("v7")
-    if all([k in cfg for k in ["analysis", "args", "live_config"]]):
-        cmap = {
-            "ddown_factor": "entry_grid_double_down_factor",
-            "initial_eprice_ema_dist": "entry_initial_ema_dist",
-            "initial_qty_pct": "entry_initial_qty_pct",
-            "markup_range": "close_grid_markup_range",
-            "min_markup": "close_grid_min_markup",
-            "rentry_pprice_dist": "entry_grid_spacing_pct",
-            "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_weight",
-        }
-        for pside in ["long", "short"]:
-            for key in cfg["live_config"][pside]:
-                if key in template[pside]:
-                    template[pside][key] = cfg["live_config"][pside][key]
-                elif key in cmap:
-                    template[pside][cmap[key]] = cfg["live_config"][pside][key]
-            template[pside]["close_grid_qty_pct"] = 1.0 / cfg["live_config"][pside]["n_close_orders"]
-            template[pside]["unstuck_close_pct"] = cfg["live_config"]["global"]["unstuck_close_pct"]
-            template[pside]["unstuck_loss_allowance_pct"] = cfg["live_config"]["global"][
-                "loss_allowance_pct"
-            ]
-            template[pside]["unstuck_threshold"] = cfg["live_config"]["global"]["stuck_threshold"]
-            template[pside]["total_wallet_exposure_limit"] = cfg["live_config"]["global"][
-                f"TWE_{pside}"
-            ]
-            template[pside]["close_trailing_grid_ratio"] = 0.0
-            template[pside]["entry_trailing_grid_ratio"] = 0.0
-        for key in ["start_date", "end_date", "starting_balance", "exchange"]:
-            template[key] = cfg["args"][key]
-        template["approved_symbols"] = cfg["args"]["symbols"]
-    return template
