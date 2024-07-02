@@ -42,7 +42,21 @@ def compare_dicts(dict1, dict2, path=""):
             print(f"{path}{key}: Values differ. First dict:  {dict1[key]} Second dict: {dict2[key]}")
 
 
+def compare_dict_keys(dict1, dict2):
+    def get_all_keys(d):
+        keys = set(d.keys())
+        for value in d.values():
+            if isinstance(value, dict):
+                keys.update(get_all_keys(value))
+        return keys
+
+    return get_all_keys(dict1) == get_all_keys(dict2)
+
+
 def convert_to_v7(cfg: dict):
+    formatted = get_template_live_config("v7")
+    if compare_dict_keys(cfg, formatted):
+        return cfg
     cmap = {
         "ddown_factor": "entry_grid_double_down_factor",
         "initial_eprice_ema_dist": "entry_initial_ema_dist",
@@ -52,12 +66,14 @@ def convert_to_v7(cfg: dict):
         "rentry_pprice_dist": "entry_grid_spacing_pct",
         "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_weight",
     }
-    formatted = get_template_live_config("v7")
     if "args" in cfg:
         for key in ["start_date", "end_date", "starting_balance", "exchange"]:
             if key in formatted["backtest"]:
                 formatted["backtest"][key] = cfg["args"][key]
         formatted["approved_symbols"] = cfg["args"]["symbols"]
+        for pside in ["long", "short"]:
+            if not cfg["args"][f"{pside}_enabled"]:
+                cfg["live_config"]["global"][f"TWE_{pside}"] = 0.0
     if "live_config" in cfg and all([x in cfg["live_config"] for x in ["global", "long", "short"]]):
         for pside in ["long", "short"]:
             for k0 in cfg["live_config"][pside]:
@@ -135,6 +151,7 @@ def run_backtest(hlcs, noisiness_indices, mss, config: dict):
         "maker_fee": mss[symbols[0]]["maker"],
         "symbols": symbols,
     }
+    print(f"Starting backtest...")
     sts = utc_ms()
     fills = pbr.run_backtest(hlcs, noisiness_indices, bot_params, exchange_params, backtest_params)
     print(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
