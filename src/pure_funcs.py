@@ -2468,6 +2468,13 @@ def analyze_fills_forager(symbols, hlcs, fdf, equities):
     analysis = {}
     for pside in ["long", "short"]:
         fdfc = fdf[fdf.type.str.contains(pside)]
+        if len(fdfc) == 0:
+            analysis[f"TP_pprice_diff_max_{pside}"] = 0.0
+            analysis[f"TP_pprice_diff_min_{pside}"] = 0.0
+            analysis[f"TP_pprice_diff_mean_{pside}"] = 0.0
+            analysis[f"TP_pprice_diff_median_{pside}"] = 0.0
+            analysis[f"TP_pprice_diff_weighted_mean_{pside}"] = 0.0
+            continue
         tdf = fdfc[(fdfc.type.str.contains("close")) & (~fdfc.type.str.contains("unstuck"))]
         tpp = tdf.pprice_diff
         tp_costs = (tdf.qty * tdf.price).abs() / tdf.balance
