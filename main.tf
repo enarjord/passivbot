@@ -68,6 +68,8 @@ resource "google_compute_instance" "default" {
 source /opt/miniconda/etc/profile.d/conda.sh
 conda activate passivbot-env
 python /opt/passivbot/passivbot.py binance_01 1000PEPEUSDT /opt/passivbot/test/live_config.json 
+EOT
+
     # Ensure the script is executable
     chmod +x /opt/passivbot/start_passivbot.sh
 
