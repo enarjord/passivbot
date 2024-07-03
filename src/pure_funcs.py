@@ -2464,39 +2464,13 @@ def process_forager_fills(fills):
     return fdf
 
 
-def calc_equity_forager(symbols, hlcs, fdf):
-    dfb = fdf[["minute", "balance"]].drop_duplicates(subset="minute", keep="first")
-    dfb["minute"] = pd.to_numeric(dfb["minute"], errors="coerce")  # Convert to numeric
-    dfb = dfb.set_index("minute")
-    full_index = pd.RangeIndex(start=0, stop=len(hlcs), step=1)
-    dfb = dfb.reindex(full_index).ffill().bfill()
-    upnls = np.zeros(len(hlcs))
-    for i, symbol in enumerate(symbols):
-        fdfc = fdf[(fdf.symbol == symbol) & (fdf.type.str.contains("long"))]
-        dfc = pd.DataFrame(hlcs[:, i, :], columns=["high", "low", "close"])
-        fdfc_grouped = fdfc.groupby("minute").last()
-        dfc = dfc.join(fdfc_grouped[["psize", "pprice"]], how="left").ffill()
-        dfc["upnl"] = dfc["psize"] * (dfc["low"] - dfc["pprice"])
-        upnls += dfc["upnl"].fillna(0.0).values
-    for i, symbol in enumerate(symbols):
-        fdfc = fdf[(fdf.symbol == symbol) & (fdf.type.str.contains("short"))]
-        dfc = pd.DataFrame(hlcs[:, i, :], columns=["high", "low", "close"])
-        fdfc_grouped = fdfc.groupby("minute").last()
-        dfc = dfc.join(fdfc_grouped[["psize", "pprice"]], how="left").ffill()
-        dfc["upnl"] = dfc["psize"].abs() * (dfc["pprice"] - dfc["high"])
-        upnls += dfc["upnl"].fillna(0.0).values
-    dfb["equity"] = dfb["balance"] + upnls
-    return dfb
-
-
-def analyze_fills_forager(symbols, hlcs, fdf):
-    tdf = fdf[fdf.type.str.contains("close")]
+def analyze_fills_forager(symbols, hlcs, fdf, equities):
+    tdf = fdf[(fdf.type.str.contains("close")) & (~fdf.type.str.contains("unstuck"))]
     tpp = tdf.pprice_diff
     tp_costs = (tdf.qty * tdf.price).abs() / tdf.balance
     tpp_w_mean = (tpp * tp_costs).sum() / tp_costs.sum()
-    balance_and_equity = calc_equity_forager(symbols, hlcs, fdf)
-    drawdowns = calc_drawdowns(balance_and_equity.equity)
-    daily_eqs = balance_and_equity.groupby(balance_and_equity.index // (60 * 24)).equity.mean()
+    drawdowns = calc_drawdowns(equities)
+    daily_eqs = equities.groupby(equities.index // (60 * 24)).mean()
     daily_eqs_pct_change = daily_eqs.pct_change()
     adg = daily_eqs_pct_change.mean()
     sharpe_ratio = adg / daily_eqs_pct_change.std()
@@ -2511,4 +2485,4 @@ def analyze_fills_forager(symbols, hlcs, fdf):
         "adg": adg,
         "sharpe_ratio": sharpe_ratio,
     }
-    return analysis, balance_and_equity
+    return analysis
