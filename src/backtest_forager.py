@@ -65,6 +65,8 @@ def convert_to_v7(cfg: dict):
         "min_markup": "close_grid_min_markup",
         "rentry_pprice_dist": "entry_grid_spacing_pct",
         "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_weight",
+        "ema_span_0": "ema_span_0",
+        "ema_span_1": "ema_span_1",
     }
     if "args" in cfg:
         for key in ["start_date", "end_date", "starting_balance", "exchange"]:
@@ -153,29 +155,38 @@ def run_backtest(hlcs, noisiness_indices, mss, config: dict):
     }
     print(f"Starting backtest...")
     sts = utc_ms()
-    fills = pbr.run_backtest(hlcs, noisiness_indices, bot_params, exchange_params, backtest_params)
+    fills, equities = pbr.run_backtest(
+        hlcs, noisiness_indices, bot_params, exchange_params, backtest_params
+    )
     print(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
-    return fills
+    return fills, equities
 
 
-def post_process(config, hlcs, fills, results_path):
+def post_process(config, hlcs, fills, equities, results_path):
     sts = utc_ms()
     fdf = process_forager_fills(fills)
-    analysis, balance_and_equity = analyze_fills_forager(config["approved_symbols"], hlcs, fdf)
+    equities = pd.Series(equities)
+    analysis = analyze_fills_forager(config["approved_symbols"], hlcs, fdf, equities)
     print(f"seconds elapsed for analysis: {(utc_ms() - sts) / 1000:.4f}")
     pprint.pprint(analysis)
-    print(balance_and_equity)
     results_path = make_get_filepath(
         oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
     )
     json.dump(analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True)
     json.dump(config, open(f"{results_path}config.json", "w"), indent=4, sort_keys=True)
-    plot_forager(results_path, config["approved_symbols"], fdf, hlcs, balance_and_equity)
+    plot_forager(results_path, config["approved_symbols"], fdf, equities, hlcs)
 
 
-def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, hlcs, balance_and_equity):
+def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, equities, hlcs):
     plots_dir = make_get_filepath(oj(results_path, "fills_plots", ""))
     plt.clf()
+    balance_and_equity = fdf[["minute", "balance"]].drop_duplicates(subset="minute", keep="first")
+    balance_and_equity = balance_and_equity.set_index(balance_and_equity.minute.astype(int)).drop(
+        ["minute"], axis=1
+    )
+    balance_and_equity = (
+        pd.DataFrame(equities, columns=["equity"]).join(balance_and_equity).ffill().bfill()
+    )
     balance_and_equity.plot()
     plt.savefig(oj(results_path, "balance_and_equity.png"))
 
@@ -198,8 +209,8 @@ async def main():
     config = load_and_process_config(args.config_path)
     hlcs, mss, results_path = await prepare_hlcs_mss(config)
     noisiness_indices = calc_noisiness_argsort_indices(hlcs).astype(np.int32)
-    fills = run_backtest(hlcs, noisiness_indices, mss, config)
-    post_process(config, hlcs, fills, results_path)
+    fills, equities = run_backtest(hlcs, noisiness_indices, mss, config)
+    post_process(config, hlcs, fills, equities, results_path)
 
 
 if __name__ == "__main__":
