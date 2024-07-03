@@ -94,6 +94,7 @@ pub struct Backtest {
     is_stuck: IsStuck,
     trading_enabled: TradingEnabled,
     trailing_enabled: TrailingEnabled,
+    equities: Vec<f64>,
 }
 
 impl Backtest {
@@ -114,6 +115,8 @@ impl Backtest {
                 }
             })
             .collect();
+        let mut equities = Vec::<f64>::new();
+        equities.push(backtest_params.starting_balance);
         Backtest {
             hlcs,
             noisiness_indices,
@@ -142,10 +145,11 @@ impl Backtest {
                 short: bot_params_pair.short.close_trailing_grid_ratio != 0.0
                     || bot_params_pair.short.entry_trailing_grid_ratio != 0.0,
             },
+            equities: equities,
         }
     }
 
-    pub fn run(&mut self) -> Vec<Fill> {
+    pub fn run(&mut self) -> (Vec<Fill>, Vec<f64>) {
         for idx in 0..self.n_markets {
             self.trailing_prices
                 .long
@@ -158,8 +162,39 @@ impl Backtest {
             let any_fill = self.check_for_fills(k);
             self.update_emas(k);
             self.update_open_orders(k, any_fill);
+            self.update_equities(k);
         }
-        self.fills.clone()
+        (self.fills.clone(), self.equities.clone())
+    }
+
+    fn update_equities(&mut self, k: usize) {
+        let mut equity = self.balance;
+
+        // Calculate unrealized PnL for long positions
+        for (&idx, position) in &self.positions.long {
+            let current_price = self.hlcs[[k, idx, CLOSE]];
+            let upnl = calc_pnl_long(
+                position.price,
+                current_price,
+                position.size,
+                self.exchange_params_list[idx].c_mult,
+            );
+            equity += upnl;
+        }
+
+        // Calculate unrealized PnL for short positions
+        for (&idx, position) in &self.positions.short {
+            let current_price = self.hlcs[[k, idx, CLOSE]];
+            let upnl = calc_pnl_short(
+                position.price,
+                current_price,
+                position.size,
+                self.exchange_params_list[idx].c_mult,
+            );
+            equity += upnl;
+        }
+
+        self.equities.push(equity);
     }
 
     fn update_actives(&mut self, k: usize, pside: usize) -> Vec<usize> {

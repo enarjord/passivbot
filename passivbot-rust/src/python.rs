@@ -11,8 +11,8 @@ use crate::types::{
     BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Order, OrderBook, Position,
     StateParams, TrailingPriceBundle,
 };
-use ndarray::{Array2, ArrayBase, ArrayD};
-use numpy::{IntoPyArray, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3};
+use ndarray::{Array1, Array2, ArrayBase, ArrayD};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -25,7 +25,7 @@ pub fn run_backtest(
     bot_params_pair_dict: &PyDict,
     exchange_params_list: &PyAny,
     backtest_params_dict: &PyDict,
-) -> PyResult<Py<PyArray2<PyObject>>> {
+) -> PyResult<(Py<PyArray2<PyObject>>, Py<PyArray1<f64>>)> {
     let hlcs_rust = hlcs.as_array();
 
     let noisiness_indices_rust: Array2<i32> =
@@ -41,8 +41,6 @@ pub fn run_backtest(
         };
 
     let bot_params_pair = bot_params_pair_from_dict(bot_params_pair_dict)?;
-    // convert exchange_params_dict to Vector<ExchangeParams>
-    // the python type is list of dicts: [{str: float}]
     let exchange_params = {
         let mut params_vec = Vec::new();
         if let Ok(py_list) = exchange_params_list.downcast::<PyList>() {
@@ -73,11 +71,13 @@ pub fn run_backtest(
         exchange_params,
         &backtest_params,
     );
-    // Convert fills to a 2D array with mixed types
-    Python::with_gil(|py| {
-        let fills = backtest.run();
-        let mut py_fills = Array2::from_elem((fills.len(), 10), py.None());
 
+    // Run the backtest and get fills and equities
+    Python::with_gil(|py| {
+        let (fills, equities) = backtest.run();
+
+        // Convert fills to a 2D array with mixed types
+        let mut py_fills = Array2::from_elem((fills.len(), 10), py.None());
         for (i, fill) in fills.iter().enumerate() {
             py_fills[(i, 0)] = fill.index.into_py(py);
             py_fills[(i, 1)] = <String as Clone>::clone(&fill.symbol).into_py(py);
@@ -91,7 +91,13 @@ pub fn run_backtest(
             py_fills[(i, 9)] = fill.order_type.to_string().into_py(py);
         }
 
-        Ok(py_fills.into_pyarray(py).to_owned())
+        // Convert equities to a 1D array
+        let py_equities = Array1::from_vec(equities);
+
+        Ok((
+            py_fills.into_pyarray(py).to_owned(),
+            py_equities.into_pyarray(py).to_owned(),
+        ))
     })
 }
 
