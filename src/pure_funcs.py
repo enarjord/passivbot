@@ -2465,24 +2465,26 @@ def process_forager_fills(fills):
 
 
 def analyze_fills_forager(symbols, hlcs, fdf, equities):
-    tdf = fdf[(fdf.type.str.contains("close")) & (~fdf.type.str.contains("unstuck"))]
-    tpp = tdf.pprice_diff
-    tp_costs = (tdf.qty * tdf.price).abs() / tdf.balance
-    tpp_w_mean = (tpp * tp_costs).sum() / tp_costs.sum()
+    analysis = {}
+    for pside in ["long", "short"]:
+        fdfc = fdf[fdf.type.str.contains(pside)]
+        tdf = fdfc[(fdfc.type.str.contains("close")) & (~fdfc.type.str.contains("unstuck"))]
+        tpp = tdf.pprice_diff
+        tp_costs = (tdf.qty * tdf.price).abs() / tdf.balance
+        tpp_w_mean = (tpp * tp_costs).sum() / tp_costs.sum()
+        analysis[f"TP_pprice_diff_max_{pside}"] = tpp.max()
+        analysis[f"TP_pprice_diff_min_{pside}"] = tpp.min()
+        analysis[f"TP_pprice_diff_mean_{pside}"] = tpp.mean()
+        analysis[f"TP_pprice_diff_median_{pside}"] = tpp.median()
+        analysis[f"TP_pprice_diff_weighted_mean_{pside}"] = tpp_w_mean
+
     drawdowns = calc_drawdowns(equities)
     daily_eqs = equities.groupby(equities.index // (60 * 24)).mean()
     daily_eqs_pct_change = daily_eqs.pct_change()
     adg = daily_eqs_pct_change.mean()
     sharpe_ratio = adg / daily_eqs_pct_change.std()
-    analysis = {
-        "TP_pprice_diff_max": tpp.max(),
-        "TP_pprice_diff_min": tpp.min(),
-        "TP_pprice_diff_mean": tpp.mean(),
-        "TP_pprice_diff_median": tpp.median(),
-        "TP_pprice_diff_weighted_mean": tpp_w_mean,
-        "drawdown_worst": abs(drawdowns.min()),
-        "drawdown_mean": abs(drawdowns.mean()),
-        "adg": adg,
-        "sharpe_ratio": sharpe_ratio,
-    }
+    analysis["drawdown_worst"] = abs(drawdowns.min())
+    analysis["drawdown_mean"] = abs(drawdowns.mean())
+    analysis["adg"] = adg
+    analysis["sharpe_ratio"] = sharpe_ratio
     return analysis
