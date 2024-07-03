@@ -13,9 +13,9 @@ from procedures import (
 )
 from pure_funcs import (
     get_template_live_config,
-    process_forager_fills,
-    analyze_fills_forager,
     ts_to_date,
+    calc_drawdowns,
+    sort_dict_keys,
 )
 import pprint
 from downloader import prepare_hlcs_forager
@@ -28,6 +28,70 @@ plt.rcParams["figure.figsize"] = [29, 18]
 
 def oj(*x):
     return os.path.join(*x)
+
+
+def process_forager_fills(fills):
+    fdf = pd.DataFrame(
+        fills,
+        columns=[
+            "minute",
+            "symbol",
+            "pnl",
+            "fee_paid",
+            "balance",
+            "qty",
+            "price",
+            "psize",
+            "pprice",
+            "type",
+        ],
+    )
+    symbols = fdf.symbol.unique()
+    for symbol in symbols:
+        fdfc = fdf[fdf.symbol == symbol].copy()
+        pprice_diffs = 1.0 - fdfc.price / fdfc.pprice.shift()
+        fdfc.loc[:, "pprice_diff"] = pprice_diffs
+        fdfc.loc[fdfc.type == "entry_initial_normal_long", "pprice_diff"] = 0.0
+        fdf.loc[fdfc.index, "pprice_diff"] = fdfc.pprice_diff
+    return fdf
+
+
+def analyze_fills_forager(symbols, hlcs, fdf, equities):
+    analysis = {}
+    pnls = {}
+    for pside in ["long", "short"]:
+        fdfc = fdf[fdf.type.str.contains(pside)]
+        profit = fdfc[fdfc.pnl > 0.0].pnl.sum()
+        loss = fdfc[fdfc.pnl < 0.0].pnl.sum()
+        if len(fdfc) == 0:
+            pnls[pside] = 0.0
+            analysis[f"loss_profit_ratio_{pside}"] = 1.0
+            continue
+        pnls[pside] = profit + loss
+        analysis[f"loss_profit_ratio_{pside}"] = abs(loss / profit)
+
+    analysis["pnl_ratio_long_short"] = pnls["long"] / (pnls["long"] + pnls["short"])
+    profit = fdf[fdf.pnl > 0.0].pnl.sum()
+    loss = fdf[fdf.pnl < 0.0].pnl.sum()
+    analysis[f"loss_profit_ratio"] = abs(loss / profit)
+    drawdowns = calc_drawdowns(equities)
+    daily_eqs = equities.groupby(equities.index // (60 * 24)).mean()
+    daily_eqs_pct_change = daily_eqs.pct_change()
+    adg = daily_eqs_pct_change.mean()
+    sharpe_ratio = adg / daily_eqs_pct_change.std()
+    bal_eq = fdf[["minute", "balance"]].drop_duplicates(subset="minute", keep="first")
+    bal_eq = bal_eq.set_index(bal_eq.minute.astype(int)).drop(["minute"], axis=1)
+    bal_eq = pd.DataFrame(equities, columns=["equity"]).join(bal_eq).ffill().bfill()
+    bal_eq_diff = (bal_eq.balance - bal_eq.equity).abs() / bal_eq[["equity", "balance"]].mean(axis=1)
+    analysis["drawdown_worst"] = abs(drawdowns.min())
+    analysis["drawdown_mean"] = abs(drawdowns.mean())
+    analysis["drawdown_median"] = abs(drawdowns.median())
+    analysis["adg"] = adg
+    analysis["sharpe_ratio"] = sharpe_ratio
+    analysis["balance_equity_diff_mean"] = bal_eq_diff.mean()
+    analysis["balance_equity_diff_median"] = bal_eq_diff.median()
+    analysis["balance_equity_diff_max"] = bal_eq_diff.max()
+    return sort_dict_keys(analysis), bal_eq
 
 
 def compare_dicts(dict1, dict2, path=""):
@@ -166,7 +230,7 @@ def post_process(config, hlcs, fills, equities, results_path):
     sts = utc_ms()
     fdf = process_forager_fills(fills)
     equities = pd.Series(equities)
-    analysis = analyze_fills_forager(config["approved_symbols"], hlcs, fdf, equities)
+    analysis, bal_eq = analyze_fills_forager(config["approved_symbols"], hlcs, fdf, equities)
     print(f"seconds elapsed for analysis: {(utc_ms() - sts) / 1000:.4f}")
     pprint.pprint(analysis)
     results_path = make_get_filepath(
@@ -174,20 +238,13 @@ def post_process(config, hlcs, fills, equities, results_path):
     )
     json.dump(analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True)
     json.dump(config, open(f"{results_path}config.json", "w"), indent=4, sort_keys=True)
-    plot_forager(results_path, config["approved_symbols"], fdf, equities, hlcs)
+    plot_forager(results_path, config["approved_symbols"], fdf, bal_eq, hlcs)
 
 
-def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, equities, hlcs):
+def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcs):
     plots_dir = make_get_filepath(oj(results_path, "fills_plots", ""))
     plt.clf()
-    balance_and_equity = fdf[["minute", "balance"]].drop_duplicates(subset="minute", keep="first")
-    balance_and_equity = balance_and_equity.set_index(balance_and_equity.minute.astype(int)).drop(
-        ["minute"], axis=1
-    )
-    balance_and_equity = (
-        pd.DataFrame(equities, columns=["equity"]).join(balance_and_equity).ffill().bfill()
-    )
-    balance_and_equity.plot()
+    bal_eq.plot()
     plt.savefig(oj(results_path, "balance_and_equity.png"))
 
     for i, symbol in enumerate(symbols):
