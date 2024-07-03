@@ -62,14 +62,6 @@ resource "google_compute_instance" "default" {
     # Install the requirements using conda
     pip install -r requirements.txt
 
-    # Create a wrapper script
-    cat <<EOT > /opt/passivbot/start_passivbot.sh
-#!/bin/bash
-source /opt/miniconda/etc/profile.d/conda.sh
-conda activate passivbot-env
-python /opt/passivbot/passivbot.py binance_01 1000PEPEUSDT /opt/passivbot/test/live_config.json 
-EOT
-
     # Ensure the script is executable
     chmod +x /opt/passivbot/start_passivbot.sh
 
