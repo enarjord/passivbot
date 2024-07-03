@@ -27,7 +27,7 @@ resource "google_compute_instance" "default" {
   metadata_startup_script = <<-EOF
     #!/bin/bash
     apt-get update
-    apt-get install -y git wget bzip2
+    apt-get install -y git wget bzip2 supervisor
 
     # Clone the GitHub repository
     git clone https://github.com/enarjord/passivbot.git /opt/passivbot
@@ -84,7 +84,12 @@ stderr_logfile=/var/log/passivbot.err.log
 stdout_logfile=/var/log/passivbot.out.log
 EOT
 
-    # Run the application (adjust the command to your app's entry point)
+    # Reload Supervisor to apply the new configuration
+    sudo supervisorctl reread
+    sudo supervisorctl update
+
+    # Start the program via Supervisor
+    # sudo supervisorctl start passivbot
   EOF
 
   metadata = {
