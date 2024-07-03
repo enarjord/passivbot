@@ -1,4 +1,5 @@
 provider "google" {
+  credentials = file("~/.gcp/gcp-key.json")
   project     = "stellar-utility-170606"
   region      = "asia-east1"
 }
