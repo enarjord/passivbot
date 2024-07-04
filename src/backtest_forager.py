@@ -46,13 +46,6 @@ def process_forager_fills(fills):
             "type",
         ],
     )
-    symbols = fdf.symbol.unique()
-    for symbol in symbols:
-        fdfc = fdf[fdf.symbol == symbol].copy()
-        pprice_diffs = 1.0 - fdfc.price / fdfc.pprice.shift()
-        fdfc.loc[:, "pprice_diff"] = pprice_diffs
-        fdfc.loc[fdfc.type == "entry_initial_normal_long", "pprice_diff"] = 0.0
-        fdf.loc[fdfc.index, "pprice_diff"] = fdfc.pprice_diff
     return fdf
 
 
@@ -71,26 +64,10 @@ def analyze_fills_forager(symbols, hlcs, fdf, equities):
         analysis[f"loss_profit_ratio_{pside}"] = abs(loss / profit)
 
     analysis["pnl_ratio_long_short"] = pnls["long"] / (pnls["long"] + pnls["short"])
-    profit = fdf[fdf.pnl > 0.0].pnl.sum()
-    loss = fdf[fdf.pnl < 0.0].pnl.sum()
-    analysis[f"loss_profit_ratio"] = abs(loss / profit)
-    drawdowns = calc_drawdowns(equities)
-    daily_eqs = equities.groupby(equities.index // (60 * 24)).mean()
-    daily_eqs_pct_change = daily_eqs.pct_change()
-    adg = daily_eqs_pct_change.mean()
-    sharpe_ratio = adg / daily_eqs_pct_change.std()
-    bal_eq = fdf[["minute", "balance"]].drop_duplicates(subset="minute", keep="first")
-    bal_eq = bal_eq.set_index(bal_eq.minute.astype(int)).drop(["minute"], axis=1)
-    bal_eq = pd.DataFrame(equities, columns=["equity"]).join(bal_eq).ffill().bfill()
-    bal_eq_diff = (bal_eq.balance - bal_eq.equity).abs() / bal_eq[["equity", "balance"]].mean(axis=1)
-    analysis["drawdown_worst"] = abs(drawdowns.min())
-    analysis["drawdown_mean"] = abs(drawdowns.mean())
-    analysis["drawdown_median"] = abs(drawdowns.median())
-    analysis["adg"] = adg
-    analysis["sharpe_ratio"] = sharpe_ratio
-    analysis["balance_equity_diff_mean"] = bal_eq_diff.mean()
-    analysis["balance_equity_diff_median"] = bal_eq_diff.median()
-    analysis["balance_equity_diff_max"] = bal_eq_diff.max()
+    bdf = fdf.groupby((fdf.minute // 60) * 60).balance.last()
+    edf = equities.iloc[::60]
+    nidx = np.arange(min(bdf.index[0], edf.index[0]), max(bdf.index[-1], edf.index[-1]), 60)
+    bal_eq = pd.DataFrame({"balance": bdf, "equity": edf}, index=nidx).ffill().bfill()
     return sort_dict_keys(analysis), bal_eq
 
 
@@ -219,18 +196,21 @@ def run_backtest(hlcs, noisiness_indices, mss, config: dict):
     }
     print(f"Starting backtest...")
     sts = utc_ms()
-    fills, equities = pbr.run_backtest(
+    fills, equities, analysis = pbr.run_backtest(
         hlcs, noisiness_indices, bot_params, exchange_params, backtest_params
     )
     print(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
-    return fills, equities
+    return fills, equities, analysis
 
 
-def post_process(config, hlcs, fills, equities, results_path):
+def post_process(config, hlcs, fills, equities, analysis, results_path):
     sts = utc_ms()
     fdf = process_forager_fills(fills)
     equities = pd.Series(equities)
-    analysis, bal_eq = analyze_fills_forager(config["approved_symbols"], hlcs, fdf, equities)
+    analysis_py, bal_eq = analyze_fills_forager(config["approved_symbols"], hlcs, fdf, equities)
+    for k in analysis_py:
+        if k not in analysis:
+            analysis[k] = analysis_py[k]
     print(f"seconds elapsed for analysis: {(utc_ms() - sts) / 1000:.4f}")
     pprint.pprint(analysis)
     results_path = make_get_filepath(
@@ -266,8 +246,8 @@ async def main():
     config = load_and_process_config(args.config_path)
     hlcs, mss, results_path = await prepare_hlcs_mss(config)
     noisiness_indices = calc_noisiness_argsort_indices(hlcs).astype(np.int32)
-    fills, equities = run_backtest(hlcs, noisiness_indices, mss, config)
-    post_process(config, hlcs, fills, equities, results_path)
+    fills, equities, analysis = run_backtest(hlcs, noisiness_indices, mss, config)
+    post_process(config, hlcs, fills, equities, analysis, results_path)
 
 
 if __name__ == "__main__":
