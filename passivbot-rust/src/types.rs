@@ -208,3 +208,26 @@ pub struct Fill {
     pub position_price: f64,
     pub order_type: OrderType,
 }
+
+#[derive(Debug)]
+pub struct Analysis {
+    pub adg: f64,
+    pub sharpe_ratio: f64,
+    pub drawdown_worst: f64,
+    pub equity_balance_diff_mean: f64,
+    pub equity_balance_diff_max: f64,
+    pub loss_profit_ratio: f64,
+}
+
+impl Default for Analysis {
+    fn default() -> Self {
+        Analysis {
+            adg: 0.0,
+            sharpe_ratio: 0.0,
+            drawdown_worst: 1.0,
+            equity_balance_diff_mean: 1.0,
+            equity_balance_diff_max: 1.0,
+            loss_profit_ratio: 1.0,
+        }
+    }
+}

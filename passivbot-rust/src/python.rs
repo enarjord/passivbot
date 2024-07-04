@@ -1,4 +1,4 @@
-use crate::backtest::Backtest;
+use crate::backtest::{analyze_backtest, Backtest};
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_grid_close_long, calc_next_close_long,
     calc_next_close_short, calc_trailing_close_long,
@@ -8,8 +8,8 @@ use crate::entries::{
     calc_next_entry_short, calc_trailing_entry_long,
 };
 use crate::types::{
-    BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Order, OrderBook, Position,
-    StateParams, TrailingPriceBundle,
+    Analysis, BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Order, OrderBook,
+    Position, StateParams, TrailingPriceBundle,
 };
 use ndarray::{Array1, Array2, ArrayBase, ArrayD};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3};
@@ -25,7 +25,7 @@ pub fn run_backtest(
     bot_params_pair_dict: &PyDict,
     exchange_params_list: &PyAny,
     backtest_params_dict: &PyDict,
-) -> PyResult<(Py<PyArray2<PyObject>>, Py<PyArray1<f64>>)> {
+) -> PyResult<(Py<PyArray2<PyObject>>, Py<PyArray1<f64>>, Py<PyDict>)> {
     let hlcs_rust = hlcs.as_array();
 
     let noisiness_indices_rust: Array2<i32> =
@@ -75,6 +75,17 @@ pub fn run_backtest(
     // Run the backtest and get fills and equities
     Python::with_gil(|py| {
         let (fills, equities) = backtest.run();
+        let analysis = analyze_backtest(&fills, &equities);
+        let py_analysis = PyDict::new(py);
+        py_analysis.set_item("adg", analysis.adg)?;
+        py_analysis.set_item("sharpe_ratio", analysis.sharpe_ratio)?;
+        py_analysis.set_item("drawdown_worst", analysis.drawdown_worst)?;
+        py_analysis.set_item(
+            "equity_balance_diff_mean",
+            analysis.equity_balance_diff_mean,
+        )?;
+        py_analysis.set_item("equity_balance_diff_max", analysis.equity_balance_diff_max)?;
+        py_analysis.set_item("loss_profit_ratio", analysis.loss_profit_ratio)?;
 
         // Convert fills to a 2D array with mixed types
         let mut py_fills = Array2::from_elem((fills.len(), 10), py.None());
@@ -97,6 +108,7 @@ pub fn run_backtest(
         Ok((
             py_fills.into_pyarray(py).to_owned(),
             py_equities.into_pyarray(py).to_owned(),
+            py_analysis.into(),
         ))
     })
 }

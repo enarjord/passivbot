@@ -5,8 +5,8 @@ use crate::closes::{
 use crate::constants::{CLOSE, HIGH, LONG, LOW, NO_POS, SHORT};
 use crate::entries::{calc_next_entry_long, calc_next_entry_short};
 use crate::types::{
-    BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Fill, Order, OrderBook,
-    OrderType, Position, Positions, StateParams, TrailingPriceBundle,
+    Analysis, BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Fill, Order,
+    OrderBook, OrderType, Position, Positions, StateParams, TrailingPriceBundle,
 };
 use crate::utils::{
     calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
@@ -14,6 +14,7 @@ use crate::utils::{
 };
 use ndarray::s;
 use ndarray::{Array1, Array2, Array3};
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Default, Copy, Debug)]
@@ -169,7 +170,6 @@ impl Backtest {
 
     fn update_equities(&mut self, k: usize) {
         let mut equity = self.balance;
-
         // Calculate unrealized PnL for long positions
         for (&idx, position) in &self.positions.long {
             let current_price = self.hlcs[[k, idx, CLOSE]];
@@ -181,7 +181,6 @@ impl Backtest {
             );
             equity += upnl;
         }
-
         // Calculate unrealized PnL for short positions
         for (&idx, position) in &self.positions.short {
             let current_price = self.hlcs[[k, idx, CLOSE]];
@@ -193,7 +192,6 @@ impl Backtest {
             );
             equity += upnl;
         }
-
         self.equities.push(equity);
     }
 
@@ -1090,4 +1088,115 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
             alphas_inv: ema_alphas_short_inv,
         },
     }
+}
+
+pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
+    let n_days = (fills.last().unwrap().index as f64 - fills[0].index as f64) / 1440.0;
+
+    // Calculate daily equities
+    let mut daily_eqs = Vec::new();
+    let mut current_day = 0;
+    let mut sum = 0.0;
+    let mut count = 0;
+    for (i, &equity) in equities.iter().enumerate() {
+        let day = i / 1440;
+        if day > current_day {
+            daily_eqs.push(sum / count as f64);
+            current_day = day;
+            sum = equity;
+            count = 1;
+        } else {
+            sum += equity;
+            count += 1;
+        }
+    }
+    if count > 0 {
+        daily_eqs.push(sum / count as f64);
+    }
+
+    // Calculate daily percentage changes
+    let daily_eqs_pct_change: Vec<f64> =
+        daily_eqs.windows(2).map(|w| (w[1] - w[0]) / w[0]).collect();
+
+    // Calculate ADG and Sharpe ratio
+    let adg = daily_eqs_pct_change.iter().sum::<f64>() / daily_eqs_pct_change.len() as f64;
+    let variance = daily_eqs_pct_change
+        .iter()
+        .map(|&x| (x - adg).powi(2))
+        .sum::<f64>()
+        / daily_eqs_pct_change.len() as f64;
+    let sharpe_ratio = adg / variance.sqrt();
+
+    // Calculate drawdowns
+    let drawdowns = calc_drawdowns(&equities);
+    let drawdown_worst = drawdowns
+        .iter()
+        .fold(f64::NEG_INFINITY, |a, &b| f64::max(a, b.abs()));
+
+    // Calculate equity-balance differences
+    let mut bal_eq = Vec::with_capacity(equities.len());
+    let mut fill_iter = fills.iter().peekable();
+    let mut last_balance = fills[0].balance;
+
+    for (i, &equity) in equities.iter().enumerate() {
+        while let Some(fill) = fill_iter.peek() {
+            if fill.index <= i {
+                last_balance = fill.balance;
+                fill_iter.next();
+            } else {
+                break;
+            }
+        }
+        bal_eq.push((equity, last_balance));
+    }
+
+    let (equity_balance_diff_sum, equity_balance_diff_max) =
+        bal_eq
+            .iter()
+            .fold((0.0, 0.0), |(sum, max), &(equity, balance)| {
+                let diff = (balance - equity).abs() / ((equity + balance) / 2.0);
+                (sum + diff, f64::max(max, diff))
+            });
+    let equity_balance_diff_mean = equity_balance_diff_sum / bal_eq.len() as f64;
+
+    // Calculate profit factor
+    let (total_profit, total_loss) = fills.iter().fold((0.0, 0.0), |(profit, loss), fill| {
+        if fill.pnl > 0.0 {
+            (profit + fill.pnl, loss)
+        } else {
+            (profit, loss + fill.pnl.abs())
+        }
+    });
+    let loss_profit_ratio = if total_profit == 0.0 {
+        f64::INFINITY
+    } else {
+        total_loss / total_profit
+    };
+
+    Analysis {
+        adg,
+        sharpe_ratio,
+        drawdown_worst,
+        equity_balance_diff_mean,
+        equity_balance_diff_max,
+        loss_profit_ratio,
+    }
+}
+
+fn calc_drawdowns(equity_series: &[f64]) -> Vec<f64> {
+    let mut cumulative_returns = vec![1.0];
+    let mut cumulative_max = vec![1.0];
+
+    for window in equity_series.windows(2) {
+        let pct_change = (window[1] - window[0]) / window[0];
+        let new_return = cumulative_returns.last().unwrap() * (1.0 + pct_change);
+        cumulative_returns.push(new_return);
+        cumulative_max.push(f64::max(*cumulative_max.last().unwrap(), new_return));
+    }
+
+    cumulative_returns
+        .iter()
+        .zip(cumulative_max.iter())
+        .map(|(&ret, &max)| (ret - max) / max)
+        .collect()
 }
