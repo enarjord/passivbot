@@ -21,22 +21,22 @@ use pyo3::wrap_pyfunction;
 #[pyfunction]
 pub fn run_backtest(
     hlcs: PyReadonlyArray3<f64>,
-    noisiness_indices: &PyAny,
+    preferred_coins: &PyAny,
     bot_params_pair_dict: &PyDict,
     exchange_params_list: &PyAny,
     backtest_params_dict: &PyDict,
 ) -> PyResult<(Py<PyArray2<PyObject>>, Py<PyArray1<f64>>, Py<PyDict>)> {
     let hlcs_rust = hlcs.as_array();
 
-    let noisiness_indices_rust: Array2<i32> =
-        if let Ok(arr) = noisiness_indices.downcast::<PyArray2<i32>>() {
+    let preferred_coins_rust: Array2<i32> =
+        if let Ok(arr) = preferred_coins.downcast::<PyArray2<i32>>() {
             unsafe { arr.as_array().to_owned() }
-        } else if let Ok(arr) = noisiness_indices.downcast::<PyArray2<i64>>() {
-            let noisiness_indices_i64: ArrayBase<_, _> = unsafe { arr.as_array() };
-            noisiness_indices_i64.mapv(|x| x as i32)
+        } else if let Ok(arr) = preferred_coins.downcast::<PyArray2<i64>>() {
+            let preferred_coins_i64: ArrayBase<_, _> = unsafe { arr.as_array() };
+            preferred_coins_i64.mapv(|x| x as i32)
         } else {
             return Err(PyValueError::new_err(
-                "Unsupported data type for noisiness_indices",
+                "Unsupported data type for preferred_coins",
             ));
         };
 
@@ -66,7 +66,7 @@ pub fn run_backtest(
 
     let mut backtest = Backtest::new(
         hlcs_rust.to_owned(),
-        noisiness_indices_rust,
+        preferred_coins_rust,
         bot_params_pair,
         exchange_params,
         &backtest_params,

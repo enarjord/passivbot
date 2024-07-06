@@ -76,8 +76,8 @@ pub struct TradingEnabled {
 }
 
 pub struct Backtest {
-    hlcs: Array3<f64>,              // 3D array: (n_timesteps, n_markets, 3)
-    noisiness_indices: Array2<i32>, // 2D array: (n_timesteps, n_markets)
+    hlcs: Array3<f64>,            // 3D array: (n_timesteps, n_markets, 3)
+    preferred_coins: Array2<i32>, // 2D array: (n_timesteps, n_markets)
     bot_params_pair: BotParamsPair,
     exchange_params_list: Vec<ExchangeParams>,
     backtest_params: BacktestParams,
@@ -101,7 +101,7 @@ pub struct Backtest {
 impl Backtest {
     pub fn new(
         hlcs: Array3<f64>,
-        noisiness_indices: Array2<i32>,
+        preferred_coins: Array2<i32>,
         bot_params_pair: BotParamsPair,
         exchange_params_list: Vec<ExchangeParams>,
         backtest_params: &BacktestParams,
@@ -120,7 +120,7 @@ impl Backtest {
         equities.push(backtest_params.starting_balance);
         Backtest {
             hlcs,
-            noisiness_indices,
+            preferred_coins,
             bot_params_pair: bot_params_pair.clone(),
             exchange_params_list,
             backtest_params: backtest_params.clone(),
@@ -214,8 +214,8 @@ impl Backtest {
         for &market_idx in positions.keys() {
             actives.insert(market_idx);
         }
-        // Add additional markets based on noisiness_indices
-        for &market_idx in self.noisiness_indices.row(k).iter() {
+        // Add additional markets based on preferred_coins
+        for &market_idx in self.preferred_coins.row(k).iter() {
             let market_idx = market_idx as usize;
             if actives.len() < n_positions {
                 if actives.insert(market_idx) {
