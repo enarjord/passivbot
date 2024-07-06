@@ -1807,7 +1807,7 @@ class Passivbot:
         return results
 
     async def close(self):
-        logging.info(f"Stopped data maintainers: {bot.stop_data_maintainers()}")
+        logging.info(f"Stopped data maintainers: {self.stop_data_maintainers()}")
         await self.cca.close()
         await self.ccp.close()
 
