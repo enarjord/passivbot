@@ -122,7 +122,9 @@ def convert_to_v7(cfg: dict):
             for k0 in cfg["live_config"][pside]:
                 if k0 in cmap and cmap[k0] in formatted[pside]:
                     formatted[pside][cmap[k0]] = cfg["live_config"][pside][k0]
-            formatted[pside]["close_grid_qty_pct"] = 1.0 / cfg["live_config"][pside]["n_close_orders"]
+            formatted[pside]["close_grid_qty_pct"] = 1.0 / round(
+                cfg["live_config"][pside]["n_close_orders"]
+            )
             formatted[pside]["unstuck_loss_allowance_pct"] = cfg["live_config"]["global"][
                 "loss_allowance_pct"
             ]
@@ -171,13 +173,18 @@ async def prepare_hlcs_mss(config):
             raise Exception("failed to load market specific settings from cache")
 
     timestamps, hlcs = await prepare_hlcs_forager(
-        config["approved_symbols"], config["backtest"]["start_date"], config["backtest"]["end_date"]
+        config["approved_symbols"],
+        config["backtest"]["start_date"],
+        config["backtest"]["end_date"],
+        base_dir=config["backtest"]["base_dir"],
+        exchange=config["backtest"]["exchange"],
     )
+
     return hlcs, mss, results_path
 
 
-def run_backtest(hlcs, noisiness_indices, mss, config: dict):
-    symbols = sorted(set(config["approved_symbols"]))
+def prep_backtest_args(config, mss):
+    symbols = sorted(set(config["approved_symbols"]))  # sort for consistency
     bot_params = {k: config[k].copy() for k in ["long", "short"]}
     for pside in bot_params:
         bot_params[pside]["wallet_exposure_limit"] = (
@@ -194,6 +201,11 @@ def run_backtest(hlcs, noisiness_indices, mss, config: dict):
         "maker_fee": mss[symbols[0]]["maker"],
         "symbols": symbols,
     }
+    return bot_params, exchange_params, backtest_params
+
+
+def run_backtest(hlcs, noisiness_indices, mss, config: dict):
+    bot_params, exchange_params, backtest_params = prep_backtest_args(config, mss)
     print(f"Starting backtest...")
     sts = utc_ms()
     fills, equities, analysis = pbr.run_backtest(
