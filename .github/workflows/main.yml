@@ -20,5 +20,5 @@ jobs:
 
     - name: Deploy new config to VM
       run: |
-        scp -o StrictHostKeyChecking=no -r configs/live/* <your-ssh-user>@<your-vm-ip>:/opt/passivbot/configs/live/
-        ssh -o StrictHostKeyChecking=no <your-ssh-user>@<your-vm-ip> 'sudo bash /opt/passivbot/update_supervisor_configs.sh'
+        scp -o StrictHostKeyChecking=no -r configs/live/* manhngodh@35.229.225.235:/opt/passivbot/configs/live/
+        ssh -o StrictHostKeyChecking=no manhngodh@35.229.225.235 'sudo bash /opt/passivbot/update_supervisor_configs.sh'
