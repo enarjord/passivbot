@@ -14,8 +14,9 @@
   # choices: [p/pso/particle_swarm_optimization, h/hs/harmony_search]
   algorithm: p
 
-  n_cpus: 6
+  n_cpus: 8
   iters: 4000
+  starting_balance: 200
 
   # to reduce overfitting, perform backtest with multiple start dates, taking mean of metrics as final analysis
   n_backtest_slices: 5

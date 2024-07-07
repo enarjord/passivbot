@@ -671,9 +671,9 @@ def assert_correct_ccxt_version(version=None, ccxt=None):
     if ccxt is None:
         import ccxt
 
-    assert (
-        ccxt.__version__ == version
-    ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v{version} manually"
+    # assert (
+    #     ccxt.__version__ == version
+    # ), f"Currently ccxt {ccxt.__version__} is installed. Please pip reinstall requirements.txt or install ccxt v{version} manually"
 
 
 def load_ccxt_version():

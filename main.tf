@@ -54,7 +54,13 @@ resource "google_compute_instance" "default" {
     # Create a conda environment and activate it
     conda create -y -n passivbot-env python=3.9
     conda activate passivbot-env
-
+[program:passivbot_KASUSDT]
+command=/opt/passivbot/start_KASUSDT.sh
+directory=/opt/passivbot
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/passivbot_KASUSDT.err.log
+stdout_logfile=/var/log/passivbot_KASUSDT.out.log
 
     # Change directory to the app
     cd /opt/passivbot

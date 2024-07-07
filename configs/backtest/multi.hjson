@@ -23,12 +23,12 @@
   short_enabled: true
 
   # format YYYY-MM-DD
-  start_date: 2021-05-01
+  start_date: 2024-05-01
   // if end_date is "now" will use current date as end_date.
   end_date: now
 
   # specify starting balance in USDT
-  starting_balance: 15000.0
+  starting_balance: 200.0
 
   // Flags:
   // -lm str: long mode. Choices: [n (normal), gs (graceful_stop)]. Will override long_enabled.
@@ -47,6 +47,8 @@
         HOTUSDT
         CHRUSDT
         ENSUSDT
+        NOTUSDT
+        WIFUSDT
     ]
 
   // Specify directory containing live configs.

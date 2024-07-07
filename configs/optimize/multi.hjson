@@ -3,27 +3,22 @@
   exchange: binance
 
   # format YYYY-MM-DD
-  start_date: 2021-05-01
+  start_date: 2024-05-01
   // if end_date is "now", will use current date as end_date.
   end_date: now
 
   symbols: [
-    MATICUSDT
-    RLCUSDT
-    GRTUSDT
-    CELRUSDT
-    HOTUSDT
-    CHRUSDT
-    ENSUSDT
+    NOTUSDT
+    WIFUSDT
   ]
 
   # backtests path
   base_dir: backtests
 
-  n_cpus: 3
+  n_cpus: 8
   iters: 12000
 
-  starting_balance: 1000000
+  starting_balance: 200
 
   # only futures supported
   market_type: futures
