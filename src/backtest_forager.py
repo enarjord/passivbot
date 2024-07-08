@@ -183,7 +183,7 @@ async def prepare_hlcs_mss(config):
     return hlcs, mss, results_path
 
 
-def prep_backtest_args(config, mss):
+def prep_backtest_args(config, mss, exchange_params=None, backtest_params=None):
     symbols = sorted(set(config["approved_symbols"]))  # sort for consistency
     bot_params = {k: config[k].copy() for k in ["long", "short"]}
     for pside in bot_params:
@@ -192,15 +192,17 @@ def prep_backtest_args(config, mss):
             if bot_params[pside]["n_positions"] > 0
             else 0.0
         )
-    exchange_params = [
-        {k: mss[symbol][k] for k in ["qty_step", "price_step", "min_qty", "min_cost", "c_mult"]}
-        for symbol in symbols
-    ]
-    backtest_params = {
-        "starting_balance": config["backtest"]["starting_balance"],
-        "maker_fee": mss[symbols[0]]["maker"],
-        "symbols": symbols,
-    }
+    if exchange_params is None:
+        exchange_params = [
+            {k: mss[symbol][k] for k in ["qty_step", "price_step", "min_qty", "min_cost", "c_mult"]}
+            for symbol in symbols
+        ]
+    if backtest_params is None:
+        backtest_params = {
+            "starting_balance": config["backtest"]["starting_balance"],
+            "maker_fee": mss[symbols[0]]["maker"],
+            "symbols": symbols,
+        }
     return bot_params, exchange_params, backtest_params
 
 
