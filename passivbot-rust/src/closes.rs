@@ -107,13 +107,7 @@ pub fn calc_trailing_close_long(
             price: f64::max(
                 state_params.order_book.ask,
                 round_up(
-                    position.price
-                        * (1.0
-                            + f64::max(
-                                0.0,
-                                bot_params.close_trailing_threshold_pct
-                                    - bot_params.close_trailing_retracement_pct,
-                            )),
+                    position.price * (1.0 + bot_params.close_trailing_threshold_pct),
                     exchange_params.price_step,
                 ),
             ),
@@ -145,12 +139,8 @@ pub fn calc_trailing_close_long(
             state_params.order_book.ask,
             round_up(
                 position.price
-                    * (1.0
-                        + f64::max(
-                            0.0,
-                            bot_params.close_trailing_threshold_pct
-                                - bot_params.close_trailing_retracement_pct,
-                        )),
+                    * (1.0 + bot_params.close_trailing_threshold_pct
+                        - bot_params.close_trailing_retracement_pct),
                 exchange_params.price_step,
             ),
         ),
@@ -331,7 +321,7 @@ pub fn calc_trailing_close_short(
             price: f64::min(
                 state_params.order_book.bid,
                 round_dn(
-                    position.price * (1.0 - f64::max(0.0, bot_params.close_trailing_threshold_pct)),
+                    position.price * (1.0 - bot_params.close_trailing_threshold_pct),
                     exchange_params.price_step,
                 ),
             ),
@@ -363,12 +353,8 @@ pub fn calc_trailing_close_short(
             state_params.order_book.bid,
             round_dn(
                 position.price
-                    * (1.0
-                        - f64::max(
-                            0.0,
-                            bot_params.close_trailing_threshold_pct
-                                - bot_params.close_trailing_retracement_pct,
-                        )),
+                    * (1.0 - bot_params.close_trailing_threshold_pct
+                        + bot_params.close_trailing_retracement_pct),
                 exchange_params.price_step,
             ),
         ),
