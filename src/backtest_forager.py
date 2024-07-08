@@ -94,9 +94,24 @@ def compare_dict_keys(dict1, dict2):
     return get_all_keys(dict1) == get_all_keys(dict2)
 
 
+def check_keys(dict0, dict1):
+    def check_nested(d0, d1):
+        for key, value in d0.items():
+            if key not in d1:
+                return False
+            if isinstance(value, dict):
+                if not isinstance(d1[key], dict):
+                    return False
+                if not check_nested(value, d1[key]):
+                    return False
+        return True
+
+    return check_nested(dict0, dict1)
+
+
 def convert_to_v7(cfg: dict):
     formatted = get_template_live_config("v7")
-    if compare_dict_keys(cfg, formatted):
+    if check_keys(formatted, cfg):
         return cfg
     cmap = {
         "ddown_factor": "entry_grid_double_down_factor",
