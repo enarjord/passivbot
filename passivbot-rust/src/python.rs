@@ -156,7 +156,10 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         entry_trailing_threshold_pct: extract_value(dict, "entry_trailing_threshold_pct")?,
         ema_span_0: extract_value(dict, "ema_span_0")?,
         ema_span_1: extract_value(dict, "ema_span_1")?,
-        n_positions: extract_value(dict, "n_positions")?,
+        n_positions: {
+            let n_positions_float: f64 = extract_value(dict, "n_positions")?;
+            n_positions_float.round() as usize
+        },
         total_wallet_exposure_limit: extract_value(dict, "total_wallet_exposure_limit")?,
         wallet_exposure_limit: extract_value(dict, "wallet_exposure_limit")?,
         unstuck_close_pct: extract_value(dict, "unstuck_close_pct")?,
