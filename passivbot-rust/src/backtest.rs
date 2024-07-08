@@ -118,10 +118,13 @@ impl Backtest {
             .collect();
         let mut equities = Vec::<f64>::new();
         equities.push(backtest_params.starting_balance);
+        let mut bot_params_pair_cloned = bot_params_pair.clone();
+        bot_params_pair_cloned.long.n_positions = n_markets.min(bot_params_pair.long.n_positions);
+        bot_params_pair_cloned.short.n_positions = n_markets.min(bot_params_pair.short.n_positions);
         Backtest {
             hlcs,
             preferred_coins,
-            bot_params_pair: bot_params_pair.clone(),
+            bot_params_pair: bot_params_pair_cloned,
             exchange_params_list,
             backtest_params: backtest_params.clone(),
             balance: backtest_params.starting_balance,
@@ -1200,3 +1203,5 @@ fn calc_drawdowns(equity_series: &[f64]) -> Vec<f64> {
         .map(|(&ret, &max)| (ret - max) / max)
         .collect()
 }
+
+fn precalc_preferred_coins_noisisness() {}
