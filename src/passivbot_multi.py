@@ -55,7 +55,7 @@ from pure_funcs import (
     shorten_custom_id,
     determine_side_from_order_tuple,
     str2bool,
-    symbol2coin,
+    symbol_to_coin,
     add_missing_params_to_hjson_live_multi_config,
     expand_PB_mode,
 )
@@ -152,9 +152,9 @@ class Passivbot:
                 pass
             try:
                 # look for an exact match first
-                coin = symbol2coin(symbol)
+                coin = symbol_to_coin(symbol)
                 for x in live_configs_fnames:
-                    if coin == symbol2coin(x.replace(".json", "")):
+                    if coin == symbol_to_coin(x.replace(".json", "")):
                         self.live_configs[symbol] = load_live_config(
                             os.path.join(self.config["live_configs_dir"], x)
                         )
@@ -202,7 +202,7 @@ class Passivbot:
                         f"loaded {key} for {self.pad_sym(symbol)}: {configs_loaded[key][symbol]}"
                     )
             elif isinstance(configs_loaded[key], set):
-                coins_ = sorted([symbol2coin(s) for s in configs_loaded[key]])
+                coins_ = sorted([symbol_to_coin(s) for s in configs_loaded[key]])
                 if len(coins_) > 20:
                     logging.info(f"loaded from {key} for {len(coins_)} symbols")
                 elif len(coins_) > 0:
@@ -269,7 +269,7 @@ class Passivbot:
         if not hasattr(self, "formatted_symbols_map"):
             self.formatted_symbols_map = {}
             self.formatted_symbols_map_inv = defaultdict(set)
-        formatted = f"{symbol2coin(symbol.replace(',', ''))}/{self.quote}:{self.quote}"
+        formatted = f"{symbol_to_coin(symbol.replace(',', ''))}/{self.quote}:{self.quote}"
         self.formatted_symbols_map[symbol] = formatted
         self.formatted_symbols_map_inv[formatted].add(symbol)
         return formatted
@@ -345,7 +345,7 @@ class Passivbot:
                 for symbol in changed:
                     inv[changed[symbol]].add(symbol)
                 for k, v in inv.items():
-                    syms = ", ".join(sorted([symbol2coin(s) for s in v]))
+                    syms = ", ".join(sorted([symbol_to_coin(s) for s in v]))
                     logging.info(f"changed {pside} WE limit from {k[0]} to {k[1]} for {syms}")
 
     async def update_exchange_configs(self):
@@ -604,7 +604,7 @@ class Passivbot:
             if previous_PB_modes is None:
                 for mode in set(self.PB_modes[pside].values()):
                     coins = [
-                        symbol2coin(s)
+                        symbol_to_coin(s)
                         for s in self.PB_modes[pside]
                         if self.PB_modes[pside][s] == mode
                     ]
@@ -1605,7 +1605,7 @@ class Passivbot:
         else:
             to_add = [s for s in set(symbols) if s not in self.emas["long"]]
         if to_add:
-            logging.info(f"adding to EMA maintainer: {','.join([symbol2coin(s) for s in to_add])}")
+            logging.info(f"adding to EMA maintainer: {','.join([symbol_to_coin(s) for s in to_add])}")
             await self.init_EMAs_multi(to_add)
             if self.forager_mode:
                 await self.update_ohlcvs_multi(to_add)
@@ -1615,7 +1615,7 @@ class Passivbot:
         # if a new symbol appears (e.g. new forager symbol or user manually opens a position), add this symbol to EMA maintainer
         try:
             logging.info(
-                f"initiating EMAs for {','.join([symbol2coin(s) for s in self.active_symbols])}"
+                f"initiating EMAs for {','.join([symbol_to_coin(s) for s in self.active_symbols])}"
             )
             await self.init_EMAs_multi(sorted(self.active_symbols))
             logging.info(f"starting EMA maintainer...")
@@ -1651,7 +1651,7 @@ class Passivbot:
                 all_syms = set(self.active_symbols) | self.eligible_symbols
                 missing_symbols = [s for s in all_syms if s not in self.ohlcv_upd_timestamps]
                 if missing_symbols:
-                    coins_ = [symbol2coin(s) for s in missing_symbols]
+                    coins_ = [symbol_to_coin(s) for s in missing_symbols]
                     logging.info(f"adding missing symbols to ohlcv maintainer: {','.join(coins_)}")
                     await self.update_ohlcvs_multi(missing_symbols)
                     await asyncio.sleep(3)
@@ -1752,7 +1752,7 @@ class Passivbot:
                 if verbose:
                     if any(res):
                         logging.info(
-                            f"updated ohlcvs for {','.join([symbol2coin(s) for s, r in zip(sym_sublist, res) if r])}"
+                            f"updated ohlcvs for {','.join([symbol_to_coin(s) for s, r in zip(sym_sublist, res) if r])}"
                         )
             except Exception as e:
                 logging.error(f"error with fetch_ohlcv in update_ohlcvs_multi {sym_sublist} {e}")
