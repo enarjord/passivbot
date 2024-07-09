@@ -25,7 +25,7 @@ from pure_funcs import (
     denumpyize,
     tuplify,
     calc_hash,
-    symbol2coin,
+    symbol_to_coin,
 )
 from backtest_multi import backtest_multi, prep_config_multi, prep_hlcs_mss_config
 from njit_multisymbol import backtest_multisymbol_recursive_grid
@@ -487,16 +487,12 @@ async def main():
     )
     config = prep_config_multi(parser)
     config["symbols"] = {k: v for k, v in sorted(config["symbols"].items())}
-    coins = [symbol2coin(s) for s in config["symbols"]]
+    coins = [symbol_to_coin(s) for s in config["symbols"]]
     coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
     config["results_cache_fname"] = make_get_filepath(
         f"results_multi/{date_fname}_{coins_fname}_all_results.txt"
     )
-    #hash_snippet = uuid4().hex[:8]
-    #config["results_cache_fname"] = make_get_filepath(
-    #    f"results_multi/{date_fname}_{hash_snippet}_{coins_fname}_all_results.txt"
-    #)
     for key, default_val in [("worst_drawdown_lower_bound", 0.25)]:
         if key not in config:
             config[key] = default_val
