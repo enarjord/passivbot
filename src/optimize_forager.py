@@ -2,9 +2,10 @@ import os
 import sys
 import passivbot_rust as pbr
 import asyncio
+import argparse
 import multiprocessing
 from multiprocessing import shared_memory
-from backtest_forager import prepare_hlcs_mss, prep_backtest_args
+from backtest_forager import prepare_hlcs_mss, prep_backtest_args, convert_to_v7
 from pure_funcs import (
     get_template_live_config,
     symbol_to_coin,
@@ -12,7 +13,7 @@ from pure_funcs import (
     denumpyize,
     sort_dict_keys,
 )
-from procedures import make_get_filepath, utc_ms
+from procedures import make_get_filepath, utc_ms, load_hjson_config
 from copy import deepcopy
 from njit_multisymbol import calc_noisiness_argsort_indices
 import numpy as np
@@ -193,13 +194,19 @@ class Evaluator:
 
 
 async def main():
+    parser = argparse.ArgumentParser(prog="optimize_forager", description="run forager optimizer")
+    parser.add_argument("config_path", type=str, default=None, help="path to hjson passivbot config")
+    args = parser.parse_args()
     signal.signal(signal.SIGINT, signal_handler)
     logging.basicConfig(
         format="%(asctime)s %(levelname)-8s %(message)s",
         level=logging.INFO,
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
-    config = get_template_live_config("v7")
+    if args.config_path is None:
+        config = get_template_live_config("v7")
+    else:
+        config = convert_to_v7(load_hjson_config(args.config_path))
     hlcs, mss, results_path = await prepare_hlcs_mss(config)
     preferred_coins = calc_noisiness_argsort_indices(hlcs).astype(np.int32)
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
