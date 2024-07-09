@@ -2366,7 +2366,7 @@ def determine_side_from_order_tuple(order_tuple):
         raise Exception(f"malformed order tuple {order_tuple}")
 
 
-def symbol2coin(symbol: str) -> str:
+def symbol_to_coin(symbol: str) -> str:
     coin = symbol
     for x in ["USDT", "USDC", "BUSD", "USD", "/:"]:
         coin = coin.replace(x, "")
@@ -2405,7 +2405,7 @@ def backtested_multiconfig2singleconfig(backtested_config: dict) -> dict:
         for key in backtested_config["live_config"][pside]:
             template[pside][key] = backtested_config["live_config"][pside][key]
     template["config_name"] = "_".join(
-        [symbol2coin(sym) for sym in backtested_config["args"]["symbols"]]
+        [symbol_to_coin(sym) for sym in backtested_config["args"]["symbols"]]
     )
     return template
 

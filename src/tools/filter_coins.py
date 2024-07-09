@@ -18,7 +18,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from forager import get_min_costs_and_contract_multipliers
 from procedures import load_live_config, utc_ms, make_get_filepath, get_first_ohlcv_timestamps
-from pure_funcs import floatify, ts_to_date_utc, date2ts_utc, str2bool, symbol2coin
+from pure_funcs import floatify, ts_to_date_utc, date2ts_utc, str2bool, symbol_to_coin
 
 
 def parse_backtest_metrics():
@@ -273,10 +273,10 @@ async def main():
     min_costs = await load_min_costs()
     configs = load_live_configs()
 
-    longs.loc[:, "symbol"] = longs.symbol.apply(symbol2coin)
-    shorts.loc[:, "symbol"] = shorts.symbol.apply(symbol2coin)
-    min_costs.loc[:, "symbol"] = min_costs.symbol.apply(symbol2coin)
-    configs = {symbol2coin(k): v for k, v in configs.items()}
+    longs.loc[:, "symbol"] = longs.symbol.apply(symbol_to_coin)
+    shorts.loc[:, "symbol"] = shorts.symbol.apply(symbol_to_coin)
+    min_costs.loc[:, "symbol"] = min_costs.symbol.apply(symbol_to_coin)
+    configs = {symbol_to_coin(k): v for k, v in configs.items()}
 
     min_cost_lower_bound = min_costs[min_costs.exchange == exchange].effective_min_cost.median()
     min_cost_upper_bound = balance * TWE_limit_long * initial_qty_pct_lower_bound / n_coins
