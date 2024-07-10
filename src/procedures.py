@@ -38,6 +38,28 @@ from pure_funcs import (
 )
 
 
+def load_config(filepath: str) -> dict:
+    # loads hjson v7 config
+    try:
+        config = load_hjson_config(filepath)
+        config["common"]["approved_symbols"] = sorted(set(config["common"]["approved_symbols"]))
+        return config
+    except Exception as e:
+        raise Exception(f"failed to load config {filepath}: {e}")
+
+
+def dump_config(config: dict, filepath: str):
+    dump_pretty_json(config, filepath)
+
+
+def dump_pretty_json(data: dict, filepath: str):
+    try:
+        with open(filepath, "w") as f:
+            f.write(config_pretty_str(sort_dict_keys(data)))
+    except Exception as e:
+        raise Exception(f"failed to dump data {filepath}: {e}")
+
+
 def load_live_config(live_config_path: str) -> dict:
     try:
         live_config = json.load(open(live_config_path))
