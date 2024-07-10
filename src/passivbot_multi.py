@@ -853,6 +853,7 @@ class Passivbot:
             elm["symbol"]
             for elm in self.fetched_positions + self.fetched_open_orders
             if elm["symbol"] not in self.markets_dict
+            or not self.markets_dict[elm["symbol"]]["active"]
         ]
         if self.ineligible_symbols_with_pos:
             logging.info(
