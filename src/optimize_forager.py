@@ -13,7 +13,7 @@ from pure_funcs import (
     denumpyize,
     sort_dict_keys,
 )
-from procedures import make_get_filepath, utc_ms, load_hjson_config
+from procedures import make_get_filepath, utc_ms, load_hjson_config, load_config
 from copy import deepcopy
 from njit_multisymbol import calc_noisiness_argsort_indices
 import numpy as np
@@ -115,11 +115,11 @@ def individual_to_config(individual, template=None):
     if template is None:
         template = get_template_live_config("v7")
     config = deepcopy(template)
-    keys = sorted(config["long"])
+    keys = sorted(config["bot"]["long"])
     i = 0
     for pside in ["long", "short"]:
         for key in keys:
-            config[pside][key] = individual[i]
+            config["bot"][pside][key] = individual[i]
             i += 1
     return config
 
@@ -127,7 +127,7 @@ def individual_to_config(individual, template=None):
 def config_to_individual(config):
     individual = []
     for pside in ["long", "short"]:
-        individual += [v for k, v in sorted(config[pside].items())]
+        individual += [v for k, v in sorted(config["bot"][pside].items())]
     return individual
 
 
@@ -176,13 +176,16 @@ class Evaluator:
 
     def calc_fitness(self, analysis):
         modifier = 0.0
-        for i, key in [(2, "drawdown_worst"), (1, "equity_balance_diff_mean")]:
+        for i, key in [(4, "drawdown_worst"), (3, "equity_balance_diff_mean")]:
             modifier += (
                 max(self.config["optimize"][f"lower_bound_{key}"], analysis[key])
                 - self.config["optimize"][f"lower_bound_{key}"]
-            ) ** i
-        w_adg = modifier - analysis["adg"]
-        w_sharpe_ratio = modifier - analysis["sharpe_ratio"]
+            ) * 10**i
+        if analysis["drawdown_worst"] >= 1.0 or analysis["equity_balance_diff_max"] < 0.1:
+            w_adg = w_sharpe_ratio = modifier
+        else:
+            w_adg = modifier - analysis["adg"]
+            w_sharpe_ratio = modifier - analysis["sharpe_ratio"]
         return w_adg, w_sharpe_ratio
 
     def cleanup(self):
@@ -195,7 +198,9 @@ class Evaluator:
 
 async def main():
     parser = argparse.ArgumentParser(prog="optimize_forager", description="run forager optimizer")
-    parser.add_argument("config_path", type=str, default=None, help="path to hjson passivbot config")
+    parser.add_argument(
+        "config_path", type=str, default=None, nargs="?", help="path to hjson passivbot config"
+    )
     args = parser.parse_args()
     signal.signal(signal.SIGINT, signal_handler)
     logging.basicConfig(
@@ -203,14 +208,11 @@ async def main():
         level=logging.INFO,
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
-    if args.config_path is None:
-        config = get_template_live_config("v7")
-    else:
-        config = convert_to_v7(load_hjson_config(args.config_path))
+    config = load_config("configs/template.hjson" if args.config_path is None else args.config_path)
     hlcs, mss, results_path = await prepare_hlcs_mss(config)
     preferred_coins = calc_noisiness_argsort_indices(hlcs).astype(np.int32)
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
-    coins = [symbol_to_coin(s) for s in config["approved_symbols"]]
+    coins = [symbol_to_coin(s) for s in config["common"]["approved_symbols"]]
     coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
     hash_snippet = uuid4().hex[:8]
     config["results_filename"] = make_get_filepath(
@@ -292,7 +294,7 @@ async def main():
             lambda_=config["optimize"]["population_size"],
             cxpb=config["optimize"]["crossover_probability"],
             mutpb=config["optimize"]["mutation_probability"],
-            ngen=config["optimize"]["generations"],
+            ngen=max(1, int(config["optimize"]["iters"] / len(population))),
             stats=stats,
             halloffame=hof,
             verbose=True,
