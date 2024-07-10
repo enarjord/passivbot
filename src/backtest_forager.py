@@ -10,6 +10,8 @@ from procedures import (
     utc_ms,
     make_get_filepath,
     fetch_market_specific_settings_multi,
+    load_config,
+    dump_config,
 )
 from pure_funcs import (
     get_template_live_config,
@@ -188,9 +190,9 @@ async def prepare_hlcs_mss(config):
             raise Exception("failed to load market specific settings from cache")
 
     timestamps, hlcs = await prepare_hlcs_forager(
-        config["approved_symbols"],
-        config["backtest"]["start_date"],
-        config["backtest"]["end_date"],
+        config["common"]["approved_symbols"],
+        config["backtest"]["date_start"],
+        config["backtest"]["date_end"],
         base_dir=config["backtest"]["base_dir"],
         exchange=config["backtest"]["exchange"],
     )
@@ -199,8 +201,8 @@ async def prepare_hlcs_mss(config):
 
 
 def prep_backtest_args(config, mss, exchange_params=None, backtest_params=None):
-    symbols = sorted(set(config["approved_symbols"]))  # sort for consistency
-    bot_params = {k: config[k].copy() for k in ["long", "short"]}
+    symbols = sorted(set(config["common"]["approved_symbols"]))  # sort for consistency
+    bot_params = {k: config["bot"][k].copy() for k in ["long", "short"]}
     for pside in bot_params:
         bot_params[pside]["wallet_exposure_limit"] = (
             bot_params[pside]["total_wallet_exposure_limit"] / bot_params[pside]["n_positions"]
@@ -236,7 +238,9 @@ def post_process(config, hlcs, fills, equities, analysis, results_path):
     sts = utc_ms()
     fdf = process_forager_fills(fills)
     equities = pd.Series(equities)
-    analysis_py, bal_eq = analyze_fills_forager(config["approved_symbols"], hlcs, fdf, equities)
+    analysis_py, bal_eq = analyze_fills_forager(
+        config["common"]["approved_symbols"], hlcs, fdf, equities
+    )
     for k in analysis_py:
         if k not in analysis:
             analysis[k] = analysis_py[k]
@@ -246,8 +250,8 @@ def post_process(config, hlcs, fills, equities, analysis, results_path):
         oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
     )
     json.dump(analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True)
-    json.dump(config, open(f"{results_path}config.json", "w"), indent=4, sort_keys=True)
-    plot_forager(results_path, config["approved_symbols"], fdf, bal_eq, hlcs)
+    dump_config(config, f"{results_path}config.json")
+    plot_forager(results_path, config["common"]["approved_symbols"], fdf, bal_eq, hlcs)
 
 
 def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcs):
@@ -270,9 +274,9 @@ def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcs):
 
 async def main():
     parser = argparse.ArgumentParser(prog="backtest_forager", description="run forager backtest")
-    parser.add_argument("config_path", type=str, help="path to hjson passivbot config")
+    parser.add_argument("config_path", type=str, default=None, help="path to hjson passivbot config")
     args = parser.parse_args()
-    config = load_and_process_config(args.config_path)
+    config = load_config("configs/template.hjson" if args.config_path is None else args.config_path)
     hlcs, mss, results_path = await prepare_hlcs_mss(config)
     noisiness_indices = calc_noisiness_argsort_indices(hlcs).astype(np.int32)
     fills, equities, analysis = run_backtest(hlcs, noisiness_indices, mss, config)
