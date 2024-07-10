@@ -1,4 +1,4 @@
-name: Deploy Passivbot Configs
+name: Deploy Autobot Configs
 
 on:
   push:
