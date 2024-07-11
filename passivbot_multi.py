@@ -274,6 +274,7 @@ class Passivbot:
         return formatted
 
     async def init_markets_dict(self):
+        self.init_markets_last_update_ms = utc_ms()
         self.markets_dict = {elm["symbol"]: elm for elm in (await self.cca.fetch_markets())}
         self.markets_dict_all = deepcopy(self.markets_dict)
         # remove ineligible symbols from markets dict
