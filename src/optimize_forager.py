@@ -9,6 +9,7 @@ from backtest_forager import (
     prepare_hlcs_mss,
     prep_backtest_args,
     convert_to_v7,
+    add_argparse_args_to_config,
 )
 from pure_funcs import (
     get_template_live_config,
@@ -241,6 +242,7 @@ async def main():
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
     config = load_config("configs/template.json" if args.config_path is None else args.config_path)
+    config = add_argparse_args_to_config(config, args)
     hlcs, mss, results_path = await prepare_hlcs_mss(config)
     preferred_coins = calc_noisiness_argsort_indices(hlcs).astype(np.int32)
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")

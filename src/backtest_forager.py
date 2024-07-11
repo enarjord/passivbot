@@ -159,6 +159,15 @@ def convert_to_v7(cfg: dict):
     return formatted
 
 
+def add_argparse_args_to_config(config, args):
+    for key, value in vars(args).items():
+        if key == "symbols":
+            symbols = value.split(",")
+            logging.info(f"new symbols: {symbols}")
+            config["common"]["approved_symbols"] = symbols
+    return config
+
+
 def load_and_process_config(path: str):
     """
     loads and processes configs of various types; returns standardized v7 config
