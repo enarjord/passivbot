@@ -201,7 +201,7 @@ class Evaluator:
         self.shared_preferred_coins.unlink()
 
 
-def add_argparse_args_forager(parser):
+def add_argparse_args_optimize_forager(parser):
     parser_items = [
         ("s", "symbols", "symbols", str, ", comma separated (SYM1USDT,SYM2USDT,...)"),
         ("e", "exchange", "exchange", str, ""),
@@ -215,6 +215,8 @@ def add_argparse_args_forager(parser):
         ),
         ("sb", "starting_balance", "starting_balance", float, ""),
         ("bd", "base_dir", "base_dir", str, ""),
+        ("c", "n_cpus", "n_cpus", int, ""),
+        ("i", "iters", "iters", int, ""),
     ]
     for k0, k1, d, t, h in parser_items:
         parser.add_argument(
@@ -234,7 +236,7 @@ async def main():
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to hjson passivbot config"
     )
-    args = add_argparse_args_forager(parser)
+    args = add_argparse_args_optimize_forager(parser)
     signal.signal(signal.SIGINT, signal_handler)
     logging.basicConfig(
         format="%(asctime)s %(levelname)-8s %(message)s",

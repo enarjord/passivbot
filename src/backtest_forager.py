@@ -161,10 +161,21 @@ def convert_to_v7(cfg: dict):
 
 def add_argparse_args_to_config(config, args):
     for key, value in vars(args).items():
-        if key == "symbols":
-            symbols = value.split(",")
-            logging.info(f"new symbols: {symbols}")
-            config["common"]["approved_symbols"] = symbols
+        try:
+            if value is None:
+                continue
+            if key == "symbols":
+                symbols = value.split(",")
+                logging.info(f"new symbols: {symbols}")
+                config["common"]["approved_symbols"] = symbols
+            elif key in ["exchange", "start_date", "end_date", "starting_balance", "base_dir"]:
+                logging.info(f"setting backtest {key} -> {value}")
+                config["backtest"][key] = value
+            elif key in ["iters", "n_cpus"]:
+                logging.info(f"setting optimize {key} -> {value}")
+                config["optimize"][key] = value
+        except Exception as e:
+            raise Exception(f"failed to add argparse arg to config {key}: {e}")
     return config
 
 
