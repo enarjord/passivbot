@@ -17,6 +17,8 @@ from pure_funcs import (
     ts_to_date_utc,
     denumpyize,
     sort_dict_keys,
+    calc_hash,
+    format_config,
 )
 from procedures import make_get_filepath, utc_ms, load_hjson_config, load_config
 from copy import deepcopy
@@ -228,8 +230,44 @@ def add_argparse_args_optimize_forager(parser):
             default=None,
             help=f"specify {k1}{h}, overriding value from hjson config.",
         )
+    parser.add_argument(
+        "-t",
+        "--start",
+        type=str,
+        required=False,
+        dest="starting_configs",
+        default=None,
+        help="start with given live configs.  single json file or dir with multiple json files",
+    )
     args = parser.parse_args()
     return args
+
+
+def get_starting_configs(starting_configs: str):
+    if starting_configs is None:
+        return []
+    cfgs = []
+    if os.path.isdir(starting_configs):
+        filenames = [os.path.join(starting_configs, f) for f in os.listdir(starting_configs)]
+    else:
+        filenames = [starting_configs]
+    for path in filenames:
+        try:
+            cfgs.append(load_hjson_config(path))
+        except Exception as e:
+            logging.error(f"failed to load live config {path} {e}")
+    return cfgs
+
+
+def configs_to_individuals(cfgs):
+    inds = {}
+    for cfg in cfgs:
+        try:
+            individual = config_to_individual(format_config(cfg))
+            inds[calc_hash(individual)] = individual
+        except Exception as e:
+            logging.error(f"error with config_to_individual {e}")
+    return list(inds.values())
 
 
 async def main():
@@ -306,7 +344,24 @@ async def main():
         toolbox.register("map", pool.map)
 
         # Create initial population
+
+        starting_individuals = configs_to_individuals(get_starting_configs(args.starting_configs))
+        if len(starting_individuals) > config["optimize"]["population_size"]:
+            logging.info(
+                f"increasing population size: {config['optimize']['population_size']} -> {len(starting_individuals)}"
+            )
+            config["optimize"]["population_size"] = len(starting_individuals)
+
         population = toolbox.population(n=config["optimize"]["population_size"])
+        if starting_individuals:
+            bounds = [(low, high) for low, high in param_bounds.values()]
+            for i in range(len(starting_individuals)):
+                adjusted = [
+                    max(min(x, bounds[z][1]), bounds[z][0])
+                    for z, x in enumerate(starting_individuals[i])
+                ]
+                population[i] = creator.Individual(adjusted)
+
         logging.info(f"Initial population size: {len(population)}")
 
         # Set up statistics and hall of fame

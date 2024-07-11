@@ -2495,3 +2495,18 @@ def extract_and_sort_by_keys_recursive(nested_dict):
         sorted_values.append(extract_and_sort_by_keys_recursive(value))
 
     return sorted_values
+
+
+def format_config(config: dict) -> dict:
+    # attempts to format a config config to v7 config
+    template = get_template_live_config("v7")
+    if all([k in config for k in template]):
+        result = deepcopy(config)
+    elif all([k in config for k in ["analysis", "config"]]) and all(
+        [k in config["config"] for k in template]
+    ):
+        result = deepcopy(config["config"])
+    else:
+        raise Exception(f"failed to format config")
+    result["common"]["approved_symbols"] = sorted(set(result["common"]["approved_symbols"]))
+    return result
