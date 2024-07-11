@@ -5,7 +5,12 @@ import asyncio
 import argparse
 import multiprocessing
 from multiprocessing import shared_memory
-from backtest_forager import prepare_hlcs_mss, prep_backtest_args, convert_to_v7
+from backtest_forager import (
+    prepare_hlcs_mss,
+    prep_backtest_args,
+    convert_to_v7,
+    add_argparse_args_to_config,
+)
 from pure_funcs import (
     get_template_live_config,
     symbol_to_coin,
@@ -196,19 +201,47 @@ class Evaluator:
         self.shared_preferred_coins.unlink()
 
 
+def add_argparse_args_forager(parser):
+    parser_items = [
+        ("s", "symbols", "symbols", str, ", comma separated (SYM1USDT,SYM2USDT,...)"),
+        ("e", "exchange", "exchange", str, ""),
+        ("sd", "start_date", "start_date", str, ""),
+        (
+            "ed",
+            "end_date",
+            "end_date",
+            str,
+            ", if end date is 'now', will use current date as end date",
+        ),
+        ("sb", "starting_balance", "starting_balance", float, ""),
+        ("bd", "base_dir", "base_dir", str, ""),
+    ]
+    for k0, k1, d, t, h in parser_items:
+        parser.add_argument(
+            *[f"-{k0}", f"--{k1}"] + ([f"--{k1.replace('_', '-')}"] if "_" in k1 else []),
+            type=t,
+            required=False,
+            dest=d,
+            default=None,
+            help=f"specify {k1}{h}, overriding value from hjson config.",
+        )
+    args = parser.parse_args()
+    return args
+
+
 async def main():
     parser = argparse.ArgumentParser(prog="optimize_forager", description="run forager optimizer")
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to hjson passivbot config"
     )
-    args = parser.parse_args()
+    args = add_argparse_args_forager(parser)
     signal.signal(signal.SIGINT, signal_handler)
     logging.basicConfig(
         format="%(asctime)s %(levelname)-8s %(message)s",
         level=logging.INFO,
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
-    config = load_config("configs/template.hjson" if args.config_path is None else args.config_path)
+    config = load_config("configs/template.json" if args.config_path is None else args.config_path)
     hlcs, mss, results_path = await prepare_hlcs_mss(config)
     preferred_coins = calc_noisiness_argsort_indices(hlcs).astype(np.int32)
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
@@ -270,9 +303,7 @@ async def main():
 
         # Create initial population
         population = toolbox.population(n=config["optimize"]["population_size"])
-        print("Debug: Initial population size:", len(population))
-        if population:
-            print("Debug: First individual:", population[0])
+        logging.info(f"Initial population size: {len(population)}")
 
         # Set up statistics and hall of fame
         stats = tools.Statistics(lambda ind: ind.fitness.values)

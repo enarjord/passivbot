@@ -24,6 +24,7 @@ from downloader import prepare_hlcs_forager
 from njit_multisymbol import calc_noisiness_argsort_indices
 from plotting import plot_fills_forager
 import matplotlib.pyplot as plt
+import logging
 
 plt.rcParams["figure.figsize"] = [29, 18]
 
@@ -273,6 +274,11 @@ def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcs):
 
 
 async def main():
+    logging.basicConfig(
+        format="%(asctime)s %(levelname)-8s %(message)s",
+        level=logging.INFO,
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
     parser = argparse.ArgumentParser(prog="backtest_forager", description="run forager backtest")
     parser.add_argument("config_path", type=str, default=None, help="path to hjson passivbot config")
     args = parser.parse_args()

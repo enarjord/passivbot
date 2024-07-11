@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from time import time
 import numpy as np
 import pprint
+from copy import deepcopy
 
 
 try:
@@ -41,11 +42,16 @@ from pure_funcs import (
 def format_config(config: dict) -> dict:
     # attempts to format a config config to v7 config
     template = get_template_live_config("v7")
-    if all([k in config for k in ["analysis", "config"]]):
-        if all([k in config["config"] for k in template]):
-            config = config["config"]
-            config["common"]["approved_symbols"] = sorted(set(config["common"]["approved_symbols"]))
-            return config
+    if all([k in config for k in template]):
+        result = deepcopy(config)
+    elif all([k in config for k in ["analysis", "config"]]) and all(
+        [k in config["config"] for k in template]
+    ):
+        config = deepcopy(config["config"])
+    else:
+        raise Exception(f"failed to format config")
+    result["common"]["approved_symbols"] = sorted(set(result["common"]["approved_symbols"]))
+    return result
 
 
 def load_config(filepath: str) -> dict:
