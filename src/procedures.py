@@ -47,7 +47,7 @@ def format_config(config: dict) -> dict:
     elif all([k in config for k in ["analysis", "config"]]) and all(
         [k in config["config"] for k in template]
     ):
-        config = deepcopy(config["config"])
+        result = deepcopy(config["config"])
     else:
         raise Exception(f"failed to format config")
     result["common"]["approved_symbols"] = sorted(set(result["common"]["approved_symbols"]))
