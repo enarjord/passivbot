@@ -217,6 +217,7 @@ def add_argparse_args_optimize_forager(parser):
         ("bd", "base_dir", "base_dir", str, ""),
         ("c", "n_cpus", "n_cpus", int, ""),
         ("i", "iters", "iters", int, ""),
+        ("p", "population_size", "population_size", int, ""),
     ]
     for k0, k1, d, t, h in parser_items:
         parser.add_argument(

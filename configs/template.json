@@ -115,4 +115,4 @@
               "lower_bound_equity_balance_diff_mean": 0.03,
               "mutation_probability": 0.2,
               "n_cpus": 5,
-              "population_size": 100}}
+              "population_size": 500}}
