@@ -9,7 +9,6 @@ from backtest_forager import (
     prepare_hlcs_mss,
     prep_backtest_args,
     convert_to_v7,
-    add_argparse_args_to_config,
 )
 from pure_funcs import (
     get_template_live_config,
