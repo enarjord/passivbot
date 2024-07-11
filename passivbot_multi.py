@@ -852,11 +852,18 @@ class Passivbot:
             elm["symbol"]
             for elm in self.fetched_positions + self.fetched_open_orders
             if elm["symbol"] not in self.markets_dict
+            or not self.markets_dict[elm["symbol"]]["active"]
         ]
+        update = False
         if self.ineligible_symbols_with_pos:
             logging.info(
                 f"Caught symbol with pos for ineligible market: {self.ineligible_symbols_with_pos}"
             )
+            update = True
+        if utc_ms() - self.init_markets_last_update_ms > (1000 * 60 * 60 * 3):
+            logging.info(f"Force updating markets every three hours.")
+            update = True
+        if update:
             await self.init_markets_dict()
             await self.init_flags()
             self.set_live_configs()
