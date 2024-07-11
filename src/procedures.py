@@ -38,11 +38,21 @@ from pure_funcs import (
 )
 
 
+def format_config(config: dict) -> dict:
+    # attempts to format a config config to v7 config
+    template = get_template_live_config("v7")
+    if all([k in config for k in ["analysis", "config"]]):
+        if all([k in config["config"] for k in template]):
+            config = config["config"]
+            config["common"]["approved_symbols"] = sorted(set(config["common"]["approved_symbols"]))
+            return config
+
+
 def load_config(filepath: str) -> dict:
-    # loads hjson v7 config
+    # loads hjson or json v7 config
     try:
         config = load_hjson_config(filepath)
-        config["common"]["approved_symbols"] = sorted(set(config["common"]["approved_symbols"]))
+        config = format_config(config)
         return config
     except Exception as e:
         raise Exception(f"failed to load config {filepath}: {e}")
