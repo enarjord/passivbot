@@ -169,10 +169,12 @@ def add_argparse_args_to_config(config, args):
                 logging.info(f"new symbols: {symbols}")
                 config["common"]["approved_symbols"] = symbols
             elif key in ["exchange", "start_date", "end_date", "starting_balance", "base_dir"]:
-                logging.info(f"setting backtest {key} -> {value}")
+                if config["backtest"][key] != value:
+                    logging.info(f"changing backtest {key} {config['backtest'][key]} -> {value}")
                 config["backtest"][key] = value
             elif key in ["iters", "n_cpus", "population_size"]:
-                logging.info(f"setting optimize {key} -> {value}")
+                if config["optimize"][key] != value:
+                    logging.info(f"chainging optimize {key} {config['optimize'][key]} -> {value}")
                 config["optimize"][key] = value
         except Exception as e:
             raise Exception(f"failed to add argparse arg to config {key}: {e}")
