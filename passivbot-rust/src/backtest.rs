@@ -277,6 +277,7 @@ impl Backtest {
                     {
                         let next_grid_entry = self.calc_next_grid_entry_long(k, idx);
                         if next_grid_entry.qty == 0.0
+                            || next_grid_entry.price >= self.open_orders.long[&idx].entry.price
                             || next_grid_entry.order_type == OrderType::EntryTrailingNormalLong
                             || next_grid_entry.order_type == OrderType::EntryTrailingCroppedLong
                         {
@@ -332,6 +333,7 @@ impl Backtest {
                     {
                         let next_grid_entry = self.calc_next_grid_entry_short(k, idx);
                         if next_grid_entry.qty == 0.0
+                            || next_grid_entry.price <= self.open_orders.short[&idx].entry.price
                             || next_grid_entry.order_type == OrderType::EntryTrailingNormalShort
                             || next_grid_entry.order_type == OrderType::EntryTrailingCroppedShort
                         {
