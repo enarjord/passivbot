@@ -165,7 +165,7 @@ def add_argparse_args_to_config(config, args):
             if value is None:
                 continue
             if key == "symbols":
-                symbols = value.split(",")
+                symbols = sorted(set(value.split(",")))
                 logging.info(f"new symbols: {symbols}")
                 config["common"]["approved_symbols"] = symbols
             elif key in ["exchange", "start_date", "end_date", "starting_balance", "base_dir"]:
