@@ -61,6 +61,7 @@ class BybitBot(Passivbot):
             except Exception as e:
                 print(f"exception watch_balance", e)
                 traceback.print_exc()
+                await asyncio.sleep(1)
 
     async def watch_orders(self):
         while True:
@@ -75,6 +76,7 @@ class BybitBot(Passivbot):
             except Exception as e:
                 print(f"exception watch_orders", e)
                 traceback.print_exc()
+                await asyncio.sleep(1)
 
     async def watch_tickers(self, symbols=None):
         self.prev_active_symbols = set()
