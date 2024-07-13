@@ -101,6 +101,7 @@ class HyperliquidBot(Passivbot):
             except Exception as e:
                 logging.error(f"exception watch_balance {res} {e}")
                 traceback.print_exc()
+                await asyncio.sleep(1)
 
     async def watch_orders(self):
         res = None
@@ -116,6 +117,7 @@ class HyperliquidBot(Passivbot):
             except Exception as e:
                 logging.error(f"exception watch_orders {res} {e}")
                 traceback.print_exc()
+                await asyncio.sleep(1)
 
     async def watch_tickers(self):
         self.WS_ticker_tasks = {}

@@ -78,6 +78,7 @@ class BingXBot(Passivbot):
                 print(f"exception watch_balance", e)
                 print_async_exception(res)
                 traceback.print_exc()
+                await asyncio.sleep(1)
 
     async def watch_orders(self):
         while True:
@@ -92,6 +93,7 @@ class BingXBot(Passivbot):
             except Exception as e:
                 print(f"exception watch_orders", e)
                 traceback.print_exc()
+                await asyncio.sleep(1)
 
     async def watch_tickers(self):
         self.WS_ticker_tasks = {}
@@ -123,7 +125,7 @@ class BingXBot(Passivbot):
                 logging.error(f"exception watch_ticker {symbol} {str(e)}")
                 traceback.print_exc()
                 await asyncio.sleep(1)
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.01)
 
     async def fetch_open_orders(self, symbol: str = None):
         fetched = None
