@@ -1501,8 +1501,19 @@ class Passivbot:
         except Exception as e:
             logging.error(f"error executing to exchange {e}")
             traceback.print_exc()
+            await self.restart_bot_on_too_many_errors()
         finally:
             self.previous_execution_ts = utc_ms()
+
+    async def restart_bot_on_too_many_errors(self):
+        if not hasattr(self, "error_counts"):
+            self.error_counts = []
+        now = utc_ms()
+        self.error_counts = [x for x in self.error_counts if x > now - 1000 * 60 * 60] + [now]
+        max_n_errors_per_hour = 10
+        logging.info(f"error count: {len(self.error_counts)} of {max_n_errors_per_hour} errors per hour")
+        if len(self.error_counts) >= max_n_errors_per_hour:
+            raise Exception("too many errors... restarting bot.")
 
     def format_custom_ids(self, orders: [dict]) -> [dict]:
         new_orders = []
