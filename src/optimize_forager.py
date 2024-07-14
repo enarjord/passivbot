@@ -221,6 +221,19 @@ def add_argparse_args_optimize_forager(parser):
         ("i", "iters", "iters", int, ""),
         ("p", "population_size", "population_size", int, ""),
     ]
+    template = get_template_live_config("v7")
+    shortened_already_added = set([x[0] for x in parser_items])
+    for key in template["optimize"]["bounds"]:
+        shortened = "".join([x[0] for x in key.split("_")])
+        if shortened in shortened_already_added:
+            for i in range(100):
+                shortened = "".join([x[0] for x in key.split("_")]) + str(i)
+                if shortened not in shortened_already_added:
+                    break
+            else:
+                raise Exception(f"too many duplicates of shortened key {key}")
+        parser_items.append((shortened, key, key, float, ", fixing optimizing bounds"))
+        shortened_already_added.add(shortened)
     for k0, k1, d, t, h in parser_items:
         parser.add_argument(
             *[f"-{k0}", f"--{k1}"] + ([f"--{k1.replace('_', '-')}"] if "_" in k1 else []),
@@ -228,7 +241,7 @@ def add_argparse_args_optimize_forager(parser):
             required=False,
             dest=d,
             default=None,
-            help=f"specify {k1}{h}, overriding value from hjson config.",
+            help=f"specify {k1}{h}, overriding value from config.",
         )
     parser.add_argument(
         "-t",
@@ -282,7 +295,12 @@ async def main():
         level=logging.INFO,
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
-    config = load_config("configs/template.json" if args.config_path is None else args.config_path)
+    if args.config_path is None:
+        logging.info(f"loading default template config configs/template.json")
+        config = load_config("configs/template.json")
+    else:
+        logging.info(f"loading config {args.config_path}")
+        config = load_config(args.config_path)
     config = add_argparse_args_to_config(config, args)
     hlcs, mss, results_path = await prepare_hlcs_mss(config)
     preferred_coins = calc_noisiness_argsort_indices(hlcs).astype(np.int32)
