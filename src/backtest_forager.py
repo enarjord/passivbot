@@ -176,6 +176,9 @@ def add_argparse_args_to_config(config, args):
                 if config["optimize"][key] != value:
                     logging.info(f"chainging optimize {key} {config['optimize'][key]} -> {value}")
                 config["optimize"][key] = value
+            elif key in config["optimize"]["bounds"]:
+                logging.info(f"fixing optimizing bound {key} to {value}")
+                config["optimize"]["bounds"][key] = [value, value]
         except Exception as e:
             raise Exception(f"failed to add argparse arg to config {key}: {e}")
     return config
@@ -274,6 +277,7 @@ def post_process(config, hlcs, fills, equities, analysis, results_path):
     )
     json.dump(analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True)
     dump_config(config, f"{results_path}config.json")
+    fdf.to_csv(f"{results_path}fills.csv")
     plot_forager(results_path, config["common"]["approved_symbols"], fdf, bal_eq, hlcs)
 
 
@@ -295,6 +299,34 @@ def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcs):
         plt.savefig(oj(plots_dir, f"{symbol}.png"))
 
 
+def add_argparse_args_backtest_forager(parser):
+    parser_items = [
+        ("s", "symbols", "symbols", str, ", comma separated (SYM1USDT,SYM2USDT,...)"),
+        ("e", "exchange", "exchange", str, ""),
+        ("sd", "start_date", "start_date", str, ""),
+        (
+            "ed",
+            "end_date",
+            "end_date",
+            str,
+            ", if end date is 'now', will use current date as end date",
+        ),
+        ("sb", "starting_balance", "starting_balance", float, ""),
+        ("bd", "base_dir", "base_dir", str, ""),
+    ]
+    for k0, k1, d, t, h in parser_items:
+        parser.add_argument(
+            *[f"-{k0}", f"--{k1}"] + ([f"--{k1.replace('_', '-')}"] if "_" in k1 else []),
+            type=t,
+            required=False,
+            dest=d,
+            default=None,
+            help=f"specify {k1}{h}, overriding value from hjson config.",
+        )
+    args = parser.parse_args()
+    return args
+
+
 async def main():
     logging.basicConfig(
         format="%(asctime)s %(levelname)-8s %(message)s",
@@ -303,8 +335,9 @@ async def main():
     )
     parser = argparse.ArgumentParser(prog="backtest_forager", description="run forager backtest")
     parser.add_argument("config_path", type=str, default=None, help="path to hjson passivbot config")
-    args = parser.parse_args()
+    args = add_argparse_args_backtest_forager(parser)
     config = load_config("configs/template.hjson" if args.config_path is None else args.config_path)
+    config = add_argparse_args_to_config(config, args)
     hlcs, mss, results_path = await prepare_hlcs_mss(config)
     noisiness_indices = calc_noisiness_argsort_indices(hlcs).astype(np.int32)
     fills, equities, analysis = run_backtest(hlcs, noisiness_indices, mss, config)
