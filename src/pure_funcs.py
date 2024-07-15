@@ -624,8 +624,11 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 },
                 "crossover_probability": 0.7,
                 "iters": 30000,
-                "lower_bound_drawdown_worst": 0.5,
-                "lower_bound_equity_balance_diff_mean": 0.03,
+                "limits": {
+                    "lower_bound_drawdown_worst": 0.5,
+                    "lower_bound_equity_balance_diff_mean": 0.03,
+                    "lower_bound_loss_profit_ratio": 0.75,
+                },
                 "mutation_probability": 0.2,
                 "n_cpus": 5,
                 "population_size": 100,
@@ -2500,12 +2503,61 @@ def extract_and_sort_by_keys_recursive(nested_dict):
 def format_config(config: dict) -> dict:
     # attempts to format a config config to v7 config
     template = get_template_live_config("v7")
+    cmap = {
+        "ddown_factor": "entry_grid_double_down_factor",
+        "initial_eprice_ema_dist": "entry_initial_ema_dist",
+        "initial_qty_pct": "entry_initial_qty_pct",
+        "markup_range": "close_grid_markup_range",
+        "min_markup": "close_grid_min_markup",
+        "rentry_pprice_dist": "entry_grid_spacing_pct",
+        "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_weight",
+        "ema_span_0": "ema_span_0",
+        "ema_span_1": "ema_span_1",
+    }
     if all([k in config for k in template]):
         result = deepcopy(config)
     elif all([k in config for k in ["analysis", "config"]]) and all(
         [k in config["config"] for k in template]
     ):
         result = deepcopy(config["config"])
+    elif all(
+        [
+            k in config
+            for k in [
+                "user",
+                "pnls_max_lookback_days",
+                "loss_allowance_pct",
+                "stuck_threshold",
+                "unstuck_close_pct",
+                "auto_gs",
+                "leverage",
+                "TWE_long",
+                "TWE_short",
+                "long_enabled",
+                "short_enabled",
+                "approved_symbols",
+                "ignored_symbols",
+                "n_longs",
+                "n_shorts",
+                "minimum_market_age_days",
+                "ohlcv_interval",
+                "relative_volume_filter_clip_pct",
+                "n_ohlcvs",
+                "live_configs_dir",
+                "default_config_path",
+                "universal_live_config",
+            ]
+        ]
+    ):
+        # PB multi live config
+        result = template
+        for pside in ["long", "short"]:
+            for key in config["universal_live_config"][pside]:
+                if key in cmap:
+                    result["bot"][pside][cmap[key]] = config["universal_live_config"][pside][key]
+            result["bot"][pside]["close_grid_qty_pct"] = 1.0 / round(
+                config["universal_live_config"][pside]["n_close_orders"]
+            )
     else:
         raise Exception(f"failed to format config")
     result["common"]["approved_symbols"] = sorted(set(result["common"]["approved_symbols"]))
