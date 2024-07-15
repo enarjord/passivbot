@@ -869,6 +869,7 @@ class Passivbot:
             await self.init_markets_dict()
             await self.init_flags()
             self.set_live_configs()
+            self.update_PB_modes()
 
     async def update_open_orders(self):
         if not hasattr(self, "open_orders"):
