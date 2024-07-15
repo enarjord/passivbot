@@ -189,8 +189,8 @@ class Evaluator:
             (2, "loss_profit_ratio"),
         ]:
             modifier += (
-                max(self.config["optimize"][f"lower_bound_{key}"], analysis[key])
-                - self.config["optimize"][f"lower_bound_{key}"]
+                max(self.config["optimize"]["limits"][f"lower_bound_{key}"], analysis[key])
+                - self.config["optimize"]["limits"][f"lower_bound_{key}"]
             ) * 10**i
         if analysis["drawdown_worst"] >= 1.0 or analysis["equity_balance_diff_max"] < 0.1:
             w_adg = w_sharpe_ratio = modifier
