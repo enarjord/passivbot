@@ -86,9 +86,6 @@ def process_single(file_location, verbose=False):
     xs = [json.loads(x) for x in lines if x]
     res = pd.DataFrame([flatten_dict(x) for x in xs])
 
-    lower_bound_drawdown_worst = res.iloc[0].config_optimize_lower_bound_drawdown_worst
-    print_("lower_bound_drawdown_worst", lower_bound_drawdown_worst)
-
     keys, higher_is_better = ["w_adg", "w_sharpe_ratio"], [False, False]
     keys = ["analysis_" + key for key in keys]
     candidates = res[(res.analysis_w_adg <= 0.0) & (res.analysis_w_sharpe_ratio <= 0.0)][keys]
