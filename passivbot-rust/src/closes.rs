@@ -115,36 +115,30 @@ pub fn calc_trailing_close_long(
         };
     }
     if trailing_price_bundle.max_price_since_open
-        < position.price * (1.0 + bot_params.close_trailing_threshold_pct)
+        > position.price * (1.0 + bot_params.close_trailing_threshold_pct)
+        && trailing_price_bundle.min_price_since_max
+            < trailing_price_bundle.max_price_since_open
+                * (1.0 - bot_params.close_trailing_retracement_pct)
     {
-        return Order {
-            qty: 0.0,
-            price: 0.0,
-            order_type: OrderType::CloseTrailingLong,
-        };
-    }
-    if trailing_price_bundle.min_price_since_max
-        > trailing_price_bundle.max_price_since_open
-            * (1.0 - bot_params.close_trailing_retracement_pct)
-    {
-        return Order {
-            qty: 0.0,
-            price: 0.0,
-            order_type: OrderType::CloseTrailingLong,
-        };
-    }
-    Order {
-        qty: -position.size,
-        price: f64::max(
-            state_params.order_book.ask,
-            round_up(
-                position.price
-                    * (1.0 + bot_params.close_trailing_threshold_pct
-                        - bot_params.close_trailing_retracement_pct),
-                exchange_params.price_step,
+        Order {
+            qty: -position.size,
+            price: f64::max(
+                state_params.order_book.ask,
+                round_up(
+                    position.price
+                        * (1.0 + bot_params.close_trailing_threshold_pct
+                            - bot_params.close_trailing_retracement_pct),
+                    exchange_params.price_step,
+                ),
             ),
-        ),
-        order_type: OrderType::CloseTrailingLong,
+            order_type: OrderType::CloseTrailingLong,
+        }
+    } else {
+        Order {
+            qty: 0.0,
+            price: 0.0,
+            order_type: OrderType::CloseTrailingLong,
+        }
     }
 }
 
@@ -358,36 +352,30 @@ pub fn calc_trailing_close_short(
         };
     }
     if trailing_price_bundle.min_price_since_open
-        > position.price * (1.0 - bot_params.close_trailing_threshold_pct)
+        < position.price * (1.0 - bot_params.close_trailing_threshold_pct)
+        && trailing_price_bundle.max_price_since_min
+            > trailing_price_bundle.min_price_since_open
+                * (1.0 + bot_params.close_trailing_retracement_pct)
     {
-        return Order {
-            qty: 0.0,
-            price: 0.0,
-            order_type: OrderType::CloseTrailingShort,
-        };
-    }
-    if trailing_price_bundle.max_price_since_min
-        < trailing_price_bundle.min_price_since_open
-            * (1.0 + bot_params.close_trailing_retracement_pct)
-    {
-        return Order {
-            qty: 0.0,
-            price: 0.0,
-            order_type: OrderType::CloseTrailingShort,
-        };
-    }
-    Order {
-        qty: position_size_abs,
-        price: f64::min(
-            state_params.order_book.bid,
-            round_dn(
-                position.price
-                    * (1.0 - bot_params.close_trailing_threshold_pct
-                        + bot_params.close_trailing_retracement_pct),
-                exchange_params.price_step,
+        Order {
+            qty: position_size_abs,
+            price: f64::min(
+                state_params.order_book.bid,
+                round_dn(
+                    position.price
+                        * (1.0 - bot_params.close_trailing_threshold_pct
+                            + bot_params.close_trailing_retracement_pct),
+                    exchange_params.price_step,
+                ),
             ),
-        ),
-        order_type: OrderType::CloseTrailingShort,
+            order_type: OrderType::CloseTrailingShort,
+        }
+    } else {
+        Order {
+            qty: 0.0,
+            price: 0.0,
+            order_type: OrderType::CloseTrailingShort,
+        }
     }
 }
 
