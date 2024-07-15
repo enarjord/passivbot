@@ -226,8 +226,8 @@ async def prepare_hlcs_mss(config):
 
     timestamps, hlcs = await prepare_hlcs_forager(
         config["common"]["approved_symbols"],
-        config["backtest"]["date_start"],
-        config["backtest"]["date_end"],
+        config["backtest"]["start_date"],
+        config["backtest"]["end_date"],
         base_dir=config["backtest"]["base_dir"],
         exchange=config["backtest"]["exchange"],
     )

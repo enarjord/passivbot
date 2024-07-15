@@ -498,8 +498,8 @@ def get_template_live_config(passivbot_mode="neat_grid"):
         return {
             "backtest": {
                 "base_dir": "backtests",
-                "date_end": "now",
-                "date_start": "2021-05-01",
+                "end_date": "now",
+                "start_date": "2021-05-01",
                 "exchange": "binance",
                 "starting_balance": 100000.0,
             },
