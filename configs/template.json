@@ -111,8 +111,9 @@
                          "short_unstuck_threshold": [0.4, 0.95]},
               "crossover_probability": 0.7,
               "iters": 30000,
-              "lower_bound_drawdown_worst": 0.5,
-              "lower_bound_equity_balance_diff_mean": 0.03,
+              "limits": {"lower_bound_drawdown_worst": 0.5,
+                         "lower_bound_equity_balance_diff_mean": 0.03,
+                         "lower_bound_loss_profit_ratio": 0.75},
               "mutation_probability": 0.2,
               "n_cpus": 5,
               "population_size": 500}}
