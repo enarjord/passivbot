@@ -1460,6 +1460,7 @@ class Passivbot:
             return True
         self.previous_execution_ts = utc_ms()
         try:
+            assert np.random.random() < 0.5, "random error"
             self.update_PB_modes()
             await self.add_new_symbols_to_maintainer_EMAs()
             await self.update_exchange_configs()
@@ -1512,7 +1513,9 @@ class Passivbot:
         now = utc_ms()
         self.error_counts = [x for x in self.error_counts if x > now - 1000 * 60 * 60] + [now]
         max_n_errors_per_hour = 10
-        logging.info(f"error count: {len(self.error_counts)} of {max_n_errors_per_hour} errors per hour")
+        logging.info(
+            f"error count: {len(self.error_counts)} of {max_n_errors_per_hour} errors per hour"
+        )
         if len(self.error_counts) >= max_n_errors_per_hour:
             raise Exception("too many errors... restarting bot.")
 
