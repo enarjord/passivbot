@@ -227,7 +227,7 @@ def add_argparse_args_optimize_forager(parser):
     ]
     template = get_template_live_config("v7")
     shortened_already_added = set([x[0] for x in parser_items])
-    for key in template["optimize"]["bounds"]:
+    for key in list(template["optimize"]["bounds"]) + list(template["optimize"]["limits"]):
         shortened = "".join([x[0] for x in key.split("_")])
         if shortened in shortened_already_added:
             for i in range(100):
