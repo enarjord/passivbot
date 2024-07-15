@@ -166,19 +166,28 @@ def add_argparse_args_to_config(config, args):
                 continue
             if key == "symbols":
                 symbols = sorted(set(value.split(",")))
-                logging.info(f"new symbols: {symbols}")
-                config["common"]["approved_symbols"] = symbols
-            elif key in ["exchange", "start_date", "end_date", "starting_balance", "base_dir"]:
-                if config["backtest"][key] != value:
-                    logging.info(f"changing backtest {key} {config['backtest'][key]} -> {value}")
-                config["backtest"][key] = value
-            elif key in ["iters", "n_cpus", "population_size"]:
-                if config["optimize"][key] != value:
-                    logging.info(f"chainging optimize {key} {config['optimize'][key]} -> {value}")
-                config["optimize"][key] = value
+                if symbols != sorted(set(config["common"]["approved_symbols"])):
+                    logging.info(f"new symbols: {symbols}")
+                    config["common"]["approved_symbols"] = symbols
+            elif key in config["backtest"]:
+                if not isinstance(config["backtest"][key], dict):
+                    if config["backtest"][key] != value:
+                        logging.info(f"changing backtest {key} {config['backtest'][key]} -> {value}")
+                        config["backtest"][key] = value
+            elif key in config["optimize"]:
+                if not isinstance(config["optimize"][key], dict):
+                    if config["optimize"][key] != value:
+                        logging.info(f"changing optimize {key} {config['optimize'][key]} -> {value}")
+                        config["optimize"][key] = value
             elif key in config["optimize"]["bounds"]:
-                logging.info(f"fixing optimizing bound {key} to {value}")
-                config["optimize"]["bounds"][key] = [value, value]
+                new_value = [value, value]
+                if config["optimize"]["bounds"][key] != new_value:
+                    logging.info(f"fixing optimizing bound {key} to {value}")
+                    config["optimize"]["bounds"][key] = new_value
+            elif key in config["optimize"]["limits"]:
+                if config["optimize"]["limits"][key] != value:
+                    logging.info(f"changing optimizing limit {key} to {value}")
+                    config["optimize"]["limits"][key] = value
         except Exception as e:
             raise Exception(f"failed to add argparse arg to config {key}: {e}")
     return config
