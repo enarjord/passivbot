@@ -443,7 +443,9 @@ def plot_fills_forager(fdf: pd.DataFrame, hlcs_df: pd.DataFrame, start_pct=0.0, 
     end_minute = int(hlcc.index[0] + hlcc.index[-1] * end_pct)
     hlcc = hlcc.loc[start_minute:end_minute]
     fdfc = fdfc.loc[start_minute:end_minute]
-    ax = hlcc.close.plot(style="y-")
+    ax = hlcc.close.plot(style="y--")
+    hlcc.low.plot(style="g--")
+    hlcc.high.plot(style="g--")
     longs = fdfc[fdfc.type.str.contains("long")]
     shorts = fdfc[fdfc.type.str.contains("short")]
     if len(longs) == 0 and len(shorts) == 0:
