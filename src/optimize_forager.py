@@ -183,7 +183,11 @@ class Evaluator:
 
     def calc_fitness(self, analysis):
         modifier = 0.0
-        for i, key in [(4, "drawdown_worst"), (3, "equity_balance_diff_mean")]:
+        for i, key in [
+            (4, "drawdown_worst"),
+            (3, "equity_balance_diff_mean"),
+            (2, "loss_profit_ratio"),
+        ]:
             modifier += (
                 max(self.config["optimize"][f"lower_bound_{key}"], analysis[key])
                 - self.config["optimize"][f"lower_bound_{key}"]
@@ -411,20 +415,7 @@ async def main():
         # Print statistics
         print(logbook)
 
-        # Save the best individuals
-        best_individuals = []
-        for ind in hof:
-            best_config = individual_to_config(ind, template=config)
-            best_individuals.append({"fitness": ind.fitness.values, "config": best_config})
-
-        with open(
-            config["results_filename"].replace("all_results.txt", "best_results.json"), "w"
-        ) as f:
-            json.dump(best_individuals, f, indent=2)
-
-        print(
-            f"Optimization complete. Best results saved to {config['results_filename'].replace('all_results.txt', 'best_results.json')}"
-        )
+        logging.info(f"Optimization complete.")
         ########
     except Exception as e:
         traceback.print_exc()
