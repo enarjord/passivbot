@@ -185,8 +185,9 @@ def add_argparse_args_to_config(config, args):
                     logging.info(f"fixing optimizing bound {key} to {value}")
                     config["optimize"]["bounds"][key] = new_value
             elif key in config["optimize"]["limits"]:
-                if config["optimize"]["limits"][key] != value:
-                    logging.info(f"changing optimizing limit {key} to {value}")
+                old_value = config["optimize"]["limits"][key]
+                if old_value != value:
+                    logging.info(f"changing optimizing limit {key} from {old_value} to {value}")
                     config["optimize"]["limits"][key] = value
         except Exception as e:
             raise Exception(f"failed to add argparse arg to config {key}: {e}")
