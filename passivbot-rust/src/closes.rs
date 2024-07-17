@@ -723,3 +723,53 @@ pub fn calc_closes_short(
     }
     closes
 }
+
+pub fn calc_unstucking_close(
+    positions: &Positions,
+    exchange_params_list: &[ExchangeParams],
+    bot_params_pair: &BotParamsPair,
+    hlcs_k: &Array2<f64>,
+    balance: f64,
+    ema_bands_long: &[EMABands],
+    ema_bands_short: &[EMABands],
+    pnl_cumsum_max: f64,
+    pnl_cumsum_running: f64,
+) -> (usize, usize, Order) {
+    let (unstucking_idx, unstucking_pside) = determine_position_for_unstucking(
+        positions,
+        exchange_params_list,
+        balance,
+        bot_params_pair,
+        hlcs_k,
+    );
+
+    if unstucking_idx == NO_POS || unstucking_pside == NO_POS {
+        return (NO_POS, NO_POS, Order::default());
+    }
+
+    let unstucking_close = match unstucking_pside {
+        LONG => calc_unstuck_close_long(
+            &exchange_params_list[unstucking_idx],
+            &bot_params_pair.long,
+            &hlcs_k.row(unstucking_idx).to_owned(),
+            balance,
+            ema_bands_long[unstucking_idx].upper,
+            &positions.long[&unstucking_idx],
+            pnl_cumsum_max,
+            pnl_cumsum_running,
+        ),
+        SHORT => calc_unstuck_close_short(
+            &exchange_params_list[unstucking_idx],
+            &bot_params_pair.short,
+            &hlcs_k.row(unstucking_idx).to_owned(),
+            balance,
+            ema_bands_short[unstucking_idx].lower,
+            &positions.short[&unstucking_idx],
+            pnl_cumsum_max,
+            pnl_cumsum_running,
+        ),
+        _ => Order::default(),
+    };
+
+    (unstucking_idx, unstucking_pside, unstucking_close)
+}

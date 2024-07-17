@@ -1,7 +1,4 @@
-use crate::closes::{
-    calc_next_close_long, calc_next_close_short, calc_unstuck_close_long, calc_unstuck_close_short,
-    determine_position_for_unstucking,
-};
+use crate::closes::{calc_next_close_long, calc_next_close_short, calc_unstucking_close};
 use crate::constants::{CLOSE, HIGH, LONG, LOW, NO_POS, SHORT};
 use crate::entries::{calc_next_entry_long, calc_next_entry_short};
 use crate::types::{
@@ -33,6 +30,38 @@ pub struct Alphas {
 pub struct EMAs {
     pub long: [f64; 3],
     pub short: [f64; 3],
+}
+impl EMAs {
+    pub fn compute_bands(&self, pside: usize) -> EMABands {
+        let (upper, lower) = match pside {
+            LONG => (
+                *self
+                    .long
+                    .iter()
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(&f64::MIN),
+                *self
+                    .long
+                    .iter()
+                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(&f64::MAX),
+            ),
+            SHORT => (
+                *self
+                    .short
+                    .iter()
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(&f64::MIN),
+                *self
+                    .short
+                    .iter()
+                    .min_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap_or(&f64::MAX),
+            ),
+            _ => panic!("Invalid pside"),
+        };
+        EMABands { upper, lower }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -555,18 +584,7 @@ impl Backtest {
                 bid: close_price,
                 ask: close_price,
             },
-            ema_bands: EMABands {
-                upper: *self.emas[idx]
-                    .long
-                    .iter()
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MIN),
-                lower: *self.emas[idx]
-                    .long
-                    .iter()
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MAX),
-            },
+            ema_bands: self.emas[idx].compute_bands(LONG),
         };
         let binding = Position::default();
         let position = self.positions.long.get(&idx).unwrap_or(&binding);
@@ -587,18 +605,7 @@ impl Backtest {
                 bid: close_price,
                 ask: close_price,
             },
-            ema_bands: EMABands {
-                upper: *self.emas[idx]
-                    .short
-                    .iter()
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MIN),
-                lower: *self.emas[idx]
-                    .short
-                    .iter()
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MAX),
-            },
+            ema_bands: self.emas[idx].compute_bands(SHORT),
         };
         let binding = Position::default();
         let position = self.positions.short.get(&idx).unwrap_or(&binding);
@@ -619,18 +626,7 @@ impl Backtest {
                 bid: close_price,
                 ask: close_price,
             },
-            ema_bands: EMABands {
-                upper: *self.emas[idx]
-                    .long
-                    .iter()
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MIN),
-                lower: *self.emas[idx]
-                    .long
-                    .iter()
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MAX),
-            },
+            ema_bands: self.emas[idx].compute_bands(LONG),
         };
         let binding = Position::default();
         let position = self.positions.long.get(&idx).unwrap_or(&binding);
@@ -651,18 +647,7 @@ impl Backtest {
                 bid: close_price,
                 ask: close_price,
             },
-            ema_bands: EMABands {
-                upper: *self.emas[idx]
-                    .short
-                    .iter()
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MIN),
-                lower: *self.emas[idx]
-                    .short
-                    .iter()
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MAX),
-            },
+            ema_bands: self.emas[idx].compute_bands(SHORT),
         };
         let binding = Position::default();
         let position = self.positions.short.get(&idx).unwrap_or(&binding);
@@ -708,49 +693,6 @@ impl Backtest {
         }
     }
 
-    fn calc_unstucking_close(&mut self, k: usize) -> (usize, usize, Order) {
-        let (unstucking_idx, unstucking_pside) = determine_position_for_unstucking(
-            &self.positions,
-            &self.exchange_params_list,
-            self.balance,
-            &self.bot_params_pair,
-            &self.hlcs.slice(s![k, .., ..]).to_owned(),
-        );
-        let mut unstucking_close = Order::default();
-        if unstucking_pside == LONG {
-            unstucking_close = calc_unstuck_close_long(
-                &self.exchange_params_list[unstucking_idx],
-                &self.bot_params_pair.long,
-                &self.hlcs.slice(s![k, unstucking_idx, ..]).to_owned(),
-                self.balance,
-                *self.emas[unstucking_idx]
-                    .long
-                    .iter()
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MIN),
-                &self.positions.long[&(unstucking_idx)],
-                self.pnl_cumsum_max,
-                self.pnl_cumsum_running,
-            );
-        } else if unstucking_pside == SHORT {
-            unstucking_close = calc_unstuck_close_short(
-                &self.exchange_params_list[unstucking_idx],
-                &self.bot_params_pair.short,
-                &self.hlcs.slice(s![k, unstucking_idx, ..]).to_owned(),
-                self.balance,
-                *self.emas[unstucking_idx]
-                    .short
-                    .iter()
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MAX),
-                &self.positions.short[&(unstucking_idx)],
-                self.pnl_cumsum_max,
-                self.pnl_cumsum_running,
-            );
-        }
-        (unstucking_idx, unstucking_pside, unstucking_close)
-    }
-
     fn update_open_orders_long_single(
         &mut self,
         k: usize,
@@ -767,18 +709,7 @@ impl Backtest {
                 bid: close_price,
                 ask: close_price,
             },
-            ema_bands: EMABands {
-                upper: *self.emas[idx]
-                    .long
-                    .iter()
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MIN),
-                lower: *self.emas[idx]
-                    .long
-                    .iter()
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MAX),
-            },
+            ema_bands: self.emas[idx].compute_bands(LONG),
         };
         let position = self
             .positions
@@ -827,18 +758,7 @@ impl Backtest {
                 bid: close_price,
                 ask: close_price,
             },
-            ema_bands: EMABands {
-                upper: *self.emas[idx]
-                    .short
-                    .iter()
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MIN),
-                lower: *self.emas[idx]
-                    .short
-                    .iter()
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MAX),
-            },
+            ema_bands: self.emas[idx].compute_bands(SHORT),
         };
         let position = self
             .positions
@@ -902,7 +822,25 @@ impl Backtest {
     }
 
     fn update_open_orders_any_fill(&mut self, k: usize) {
-        let (unstucking_idx, unstucking_pside, unstucking_close) = self.calc_unstucking_close(k);
+        let (unstucking_idx, unstucking_pside, unstucking_close) = calc_unstucking_close(
+            &self.positions,
+            &self.exchange_params_list,
+            &self.bot_params_pair,
+            &self.hlcs.slice(s![k, .., ..]).to_owned(),
+            self.balance,
+            &self
+                .emas
+                .iter()
+                .map(|ema| ema.compute_bands(LONG))
+                .collect::<Vec<EMABands>>(),
+            &self
+                .emas
+                .iter()
+                .map(|ema| ema.compute_bands(SHORT))
+                .collect::<Vec<EMABands>>(),
+            self.pnl_cumsum_max,
+            self.pnl_cumsum_running,
+        );
         if self.trading_enabled.long {
             if self.trailing_enabled.long {
                 let positions_long_indices: Vec<usize> =
@@ -961,7 +899,25 @@ impl Backtest {
         // - closes for symbols with open trailing closes
         let (unstucking_idx, unstucking_pside, unstucking_close) =
             if !(self.is_stuck.long.is_empty() && self.is_stuck.short.is_empty()) {
-                self.calc_unstucking_close(k)
+                calc_unstucking_close(
+                    &self.positions,
+                    &self.exchange_params_list,
+                    &self.bot_params_pair,
+                    &self.hlcs.slice(s![k, .., ..]).to_owned(),
+                    self.balance,
+                    &self
+                        .emas
+                        .iter()
+                        .map(|ema| ema.compute_bands(LONG))
+                        .collect::<Vec<EMABands>>(),
+                    &self
+                        .emas
+                        .iter()
+                        .map(|ema| ema.compute_bands(SHORT))
+                        .collect::<Vec<EMABands>>(),
+                    self.pnl_cumsum_max,
+                    self.pnl_cumsum_running,
+                )
             } else {
                 (NO_POS, NO_POS, Order::default())
             };
