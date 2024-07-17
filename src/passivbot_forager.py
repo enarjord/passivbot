@@ -58,6 +58,7 @@ from pure_funcs import (
     symbol_to_coin,
     add_missing_params_to_hjson_live_multi_config,
     expand_PB_mode,
+    ts_to_date_utc,
 )
 
 import logging
@@ -260,22 +261,18 @@ class Passivbot:
             logging.error(f"error stopping maintainer_EMAs {e}")
         return res
 
-    def has_position(self, symbol, pside=None):
-        if symbol in self.positions:
-            if self.positions[symbol]["long"]["size"] != 0.0 and pside in ["long", None]:
-                return True
-            if self.positions[symbol]["short"]["size"] != 0.0 and pside in ["short", None]:
-                return True
-        return False
+    def has_position(self, symbol, pside):
+        return symbol in self.positions and self.positions[symbol][pside]["size"] != 0.0
 
     def is_trailing(self, symbol, pside):
-        if symbol in self.live_configs:
-            for x in ["entry", "close"]:
-                if self.live_configs[symbol][pside][f"{x}_trailing_grid_ratio"] != 0.0:
-                    return True
-        return False
+        return symbol in self.live_configs and any(
+            [
+                self.live_configs[symbol][pside][f"{x}_trailing_grid_ratio"] != 0.0
+                for x in ["entry", "close"]
+            ]
+        )
 
-    def update_hlc(self, symbol, bid, ask, timestamp):
+    def update_hlc_ws(self, symbol, bid, ask, timestamp):
         # update hlc with latest price from WS
         # hlc format [[timestamp_ms, high, low, close], ...]
         if not hasattr(self, "hlcs"):
@@ -310,7 +307,46 @@ class Passivbot:
                 ]
             ]
 
-    async def force_update_hlcs(self, symbol, since):
+    async def init_hlcs(self, n_fetches=10):
+        last_pos_changes = self.get_last_position_changes()
+        symsince = [(s, min(last_pos_changes[s].values())) for s in last_pos_changes]
+        all_res = []
+        for sym_sublist in [symsince[i : i + n_fetches] for i in range(0, len(symsince), n_fetches)]:
+            res = await asyncio.gather(*[self.update_hlcs_rest(sym, sn) for sym, sn in sym_sublist])
+            all_res += res
+        return all_res
+
+    def get_last_position_changes(self):
+        last_position_changes = defaultdict(dict)
+        for symbol in self.positions:
+            for pside in ["long", "short"]:
+                if self.has_position(symbol, pside) and self.is_trailing(symbol, pside):
+                    last_position_changes[symbol][pside] = utc_ms() - 1000 * 60 * 60 * 24 * 7
+                    for fill in self.pnls[::-1]:
+                        if fill["symbol"] == symbol and fill["position_side"] == pside:
+                            last_position_changes[symbol][pside] = fill["timestamp"]
+                            break
+        return last_position_changes
+
+    async def maintain_hlcs(self):
+        while True:
+            try:
+                last_position_changes = self.get_last_position_changes()
+                if not last_position_changes:
+                    await asyncio.sleep(5)
+                else:
+                    sleep_time_seconds = 60.0 / len(last_position_changes)
+                    for symbol in sorted(last_position_changes):
+                        sts = utc_ms()
+                        since = min(last_position_changes[symbol].values())
+                        await self.update_hlcs_rest(symbol, since)
+                        await asyncio.sleep(max(0.0, sleep_time_seconds - (utc_ms() - sts) / 1000))
+            except Exception as e:
+                logging.error(f"error with maintain_hlcs {e}")
+                traceback.print_exc()
+                await asyncio.sleep(2)
+
+    async def update_hlcs_rest(self, symbol, since):
         if not hasattr(self, "hlcs"):
             self.hlcs = {}
         if symbol in self.hlcs:
@@ -318,20 +354,20 @@ class Passivbot:
             since = self.hlcs[symbol][-1][0] - 60000 * 100
         else:
             self.hlcs[symbol] = []
-        candles = await self.fetch_1m_hlcs(symbol, since)
+        candles = await self.fetch_hlcs(symbol, since)
         all_candles_d = {x[0]: x for x in self.hlcs[symbol]}
         all_candles_d.update({x[0]: x for x in candles})
+        logging.info(f"updated hlcs for {symbol} since {ts_to_date_utc(since)}")
         self.hlcs[symbol] = sorted(all_candles_d.values(), key=lambda x: x[0])
 
-    def find_position_change_timestamp(self, symbol, pside):
-        for fill in self.pnls[::-1]:
-            if fill["symbol"] == symbol and fill["position_side"] == pside:
-                return fill["timestamp"]
-        return 0
-
-    def update_trailing_data(self, symbol):
+    def update_trailing_data(self, symbol=None):
         if not hasattr(self, "trailing_prices"):
             self.trailing_prices = {}
+        if symbol is None:
+            symbols = set(self.trailing_prices) | set(self.positions)
+            for symbol in symbols:
+                self.update_trailing_data(symbol)
+            return
         self.trailing_prices[symbol] = {
             "long": {
                 "max_since_open": 0.0,
@@ -348,32 +384,24 @@ class Passivbot:
         }
         for pside in ["long", "short"]:
             if self.is_trailing(symbol, pside) and self.has_position(symbol, pside):
-                if self.has_position(symbol, pside):
-                    since = self.find_position_change_timestamp(symbol, pside)
-                    for x in self.hlcs[symbol]:
-                        if x[0] < since:
-                            continue
-                        if x[1] > self.trailing_prices[symbol][pside]["max_since_open"]:
-                            self.trailing_prices[symbol][pside]["max_since_open"] = x[1]
-                            self.trailing_prices[symbol][pside]["min_since_max"] = x[3]
-                        else:
-                            self.trailing_prices[symbol][pside]["min_since_max"] = min(
-                                self.trailing_prices[symbol][pside]["min_since_max"], x[2]
-                            )
-                        if x[2] < self.trailing_prices[symbol][pside]["min_since_open"]:
-                            self.trailing_prices[symbol][pside]["min_since_open"] = x[2]
-                            self.trailing_prices[symbol][pside]["max_since_min"] = x[3]
-                        else:
-                            self.trailing_prices[symbol][pside]["max_since_min"] = max(
-                                self.trailing_prices[symbol][pside]["max_since_min"], x[1]
-                            )
-
-    async def maintain_1m_hlcs(self):
-        # for trailing prices
-        for symbol in self.active_symbols:
-            if self.is_trailing(symbol):
-                if self.has_position(symbol):
-                    pass
+                since = self.find_position_change_timestamp(symbol, pside)
+                for x in self.hlcs[symbol]:
+                    if x[0] <= since:
+                        continue
+                    if x[1] > self.trailing_prices[symbol][pside]["max_since_open"]:
+                        self.trailing_prices[symbol][pside]["max_since_open"] = x[1]
+                        self.trailing_prices[symbol][pside]["min_since_max"] = x[3]
+                    else:
+                        self.trailing_prices[symbol][pside]["min_since_max"] = min(
+                            self.trailing_prices[symbol][pside]["min_since_max"], x[2]
+                        )
+                    if x[2] < self.trailing_prices[symbol][pside]["min_since_open"]:
+                        self.trailing_prices[symbol][pside]["min_since_open"] = x[2]
+                        self.trailing_prices[symbol][pside]["max_since_min"] = x[3]
+                    else:
+                        self.trailing_prices[symbol][pside]["max_since_min"] = max(
+                            self.trailing_prices[symbol][pside]["max_since_min"], x[1]
+                        )
 
     async def init_bot(self):
         logging.info(f"setting hedge mode...")
@@ -748,6 +776,7 @@ class Passivbot:
             if symbol not in self.open_orders:
                 self.open_orders[symbol] = []
         self.set_wallet_exposure_limits()
+        self.update_trailing_data()
 
         # log changes
         for pside in self.PB_modes:
@@ -909,7 +938,7 @@ class Passivbot:
             if all([key in upd for key in ["bid", "ask", "symbol"]]):
                 if "last" not in upd or upd["last"] is None:
                     upd["last"] = np.mean([upd["bid"], upd["ask"]])
-                self.update_hlc(upd["symbol"], upd["bid"], upd["ask"], upd["timestamp"])
+                self.update_hlc_ws(upd["symbol"], upd["bid"], upd["ask"], upd["timestamp"])
                 for key in ["bid", "ask", "last"]:
                     if upd[key] is not None:
                         if upd[key] != self.tickers[upd["symbol"]][key]:
@@ -1603,7 +1632,6 @@ class Passivbot:
             return True
         self.previous_execution_ts = utc_ms()
         try:
-            assert np.random.random() < 0.5, "random error"
             self.update_PB_modes()
             await self.add_new_symbols_to_maintainer_EMAs()
             await self.update_exchange_configs()
@@ -1784,7 +1812,12 @@ class Passivbot:
             )
             await self.init_EMAs_multi(sorted(self.active_symbols))
             logging.info(f"starting EMA maintainer...")
-            while True:
+        except Exception as e:
+            logging.error(f"Error starting maintain_EMAs: {e}")
+            traceback.print_exc()
+
+        while True:
+            try:
                 now_minute = int(utc_ms() // (1000 * 60) * (1000 * 60))
                 symbols_to_update = [
                     s
@@ -1793,26 +1826,26 @@ class Passivbot:
                 ]
                 await self.update_EMAs_multi(symbols_to_update)
                 await asyncio.sleep(30)
-        except Exception as e:
-            logging.error(f"Error with maintain_EMAs: {e}")
-            traceback.print_exc()
-            logging.info("restarting EMA maintainer in")
-            for i in range(10, 0, -1):
-                logging.info(f"{i} seconds")
-                await asyncio.sleep(1)
+            except Exception as e:
+                logging.error(f"Error with maintain_EMAs: {e}")
+                traceback.print_exc()
+                logging.info("restarting EMA maintainer in")
+                for i in range(10, 0, -1):
+                    logging.info(f"{i} seconds")
+                    await asyncio.sleep(1)
 
     async def maintain_ohlcvs(self, timeframe=None):
-        try:
-            timeframe = self.config["common"]["ohlcv_interval"] if timeframe is None else timeframe
-            # if in forager mode, maintain ohlcvs for all candidate symbols
-            # else, fetch ohlcvs once for EMA initialization
-            if not self.forager_mode:
-                return
-            sleep_interval_sec = max(5.0, (60.0 * 60.0) / len(self.eligible_symbols))
-            logging.info(
-                f"Starting ohlcvs maintainer. Will sleep {sleep_interval_sec:.1f}s between each fetch."
-            )
-            while True:
+        timeframe = self.config["common"]["ohlcv_interval"] if timeframe is None else timeframe
+        # if in forager mode, maintain ohlcvs for all candidate symbols
+        # else, fetch ohlcvs once for EMA initialization
+        if not self.forager_mode:
+            return
+        sleep_interval_sec = max(5.0, (60.0 * 60.0) / len(self.eligible_symbols))
+        logging.info(
+            f"Starting ohlcvs maintainer. Will sleep {sleep_interval_sec:.1f}s between each fetch."
+        )
+        while True:
+            try:
                 all_syms = set(self.active_symbols) | self.eligible_symbols
                 missing_symbols = [s for s in all_syms if s not in self.ohlcv_upd_timestamps]
                 if missing_symbols:
@@ -1828,13 +1861,13 @@ class Passivbot:
                     )
                     # logging.info(f"updated ohlcvs for {symbol} {res}")
                     await asyncio.sleep(max(0.0, sleep_interval_sec - (utc_ms() - start_ts) / 1000))
-        except Exception as e:
-            logging.error(f"Error with maintain_ohlcvs: {e}")
-            traceback.print_exc()
-            logging.info("restarting ohlcvs maintainer in")
-            for i in range(10, 0, -1):
-                logging.info(f"{i} seconds")
-                await asyncio.sleep(1)
+            except Exception as e:
+                logging.error(f"Error with maintain_ohlcvs: {e}")
+                traceback.print_exc()
+                logging.info("restarting ohlcvs maintainer in")
+                for i in range(10, 0, -1):
+                    logging.info(f"{i} seconds")
+                    await asyncio.sleep(1)
 
     async def update_EMAs_multi(self, symbols, n_fetches=10):
         all_res = []
@@ -1853,7 +1886,6 @@ class Passivbot:
             now_minute = int(utc_ms() // (1000 * 60) * (1000 * 60))
             if now_minute <= self.upd_minute_emas[symbol]:
                 return True
-            before = self.emas["long"][symbol].copy()
             for pside in ["long", "short"]:
                 self.emas[pside][symbol] = calc_ema(
                     self.ema_alphas[pside][symbol][0],
@@ -1861,7 +1893,6 @@ class Passivbot:
                     self.emas[pside][symbol],
                     self.tickers[symbol]["last"],
                 )
-            # logging.info(f"updated EMAs for {symbol} {before} -> {self.emas['long'][symbol]}")
             self.upd_minute_emas[symbol] = now_minute
             return True
         except Exception as e:
