@@ -14,6 +14,7 @@ from functools import reduce
 import zipfile
 import traceback
 import aiohttp
+import ccxt.async_support as ccxt
 
 import numpy as np
 import pandas as pd
@@ -1151,13 +1152,21 @@ async def download_single_ohlcvs_binance(url: str, fpath: str):
 
 
 async def download_ohlcvs_binance(
-    symbol, inverse, start_date, end_date, spot=False, download_only=False
+    symbol,
+    inverse,
+    start_date,
+    end_date,
+    spot=False,
+    download_only=False,
+    start_tss=None,
 ) -> pd.DataFrame:
     dirpath = make_get_filepath(f"historical_data/ohlcvs_{'spot' if spot else 'futures'}/{symbol}/")
     base_url = "https://data.binance.vision/data/"
     base_url += "spot/" if spot else f"futures/{'cm' if inverse else 'um'}/"
     col_names = ["timestamp", "open", "high", "low", "close", "volume"]
-    if spot:
+    if start_tss is not None and symbol in start_tss:
+        start_ts = start_tss[symbol]
+    elif spot:
         start_ts = get_first_ohlcv_ts(symbol, spot=spot)
     else:
         start_ts = (await get_first_ohlcv_timestamps(symbols=[symbol]))[symbol]
@@ -1271,6 +1280,7 @@ async def load_hlc_cache(
     base_dir="backtests",
     spot=False,
     exchange="binance",
+    start_tss=None,
 ):
     cache_fname = (
         f"{ts_to_date_utc(date_to_ts2(start_date))[:10]}_"
@@ -1287,7 +1297,9 @@ async def load_hlc_cache(
             df = await download_ohlcvs_bybit(symbol, start_date, end_date, spot, download_only=False)
             df = attempt_gap_fix_hlcs(df)
         else:
-            df = await download_ohlcvs_binance(symbol, inverse, start_date, end_date, spot)
+            df = await download_ohlcvs_binance(
+                symbol, inverse, start_date, end_date, spot, start_tss=start_tss
+            )
         df = df[df.timestamp >= date_to_ts2(start_date)]
         df = df[df.timestamp <= date_to_ts2(end_date)]
         data = df[["timestamp", "high", "low", "close"]].values
@@ -1398,8 +1410,13 @@ async def prepare_hlcs_forager(
         end_date = ts_to_date_utc(utc_ms())[:10]
     hlcsd = {}
     interval_ms = 60000
+    start_tss = None
+    if exchange == "binance":
+        start_tss = await get_first_ohlcv_timestamps(cc=ccxt.binanceusdm(), symbols=symbols)
     for symbol in symbols:
-        data = await load_hlc_cache(symbol, False, start_date, end_date, base_dir, False, exchange)
+        data = await load_hlc_cache(
+            symbol, False, start_date, end_date, base_dir, False, exchange, start_tss=start_tss
+        )
         assert (
             np.diff(data[:, 0]) == interval_ms
         ).all(), f"gaps in hlc data {symbol}"  # verify integrous 1m hlcs
