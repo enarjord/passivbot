@@ -771,16 +771,6 @@ class Passivbot:
                             self.tickers[upd["symbol"]][key] = upd[key]
                     else:
                         logging.info(f"ticker {upd['symbol']} {key} is None")
-
-                # if upd['bid'] is not None:
-                #    if upd['ask'] is not None:
-                #        if upd['last'] is not None:
-                #            self.tickers[upd['symbol']] = {k: upd[k] for k in ["bid", "ask", "last"]}
-                #            return
-                #        self.tickers[upd['symbol']] = {'bid': upd['bid'], 'ask': upd['ask'], 'last': np.random.choice([upd['bid'], upd['ask']])}
-                #        return
-                #    self.tickers[upd['symbol']] = {'bid': upd['bid'], 'ask': upd['bid'], 'last': upd['bid']}
-                #    return
             else:
                 logging.info(f"unexpected WS ticker formatting: {upd}")
 
@@ -1468,7 +1458,6 @@ class Passivbot:
             return True
         self.previous_execution_ts = utc_ms()
         try:
-            assert np.random.random() < 0.5, "random error"
             self.update_PB_modes()
             await self.add_new_symbols_to_maintainer_EMAs()
             await self.update_exchange_configs()
