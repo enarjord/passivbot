@@ -382,6 +382,15 @@ class HyperliquidBot(Passivbot):
             print_async_exception(res)
             traceback.print_exc()
 
+    def symbol_is_eligible(self, symbol):
+        try:
+            if self.markets_dict[symbol]["info"]["onlyIsolated"]:
+                return False
+        except Exception as e:
+            logging.error(f"error with symbol_is_eligible {e} {symbol}")
+            return False
+        return True
+
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_margin_mode = {}
         for symbol in symbols:
