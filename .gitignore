@@ -1,5 +1,6 @@
 ### Passivebot ###
-caches/*
+caches/
+myPbConfigs/
 
 ### Linux ###
 *~
