@@ -274,6 +274,10 @@ class Passivbot:
         self.formatted_symbols_map_inv[formatted].add(symbol)
         return formatted
 
+    def symbol_is_eligible(self, symbol):
+        # defined for each child class
+        return True
+
     async def init_markets_dict(self):
         self.init_markets_last_update_ms = utc_ms()
         self.markets_dict = {elm["symbol"]: elm for elm in (await self.cca.fetch_markets())}
@@ -292,6 +296,9 @@ class Passivbot:
                 del self.markets_dict[symbol]
             elif not symbol.endswith(f"/{self.quote}:{self.quote}"):
                 ineligible_symbols[symbol] = "wrong quote"
+                del self.markets_dict[symbol]
+            elif not self.symbol_is_eligible(symbol):
+                ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
                 del self.markets_dict[symbol]
         for line in set(ineligible_symbols.values()):
             syms_ = [s for s in ineligible_symbols if ineligible_symbols[s] == line]
