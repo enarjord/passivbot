@@ -1,0 +1,21 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Backtest",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "backtest.py",
+            "console": "integratedTerminal",
+            "args": [
+                "-s",
+                "1000PEPEUSDT",
+                "configs/live/1000PEPEUSDT.json"
+            ],
+            "python": "${command:python.interpreterPath}"
+        }
+    ]
+}
