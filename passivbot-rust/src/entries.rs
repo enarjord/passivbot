@@ -96,7 +96,6 @@ pub fn calc_reentry_qty(
 }
 
 fn calc_reentry_price_bid(
-    balance: f64,
     position_price: f64,
     wallet_exposure: f64,
     order_book_bid: f64,
@@ -120,7 +119,6 @@ fn calc_reentry_price_bid(
 }
 
 fn calc_reentry_price_ask(
-    balance: f64,
     position_price: f64,
     wallet_exposure: f64,
     order_book_ask: f64,
@@ -195,7 +193,6 @@ pub fn calc_grid_entry_long(
 
     // normal re-entry
     let reentry_price = calc_reentry_price_bid(
-        state_params.balance,
         position.price,
         wallet_exposure,
         state_params.order_book.bid,
@@ -240,7 +237,6 @@ pub fn calc_grid_entry_long(
         exchange_params.qty_step,
     );
     let next_reentry_price = calc_reentry_price_bid(
-        state_params.balance,
         pprice_if_filled,
         wallet_exposure_if_filled,
         state_params.order_book.bid,
@@ -549,7 +545,6 @@ pub fn calc_grid_entry_short(
 
     // normal re-entry
     let reentry_price = calc_reentry_price_ask(
-        state_params.balance,
         position.price,
         wallet_exposure,
         state_params.order_book.ask,
@@ -594,7 +589,6 @@ pub fn calc_grid_entry_short(
         exchange_params.qty_step,
     );
     let next_reentry_price = calc_reentry_price_ask(
-        state_params.balance,
         pprice_if_filled,
         wallet_exposure_if_filled,
         state_params.order_book.ask,
