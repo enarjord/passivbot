@@ -1,0 +1,42 @@
+{
+    "config_name": "AGIUSDT",
+    "logging_level": 0,
+    "long": {
+        "auto_unstuck_delay_minutes": 0.0,
+        "auto_unstuck_ema_dist": 0,
+        "auto_unstuck_qty_pct": 0.0,
+        "auto_unstuck_wallet_exposure_threshold": 0.0,
+        "backwards_tp": false,
+        "ddown_factor": 2.1428512029160007,
+        "ema_span_0": 488.2787706365034,
+        "ema_span_1": 539.020235994181,
+        "enabled": true,
+        "initial_eprice_ema_dist": -0.1,
+        "initial_qty_pct": 0.003189291847846262,
+        "markup_range": 0.028078089044222078,
+        "min_markup": 0.005708961842775891,
+        "n_close_orders": 5,
+        "rentry_pprice_dist": 0.018514600084018253,
+        "rentry_pprice_dist_wallet_exposure_weighting": 2.119869195156612,
+        "wallet_exposure_limit": 1.0
+    },
+    "short": {
+        "auto_unstuck_delay_minutes": 0.0,
+        "auto_unstuck_ema_dist": 0.29459950549053276,
+        "auto_unstuck_qty_pct": 0.0,
+        "auto_unstuck_wallet_exposure_threshold": 0.4938967968031466,
+        "backwards_tp": false,
+        "ddown_factor": 2.4352795042460302,
+        "ema_span_0": 8852.146540376903,
+        "ema_span_1": 7283.547019316724,
+        "enabled": false,
+        "initial_eprice_ema_dist": -0.07416676113802156,
+        "initial_qty_pct": 0.040846728757127006,
+        "markup_range": 0.01743978621540221,
+        "min_markup": 0.031682835203224,
+        "n_close_orders": 11,
+        "rentry_pprice_dist": 0.04405641859087018,
+        "rentry_pprice_dist_wallet_exposure_weighting": 24.643555906663153,
+        "wallet_exposure_limit": 0.1
+    }
+}
