@@ -252,7 +252,8 @@ class HyperliquidBot(Passivbot):
         max_n_fetches = 20
         all_fetched = []
         for i in range(max_n_fetches):
-            fetched = await self.cca.fetch_ohlcv(symbol, timeframe="1m", since=since)
+            print(symbol, since)
+            fetched = await self.cca.fetch_ohlcv(symbol, timeframe="1m", since=int(since))
             all_fetched += fetched
             print("debug fetching ohlcvs", ts_to_date_utc(fetched[-1][0]))
             if len(fetched) < n_candles_limit:
@@ -399,6 +400,15 @@ class HyperliquidBot(Passivbot):
             logging.error(f"error executing orders {e}")
             print_async_exception(res)
             traceback.print_exc()
+
+    def symbol_is_eligible(self, symbol):
+        try:
+            if self.markets_dict[symbol]["info"]["onlyIsolated"]:
+                return False
+        except Exception as e:
+            logging.error(f"error with symbol_is_eligible {e} {symbol}")
+            return False
+        return True
 
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_margin_mode = {}
