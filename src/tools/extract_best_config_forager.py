@@ -10,11 +10,13 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from pure_funcs import config_pretty_str
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from procedures import utc_ms, make_get_filepath
+from procedures import utc_ms, make_get_filepath, dump_config
 from pure_funcs import (
     flatten_dict,
     ts_to_date_utc,
     backtested_multiconfig2live_multiconfig,
+    sort_dict_keys,
+    config_pretty_str,
 )
 
 
@@ -76,7 +78,7 @@ def process_single(file_location, verbose=False):
     print_ = gprint(verbose)
     try:
         result = json.load(open(file_location))
-        print_(json.dumps(result, indent=4))
+        print_(config_pretty_str(sort_dict_keys(result)))
         return result
     except:
         pass
@@ -118,7 +120,7 @@ def process_single(file_location, verbose=False):
     print_(file_location)
     fname = os.path.split(file_location)[-1].replace("_all_results.txt", "") + ".json"
     full_path = make_get_filepath(os.path.join("opt_results_forager_analysis", fname))
-    json.dump(best_d, open(full_path, "w"), indent=4, sort_keys=True)
+    dump_config(best_d, full_path)
     return best_d
 
 
@@ -136,12 +138,7 @@ def main(args):
             result = process_single(args.file_location, args.verbose)
             print(f"successfully processed {args.file_location}")
             if args.user is not None:
-                live_config = backtested_multiconfig2live_multiconfig(result)
-                live_config["user"] = args.user
-                now = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
-                fpath = f"configs/live/{now}_{args.user}.hjson"
-                hjson.dump(live_config, open(fpath, "w"))
-                print(f"successfully dumped live config {fpath}")
+                pass
         except Exception as e:
             print(f"error with {args.file_location} {e}")
 
