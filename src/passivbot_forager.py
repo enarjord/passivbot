@@ -316,7 +316,7 @@ class Passivbot:
             all_res += res
         return all_res
 
-    def get_last_position_changes(self):
+    def get_last_position_changes(self, symbol=None):
         last_position_changes = defaultdict(dict)
         for symbol in self.positions:
             for pside in ["long", "short"]:
@@ -349,7 +349,7 @@ class Passivbot:
     async def update_hlcs_rest(self, symbol, since):
         if not hasattr(self, "hlcs"):
             self.hlcs = {}
-        if symbol in self.hlcs:
+        if symbol in self.hlcs and self.hlcs[symbol]:
             self.hlcs[symbol] = [x for x in self.hlcs[symbol] if x[0] >= since]
             since = self.hlcs[symbol][-1][0] - 60000 * 100
         else:
@@ -360,33 +360,31 @@ class Passivbot:
         logging.info(f"updated hlcs for {symbol} since {ts_to_date_utc(since)}")
         self.hlcs[symbol] = sorted(all_candles_d.values(), key=lambda x: x[0])
 
-    def update_trailing_data(self, symbol=None):
+    def update_trailing_data(self):
         if not hasattr(self, "trailing_prices"):
             self.trailing_prices = {}
-        if symbol is None:
-            symbols = set(self.trailing_prices) | set(self.positions)
-            for symbol in symbols:
-                self.update_trailing_data(symbol)
-            return
-        self.trailing_prices[symbol] = {
-            "long": {
-                "max_since_open": 0.0,
-                "min_since_max": np.inf,
-                "min_since_open": np.inf,
-                "max_since_min": 0.0,
-            },
-            "short": {
-                "max_since_open": 0.0,
-                "min_since_max": np.inf,
-                "min_since_open": np.inf,
-                "max_since_min": 0.0,
-            },
-        }
-        for pside in ["long", "short"]:
-            if self.is_trailing(symbol, pside) and self.has_position(symbol, pside):
-                since = self.find_position_change_timestamp(symbol, pside)
+        last_position_changes = self.get_last_position_changes()
+        symbols = set(self.trailing_prices) | set(last_position_changes)
+        for symbol in symbols:
+            self.trailing_prices[symbol] = {
+                "long": {
+                    "max_since_open": 0.0,
+                    "min_since_max": np.inf,
+                    "min_since_open": np.inf,
+                    "max_since_min": 0.0,
+                },
+                "short": {
+                    "max_since_open": 0.0,
+                    "min_since_max": np.inf,
+                    "min_since_open": np.inf,
+                    "max_since_min": 0.0,
+                },
+            }
+            if symbol not in last_position_changes:
+                continue
+            for pside in last_position_changes[symbol]:
                 for x in self.hlcs[symbol]:
-                    if x[0] <= since:
+                    if x[0] <= last_position_changes[symbol][pside]:
                         continue
                     if x[1] > self.trailing_prices[symbol][pside]["max_since_open"]:
                         self.trailing_prices[symbol][pside]["max_since_open"] = x[1]
@@ -418,6 +416,7 @@ class Passivbot:
         self.set_live_configs()
         if self.forager_mode:
             await self.update_ohlcvs_multi(list(self.eligible_symbols), verbose=True)
+        await self.init_hlcs()
         self.update_PB_modes()
         logging.info(f"initiating pnl history...")
         await self.update_pnls()
@@ -442,6 +441,10 @@ class Passivbot:
         self.formatted_symbols_map_inv[formatted].add(symbol)
         return formatted
 
+    def symbol_is_eligible(self, symbol):
+        # defined for each child class
+        return True
+
     async def init_markets_dict(self):
         self.init_markets_last_update_ms = utc_ms()
         self.markets_dict = {elm["symbol"]: elm for elm in (await self.cca.fetch_markets())}
@@ -460,6 +463,12 @@ class Passivbot:
                 del self.markets_dict[symbol]
             elif not symbol.endswith(f"/{self.quote}:{self.quote}"):
                 ineligible_symbols[symbol] = "wrong quote"
+                del self.markets_dict[symbol]
+            elif not self.symbol_is_eligible(symbol):
+                ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
+                del self.markets_dict[symbol]
+            elif not self.symbol_is_eligible(symbol):
+                ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
                 del self.markets_dict[symbol]
         for line in set(ineligible_symbols.values()):
             syms_ = [s for s in ineligible_symbols if ineligible_symbols[s] == line]
@@ -1226,6 +1235,43 @@ class Passivbot:
                 self.tickers[symbol]["effective_min_cost"] = 0.0
         self.upd_timestamps["tickers"] = utc_ms()
         return True
+
+    def calc_unstuck_order(self):
+        symbols = [
+            s for s in self.positions if self.has_position(s, "long") or self.has_position(s, "short")
+        ]
+        symbols = sorted(symbols)
+        positions = [self.positions[s] for s in symbols]
+        exchange_params = exchange_params = [
+            {
+                key: getattr(self, key + "s")[s]
+                for key in ["qty_step", "price_step", "min_qty", "min_cost", "c_mult"]
+            }
+            for s in symbols
+        ]
+        bot_params_pair = [{k: self.live_configs[s][k] for k in ["long", "short"]} for s in symbols]
+        tickers = [{k: self.tickers[s][k] for k in ["bid", "ask"]} for s in symbols]
+        ema_bands_long = [
+            {"upper": max(self.emas["long"][s]), "lower": min(self.emas["long"][s])} for s in symbols
+        ]
+        ema_bands_short = [
+            {"upper": max(self.emas["short"][s]), "lower": min(self.emas["short"][s])}
+            for s in symbols
+        ]
+        pnl_cumsum = np.cumsum([x["pnl"] for x in self.pnls])
+        pnl_cumsum_max, pnl_cumsum_running = (
+            (pnl_cumsum.max(), pnl_cumsum[-1]) if len(pnl_cumsum) > 0 else (0.0, 0.0)
+        )
+        unstuck_close_order = pbr.calc_unstucking_close_py(
+            positions,
+            exchange_params,
+            tickers,
+            self.balance,
+            ema_bands_long,
+            ema_bands_short,
+            pnl_cumsum_max,
+            pnl_cumsum_running,
+        )
 
     def calc_ideal_orders(self):
         unstuck_close_order = None
