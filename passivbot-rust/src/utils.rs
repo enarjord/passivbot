@@ -56,6 +56,7 @@ pub fn qty_to_cost(qty: f64, price: f64, c_mult: f64) -> f64 {
     (qty.abs() * price) * c_mult
 }
 
+#[pyfunction]
 pub fn calc_wallet_exposure(
     c_mult: f64,
     balance: f64,
