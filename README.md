@@ -32,14 +32,22 @@ To install Passivbot and its dependencies, follow the steps below.
 
 ### Step 1: Clone the Repository
 
-First, clone the Passivbot repository to your local machine:
+First, clone the Passivbot repository to the local machine:
 
 ```sh
 git clone https://github.com/enarjord/passivbot.git
 cd passivbot
 ```
 
-### Step 2: Create and Activate a Virtual Environment
+
+### Step 2: Install Rust
+Passivbot uses Rust for some of its components. Install Rust by following these steps:
+
+Visit https://www.rust-lang.org/tools/install
+Follow the instructions for your operating system to install Rustup, the Rust installer and version management tool.
+After installation, restart your terminal or command prompt.
+
+### Step 3: Create and Activate a Virtual Environment
 
 Create a virtual environment to manage dependencies:
 
@@ -58,7 +66,7 @@ Activate the virtual environment:
   source venv/bin/activate
   ```
 
-### Step 3: Install Python Dependencies
+### Step 4: Install Python Dependencies
 
 Install all the required Python dependencies listed in the `requirements.txt` file:
 
@@ -66,7 +74,7 @@ Install all the required Python dependencies listed in the `requirements.txt` fi
 pip install -r requirements.txt
 ```
 
-### Step 4: Build Rust Extensions
+### Step 5: Build Rust Extensions
 
 Navigate to the `passivbot-rust` directory and build the Rust extensions using `maturin`:
 
@@ -76,7 +84,9 @@ maturin develop --release
 cd ..
 ```
 
-### Step 5: Add API keys
+Note that the Rust bindings must be recompiled for changes in the Rust source to take effect.
+
+### Step 6: Add API keys
 
 Make a copy of the api-keys template file:
 
@@ -94,6 +104,13 @@ To start the bot, run:
 
 ```sh
 python src/main.py configs/live/example_config.hjson
+```
+
+## Jupyter Lab
+
+Jupyter lab needs to be run in the same virtual environment as the bot. Activate venv (see installation instructions above, step 3), and launch Jupyter lab from the Passivbot root dir with:
+```shell
+python3 -m jupyter lab
 ```
 
 ## Requirements
