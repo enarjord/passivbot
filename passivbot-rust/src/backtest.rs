@@ -170,8 +170,10 @@ impl Backtest {
             fills: Vec::new(),
             is_stuck: IsStuck::default(),
             trading_enabled: TradingEnabled {
-                long: bot_params_pair.long.wallet_exposure_limit != 0.0,
-                short: bot_params_pair.short.wallet_exposure_limit != 0.0,
+                long: bot_params_pair.long.wallet_exposure_limit != 0.0
+                    && bot_params_pair.long.n_positions > 0,
+                short: bot_params_pair.short.wallet_exposure_limit != 0.0
+                    && bot_params_pair.short.n_positions > 0,
             },
             trailing_enabled: TrailingEnabled {
                 long: bot_params_pair.long.close_trailing_grid_ratio != 0.0
@@ -676,20 +678,20 @@ impl Backtest {
         } else {
             self.trailing_prices.short.entry(idx).or_default()
         };
-        if self.hlcs[[k, idx, LOW]] < trailing_price_bundle.min_price_since_open {
-            trailing_price_bundle.min_price_since_open = self.hlcs[[k, idx, LOW]];
-            trailing_price_bundle.max_price_since_min = self.hlcs[[k, idx, CLOSE]];
+        if self.hlcs[[k, idx, LOW]] < trailing_price_bundle.min_since_open {
+            trailing_price_bundle.min_since_open = self.hlcs[[k, idx, LOW]];
+            trailing_price_bundle.max_since_min = self.hlcs[[k, idx, CLOSE]];
         } else {
-            trailing_price_bundle.max_price_since_min = trailing_price_bundle
-                .max_price_since_min
+            trailing_price_bundle.max_since_min = trailing_price_bundle
+                .max_since_min
                 .max(self.hlcs[[k, idx, HIGH]]);
         }
-        if self.hlcs[[k, idx, HIGH]] > trailing_price_bundle.max_price_since_open {
-            trailing_price_bundle.max_price_since_open = self.hlcs[[k, idx, HIGH]];
-            trailing_price_bundle.min_price_since_max = self.hlcs[[k, idx, CLOSE]];
+        if self.hlcs[[k, idx, HIGH]] > trailing_price_bundle.max_since_open {
+            trailing_price_bundle.max_since_open = self.hlcs[[k, idx, HIGH]];
+            trailing_price_bundle.min_since_max = self.hlcs[[k, idx, CLOSE]];
         } else {
-            trailing_price_bundle.min_price_since_max = trailing_price_bundle
-                .min_price_since_max
+            trailing_price_bundle.min_since_max = trailing_price_bundle
+                .min_since_max
                 .min(self.hlcs[[k, idx, LOW]]);
         }
     }

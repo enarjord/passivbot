@@ -229,8 +229,8 @@ pub fn calc_grid_close_long_py(
 pub fn calc_trailing_close_long_py(
     price_step: f64,
     order_book_ask: f64,
-    max_price_since_open: f64,
-    min_price_since_max: f64,
+    max_since_open: f64,
+    min_since_max: f64,
     close_trailing_threshold_pct: f64,
     close_trailing_retracement_pct: f64,
     position_size: f64,
@@ -257,8 +257,8 @@ pub fn calc_trailing_close_long_py(
         price: position_price,
     };
     let trailing_price_bundle = TrailingPriceBundle {
-        max_price_since_open: max_price_since_open,
-        min_price_since_max: min_price_since_max,
+        max_since_open: max_since_open,
+        min_since_max: min_since_max,
         ..Default::default()
     };
     let order = calc_trailing_close_long(
@@ -340,8 +340,8 @@ pub fn calc_trailing_entry_long_py(
     wallet_exposure_limit: f64,
     position_size: f64,
     position_price: f64,
-    min_price_since_open: f64,
-    max_price_since_min: f64,
+    min_since_open: f64,
+    max_since_min: f64,
     entry_trailing_threshold_pct: f64,
     entry_trailing_retracement_pct: f64,
 ) -> (f64, f64, String) {
@@ -373,8 +373,8 @@ pub fn calc_trailing_entry_long_py(
         price: position_price,
     };
     let trailing_price_bundle = TrailingPriceBundle {
-        min_price_since_open: min_price_since_open,
-        max_price_since_min: max_price_since_min,
+        min_since_open: min_since_open,
+        max_since_min: max_since_min,
         ..Default::default()
     };
     let order = calc_trailing_entry_long(
@@ -406,8 +406,8 @@ pub fn calc_next_entry_long_py(
     balance: f64,
     position_size: f64,
     position_price: f64,
-    min_price_since_open: f64,
-    max_price_since_min: f64,
+    min_since_open: f64,
+    max_since_min: f64,
     ema_bands_lower: f64,
     order_book_bid: f64,
 ) -> (f64, f64, String) {
@@ -447,8 +447,8 @@ pub fn calc_next_entry_long_py(
         price: position_price,
     };
     let trailing_price_bundle = TrailingPriceBundle {
-        min_price_since_open: min_price_since_open,
-        max_price_since_min: max_price_since_min,
+        min_since_open: min_since_open,
+        max_since_min: max_since_min,
         ..Default::default()
     };
     let next_entry = calc_next_entry_long(
@@ -483,8 +483,8 @@ pub fn calc_next_close_long_py(
     balance: f64,
     position_size: f64,
     position_price: f64,
-    max_price_since_open: f64,
-    min_price_since_max: f64,
+    max_since_open: f64,
+    min_since_max: f64,
     order_book_ask: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -517,8 +517,8 @@ pub fn calc_next_close_long_py(
         price: position_price,
     };
     let trailing_price_bundle = TrailingPriceBundle {
-        max_price_since_open: max_price_since_open,
-        min_price_since_max: min_price_since_max,
+        max_since_open: max_since_open,
+        min_since_max: min_since_max,
         ..Default::default()
     };
     let next_entry = calc_next_close_long(
@@ -554,8 +554,8 @@ pub fn calc_next_entry_short_py(
     balance: f64,
     position_size: f64,
     position_price: f64,
-    max_price_since_open: f64,
-    min_price_since_max: f64,
+    max_since_open: f64,
+    min_since_max: f64,
     ema_bands_upper: f64,
     order_book_ask: f64,
 ) -> (f64, f64, String) {
@@ -595,8 +595,8 @@ pub fn calc_next_entry_short_py(
         price: position_price,
     };
     let trailing_price_bundle = TrailingPriceBundle {
-        max_price_since_open: max_price_since_open,
-        min_price_since_max: min_price_since_max,
+        max_since_open: max_since_open,
+        min_since_max: min_since_max,
         ..Default::default()
     };
     let next_entry = calc_next_entry_short(
@@ -631,8 +631,8 @@ pub fn calc_next_close_short_py(
     balance: f64,
     position_size: f64,
     position_price: f64,
-    min_price_since_open: f64,
-    max_price_since_min: f64,
+    min_since_open: f64,
+    max_since_min: f64,
     order_book_bid: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -665,8 +665,8 @@ pub fn calc_next_close_short_py(
         price: position_price,
     };
     let trailing_price_bundle = TrailingPriceBundle {
-        min_price_since_open: min_price_since_open,
-        max_price_since_min: max_price_since_min,
+        min_since_open: min_since_open,
+        max_since_min: max_since_min,
         ..Default::default()
     };
     let next_entry = calc_next_close_short(
@@ -702,8 +702,8 @@ pub fn calc_entries_long_py(
     balance: f64,
     position_size: f64,
     position_price: f64,
-    min_price_since_open: f64,
-    max_price_since_min: f64,
+    min_since_open: f64,
+    max_since_min: f64,
     ema_bands_lower: f64,
     order_book_bid: f64,
 ) -> Vec<(f64, f64, String)> {
@@ -746,8 +746,8 @@ pub fn calc_entries_long_py(
         price: position_price,
     };
     let trailing_price_bundle = TrailingPriceBundle {
-        min_price_since_open: min_price_since_open,
-        max_price_since_min: max_price_since_min,
+        min_since_open: min_since_open,
+        max_since_min: max_since_min,
         ..Default::default()
     };
     let entries = calc_entries_long(
@@ -784,8 +784,8 @@ pub fn calc_entries_short_py(
     balance: f64,
     position_size: f64,
     position_price: f64,
-    max_price_since_open: f64,
-    min_price_since_max: f64,
+    max_since_open: f64,
+    min_since_max: f64,
     ema_bands_upper: f64,
     order_book_ask: f64,
 ) -> Vec<(f64, f64, String)> {
@@ -828,8 +828,8 @@ pub fn calc_entries_short_py(
         price: position_price,
     };
     let trailing_price_bundle = TrailingPriceBundle {
-        max_price_since_open: max_price_since_open,
-        min_price_since_max: min_price_since_max,
+        max_since_open: max_since_open,
+        min_since_max: min_since_max,
         ..Default::default()
     };
     let entries = calc_entries_short(
@@ -864,8 +864,8 @@ pub fn calc_closes_long_py(
     balance: f64,
     position_size: f64,
     position_price: f64,
-    max_price_since_open: f64,
-    min_price_since_max: f64,
+    max_since_open: f64,
+    min_since_max: f64,
     order_book_ask: f64,
 ) -> Vec<(f64, f64, String)> {
     let exchange_params = ExchangeParams {
@@ -901,8 +901,8 @@ pub fn calc_closes_long_py(
         price: position_price,
     };
     let trailing_price_bundle = TrailingPriceBundle {
-        max_price_since_open: max_price_since_open,
-        min_price_since_max: min_price_since_max,
+        max_since_open: max_since_open,
+        min_since_max: min_since_max,
         ..Default::default()
     };
     let closes = calc_closes_long(
@@ -937,8 +937,8 @@ pub fn calc_closes_short_py(
     balance: f64,
     position_size: f64,
     position_price: f64,
-    min_price_since_open: f64,
-    max_price_since_min: f64,
+    min_since_open: f64,
+    max_since_min: f64,
     order_book_bid: f64,
 ) -> Vec<(f64, f64, String)> {
     let exchange_params = ExchangeParams {
@@ -973,8 +973,8 @@ pub fn calc_closes_short_py(
         price: position_price,
     };
     let trailing_price_bundle = TrailingPriceBundle {
-        min_price_since_open: min_price_since_open,
-        max_price_since_min: max_price_since_min,
+        min_since_open: min_since_open,
+        max_since_min: max_since_min,
         ..Default::default()
     };
     let closes = calc_closes_short(

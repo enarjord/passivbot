@@ -113,10 +113,10 @@ pub fn calc_trailing_close_long(
             order_type: OrderType::CloseTrailingLong,
         };
     }
-    if trailing_price_bundle.max_price_since_open
+    if trailing_price_bundle.max_since_open
         > position.price * (1.0 + bot_params.close_trailing_threshold_pct)
-        && trailing_price_bundle.min_price_since_max
-            < trailing_price_bundle.max_price_since_open
+        && trailing_price_bundle.min_since_max
+            < trailing_price_bundle.max_since_open
                 * (1.0 - bot_params.close_trailing_retracement_pct)
     {
         Order {
@@ -350,10 +350,10 @@ pub fn calc_trailing_close_short(
             order_type: OrderType::CloseTrailingShort,
         };
     }
-    if trailing_price_bundle.min_price_since_open
+    if trailing_price_bundle.min_since_open
         < position.price * (1.0 - bot_params.close_trailing_threshold_pct)
-        && trailing_price_bundle.max_price_since_min
-            > trailing_price_bundle.min_price_since_open
+        && trailing_price_bundle.max_since_min
+            > trailing_price_bundle.min_since_open
                 * (1.0 + bot_params.close_trailing_retracement_pct)
     {
         Order {
