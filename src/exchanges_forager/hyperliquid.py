@@ -252,10 +252,8 @@ class HyperliquidBot(Passivbot):
         max_n_fetches = 20
         all_fetched = []
         for i in range(max_n_fetches):
-            print(symbol, since)
             fetched = await self.cca.fetch_ohlcv(symbol, timeframe="1m", since=int(since))
             all_fetched += fetched
-            print("debug fetching ohlcvs", ts_to_date_utc(fetched[-1][0]))
             if len(fetched) < n_candles_limit:
                 break
             since = fetched[-1][0]
