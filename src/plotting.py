@@ -450,7 +450,7 @@ def plot_fills_forager(fdf: pd.DataFrame, hlcs_df: pd.DataFrame, start_pct=0.0, 
     shorts = fdfc[fdfc.type.str.contains("short")]
     if len(longs) == 0 and len(shorts) == 0:
         return plt
-    legend = ["price"]
+    legend = ["close", "high", "low"]
     if len(longs) > 0:
         pprices_long = hlcc.join(longs[["pprice", "psize"]]).ffill()
         pprices_long.loc[pprices_long.pprice.pct_change() != 0.0, "pprice"] = np.nan
