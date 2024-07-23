@@ -24,7 +24,7 @@ from procedures import (
     load_live_config,
     get_file_mod_utc,
     get_first_ohlcv_timestamps,
-    load_hjson_config,
+    load_config,
 )
 from njit_funcs_recursive_grid import calc_recursive_entries_long, calc_recursive_entries_short
 from njit_funcs import (
@@ -246,28 +246,28 @@ class Passivbot:
     def pad_sym(self, symbol):
         return f"{symbol: <{self.sym_padding}}"
 
-    def stop_maintainer_ohlcvs(self):
-        return self.maintainer_ohlcvs.cancel()
-
-    async def start_maintainer_ohlcvs(self):
-        if self.forager_mode:
-            self.maintainer_ohlcvs = asyncio.create_task(self.maintain_ohlcvs())
+    async def start_data_maintainers(self):
+        if not hasattr(self, "maintainers"):
+            self.maintainers = {}
         else:
-            self.maintainer_ohlcvs = None
-
-    async def start_maintainer_EMAs(self):
-        self.maintainer_EMAs = asyncio.create_task(self.maintain_EMAs())
+            self.stop_data_maintainers()
+        if self.forager_mode:
+            self.maintainers["ohlcvs"] = asyncio.create_task(self.maintain_ohlcvs())
+        else:
+            self.maintainers["ohlcvs"] = None
+        self.maintainers["EMAs"] = asyncio.create_task(self.maintain_EMAs())
+        self.maintainers["hlcs"] = asyncio.create_task(self.maintain_hlcs())
 
     def stop_data_maintainers(self):
+        if not hasattr(self, "maintainers"):
+            return
         res = []
-        try:
-            res.append(self.maintainer_ohlcvs.cancel())
-        except Exception as e:
-            logging.error(f"error stopping maintainer_ohlcvs {e}")
-        try:
-            res.append(self.maintainer_EMAs.cancel())
-        except Exception as e:
-            logging.error(f"error stopping maintainer_EMAs {e}")
+        for key in self.maintainers:
+            try:
+                res.append(self.maintainers[key].cancel())
+            except Exception as e:
+                logging.error(f"error stopping maintainer {key} {e}")
+        logging.info(f"stopped data maintainers: {res}")
         return res
 
     def has_position(self, symbol, pside=None):
@@ -335,7 +335,7 @@ class Passivbot:
             for pside in ["long", "short"]:
                 if self.has_position(symbol, pside) and self.is_trailing(symbol, pside):
                     last_position_changes[symbol][pside] = utc_ms() - 1000 * 60 * 60 * 24 * 7
-                    for fill in self.pnls[::-1]:
+                    for fill in self.fills[::-1]:
                         if fill["symbol"] == symbol and fill["position_side"] == pside:
                             last_position_changes[symbol][pside] = fill["timestamp"]
                             break
@@ -988,6 +988,11 @@ class Passivbot:
             traceback.print_exc()
             return 0.0
 
+    async def update_fills(self):
+        # called whenever a position changes
+        # some exchanges have unified pnl and fill data, some have them separate
+        pass
+
     async def update_pnls(self):
         # fetch latest pnls
         # dump new pnls to cache
@@ -1633,12 +1638,14 @@ class Passivbot:
             # format custom_id
             to_create = self.format_custom_ids(to_create)
             res = await self.execute_cancellations(
-                to_cancel[: self.config["max_n_cancellations_per_batch"]]
+                to_cancel[: self.config["live"]["max_n_cancellations_per_batch"]]
             )
             if res:
                 for elm in res:
                     self.remove_cancelled_order(elm, source="POST")
-            res = await self.execute_orders(to_create[: self.config["max_n_creations_per_batch"]])
+            res = await self.execute_orders(
+                to_create[: self.config["live"]["max_n_creations_per_batch"]]
+            )
             if res:
                 for elm in res:
                     self.add_new_order(elm, source="POST")
@@ -1674,6 +1681,7 @@ class Passivbot:
         return new_orders
 
     async def execution_loop(self):
+        return
         while True:
             if self.stop_websocket:
                 break
@@ -1700,14 +1708,12 @@ class Passivbot:
     async def start_bot(self):
         await self.init_bot()
         logging.info("done initiating bot")
-        asyncio.create_task(self.start_maintainer_ohlcvs())
-        asyncio.create_task(self.start_maintainer_EMAs())
+        asyncio.create_task(self.start_data_maintainers())
         for i in range(30):
             await asyncio.sleep(1)
             if set(self.emas["long"]) == set(self.active_symbols):
                 break
         logging.info("starting websockets...")
-        return
         await asyncio.gather(self.execution_loop(), self.start_websockets())
 
     def get_ohlcv_fpath(self, symbol) -> str:
@@ -2059,11 +2065,8 @@ async def main():
     restarts = []
     while True:
         args = parser.parse_args()
-        config = load_hjson_config(args.hjson_config_path)
-        config, logging_lines = add_missing_params_to_hjson_live_multi_config(config)
-        for line in logging_lines:
-            logging.info(line)
-
+        config = load_config(args.hjson_config_path)
+        """
         for key in [x[2] for x in parser_items]:
             if getattr(args, key) is not None:
                 if key.endswith("symbols"):
@@ -2074,6 +2077,7 @@ async def main():
                     new_value = getattr(args, key)
                 logging.info(f"changing {key}: {old_value} -> {new_value}")
                 config[key] = new_value
+        """
         bot = setup_bot(config)
         try:
             await bot.start_bot()
