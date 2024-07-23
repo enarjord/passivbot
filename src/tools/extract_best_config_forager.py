@@ -8,6 +8,7 @@ import pprint
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from pure_funcs import config_pretty_str
+from copy import deepcopy
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from procedures import utc_ms, make_get_filepath, dump_config
@@ -114,9 +115,11 @@ def process_single(file_location, verbose=False):
     # Processing the best result for configuration
     best_d = xs[best]
     best_d["analysis"]["n_iters"] = len(lines)
+    best_d.update(deepcopy(best_d["config"]))
+    del best_d["config"]
     fjson = config_pretty_str(best_d)
     print_(fjson)
-    coins = [s.replace("USDT", "") for s in best_d["config"]["common"]["approved_symbols"]]
+    coins = [s.replace("USDT", "") for s in best_d["common"]["approved_symbols"]]
     print_(file_location)
     fname = os.path.split(file_location)[-1].replace("_all_results.txt", "") + ".json"
     full_path = make_get_filepath(os.path.join("opt_results_forager_analysis", fname))
