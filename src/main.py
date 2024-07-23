@@ -1,5 +1,5 @@
 import asyncio
-from passivbot_multi import main
+from passivbot_forager import main
 
 
 if __name__ == "__main__":
