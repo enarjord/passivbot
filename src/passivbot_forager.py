@@ -1395,20 +1395,25 @@ class Passivbot:
                 )
                 ideal_orders[symbol] += entries_short + closes_short
 
+        unstucking_symbol, unstucking_close = self.calc_unstucking_close(ideal_orders)
+        if unstucking_close[0] != 0.0:
+            ideal_orders[unstucking_symbol] = [
+                x for x in ideal_orders[unstucking_symbol] if not "close" in x[2]
+            ]
+            ideal_orders[unstucking_symbol].append(unstucking_close)
+
         ideal_orders_f = {}
         for symbol in ideal_orders:
             ideal_orders_f[symbol] = []
-            for order in sorted(
-                ideal_orders[symbol], key=lambda x: calc_diff(x[1], self.tickers[symbol]["last"])
-            ):
-                if order[0] == 0.0:
+            with_pprice_diff = [
+                (calc_diff(x[1], self.tickers[symbol]["last"]), x) for x in ideal_orders[symbol]
+            ]
+            for pprice_diff, order in sorted(with_pprice_diff):
+                if order[0] == 0.0 or (
+                    any([x in order[2] for x in ["initial", "unstuck"]])
+                    and pprice_diff > self.config["live"]["price_distance_threshold"]
+                ):
                     continue
-                if any([x in order[2] for x in ["initial", "unstuck"]]):
-                    if (
-                        calc_diff(order[1], self.tickers[symbol]["last"])
-                        > self.config["live"]["price_distance_threshold"]
-                    ):
-                        continue
                 ideal_orders_f[symbol].append(
                     {
                         "symbol": symbol,
@@ -1420,10 +1425,6 @@ class Passivbot:
                         "custom_id": order[2],
                     }
                 )
-        unstucking_close = self.calc_unstucking_close(ideal_orders_f)
-        print(unstucking_close)
-        if unstucking_close is not None:
-            ideal_orders_f[unstucking_close["symbol"]] = unstucking_close
         return ideal_orders_f
 
     def calc_unstucking_close(self, ideal_orders):
@@ -1449,7 +1450,7 @@ class Passivbot:
                         )
                         stuck_positions.append((symbol, pside, pprice_diff))
         if not stuck_positions:
-            return None
+            return "", (0.0, 0.0, "")
         stuck_positions.sort(key=lambda x: x[2])
         for symbol, pside, _ in stuck_positions:
             if pside == "long":
@@ -1462,11 +1463,11 @@ class Passivbot:
                     ),
                 )
                 ideal_closes = (
-                    [x for x in ideal_orders[symbol] if x["side"] == "sell"]
+                    [x for x in ideal_orders[symbol] if "close" in x[2] and pside in x[2]]
                     if symbol in ideal_orders
                     else []
                 )
-                if not ideal_closes or close_price >= ideal_closes[0]["price"]:
+                if not ideal_closes or close_price >= ideal_closes[0][1]:
                     continue
                 close_qty = -min(
                     self.positions[symbol][pside]["size"],
@@ -1492,15 +1493,7 @@ class Passivbot:
                     ),
                 )
                 if close_qty != 0.0:
-                    return {
-                        "symbol": symbol,
-                        "side": "sell",
-                        "position_side": "long",
-                        "qty": abs(close_qty),
-                        "price": close_price,
-                        "reduce_only": True,
-                        "custom_id": "unstuck_close_long",
-                    }
+                    return symbol, (close_qty, close_price, "unstuck_close_long")
             elif pside == "short":
                 close_price = min(
                     self.tickers[symbol]["bid"],
@@ -1511,7 +1504,7 @@ class Passivbot:
                     ),
                 )
                 ideal_closes = (
-                    [x for x in ideal_orders[symbol] if x["side"] == "buy"]
+                    [x for x in ideal_orders[symbol] if "close" in x[2] and pside in x[2]]
                     if symbol in ideal_orders
                     else []
                 )
@@ -1541,16 +1534,8 @@ class Passivbot:
                     ),
                 )
                 if close_qty != 0.0:
-                    return {
-                        "symbol": symbol,
-                        "side": "buy",
-                        "position_side": "short",
-                        "qty": abs(close_qty),
-                        "price": close_price,
-                        "reduce_only": True,
-                        "custom_id": "unstuck_close_short",
-                    }
-        return None
+                    return symbol, (close_qty, close_price, "unstuck_close_short")
+        return "", (0.0, 0.0, "")
 
     def calc_orders_to_cancel_and_create(self):
         ideal_orders = self.calc_ideal_orders()
@@ -1722,6 +1707,7 @@ class Passivbot:
             if set(self.emas["long"]) == set(self.active_symbols):
                 break
         logging.info("starting websockets...")
+        return
         await asyncio.gather(self.execution_loop(), self.start_websockets())
 
     def get_ohlcv_fpath(self, symbol) -> str:
