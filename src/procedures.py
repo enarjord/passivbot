@@ -632,7 +632,8 @@ async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
     try:
         if symbols is None:
             markets = await cc.load_markets()
-            symbols = sorted([x for x in markets if markets[x]["swap"] and markets[x]["active"]])
+            symbols = [x for x in markets if markets[x]["swap"] and markets[x]["active"]]
+        symbols.sort()
         n = 30
         first_timestamps = {}
         cache_fname = f"caches/first_ohlcv_timestamps_{cc.id}.json"
