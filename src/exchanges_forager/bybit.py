@@ -6,6 +6,7 @@ import pprint
 import asyncio
 import traceback
 import numpy as np
+from collections import defaultdict
 from pure_funcs import multi_replace, floatify, ts_to_date_utc, calc_hash, determine_pos_side_ccxt
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
 
@@ -193,7 +194,7 @@ class BybitBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_pnls(
+    async def fetch_pnls_old(
         self,
         symbol: str = None,
         start_time: int = None,
@@ -276,6 +277,85 @@ class BybitBot(Passivbot):
             print_async_exception(fetched)
             traceback.print_exc()
             return []
+
+    async def fetch_history_sub(self, func, end_time=None):
+        all_fetched_d = {}
+        params = {"limit": 100}
+        if end_time:
+            params["paginate"] = True
+            params["endTime"] = int(end_time)
+        result = await getattr(self.cca, func)(params=params)
+        return sorted(result, key=lambda x: x["timestamp"])
+
+    async def fetch_fills_sub(self, start_time=None, end_time=None):
+        return await self.fetch_history_sub("fetch_my_trades", end_time)
+
+    async def fetch_pnls_sub(self, start_time=None, end_time=None):
+        return await self.fetch_history_sub("fetch_positions_history", end_time)
+
+    async def fetch_pnls(self, start_time=None, end_time=None):
+        # fetches both fills and pnls (bybit has them in separate endpoints)
+        if start_time is None:
+            all_fetched_fills, all_fetched_pnls = await asyncio.gather(
+                self.fetch_fills_sub(None, end_time), self.fetch_pnls_sub(None, end_time)
+            )
+            all_fetched_fills.sort(key=lambda y: y["timestamp"])
+        else:
+            all_fetched_fills = []
+            for _ in range(100):
+                fills = await self.fetch_fills_sub(None, end_time)
+                if not fills:
+                    break
+                logging.info(
+                    f"fetched fills: {fills[0]['datetime']} {fills[-1]['datetime']} {len(fills)}"
+                )
+                all_fetched_fills += fills
+                if fills[0]["timestamp"] <= start_time:
+                    break
+                end_time = fills[0]["timestamp"]
+            else:
+                logging.error(f"more than 100 calls to ccxt fetch_my_trades")
+            if not all_fetched_fills:
+                return []
+            all_fetched_fills.sort(key=lambda y: y["timestamp"])
+            start_time = all_fetched_fills[0]["timestamp"]
+            end_time = all_fetched_fills[-1]["timestamp"] + 1
+            all_fetched_pnls = []
+            for _ in range(100):
+                pnls = await self.fetch_pnls_sub(None, end_time)
+                if not pnls:
+                    break
+                logging.info(
+                    f"fetched pnls: {pnls[0]['datetime']} {pnls[-1]['datetime']} {len(pnls)}"
+                )
+                all_fetched_pnls += pnls
+                if pnls[0]["timestamp"] <= start_time:
+                    break
+                end_time = pnls[0]["timestamp"]
+        fillsd = defaultdict(list)
+        execIds_seen = set()
+        for x in all_fetched_fills:
+            if x["info"]["execId"] not in execIds_seen:
+                fillsd[x["info"]["orderId"]].append(
+                    {**x, **{"pnl": 0.0, "position_side": self.determine_pos_side(x)}}
+                )
+                execIds_seen.add(x["info"]["execId"])
+        for x in all_fetched_pnls:
+            if x["timestamp"] < all_fetched_fills[0]["timestamp"]:
+                continue
+            if x["info"]["orderId"] in fillsd:
+                fillsd[x["info"]["orderId"]][-1]["pnl"] = float(x["info"]["closedPnl"])
+            else:
+                logging.info(f"debug: pnl order id {x['info']['orderId']} not in fills")
+        result = []
+        for x in fillsd.values():
+            result += x
+        return sorted(result, key=lambda x: x["timestamp"])
+
+    def determine_pos_side(self, x):
+        if x["side"] == "buy":
+            return "short" if float(x["info"]["closedSize"]) != 0.0 else "long"
+        return "long" if float(x["info"]["closedSize"]) != 0.0 else "short"
 
     async def execute_cancellation(self, order: dict) -> dict:
         executed = None
