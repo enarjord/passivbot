@@ -371,7 +371,7 @@ class Passivbot:
         candles = await self.fetch_hlcs(symbol, since)
         all_candles_d = {x[0]: x for x in self.hlcs[symbol]}
         all_candles_d.update({x[0]: x for x in candles})
-        logging.info(f"updated hlcs for {symbol} since {ts_to_date_utc(since)}")
+        #logging.info(f"updated hlcs for {symbol} since {ts_to_date_utc(since)}")
         self.hlcs[symbol] = sorted(all_candles_d.values(), key=lambda x: x[0])
 
     def update_trailing_data(self):
