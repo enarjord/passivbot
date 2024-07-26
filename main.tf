@@ -63,25 +63,7 @@ resource "google_compute_instance" "default" {
     pip install -r requirements.txt
 
     # Ensure the script is executable
-    chmod +x /opt/passivbot/start_passivbot.sh
-
-    # Create Supervisor configuration file
-    cat <<EOT > /etc/supervisor/conf.d/passivbot.conf
-[program:passivbot]
-command=/opt/passivbot/start_passivbot.sh
-directory=/opt/passivbot
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/passivbot.err.log
-stdout_logfile=/var/log/passivbot.out.log
-EOT
-
-    # Reload Supervisor to apply the new configuration
-    sudo supervisorctl reread
-    sudo supervisorctl update
-
-    # Start the program via Supervisor
-    # sudo supervisorctl start passivbot
+    chmod +x /opt/passivbot/update_supervisor_configs.sh
   EOF
 
   metadata = {

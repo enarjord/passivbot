@@ -2,8 +2,8 @@
     "config_name": "recursive_grid_1000PEPEUSDT_161days",
     "logging_level": 0,
     "starting_balance": 400,
-    "start_date": "2024-06-05",
-    "end_date": "2024-07-01",
+    "start_date": "2023-07-21",
+    "end_date": "2024-07-21",
     "leverage": 20,
     "long": {
         "auto_unstuck_delay_minutes": 0,
