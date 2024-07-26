@@ -322,7 +322,7 @@ class Passivbot:
 
     async def init_hlcs(self, n_fetches=10):
         last_pos_changes = self.get_last_position_changes()
-        symsince = [(s, min(last_pos_changes[s].values())) for s in last_pos_changes]
+        symsince = [(s, min(last_pos_changes[s].values()) - 1000 * 60 * 60) for s in last_pos_changes]
         all_res = []
         for sym_sublist in [symsince[i : i + n_fetches] for i in range(0, len(symsince), n_fetches)]:
             res = await asyncio.gather(*[self.update_hlcs_rest(sym, sn) for sym, sn in sym_sublist])
@@ -335,13 +335,14 @@ class Passivbot:
             for pside in ["long", "short"]:
                 if self.has_position(symbol, pside) and self.is_trailing(symbol, pside):
                     last_position_changes[symbol][pside] = utc_ms() - 1000 * 60 * 60 * 24 * 7
-                    for fill in self.fills[::-1]:
+                    for fill in self.pnls[::-1]:
                         if fill["symbol"] == symbol and fill["position_side"] == pside:
                             last_position_changes[symbol][pside] = fill["timestamp"]
                             break
         return last_position_changes
 
     async def maintain_hlcs(self):
+        logging.info(f"starting hlcs maintainer")
         while True:
             try:
                 last_position_changes = self.get_last_position_changes()
@@ -429,10 +430,10 @@ class Passivbot:
         self.set_live_configs()
         if self.forager_mode:
             await self.update_ohlcvs_multi(list(self.eligible_symbols), verbose=True)
-        await self.init_hlcs()
-        self.update_PB_modes()
         logging.info(f"initiating pnl history...")
         await self.update_pnls()
+        await self.init_hlcs()
+        self.update_PB_modes()
         await self.update_exchange_configs()
 
     async def get_active_symbols(self):
@@ -997,38 +998,41 @@ class Passivbot:
         # fetch latest pnls
         # dump new pnls to cache
         age_limit = utc_ms() - 1000 * 60 * 60 * 24 * self.config["live"]["pnls_max_lookback_days"]
-        missing_pnls = []
-        if len(self.pnls) == 0:
-            # load pnls from cache
-            pnls_cache = []
-            try:
-                if os.path.exists(self.pnls_cache_filepath):
-                    pnls_cache = json.load(open(self.pnls_cache_filepath))
-            except Exception as e:
-                logging.error(f"error loading {self.pnls_cache_filepath} {e}")
-            # fetch pnls since latest timestamp
-            if len(pnls_cache) > 0:
-                if pnls_cache[0]["timestamp"] > age_limit + 1000 * 60 * 60 * 4:
-                    # fetch missing pnls
-                    res = await self.fetch_pnls(
-                        start_time=age_limit - 1000, end_time=pnls_cache[0]["timestamp"]
-                    )
-                    if res in [None, False]:
-                        return False
-                    missing_pnls = res
-                    pnls_cache = sorted(
-                        {
-                            elm["id"]: elm
-                            for elm in pnls_cache + missing_pnls
-                            if elm["timestamp"] >= age_limit
-                        }.values(),
-                        key=lambda x: x["timestamp"],
-                    )
-            self.pnls = pnls_cache
-        start_time = self.pnls[-1]["timestamp"] if self.pnls else age_limit
-        res = await self.fetch_pnls(start_time=start_time)
-        if res in [None, False]:
-            return False
+        if utc_ms() - self.upd_timestamps["pnls"] > 1000 * 60 * 5:
+            missing_pnls = []
+            if len(self.pnls) == 0:
+                # load pnls from cache
+                pnls_cache = []
+                try:
+                    if os.path.exists(self.pnls_cache_filepath):
+                        pnls_cache = json.load(open(self.pnls_cache_filepath))
+                except Exception as e:
+                    logging.error(f"error loading {self.pnls_cache_filepath} {e}")
+                # fetch pnls since latest timestamp
+                if len(pnls_cache) > 0:
+                    if pnls_cache[0]["timestamp"] > age_limit + 1000 * 60 * 60 * 4:
+                        # fetch missing pnls
+                        res = await self.fetch_pnls(
+                            start_time=age_limit - 1000, end_time=pnls_cache[0]["timestamp"]
+                        )
+                        if res in [None, False]:
+                            return False
+                        missing_pnls = res
+                        pnls_cache = sorted(
+                            {
+                                elm["id"]: elm
+                                for elm in pnls_cache + missing_pnls
+                                if elm["timestamp"] >= age_limit
+                            }.values(),
+                            key=lambda x: x["timestamp"],
+                        )
+                self.pnls = pnls_cache
+            start_time = self.pnls[-1]["timestamp"] if self.pnls else age_limit
+            res = await self.fetch_pnls(start_time=start_time)
+            if res in [None, False]:
+                return False
+        else:
+            res = await self.fetch_pnls()
         new_pnls = [x for x in res if x["id"] not in {elm["id"] for elm in self.pnls}]
         self.pnls = sorted(
             {elm["id"]: elm for elm in self.pnls + new_pnls if elm["timestamp"] > age_limit}.values(),
@@ -1681,7 +1685,6 @@ class Passivbot:
         return new_orders
 
     async def execution_loop(self):
-        return
         while True:
             if self.stop_websocket:
                 break
@@ -1792,11 +1795,10 @@ class Passivbot:
                 f"initiating EMAs for {','.join([symbol_to_coin(s) for s in self.active_symbols])}"
             )
             await self.init_EMAs_multi(sorted(self.active_symbols))
-            logging.info(f"starting EMA maintainer...")
         except Exception as e:
             logging.error(f"Error starting maintain_EMAs: {e}")
             traceback.print_exc()
-
+        logging.info(f"starting EMA maintainer...")
         while True:
             try:
                 now_minute = int(utc_ms() // (1000 * 60) * (1000 * 60))
@@ -1957,6 +1959,7 @@ class Passivbot:
             return True
         except Exception as e:
             logging.error(f"error with update_ohlcvs_single {symbol} {e}")
+            traceback.print_exc()
             return False
 
     async def execute_multiple(self, orders: [dict], type_: str, max_n_executions: int):
