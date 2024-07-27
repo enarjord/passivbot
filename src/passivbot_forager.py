@@ -138,10 +138,18 @@ class Passivbot:
         # update 15m hlcs for all eligible symbols
         if not hasattr(self, "update_hlcs15m_verbose"):
             self.update_hlcs15m_verbose = True
+        all_symbols = sorted(set(self.eligible_symbols) | set(self.active_symbols))
         await self.update_ohlcvs_multi(
-            sorted(set(self.eligible_symbols) | set(self.active_symbols)),
+            all_symbols,
             verbose=self.update_hlcs15m_verbose,
         )
+        try:
+            # update one hlc15m each round
+            sleep_interval_sec = max(5.0, (60.0 * 60.0) / len(all_symbols))
+            symbol = self.get_oldest_updated_ohlcv_symbol()
+            res = await self.update_ohlcvs_single(symbol, age_limit_ms=(sleep_interval_sec * 1000))
+        except:
+            pass
         self.update_hlcs15m_verbose = False
 
     async def update_hlcs1m(self):
