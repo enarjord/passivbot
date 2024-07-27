@@ -246,13 +246,17 @@ class HyperliquidBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_hlcs(self, symbol: str, since: float):
-        since = since // 60000 * 60000
+    async def fetch_hlcs(self, symbol: str, since: float = None):
         n_candles_limit = 500
+        if since is None:
+            return await self.cca.fetch_ohlcv(symbol, timeframe="1m", limit=n_candles_limit)
+        since = since // 60000 * 60000
         max_n_fetches = 20
         all_fetched = []
         for i in range(max_n_fetches):
-            fetched = await self.cca.fetch_ohlcv(symbol, timeframe="1m", since=int(since))
+            fetched = await self.cca.fetch_ohlcv(
+                symbol, timeframe="1m", since=int(since), limit=n_candles_limit
+            )
             all_fetched += fetched
             if len(fetched) < n_candles_limit:
                 break

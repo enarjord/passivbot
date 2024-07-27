@@ -469,13 +469,17 @@ class BybitBot(Passivbot):
         except Exception as e:
             logging.error(f"error setting hedge mode {e}")
 
-    async def fetch_hlcs(self, symbol: str, since: float):
+    async def fetch_hlcs(self, symbol: str, since: float = None):
+        n_candles_limit = 1000
+        if since is None:
+            return await self.cca.fetch_ohlcv(symbol, timeframe="1m", limit=n_candles_limit)
         since = since // 60000 * 60000
-        n_candles_limit = 200
         max_n_fetches = n_candles_limit // 7
         all_fetched = []
         for i in range(max_n_fetches):
-            fetched = await self.cca.fetch_ohlcv(symbol, timeframe="1m", since=int(since))
+            fetched = await self.cca.fetch_ohlcv(
+                symbol, timeframe="1m", since=int(since), limit=n_candles_limit
+            )
             all_fetched += fetched
             if len(fetched) < n_candles_limit:
                 break
