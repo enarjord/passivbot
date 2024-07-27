@@ -126,6 +126,96 @@ class Passivbot:
         self.upd_minute_emas = {}
         self.ineligible_symbols_with_pos = set()
 
+    async def update_market_info(self):
+        logging.info(f"setting hedge mode...")
+        await self.update_exchange_config()
+        logging.info(f"initiating markets...")
+        await self.init_markets_dict()
+        await self.init_flags()
+        self.set_live_configs()
+
+    async def update_hlcs15m(self):
+        # update 15m hlcs for all eligible symbols
+        if not hasattr(self, "update_hlcs15m_verbose"):
+            self.update_hlcs15m_verbose = True
+        await self.update_ohlcvs_multi(
+            sorted(set(self.eligible_symbols) | set(self.active_symbols)),
+            verbose=self.update_hlcs15m_verbose,
+        )
+        self.update_hlcs15m_verbose = False
+
+    async def update_hlcs1m(self):
+        if not hasattr(self, "update_hlcs1m_verbose"):
+            self.update_hlcs1m_verbose = True
+        await self.update_hlcs(verbose=self.update_hlcs1m_verbose)
+        self.update_hlcs1m_verbose = False
+
+    async def update_EMAs(self):
+        # update EMAs for all eligible symbols
+        if not hasattr(self, "update_EMAs_verbose"):
+            self.update_EMAs_verbose = True
+        await self.update_EMAs_multi(
+            sorted(set(self.eligible_symbols) | set(self.active_symbols)),
+            verbose=self.update_EMAs_verbose,
+        )
+        self.update_EMAs_verbose = False
+
+    async def loop_execution_no_WS(self):
+        self.update_timestamps = {
+            "update_market_info": 0.0,
+            "update_tickers": 0.0,
+            "update_positions": 0.0,
+            "update_open_orders": 0.0,
+            "update_EMAs": 0.0,
+            "update_hlcs15m": 0.0,
+            "update_hlcs1m": 0.0,
+            "update_pnls": 0.0,
+        }
+        self.update_age_limit_ms = {key: 1000 * 30 for key in self.update_timestamps}
+        self.update_age_limit_ms["update_market_info"] = 1000 * 60 * 60 * 3
+        while True:
+            sts = utc_ms()
+            try:
+                await self.execute_to_exchange_no_WS()
+            except Exception as e:
+                logging.error(f"error in loop_execution_no_WS {e}")
+                traceback.print_exc()
+            sleep_duration = max(0.0, 15.0 - (utc_ms() - sts) / 1000)
+            await asyncio.sleep(sleep_duration)
+
+    async def execute_to_exchange_no_WS(self):
+        # checks if all data is up to date before executing to exchange
+        for key in self.update_timestamps:
+            if utc_ms() - self.update_timestamps[key] > self.update_age_limit_ms[key]:
+                # logging.info(f"calling {key}")
+                res = await getattr(self, key)()
+                self.update_timestamps[key] = utc_ms()
+        self.update_PB_modes()
+        to_cancel, to_create = self.calc_orders_to_cancel_and_create()
+
+        # debug duplicates
+        seen = set()
+        for elm in to_cancel:
+            key = str(elm["price"]) + str(elm["qty"])
+            if key in seen:
+                logging.info(f"debug duplicate {elm}")
+            seen.add(key)
+        # format custom_id
+        to_create = self.format_custom_ids(to_create)
+        res = await self.execute_cancellations(
+            to_cancel[: self.config["live"]["max_n_cancellations_per_batch"]]
+        )
+        if res:
+            for elm in res:
+                self.remove_cancelled_order(elm, source="POST")
+        res = await self.execute_orders(to_create[: self.config["live"]["max_n_creations_per_batch"]])
+        if res:
+            for elm in res:
+                self.add_new_order(elm, source="POST")
+        if to_cancel or to_create:
+            self.update_timestamps["update_positions"] = 0.0
+            self.update_timestamps["update_open_orders"] = 0.0
+
     def is_forager_mode(self):
         n_approved_symbols = len(self.config["common"]["approved_symbols"])
         if n_approved_symbols == 0:
@@ -320,12 +410,22 @@ class Passivbot:
                 ]
             ]
 
-    async def init_hlcs(self, n_fetches=10):
+    async def update_hlcs(self, n_fetches=10, verbose=False):
         last_pos_changes = self.get_last_position_changes()
         symsince = [(s, min(last_pos_changes[s].values()) - 1000 * 60 * 60) for s in last_pos_changes]
         all_res = []
         for sym_sublist in [symsince[i : i + n_fetches] for i in range(0, len(symsince), n_fetches)]:
-            res = await asyncio.gather(*[self.update_hlcs_rest(sym, sn) for sym, sn in sym_sublist])
+            try:
+                res = await asyncio.gather(
+                    *[self.update_hlcs_rest(sym, sn) for sym, sn in sym_sublist]
+                )
+                if verbose:
+                    if any(res):
+                        logging.info(
+                            f"updated hlcs1m for {','.join([symbol_to_coin(s) for s, r in zip(sym_sublist, res) if r])}"
+                        )
+            except Exception as e:
+                logging.error(f"error in update_hlcs {sym_sublist} {e}")
             all_res += res
         return all_res
 
@@ -364,15 +464,18 @@ class Passivbot:
         if not hasattr(self, "hlcs"):
             self.hlcs = {}
         if symbol in self.hlcs and self.hlcs[symbol]:
-            self.hlcs[symbol] = [x for x in self.hlcs[symbol] if x[0] >= since]
-            since = self.hlcs[symbol][-1][0] - 60000 * 100
+            candles = await self.fetch_hlcs(symbol)
         else:
             self.hlcs[symbol] = []
-        candles = await self.fetch_hlcs(symbol, since)
+            candles = await self.fetch_hlcs(symbol, since)
         all_candles_d = {x[0]: x for x in self.hlcs[symbol]}
         all_candles_d.update({x[0]: x for x in candles})
-        #logging.info(f"updated hlcs for {symbol} since {ts_to_date_utc(since)}")
+        # logging.info(f"updated hlcs for {symbol} since {ts_to_date_utc(since)}")
         self.hlcs[symbol] = sorted(all_candles_d.values(), key=lambda x: x[0])
+        if since is not None:
+            self.hlcs[symbol] = [x for x in self.hlcs[symbol] if x[0] >= since - 1000 * 60 * 60 * 3]
+            if not self.hlcs[symbol]:
+                logging.info(f"debug hlcs is empty for {symbol}")
 
     def update_trailing_data(self):
         if not hasattr(self, "trailing_prices"):
@@ -432,7 +535,7 @@ class Passivbot:
             await self.update_ohlcvs_multi(list(self.eligible_symbols), verbose=True)
         logging.info(f"initiating pnl history...")
         await self.update_pnls()
-        await self.init_hlcs()
+        await self.update_hlcs()
         self.update_PB_modes()
         await self.update_exchange_configs()
 
@@ -1709,6 +1812,8 @@ class Passivbot:
             self.tmp_debug_ts = utc_ms()
 
     async def start_bot(self):
+        await self.loop_execution_no_WS()
+        return
         await self.init_bot()
         logging.info("done initiating bot")
         asyncio.create_task(self.start_data_maintainers())
@@ -1852,20 +1957,30 @@ class Passivbot:
                     logging.info(f"{i} seconds")
                     await asyncio.sleep(1)
 
-    async def update_EMAs_multi(self, symbols, n_fetches=10):
+    async def update_EMAs_multi(self, symbols, n_fetches=10, verbose=False):
         all_res = []
         for sym_sublist in [symbols[i : i + n_fetches] for i in range(0, len(symbols), n_fetches)]:
-            res = await asyncio.gather(*[self.update_EMAs_single(symbol) for symbol in sym_sublist])
+            try:
+                res = await asyncio.gather(
+                    *[self.update_EMAs_single(symbol, verbose=False) for symbol in sym_sublist]
+                )
+                if verbose:
+                    if any(res):
+                        logging.info(
+                            f"initiated EMAs for {','.join([symbol_to_coin(s) for s, r in zip(sym_sublist, res) if r])}"
+                        )
+            except Exception as e:
+                logging.error(f"error in update_EMAs_multi {sym_sublist} {e}")
             all_res += res
         return all_res
 
-    async def update_EMAs_single(self, symbol):
+    async def update_EMAs_single(self, symbol, verbose=False):
         # updates EMAs for single symbol
         try:
             # if EMAs for symbol has not been initiated, initiate
             if not all([symbol in x for x in [self.emas["long"], self.upd_minute_emas]]):
                 # initiate EMA for symbol
-                await self.init_EMAs_single(symbol)
+                await self.init_EMAs_single(symbol, verbose)
             now_minute = int(utc_ms() // (1000 * 60) * (1000 * 60))
             if now_minute <= self.upd_minute_emas[symbol]:
                 return True
@@ -1886,11 +2001,19 @@ class Passivbot:
     async def init_EMAs_multi(self, symbols, n_fetches=10):
         all_res = []
         for sym_sublist in [symbols[i : i + n_fetches] for i in range(0, len(symbols), n_fetches)]:
-            res = await asyncio.gather(*[self.init_EMAs_single(symbol) for symbol in sym_sublist])
-            all_res += res
+            try:
+                res = await asyncio.gather(*[self.init_EMAs_single(symbol) for symbol in sym_sublist])
+                all_res += res
+                if verbose:
+                    if any(res):
+                        logging.info(
+                            f"initiated EMAs for {','.join([symbol_to_coin(s) for s, r in zip(sym_sublist, res) if r])}"
+                        )
+            except Exception as e:
+                logging.error(f"error in init_EMAs_multi {sym_sublist} {e}")
         return all_res
 
-    async def init_EMAs_single(self, symbol):
+    async def init_EMAs_single(self, symbol, verbose=True):
         # check if ohlcvs are in cache for symbol
         # if not, or if too old, update them
         # if it fails, print warning and use ticker as first EMA
@@ -1911,7 +2034,8 @@ class Passivbot:
             )
             for pside in ["long", "short"]:
                 self.emas[pside][symbol] = calc_emas_last(samples1m[:, 2], ema_spans[pside])
-            logging.info(f"initiated EMAs for {symbol}")
+            if verbose:
+                logging.info(f"initiated EMAs for {symbol}")
         except Exception as e:
             logging.error(f"error initiating EMAs for {self.pad_sym(symbol)}; using ticker as EMAs")
         self.upd_minute_emas[symbol] = int(utc_ms() // (1000 * 60) * (1000 * 60))
@@ -1945,12 +2069,13 @@ class Passivbot:
             pass
         self.ohlcv_upd_timestamps[symbol] = last_ts_modified
         try:
-            if utc_ms() - last_ts_modified > age_limit_ms:
+            self.ohlcvs[symbol] = self.load_ohlcv_from_cache(symbol)
+        except:
+            self.ohlcvs[symbol] = []
+        try:
+            if not self.ohlcvs[symbol] or utc_ms() - last_ts_modified > age_limit_ms:
                 self.ohlcvs[symbol] = await self.fetch_ohlcv(symbol, timeframe=timeframe)
                 self.dump_ohlcv_to_cache(symbol, self.ohlcvs[symbol])
-            else:
-                if symbol not in self.ohlcvs or not self.ohlcvs[symbol]:
-                    self.ohlcvs[symbol] = self.load_ohlcv_from_cache(symbol)
             if len(self.ohlcvs[symbol]) < self.config["common"]["n_ohlcvs"]:
                 logging.info(
                     f"too few ohlcvs fetched for {symbol}: fetched {len(self.ohlcvs[symbol])}, ideally: {self.config['common']['n_ohlcvs']}"
