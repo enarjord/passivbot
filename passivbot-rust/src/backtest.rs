@@ -126,6 +126,7 @@ pub struct Backtest {
     trading_enabled: TradingEnabled,
     trailing_enabled: TrailingEnabled,
     equities: Vec<f64>,
+    delist_timestamps: HashMap<usize, usize>,
 }
 
 impl Backtest {
@@ -182,10 +183,14 @@ impl Backtest {
                     || bot_params_pair.short.entry_trailing_grid_ratio != 0.0,
             },
             equities: equities,
+            delist_timestamps: HashMap::new(),
         }
     }
 
     pub fn run(&mut self) -> (Vec<Fill>, Vec<f64>) {
+        let check_points: Vec<usize> = (0..7).map(|i| i * 60 * 24).collect();
+        let n_timesteps = self.hlcs.shape()[0];
+
         for idx in 0..self.n_markets {
             self.trailing_prices
                 .long
@@ -193,8 +198,31 @@ impl Backtest {
             self.trailing_prices
                 .short
                 .insert(idx, TrailingPriceBundle::default());
+
+            // check if the coin was delisted at any point
+            if n_timesteps > *check_points.last().unwrap() {
+                let last_hlc_close = self.hlcs[[n_timesteps - 1, idx, CLOSE]];
+                if check_points.iter().all(|&point| {
+                    self.hlcs[[n_timesteps - 1 - point, idx, HIGH]] == last_hlc_close
+                        && self.hlcs[[n_timesteps - 1 - point, idx, LOW]] == last_hlc_close
+                        && self.hlcs[[n_timesteps - 1 - point, idx, CLOSE]] == last_hlc_close
+                }) {
+                    // was delisted. Find timestamp of delisting
+                    let mut i = n_timesteps - check_points.last().unwrap();
+                    while i > 0
+                        && self.hlcs[[i, idx, HIGH]] == last_hlc_close
+                        && self.hlcs[[i, idx, LOW]] == last_hlc_close
+                        && self.hlcs[[i, idx, CLOSE]] == last_hlc_close
+                    {
+                        i -= 1;
+                    }
+                    if i > 1 {
+                        self.delist_timestamps.insert(idx, i);
+                    }
+                }
+            }
         }
-        for k in 1..self.hlcs.shape()[0] {
+        for k in 1..n_timesteps {
             let any_fill = self.check_for_fills(k);
             self.update_emas(k);
             self.update_open_orders(k, any_fill);
@@ -271,6 +299,23 @@ impl Backtest {
                 self.open_orders.long.keys().cloned().collect();
             open_orders_keys_long.sort();
             for idx in open_orders_keys_long {
+                // check if coin is delisted
+                if let Some(&delist_timestamp) = self.delist_timestamps.get(&idx) {
+                    if k >= delist_timestamp && self.positions.long.contains_key(&idx) {
+                        self.open_orders.long.get_mut(&idx).unwrap().close = Order {
+                            qty: -self.positions.long[&idx].size,
+                            price: round_(
+                                f64::min(
+                                    self.hlcs[[k, idx, HIGH]]
+                                        - self.exchange_params_list[idx].price_step,
+                                    self.positions.long[&idx].price,
+                                ),
+                                self.exchange_params_list[idx].price_step,
+                            ),
+                            order_type: OrderType::CloseUnstuckLong,
+                        };
+                    }
+                }
                 // Process close fills
                 while self.open_orders.long[&idx].close.qty != 0.0
                     && self.hlcs[[k, idx, HIGH]] > self.open_orders.long[&idx].close.price
@@ -278,7 +323,6 @@ impl Backtest {
                     any_fill = true;
                     self.reset_trailing_prices(idx, LONG);
                     self.process_close_fill_long(k, idx);
-
                     if !self.positions.long.contains_key(&idx) {
                         break;
                     } else if self.open_orders.long[&idx].close.order_type
@@ -301,7 +345,6 @@ impl Backtest {
                     any_fill = true;
                     self.reset_trailing_prices(idx, LONG);
                     self.process_entry_fill_long(k, idx);
-
                     if self.open_orders.long[&idx].entry.order_type
                         == OrderType::EntryGridNormalLong
                         || self.open_orders.long[&idx].entry.order_type
@@ -327,6 +370,23 @@ impl Backtest {
                 self.open_orders.short.keys().cloned().collect();
             open_orders_keys_short.sort();
             for idx in open_orders_keys_short {
+                // check if coin is delisted
+                if let Some(&delist_timestamp) = self.delist_timestamps.get(&idx) {
+                    if k >= delist_timestamp && self.positions.short.contains_key(&idx) {
+                        self.open_orders.short.get_mut(&idx).unwrap().close = Order {
+                            qty: self.positions.long[&idx].size.abs(),
+                            price: round_(
+                                f64::max(
+                                    self.hlcs[[k, idx, LOW]]
+                                        + self.exchange_params_list[idx].price_step,
+                                    self.positions.long[&idx].price,
+                                ),
+                                self.exchange_params_list[idx].price_step,
+                            ),
+                            order_type: OrderType::CloseUnstuckShort,
+                        };
+                    }
+                }
                 // Process close fills
                 while self.open_orders.short[&idx].close.qty != 0.0
                     && self.hlcs[[k, idx, LOW]] < self.open_orders.short[&idx].close.price
