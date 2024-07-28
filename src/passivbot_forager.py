@@ -168,7 +168,7 @@ class Passivbot:
         )
         self.update_EMAs_verbose = False
 
-    async def loop_execution_no_WS(self):
+    def init_no_WS(self):
         self.update_timestamps = {
             "update_market_info": 0.0,
             "update_tickers": 0.0,
@@ -181,6 +181,9 @@ class Passivbot:
         }
         self.update_age_limit_ms = {key: 1000 * 30 for key in self.update_timestamps}
         self.update_age_limit_ms["update_market_info"] = 1000 * 60 * 60 * 3
+
+    async def loop_execution_no_WS(self):
+        self.init_no_WS()
         while True:
             sts = utc_ms()
             try:
@@ -191,7 +194,7 @@ class Passivbot:
             sleep_duration = max(0.0, 15.0 - (utc_ms() - sts) / 1000)
             await asyncio.sleep(sleep_duration)
 
-    async def execute_to_exchange_no_WS(self):
+    async def update_data_no_WS(self):
         # checks if all data is up to date before executing to exchange
         for key in self.update_timestamps:
             if utc_ms() - self.update_timestamps[key] > self.update_age_limit_ms[key]:
@@ -199,6 +202,9 @@ class Passivbot:
                 res = await getattr(self, key)()
                 self.update_timestamps[key] = utc_ms()
         self.update_PB_modes()
+
+    async def execute_to_exchange_no_WS(self):
+        await self.update_data_no_WS()
         to_cancel, to_create = self.calc_orders_to_cancel_and_create()
 
         # debug duplicates
@@ -243,6 +249,8 @@ class Passivbot:
         return False
 
     def set_live_configs(self):
+        self.config["bot"]["long"]["n_positions"] = round(self.config["bot"]["long"]["n_positions"])
+        self.config["bot"]["short"]["n_positions"] = round(self.config["bot"]["short"]["n_positions"])
         for symbol in self.markets_dict:
             self.live_configs[symbol] = deepcopy(self.config["bot"])
             self.live_configs[symbol]["leverage"] = self.config["live"]["leverage"]
