@@ -573,6 +573,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 "max_n_creations_per_batch": 3,
                 "pnls_max_lookback_days": 30.0,
                 "price_distance_threshold": 0.002,
+                "time_in_force": "post_only",
                 "user": "bybit_01",
             },
             "optimize": {
@@ -2501,7 +2502,7 @@ def extract_and_sort_by_keys_recursive(nested_dict):
 
 
 def format_config(config: dict) -> dict:
-    # attempts to format a config config to v7 config
+    # attempts to format a config to v7 config
     template = get_template_live_config("v7")
     cmap = {
         "ddown_factor": "entry_grid_double_down_factor",
@@ -2514,50 +2515,73 @@ def format_config(config: dict) -> dict:
         "ema_span_0": "ema_span_0",
         "ema_span_1": "ema_span_1",
     }
-    if all([k in config for k in template]):
-        result = deepcopy(config)
-    elif all([k in config for k in ["analysis", "config"]]) and all(
-        [k in config["config"] for k in template]
-    ):
-        result = deepcopy(config["config"])
-    elif all(
+    cmap_inv = {v: k for k, v in cmap.items()}
+    if all(
         [
-            k in config
-            for k in [
+            x in config
+            for x in [
                 "user",
                 "pnls_max_lookback_days",
                 "loss_allowance_pct",
                 "stuck_threshold",
                 "unstuck_close_pct",
-                "auto_gs",
-                "leverage",
                 "TWE_long",
                 "TWE_short",
-                "long_enabled",
-                "short_enabled",
-                "approved_symbols",
-                "ignored_symbols",
-                "n_longs",
-                "n_shorts",
-                "minimum_market_age_days",
-                "ohlcv_interval",
-                "relative_volume_filter_clip_pct",
                 "n_ohlcvs",
-                "live_configs_dir",
-                "default_config_path",
                 "universal_live_config",
             ]
         ]
     ):
         # PB multi live config
-        result = template
+        for key0 in ["live", "common"]:
+            for key1 in template[key0]:
+                if key1 in config:
+                    template["live"][key1] = config[key1]
+        if template["live"]["approved_symbols"] and isinstance(
+            template["live"]["approved_symbols"], dict
+        ):
+            template["live"]["symbol_flags"] = template["live"]["approved_symbols"]
+        template["common"]["approved_symbols"] = sorted(template["common"]["approved_symbols"])
         for pside in ["long", "short"]:
-            for key in config["universal_live_config"][pside]:
-                if key in cmap:
-                    result["bot"][pside][cmap[key]] = config["universal_live_config"][pside][key]
-            result["bot"][pside]["close_grid_qty_pct"] = 1.0 / round(
+            for key in template["bot"][pside]:
+                if key in cmap_inv and cmap_inv[key] in config["universal_live_config"][pside]:
+                    template["bot"][pside][key] = config["universal_live_config"][pside][
+                        cmap_inv[key]
+                    ]
+            close_grid_qty_pct = 1.0 / round(config["universal_live_config"][pside]["n_close_orders"])
+            template["bot"][pside]["close_grid_qty_pct"] = 1.0 / round(
                 config["universal_live_config"][pside]["n_close_orders"]
             )
+            for key in [
+                "close_trailing_grid_ratio",
+                "close_trailing_retracement_pct",
+                "close_trailing_threshold_pct",
+                "entry_trailing_grid_ratio",
+                "entry_trailing_retracement_pct",
+                "entry_trailing_threshold_pct",
+                "unstuck_ema_dist",
+            ]:
+                template["bot"][pside][key] = 0.0
+            if config[f"n_longs"] == 0 and config[f"n_shorts"] == 0:
+                forager_mode = False
+                # not forager mode
+                n_positions = len(template["live"]["symbol_flags"])
+            else:
+                n_positions = config[f"n_{pside}s"]
+            template["bot"][pside]["n_positions"] = n_positions
+            template["bot"][pside]["unstuck_close_pct"] = config["unstuck_close_pct"]
+            template["bot"][pside]["unstuck_loss_allowance_pct"] = config["loss_allowance_pct"]
+            template["bot"][pside]["unstuck_threshold"] = config["stuck_threshold"]
+            template["bot"][pside]["total_wallet_exposure_limit"] = (
+                config[f"TWE_{pside}"] if config[f"{pside}_enabled"] else 0.0
+            )
+        result = template
+    elif all([k in config for k in template]):
+        result = deepcopy(config)
+    elif all([k in config for k in ["analysis", "config"]]) and all(
+        [k in config["config"] for k in template]
+    ):
+        result = deepcopy(config["config"])
     else:
         raise Exception(f"failed to format config")
     result["common"]["approved_symbols"] = sorted(set(result["common"]["approved_symbols"]))
