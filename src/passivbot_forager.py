@@ -440,9 +440,9 @@ class Passivbot:
                         logging.info(
                             f"updated hlcs1m for {','.join([symbol_to_coin(s) for s, r in zip(sym_sublist, res) if r])}"
                         )
+                all_res += res
             except Exception as e:
                 logging.error(f"error in update_hlcs {sym_sublist} {e}")
-            all_res += res
         return all_res
 
     def get_last_position_changes(self, symbol=None):
