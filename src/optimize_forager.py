@@ -325,12 +325,10 @@ async def main():
         # Define parameter bounds
         param_bounds = sort_dict_keys(config["optimize"]["bounds"])
         param_bounds = sort_dict_keys(config["optimize"]["bounds"])
-        print("Debug: param_bounds =", param_bounds)
 
         # Register attribute generators
         for i, (param_name, (low, high)) in enumerate(param_bounds.items()):
             toolbox.register(f"attr_{i}", np.random.uniform, low, high)
-        print("Debug: Number of attributes registered:", i + 1)
 
         def create_individual():
             return creator.Individual(
