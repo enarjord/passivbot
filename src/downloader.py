@@ -1224,7 +1224,13 @@ async def download_ohlcvs_binance(
             for fpath in months_done + days_done
             if fpath in fnames
         ]
-        df = pd.concat(dfs)[col_names].sort_values("timestamp")
+        try:
+            df = pd.concat(dfs)[col_names].sort_values("timestamp")
+        except ValueError as e:
+            print(
+                f"error with download_ohlcvs_binance {symbol} {start_date} {end_date}: {e}. Returning empty"
+            )
+            return pd.DataFrame()
         df = df.drop_duplicates(subset=["timestamp"]).reset_index()
         nindex = np.arange(df.timestamp.iloc[0], df.timestamp.iloc[-1] + 60000, 60000)
         return df[col_names].set_index("timestamp").reindex(nindex).ffill().reset_index()
@@ -1300,6 +1306,8 @@ async def load_hlc_cache(
             df = await download_ohlcvs_binance(
                 symbol, inverse, start_date, end_date, spot, start_tss=start_tss
             )
+        if len(df) == 0:
+            return pd.DataFrame()
         df = df[df.timestamp >= date_to_ts2(start_date)]
         df = df[df.timestamp <= date_to_ts2(end_date)]
         data = df[["timestamp", "high", "low", "close"]].values
@@ -1417,6 +1425,8 @@ async def prepare_hlcs_forager(
         data = await load_hlc_cache(
             symbol, False, start_date, end_date, base_dir, False, exchange, start_tss=start_tss
         )
+        if len(data) == 0:
+            continue
         assert (
             np.diff(data[:, 0]) == interval_ms
         ).all(), f"gaps in hlc data {symbol}"  # verify integrous 1m hlcs
