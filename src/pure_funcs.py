@@ -2536,11 +2536,12 @@ def format_config(config: dict) -> dict:
         for key0 in ["live", "common"]:
             for key1 in template[key0]:
                 if key1 in config:
-                    template["live"][key1] = config[key1]
-        if template["live"]["approved_symbols"] and isinstance(
-            template["live"]["approved_symbols"], dict
+                    template[key0][key1] = config[key1]
+                    print(key0, key1)
+        if template["common"]["approved_symbols"] and isinstance(
+            template["common"]["approved_symbols"], dict
         ):
-            template["live"]["symbol_flags"] = template["live"]["approved_symbols"]
+            template["live"]["symbol_flags"] = template["common"]["approved_symbols"]
         template["common"]["approved_symbols"] = sorted(template["common"]["approved_symbols"])
         for pside in ["long", "short"]:
             for key in template["bot"][pside]:
