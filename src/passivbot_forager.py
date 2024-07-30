@@ -2089,15 +2089,15 @@ class Passivbot:
         except:
             self.ohlcvs[symbol] = []
         try:
-            if not self.ohlcvs[symbol] or utc_ms() - last_ts_modified > age_limit_ms:
+            if utc_ms() - last_ts_modified > age_limit_ms:
                 self.ohlcvs[symbol] = await self.fetch_ohlcv(symbol, timeframe=timeframe)
                 self.dump_ohlcv_to_cache(symbol, self.ohlcvs[symbol])
-            '''
+            """
             if len(self.ohlcvs[symbol]) < self.config["common"]["n_ohlcvs"]:
                 logging.info(
                     f"too few ohlcvs fetched for {symbol}: fetched {len(self.ohlcvs[symbol])}, ideally: {self.config['common']['n_ohlcvs']}"
                 )
-            '''
+            """
             self.ohlcvs[symbol] = self.ohlcvs[symbol][-self.config["common"]["n_ohlcvs"] :]
             return True
         except Exception as e:
