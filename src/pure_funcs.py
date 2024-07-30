@@ -2537,7 +2537,6 @@ def format_config(config: dict) -> dict:
             for key1 in template[key0]:
                 if key1 in config:
                     template[key0][key1] = config[key1]
-                    print(key0, key1)
         if template["common"]["approved_symbols"] and isinstance(
             template["common"]["approved_symbols"], dict
         ):
