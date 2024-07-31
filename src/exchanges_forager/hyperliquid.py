@@ -249,7 +249,14 @@ class HyperliquidBot(Passivbot):
     async def fetch_hlcs(self, symbol: str, since: float = None):
         n_candles_limit = 500
         if since is None:
-            return await self.cca.fetch_ohlcv(symbol, timeframe="1m", limit=n_candles_limit)
+            result = await self.cca.fetch_ohlcv(
+                symbol,
+                timeframe="1m",
+                limit=n_candles_limit,
+                since=int(self.get_exchange_time_now()),
+            )
+            print("debug HL len hlcs", len(result))
+            return result
         since = since // 60000 * 60000
         max_n_fetches = 20
         all_fetched = []

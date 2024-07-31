@@ -430,6 +430,7 @@ class Passivbot:
         last_pos_changes = self.get_last_position_changes()
         symsince = [(s, min(last_pos_changes[s].values()) - 1000 * 60 * 60) for s in last_pos_changes]
         all_res = []
+        print(last_pos_changes, symsince)
         for sym_sublist in [symsince[i : i + n_fetches] for i in range(0, len(symsince), n_fetches)]:
             try:
                 res = await asyncio.gather(
@@ -581,6 +582,7 @@ class Passivbot:
     async def init_markets_dict(self):
         self.init_markets_last_update_ms = utc_ms()
         self.markets_dict = {elm["symbol"]: elm for elm in (await self.cca.fetch_markets())}
+        await self.determine_utc_offset()
         self.markets_dict_all = deepcopy(self.markets_dict)
         # remove ineligible symbols from markets dict
         ineligible_symbols = {}
@@ -1233,6 +1235,20 @@ class Passivbot:
                 logging.info(line)
         self.upd_timestamps["open_orders"] = utc_ms()
         return True
+
+    async def determine_utc_offset(self):
+        # returns millis to add to utc to get exchange timestamp
+        # call some endpoint which includes timestamp for exchange's server
+        # if timestamp is not included in self.cca.fetch_balance(),
+        # implement method in exchange child class
+        result = await self.cca.fetch_balance()
+        self.utc_offset = round((result["timestamp"] - utc_ms()) / (1000 * 60 * 60)) * (
+            1000 * 60 * 60
+        )
+        logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
+
+    def get_exchange_time_now(self):
+        return utc_ms() + self.utc_offset
 
     async def update_positions(self):
         # also updates balance
