@@ -253,7 +253,7 @@ class HyperliquidBot(Passivbot):
                 symbol,
                 timeframe="1m",
                 limit=n_candles_limit,
-                since=int(self.get_exchange_time_now() - 1000 * 60 * 60 * 2),
+                since=int(self.get_exchange_time() - 1000 * 60 * 60 * 2),
             )
             return result
         since = since // 60000 * 60000

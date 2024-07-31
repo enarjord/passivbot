@@ -127,21 +127,17 @@ class Passivbot:
         self.ineligible_symbols_with_pos = set()
 
     async def update_market_info(self):
-        logging.info(f"setting hedge mode...")
-        await self.update_exchange_config()
         logging.info(f"initiating markets...")
         await self.init_markets_dict()
-        await self.init_flags()
-        self.set_live_configs()
 
-    async def update_hlcs15m(self):
+    async def update_hlcs_15m(self):
         # update 15m hlcs for all eligible symbols
-        if not hasattr(self, "update_hlcs15m_verbose"):
-            self.update_hlcs15m_verbose = True
+        if not hasattr(self, "update_hlcs_15m_verbose"):
+            self.update_hlcs_15m_verbose = True
         all_symbols = sorted(set(self.eligible_symbols) | set(self.active_symbols))
         await self.update_ohlcvs_multi(
             all_symbols,
-            verbose=self.update_hlcs15m_verbose,
+            verbose=self.update_hlcs_15m_verbose,
         )
         try:
             # update one hlc15m each round
@@ -150,13 +146,13 @@ class Passivbot:
             res = await self.update_ohlcvs_single(symbol, age_limit_ms=(sleep_interval_sec * 1000))
         except:
             pass
-        self.update_hlcs15m_verbose = False
+        self.update_hlcs_15m_verbose = False
 
-    async def update_hlcs1m(self):
-        if not hasattr(self, "update_hlcs1m_verbose"):
-            self.update_hlcs1m_verbose = True
-        await self.update_hlcs(verbose=self.update_hlcs1m_verbose)
-        self.update_hlcs1m_verbose = False
+    async def update_hlcs_1m(self):
+        if not hasattr(self, "update_hlcs_1m_verbose"):
+            self.update_hlcs_1m_verbose = True
+        await self.update_hlcs(verbose=self.update_hlcs_1m_verbose)
+        self.update_hlcs_1m_verbose = False
 
     async def update_EMAs(self):
         # update EMAs for all eligible symbols
@@ -168,6 +164,116 @@ class Passivbot:
         )
         self.update_EMAs_verbose = False
 
+    async def start_data_maintainers(self):
+        self.maintainers = {
+            "maintain_market_info": None,
+            "maintain_tickers": None,
+            "maintain_positions": None,
+            "maintain_open_orders": None,
+            "maintain_hlcs_1m": None,
+            "maintain_hlcs_15m": None,
+            "maintain_EMAs": None,
+            "maintain_pnls": None,
+        }
+        self.last_update_timestamps = {
+            key.replace("maintain", "update"): 0.0 for key in self.maintainers
+        }
+        self.update_intervals = {key: 1000 * 60 for key in self.last_update_timestamps}
+        self.update_intervals["update_market_info"] = 1000 * 60 * 60
+        self.update_intervals["update_EMAs"] = 1000 * 60 * 30
+        for key in self.maintainers:
+            if self.maintainers[key] is None:
+                function_name = key.replace("maintain", "update")
+                result = await getattr(self, function_name)()
+                self.last_update_timestamps[function_name] = utc_ms()
+                self.maintainers[key] = asyncio.create_task(self.maintain_thing(key))
+
+    async def maintain_thing(self, maintainer_name):
+        logging.info(f"starting {maintainer_name}")
+        if hasattr(self, maintainer_name):
+            await getattr(self, maintainer_name)()
+        else:
+            function_name = maintainer_name.replace("maintain", "update")
+            while True:
+                try:
+                    if (
+                        utc_ms() - self.last_update_timestamps[function_name]
+                        > self.update_intervals[function_name]
+                    ):
+                        self.last_update_timestamps[function_name] = utc_ms()
+                        logging.info(f"calling {function_name}")
+                        result = await getattr(self, function_name)()
+                    await asyncio.sleep(0.1)
+                except Exception as e:
+                    logging.error(f"error with {maintainer_name} {e}")
+                    traceback.print_exc()
+                    await asyncio.sleep(5.0)
+
+    async def run_execution_loop(self):
+        # simulates backtest which executes once every 1m
+        prev_minute = utc_ms() // (1000 * 60)
+        while True:
+            try:
+                now_minute = utc_ms() // (1000 * 60)
+                if now_minute != prev_minute:
+                    prev_minute = now_minute
+                    await self.execute_to_exchange()
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                logging.error(f"error with run_execution_loop {e}")
+                traceback.print_exc()
+                await asyncio.sleep(5.0)
+
+    async def execute_to_exchange(self):
+        self.update_PB_modes()
+        await self.update_exchange_configs()
+        to_cancel, to_create = self.calc_orders_to_cancel_and_create()
+
+        # debug duplicates
+        seen = set()
+        for elm in to_cancel:
+            key = str(elm["price"]) + str(elm["qty"])
+            if key in seen:
+                logging.info(f"debug duplicate order cancel {elm}")
+            seen.add(key)
+
+        seen = set()
+        for elm in to_create:
+            key = str(elm["price"]) + str(elm["qty"])
+            if key in seen:
+                logging.info(f"debug duplicate order create {elm}")
+            seen.add(key)
+
+        # format custom_id
+        to_create = self.format_custom_ids(to_create)
+        res = await self.execute_cancellations(
+            to_cancel[: self.config["live"]["max_n_cancellations_per_batch"]]
+        )
+        if res:
+            for elm in res:
+                self.remove_cancelled_order(elm, source="POST")
+        res = await self.execute_orders(to_create[: self.config["live"]["max_n_creations_per_batch"]])
+        if res:
+            for elm in res:
+                self.add_new_order(elm, source="POST")
+        if to_cancel or to_create:
+            # update them 10 secs before next whole minute
+            new_ts = utc_ms() // (1000 * 60) * (1000 * 60) + 50.0 * 1000
+            self.last_update_timestamps["update_positions"] = new_ts
+            self.last_update_timestamps["update_open_orders"] = new_ts
+            self.last_update_timestamps["update_tickers"] = new_ts
+
+    async def update_single(self, key):
+        if (
+            utc_ms() - self.update_before_1m_mark[key]["last_update"]
+            > self.update_before_1m_mark[key]["interval"]
+        ):
+            logging.info(f"calling {key}")
+            result = await getattr(self, key)()
+            self.update_before_1m_mark[key]["last_update"] = utc_ms()
+            return result
+        return None
+
     def init_no_WS(self):
         self.update_timestamps = {
             "update_market_info": 0.0,
@@ -175,8 +281,8 @@ class Passivbot:
             "update_positions": 0.0,
             "update_open_orders": 0.0,
             "update_EMAs": 0.0,
-            "update_hlcs15m": 0.0,
-            "update_hlcs1m": 0.0,
+            "update_hlcs_15m": 0.0,
+            "update_hlcs_1m": 0.0,
             "update_pnls": 0.0,
         }
         self.update_age_limit_ms = {key: 1000 * 30 for key in self.update_timestamps}
@@ -352,7 +458,7 @@ class Passivbot:
     def pad_sym(self, symbol):
         return f"{symbol: <{self.sym_padding}}"
 
-    async def start_data_maintainers(self):
+    async def start_data_maintainers_old(self):
         if not hasattr(self, "maintainers"):
             self.maintainers = {}
         else:
@@ -361,16 +467,16 @@ class Passivbot:
             self.maintainers["ohlcvs"] = asyncio.create_task(self.maintain_ohlcvs())
         else:
             self.maintainers["ohlcvs"] = None
-        self.maintainers["EMAs"] = asyncio.create_task(self.maintain_EMAs())
+        self.maintainers["EMAs"] = asyncio.create_task(self.maintain_EMAs_old())
         self.maintainers["hlcs"] = asyncio.create_task(self.maintain_hlcs())
 
     def stop_data_maintainers(self):
         if not hasattr(self, "maintainers"):
             return
-        res = []
+        res = {}
         for key in self.maintainers:
             try:
-                res.append(self.maintainers[key].cancel())
+                res[key] = self.maintainers[key].cancel()
             except Exception as e:
                 logging.error(f"error stopping maintainer {key} {e}")
         logging.info(f"stopped data maintainers: {res}")
@@ -579,6 +685,7 @@ class Passivbot:
         return True
 
     async def init_markets_dict(self):
+        await self.update_exchange_config()
         self.init_markets_last_update_ms = utc_ms()
         self.markets_dict = {elm["symbol"]: elm for elm in (await self.cca.fetch_markets())}
         await self.determine_utc_offset()
@@ -623,6 +730,8 @@ class Passivbot:
         # for prettier printing
         self.max_len_symbol = max([len(s) for s in self.markets_dict])
         self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
+        await self.init_flags()
+        self.set_live_configs()
 
     def set_market_specific_settings(self):
         # set min cost, min qty, price step, qty step, c_mult
@@ -1246,7 +1355,7 @@ class Passivbot:
         )
         logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
 
-    def get_exchange_time_now(self):
+    def get_exchange_time(self):
         return utc_ms() + self.utc_offset
 
     async def update_positions(self):
@@ -1686,18 +1795,23 @@ class Passivbot:
         for symbol in self.active_symbols:
             actual_orders[symbol] = []
             for x in self.open_orders[symbol] if symbol in self.open_orders else []:
-                actual_orders[symbol].append(
-                    {
-                        "symbol": x["symbol"],
-                        "side": x["side"],
-                        "position_side": x["position_side"],
-                        "qty": abs(x["amount"]),
-                        "price": x["price"],
-                        "reduce_only": (x["position_side"] == "long" and x["side"] == "sell")
-                        or (x["position_side"] == "short" and x["side"] == "buy"),
-                        "id": x["id"],
-                    }
-                )
+                try:
+                    actual_orders[symbol].append(
+                        {
+                            "symbol": x["symbol"],
+                            "side": x["side"],
+                            "position_side": x["position_side"],
+                            "qty": abs(x["amount"]),
+                            "price": x["price"],
+                            "reduce_only": (x["position_side"] == "long" and x["side"] == "sell")
+                            or (x["position_side"] == "short" and x["side"] == "buy"),
+                            "id": x["id"],
+                        }
+                    )
+                except Exception as e:
+                    logging.error(f"error in calc_orders_to_cancel_and_create {e}")
+                    traceback.print_exc()
+                    print(x)
         keys = ("symbol", "side", "position_side", "qty", "price")
         to_cancel, to_create = [], []
         for symbol in actual_orders:
@@ -1742,7 +1856,7 @@ class Passivbot:
         res = await asyncio.gather(*[x[1] for x in coros_to_call])
         return res
 
-    async def execute_to_exchange(self):
+    async def execute_to_exchange_old(self):
         # cancels wrong orders and creates missing orders
         # check whether to call any self.update_*()
         if utc_ms() - self.execution_delay_millis < self.previous_execution_ts:
@@ -1823,7 +1937,7 @@ class Passivbot:
             if self.stop_websocket:
                 break
             if utc_ms() - self.execution_delay_millis > self.previous_execution_ts:
-                await self.execute_to_exchange()
+                await self.execute_to_exchange_old()
             await asyncio.sleep(1.0)
             # self.debug_dump_bot_state_to_disk()
 
@@ -1843,11 +1957,12 @@ class Passivbot:
             self.tmp_debug_ts = utc_ms()
 
     async def start_bot(self):
-        await self.loop_execution_no_WS()
+        await self.start_data_maintainers()
+        await self.run_execution_loop()
         return
         await self.init_bot()
         logging.info("done initiating bot")
-        asyncio.create_task(self.start_data_maintainers())
+        asyncio.create_task(self.start_data_maintainers_old())
         for i in range(30):
             await asyncio.sleep(1)
             if set(self.emas["long"]) == set(self.active_symbols):
@@ -1923,7 +2038,7 @@ class Passivbot:
             if self.forager_mode:
                 await self.update_ohlcvs_multi(to_add)
 
-    async def maintain_EMAs(self):
+    async def maintain_EMAs_old(self):
         # maintain EMAs for active symbols
         # if a new symbol appears (e.g. new forager symbol or user manually opens a position), add this symbol to EMA maintainer
         try:
@@ -1932,7 +2047,7 @@ class Passivbot:
             )
             await self.init_EMAs_multi(sorted(self.active_symbols))
         except Exception as e:
-            logging.error(f"Error starting maintain_EMAs: {e}")
+            logging.error(f"Error starting maintain_EMAs_old: {e}")
             traceback.print_exc()
         logging.info(f"starting EMA maintainer...")
         while True:
@@ -1946,7 +2061,7 @@ class Passivbot:
                 await self.update_EMAs_multi(symbols_to_update)
                 await asyncio.sleep(30)
             except Exception as e:
-                logging.error(f"Error with maintain_EMAs: {e}")
+                logging.error(f"Error with maintain_EMAs_old: {e}")
                 traceback.print_exc()
                 logging.info("restarting EMA maintainer in")
                 for i in range(10, 0, -1):
