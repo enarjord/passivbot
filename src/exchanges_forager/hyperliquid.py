@@ -255,7 +255,6 @@ class HyperliquidBot(Passivbot):
                 limit=n_candles_limit,
                 since=int(self.get_exchange_time_now() - 1000 * 60 * 60 * 2),
             )
-            print("debug HL len hlcs", len(result))
             return result
         since = since // 60000 * 60000
         max_n_fetches = 20
