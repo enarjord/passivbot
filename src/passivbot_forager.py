@@ -430,7 +430,6 @@ class Passivbot:
         last_pos_changes = self.get_last_position_changes()
         symsince = [(s, min(last_pos_changes[s].values()) - 1000 * 60 * 60) for s in last_pos_changes]
         all_res = []
-        print(last_pos_changes, symsince)
         for sym_sublist in [symsince[i : i + n_fetches] for i in range(0, len(symsince), n_fetches)]:
             try:
                 res = await asyncio.gather(
