@@ -246,7 +246,7 @@ class HyperliquidBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_hlcs(self, symbol: str, since: float = None):
+    async def fetch_hlcs_1m(self, symbol: str, since: float = None):
         n_candles_limit = 500
         if since is None:
             result = await self.cca.fetch_ohlcv(
