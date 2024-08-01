@@ -538,6 +538,9 @@ class Passivbot:
             if symbol not in last_position_changes:
                 continue
             for pside in last_position_changes[symbol]:
+                if symbol not in self.hlcs_1m:
+                    logging.info(f"debug: {symbol} missing from self.hlcs_1m")
+                    continue
                 for x in self.hlcs_1m[symbol]:
                     if x[0] <= last_position_changes[symbol][pside]:
                         continue
