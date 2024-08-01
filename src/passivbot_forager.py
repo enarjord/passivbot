@@ -263,10 +263,6 @@ class Passivbot:
         if res:
             for elm in res:
                 self.add_new_order(elm, source="POST")
-        if to_cancel or to_create:
-            # update them 10 secs before next whole minute
-            new_ts = utc_ms() // (1000 * 60) * (1000 * 60) + 50.0 * 1000
-            self.last_update_timestamps["update_pnls"] = new_ts
 
     def is_forager_mode(self):
         n_approved_symbols = len(self.config["common"]["approved_symbols"])
