@@ -148,12 +148,6 @@ class Passivbot:
             pass
         self.update_hlcs_15m_verbose = False
 
-    async def update_hlcs_1m(self):
-        if not hasattr(self, "update_hlcs_1m_verbose"):
-            self.update_hlcs_1m_verbose = True
-        await self.update_hlcs(verbose=self.update_hlcs_1m_verbose)
-        self.update_hlcs_1m_verbose = False
-
     async def update_EMAs(self):
         # update EMAs for all eligible symbols
         if not hasattr(self, "update_EMAs_verbose"):
@@ -165,12 +159,9 @@ class Passivbot:
         self.update_EMAs_verbose = False
 
     async def start_data_maintainers(self):
+        # maintains market info, hlcs_15m, EMAs and pnls
         self.maintainers = {
             "maintain_market_info": None,
-            "maintain_tickers": None,
-            "maintain_positions": None,
-            "maintain_open_orders": None,
-            "maintain_hlcs_1m": None,
             "maintain_hlcs_15m": None,
             "maintain_EMAs": None,
             "maintain_pnls": None,
@@ -181,11 +172,21 @@ class Passivbot:
         self.update_intervals = {key: 1000 * 60 for key in self.last_update_timestamps}
         self.update_intervals["update_market_info"] = 1000 * 60 * 60
         self.update_intervals["update_EMAs"] = 1000 * 60 * 30
+        await self.update_market_info()  # needs to update market info first
+        self.last_update_timestamps["update_market_info"] = utc_ms()
+        for key in [
+            "update_tickers",
+            "update_positions",
+            "update_open_orders",
+            "update_hlcs_1m",
+        ]:  # these are initiated here, then updated just before executing to exchange once a minute
+            result = await getattr(self, key)()
         for key in self.maintainers:
             if self.maintainers[key] is None:
                 function_name = key.replace("maintain", "update")
-                result = await getattr(self, function_name)()
-                self.last_update_timestamps[function_name] = utc_ms()
+                if self.last_update_timestamps[function_name] == 0.0:
+                    result = await getattr(self, function_name)()
+                    self.last_update_timestamps[function_name] = utc_ms()
                 self.maintainers[key] = asyncio.create_task(self.maintain_thing(key))
 
     async def maintain_thing(self, maintainer_name):
@@ -226,7 +227,13 @@ class Passivbot:
 
     async def execute_to_exchange(self):
         self.update_PB_modes()
-        await self.update_exchange_configs()
+        await asyncio.gather(
+            self.update_open_orders(),
+            self.update_positions(),
+            self.update_hlcs_1m(),
+            self.update_exchange_configs(),
+            self.update_tickers(),
+        )
         to_cancel, to_create = self.calc_orders_to_cancel_and_create()
 
         # debug duplicates
@@ -259,82 +266,7 @@ class Passivbot:
         if to_cancel or to_create:
             # update them 10 secs before next whole minute
             new_ts = utc_ms() // (1000 * 60) * (1000 * 60) + 50.0 * 1000
-            self.last_update_timestamps["update_positions"] = new_ts
-            self.last_update_timestamps["update_open_orders"] = new_ts
-            self.last_update_timestamps["update_tickers"] = new_ts
-
-    async def update_single(self, key):
-        if (
-            utc_ms() - self.update_before_1m_mark[key]["last_update"]
-            > self.update_before_1m_mark[key]["interval"]
-        ):
-            logging.info(f"calling {key}")
-            result = await getattr(self, key)()
-            self.update_before_1m_mark[key]["last_update"] = utc_ms()
-            return result
-        return None
-
-    def init_no_WS(self):
-        self.update_timestamps = {
-            "update_market_info": 0.0,
-            "update_tickers": 0.0,
-            "update_positions": 0.0,
-            "update_open_orders": 0.0,
-            "update_EMAs": 0.0,
-            "update_hlcs_15m": 0.0,
-            "update_hlcs_1m": 0.0,
-            "update_pnls": 0.0,
-        }
-        self.update_age_limit_ms = {key: 1000 * 30 for key in self.update_timestamps}
-        self.update_age_limit_ms["update_market_info"] = 1000 * 60 * 60 * 3
-
-    async def loop_execution_no_WS(self):
-        self.init_no_WS()
-        while True:
-            sts = utc_ms()
-            try:
-                await self.execute_to_exchange_no_WS()
-            except Exception as e:
-                logging.error(f"error in loop_execution_no_WS {e}")
-                traceback.print_exc()
-            sleep_duration = max(0.0, 15.0 - (utc_ms() - sts) / 1000)
-            await asyncio.sleep(sleep_duration)
-
-    async def update_data_no_WS(self):
-        # checks if all data is up to date before executing to exchange
-        for key in self.update_timestamps:
-            if utc_ms() - self.update_timestamps[key] > self.update_age_limit_ms[key]:
-                # logging.info(f"calling {key}")
-                res = await getattr(self, key)()
-                self.update_timestamps[key] = utc_ms()
-        self.update_PB_modes()
-
-    async def execute_to_exchange_no_WS(self):
-        await self.update_data_no_WS()
-        to_cancel, to_create = self.calc_orders_to_cancel_and_create()
-
-        # debug duplicates
-        seen = set()
-        for elm in to_cancel:
-            key = str(elm["price"]) + str(elm["qty"])
-            if key in seen:
-                logging.info(f"debug duplicate {elm}")
-            seen.add(key)
-        # format custom_id
-        to_create = self.format_custom_ids(to_create)
-        res = await self.execute_cancellations(
-            to_cancel[: self.config["live"]["max_n_cancellations_per_batch"]]
-        )
-        if res:
-            for elm in res:
-                self.remove_cancelled_order(elm, source="POST")
-        res = await self.execute_orders(to_create[: self.config["live"]["max_n_creations_per_batch"]])
-        if res:
-            for elm in res:
-                self.add_new_order(elm, source="POST")
-        if to_cancel or to_create:
-            self.update_timestamps["update_positions"] = 0.0
-            self.update_timestamps["update_open_orders"] = 0.0
+            self.last_update_timestamps["update_pnls"] = new_ts
 
     def is_forager_mode(self):
         n_approved_symbols = len(self.config["common"]["approved_symbols"])
@@ -498,6 +430,7 @@ class Passivbot:
         )
 
     def update_hlc_ws(self, symbol, bid, ask, timestamp):
+        return
         # update hlc with latest price from WS
         # hlc format [[timestamp_ms, high, low, close], ...]
         if not hasattr(self, "hlcs"):
@@ -532,14 +465,16 @@ class Passivbot:
                 ]
             ]
 
-    async def update_hlcs(self, n_fetches=10, verbose=False):
+    async def update_hlcs_1m(self, n_fetches=10, verbose=False):
+        if not hasattr(self, "hlcs_1m"):
+            self.hlcs_1m = {}
         last_pos_changes = self.get_last_position_changes()
         symsince = [(s, min(last_pos_changes[s].values()) - 1000 * 60 * 60) for s in last_pos_changes]
         all_res = []
         for sym_sublist in [symsince[i : i + n_fetches] for i in range(0, len(symsince), n_fetches)]:
             try:
                 res = await asyncio.gather(
-                    *[self.update_hlcs_rest(sym, sn) for sym, sn in sym_sublist]
+                    *[self.update_hlcs_1m_single(sym, sn) for sym, sn in sym_sublist]
                 )
                 if verbose:
                     if any(res):
@@ -563,41 +498,22 @@ class Passivbot:
                             break
         return last_position_changes
 
-    async def maintain_hlcs(self):
-        logging.info(f"starting hlcs maintainer")
-        while True:
-            try:
-                last_position_changes = self.get_last_position_changes()
-                if not last_position_changes:
-                    await asyncio.sleep(5)
-                else:
-                    sleep_time_seconds = 60.0 / len(last_position_changes)
-                    for symbol in sorted(last_position_changes):
-                        sts = utc_ms()
-                        since = min(last_position_changes[symbol].values())
-                        await self.update_hlcs_rest(symbol, since)
-                        await asyncio.sleep(max(0.0, sleep_time_seconds - (utc_ms() - sts) / 1000))
-            except Exception as e:
-                logging.error(f"error with maintain_hlcs {e}")
-                traceback.print_exc()
-                await asyncio.sleep(2)
-
-    async def update_hlcs_rest(self, symbol, since):
-        if not hasattr(self, "hlcs"):
-            self.hlcs = {}
-        if symbol in self.hlcs and self.hlcs[symbol]:
-            candles = await self.fetch_hlcs(symbol)
+    async def update_hlcs_1m_single(self, symbol, since):
+        if symbol in self.hlcs_1m and self.hlcs_1m[symbol]:
+            candles = await self.fetch_hlcs_1m(symbol)
         else:
-            self.hlcs[symbol] = []
-            candles = await self.fetch_hlcs(symbol, since)
-        all_candles_d = {x[0]: x for x in self.hlcs[symbol]}
+            self.hlcs_1m[symbol] = []
+            candles = await self.fetch_hlcs_1m(symbol, since)
+        all_candles_d = {x[0]: x for x in self.hlcs_1m[symbol]}
         all_candles_d.update({x[0]: x for x in candles})
-        # logging.info(f"updated hlcs for {symbol} since {ts_to_date_utc(since)}")
-        self.hlcs[symbol] = sorted(all_candles_d.values(), key=lambda x: x[0])
+        logging.info(f"updated hlcs_1m for {symbol} since {ts_to_date_utc(since)}")
+        self.hlcs_1m[symbol] = sorted(all_candles_d.values(), key=lambda x: x[0])
         if since is not None:
-            self.hlcs[symbol] = [x for x in self.hlcs[symbol] if x[0] >= since - 1000 * 60 * 60 * 3]
-            if not self.hlcs[symbol]:
-                logging.info(f"debug hlcs is empty for {symbol}")
+            self.hlcs_1m[symbol] = [
+                x for x in self.hlcs_1m[symbol] if x[0] >= since - 1000 * 60 * 60 * 3
+            ]
+            if not self.hlcs_1m[symbol]:
+                logging.info(f"debug hlcs_1m is empty for {symbol}")
 
     def update_trailing_data(self):
         if not hasattr(self, "trailing_prices"):
@@ -622,7 +538,7 @@ class Passivbot:
             if symbol not in last_position_changes:
                 continue
             for pside in last_position_changes[symbol]:
-                for x in self.hlcs[symbol]:
+                for x in self.hlcs_1m[symbol]:
                     if x[0] <= last_position_changes[symbol][pside]:
                         continue
                     if x[1] > self.trailing_prices[symbol][pside]["max_since_open"]:
@@ -1660,11 +1576,16 @@ class Passivbot:
             with_pprice_diff = [
                 (calc_diff(x[1], self.tickers[symbol]["last"]), x) for x in ideal_orders[symbol]
             ]
+            seen = set()
             for pprice_diff, order in sorted(with_pprice_diff):
                 if order[0] == 0.0 or (
                     any([x in order[2] for x in ["initial", "unstuck"]])
                     and pprice_diff > self.config["live"]["price_distance_threshold"]
                 ):
+                    continue
+                seen_key = str(abs(order[0])) + str(order[1])
+                if seen_key in seen:
+                    logging.info(f"debug duplicate ideal order {symbol} {order}")
                     continue
                 ideal_orders_f[symbol].append(
                     {
@@ -1677,6 +1598,7 @@ class Passivbot:
                         "custom_id": order[2],
                     }
                 )
+                seen.add(seen_key)
         return ideal_orders_f
 
     def calc_unstucking_close(self, ideal_orders):
@@ -1801,7 +1723,7 @@ class Passivbot:
                             "symbol": x["symbol"],
                             "side": x["side"],
                             "position_side": x["position_side"],
-                            "qty": abs(x["amount"]),
+                            "qty": abs(x["qty"]),
                             "price": x["price"],
                             "reduce_only": (x["position_side"] == "long" and x["side"] == "sell")
                             or (x["position_side"] == "short" and x["side"] == "buy"),
