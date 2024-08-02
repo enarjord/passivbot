@@ -474,7 +474,8 @@ class BybitBot(Passivbot):
     async def fetch_hlcs_1m(self, symbol: str, since: float = None):
         n_candles_limit = 1000
         if since is None:
-            return await self.cca.fetch_ohlcv(symbol, timeframe="1m", limit=n_candles_limit)
+            result = await self.cca.fetch_ohlcv(symbol, timeframe="1m", limit=n_candles_limit)
+            return [[x[0], x[2], x[3], x[4]] for x in result]
         since = since // 60000 * 60000
         max_n_fetches = n_candles_limit // 7
         all_fetched = []
