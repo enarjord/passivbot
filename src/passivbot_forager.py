@@ -164,7 +164,6 @@ class Passivbot:
             "maintain_market_info": None,
             "maintain_hlcs_15m": None,
             "maintain_EMAs": None,
-            "maintain_pnls": None,
         }
         self.last_update_timestamps = {
             key.replace("maintain", "update"): 0.0 for key in self.maintainers
@@ -175,6 +174,7 @@ class Passivbot:
         await self.update_market_info()  # needs to update market info first
         self.last_update_timestamps["update_market_info"] = utc_ms()
         for key in [
+            "update_pnls",
             "update_tickers",
             "update_positions",
             "update_open_orders",
@@ -229,8 +229,11 @@ class Passivbot:
         await asyncio.gather(
             self.update_open_orders(),
             self.update_positions(),
-            self.update_hlcs_1m(),
+            self.update_pnls(),
             self.update_exchange_configs(),
+        )
+        await asyncio.gather(
+            self.update_hlcs_1m(),
             self.update_tickers(),
         )
         self.update_PB_modes()
