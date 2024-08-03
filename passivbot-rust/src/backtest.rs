@@ -127,6 +127,8 @@ pub struct Backtest {
     trailing_enabled: TrailingEnabled,
     equities: Vec<f64>,
     delist_timestamps: HashMap<usize, usize>,
+    did_fill_long: HashSet<usize>,
+    did_fill_short: HashSet<usize>,
 }
 
 impl Backtest {
@@ -184,6 +186,8 @@ impl Backtest {
             },
             equities: equities,
             delist_timestamps: HashMap::new(),
+            did_fill_long: HashSet::new(),
+            did_fill_short: HashSet::new(),
         }
     }
 
@@ -223,9 +227,9 @@ impl Backtest {
             }
         }
         for k in 1..n_timesteps {
-            let any_fill = self.check_for_fills(k);
+            self.check_for_fills(k);
             self.update_emas(k);
-            self.update_open_orders(k, any_fill);
+            self.update_open_orders(k);
             self.update_equities(k);
         }
         (self.fills.clone(), self.equities.clone())
@@ -292,8 +296,9 @@ impl Backtest {
         actives_without_pos
     }
 
-    fn check_for_fills(&mut self, k: usize) -> bool {
-        let mut any_fill = false;
+    fn check_for_fills(&mut self, k: usize) {
+        self.did_fill_long.clear();
+        self.did_fill_short.clear();
         if self.trading_enabled.long {
             let mut open_orders_keys_long: Vec<usize> =
                 self.open_orders.long.keys().cloned().collect();
@@ -320,7 +325,7 @@ impl Backtest {
                 while self.open_orders.long[&idx].close.qty != 0.0
                     && self.hlcs[[k, idx, HIGH]] > self.open_orders.long[&idx].close.price
                 {
-                    any_fill = true;
+                    self.did_fill_long.insert(idx);
                     self.reset_trailing_prices(idx, LONG);
                     self.process_close_fill_long(k, idx);
                     if !self.positions.long.contains_key(&idx) {
@@ -342,7 +347,7 @@ impl Backtest {
                 while self.open_orders.long[&idx].entry.qty != 0.0
                     && self.hlcs[[k, idx, LOW]] < self.open_orders.long[&idx].entry.price
                 {
-                    any_fill = true;
+                    self.did_fill_long.insert(idx);
                     self.reset_trailing_prices(idx, LONG);
                     self.process_entry_fill_long(k, idx);
                     if self.open_orders.long[&idx].entry.order_type
@@ -391,7 +396,7 @@ impl Backtest {
                 while self.open_orders.short[&idx].close.qty != 0.0
                     && self.hlcs[[k, idx, LOW]] < self.open_orders.short[&idx].close.price
                 {
-                    any_fill = true;
+                    self.did_fill_short.insert(idx);
                     self.reset_trailing_prices(idx, SHORT);
                     self.process_close_fill_short(k, idx);
 
@@ -414,7 +419,7 @@ impl Backtest {
                 while self.open_orders.short[&idx].entry.qty != 0.0
                     && self.hlcs[[k, idx, HIGH]] > self.open_orders.short[&idx].entry.price
                 {
-                    any_fill = true;
+                    self.did_fill_short.insert(idx);
                     self.reset_trailing_prices(idx, SHORT);
                     self.process_entry_fill_short(k, idx);
 
@@ -438,7 +443,6 @@ impl Backtest {
                 }
             }
         }
-        any_fill
     }
 
     fn update_stuck_status(&mut self, idx: usize) {
@@ -987,7 +991,9 @@ impl Backtest {
                 let positions_long_indices: Vec<usize> =
                     self.positions.long.keys().cloned().collect();
                 for idx in &positions_long_indices {
-                    self.update_trailing_prices(k, *idx, LONG);
+                    if !self.did_fill_long.contains(&idx) {
+                        self.update_trailing_prices(k, *idx, LONG);
+                    }
                 }
             }
             self.update_actives(k, LONG);
@@ -1005,7 +1011,9 @@ impl Backtest {
                 let positions_short_indices: Vec<usize> =
                     self.positions.short.keys().cloned().collect();
                 for idx in &positions_short_indices {
-                    self.update_trailing_prices(k, *idx, SHORT);
+                    if !self.did_fill_short.contains(&idx) {
+                        self.update_trailing_prices(k, *idx, SHORT);
+                    }
                 }
             }
             self.update_actives(k, SHORT);
@@ -1050,7 +1058,9 @@ impl Backtest {
             let positions_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
             if self.trailing_enabled.long {
                 for idx in &positions_long_indices {
-                    self.update_trailing_prices(k, *idx, LONG);
+                    if !self.did_fill_long.contains(&idx) {
+                        self.update_trailing_prices(k, *idx, LONG);
+                    }
                 }
             }
             let mut actives_without_pos = Vec::<usize>::new();
@@ -1079,7 +1089,9 @@ impl Backtest {
                 self.positions.short.keys().cloned().collect();
             if self.trailing_enabled.short {
                 for idx in &positions_short_indices {
-                    self.update_trailing_prices(k, *idx, SHORT);
+                    if !self.did_fill_short.contains(&idx) {
+                        self.update_trailing_prices(k, *idx, SHORT);
+                    }
                 }
             }
             let mut actives_without_pos = Vec::<usize>::new();
@@ -1129,8 +1141,8 @@ impl Backtest {
         }
     }
 
-    fn update_open_orders(&mut self, k: usize, any_fill: bool) {
-        if any_fill {
+    fn update_open_orders(&mut self, k: usize) {
+        if (!self.did_fill_long.is_empty() || !self.did_fill_short.is_empty()) {
             self.update_open_orders_any_fill(k);
         } else {
             self.update_open_orders_no_fill(k);
