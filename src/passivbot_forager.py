@@ -225,7 +225,7 @@ class Passivbot:
                 traceback.print_exc()
                 await asyncio.sleep(5.0)
 
-    async def execute_to_exchange(self):
+    async def prepare_for_execution(self):
         await asyncio.gather(
             self.update_open_orders(),
             self.update_positions(),
@@ -237,6 +237,9 @@ class Passivbot:
             self.update_tickers(),
         )
         self.update_PB_modes()
+
+    async def execute_to_exchange(self):
+        await self.prepare_for_execution()
         to_cancel, to_create = self.calc_orders_to_cancel_and_create()
 
         # debug duplicates
