@@ -557,6 +557,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 "approved_symbols": ["BTCUSDT", "ETHUSDT", "XRPUSDT"],
                 "minimum_market_age_days": 7.0,
                 "n_ohlcvs": 100,
+                "noisiness_rolling_mean_window_size": 60,
                 "ohlcv_interval": "15m",
                 "relative_volume_filter_clip_pct": 0.1,
                 "symbol_flags": {},
