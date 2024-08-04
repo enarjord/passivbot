@@ -259,12 +259,12 @@ def prep_backtest_args(config, mss, exchange_params=None, backtest_params=None):
     return bot_params, exchange_params, backtest_params
 
 
-def run_backtest(hlcs, noisiness_indices, mss, config: dict):
+def run_backtest(hlcs, preferred_coins, mss, config: dict):
     bot_params, exchange_params, backtest_params = prep_backtest_args(config, mss)
     print(f"Starting backtest...")
     sts = utc_ms()
     fills, equities, analysis = pbr.run_backtest(
-        hlcs, noisiness_indices, bot_params, exchange_params, backtest_params
+        hlcs, preferred_coins, bot_params, exchange_params, backtest_params
     )
     print(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
     return fills, equities, analysis
@@ -337,6 +337,12 @@ def add_argparse_args_backtest_forager(parser):
     return args
 
 
+def calc_preferred_coins(hlcs, config):
+    return np.argsort(
+        -pbr.calc_noisiness_py(hlcs, config["common"]["noisiness_rolling_mean_window_size"])
+    )
+
+
 async def main():
     logging.basicConfig(
         format="%(asctime)s %(levelname)-8s %(message)s",
@@ -349,8 +355,8 @@ async def main():
     config = load_config("configs/template.hjson" if args.config_path is None else args.config_path)
     config = add_argparse_args_to_config(config, args)
     hlcs, mss, results_path = await prepare_hlcs_mss(config)
-    noisiness_indices = calc_noisiness_argsort_indices(hlcs).astype(np.int32)
-    fills, equities, analysis = run_backtest(hlcs, noisiness_indices, mss, config)
+    preferred_coins = calc_preferred_coins(hlcs, config)
+    fills, equities, analysis = run_backtest(hlcs, preferred_coins, mss, config)
     post_process(config, hlcs, fills, equities, analysis, results_path)
 
 
