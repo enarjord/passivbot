@@ -1,4 +1,4 @@
-use crate::backtest::{analyze_backtest, Backtest};
+use crate::backtest::{analyze_backtest, calc_noisiness, Backtest};
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_grid_close_long, calc_next_close_long,
     calc_next_close_short, calc_trailing_close_long,
@@ -11,12 +11,27 @@ use crate::types::{
     Analysis, BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Order, OrderBook,
     Position, StateParams, TrailingPriceBundle,
 };
-use ndarray::{Array1, Array2, ArrayBase, ArrayD};
+use ndarray::{Array1, Array2, Array3, ArrayBase, ArrayD};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use pyo3::wrap_pyfunction;
+
+#[pyfunction]
+pub fn calc_noisiness_py(
+    hlcs: PyReadonlyArray3<f64>,
+    window: usize,
+) -> PyResult<Py<PyArray2<f64>>> {
+    // Convert PyReadonlyArray3 to owned Array3
+    let hlcs_rust: Array3<f64> = hlcs.as_array().to_owned();
+
+    // Call the existing calc_noisiness function
+    let noisiness = calc_noisiness(&hlcs_rust, window);
+
+    // Convert the result back to a PyArray
+    Python::with_gil(|py| Ok(noisiness.into_pyarray(py).to_owned()))
+}
 
 #[pyfunction]
 pub fn run_backtest(

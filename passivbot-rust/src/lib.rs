@@ -38,6 +38,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calc_closes_long_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_closes_short_py, m)?)?;
     m.add_function(wrap_pyfunction!(run_backtest, m)?)?;
+    m.add_function(wrap_pyfunction!(calc_noisiness_py, m)?)?;
 
     Ok(())
 }

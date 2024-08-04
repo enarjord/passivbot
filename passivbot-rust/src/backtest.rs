@@ -1311,4 +1311,29 @@ fn calc_drawdowns(equity_series: &[f64]) -> Vec<f64> {
         .collect()
 }
 
-fn precalc_preferred_coins_noisisness() {}
+pub fn calc_noisiness(hlcs: &Array3<f64>, window: usize) -> Array2<f64> {
+    let (n_minutes, n_coins, _) = hlcs.dim();
+
+    // Calculate Normalized Relative Range (NRR)
+    let nrrs =
+        (&hlcs.slice(s![.., .., 0]) - &hlcs.slice(s![.., .., 1])) / &hlcs.slice(s![.., .., 2]);
+
+    let mut noisiness = Array2::<f64>::zeros((n_minutes, n_coins));
+    let mut sums = vec![0.0; n_coins];
+
+    for i in 1..n_minutes {
+        let idx_start = i.saturating_sub(window);
+
+        for j in 0..n_coins {
+            sums[j] += nrrs[[i - 1, j]];
+
+            if idx_start > 0 {
+                sums[j] -= nrrs[[idx_start - 1, j]];
+                noisiness[[i, j]] = sums[j] / window as f64;
+            } else {
+                noisiness[[i, j]] = sums[j] / i as f64;
+            }
+        }
+    }
+    noisiness
+}
