@@ -45,9 +45,13 @@ def load_config(filepath: str) -> dict:
     try:
         config = load_hjson_config(filepath)
         config = format_config(config)
-        if "time_in_force" not in config["live"]:
-            print("adding missing parameter time_in_force")
-            config["live"]["time_in_force"] = "post_only"
+        for k0, k1, v in [
+            ("live", "time_in_force", "good_till_cancelled"),
+            ("common", "noisiness_rolling_mean_window_size", 60),
+        ]:
+            if k1 not in config[k0]:
+                config[k0][k1] = v
+                print(f"adding missing parameter {k0} {k1}: {v}")
         return config
     except Exception as e:
         raise Exception(f"failed to load config {filepath}: {e}")
