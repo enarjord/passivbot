@@ -15,6 +15,7 @@ from prettytable import PrettyTable
 from uuid import uuid4
 from copy import deepcopy
 from collections import defaultdict
+from sortedcontainers import SortedDict
 
 from procedures import (
     load_broker_code,
@@ -499,6 +500,34 @@ class Passivbot:
                             last_position_changes[symbol][pside] = fill["timestamp"]
                             break
         return last_position_changes
+
+    async def init_hlcs_1m(self):
+        # fetch latest hlcs_1m for all eligible symbols
+        # to be called after starting websocket
+        min_n_candles = self.config["common"]["noisiness_rolling_mean_window_size"]
+        sleep_time_seconds = 20 / len(self.eligible_symbols)
+        tasks = {}
+        symbols = sorted(self.eligible_symbols)
+        logging.info(f"initiating hlcs_1m for {','.join([symbol_to_coin(s) for s in symbols])}")
+        for symbol in symbols:
+            tasks[symbol] = asyncio.create_task(self.update_hlcs_1m_single_new(symbol))
+            await asyncio.sleep(sleep_time_seconds)
+            print("init_hlcs_1m", symbol)
+        for symbol in tasks:
+            await tasks[symbol]
+
+    async def update_hlcs_1m_single_new(self, symbol, since=None):
+        if symbol in self.hlcs_1m and self.hlcs_1m[symbol]:
+            candles = await self.fetch_hlcs_1m(symbol)
+        else:
+            self.hlcs_1m[symbol] = SortedDict()
+            candles = await self.fetch_hlcs_1m(symbol, since)
+        for x in candles:
+            self.hlcs_1m[symbol][x[0]] = x
+        if candles:
+            logging.info(f"updated hlcs_1m for {symbol} since {ts_to_date_utc(candles[0][0])}")
+        while len(self.hlcs_1m[symbol]) > 10080:
+            del self.hlcs_1m[symbol][self.hlcs_1m[symbol].peekitem(0)]
 
     async def update_hlcs_1m_single(self, symbol, since):
         if symbol in self.hlcs_1m and self.hlcs_1m[symbol]:
@@ -1120,6 +1149,15 @@ class Passivbot:
                         logging.info(f"ticker {upd['symbol']} {key} is None")
             else:
                 logging.info(f"unexpected WS ticker formatting: {upd}")
+
+    def handle_ohlcv_update(self, symbol, upd):
+        for elm in upd:
+            if symbol not in self.hlcs_1m:
+                self.hlcs_1m[symbol] = SortedDict()
+            self.hlcs_1m[symbol][elm[0]] = self.ohlcv_to_hlc(elm)
+
+    def ohlcv_to_hlc(self, elm):
+        return [elm[0], elm[2], elm[3], elm[4]]
 
     def calc_upnl_sum(self):
         try:
