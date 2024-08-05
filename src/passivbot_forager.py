@@ -202,7 +202,7 @@ class Passivbot:
                         > self.update_intervals[function_name]
                     ):
                         self.last_update_timestamps[function_name] = utc_ms()
-                        logging.info(f"calling {function_name}")
+                        # logging.info(f"calling {function_name}")
                         result = await getattr(self, function_name)()
                     await asyncio.sleep(0.1)
                 except Exception as e:
