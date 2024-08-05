@@ -909,7 +909,9 @@ impl Backtest {
                             self.exchange_params_list[idx].price_step,
                         ),
                     );
-                    if close_price < self.open_orders.long[&idx].close.price {
+                    if self.open_orders.long[&idx].close.qty == 0.0
+                        || close_price < self.open_orders.long[&idx].close.price
+                    {
                         let close_qty = -f64::min(
                             self.positions.long[&idx].size,
                             f64::max(
@@ -948,7 +950,9 @@ impl Backtest {
                             self.exchange_params_list[idx].price_step,
                         ),
                     );
-                    if close_price > self.open_orders.short[&idx].close.price {
+                    if self.open_orders.short[&idx].close.qty == 0.0
+                        || close_price > self.open_orders.short[&idx].close.price
+                    {
                         let close_qty = f64::min(
                             self.positions.short[&idx].size.abs(),
                             f64::max(

@@ -418,24 +418,6 @@ pub fn calc_trailing_entry_long(
             order_type: OrderType::EntryInitialPartialLong,
         };
     }
-    if trailing_price_bundle.min_since_open
-        > position.price * (1.0 - bot_params.entry_trailing_threshold_pct)
-    {
-        return Order {
-            qty: 0.0,
-            price: 0.0,
-            order_type: OrderType::EntryTrailingNormalLong,
-        };
-    }
-    if trailing_price_bundle.max_since_min
-        < trailing_price_bundle.min_since_open * (1.0 + bot_params.entry_trailing_retracement_pct)
-    {
-        return Order {
-            qty: 0.0,
-            price: 0.0,
-            order_type: OrderType::EntryTrailingNormalLong,
-        };
-    }
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
         state_params.balance,
@@ -445,24 +427,67 @@ pub fn calc_trailing_entry_long(
     if wallet_exposure > bot_params.wallet_exposure_limit * 0.999 {
         return Order::default();
     }
+    let mut entry_triggered = false;
+    let mut reentry_price = 0.0;
+    if bot_params.entry_trailing_threshold_pct <= 0.0 {
+        // means trailing entry immediately from pos change
+        if bot_params.entry_trailing_retracement_pct > 0.0
+            && trailing_price_bundle.max_since_min
+                > trailing_price_bundle.min_since_open
+                    * (1.0 + bot_params.entry_trailing_retracement_pct)
+        {
+            entry_triggered = true;
+            reentry_price = state_params.order_book.bid;
+        }
+    } else {
+        // means trailing entry will activate only after a threshold
+        if bot_params.entry_trailing_retracement_pct <= 0.0 {
+            // close at threshold
+            entry_triggered = true;
+            reentry_price = f64::min(
+                state_params.order_book.bid,
+                round_dn(
+                    position.price * (1.0 - bot_params.entry_trailing_threshold_pct),
+                    exchange_params.price_step,
+                ),
+            );
+        } else {
+            // enter if both conditions are met
+            if trailing_price_bundle.min_since_open
+                < position.price * (1.0 - bot_params.entry_trailing_threshold_pct)
+                && trailing_price_bundle.max_since_min
+                    > trailing_price_bundle.min_since_open
+                        * (1.0 + bot_params.entry_trailing_retracement_pct)
+            {
+                entry_triggered = true;
+                reentry_price = f64::min(
+                    state_params.order_book.bid,
+                    round_dn(
+                        position.price
+                            * (1.0 - bot_params.entry_trailing_threshold_pct
+                                + bot_params.entry_trailing_retracement_pct),
+                        exchange_params.price_step,
+                    ),
+                );
+            }
+        }
+    }
+    if !entry_triggered {
+        return Order {
+            qty: 0.0,
+            price: 0.0,
+            order_type: OrderType::EntryTrailingNormalLong,
+        };
+    }
     let reentry_qty = f64::max(
         calc_reentry_qty(
-            state_params.order_book.bid,
+            reentry_price,
             state_params.balance,
             position.size,
             &exchange_params,
             &bot_params,
         ),
         initial_entry_qty,
-    );
-    let reentry_price = f64::min(
-        state_params.order_book.bid,
-        round_dn(
-            position.price
-                * (1.0 - bot_params.entry_trailing_threshold_pct
-                    + bot_params.entry_trailing_retracement_pct),
-            exchange_params.price_step,
-        ),
     );
     let (wallet_exposure_if_filled, reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,
@@ -681,24 +706,6 @@ pub fn calc_trailing_entry_short(
             order_type: OrderType::EntryInitialPartialShort,
         };
     }
-    if trailing_price_bundle.max_since_open
-        < position.price * (1.0 + bot_params.entry_trailing_threshold_pct)
-    {
-        return Order {
-            qty: 0.0,
-            price: 0.0,
-            order_type: OrderType::EntryTrailingNormalShort,
-        };
-    }
-    if trailing_price_bundle.min_since_max
-        > trailing_price_bundle.max_since_open * (1.0 - bot_params.entry_trailing_retracement_pct)
-    {
-        return Order {
-            qty: 0.0,
-            price: 0.0,
-            order_type: OrderType::EntryTrailingNormalShort,
-        };
-    }
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
         state_params.balance,
@@ -708,24 +715,67 @@ pub fn calc_trailing_entry_short(
     if wallet_exposure > bot_params.wallet_exposure_limit * 0.999 {
         return Order::default();
     }
+    let mut entry_triggered = false;
+    let mut reentry_price = 0.0;
+    if bot_params.entry_trailing_threshold_pct <= 0.0 {
+        // means trailing entry immediately from pos change
+        if bot_params.entry_trailing_retracement_pct > 0.0
+            && trailing_price_bundle.min_since_max
+                < trailing_price_bundle.max_since_open
+                    * (1.0 - bot_params.entry_trailing_retracement_pct)
+        {
+            entry_triggered = true;
+            reentry_price = state_params.order_book.ask;
+        }
+    } else {
+        // means trailing entry will activate only after a threshold
+        if bot_params.entry_trailing_retracement_pct <= 0.0 {
+            // enter at threshold
+            entry_triggered = true;
+            reentry_price = f64::max(
+                state_params.order_book.ask,
+                round_up(
+                    position.price * (1.0 + bot_params.entry_trailing_threshold_pct),
+                    exchange_params.price_step,
+                ),
+            );
+        } else {
+            // enter if both conditions are met
+            if trailing_price_bundle.max_since_open
+                > position.price * (1.0 + bot_params.entry_trailing_threshold_pct)
+                && trailing_price_bundle.min_since_max
+                    < trailing_price_bundle.max_since_open
+                        * (1.0 - bot_params.entry_trailing_retracement_pct)
+            {
+                entry_triggered = true;
+                reentry_price = f64::max(
+                    state_params.order_book.ask,
+                    round_up(
+                        position.price
+                            * (1.0 + bot_params.entry_trailing_threshold_pct
+                                - bot_params.entry_trailing_retracement_pct),
+                        exchange_params.price_step,
+                    ),
+                );
+            }
+        }
+    }
+    if !entry_triggered {
+        return Order {
+            qty: 0.0,
+            price: 0.0,
+            order_type: OrderType::EntryTrailingNormalShort,
+        };
+    }
     let reentry_qty = f64::max(
         calc_reentry_qty(
-            state_params.order_book.ask,
+            reentry_price,
             state_params.balance,
             position_size_abs,
             &exchange_params,
             &bot_params,
         ),
         initial_entry_qty,
-    );
-    let reentry_price = f64::max(
-        state_params.order_book.ask,
-        round_up(
-            position.price
-                * (1.0 + bot_params.entry_trailing_threshold_pct
-                    - bot_params.entry_trailing_retracement_pct),
-            exchange_params.price_step,
-        ),
     );
     let (wallet_exposure_if_filled, reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,

@@ -101,7 +101,7 @@ pub fn calc_trailing_close_long(
         return Order::default();
     }
     if bot_params.close_trailing_threshold_pct <= 0.0 {
-        // means trailing stop immediately from pos open
+        // means trailing close immediately from pos open
         if bot_params.close_trailing_retracement_pct > 0.0
             && trailing_price_bundle.min_since_max
                 < trailing_price_bundle.max_since_open
@@ -120,7 +120,7 @@ pub fn calc_trailing_close_long(
             }
         }
     } else {
-        // means trailing stop will activate only after a threshold
+        // means trailing close will activate only after a threshold
         if bot_params.close_trailing_retracement_pct <= 0.0 {
             // close at threshold
             Order {
