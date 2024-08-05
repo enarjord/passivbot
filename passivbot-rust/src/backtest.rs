@@ -379,12 +379,12 @@ impl Backtest {
                 if let Some(&delist_timestamp) = self.delist_timestamps.get(&idx) {
                     if k >= delist_timestamp && self.positions.short.contains_key(&idx) {
                         self.open_orders.short.get_mut(&idx).unwrap().close = Order {
-                            qty: self.positions.long[&idx].size.abs(),
+                            qty: self.positions.short[&idx].size.abs(),
                             price: round_(
                                 f64::max(
                                     self.hlcs[[k, idx, LOW]]
                                         + self.exchange_params_list[idx].price_step,
-                                    self.positions.long[&idx].price,
+                                    self.positions.short[&idx].price,
                                 ),
                                 self.exchange_params_list[idx].price_step,
                             ),
@@ -445,25 +445,47 @@ impl Backtest {
         }
     }
 
-    fn update_stuck_status(&mut self, idx: usize) {
-        if !self.positions.long.contains_key(&idx) {
-            if self.is_stuck.long.contains(&idx) {
-                self.is_stuck.long.remove(&idx);
+    fn update_stuck_status(&mut self, idx: usize, pside: usize) {
+        match pside {
+            LONG => {
+                if self.positions.long.contains_key(&idx) {
+                    let wallet_exposure = calc_wallet_exposure(
+                        self.exchange_params_list[idx].c_mult,
+                        self.balance,
+                        self.positions.long[&idx].size,
+                        self.positions.long[&idx].price,
+                    );
+                    if wallet_exposure / self.bot_params_pair.long.wallet_exposure_limit
+                        > self.bot_params_pair.long.unstuck_threshold
+                    {
+                        self.is_stuck.long.insert(idx);
+                    } else {
+                        self.is_stuck.long.remove(&idx);
+                    }
+                } else {
+                    self.is_stuck.long.remove(&idx);
+                }
             }
-            return;
-        }
-        let wallet_exposure = calc_wallet_exposure(
-            self.exchange_params_list[idx].c_mult,
-            self.balance,
-            self.positions.long[&idx].size,
-            self.positions.long[&idx].price,
-        );
-        if wallet_exposure / self.bot_params_pair.long.wallet_exposure_limit
-            > self.bot_params_pair.long.unstuck_threshold
-        {
-            self.is_stuck.long.insert(idx);
-        } else if self.is_stuck.long.contains(&idx) {
-            self.is_stuck.long.remove(&idx);
+            SHORT => {
+                if self.positions.short.contains_key(&idx) {
+                    let wallet_exposure = calc_wallet_exposure(
+                        self.exchange_params_list[idx].c_mult,
+                        self.balance,
+                        self.positions.short[&idx].size.abs(),
+                        self.positions.short[&idx].price,
+                    );
+                    if wallet_exposure / self.bot_params_pair.short.wallet_exposure_limit
+                        > self.bot_params_pair.short.unstuck_threshold
+                    {
+                        self.is_stuck.short.insert(idx);
+                    } else {
+                        self.is_stuck.short.remove(&idx);
+                    }
+                } else {
+                    self.is_stuck.short.remove(&idx);
+                }
+            }
+            _ => panic!("Invalid pside in update_stuck_status"),
         }
     }
 
@@ -1006,7 +1028,7 @@ impl Backtest {
                 .retain(|&idx, _| self.actives.long.contains(&idx));
             let active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
             for &idx in &active_long_indices {
-                self.update_stuck_status(idx);
+                self.update_stuck_status(idx, LONG);
                 self.update_open_orders_long_single(k, idx);
             }
         }
@@ -1026,7 +1048,7 @@ impl Backtest {
                 .retain(|&idx, _| self.actives.short.contains(&idx));
             let active_short_indices: Vec<usize> = self.actives.short.iter().cloned().collect();
             for &idx in &active_short_indices {
-                self.update_stuck_status(idx);
+                self.update_stuck_status(idx, SHORT);
                 self.update_open_orders_short_single(k, idx);
             }
         }
@@ -1120,7 +1142,7 @@ impl Backtest {
                 }
             }
         }
-        if !self.is_stuck.long.is_empty() || self.is_stuck.short.is_empty() {
+        if !self.is_stuck.long.is_empty() || !self.is_stuck.short.is_empty() {
             let (unstucking_idx, unstucking_pside, unstucking_close) =
                 self.calc_unstucking_close(k);
             if unstucking_idx != NO_POS {
