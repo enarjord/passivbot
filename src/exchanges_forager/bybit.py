@@ -99,6 +99,20 @@ class BybitBot(Passivbot):
                 traceback.print_exc()
                 await asyncio.sleep(1)
 
+    async def watch_ohlcvs(self):
+        if not hasattr(self, "hlcs_1m"):
+            self.hlcs_1m = {}
+        symbols_and_timeframes = [[s, "1m"] for s in sorted(self.eligible_symbols)]
+        while not self.stop_websocket:
+            try:
+                res = await self.ccp.watch_ohlcv_for_symbols(symbols_and_timeframes)
+                symbol = next(iter(res))
+                self.handle_ohlcv_update(symbol, res[symbol]["1m"])
+            except Exception as e:
+                logging.error(f"Exception in watch_ohlcvs: {e}")
+                traceback.print_exc()
+                await asyncio.sleep(1)
+
     async def fetch_open_orders(self, symbol: str = None) -> [dict]:
         fetched = None
         open_orders = {}
@@ -475,7 +489,7 @@ class BybitBot(Passivbot):
         n_candles_limit = 1000
         if since is None:
             result = await self.cca.fetch_ohlcv(symbol, timeframe="1m", limit=n_candles_limit)
-            return [[x[0], x[2], x[3], x[4]] for x in result]
+            return [self.ohlcv_to_hlc(x) for x in result]
         since = since // 60000 * 60000
         max_n_fetches = n_candles_limit // 7
         all_fetched = []
@@ -487,5 +501,5 @@ class BybitBot(Passivbot):
             if len(fetched) < n_candles_limit:
                 break
             since = fetched[-1][0]
-        all_fetched_d = {x[0]: [x[0], x[2], x[3], x[4]] for x in all_fetched}
+        all_fetched_d = {x[0]: self.ohlcv_to_hlc(x) for x in all_fetched}
         return sorted(all_fetched_d.values(), key=lambda x: x[0])

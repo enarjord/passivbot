@@ -14,6 +14,7 @@ from pure_funcs import (
     calc_hash,
     shorten_custom_id,
     coin2symbol,
+    symbol_to_coin,
 )
 from njit_funcs import (
     calc_diff,
@@ -25,6 +26,7 @@ from njit_funcs import (
     round_dynamic_dn,
 )
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
+from sortedcontainers import SortedDict
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
@@ -83,6 +85,45 @@ class HyperliquidBot(Passivbot):
             self.watch_orders(),
             self.watch_tickers(),
         )
+
+    async def watch_ohlcvs(self):
+        if not hasattr(self, "hlcs_1m"):
+            self.hlcs_1m = {}
+        self.WS_ohlcv_tasks = {}
+        while not self.stop_websocket:
+            current_symbols = set(self.eligible_symbols)
+            started_symbols = set(self.WS_ohlcv_tasks.keys())
+            to_print = []
+            # Start watch_ohlcv tasks for new symbols
+            for symbol in current_symbols - started_symbols:
+                task = asyncio.create_task(self.watch_ohlcv(symbol))
+                self.WS_ohlcv_tasks[symbol] = task
+                to_print.append(symbol)
+            if to_print:
+                coins = [symbol_to_coin(s) for s in to_print]
+                logging.info(f"Started watching ohlcv for {','.join(coins)}")
+            to_print = []
+            # Cancel tasks for symbols that are no longer active
+            for symbol in started_symbols - current_symbols:
+                self.WS_ohlcv_tasks[symbol].cancel()
+                del self.WS_ohlcv_tasks[symbol]
+                to_print.append(symbol)
+            if to_print:
+                coins = [symbol_to_coin(s) for s in to_print]
+                logging.info(f"Stopped watching ohlcv for: {','.join(coins)}")
+            # Wait a bit before checking again
+            await asyncio.sleep(1)  # Adjust sleep time as needed
+
+    async def watch_ohlcv(self, symbol):
+        while not self.stop_websocket and symbol in self.eligible_symbols:
+            try:
+                res = await self.ccp.watch_ohlcv(symbol)
+                self.handle_ohlcv_update(symbol, res)
+            except Exception as e:
+                logging.error(f"exception watch_ohlcv {symbol} {e}")
+                traceback.print_exc()
+                await asyncio.sleep(1)
+            await asyncio.sleep(0.1)
 
     async def watch_balance(self):
         # hyperliquid ccxt watch balance not supported.
@@ -253,9 +294,9 @@ class HyperliquidBot(Passivbot):
                 symbol,
                 timeframe="1m",
                 limit=n_candles_limit,
-                since=int(self.get_exchange_time() - 1000 * 60 * 60 * 2),
+                since=int(self.get_exchange_time() - 1000 * 60 * 60 * 3),
             )
-            return result
+            return [self.ohlcv_to_hlc(x) for x in result]
         since = since // 60000 * 60000
         max_n_fetches = 20
         all_fetched = []
@@ -267,7 +308,7 @@ class HyperliquidBot(Passivbot):
             if len(fetched) < n_candles_limit:
                 break
             since = fetched[-1][0]
-        all_fetched_d = {x[0]: [x[0], x[2], x[3], x[4]] for x in all_fetched}
+        all_fetched_d = {x[0]: self.ohlcv_to_hlc(x) for x in all_fetched}
         return sorted(all_fetched_d.values(), key=lambda x: x[0])
 
     async def fetch_pnls(
