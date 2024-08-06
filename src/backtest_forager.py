@@ -166,9 +166,9 @@ def add_argparse_args_to_config(config, args):
                 continue
             if key == "symbols":
                 symbols = sorted(set(value.split(",")))
-                if symbols != sorted(set(config["common"]["approved_symbols"])):
+                if symbols != sorted(set(config["backtest"]["symbols"])):
                     logging.info(f"new symbols: {symbols}")
-                    config["common"]["approved_symbols"] = symbols
+                    config["backtest"]["symbols"] = symbols
             elif key in config["backtest"]:
                 if not isinstance(config["backtest"][key], dict):
                     if config["backtest"][key] != value:
@@ -226,7 +226,7 @@ async def prepare_hlcs_mss(config):
             raise Exception("failed to load market specific settings from cache")
 
     timestamps, hlcs = await prepare_hlcs_forager(
-        config["common"]["approved_symbols"],
+        config["backtest"]["symbols"],
         config["backtest"]["start_date"],
         config["backtest"]["end_date"],
         base_dir=config["backtest"]["base_dir"],
@@ -237,7 +237,7 @@ async def prepare_hlcs_mss(config):
 
 
 def prep_backtest_args(config, mss, exchange_params=None, backtest_params=None):
-    symbols = sorted(set(config["common"]["approved_symbols"]))  # sort for consistency
+    symbols = sorted(set(config["backtest"]["symbols"]))  # sort for consistency
     bot_params = {k: config["bot"][k].copy() for k in ["long", "short"]}
     for pside in bot_params:
         bot_params[pside]["wallet_exposure_limit"] = (
@@ -274,9 +274,7 @@ def post_process(config, hlcs, fills, equities, analysis, results_path):
     sts = utc_ms()
     fdf = process_forager_fills(fills)
     equities = pd.Series(equities)
-    analysis_py, bal_eq = analyze_fills_forager(
-        config["common"]["approved_symbols"], hlcs, fdf, equities
-    )
+    analysis_py, bal_eq = analyze_fills_forager(config["backtest"]["symbols"], hlcs, fdf, equities)
     for k in analysis_py:
         if k not in analysis:
             analysis[k] = analysis_py[k]
@@ -288,7 +286,7 @@ def post_process(config, hlcs, fills, equities, analysis, results_path):
     json.dump(analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True)
     dump_config(config, f"{results_path}config.json")
     fdf.to_csv(f"{results_path}fills.csv")
-    plot_forager(results_path, config["common"]["approved_symbols"], fdf, bal_eq, hlcs)
+    plot_forager(results_path, config["backtest"]["symbols"], fdf, bal_eq, hlcs)
 
 
 def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcs):
@@ -339,7 +337,7 @@ def add_argparse_args_backtest_forager(parser):
 
 def calc_preferred_coins(hlcs, config):
     return np.argsort(
-        -pbr.calc_noisiness_py(hlcs, config["common"]["noisiness_rolling_mean_window_size"])
+        -pbr.calc_noisiness_py(hlcs, config["live"]["noisiness_rolling_mean_window_size"])
     )
 
 
