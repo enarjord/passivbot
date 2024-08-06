@@ -309,7 +309,7 @@ async def main():
     hlcs, mss, results_path = await prepare_hlcs_mss(config)
     preferred_coins = calc_noisiness_argsort_indices(hlcs).astype(np.int32)
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
-    coins = [symbol_to_coin(s) for s in config["common"]["approved_symbols"]]
+    coins = [symbol_to_coin(s) for s in config["backtest"]["symbols"]]
     coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
     hash_snippet = uuid4().hex[:8]
     config["results_filename"] = make_get_filepath(
