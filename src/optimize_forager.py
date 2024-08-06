@@ -18,9 +18,8 @@ from pure_funcs import (
     denumpyize,
     sort_dict_keys,
     calc_hash,
-    format_config,
 )
-from procedures import make_get_filepath, utc_ms, load_hjson_config, load_config
+from procedures import make_get_filepath, utc_ms, load_hjson_config, load_config, format_config
 from copy import deepcopy
 from njit_multisymbol import calc_noisiness_argsort_indices
 import numpy as np
@@ -290,7 +289,7 @@ def configs_to_individuals(cfgs):
 async def main():
     parser = argparse.ArgumentParser(prog="optimize_forager", description="run forager optimizer")
     parser.add_argument(
-        "config_path", type=str, default=None, nargs="?", help="path to hjson passivbot config"
+        "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )
     args = add_argparse_args_optimize_forager(parser)
     signal.signal(signal.SIGINT, signal_handler)
