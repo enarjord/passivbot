@@ -135,12 +135,10 @@ def format_config(config: dict) -> dict:
         raise Exception(f"failed to format config")
     result["live"]["approved_coins"] = sorted(set(result["live"]["approved_coins"]))
     if result["backtest"]["symbols"]:
-        result["backtest"]["symbols"] = [coin_to_symbol(s) for s in result["backtest"]["symbols"]]
+        result["backtest"]["symbols"] = coins_to_symbols(result["backtest"]["symbols"])
     else:
         if result["live"]["approved_coins"]:
-            result["backtest"]["symbols"] = [
-                coin_to_symbol(s) for s in result["live"]["approved_coins"]
-            ]
+            result["backtest"]["symbols"] = coins_to_symbols(result["live"]["approved_coins"])
         else:
             result["backtest"]["symbols"] = get_all_eligible_symbols(result)
     return result
@@ -174,6 +172,7 @@ def get_all_eligible_symbols(config=None):
     markets = cc.fetch_markets()
     symbols = [x["symbol"] for x in markets if "symbol" in x and x["symbol"].endswith(f":{quote}")]
     eligible_symbols = sorted(set([x.replace("/USDT:", "") for x in symbols]))
+    eligible_symbols = [x for x in eligible_symbols if x]
     json.dump(eligible_symbols, open(filepath, "w"))
     return eligible_symbols
 
@@ -192,7 +191,16 @@ def coin_to_symbol(coin: str, eligible_symbols=None):
     for x in candidates:
         if x.replace("USDT", "") == coin:
             return x
-    raise Exception(f"ambiguous coin: {coin}, candidates: {candidates}")
+    if coin == "":
+        return None
+    print(f"ambiguous coin: {coin}, candidates: {candidates}")
+    return None
+
+
+def coins_to_symbols(coins: [str], eligible_symbols=None):
+    eligible_symbols = get_all_eligible_symbols()
+    symbols = [coin_to_symbol(x, eligible_symbols) for x in coins]
+    return [x for x in symbols if x]
 
 
 def load_config(filepath: str) -> dict:
