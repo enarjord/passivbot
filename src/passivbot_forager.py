@@ -118,7 +118,7 @@ class Passivbot:
         self.forager_mode = self.is_forager_mode()
 
         self.minimum_market_age_millis = (
-            self.config["common"]["minimum_market_age_days"] * 24 * 60 * 60 * 1000
+            self.config["live"]["minimum_market_age_days"] * 24 * 60 * 60 * 1000
         )
         self.ohlcvs = {}
         self.ohlcv_upd_timestamps = {}
@@ -272,7 +272,7 @@ class Passivbot:
                 self.add_new_order(elm, source="POST")
 
     def is_forager_mode(self):
-        n_approved_symbols = len(self.config["common"]["approved_symbols"])
+        n_approved_symbols = len(self.config["live"]["approved_coins"])
         if n_approved_symbols == 0:
             return True
         if (
@@ -504,7 +504,7 @@ class Passivbot:
     async def init_hlcs_1m(self):
         # fetch latest hlcs_1m for all eligible symbols
         # to be called after starting websocket
-        min_n_candles = self.config["common"]["noisiness_rolling_mean_window_size"]
+        min_n_candles = self.config["live"]["noisiness_rolling_mean_window_size"]
         sleep_time_seconds = 20 / len(self.eligible_symbols)
         tasks = {}
         symbols = sorted(self.eligible_symbols)
@@ -672,7 +672,7 @@ class Passivbot:
             if symbol not in self.markets_dict and symbol in self.markets_dict_all:
                 logging.info(f"There is a position in an ineligible market: {symbol}.")
                 self.markets_dict[symbol] = self.markets_dict_all[symbol]
-                self.config["live"]["ignored_symbols"].append(symbol)
+                self.config["live"]["ignored_coins"].append(symbol)
 
         self.set_market_specific_settings()
         for symbol in self.markets_dict:
@@ -761,22 +761,20 @@ class Passivbot:
         return ""
 
     async def init_flags(self):
-        self.ignored_symbols = {
-            self.reformat_symbol(x) for x in self.config["live"]["ignored_symbols"]
-        }
+        self.ignored_coins = {self.reformat_symbol(x) for x in self.config["live"]["ignored_coins"]}
         self.flags = {}
         self.eligible_symbols = set()  # symbols which may be approved for trading
 
-        for symbol in self.config["common"]["approved_symbols"]:
+        for symbol in self.config["live"]["approved_coins"]:
             reformatted_symbol = self.reformat_symbol(symbol, verbose=True)
             if reformatted_symbol:
                 self.flags[reformatted_symbol] = (
-                    self.config["common"]["approved_symbols"][symbol]
-                    if isinstance(self.config["common"]["approved_symbols"], dict)
+                    self.config["live"]["approved_coins"][symbol]
+                    if isinstance(self.config["live"]["approved_coins"], dict)
                     else ""
                 )
                 self.eligible_symbols.add(reformatted_symbol)
-        if not self.config["common"]["approved_symbols"]:
+        if not self.config["live"]["approved_coins"]:
             self.eligible_symbols = set(self.markets_dict)
 
         # this argparser is used only internally
@@ -798,7 +796,7 @@ class Passivbot:
             )
             for pside in ["long", "short"]:
                 if (mode := getattr(self.flags[symbol], f"{pside}_mode")) is None:
-                    if symbol in self.ignored_symbols:
+                    if symbol in self.ignored_coins:
                         setattr(
                             self.flags[symbol],
                             f"{pside}_mode",
@@ -873,14 +871,13 @@ class Passivbot:
                 if symbol in self.actual_actives[pside]:
                     self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
         if self.forager_mode:
-            if self.config["common"]["relative_volume_filter_clip_pct"] > 0.0:
+            if self.config["live"]["relative_volume_filter_clip_pct"] > 0.0:
                 self.calc_volumes()
                 # filter by relative volume
                 eligible_symbols = sorted(self.volumes, key=lambda x: self.volumes[x])[
                     int(
                         round(
-                            len(self.volumes)
-                            * self.config["common"]["relative_volume_filter_clip_pct"]
+                            len(self.volumes) * self.config["live"]["relative_volume_filter_clip_pct"]
                         )
                     ) :
                 ]
@@ -1039,8 +1036,8 @@ class Passivbot:
             else:
                 WE_limit = (
                     self.config["bot"][pside]["total_wallet_exposure_limit"]
-                    / len(self.config["common"]["approved_symbols"])
-                    if len(self.config["common"]["approved_symbols"]) > 0
+                    / len(self.config["live"]["approved_coins"])
+                    if len(self.config["live"]["approved_coins"]) > 0
                     else 0.0
                 )
         return (
@@ -1621,11 +1618,14 @@ class Passivbot:
             ]
             seen = set()
             for pprice_diff, order in sorted(with_pprice_diff):
-                if order[0] == 0.0 or (
-                    any([x in order[2] for x in ["initial", "unstuck"]])
-                    and pprice_diff > self.config["live"]["price_distance_threshold"]
-                ):
+                position_side = "long" if "long" in order[2] else "short"
+                if order[0] == 0.0:
                     continue
+                if pprice_diff > self.config["live"]["price_distance_threshold"]:
+                    if not self.has_position(symbol, position_side):
+                        continue
+                    if any([x in order[2] for x in ["initial", "unstuck"]]):
+                        continue
                 seen_key = str(abs(order[0])) + str(order[1])
                 if seen_key in seen:
                     logging.info(f"debug duplicate ideal order {symbol} {order}")
@@ -1634,7 +1634,7 @@ class Passivbot:
                     {
                         "symbol": symbol,
                         "side": determine_side_from_order_tuple(order),
-                        "position_side": "long" if "long" in order[2] else "short",
+                        "position_side": position_side,
                         "qty": abs(order[0]),
                         "price": order[1],
                         "reduce_only": "close" in order[2],
@@ -2034,7 +2034,7 @@ class Passivbot:
                     await asyncio.sleep(1)
 
     async def maintain_ohlcvs(self, timeframe=None):
-        timeframe = self.config["common"]["ohlcv_interval"] if timeframe is None else timeframe
+        timeframe = "15m"
         # if in forager mode, maintain ohlcvs for all candidate symbols
         # else, fetch ohlcvs once for EMA initialization
         if not self.forager_mode:
@@ -2152,7 +2152,7 @@ class Passivbot:
         self.upd_minute_emas[symbol] = int(utc_ms() // (1000 * 60) * (1000 * 60))
 
     async def update_ohlcvs_multi(self, symbols, timeframe=None, n_fetches=10, verbose=False):
-        timeframe = self.config["common"]["ohlcv_interval"] if timeframe is None else timeframe
+        timeframe = "15m"
         all_res = []
         for sym_sublist in [symbols[i : i + n_fetches] for i in range(0, len(symbols), n_fetches)]:
             try:
@@ -2172,7 +2172,8 @@ class Passivbot:
                 logging.error(f"error with fetch_ohlcv in update_ohlcvs_multi {sym_sublist} {e}")
 
     async def update_ohlcvs_single(self, symbol, timeframe=None, age_limit_ms=1000 * 60 * 60):
-        timeframe = self.config["common"]["ohlcv_interval"] if timeframe is None else timeframe
+        timeframe = "15m"
+        n_ohlcvs = 100
         last_ts_modified = 0.0
         try:
             last_ts_modified = get_file_mod_utc(self.get_ohlcv_fpath(symbol))
@@ -2188,12 +2189,12 @@ class Passivbot:
                 self.ohlcvs[symbol] = await self.fetch_ohlcv(symbol, timeframe=timeframe)
                 self.dump_ohlcv_to_cache(symbol, self.ohlcvs[symbol])
             """
-            if len(self.ohlcvs[symbol]) < self.config["common"]["n_ohlcvs"]:
+            if len(self.ohlcvs[symbol]) < n_ohlcvs:
                 logging.info(
-                    f"too few ohlcvs fetched for {symbol}: fetched {len(self.ohlcvs[symbol])}, ideally: {self.config['common']['n_ohlcvs']}"
+                    f"too few ohlcvs fetched for {symbol}: fetched {len(self.ohlcvs[symbol])}, ideally: {n_ohlcvs}"
                 )
             """
-            self.ohlcvs[symbol] = self.ohlcvs[symbol][-self.config["common"]["n_ohlcvs"] :]
+            self.ohlcvs[symbol] = self.ohlcvs[symbol][-n_ohlcvs:]
             return True
         except Exception as e:
             logging.error(f"error with update_ohlcvs_single {symbol} {e}")
@@ -2274,7 +2275,7 @@ async def main():
             str,
             ", comma separated (SYM1USDT,SYM2USDT,...)",
         ),
-        ("i", "ignored_symbols", "ignored_symbols", str, ", comma separated (SYM1USDT,SYM2USDT,...)"),
+        ("i", "ignored_coins", "ignored_coins", str, ", comma separated (SYM1USDT,SYM2USDT,...)"),
         ("le", "long_enabled", "long_enabled", str2bool, " (y/n or t/f)"),
         ("se", "short_enabled", "short_enabled", str2bool, " (y/n or t/f)"),
         ("tl", "total_wallet_exposure_long", "TWE_long", float, ""),
