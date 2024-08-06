@@ -12,6 +12,7 @@ from procedures import (
     fetch_market_specific_settings_multi,
     load_config,
     dump_config,
+    coin_to_symbol,
 )
 from pure_funcs import (
     get_template_live_config,
@@ -165,10 +166,10 @@ def add_argparse_args_to_config(config, args):
             if value is None:
                 continue
             if key == "symbols":
-                symbols = sorted(set(value.split(",")))
+                symbols = sorted([coin_to_symbol(x) for x in set(value.split(","))])
                 if symbols != sorted(set(config["backtest"]["symbols"])):
                     logging.info(f"new symbols: {symbols}")
-                    config["backtest"]["symbols"] = symbols
+                    config["backtest"]["symbols"] = [coin_to_symbol(x) for x in symbols]
             elif key in config["backtest"]:
                 if not isinstance(config["backtest"][key], dict):
                     if config["backtest"][key] != value:
