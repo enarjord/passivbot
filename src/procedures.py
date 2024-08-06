@@ -40,11 +40,36 @@ from pure_funcs import (
 )
 
 
+def get_all_eligible_symbols(exchange="binance"):
+    exchange_map = {
+        "bybit": "bybit",
+        "binance": "binanceusdm",
+        # "bitget": "bitget", TODO
+        # "bingx": "bingx", TODO
+        "hyperliquid": "hyperliquid",
+    }
+    quote = "USDT"
+    assert exchange in exchange_map, f"unsupported exchange {exchange}"
+    import ccxt
+
+    cc = getattr(ccxt, exchange_map[exchange])()
+    markets = cc.fetch_markets()
+    symbols = [x["symbol"] for x in markets if "symbol" in x and x["symbol"].endswith(f":{quote}")]
+    return sorted(set([x.replace("/USDT:", "") for x in symbols]))
+
+
 def load_config(filepath: str) -> dict:
     # loads hjson or json v7 config
     try:
         config = load_hjson_config(filepath)
         config = format_config(config)
+        if config["common"]["approved_symbols"] == []:
+            # all symbols are approved
+            # use all eligible symbols
+            print("approved_symbols is empty; use all eligible symbols")
+            config["common"]["approved_symbols"] = get_all_eligible_symbols(
+                config["backtest"]["exchange"]
+            )
         for k0, k1, v in [
             ("live", "time_in_force", "good_till_cancelled"),
             ("common", "noisiness_rolling_mean_window_size", 60),
