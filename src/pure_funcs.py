@@ -2574,6 +2574,10 @@ def format_config(config: dict) -> dict:
         result = template
     elif "common" in config:
         # older v7 config type
+        for k0 in ["backtest", "live", "optimize", "bot"]:
+            for k1 in config[k0]:
+                if k1 in template[k0]:
+                    template[k0][k1] = config[k0][k1]
         for key in config["common"]:
             if key in template["live"]:
                 template["live"][key] = config["common"][key]
