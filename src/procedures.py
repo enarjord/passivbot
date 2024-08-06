@@ -37,16 +37,17 @@ from pure_funcs import (
     date2ts_utc,
     remove_OD,
     format_config,
+    symbol_to_coin,
 )
 
 
 def get_all_eligible_symbols(exchange="binance"):
     exchange_map = {
-        "bybit": "bybit",
+        # "bybit": "bybit", TODO
         "binance": "binanceusdm",
         # "bitget": "bitget", TODO
         # "bingx": "bingx", TODO
-        "hyperliquid": "hyperliquid",
+        # "hyperliquid": "hyperliquid", TODO
     }
     quote = "USDT"
     assert exchange in exchange_map, f"unsupported exchange {exchange}"
@@ -63,16 +64,21 @@ def load_config(filepath: str) -> dict:
     try:
         config = load_hjson_config(filepath)
         config = format_config(config)
-        if config["common"]["approved_symbols"] == []:
-            # all symbols are approved
-            # use all eligible symbols
-            print("approved_symbols is empty; use all eligible symbols")
-            config["common"]["approved_symbols"] = get_all_eligible_symbols(
-                config["backtest"]["exchange"]
-            )
+        if config["backtest"]["symbols"] == []:
+            if config["live"]["approved_coins"] == []:
+                # all symbols are approved
+                # use all eligible symbols
+                print("approved_symbols is empty; use all eligible symbols")
+                config["backtest"]["symbols"] = get_all_eligible_symbols(
+                    config["backtest"]["exchange"]
+                )
+            else:
+                config["backtest"]["symbols"] = [
+                    symbol_to_coin(s) + "USDT" for s in config["live"]["approved_coins"]
+                ]
         for k0, k1, v in [
             ("live", "time_in_force", "good_till_cancelled"),
-            ("common", "noisiness_rolling_mean_window_size", 60),
+            ("live", "noisiness_rolling_mean_window_size", 60),
         ]:
             if k1 not in config[k0]:
                 config[k0][k1] = v
