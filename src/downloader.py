@@ -33,7 +33,7 @@ from procedures import (
     utc_ms,
     get_first_ohlcv_timestamps,
 )
-from pure_funcs import ts_to_date, ts_to_date_utc, date_to_ts2, get_dummy_settings, get_day
+from pure_funcs import ts_to_date, ts_to_date_utc, date_to_ts2, get_dummy_settings, get_day, numpyize
 
 
 class Downloader:
@@ -1439,6 +1439,20 @@ async def prepare_hlcs_forager(
     unified_data = []
     for symbol, data in hlcsd.items():
         padded_hlcs = pad_hlcs(data, timestamps)
+        unified_data.append(padded_hlcs)
+
+    return timestamps, np.array(unified_data).transpose(1, 0, 2)
+
+
+def format_hlcs_forager(hlcsd: dict):
+    interval_ms = 60000
+    first_timestamp = min([x[0][0] for x in hlcsd.values()])
+    last_timestamp = max([x[-1][0] for x in hlcsd.values()])
+    timestamps = np.arange(first_timestamp, last_timestamp + interval_ms, interval_ms)
+
+    unified_data = []
+    for symbol, data in hlcsd.items():
+        padded_hlcs = pad_hlcs(numpyize(data), timestamps)
         unified_data.append(padded_hlcs)
 
     return timestamps, np.array(unified_data).transpose(1, 0, 2)
