@@ -36,12 +36,129 @@ from pure_funcs import (
     determine_passivbot_mode,
     date2ts_utc,
     remove_OD,
-    format_config,
     symbol_to_coin,
 )
 
 
-def get_all_eligible_symbols(exchange="binance"):
+def format_config(config: dict) -> dict:
+    # attempts to format a config to v7 config
+    template = get_template_live_config("v7")
+    cmap = {
+        "ddown_factor": "entry_grid_double_down_factor",
+        "initial_eprice_ema_dist": "entry_initial_ema_dist",
+        "initial_qty_pct": "entry_initial_qty_pct",
+        "markup_range": "close_grid_markup_range",
+        "min_markup": "close_grid_min_markup",
+        "rentry_pprice_dist": "entry_grid_spacing_pct",
+        "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_weight",
+        "ema_span_0": "ema_span_0",
+        "ema_span_1": "ema_span_1",
+    }
+    cmap_inv = {v: k for k, v in cmap.items()}
+    if all(
+        [
+            x in config
+            for x in [
+                "user",
+                "pnls_max_lookback_days",
+                "loss_allowance_pct",
+                "stuck_threshold",
+                "unstuck_close_pct",
+                "TWE_long",
+                "TWE_short",
+                "n_ohlcvs",
+                "universal_live_config",
+            ]
+        ]
+    ):
+        # PB multi live config
+        for key1 in template["live"]:
+            if key1 in config:
+                template["live"][key1] = config[key1]
+        if config["approved_symbols"] and isinstance(config["approved_symbols"], dict):
+            template["live"]["coin_flags"] = config["approved_symbols"]
+        template["live"]["approved_coins"] = sorted(set(config["approved_symbols"]))
+        template["live"]["ignored_coins"] = sorted(set(config["ignored_symbols"]))
+        for pside in ["long", "short"]:
+            for key in template["bot"][pside]:
+                if key in cmap_inv and cmap_inv[key] in config["universal_live_config"][pside]:
+                    template["bot"][pside][key] = config["universal_live_config"][pside][
+                        cmap_inv[key]
+                    ]
+            close_grid_qty_pct = 1.0 / round(config["universal_live_config"][pside]["n_close_orders"])
+            template["bot"][pside]["close_grid_qty_pct"] = 1.0 / round(
+                config["universal_live_config"][pside]["n_close_orders"]
+            )
+            for key in [
+                "close_trailing_grid_ratio",
+                "close_trailing_retracement_pct",
+                "close_trailing_threshold_pct",
+                "entry_trailing_grid_ratio",
+                "entry_trailing_retracement_pct",
+                "entry_trailing_threshold_pct",
+                "unstuck_ema_dist",
+            ]:
+                template["bot"][pside][key] = 0.0
+            if config[f"n_longs"] == 0 and config[f"n_shorts"] == 0:
+                forager_mode = False
+                # not forager mode
+                n_positions = len(template["live"]["coin_flags"])
+            else:
+                n_positions = config[f"n_{pside}s"]
+            template["bot"][pside]["n_positions"] = n_positions
+            template["bot"][pside]["unstuck_close_pct"] = config["unstuck_close_pct"]
+            template["bot"][pside]["unstuck_loss_allowance_pct"] = config["loss_allowance_pct"]
+            template["bot"][pside]["unstuck_threshold"] = config["stuck_threshold"]
+            template["bot"][pside]["total_wallet_exposure_limit"] = (
+                config[f"TWE_{pside}"] if config[f"{pside}_enabled"] else 0.0
+            )
+        result = template
+    elif "common" in config:
+        # older v7 config type
+        for k0 in ["backtest", "live", "optimize", "bot"]:
+            for k1 in config[k0]:
+                if k1 in template[k0]:
+                    template[k0][k1] = config[k0][k1]
+        for key in config["common"]:
+            if key in template["live"]:
+                template["live"][key] = config["common"][key]
+        template["live"]["approved_coins"] = config["common"]["approved_symbols"]
+        template["live"]["coin_flags"] = config["common"]["symbol_flags"]
+        result = template
+    elif all([k in config for k in template]):
+        result = deepcopy(config)
+    elif all([k in config for k in ["analysis", "config"]]) and all(
+        [k in config["config"] for k in template]
+    ):
+        result = deepcopy(config["config"])
+    else:
+        raise Exception(f"failed to format config")
+    result["live"]["approved_coins"] = sorted(set(result["live"]["approved_coins"]))
+    if result["backtest"]["symbols"]:
+        result["backtest"]["symbols"] = [coin_to_symbol(s) for s in result["backtest"]["symbols"]]
+    else:
+        if result["live"]["approved_coins"]:
+            result["backtest"]["symbols"] = [
+                coin_to_symbol(s) for s in result["live"]["approved_coins"]
+            ]
+        else:
+            result["backtest"]["symbols"] = get_all_eligible_symbols(result)
+    return result
+
+
+def get_all_eligible_symbols(config=None):
+    if config is None:
+        exchange = "binance"
+    elif config["backtest"]["exchange"] != "binance":
+        raise Exception(f"only exchange binance is supported for backtesting")
+    else:
+        exchange = config["backtest"]["exchange"]
+    filepath = make_get_filepath("caches/binance/eligible_symbols.json")
+    try:
+        assert utc_ms() - get_file_mod_utc(filepath) < 1000 * 60 * 60 * 24
+        return json.load(open(filepath))
+    except Exception as e:
+        pass
     exchange_map = {
         # "bybit": "bybit", TODO
         "binance": "binanceusdm",
@@ -56,7 +173,26 @@ def get_all_eligible_symbols(exchange="binance"):
     cc = getattr(ccxt, exchange_map[exchange])()
     markets = cc.fetch_markets()
     symbols = [x["symbol"] for x in markets if "symbol" in x and x["symbol"].endswith(f":{quote}")]
-    return sorted(set([x.replace("/USDT:", "") for x in symbols]))
+    eligible_symbols = sorted(set([x.replace("/USDT:", "") for x in symbols]))
+    json.dump(eligible_symbols, open(filepath, "w"))
+    return eligible_symbols
+
+
+def coin_to_symbol(coin: str, eligible_symbols=None):
+    # formats coin to appropriate symbol
+    if eligible_symbols is None:
+        eligible_symbols = get_all_eligible_symbols()
+    coin = symbol_to_coin(coin)
+    candidates = [x for x in eligible_symbols if coin in x]
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) == 0:
+        print(f"no candidate symbol found for {coin}")
+        return None
+    for x in candidates:
+        if x.replace("USDT", "") == coin:
+            return x
+    raise Exception(f"ambiguous coin: {coin}, candidates: {candidates}")
 
 
 def load_config(filepath: str) -> dict:
@@ -64,18 +200,6 @@ def load_config(filepath: str) -> dict:
     try:
         config = load_hjson_config(filepath)
         config = format_config(config)
-        if config["backtest"]["symbols"] == []:
-            if config["live"]["approved_coins"] == []:
-                # all symbols are approved
-                # use all eligible symbols
-                print("approved_symbols is empty; use all eligible symbols")
-                config["backtest"]["symbols"] = get_all_eligible_symbols(
-                    config["backtest"]["exchange"]
-                )
-            else:
-                config["backtest"]["symbols"] = [
-                    symbol_to_coin(s) + "USDT" for s in config["live"]["approved_coins"]
-                ]
         for k0, k1, v in [
             ("live", "time_in_force", "good_till_cancelled"),
             ("live", "noisiness_rolling_mean_window_size", 60),
