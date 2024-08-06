@@ -499,16 +499,17 @@ def get_template_live_config(passivbot_mode="neat_grid"):
             "backtest": {
                 "base_dir": "backtests",
                 "end_date": "now",
-                "start_date": "2021-05-01",
                 "exchange": "binance",
+                "start_date": "2021-05-01",
                 "starting_balance": 100000.0,
+                "symbols": [],
             },
             "bot": {
                 "long": {
                     "close_grid_markup_range": 0.0255,
                     "close_grid_min_markup": 0.0089,
                     "close_grid_qty_pct": 0.125,
-                    "close_trailing_grid_ratio": 0.0,
+                    "close_trailing_grid_ratio": 0.5,
                     "close_trailing_retracement_pct": 0.002,
                     "close_trailing_threshold_pct": 0.008,
                     "ema_span_0": 1318.0,
@@ -518,10 +519,10 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                     "entry_grid_spacing_weight": 0.697,
                     "entry_initial_ema_dist": -0.00738,
                     "entry_initial_qty_pct": 0.00592,
-                    "entry_trailing_grid_ratio": 0.0,
+                    "entry_trailing_grid_ratio": 0.5,
                     "entry_trailing_retracement_pct": 0.01,
                     "entry_trailing_threshold_pct": 0.05,
-                    "n_positions": 10,
+                    "n_positions": 10.0,
                     "total_wallet_exposure_limit": 1.7,
                     "unstuck_close_pct": 0.001,
                     "unstuck_ema_dist": 0.0,
@@ -532,7 +533,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                     "close_grid_markup_range": 0.0255,
                     "close_grid_min_markup": 0.0089,
                     "close_grid_qty_pct": 0.125,
-                    "close_trailing_grid_ratio": 0.0,
+                    "close_trailing_grid_ratio": 0.5,
                     "close_trailing_retracement_pct": 0.002,
                     "close_trailing_threshold_pct": 0.008,
                     "ema_span_0": 1318.0,
@@ -542,10 +543,10 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                     "entry_grid_spacing_weight": 0.697,
                     "entry_initial_ema_dist": -0.00738,
                     "entry_initial_qty_pct": 0.00592,
-                    "entry_trailing_grid_ratio": 0.0,
+                    "entry_trailing_grid_ratio": 0.5,
                     "entry_trailing_retracement_pct": 0.01,
                     "entry_trailing_threshold_pct": 0.05,
-                    "n_positions": 10,
+                    "n_positions": 10.0,
                     "total_wallet_exposure_limit": 1.7,
                     "unstuck_close_pct": 0.001,
                     "unstuck_ema_dist": 0.0,
@@ -553,27 +554,23 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                     "unstuck_threshold": 0.916,
                 },
             },
-            "common": {
-                "approved_symbols": ["BTCUSDT", "ETHUSDT", "XRPUSDT"],
-                "minimum_market_age_days": 7.0,
-                "n_ohlcvs": 100,
-                "noisiness_rolling_mean_window_size": 60,
-                "ohlcv_interval": "15m",
-                "relative_volume_filter_clip_pct": 0.1,
-                "symbol_flags": {},
-            },
             "live": {
+                "approved_coins": ["BCH", "BTC", "DOGE", "ETH", "LTC", "XLM", "XRP"],
                 "auto_gs": True,
+                "coin_flags": {},
                 "execution_delay_seconds": 2.0,
                 "filter_by_min_effective_cost": True,
                 "forced_mode_long": "",
                 "forced_mode_short": "",
-                "ignored_symbols": [],
+                "ignored_coins": ["COIN1", "COIN2"],
                 "leverage": 10.0,
                 "max_n_cancellations_per_batch": 5,
                 "max_n_creations_per_batch": 3,
+                "minimum_market_age_days": 7.0,
+                "noisiness_rolling_mean_window_size": 60,
                 "pnls_max_lookback_days": 30.0,
                 "price_distance_threshold": 0.002,
+                "relative_volume_filter_clip_pct": 0.1,
                 "time_in_force": "post_only",
                 "user": "bybit_01",
             },
@@ -633,7 +630,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 },
                 "mutation_probability": 0.2,
                 "n_cpus": 5,
-                "population_size": 100,
+                "population_size": 500,
             },
         }
     elif passivbot_mode == "multi_hjson":
@@ -2534,15 +2531,13 @@ def format_config(config: dict) -> dict:
         ]
     ):
         # PB multi live config
-        for key0 in ["live", "common"]:
-            for key1 in template[key0]:
-                if key1 in config:
-                    template[key0][key1] = config[key1]
-        if template["common"]["approved_symbols"] and isinstance(
-            template["common"]["approved_symbols"], dict
-        ):
-            template["live"]["symbol_flags"] = template["common"]["approved_symbols"]
-        template["common"]["approved_symbols"] = sorted(template["common"]["approved_symbols"])
+        for key1 in template["live"]:
+            if key1 in config:
+                template["live"][key1] = config[key1]
+        if config["approved_symbols"] and isinstance(config["approved_symbols"], dict):
+            template["live"]["coin_flags"] = config["approved_symbols"]
+        template["live"]["approved_coins"] = sorted(set(config["approved_symbols"]))
+        template["live"]["ignored_coins"] = sorted(set(config["ignored_symbols"]))
         for pside in ["long", "short"]:
             for key in template["bot"][pside]:
                 if key in cmap_inv and cmap_inv[key] in config["universal_live_config"][pside]:
@@ -2566,7 +2561,7 @@ def format_config(config: dict) -> dict:
             if config[f"n_longs"] == 0 and config[f"n_shorts"] == 0:
                 forager_mode = False
                 # not forager mode
-                n_positions = len(template["live"]["symbol_flags"])
+                n_positions = len(template["live"]["coin_flags"])
             else:
                 n_positions = config[f"n_{pside}s"]
             template["bot"][pside]["n_positions"] = n_positions
@@ -2577,6 +2572,14 @@ def format_config(config: dict) -> dict:
                 config[f"TWE_{pside}"] if config[f"{pside}_enabled"] else 0.0
             )
         result = template
+    elif "common" in config:
+        # older v7 config type
+        for key in config["common"]:
+            if key in template["live"]:
+                template["live"][key] = config["common"][key]
+        template["live"]["approved_coins"] = config["common"]["approved_symbols"]
+        template["live"]["coin_flags"] = config["common"]["symbol_flags"]
+        result = template
     elif all([k in config for k in template]):
         result = deepcopy(config)
     elif all([k in config for k in ["analysis", "config"]]) and all(
@@ -2585,5 +2588,6 @@ def format_config(config: dict) -> dict:
         result = deepcopy(config["config"])
     else:
         raise Exception(f"failed to format config")
-    result["common"]["approved_symbols"] = sorted(set(result["common"]["approved_symbols"]))
+    result["live"]["approved_coins"] = sorted(set(result["live"]["approved_coins"]))
+    pprint.pprint(result)
     return result
