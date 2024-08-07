@@ -152,29 +152,40 @@ def get_all_eligible_symbols(config=None):
     else:
         exchange = config["backtest"]["exchange"]
     filepath = make_get_filepath("caches/binance/eligible_symbols.json")
+    loaded_json = None
     try:
+        loaded_json = json.load(open(filepath))
         assert utc_ms() - get_file_mod_utc(filepath) < 1000 * 60 * 60 * 24
-        return json.load(open(filepath))
+        return loaded_json
     except Exception as e:
         pass
-    exchange_map = {
-        # "bybit": "bybit", TODO
-        "binance": "binanceusdm",
-        # "bitget": "bitget", TODO
-        # "bingx": "bingx", TODO
-        # "hyperliquid": "hyperliquid", TODO
-    }
-    quote = "USDT"
-    assert exchange in exchange_map, f"unsupported exchange {exchange}"
-    import ccxt
+    try:
+        exchange_map = {
+            # "bybit": "bybit", TODO
+            "binance": "binanceusdm",
+            # "bitget": "bitget", TODO
+            # "bingx": "bingx", TODO
+            # "hyperliquid": "hyperliquid", TODO
+        }
+        quote = "USDT"
+        assert exchange in exchange_map, f"unsupported exchange {exchange}"
+        import ccxt
 
-    cc = getattr(ccxt, exchange_map[exchange])()
-    markets = cc.fetch_markets()
-    symbols = [x["symbol"] for x in markets if "symbol" in x and x["symbol"].endswith(f":{quote}")]
-    eligible_symbols = sorted(set([x.replace("/USDT:", "") for x in symbols]))
-    eligible_symbols = [x for x in eligible_symbols if x]
-    json.dump(eligible_symbols, open(filepath, "w"))
-    return eligible_symbols
+        cc = getattr(ccxt, exchange_map[exchange])()
+        markets = cc.fetch_markets()
+        symbols = [
+            x["symbol"] for x in markets if "symbol" in x and x["symbol"].endswith(f":{quote}")
+        ]
+        eligible_symbols = sorted(set([x.replace("/USDT:", "") for x in symbols]))
+        eligible_symbols = [x for x in eligible_symbols if x]
+        json.dump(eligible_symbols, open(filepath, "w"))
+        return eligible_symbols
+    except Exception as e:
+        print(f"error fetching eligible symbols {e}")
+        if loaded_json:
+            print(f"using cached data")
+            return loaded_json
+        raise Exception("unable to fetch or load from cache")
 
 
 def coin_to_symbol(coin: str, eligible_symbols=None):
