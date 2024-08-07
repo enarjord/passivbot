@@ -288,28 +288,14 @@ class HyperliquidBot(Passivbot):
             return False
 
     async def fetch_hlcs_1m(self, symbol: str, since: float = None):
-        n_candles_limit = 500
-        if since is None:
-            result = await self.cca.fetch_ohlcv(
-                symbol,
-                timeframe="1m",
-                limit=n_candles_limit,
-                since=int(self.get_exchange_time() - 1000 * 60 * 60 * 3),
-            )
-            return [self.ohlcv_to_hlc(x) for x in result]
-        since = since // 60000 * 60000
-        max_n_fetches = 20
-        all_fetched = []
-        for i in range(max_n_fetches):
-            fetched = await self.cca.fetch_ohlcv(
-                symbol, timeframe="1m", since=int(since), limit=n_candles_limit
-            )
-            all_fetched += fetched
-            if len(fetched) < n_candles_limit:
-                break
-            since = fetched[-1][0]
-        all_fetched_d = {x[0]: self.ohlcv_to_hlc(x) for x in all_fetched}
-        return sorted(all_fetched_d.values(), key=lambda x: x[0])
+        n_candles_limit = 5000
+        result = await self.cca.fetch_ohlcv(
+            symbol,
+            timeframe="1m",
+            limit=n_candles_limit,
+            since=int(self.get_exchange_time() - 1000 * 60 * n_candles_limit * 0.95),
+        )
+        return [self.ohlcv_to_hlc(x) for x in result]
 
     async def fetch_pnls(
         self,
