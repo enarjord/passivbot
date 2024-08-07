@@ -944,7 +944,7 @@ def backtest_forager(
 ):
     """
     hlcs contains all eligible symbols, time frame is 1m
-    hlcs stucture: (n_minutes, n_markets, 3)
+    hlcs structure: (n_minutes, n_markets, 3)
     hlcs:
     [
         [

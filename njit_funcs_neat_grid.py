@@ -301,7 +301,7 @@ def approximate_neat_grid_long(
         return grid, diff, i
 
     if pprice == 0.0 or psize == 0.0:
-        raise Exception("cannot appriximate grid without pprice and psize")
+        raise Exception("cannot approximate grid without pprice and psize")
     grid, diff, i = eval_(pprice, psize)
     grid, diff, i = eval_(pprice * (pprice / grid[i][3]), psize)
     if diff < 0.01:
@@ -389,7 +389,7 @@ def approximate_neat_grid_short(
 
     abs_psize = abs(psize)
     if pprice == 0.0 or psize == 0.0:
-        raise Exception("cannot appriximate grid without pprice and psize")
+        raise Exception("cannot approximate grid without pprice and psize")
     grid, diff, i = eval_(pprice, psize)
     grid, diff, i = eval_(pprice * (pprice / grid[i][3]), psize)
     if diff < 0.01:

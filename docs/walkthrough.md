@@ -97,7 +97,7 @@ Once you're satisfied with the configuration, start the bot:
 python3 passivbot.py binance_01 XLMUSDT configs/live/myconfig.json
 ```
 
-If the bot started succesfully, you should receive a message **Passivbot started!**. After this, you can disconnect
+If the bot started successfully, you should receive a message **Passivbot started!**. After this, you can disconnect
 from the tmux session by pressing `ctrl+b`, following by pressing `d`.
 
 !!! Info
