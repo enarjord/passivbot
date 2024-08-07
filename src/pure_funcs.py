@@ -571,7 +571,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 "pnls_max_lookback_days": 30.0,
                 "price_distance_threshold": 0.002,
                 "relative_volume_filter_clip_pct": 0.1,
-                "time_in_force": "post_only",
+                "time_in_force": "good_till_cancelled",
                 "user": "bybit_01",
             },
             "optimize": {
