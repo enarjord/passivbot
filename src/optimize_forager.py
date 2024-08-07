@@ -10,6 +10,7 @@ from backtest_forager import (
     prep_backtest_args,
     convert_to_v7,
     add_argparse_args_to_config,
+    calc_preferred_coins,
 )
 from pure_funcs import (
     get_template_live_config,
@@ -21,7 +22,6 @@ from pure_funcs import (
 )
 from procedures import make_get_filepath, utc_ms, load_hjson_config, load_config, format_config
 from copy import deepcopy
-from njit_multisymbol import calc_noisiness_argsort_indices
 import numpy as np
 from uuid import uuid4
 import signal
@@ -306,7 +306,7 @@ async def main():
         config = load_config(args.config_path)
     config = add_argparse_args_to_config(config, args)
     hlcs, mss, results_path = await prepare_hlcs_mss(config)
-    preferred_coins = calc_noisiness_argsort_indices(hlcs).astype(np.int32)
+    preferred_coins = calc_preferred_coins(hlcs, config)
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
     coins = [symbol_to_coin(s) for s in config["backtest"]["symbols"]]
     coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
