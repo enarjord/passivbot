@@ -119,7 +119,7 @@ def process_single(file_location, verbose=False):
     del best_d["config"]
     fjson = config_pretty_str(best_d)
     print_(fjson)
-    coins = [s.replace("USDT", "") for s in best_d["common"]["approved_symbols"]]
+    coins = [s.replace("USDT", "") for s in best_d["backtest"]["symbols"]]
     print_(file_location)
     fname = os.path.split(file_location)[-1].replace("_all_results.txt", "") + ".json"
     full_path = make_get_filepath(os.path.join("opt_results_forager_analysis", fname))
