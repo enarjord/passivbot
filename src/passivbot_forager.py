@@ -10,6 +10,7 @@ import json
 import hjson
 import pprint
 import numpy as np
+import inspect
 import passivbot_rust as pbr
 from prettytable import PrettyTable
 from uuid import uuid4
@@ -69,6 +70,10 @@ logging.basicConfig(
     level=logging.INFO,
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
+
+
+def get_function_name():
+    return inspect.currentframe().f_back.f_code.co_name
 
 
 class Passivbot:
@@ -232,10 +237,6 @@ class Passivbot:
             self.update_positions(),
             self.update_pnls(),
             self.update_exchange_configs(),
-        )
-        await asyncio.gather(
-            self.update_hlcs_1m(),
-            self.update_tickers(),
         )
         self.update_PB_modes()
 
@@ -1921,6 +1922,82 @@ class Passivbot:
                     logging.error(f"debug failed to dump to disk {k} {e}")
             self.tmp_debug_ts = utc_ms()
 
+    def fill_gaps_hlcs_1m(self):
+        for symbol in self.hlcs_1m:
+            self.fill_gaps_hlcs_1m_single(symbol)
+
+    def fill_gaps_hlcs_1m_single(self, symbol):
+        if symbol not in self.hlcs_1m or not self.hlcs_1m[symbol]:
+            return
+        now_minute = int(self.get_exchange_time() // 60000 * 60000)
+        last_ts, last_hlc = self.hlcs_1m[symbol].peekitem(-1)
+        if now_minute > last_ts:
+            print(
+                "debug add last hlc",
+                symbol,
+                ts_to_date_utc(now_minute),
+                [now_minute] + [last_hlc[3]] * 3,
+            )
+            self.hlcs_1m[symbol][now_minute] = [now_minute] + [last_hlc[3]] * 3
+        n_hlcs = len(self.hlcs_1m[symbol])
+        range_ms = self.hlcs_1m[symbol].peekitem(-1)[0] - self.hlcs_1m[symbol].peekitem(0)[0]
+        ideal_n_hlcs = int((range_ms) / 60000) + 1
+        if ideal_n_hlcs > n_hlcs:
+            ts = self.hlcs_1m[symbol].peekitem(0)[0]
+            last_ts = self.hlcs_1m[symbol].peekitem(-1)[0]
+            while ts < last_ts:
+                ts += 60000
+                if ts not in self.hlcs_1m[symbol]:
+                    self.hlcs_1m[symbol][ts] = [ts] + [self.hlcs_1m[symbol][ts - 60000][3]] * 3
+                    print(
+                        "debug fill gaps hlcs 1m",
+                        symbol,
+                        ts_to_date_utc(ts),
+                        self.hlcs_1m[symbol][ts],
+                    )
+
+    def init_EMAs_single_new(self, symbol):
+        first_ts, first_hlc = self.hlcs_1m[symbol].peekitem(0)
+        for pside in ["long", "short"]:
+            self.emas[pside][symbol] = np.repeat(first_hlc[3], 3)
+            lc = self.live_configs[symbol][pside]
+            es = [lc["ema_span_0"], lc["ema_span_1"], (lc["ema_span_0"] * lc["ema_span_1"]) ** 0.5]
+            ema_spans = numpyize(sorted(es))
+            self.ema_alphas[pside][symbol] = (a := (2.0 / (ema_spans + 1)), 1.0 - a)
+        self.upd_minute_emas[symbol] = first_ts
+
+    def update_EMAs_new(self):
+        for symbol in self.hlcs_1m:
+            self.update_EMAs_single_new(symbol)
+
+    def update_EMAs_single_new(self, symbol):
+        try:
+            self.fill_gaps_hlcs_1m_single(symbol)
+            if symbol not in self.emas["long"]:
+                self.init_EMAs_single_new(symbol)
+            last_ts, last_hlc = self.hlcs_1m[symbol].peekitem(-1)
+            mn = 60000
+            for ts in range(self.upd_minute_emas[symbol] + mn, last_ts + mn, mn):
+                for pside in ["long", "short"]:
+                    self.emas[pside][symbol] = calc_ema(
+                        self.ema_alphas[pside][symbol][0],
+                        self.ema_alphas[pside][symbol][1],
+                        self.emas[pside][symbol],
+                        self.hlcs_1m[symbol][ts][3],
+                    )
+            self.upd_minute_emas[symbol] = last_ts
+            return True
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} for {symbol}: {e}")
+            traceback.print_exc()
+            return False
+
+    async def start_bot_new(self):
+        await self.init_markets_dict()
+        self.ohlcv_WS = asyncio.create_task(self.watch_ohlcvs())
+        await asyncio.sleep(1)
+        await self.init_hlcs_1m()
+
     async def start_bot(self):
         await self.start_data_maintainers()
         await self.run_execution_loop()
@@ -1972,6 +2049,17 @@ class Passivbot:
             if symbol == sorted(self.ohlcv_upd_timestamps.items(), key=lambda x: x[1])[0][0]:
                 break
         return symbol
+
+    def calc_noisiness_new(self):
+        if not hasattr(self, "noisiness"):
+            self.noisiness = {}
+        n = int(self.config["live"]["noisiness_rolling_mean_window_size"])
+        for symbol in self.eligible_symbols:
+            if symbol in self.hlcs_1m and self.hlcs_1m[symbol]:
+                hlcs = [v for _, v in self.hlcs_1m[symbol].items()[-n:]]
+                self.noisiness[symbol] = np.mean([(x[1] - x[2]) / x[3] for x in hlcs])
+            else:
+                self.noisiness[symbol] = 0.0
 
     def calc_noisiness(self, symbol=None):
         if not hasattr(self, "noisiness"):
