@@ -6,7 +6,6 @@ import passivbot_rust as pbr
 import asyncio
 import argparse
 from procedures import (
-    load_hjson_config,
     utc_ms,
     make_get_filepath,
     fetch_market_specific_settings_multi,
@@ -17,12 +16,10 @@ from procedures import (
 from pure_funcs import (
     get_template_live_config,
     ts_to_date,
-    calc_drawdowns,
     sort_dict_keys,
 )
 import pprint
 from downloader import prepare_hlcs_forager
-from njit_multisymbol import calc_noisiness_argsort_indices
 from plotting import plot_fills_forager
 import matplotlib.pyplot as plt
 import logging
@@ -193,15 +190,6 @@ def add_argparse_args_to_config(config, args):
         except Exception as e:
             raise Exception(f"failed to add argparse arg to config {key}: {e}")
     return config
-
-
-def load_and_process_config(path: str):
-    """
-    loads and processes configs of various types; returns standardized v7 config
-    """
-    loaded = load_hjson_config(path)
-    formatted = convert_to_v7(loaded)
-    return formatted
 
 
 async def prepare_hlcs_mss(config):
