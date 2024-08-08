@@ -47,7 +47,7 @@ pub struct EMABands {
     pub lower: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Order {
     pub qty: f64,
     pub price: f64,
