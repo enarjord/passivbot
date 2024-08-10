@@ -45,8 +45,8 @@ class BingXBot(Passivbot):
         for symbol in self.markets_dict:
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
-            self.price_steps[symbol] = round(1.0 / (10 ** elm["precision"]["price"]), 12)
-            self.qty_steps[symbol] = round(1.0 / (10 ** elm["precision"]["amount"]), 12)
+            self.price_steps[symbol] = elm["precision"]["price"]
+            self.qty_steps[symbol] = elm["precision"]["amount"]
             self.min_qtys[symbol] = elm["limits"]["amount"]["min"]
             self.min_costs[symbol] = elm["limits"]["cost"]["min"]
             self.c_mults[symbol] = 1.0
