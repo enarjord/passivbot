@@ -31,12 +31,19 @@ def move(source_dir, destination_dir):
             shutil.move(source_path, destination_path)
 
 
+class Args:
+    def __init__(self, file_location, verbose, user):
+        self.file_location = file_location
+        self.user = user
+        self.verbose = verbose
+
+
 sys.argv = ["config_path", r"C:\pbgui\passivbot\configs\binance.json"]
 # Указываем путь к папке
 source_dir = "opt_results_forager"
 destination_dir = os.path.join(source_dir, "old")
 move(source_dir, destination_dir)
-# asyncio.run(optimize())
+asyncio.run(optimize())
 config = os.listdir(source_dir)[0]
 if config == "old":
     raise Exception()
@@ -47,6 +54,8 @@ sys.argv = [
     "bybit_01",
     "verbose",
 ]
+args = Args(os.path.join(source_dir, config), True, "bybit_01")
 source_dir = "opt_results_forager_analysis"
 destination_dir = os.path.join(source_dir, "old")
 move(source_dir, destination_dir)
+extract(args)
