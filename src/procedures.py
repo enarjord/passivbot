@@ -66,7 +66,6 @@ def format_config(config: dict) -> dict:
                 "unstuck_close_pct",
                 "TWE_long",
                 "TWE_short",
-                "n_ohlcvs",
                 "universal_live_config",
             ]
         ]
