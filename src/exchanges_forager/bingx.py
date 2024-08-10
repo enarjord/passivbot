@@ -12,6 +12,7 @@ from pure_funcs import (
     ts_to_date_utc,
     calc_hash,
     determine_pos_side_ccxt,
+    symbol_to_coin,
 )
 from njit_funcs import calc_diff, round_
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version

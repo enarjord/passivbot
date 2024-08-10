@@ -7,7 +7,14 @@ import asyncio
 import traceback
 import numpy as np
 from collections import defaultdict
-from pure_funcs import multi_replace, floatify, ts_to_date_utc, calc_hash, determine_pos_side_ccxt
+from pure_funcs import (
+    multi_replace,
+    floatify,
+    ts_to_date_utc,
+    calc_hash,
+    determine_pos_side_ccxt,
+    symbol_to_coin,
+)
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
