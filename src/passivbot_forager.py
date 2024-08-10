@@ -1055,10 +1055,13 @@ class Passivbot:
 
     def get_last_price(self, symbol):
         try:
-            return self.ohlcvs_1m[symbol].peekitem(-1)[1][4]
+            if self.ohlcvs_1m[symbol]:
+                return self.ohlcvs_1m[symbol].peekitem(-1)[1][4]
+            return 0.0
         except Exception as e:
             logging.error(f"error with {get_function_name()} for {symbol}: {e}")
             traceback.print_exc()
+        return 0.0
 
     def log_position_changes(self, position_changes, positions_new, rd=6) -> str:
         if not position_changes:
