@@ -103,6 +103,9 @@ class BybitBot(Passivbot):
         if not hasattr(self, "ohlcvs_1m"):
             self.ohlcvs_1m = {}
         symbols_and_timeframes = [[s, "1m"] for s in sorted(self.eligible_symbols)]
+        coins = [symbol_to_coin(x[0]) for x in symbols_and_timeframes]
+        if coins:
+            logging.info(f"Started watching ohlcv_1m for {','.join(coins)}")
         while not self.stop_websocket:
             try:
                 res = await self.ccp.watch_ohlcv_for_symbols(symbols_and_timeframes)
