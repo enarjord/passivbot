@@ -86,41 +86,41 @@ class HyperliquidBot(Passivbot):
             self.watch_tickers(),
         )
 
-    async def watch_ohlcvs(self):
-        if not hasattr(self, "hlcs_1m"):
-            self.hlcs_1m = {}
-        self.WS_ohlcv_tasks = {}
+    async def watch_ohlcvs_1m(self):
+        if not hasattr(self, "ohlcvs_1m"):
+            self.ohlcvs_1m = {}
+        self.WS_ohlcvs_1m_tasks = {}
         while not self.stop_websocket:
             current_symbols = set(self.eligible_symbols)
-            started_symbols = set(self.WS_ohlcv_tasks.keys())
+            started_symbols = set(self.WS_ohlcvs_1m_tasks.keys())
             to_print = []
-            # Start watch_ohlcv tasks for new symbols
+            # Start watch_ohlcv_1m_single tasks for new symbols
             for symbol in current_symbols - started_symbols:
-                task = asyncio.create_task(self.watch_ohlcv(symbol))
-                self.WS_ohlcv_tasks[symbol] = task
+                task = asyncio.create_task(self.watch_ohlcv_1m_single(symbol))
+                self.WS_ohlcvs_1m_tasks[symbol] = task
                 to_print.append(symbol)
             if to_print:
                 coins = [symbol_to_coin(s) for s in to_print]
-                logging.info(f"Started watching ohlcv for {','.join(coins)}")
+                logging.info(f"Started watching ohlcv_1m for {','.join(coins)}")
             to_print = []
             # Cancel tasks for symbols that are no longer active
             for symbol in started_symbols - current_symbols:
-                self.WS_ohlcv_tasks[symbol].cancel()
-                del self.WS_ohlcv_tasks[symbol]
+                self.WS_ohlcvs_1m_tasks[symbol].cancel()
+                del self.WS_ohlcvs_1m_tasks[symbol]
                 to_print.append(symbol)
             if to_print:
                 coins = [symbol_to_coin(s) for s in to_print]
-                logging.info(f"Stopped watching ohlcv for: {','.join(coins)}")
+                logging.info(f"Stopped watching ohlcv_1m for: {','.join(coins)}")
             # Wait a bit before checking again
             await asyncio.sleep(1)  # Adjust sleep time as needed
 
-    async def watch_ohlcv(self, symbol):
+    async def watch_ohlcv_1m_single(self, symbol):
         while not self.stop_websocket and symbol in self.eligible_symbols:
             try:
                 res = await self.ccp.watch_ohlcv(symbol)
-                self.handle_ohlcv_update(symbol, res)
+                self.handle_ohlcv_1m_update(symbol, res)
             except Exception as e:
-                logging.error(f"exception watch_ohlcv {symbol} {e}")
+                logging.error(f"exception watch_ohlcv_1m_single {symbol} {e}")
                 traceback.print_exc()
                 await asyncio.sleep(1)
             await asyncio.sleep(0.1)
@@ -287,7 +287,7 @@ class HyperliquidBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_hlcs_1m(self, symbol: str, since: float = None):
+    async def fetch_ohlcvs_1m(self, symbol: str, since: float = None):
         n_candles_limit = 5000
         result = await self.cca.fetch_ohlcv(
             symbol,
@@ -295,7 +295,7 @@ class HyperliquidBot(Passivbot):
             limit=n_candles_limit,
             since=int(self.get_exchange_time() - 1000 * 60 * n_candles_limit * 0.95),
         )
-        return [self.ohlcv_to_hlc(x) for x in result]
+        return result
 
     async def fetch_pnls(
         self,
