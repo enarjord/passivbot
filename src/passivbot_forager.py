@@ -1597,6 +1597,8 @@ class Passivbot:
 
     def update_EMAs_single(self, symbol):
         try:
+            if symbol not in self.ohlcvs_1m or not self.ohlcvs_1m[symbol]:
+                return
             self.fill_gaps_ohlcvs_1m_single(symbol)
             if symbol not in self.emas["long"]:
                 self.init_EMAs_single(symbol)
