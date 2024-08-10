@@ -108,6 +108,7 @@ class BingXBot(Passivbot):
                 await asyncio.sleep(1)
 
     async def watch_ohlcvs_1m(self):
+        return
         if not hasattr(self, "ohlcvs_1m"):
             self.ohlcvs_1m = {}
         symbols_and_timeframes = [[s, "1m"] for s in sorted(self.eligible_symbols)]
