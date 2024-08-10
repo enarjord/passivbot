@@ -268,6 +268,8 @@ class Passivbot:
     async def init_ohlcvs_1m(self):
         # fetch latest ohlcvs_1m for all eligible symbols
         # to be called after starting websocket
+        if not hasattr(self, "ohlcvs_1m"):
+            self.ohlcvs_1m = {}
         min_n_candles = self.config["live"]["noisiness_rolling_mean_window_size"]
         sleep_time_seconds = 20 / len(self.eligible_symbols)
         tasks = {}
@@ -1608,7 +1610,6 @@ class Passivbot:
             return False
 
     async def maintain_ohlcvs_1m_REST(self):
-        max_age_ms_normal = 1000 * 60 * 20
         while True:
             try:
                 # force update all ohlcvs_1m via REST every 20 mins
