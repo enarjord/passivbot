@@ -20,7 +20,13 @@ from pure_funcs import (
     sort_dict_keys,
     calc_hash,
 )
-from procedures import make_get_filepath, utc_ms, load_hjson_config, load_config, format_config
+from procedures import (
+    make_get_filepath,
+    utc_ms,
+    load_hjson_config,
+    load_config,
+    format_config,
+)
 from copy import deepcopy
 import numpy as np
 from uuid import uuid4
@@ -138,9 +144,12 @@ def config_to_individual(config):
 
 
 class Evaluator:
-    def __init__(self, hlcs, preferred_coins, config, mss):
+    def __init__(self, hlcs, preferred_coins, config, mss, queue):
+        self.queue = queue
         self.hlcs = hlcs
-        self.shared_hlcs = shared_memory.SharedMemory(create=True, size=self.hlcs.nbytes)
+        self.shared_hlcs = shared_memory.SharedMemory(
+            create=True, size=self.hlcs.nbytes
+        )
         self.shared_hlcs_np = np.ndarray(
             self.hlcs.shape, dtype=self.hlcs.dtype, buffer=self.shared_hlcs.buf
         )
@@ -165,7 +174,10 @@ class Evaluator:
     def evaluate(self, individual):
         config = individual_to_config(individual, template=self.config)
         bot_params, _, _ = prep_backtest_args(
-            config, [], exchange_params=self.exchange_params, backtest_params=self.backtest_params
+            config,
+            [],
+            exchange_params=self.exchange_params,
+            backtest_params=self.backtest_params,
         )
         fills, equities, analysis = pbr.run_backtest(
             self.shared_hlcs_np,
@@ -176,8 +188,9 @@ class Evaluator:
         )
         w_adg, w_sharpe_ratio = self.calc_fitness(analysis)
         analysis.update({"w_adg": w_adg, "w_sharpe_ratio": w_sharpe_ratio})
-        with open(self.config["results_filename"], "a") as f:
-            f.write(json.dumps(denumpyize({"analysis": analysis, "config": config})) + "\n")
+        self.queue.put(
+            json.dumps(denumpyize({"analysis": analysis, "config": config})) + "\n"
+        )
         return w_adg, w_sharpe_ratio
 
     def calc_fitness(self, analysis):
@@ -188,10 +201,16 @@ class Evaluator:
             (2, "loss_profit_ratio"),
         ]:
             modifier += (
-                max(self.config["optimize"]["limits"][f"lower_bound_{key}"], analysis[key])
+                max(
+                    self.config["optimize"]["limits"][f"lower_bound_{key}"],
+                    analysis[key],
+                )
                 - self.config["optimize"]["limits"][f"lower_bound_{key}"]
             ) * 10**i
-        if analysis["drawdown_worst"] >= 1.0 or analysis["equity_balance_diff_max"] < 0.1:
+        if (
+            analysis["drawdown_worst"] >= 1.0
+            or analysis["equity_balance_diff_max"] < 0.1
+        ):
             w_adg = w_sharpe_ratio = modifier
         else:
             w_adg = modifier - analysis["adg"]
@@ -204,6 +223,14 @@ class Evaluator:
         self.shared_hlcs.unlink()
         self.shared_preferred_coins.close()
         self.shared_preferred_coins.unlink()
+
+    def listener(self):
+        # Listens for messages on the queue, writes to file.
+        with open(self.config["results_filename"], "a") as f:
+            while True:
+                result = self.queue.get()
+                f.write(result)
+                f.flush()
 
 
 def add_argparse_args_optimize_forager(parser):
@@ -226,7 +253,9 @@ def add_argparse_args_optimize_forager(parser):
     ]
     template = get_template_live_config("v7")
     shortened_already_added = set([x[0] for x in parser_items])
-    for key in list(template["optimize"]["bounds"]) + list(template["optimize"]["limits"]):
+    for key in list(template["optimize"]["bounds"]) + list(
+        template["optimize"]["limits"]
+    ):
         shortened = "".join([x[0] for x in key.split("_")])
         if shortened in shortened_already_added:
             for i in range(100):
@@ -239,7 +268,8 @@ def add_argparse_args_optimize_forager(parser):
         shortened_already_added.add(shortened)
     for k0, k1, d, t, h in parser_items:
         parser.add_argument(
-            *[f"-{k0}", f"--{k1}"] + ([f"--{k1.replace('_', '-')}"] if "_" in k1 else []),
+            *[f"-{k0}", f"--{k1}"]
+            + ([f"--{k1.replace('_', '-')}"] if "_" in k1 else []),
             type=t,
             required=False,
             dest=d,
@@ -264,7 +294,9 @@ def get_starting_configs(starting_configs: str):
         return []
     cfgs = []
     if os.path.isdir(starting_configs):
-        filenames = [os.path.join(starting_configs, f) for f in os.listdir(starting_configs)]
+        filenames = [
+            os.path.join(starting_configs, f) for f in os.listdir(starting_configs)
+        ]
     else:
         filenames = [starting_configs]
     for path in filenames:
@@ -287,9 +319,15 @@ def configs_to_individuals(cfgs):
 
 
 async def main():
-    parser = argparse.ArgumentParser(prog="optimize_forager", description="run forager optimizer")
+    parser = argparse.ArgumentParser(
+        prog="optimize_forager", description="run forager optimizer"
+    )
     parser.add_argument(
-        "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
+        "config_path",
+        type=str,
+        default=None,
+        nargs="?",
+        help="path to json passivbot config",
     )
     args = add_argparse_args_optimize_forager(parser)
     signal.signal(signal.SIGINT, signal_handler)
@@ -315,8 +353,14 @@ async def main():
         f"opt_results_forager/{date_fname}_{coins_fname}_{hash_snippet}_all_results.txt"
     )
     try:
-        evaluator = Evaluator(hlcs, preferred_coins, config, mss)
-        creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -1.0))  # Minimize both objectives
+        # Initializing Manager and Queue for results_filename
+        manager = multiprocessing.Manager()
+        queue = manager.Queue()
+
+        evaluator = Evaluator(hlcs, preferred_coins, config, mss, queue)
+        creator.create(
+            "FitnessMulti", base.Fitness, weights=(-1.0, -1.0)
+        )  # Minimize both objectives
         creator.create("Individual", list, fitness=creator.FitnessMulti)
 
         toolbox = base.Toolbox()
@@ -361,10 +405,13 @@ async def main():
         # Parallelization setup
         pool = multiprocessing.Pool(processes=config["optimize"]["n_cpus"])
         toolbox.register("map", pool.map)
+        watcher = pool.apply_async(evaluator.listener)
 
         # Create initial population
 
-        starting_individuals = configs_to_individuals(get_starting_configs(args.starting_configs))
+        starting_individuals = configs_to_individuals(
+            get_starting_configs(args.starting_configs)
+        )
         if len(starting_individuals) > config["optimize"]["population_size"]:
             logging.info(
                 f"increasing population size: {config['optimize']['population_size']} -> {len(starting_individuals)}"
