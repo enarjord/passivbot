@@ -1628,8 +1628,6 @@ class Passivbot:
             symbols_to_update = [
                 s for s in self.positions if self.has_position(s) and self.is_trailing(s)
             ]
-            if symbols_to_update:
-                logging.info(f"updating ohlcvs_1m for {symbols_to_update}")
             await asyncio.gather(
                 *[self.update_ohlcvs_1m_single(s, verbose=False) for s in symbols_to_update]
             )
