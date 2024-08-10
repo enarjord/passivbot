@@ -115,7 +115,6 @@ class Passivbot:
         self.execution_delay_millis = max(
             3000.0, self.config["live"]["execution_delay_seconds"] * 1000
         )
-        self.force_update_age_millis = 60 * 1000  # force update once a minute
         self.quote = "USDT"
         self.forager_mode = self.is_forager_mode()
 
@@ -1510,17 +1509,6 @@ class Passivbot:
             to_cancel, key=lambda x: calc_diff(x["price"], self.get_last_price(x["symbol"]))
         ), sorted(to_create, key=lambda x: calc_diff(x["price"], self.get_last_price(x["symbol"])))
 
-    async def force_update(self, force=False):
-        # if some information has not been updated in a while, force update via REST
-        coros_to_call = []
-        now = utc_ms()
-        for key in self.upd_timestamps:
-            if force or now - self.upd_timestamps[key] > self.force_update_age_millis:
-                # logging.info(f"forcing update {key}")
-                coros_to_call.append((key, getattr(self, f"update_{key}")()))
-        res = await asyncio.gather(*[x[1] for x in coros_to_call])
-        return res
-
     async def restart_bot_on_too_many_errors(self):
         if not hasattr(self, "error_counts"):
             self.error_counts = []
@@ -1621,15 +1609,13 @@ class Passivbot:
 
     async def maintain_ohlcvs_1m_REST(self):
         max_age_ms_normal = 1000 * 60 * 20
-        max_age_ms_trailing = 1000 * 60
         while True:
             try:
                 # force update all ohlcvs_1m via REST every 20 mins
-                # force update ohlcvs_1m for coin with position and trailing via REST every minute
                 sts = utc_ms()
                 sleep_interval_sec = max(1.0, (60 * 20) / len(self.ohlcvs_1m))
                 symbol = sorted(self.upd_tss_ohlcvs_1m_single.items(), key=lambda x: x[1])[0][0]
-                await self.update_ohlcvs_1m_single(symbol, verbose=True)
+                await self.update_ohlcvs_1m_single(symbol, verbose=False)
                 sleep_duration_sec = max(0.0, sleep_interval_sec - (utc_ms() - sts) / 1000)
                 await asyncio.sleep(sleep_duration_sec)
             except Exception as e:
@@ -1642,8 +1628,10 @@ class Passivbot:
             symbols_to_update = [
                 s for s in self.positions if self.has_position(s) and self.is_trailing(s)
             ]
+            if symbols_to_update:
+                logging.info(f"updating ohlcvs_1m for {symbols_to_update}")
             await asyncio.gather(
-                *[self.update_ohlcvs_1m_single(s, verbose=True) for s in symbols_to_update]
+                *[self.update_ohlcvs_1m_single(s, verbose=False) for s in symbols_to_update]
             )
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
@@ -1654,7 +1642,6 @@ class Passivbot:
             try:
                 # update markets dict once every hour
                 if utc_ms() - self.init_markets_last_update_ms > 1000 * 60 * 60:
-                    print("debug init_markets_dict")
                     await self.init_markets_dict(verbose=False)
                 await asyncio.sleep(1)
             except Exception as e:
