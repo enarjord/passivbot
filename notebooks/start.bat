@@ -1,0 +1,1 @@
+..\..\venv\Scripts\activate && jupyter-notebook notes_backtest_forager_mod.ipynb
