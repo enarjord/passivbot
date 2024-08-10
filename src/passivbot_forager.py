@@ -1055,7 +1055,7 @@ class Passivbot:
 
     def get_last_price(self, symbol):
         try:
-            if self.ohlcvs_1m[symbol]:
+            if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
                 return self.ohlcvs_1m[symbol].peekitem(-1)[1][4]
             return 0.0
         except Exception as e:
