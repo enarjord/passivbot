@@ -1,4 +1,4 @@
-from passivbot_forager import Passivbot, logging
+from passivbot_forager import Passivbot, logging, get_function_name
 from uuid import uuid4
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
@@ -252,43 +252,54 @@ class BingXBot(Passivbot):
         limit = 1000
         if start_time is None and end_time is None:
             return await self.fetch_pnl()
+        if end_time is None:
+            end_time = self.get_exchange_time()
         all_fetched = {}
         while True:
-            fetched = await self.fetch_pnl(start_time=start_time, end_time=end_time)
+            fetched = await self.fetch_pnl(start_time=start_time)
             if fetched == []:
                 break
+            logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
             for elm in fetched:
                 all_fetched[elm["id"]] = elm
-            if fetched[0]["timestamp"] <= start_time:
+            if end_time is not None and fetched[-1]["timestamp"] > end_time:
                 break
             if len(fetched) < limit:
                 break
-            logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
-            end_time = fetched[0]["timestamp"]
-        return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
+            start_time = fetched[-1]["timestamp"]
+        return sorted(
+            [x for x in all_fetched.values() if x["qty"] != 0.0], key=lambda x: x["timestamp"]
+        )
 
     async def fetch_pnl(
         self,
         start_time: int = None,
-        end_time: int = None,
     ):
+        # fetches from past towards future
         fetched = None
+        n_pnls_limit = 1000
+        # max 7 days fetch range
         # if there are more fills in timeframe than 100, it will fetch latest
         try:
-            if end_time is None:
-                end_time = utc_ms() + 1000 * 60 * 60 * 24
-            if start_time is None:
-                start_time = end_time - 1000 * 60 * 60 * 24 * 6.99
-            start_time = max(start_time, end_time - 1000 * 60 * 60 * 24 * 6.99)  # max 7 days fetch
-            params = {"startTime": int(start_time), "endTime": int(end_time), "limit": 1000}
+            params = {"limit": n_pnls_limit}
+            if start_time is not None:
+                params["startTime"] = int(start_time)
+                params["endTime"] = int(start_time + 1000 * 60 * 60 * 24 * 6.99)
             fetched = await self.cca.swap_v2_private_get_trade_allorders(params=params)
-            fetched = floatify(fetched["data"]["orders"])
+            fetched = fetched["data"]["orders"]
             for i in range(len(fetched)):
-                fetched[i]["pnl"] = fetched[i]["profit"]
-                fetched[i]["timestamp"] = fetched[i]["updateTime"]
-                fetched[i]["id"] = fetched[i]["orderId"]
-                fetched[i]["symbol_id"] = fetched[i]["symbol"]
-                fetched[i]["symbol"] = self.symbol_ids_inv[fetched[i]["symbol"]]
+                for k0, k1, f in [
+                    ("avgPrice", "price", float),
+                    ("executedQty", "qty", float),
+                    ("profit", "pnl", float),
+                    ("updateTime", "timestamp", int),
+                    ("orderId", "id", None),
+                    ("positionSide", "position_side", lambda x: x.lower()),
+                    ("side", "side", lambda x: x.lower()),
+                    ("symbol", "symbol_id", None),
+                    ("symbol", "symbol", lambda x: self.symbol_ids_inv[x]),
+                ]:
+                    fetched[i][k1] = fetched[i][k0] if f is None else f(fetched[i][k0])
             return sorted(fetched, key=lambda x: x["timestamp"])
         except Exception as e:
             logging.error(f"error fetching pnl {e}")
