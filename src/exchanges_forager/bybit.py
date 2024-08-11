@@ -330,12 +330,12 @@ class BybitBot(Passivbot):
                 fills = await self.fetch_fills_sub(None, end_time)
                 if not fills:
                     break
-                logging.info(
-                    f"fetched fills: {fills[0]['datetime']} {fills[-1]['datetime']} {len(fills)}"
-                )
                 all_fetched_fills += fills
                 if fills[0]["timestamp"] <= start_time:
                     break
+                logging.info(
+                    f"fetched fills: {fills[0]['datetime']} {fills[-1]['datetime']} {len(fills)}"
+                )
                 end_time = fills[0]["timestamp"]
             else:
                 logging.error(f"more than 100 calls to ccxt fetch_my_trades")
@@ -349,12 +349,12 @@ class BybitBot(Passivbot):
                 pnls = await self.fetch_pnls_sub(None, end_time)
                 if not pnls:
                     break
-                logging.info(
-                    f"fetched pnls: {pnls[0]['datetime']} {pnls[-1]['datetime']} {len(pnls)}"
-                )
                 all_fetched_pnls += pnls
                 if pnls[0]["timestamp"] <= start_time:
                     break
+                logging.info(
+                    f"fetched pnls: {pnls[0]['datetime']} {pnls[-1]['datetime']} {len(pnls)}"
+                )
                 end_time = pnls[0]["timestamp"]
         fillsd = defaultdict(list)
         execIds_seen = set()

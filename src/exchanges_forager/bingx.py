@@ -259,13 +259,13 @@ class BingXBot(Passivbot):
             fetched = await self.fetch_pnl(start_time=start_time)
             if fetched == []:
                 break
-            logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
             for elm in fetched:
                 all_fetched[elm["id"]] = elm
             if end_time is not None and fetched[-1]["timestamp"] > end_time:
                 break
             if len(fetched) < limit:
                 break
+            logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
             start_time = fetched[-1]["timestamp"]
         return sorted(
             [x for x in all_fetched.values() if x["qty"] != 0.0], key=lambda x: x["timestamp"]
