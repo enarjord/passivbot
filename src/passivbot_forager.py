@@ -1027,7 +1027,7 @@ class Passivbot:
         positions_list_new, balance_new = res
         self.fetched_positions = positions_list_new
         await self.check_for_inactive_markets()
-        self.handle_balance_update({self.quote: {"total": balance_new}})
+        self.handle_balance_update({self.quote: {"total": balance_new}}, source="REST")
         positions_new = {
             sym: {
                 "long": {"size": 0.0, "price": 0.0},
