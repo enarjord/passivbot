@@ -883,45 +883,47 @@ class Passivbot:
     async def update_pnls(self):
         # fetch latest pnls
         # dump new pnls to cache
-        age_limit = utc_ms() - 1000 * 60 * 60 * 24 * self.config["live"]["pnls_max_lookback_days"]
-        if utc_ms() - self.upd_timestamps["pnls"] > 1000 * 60 * 5:
-            missing_pnls = []
-            if len(self.pnls) == 0:
-                # load pnls from cache
-                pnls_cache = []
-                try:
-                    if os.path.exists(self.pnls_cache_filepath):
-                        pnls_cache = json.load(open(self.pnls_cache_filepath))
-                except Exception as e:
-                    logging.error(f"error loading {self.pnls_cache_filepath} {e}")
-                # fetch pnls since latest timestamp
-                if len(pnls_cache) > 0:
-                    if pnls_cache[0]["timestamp"] > age_limit + 1000 * 60 * 60 * 4:
-                        # fetch missing pnls
-                        res = await self.fetch_pnls(
-                            start_time=age_limit - 1000, end_time=pnls_cache[0]["timestamp"]
-                        )
-                        if res in [None, False]:
-                            return False
-                        missing_pnls = res
-                        pnls_cache = sorted(
-                            {
-                                elm["id"]: elm
-                                for elm in pnls_cache + missing_pnls
-                                if elm["timestamp"] >= age_limit
-                            }.values(),
-                            key=lambda x: x["timestamp"],
-                        )
-                self.pnls = pnls_cache
-            start_time = self.pnls[-1]["timestamp"] if self.pnls else age_limit
-            res = await self.fetch_pnls(start_time=start_time)
-            if res in [None, False]:
-                return False
-        else:
-            res = await self.fetch_pnls()
+        age_limit = (
+            self.get_exchange_time()
+            - 1000 * 60 * 60 * 24 * self.config["live"]["pnls_max_lookback_days"]
+        )
+        if len(self.pnls) == 0:
+            # load pnls from cache
+            pnls_cache = []
+            try:
+                if os.path.exists(self.pnls_cache_filepath):
+                    pnls_cache = json.load(open(self.pnls_cache_filepath))
+            except Exception as e:
+                logging.error(f"error loading {self.pnls_cache_filepath} {e}")
+            if len(pnls_cache) > 0:
+                if pnls_cache[0]["timestamp"] > age_limit + 1000 * 60 * 60 * 4:
+                    # fetch missing pnls
+                    logging.info(
+                        f"fetching missing pnls {ts_to_date_utc(pnls_cache[0]['timestamp'])}"
+                    )
+                    missing_pnls = await self.fetch_pnls(
+                        start_time=age_limit - 1000, end_time=pnls_cache[0]["timestamp"]
+                    )
+                    if missing_pnls in [None, False]:
+                        return False
+                    pnls_cache = sorted(
+                        {
+                            elm["id"]: elm
+                            for elm in pnls_cache + missing_pnls
+                            if elm["timestamp"] >= age_limit
+                        }.values(),
+                        key=lambda x: x["timestamp"],
+                    )
+            self.pnls = pnls_cache
+        start_time = self.pnls[-1]["timestamp"] - 1000 if self.pnls else age_limit
+        res = await self.fetch_pnls(start_time=start_time)
+        if res in [None, False]:
+            return False
         new_pnls = [x for x in res if x["id"] not in {elm["id"] for elm in self.pnls}]
         self.pnls = sorted(
-            {elm["id"]: elm for elm in self.pnls + new_pnls if elm["timestamp"] > age_limit}.values(),
+            {
+                elm["id"]: elm for elm in self.pnls + new_pnls if elm["timestamp"] >= age_limit
+            }.values(),
             key=lambda x: x["timestamp"],
         )
         if new_pnls:
