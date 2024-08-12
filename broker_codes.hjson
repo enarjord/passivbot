@@ -8,4 +8,5 @@
 	mexc: ""
 	bingx: "Passivbot"
 	hyperliquid: ""
+	gateio: "passivbot"
 }
