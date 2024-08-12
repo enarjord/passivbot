@@ -125,6 +125,8 @@ class Passivbot:
         self.ema_alphas = {"long": {}, "short": {}}
         self.upd_minute_emas = {}
         self.ineligible_symbols_with_pos = set()
+        self.ohlcvs_1m_update_cycle_duration_minutes = 20
+        self.ohlcvs_1m_init_duration_seconds = 20
 
     async def update_market_info(self):
         logging.info(f"initiating markets...")
@@ -271,10 +273,12 @@ class Passivbot:
         if not hasattr(self, "ohlcvs_1m"):
             self.ohlcvs_1m = {}
         min_n_candles = self.config["live"]["noisiness_rolling_mean_window_size"]
-        sleep_time_seconds = 20 / len(self.eligible_symbols)
+        sleep_time_seconds = self.ohlcvs_1m_init_duration_seconds / len(self.eligible_symbols)
         tasks = {}
         symbols = sorted(self.eligible_symbols)
-        logging.info(f"initiating ohlcvs_1m for {','.join([symbol_to_coin(s) for s in symbols])}")
+        logging.info(
+            f"initiating ohlcvs_1m over {self.ohlcvs_1m_init_duration_seconds}s for {','.join([symbol_to_coin(s) for s in symbols])}"
+        )
         for symbol in symbols:
             tasks[symbol] = asyncio.create_task(self.update_ohlcvs_1m_single(symbol, verbose=False))
             await asyncio.sleep(sleep_time_seconds)
@@ -285,11 +289,9 @@ class Passivbot:
         if not hasattr(self, "upd_tss_ohlcvs_1m_single"):
             self.upd_tss_ohlcvs_1m_single = defaultdict(float)
         self.upd_tss_ohlcvs_1m_single[symbol] = utc_ms()
-        if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
-            candles = await self.fetch_ohlcvs_1m(symbol)
-        else:
+        if symbol not in self.ohlcvs_1m:
             self.ohlcvs_1m[symbol] = SortedDict()
-            candles = await self.fetch_ohlcvs_1m(symbol, since)
+        candles = await self.fetch_ohlcvs_1m(symbol)
         for x in candles:
             self.ohlcvs_1m[symbol][x[0]] = x
         if candles:
@@ -559,7 +561,9 @@ class Passivbot:
 
         if self.forager_mode and self.minimum_market_age_millis > 0:
             if not hasattr(self, "first_timestamps"):
-                self.first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
+                self.first_timestamps = await get_first_ohlcv_timestamps(
+                    cc=self.cca, symbols=sorted(self.eligible_symbols)
+                )
                 for symbol in sorted(self.first_timestamps):
                     self.first_timestamps[self.format_symbol(symbol)] = self.first_timestamps[symbol]
         else:
@@ -1614,9 +1618,11 @@ class Passivbot:
     async def maintain_ohlcvs_1m_REST(self):
         while True:
             try:
-                # force update all ohlcvs_1m via REST every 20 mins
+                # force update all ohlcvs_1m via REST every x mins (default 20)
                 sts = utc_ms()
-                sleep_interval_sec = max(1.0, (60 * 20) / len(self.ohlcvs_1m))
+                sleep_interval_sec = max(
+                    1.0, (60 * self.ohlcvs_1m_update_cycle_duration_minutes) / len(self.ohlcvs_1m)
+                )
                 symbol = sorted(self.upd_tss_ohlcvs_1m_single.items(), key=lambda x: x[1])[0][0]
                 await self.update_ohlcvs_1m_single(symbol, verbose=False)
                 sleep_duration_sec = max(0.0, sleep_interval_sec - (utc_ms() - sts) / 1000)
@@ -1749,6 +1755,10 @@ def setup_bot(config):
         from exchanges_forager.hyperliquid import HyperliquidBot
 
         bot = HyperliquidBot(config)
+    elif user_info["exchange"] == "gateio":
+        from exchanges_forager.gateio import GateIOBot
+
+        bot = GateIOBot(config)
     else:
         raise Exception(f"unknown exchange {user_info['exchange']}")
     return bot
