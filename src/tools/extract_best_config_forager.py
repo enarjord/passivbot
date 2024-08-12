@@ -93,26 +93,31 @@ def process_single(file_location, verbose=False):
     keys = ["analysis_" + key for key in keys]
     candidates = res[(res.analysis_w_adg <= 0.0) & (res.analysis_w_sharpe_ratio <= 0.0)][keys]
     print_("n candidates", len(candidates))
-    pareto = candidates.loc[
-        calc_pareto_front_d(
-            {i: x for i, x in zip(candidates.index, candidates.values)}, higher_is_better
+    if len(candidates) == 1:
+        best = candidates.iloc[0].name
+    else:
+        pareto = candidates.loc[
+            calc_pareto_front_d(
+                {i: x for i, x in zip(candidates.index, candidates.values)}, higher_is_better
+            )
+        ]
+
+        cands_norm = (candidates - candidates.min()) / (candidates.max() - candidates.min())
+        pareto_norm = (pareto - candidates.min()) / (candidates.max() - candidates.min())
+        dists = [calc_dist(p, [float(x) for x in higher_is_better]) for p in pareto_norm.values]
+        pareto_w_dists = pareto_norm.join(
+            pd.Series(dists, name="dist_to_ideal", index=pareto_norm.index)
         )
-    ]
+        closest_to_ideal = pareto_w_dists.sort_values("dist_to_ideal")
+        best = closest_to_ideal.dist_to_ideal.idxmin()
+        print_("best")
+        print_(candidates.loc[best])
+        print_("pareto front:")
+        res_to_print = res[[x for x in res.columns if "analysis" in x]].loc[closest_to_ideal.index]
+        res_to_print.columns = [x.replace("analysis_", "") for x in res_to_print.columns]
+        print_(res_to_print)
 
-    cands_norm = (candidates - candidates.min()) / (candidates.max() - candidates.min())
-    pareto_norm = (pareto - candidates.min()) / (candidates.max() - candidates.min())
-    dists = [calc_dist(p, [float(x) for x in higher_is_better]) for p in pareto_norm.values]
-    pareto_w_dists = pareto_norm.join(pd.Series(dists, name="dist_to_ideal", index=pareto_norm.index))
-    closest_to_ideal = pareto_w_dists.sort_values("dist_to_ideal")
-    best = closest_to_ideal.dist_to_ideal.idxmin()
-    print_("best")
-    print_(candidates.loc[best])
-    print_("pareto front:")
-    res_to_print = res[[x for x in res.columns if "analysis" in x]].loc[closest_to_ideal.index]
-    res_to_print.columns = [x.replace("analysis_", "") for x in res_to_print.columns]
-    print_(res_to_print)
-
-    # Processing the best result for configuration
+        # Processing the best result for configuration
     best_d = xs[best]
     best_d["analysis"]["n_iters"] = len(lines)
     best_d.update(deepcopy(best_d["config"]))
