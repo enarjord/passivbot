@@ -331,6 +331,8 @@ class GateIOBot(Passivbot):
         return await self.execute_cancellations([order])
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
+        if not orders:
+            return []
         res = None
         max_n_cancellations_per_batch = min(
             self.max_n_cancellations_per_batch, self.config["live"]["max_n_cancellations_per_batch"]
@@ -350,7 +352,7 @@ class GateIOBot(Passivbot):
                 cancellations.append({**order, **elm})
             return cancellations
         except Exception as e:
-            logging.error(f"error executing cancellations {e}")
+            logging.error(f"error executing cancellations {e} {orders}")
             print_async_exception(res)
             traceback.print_exc()
 
