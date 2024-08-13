@@ -51,6 +51,9 @@ class GateIOBot(Passivbot):
         self.ohlcvs_1m_init_duration_seconds = (
             120  # gateio has stricter rate limiting on fetching ohlcvs
         )
+        self.hedge_mode = False
+        self.max_n_creations_per_batch = 10
+        self.max_n_cancellations_per_batch = 20
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
@@ -197,15 +200,9 @@ class GateIOBot(Passivbot):
 
     def determine_pos_side(self, order):
         if order["side"] == "buy":
-            if order["reduceOnly"]:
-                return "short"
-            else:
-                return "long"
+            return "short" if order["reduceOnly"] else "long"
         if order["side"] == "sell":
-            if order["reduceOnly"]:
-                return "long"
-            else:
-                return "short"
+            return "long" if order["reduceOnly"] else "short"
         raise Exception(f"unsupported order side {order['side']}")
 
     async def fetch_open_orders(self, symbol: str = None):
@@ -226,14 +223,17 @@ class GateIOBot(Passivbot):
     async def fetch_positions(self) -> ([dict], float):
         positions, balance = None, None
         try:
-            positions, balance = await asyncio.gather(
+            positions_fetched, balance = await asyncio.gather(
                 self.cca.fetch_positions(), self.cca.fetch_balance()
             )
             balance = balance[self.quote]["total"]
-            for i in range(len(positions)):
-                positions[i]["size"] = positions[i]["contracts"]
-                positions[i]["price"] = positions[i]["entryPrice"]
-                positions[i]["position_side"] = positions[i]["side"]
+            positions = []
+            for x in positions_fetched:
+                if x["contracts"] != 0.0:
+                    x["size"] = x["contracts"]
+                    x["price"] = x["entryPrice"]
+                    x["position_side"] = x["side"]
+                    positions.append(x)
             return positions, balance
         except Exception as e:
             logging.error(f"error fetching positions and balance {e}")
@@ -292,6 +292,8 @@ class GateIOBot(Passivbot):
         start_time: int = None,
         end_time: int = None,
     ):
+        # TODO
+        return await self.fetch_pnl()
         limit = 2000
         if start_time is None and end_time is None:
             return await self.fetch_pnl()
@@ -311,23 +313,13 @@ class GateIOBot(Passivbot):
     async def fetch_pnl(
         self,
         start_time: int = None,
-        end_time: int = None,
     ):
         fetched = None
-        # if there are more fills in timeframe than 100, it will fetch latest
         try:
-            if end_time is None:
-                end_time = utc_ms() + 1000 * 60 * 60 * 24
-            if start_time is None:
-                start_time = end_time - 1000 * 60 * 60 * 24 * 7
-            fetched = await self.cca.fetch_my_trades(
-                since=int(start_time), params={"endTime": int(end_time)}
-            )
+            fetched = await self.cca.fetch_closed_orders(since=start_time)
             for i in range(len(fetched)):
-                fetched[i]["pnl"] = float(fetched[i]["info"]["closedPnl"])
-                fetched[i]["position_side"] = (
-                    "long" if "long" in fetched[i]["info"]["dir"].lower() else "short"
-                )
+                fetched[i]["pnl"] = float(fetched[i]["info"]["pnl"])
+                fetched[i]["position_side"] = self.determine_pos_side(fetched[i])
             return sorted(fetched, key=lambda x: x["timestamp"])
         except Exception as e:
             logging.error(f"error fetching pnl {e}")
@@ -340,43 +332,22 @@ class GateIOBot(Passivbot):
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
         res = None
+        max_n_cancellations_per_batch = min(
+            self.max_n_cancellations_per_batch, self.config["live"]["max_n_cancellations_per_batch"]
+        )
         try:
-            if len(orders) > self.config["live"]["max_n_cancellations_per_batch"]:
+            if len(orders) > max_n_cancellations_per_batch:
                 # prioritize cancelling reduce-only orders
                 try:
                     reduce_only_orders = [x for x in orders if x["reduce_only"]]
                     rest = [x for x in orders if not x["reduce_only"]]
-                    orders = (reduce_only_orders + rest)[
-                        : self.config["live"]["max_n_cancellations_per_batch"]
-                    ]
+                    orders = (reduce_only_orders + rest)[:max_n_cancellations_per_batch]
                 except Exception as e:
                     logging.error(f"debug filter cancellations {e}")
-            by_symbol = {}
-            for order in orders:
-                if order["symbol"] not in by_symbol:
-                    by_symbol[order["symbol"]] = []
-                by_symbol[order["symbol"]].append(order)
-            syms = sorted(by_symbol)
-            res = await asyncio.gather(
-                *[
-                    self.cca.cancel_orders(
-                        [x["id"] for x in by_symbol[sym]],
-                        symbol=sym,
-                        params=(
-                            {"vaultAddress": self.user_info["wallet_address"]}
-                            if self.user_info["is_vault"]
-                            else {}
-                        ),
-                    )
-                    for sym in syms
-                ]
-            )
+            res = await self.cca.cancel_orders([x["id"] for x in orders])
             cancellations = []
-            for sym, elm in zip(syms, res):
-                if "status" in elm and elm["status"] == "ok":
-                    for status, order in zip(elm["response"]["data"]["statuses"], by_symbol[sym]):
-                        if status == "success":
-                            cancellations.append(order)
+            for order, elm in zip(orders, res):
+                cancellations.append({**order, **elm})
             return cancellations
         except Exception as e:
             logging.error(f"error executing cancellations {e}")
@@ -392,7 +363,7 @@ class GateIOBot(Passivbot):
             if len(orders) == 0:
                 return []
             to_execute = []
-            for order in orders:
+            for order in orders[: self.max_n_creations_per_batch]:
                 to_execute.append(
                     {
                         "symbol": order["symbol"],
@@ -401,28 +372,19 @@ class GateIOBot(Passivbot):
                         "amount": order["qty"],
                         "price": order["price"],
                         "params": {
-                            # "orderType": {"limit": {"tif": "Alo"}},
-                            # "cloid": order["custom_id"],
-                            "reduceOnly": order["reduce_only"],
+                            "reduce_only": order["reduce_only"],
                             "timeInForce": (
-                                "Alo"
+                                "poc"
                                 if self.config["live"]["time_in_force"] == "post_only"
-                                else "Gtc"
+                                else "gtc"
                             ),
                         },
                     }
                 )
-            res = await self.cca.create_orders(
-                to_execute,
-                params=(
-                    {"vaultAddress": self.user_info["wallet_address"]}
-                    if self.user_info["is_vault"]
-                    else {}
-                ),
-            )
+            res = await self.cca.create_orders(to_execute)
             executed = []
             for ex, order in zip(res, orders):
-                if "info" in ex and "filled" in ex["info"] or "resting" in ex["info"]:
+                if "info" in ex and ex["status"] in ["closed", "open"]:
                     executed.append({**ex, **order})
             return executed
         except Exception as e:
@@ -431,6 +393,7 @@ class GateIOBot(Passivbot):
             traceback.print_exc()
 
     async def update_exchange_config_by_symbols(self, symbols):
+        return
         coros_to_call_margin_mode = {}
         for symbol in symbols:
             try:
@@ -469,24 +432,4 @@ class GateIOBot(Passivbot):
     def calc_ideal_orders(self):
         # hyperliquid needs custom price rounding
         ideal_orders = super().calc_ideal_orders()
-        for sym in ideal_orders:
-            for i in range(len(ideal_orders[sym])):
-                if ideal_orders[sym][i]["side"] == "sell":
-                    ideal_orders[sym][i]["price"] = round_dynamic_up(
-                        round(ideal_orders[sym][i]["price"], self.n_decimal_places),
-                        self.n_significant_figures,
-                    )
-                elif ideal_orders[sym][i]["side"] == "buy":
-                    ideal_orders[sym][i]["price"] = round_dynamic_dn(
-                        round(ideal_orders[sym][i]["price"], self.n_decimal_places),
-                        self.n_significant_figures,
-                    )
-                else:
-                    ideal_orders[sym][i]["price"] = round_dynamic(
-                        round(ideal_orders[sym][i]["price"], self.n_decimal_places),
-                        self.n_significant_figures,
-                    )
-                ideal_orders[sym][i]["price"] = round_(
-                    ideal_orders[sym][i]["price"], self.price_steps[sym]
-                )
         return ideal_orders
