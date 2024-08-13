@@ -321,7 +321,7 @@ class BybitBot(Passivbot):
         # fetches both fills and pnls (bybit has them in separate endpoints)
         if start_time is None:
             all_fetched_fills, all_fetched_pnls = await asyncio.gather(
-                self.fetch_fills_sub(None, end_time), self.fetch_pnls_sub(None, end_time)
+                self.fetch_fills_sub(), self.fetch_pnls_sub()
             )
             all_fetched_fills.sort(key=lambda y: y["timestamp"])
         else:
