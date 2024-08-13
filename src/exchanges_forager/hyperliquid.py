@@ -302,20 +302,30 @@ class HyperliquidBot(Passivbot):
         start_time: int = None,
         end_time: int = None,
     ):
+        # hyperliquid fetches from past to future
         limit = 2000
         if start_time is None and end_time is None:
+            # hyperliquid returns latest trades if no time frame is passed
             return await self.fetch_pnl()
         all_fetched = {}
+        prev_hash = ""
         while True:
-            fetched = await self.fetch_pnl(start_time=start_time, end_time=end_time)
+            fetched = await self.fetch_pnl(start_time=start_time)
             if fetched == []:
                 break
             for elm in fetched:
                 all_fetched[elm["id"]] = elm
             if len(fetched) < limit:
                 break
+            if end_time and fetched[-1]["timestamp"] >= end_time:
+                break
+            new_hash = calc_hash(fetched)
+            if prev_hash == new_hash:
+                print("debug pnls hash", prev_hash, new_hash)
+                break
+            prev_hash = new_hash
             logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
-            end_time = fetched[0]["timestamp"]
+            start_time = fetched[-1]["timestamp"] - 1000
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
 
     async def fetch_pnl(
@@ -327,7 +337,7 @@ class HyperliquidBot(Passivbot):
         # if there are more fills in timeframe than 100, it will fetch latest
         try:
             if end_time is None:
-                end_time = utc_ms() + 1000 * 60 * 60 * 24
+                end_time = self.get_exchange_time() + 1000 * 60 * 60 * 24
             if start_time is None:
                 start_time = end_time - 1000 * 60 * 60 * 24 * 7
             fetched = await self.cca.fetch_my_trades(
