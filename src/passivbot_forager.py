@@ -110,6 +110,7 @@ class Passivbot:
         self.live_configs = {}
         self.stop_bot = False
         self.pnls_cache_filepath = make_get_filepath(f"caches/{self.exchange}/{self.user}_pnls.json")
+        self.ohlcvs_1m_cache_dirpath = make_get_filepath(f"caches/{self.exchange}/ohlcvs_1m/")
         self.previous_execution_ts = 0
         self.recent_fill = False
         self.execution_delay_millis = max(
@@ -125,7 +126,7 @@ class Passivbot:
         self.ema_alphas = {"long": {}, "short": {}}
         self.upd_minute_emas = {}
         self.ineligible_symbols_with_pos = set()
-        self.ohlcvs_1m_update_cycle_duration_minutes = 20
+        self.ohlcvs_1m_update_cycle_duration_seconds = 60 * 20
         self.ohlcvs_1m_init_sleep_duration_per_coin_seconds = 0.25
 
     async def update_market_info(self):
@@ -267,22 +268,43 @@ class Passivbot:
                             break
         return last_position_changes
 
+    def update_ohlcvs_1m_single_from_cache(self, symbol):
+        try:
+            data = json.load(open(self.get_ohlcvs_1m_filepath(symbol)))
+            self.ohlcvs_1m[symbol] = SortedDict()
+            for x in data:
+                self.ohlcvs_1m[symbol][x[0]] = x
+            return True
+        except Exception as e:
+            logging.error(f"error with update_ohlcvs_1m_single_from_cache {symbol} {e}")
+            traceback.print_exc()
+            return False
+
     async def init_ohlcvs_1m(self):
         # fetch latest ohlcvs_1m for all eligible symbols
         # to be called after starting websocket
         try:
             if not hasattr(self, "ohlcvs_1m"):
                 self.ohlcvs_1m = {}
-            min_n_candles = self.config["live"]["noisiness_rolling_mean_window_size"]
+            last_update_tss = self.get_ohlcvs_1m_file_mods()
+            now_utc = utc_ms()
+            symbols_to_update = []
+            for ts, symbol in sorted(last_update_tss, reverse=True):
+                if now_utc - ts > 1000 * 60 * 5:
+                    symbols_to_update.append(symbol)
+                else:
+                    if not self.update_ohlcvs_1m_single_from_cache(symbol):
+                        symbols_to_update.append(symbol)
+            if not symbols_to_update:
+                return
             total_sleep_time_seconds = self.ohlcvs_1m_init_sleep_duration_per_coin_seconds * len(
-                self.eligible_symbols
+                symbols_to_update
             )
             tasks = {}
-            symbols = sorted(self.eligible_symbols)
             logging.info(
-                f"initiating ohlcvs_1m over {total_sleep_time_seconds:.2f}s for {','.join([symbol_to_coin(s) for s in symbols])}"
+                f"initiating ohlcvs_1m over {total_sleep_time_seconds:.2f}s for {','.join([symbol_to_coin(s) for s in symbols_to_update])}"
             )
-            for symbol in symbols:
+            for symbol in symbols_to_update:
                 tasks[symbol] = asyncio.create_task(
                     self.update_ohlcvs_1m_single(symbol, verbose=False)
                 )
@@ -293,14 +315,10 @@ class Passivbot:
             logging.error(f"error with {get_function_name()}: {e}")
             traceback.print_exc()
 
-    async def update_ohlcvs_1m_single_new(self, symbol):
-        # fetches via REST API latest 1m ohlcvs and dumps them to disk
-        pass
+    def get_ohlcvs_1m_filepath(self, symbol):
+        return f"{self.ohlcvs_1m_cache_dirpath}{symbol_to_coin(symbol)}.json"
 
     async def update_ohlcvs_1m_single(self, symbol, since=None, verbose=True):
-        if not hasattr(self, "upd_tss_ohlcvs_1m_single"):
-            self.upd_tss_ohlcvs_1m_single = defaultdict(float)
-        self.upd_tss_ohlcvs_1m_single[symbol] = utc_ms()
         if symbol not in self.ohlcvs_1m:
             self.ohlcvs_1m[symbol] = SortedDict()
         candles = await self.fetch_ohlcvs_1m(symbol)
@@ -309,7 +327,19 @@ class Passivbot:
         if candles:
             if verbose:
                 logging.info(f"updated ohlcvs_1m for {symbol} since {ts_to_date_utc(candles[0][0])}")
+            try:
+                json.dump(candles, open(self.get_ohlcvs_1m_filepath(symbol), "w"))
+            except Exception as e:
+                logging.error(f"error dumping ohclvs_1m to disk for {symbol} {e}")
+                traceback.print_exc()
+        i = 0
         while len(self.ohlcvs_1m[symbol]) > 10080:
+            i += 1
+            if i > 1000:
+                logging.info(
+                    f"debug: more than 1000 deletions from ohlcvs_1m for {symbol} len: {len(self.ohlcvs_1m[symbol])}"
+                )
+                break
             del self.ohlcvs_1m[symbol][self.ohlcvs_1m[symbol].peekitem(0)]
 
     def update_trailing_data(self):
@@ -1628,7 +1658,53 @@ class Passivbot:
             traceback.print_exc()
             return False
 
+    def get_ohlcvs_1m_file_mods(self, symbols=None):
+        if symbols is None:
+            symbols = sorted(set(self.eligible_symbols))
+        last_update_tss = []
+        for symbol in symbols:
+            try:
+                filepath = self.get_ohlcvs_1m_filepath(symbol)
+                if os.path.exists(filepath):
+                    last_update_tss.append(
+                        (get_file_mod_utc(filepath), symbol)
+                    )
+                else:
+                    last_update_tss.append((0.0, symbol))
+            except Exception as e:
+                logging.info(f"debug error with get_file_mod_utc for {symbol} {e}")
+                last_update_tss.append((0.0, symbol))
+        return last_update_tss
+
     async def maintain_ohlcvs_1m_REST(self):
+        while True:
+            try:
+                # force update all ohlcvs_1m via REST every x mins (default 20)
+                sts = utc_ms()
+                symbols_to_consider = [
+                    x
+                    for x in self.eligible_symbols
+                    if not (self.has_position(x) and self.is_trailing(x))
+                ]
+                last_update_tss = self.get_ohlcvs_1m_file_mods(symbols_to_consider)
+                last_update_tss = sorted([x for x in last_update_tss if sts - x[0] > 1000 * 50])
+                line = ""
+                if last_update_tss:
+                    symbol = last_update_tss[0][1]
+                    line += symbol
+                    await self.update_ohlcvs_1m_single(symbol, verbose=False)
+                sleep_duration_sec = max(
+                    5.0, self.ohlcvs_1m_update_cycle_duration_seconds / len(symbols_to_consider)
+                )
+                sleep_duration_sec = max(0.0, sleep_duration_sec - (utc_ms() - sts) / 1000)
+                logging.info(f"debug sleeping for {sleep_duration_sec:.2f}s {line}")
+                await asyncio.sleep(sleep_duration_sec)
+            except Exception as e:
+                logging.error(f"error with {get_function_name()} {e}")
+                traceback.print_exc()
+                await asyncio.sleep(5)
+
+    async def maintain_ohlcvs_1m_REST_old(self):
         while True:
             try:
                 # force update all ohlcvs_1m via REST every x mins (default 20)
@@ -1681,7 +1757,7 @@ class Passivbot:
 
     async def start_bot(self):
         await self.init_markets_dict()
-        self.ohlcv_1m_WS = asyncio.create_task(self.watch_ohlcvs_1m())
+        # self.ohlcv_1m_WS = asyncio.create_task(self.watch_ohlcvs_1m())
         await asyncio.sleep(1)
         await self.init_ohlcvs_1m()
         await self.start_data_maintainers()
