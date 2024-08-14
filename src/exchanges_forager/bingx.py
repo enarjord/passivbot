@@ -40,7 +40,9 @@ class BingXBot(Passivbot):
         )
         self.cca.options["defaultType"] = "swap"
         self.custom_id_max_length = 40
-        self.ohlcvs_1m_update_cycle_duration_minutes = 60  # bingx has stricter api rate limiting...
+        self.ohlcvs_1m_init_sleep_duration_per_coin_seconds = (
+            0.5  # bingx has stricter api rate limiting...
+        )
 
     async def determine_utc_offset(self):
         # returns millis to add to utc to get exchange timestamp
