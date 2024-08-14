@@ -126,7 +126,7 @@ class Passivbot:
         self.upd_minute_emas = {}
         self.ineligible_symbols_with_pos = set()
         self.ohlcvs_1m_update_cycle_duration_minutes = 20
-        self.ohlcvs_1m_init_duration_seconds = 20
+        self.ohlcvs_1m_init_sleep_duration_per_coin_seconds = 0.25
 
     async def update_market_info(self):
         logging.info(f"initiating markets...")
@@ -270,20 +270,32 @@ class Passivbot:
     async def init_ohlcvs_1m(self):
         # fetch latest ohlcvs_1m for all eligible symbols
         # to be called after starting websocket
-        if not hasattr(self, "ohlcvs_1m"):
-            self.ohlcvs_1m = {}
-        min_n_candles = self.config["live"]["noisiness_rolling_mean_window_size"]
-        sleep_time_seconds = self.ohlcvs_1m_init_duration_seconds / len(self.eligible_symbols)
-        tasks = {}
-        symbols = sorted(self.eligible_symbols)
-        logging.info(
-            f"initiating ohlcvs_1m over {self.ohlcvs_1m_init_duration_seconds}s for {','.join([symbol_to_coin(s) for s in symbols])}"
-        )
-        for symbol in symbols:
-            tasks[symbol] = asyncio.create_task(self.update_ohlcvs_1m_single(symbol, verbose=False))
-            await asyncio.sleep(sleep_time_seconds)
-        for symbol in tasks:
-            await tasks[symbol]
+        try:
+            if not hasattr(self, "ohlcvs_1m"):
+                self.ohlcvs_1m = {}
+            min_n_candles = self.config["live"]["noisiness_rolling_mean_window_size"]
+            total_sleep_time_seconds = self.ohlcvs_1m_init_sleep_duration_per_coin_seconds * len(
+                self.eligible_symbols
+            )
+            tasks = {}
+            symbols = sorted(self.eligible_symbols)
+            logging.info(
+                f"initiating ohlcvs_1m over {total_sleep_time_seconds:.2f}s for {','.join([symbol_to_coin(s) for s in symbols])}"
+            )
+            for symbol in symbols:
+                tasks[symbol] = asyncio.create_task(
+                    self.update_ohlcvs_1m_single(symbol, verbose=False)
+                )
+                await asyncio.sleep(self.ohlcvs_1m_init_sleep_duration_per_coin_seconds)
+            for symbol in tasks:
+                await tasks[symbol]
+        except Exception as e:
+            logging.error(f"error with {get_function_name()}: {e}")
+            traceback.print_exc()
+
+    async def update_ohlcvs_1m_single_new(self, symbol):
+        # fetches via REST API latest 1m ohlcvs and dumps them to disk
+        pass
 
     async def update_ohlcvs_1m_single(self, symbol, since=None, verbose=True):
         if not hasattr(self, "upd_tss_ohlcvs_1m_single"):
@@ -666,9 +678,9 @@ class Passivbot:
         else:
             # if not forager mode, all eligible symbols are ideal symbols, unless symbol in forced_modes
             for pside in ["long", "short"]:
-                if self.config[f"{pside}_enabled"]:
-                    self.warn_on_high_effective_min_cost(pside)
-                    for symbol in self.eligible_symbols:
+                self.warn_on_high_effective_min_cost(pside)
+                for symbol in self.eligible_symbols:
+                    if self.is_enabled(symbol, pside):
                         if not self.effective_min_cost_is_low_enough(pside, symbol):
                             continue
                         if symbol not in self.forced_modes[pside]:
@@ -1168,7 +1180,8 @@ class Passivbot:
         if pside is None:
             return self.is_enabled(symbol, "long") or self.is_enabled(symbol, "short")
         return (
-            self.live_configs[symbol][pside]["wallet_exposure_limit"] > 0.0
+            symbol in self.live_configs
+            and self.live_configs[symbol][pside]["wallet_exposure_limit"] > 0.0
             and self.live_configs[symbol][pside]["n_positions"] > 0.0
         )
 
