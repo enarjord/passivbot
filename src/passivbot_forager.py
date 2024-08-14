@@ -1683,6 +1683,7 @@ class Passivbot:
                 ]
                 if not symbols_to_consider:
                     await asyncio.sleep(5)
+                    continue
                 last_update_tss = self.get_ohlcvs_1m_file_mods(symbols_to_consider)
                 last_update_tss = sorted([x for x in last_update_tss if sts - x[0] > 1000 * 50])
                 line = ""
