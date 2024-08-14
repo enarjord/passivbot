@@ -237,7 +237,8 @@ class GateIOBot(Passivbot):
             return positions, balance
         except Exception as e:
             logging.error(f"error fetching positions and balance {e}")
-            print_async_exception(info)
+            print_async_exception(positions)
+            print_async_exception(balance)
             traceback.print_exc()
             return False
 
