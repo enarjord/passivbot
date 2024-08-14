@@ -153,12 +153,11 @@ class Passivbot:
             self.update_open_orders(),
             self.update_positions(),
             self.update_pnls(),
-            self.update_ohlcvs_1m_for_trailing(),
         )
         self.update_effective_min_cost()
         self.update_EMAs()
         self.update_PB_modes()
-        await self.update_exchange_configs(),
+        await asyncio.gather(self.update_ohlcvs_1m_for_actives(), self.update_exchange_configs())
 
     async def execute_to_exchange(self):
         await self.prepare_for_execution()
@@ -1666,9 +1665,7 @@ class Passivbot:
             try:
                 filepath = self.get_ohlcvs_1m_filepath(symbol)
                 if os.path.exists(filepath):
-                    last_update_tss.append(
-                        (get_file_mod_utc(filepath), symbol)
-                    )
+                    last_update_tss.append((get_file_mod_utc(filepath), symbol))
                 else:
                     last_update_tss.append((0.0, symbol))
             except Exception as e:
@@ -1682,10 +1679,10 @@ class Passivbot:
                 # force update all ohlcvs_1m via REST every x mins (default 20)
                 sts = utc_ms()
                 symbols_to_consider = [
-                    x
-                    for x in self.eligible_symbols
-                    if not (self.has_position(x) and self.is_trailing(x))
+                    x for x in self.eligible_symbols if x not in self.active_symbols
                 ]
+                if not symbols_to_consider:
+                    await asyncio.sleep(5)
                 last_update_tss = self.get_ohlcvs_1m_file_mods(symbols_to_consider)
                 last_update_tss = sorted([x for x in last_update_tss if sts - x[0] > 1000 * 50])
                 line = ""
@@ -1697,7 +1694,7 @@ class Passivbot:
                     5.0, self.ohlcvs_1m_update_cycle_duration_seconds / len(symbols_to_consider)
                 )
                 sleep_duration_sec = max(0.0, sleep_duration_sec - (utc_ms() - sts) / 1000)
-                logging.info(f"debug sleeping for {sleep_duration_sec:.2f}s {line}")
+                # logging.info(f"debug sleeping for {sleep_duration_sec:.2f}s {line}")
                 await asyncio.sleep(sleep_duration_sec)
             except Exception as e:
                 logging.error(f"error with {get_function_name()} {e}")
@@ -1721,13 +1718,10 @@ class Passivbot:
                 traceback.print_exc()
                 await asyncio.sleep(5)
 
-    async def update_ohlcvs_1m_for_trailing(self):
+    async def update_ohlcvs_1m_for_actives(self):
         try:
-            symbols_to_update = [
-                s for s in self.positions if self.has_position(s) and self.is_trailing(s)
-            ]
             await asyncio.gather(
-                *[self.update_ohlcvs_1m_single(s, verbose=False) for s in symbols_to_update]
+                *[self.update_ohlcvs_1m_single(s, verbose=False) for s in self.active_symbols]
             )
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
