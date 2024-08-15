@@ -38,6 +38,7 @@ class GateIOBot(Passivbot):
             {
                 "apiKey": self.user_info["key"],
                 "secret": self.user_info["secret"],
+                "headers": {"X-Gate-Channel-Id": self.broker_code} if self.broker_code else {},
             }
         )
         self.ccp.options["defaultType"] = "swap"
@@ -45,6 +46,7 @@ class GateIOBot(Passivbot):
             {
                 "apiKey": self.user_info["key"],
                 "secret": self.user_info["secret"],
+                "headers": {"X-Gate-Channel-Id": self.broker_code} if self.broker_code else {},
             }
         )
         self.cca.options["defaultType"] = "swap"
