@@ -28,6 +28,7 @@ class BybitBot(Passivbot):
                 "apiKey": self.user_info["key"],
                 "secret": self.user_info["secret"],
                 "password": self.user_info["passphrase"],
+                "headers": {"referer": self.broker_code} if self.broker_code else {},
             }
         )
         self.cca = getattr(ccxt_async, self.exchange)(
