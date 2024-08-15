@@ -350,7 +350,12 @@ class GateIOBot(Passivbot):
             res = await self.cca.cancel_orders([x["id"] for x in orders])
             cancellations = []
             for order, elm in zip(orders, res):
-                cancellations.append({**order, **elm})
+                if elm["status"] != "rejected":
+                    joined = order.copy()
+                    for k, v in elm.items():
+                        if k not in joined or not joined[k]:
+                            joined[k] = v
+                    cancellations.append(joined)
             return cancellations
         except Exception as e:
             logging.error(f"error executing cancellations {e} {orders}")
