@@ -2035,5 +2035,5 @@ if __name__ == "__main__":
         logging.error(f"There was an error starting the bot: {e}")
         traceback.print_exc()
     finally:
-        logging.info("Passivbot was stopped succesfully")
+        logging.info("Passivbot was stopped successfully")
         os._exit(0)

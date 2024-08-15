@@ -157,10 +157,10 @@ If the robot is profitable, consider donating as showing gratitude for its devel
 Tether USD (USDT):  
 - USDT Solana:  
 9hUCHBQA261PU6rUSbwgMoxn8nrdcXPAYgbASRgA8dtm  
-- USDT Binance Smart Chain BEP20:  
-0x574cad69595fe80c6424ea21988ca0e504cd90cc  
+- USDT Binance Smart Chain BEP20 (TSS address):  
+0xa1e290ec13bf716dadf81640447df9639128460a  
 - USDT Matic Polygon:  
-0x574cad69595fe80c6424ea21988ca0e504cd90cc  
+0xa1e290ec13bf716dadf81640447df9639128460a  
 
 Monero (XMR):  
 49gUQ1jasDK23tJTMCvP4mQUUwndeLWAwSgdCFn6ovmRKXZAjQnVp2JZ2K4UuDDdYMNam1HE8ELZoWdeJPRfYEa9QSEK6XZ
