@@ -11,7 +11,7 @@ from pure_funcs import config_pretty_str
 from copy import deepcopy
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from procedures import utc_ms, make_get_filepath, dump_config
+from procedures import utc_ms, make_get_filepath, dump_config, format_config
 from pure_funcs import (
     flatten_dict,
     ts_to_date_utc,
@@ -128,7 +128,7 @@ def process_single(file_location, verbose=False):
     print_(file_location)
     fname = os.path.split(file_location)[-1].replace("_all_results.txt", "") + ".json"
     full_path = make_get_filepath(os.path.join("opt_results_forager_analysis", fname))
-    dump_config(best_d, full_path)
+    dump_config(format_config(best_d), full_path)
     return best_d
 
 
