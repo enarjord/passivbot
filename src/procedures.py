@@ -135,6 +135,8 @@ def format_config(config: dict) -> dict:
     result["live"]["approved_coins"] = sorted(set(result["live"]["approved_coins"]))
     if result["backtest"]["symbols"]:
         result["backtest"]["symbols"] = coins_to_symbols(result["backtest"]["symbols"])
+        if not result["live"]["approved_coins"]:
+            result["live"]["approved_coins"] = result["backtest"]["symbols"]
     else:
         if result["live"]["approved_coins"]:
             result["backtest"]["symbols"] = coins_to_symbols(result["live"]["approved_coins"])
