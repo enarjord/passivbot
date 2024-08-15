@@ -1674,6 +1674,7 @@ class Passivbot:
         return last_update_tss
 
     async def maintain_ohlcvs_1m_REST(self):
+        error_count = 0
         while True:
             try:
                 # force update all ohlcvs_1m via REST every x mins (default 20)
@@ -1701,6 +1702,9 @@ class Passivbot:
                 logging.error(f"error with {get_function_name()} {e}")
                 traceback.print_exc()
                 await asyncio.sleep(5)
+                error_count += 1
+                if error_count > 10:
+                    raise Exception(f"too many errors with {get_function_name()}. Restarting bot.")
 
     async def maintain_ohlcvs_1m_REST_old(self):
         while True:
@@ -1750,14 +1754,15 @@ class Passivbot:
             if self.maintainers[key] is None:
                 self.maintainers[key] = asyncio.create_task(getattr(self, key)())
 
-    async def start_bot(self):
+    async def start_bot(self, debug_mode=False):
         await self.init_markets_dict()
         # self.ohlcv_1m_WS = asyncio.create_task(self.watch_ohlcvs_1m())
         await asyncio.sleep(1)
         await self.init_ohlcvs_1m()
         await self.start_data_maintainers()
         logging.info(f"starting execution loop...")
-        await self.run_execution_loop()
+        if not debug_mode:
+            await self.run_execution_loop()
 
     def calc_noisiness(self):
         if not hasattr(self, "noisiness"):
