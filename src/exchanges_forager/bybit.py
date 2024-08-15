@@ -323,7 +323,6 @@ class BybitBot(Passivbot):
             all_fetched_fills, all_fetched_pnls = await asyncio.gather(
                 self.fetch_fills_sub(), self.fetch_pnls_sub()
             )
-            all_fetched_fills.sort(key=lambda y: y["timestamp"])
         else:
             all_fetched_fills = []
             for _ in range(100):
@@ -339,9 +338,21 @@ class BybitBot(Passivbot):
                 end_time = fills[0]["timestamp"]
             else:
                 logging.error(f"more than 100 calls to ccxt fetch_my_trades")
-            if not all_fetched_fills:
-                return []
-            all_fetched_fills.sort(key=lambda y: y["timestamp"])
+        if not all_fetched_fills:
+            return []
+        all_fetched_fills.sort(key=lambda y: y["timestamp"])
+        fillsd = defaultdict(list)
+        execIds_seen = set()
+        closes_ids = set()
+        for x in all_fetched_fills:
+            if float(x["info"]["closedSize"]) != 0.0:
+                closes_ids.add(x["info"]["orderId"])
+            if x["info"]["execId"] not in execIds_seen:
+                fillsd[x["info"]["orderId"]].append(
+                    {**x, **{"pnl": 0.0, "position_side": self.determine_pos_side(x)}}
+                )
+                execIds_seen.add(x["info"]["execId"])
+        if start_time is not None:
             start_time = all_fetched_fills[0]["timestamp"]
             end_time = all_fetched_fills[-1]["timestamp"] + 1
             all_fetched_pnls = []
@@ -352,18 +363,12 @@ class BybitBot(Passivbot):
                 all_fetched_pnls += pnls
                 if pnls[0]["timestamp"] <= start_time:
                     break
+                if all([x["info"]["orderId"] in closes_ids for x in all_fetched_pnls]):
+                    break
                 logging.info(
                     f"fetched pnls: {pnls[0]['datetime']} {pnls[-1]['datetime']} {len(pnls)}"
                 )
                 end_time = pnls[0]["timestamp"]
-        fillsd = defaultdict(list)
-        execIds_seen = set()
-        for x in all_fetched_fills:
-            if x["info"]["execId"] not in execIds_seen:
-                fillsd[x["info"]["orderId"]].append(
-                    {**x, **{"pnl": 0.0, "position_side": self.determine_pos_side(x)}}
-                )
-                execIds_seen.add(x["info"]["execId"])
         for x in all_fetched_pnls:
             if x["timestamp"] < all_fetched_fills[0]["timestamp"]:
                 continue
