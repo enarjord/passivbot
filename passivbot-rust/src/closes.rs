@@ -24,7 +24,7 @@ pub fn calc_grid_close_long(
         || bot_params.close_grid_qty_pct >= 1.0
     {
         return Order {
-            qty: -position.size,
+            qty: -round_(position.size, exchange_params.qty_step),
             price: f64::max(
                 state_params.order_book.ask,
                 round_up(
@@ -46,7 +46,7 @@ pub fn calc_grid_close_long(
     );
     if close_prices_start == close_prices_end {
         return Order {
-            qty: -position.size,
+            qty: -round_(position.size, exchange_params.qty_step),
             price: f64::max(state_params.order_book.ask, close_prices_start),
             order_type: OrderType::CloseGridLong,
         };
@@ -569,7 +569,10 @@ pub fn calc_closes_long(
             if closes[closes.len() - 1].price == close.price {
                 let previous_close = closes.pop();
                 let merged_close = Order {
-                    qty: previous_close.unwrap().qty + close.qty,
+                    qty: round_(
+                        previous_close.unwrap().qty + close.qty,
+                        exchange_params.qty_step,
+                    ),
                     price: close.price,
                     order_type: close.order_type,
                 };
