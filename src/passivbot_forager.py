@@ -291,7 +291,7 @@ class Passivbot:
             return False
 
     async def wait_for_ohlcvs_1m_to_update(self):
-        await asyncio.sleep(0.25)
+        await asyncio.sleep(1.0)
         prev_print_ts = 0
         while self.n_symbols_missing_ohlcvs_1m > self.max_n_concurrent_ohlcvs_1m_updates - 1:
             if utc_ms() - prev_print_ts > 1000 * 20:
@@ -1092,7 +1092,6 @@ class Passivbot:
         try:
             if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
                 return self.ohlcvs_1m[symbol].peekitem(-1)[1][4]
-            return 0.0
         except Exception as e:
             logging.error(f"error with {get_function_name()} for {symbol}: {e}")
             traceback.print_exc()
@@ -1119,20 +1118,27 @@ class Passivbot:
                 WE_ratio = wallet_exposure / self.live_configs[symbol][pside]["wallet_exposure_limit"]
             except:
                 WE_ratio = 0.0
+            last_price = or_default(self.get_last_price, symbol, default=0.0)
             try:
-                pprice_diff = calc_pprice_diff(
-                    pside, positions_new[symbol][pside]["price"], self.get_last_price(symbol)
+                pprice_diff = (
+                    calc_pprice_diff(pside, positions_new[symbol][pside]["price"], last_price)
+                    if last_price
+                    else 0.0
                 )
             except:
                 pprice_diff = 0.0
             try:
-                upnl = calc_pnl(
-                    pside,
-                    positions_new[symbol][pside]["price"],
-                    self.get_last_price(symbol),
-                    positions_new[symbol][pside]["size"],
-                    self.inverse,
-                    self.c_mults[symbol],
+                upnl = (
+                    calc_pnl(
+                        pside,
+                        positions_new[symbol][pside]["price"],
+                        self.get_last_price(symbol),
+                        positions_new[symbol][pside]["size"],
+                        self.inverse,
+                        self.c_mults[symbol],
+                    )
+                    if last_price
+                    else 0.0
                 )
             except Exception as e:
                 upnl = 0.0
