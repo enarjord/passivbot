@@ -502,7 +502,9 @@ class BybitBot(Passivbot):
             logging.error(f"error setting hedge mode {e}")
 
     async def fetch_ohlcvs_1m(self, symbol: str, since: float = None):
-        n_candles_limit = 1000
+        n_candles_limit = (
+            20 if symbol in self.ohlcvs_1m and len(self.ohlcvs_1m[symbol]) > 100 else 1000
+        )
         if since is None:
             result = await self.cca.fetch_ohlcv(symbol, timeframe="1m", limit=n_candles_limit)
             return result
