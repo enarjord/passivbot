@@ -1692,8 +1692,8 @@ class Passivbot:
                                 or self.ohlcvs_1m_update_timestamps[symbol] < mod_ts
                             ):
                                 # may have been updated from other instance
-                                self.update_ohlcvs_1m_single_from_cache(symbol)
-                                self.ohlcvs_1m_update_timestamps[symbol] = mod_ts
+                                if self.update_ohlcvs_1m_single_from_cache(symbol):
+                                    self.ohlcvs_1m_update_timestamps[symbol] = mod_ts
                     else:
                         symbols_too_old.append((0.0, symbol))
                 symbols_to_update = sorted(symbols_too_old)[: self.max_n_concurrent_ohlcvs_1m_updates]
