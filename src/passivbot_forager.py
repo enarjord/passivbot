@@ -134,9 +134,12 @@ class Passivbot:
         self.upd_minute_emas = {}
         self.ineligible_symbols_with_pos = set()
         self.ohlcvs_1m_max_age_minutes = 5
+        self.ohlcvs_1m_max_len = 10080
+
         self.n_symbols_missing_ohlcvs_1m = 1000
         self.ohlcvs_1m_update_timestamps = {}
         self.max_n_concurrent_ohlcvs_1m_updates = 10
+        self.stop_signal_received = False
 
     async def update_market_info(self):
         logging.info(f"initiating markets...")
@@ -145,7 +148,7 @@ class Passivbot:
     async def run_execution_loop(self):
         # simulates backtest which executes once every 1m
         prev_minute = utc_ms() // (1000 * 60)
-        while True:
+        while not self.stop_signal_received:
             try:
                 now_minute = utc_ms() // (1000 * 60)
                 if now_minute != prev_minute:
@@ -288,6 +291,10 @@ class Passivbot:
         except Exception as e:
             logging.error(f"error with update_ohlcvs_1m_single_from_cache {symbol} {e}")
             traceback.print_exc()
+            try:
+                os.remove(self.get_ohlcvs_1m_filepath(symbol))
+            except Exception as e0:
+                logging.error(f"failed to remove corrupted ohlcvs_1m file for {symbol}")
             return False
 
     async def wait_for_ohlcvs_1m_to_update(self):
@@ -304,6 +311,16 @@ class Passivbot:
     def get_ohlcvs_1m_filepath(self, symbol):
         return f"{self.ohlcvs_1m_cache_dirpath}{symbol_to_coin(symbol)}.json"
 
+    def dump_ohlcvs_1m_to_cache(self, symbol):
+        try:
+            to_dump = [x for x in self.ohlcvs_1m[symbol].values()][-self.ohlcvs_1m_max_len:]
+            json.dump(to_dump, open(self.get_ohlcvs_1m_filepath(symbol), "w"))
+            return True
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} for {symbol}: {e}")
+            traceback.print_exc()
+            return False
+
     async def update_ohlcvs_1m_single(self, symbol, since=None, verbose=True):
         if symbol not in self.ohlcvs_1m:
             self.ohlcvs_1m[symbol] = SortedDict()
@@ -313,16 +330,9 @@ class Passivbot:
         if candles:
             if verbose:
                 logging.info(f"updated ohlcvs_1m for {symbol} since {ts_to_date_utc(candles[0][0])}")
-            try:
-                json.dump(candles, open(self.get_ohlcvs_1m_filepath(symbol), "w"))
-                self.ohlcvs_1m_update_timestamps[symbol] = or_default(
-                    get_file_mod_utc, self.get_ohlcvs_1m_filepath(symbol), default=0.0
-                )
-            except Exception as e:
-                logging.error(f"error dumping ohclvs_1m to disk for {symbol} {e}")
-                traceback.print_exc()
+            self.dump_ohlcvs_1m_to_cache(symbol)
         i = 0
-        while len(self.ohlcvs_1m[symbol]) > 10080:
+        while len(self.ohlcvs_1m[symbol]) > self.ohlcvs_1m_max_len:
             i += 1
             if i > 1000:
                 logging.info(
@@ -1676,7 +1686,7 @@ class Passivbot:
         self.ohlcvs_1m_update_timestamps = {}
         loop_sleep_time_ms = 1000 * 2
         logging.info(f"starting {get_function_name()}")
-        while True:
+        while not self.stop_signal_received:
             try:
                 symbols_too_old = []
                 now_utc = utc_ms()
@@ -1731,6 +1741,7 @@ class Passivbot:
 
     async def restart_bot(self):
         logging.info("Initiating bot restart...")
+        self.stop_signal_received = True
         self.stop_data_maintainers()
         await self.cca.close()
         await self.ccp.close()
@@ -1763,7 +1774,7 @@ class Passivbot:
             traceback.print_exc()
 
     async def maintain_markets_info(self):
-        while True:
+        while not stop_signal_received:
             try:
                 # update markets dict once every hour
                 if utc_ms() - self.init_markets_last_update_ms > 1000 * 60 * 60:
@@ -1961,6 +1972,7 @@ async def main():
         restarts.append(utc_ms())
         restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]
         if len(restarts) > max_n_restarts_per_day:
+            logging.info(f"n restarts exceeded {max_n_restarts_per_day} last 24h")
             break
 
 
