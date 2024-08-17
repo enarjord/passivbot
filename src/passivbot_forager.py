@@ -1727,7 +1727,14 @@ class Passivbot:
                 await asyncio.sleep(5)
                 error_count += 1
                 if error_count > 10:
-                    raise Exception(f"too many errors with {get_function_name()}. Restarting bot.")
+                    await self.restart_bot()
+
+    async def restart_bot(self):
+        logging.info("Initiating bot restart...")
+        self.stop_data_maintainers()
+        await self.cca.close()
+        await self.ccp.close()
+        raise Exception("Bot will restart.")
 
     async def maintain_ohlcvs_1m_REST_old(self):
         while True:
