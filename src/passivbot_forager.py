@@ -138,8 +138,6 @@ class Passivbot:
         self.ohlcvs_1m_update_timestamps = {}
         self.max_n_concurrent_ohlcvs_1m_updates = 10
 
-
-
     async def update_market_info(self):
         logging.info(f"initiating markets...")
         await self.init_markets_dict()
@@ -166,9 +164,9 @@ class Passivbot:
             self.update_pnls(),
         )
         self.update_effective_min_cost()
-        self.update_EMAs()
         self.update_PB_modes()
         await asyncio.gather(self.update_ohlcvs_1m_for_actives(), self.update_exchange_configs())
+        self.update_EMAs()
 
     async def execute_to_exchange(self):
         await self.prepare_for_execution()
@@ -297,7 +295,9 @@ class Passivbot:
         prev_print_ts = 0
         while self.n_symbols_missing_ohlcvs_1m > self.max_n_concurrent_ohlcvs_1m_updates - 1:
             if utc_ms() - prev_print_ts > 1000 * 20:
-                logging.info(f"Waiting for ohlcvs to be refreshed. Number of symbols with out-of-date ohlcvs: {self.n_symbols_missing_ohlcvs_1m}")
+                logging.info(
+                    f"Waiting for ohlcvs to be refreshed. Number of symbols with out-of-date ohlcvs: {self.n_symbols_missing_ohlcvs_1m}"
+                )
                 prev_print_ts = utc_ms()
             await asyncio.sleep(0.1)
 
@@ -898,22 +898,26 @@ class Passivbot:
             self.ohlcvs_1m[symbol][elm[0]] = elm
 
     def calc_upnl_sum(self):
-        try:
-            upnl_sum = 0.0
-            for elm in self.fetched_positions:
-                upnl_sum += calc_pnl(
-                    elm["position_side"],
-                    elm["price"],
-                    self.ohlcvs_1m[elm["symbol"]].peekitem(-1)[1][3],
-                    elm["size"],
-                    self.inverse,
-                    self.c_mults[elm["symbol"]],
+        upnl_sum = 0.0
+        for elm in self.fetched_positions:
+            try:
+                upnl_sum += (
+                    calc_pnl(
+                        elm["position_side"],
+                        elm["price"],
+                        self.ohlcvs_1m[elm["symbol"]].peekitem(-1)[1][3],
+                        elm["size"],
+                        self.inverse,
+                        self.c_mults[elm["symbol"]],
+                    )
+                    if elm["symbol"] in self.ohlcvs_1m
+                    else 0.0
                 )
-            return upnl_sum
-        except Exception as e:
-            logging.error(f"error calculating upnl sum {e}")
-            traceback.print_exc()
-            return 0.0
+            except Exception as e:
+                logging.error(f"error calculating upnl sum {e}")
+                traceback.print_exc()
+                return 0.0
+        return upnl_sum
 
     async def update_pnls(self):
         # fetch latest pnls
@@ -987,14 +991,7 @@ class Passivbot:
                 f"Caught symbol with pos for ineligible market: {self.ineligible_symbols_with_pos}"
             )
             update = True
-        if utc_ms() - self.init_markets_last_update_ms > (1000 * 60 * 60 * 3):
-            logging.info(f"Force updating markets every three hours.")
-            update = True
-        if update:
             await self.init_markets_dict()
-            await self.init_flags()
-            self.set_live_configs()
-            self.update_PB_modes()
 
     async def update_open_orders(self):
         if not hasattr(self, "open_orders"):
@@ -1620,7 +1617,7 @@ class Passivbot:
         self.upd_minute_emas[symbol] = first_ts
 
     def update_EMAs(self):
-        for symbol in self.ohlcvs_1m:
+        for symbol in self.get_eligible_or_active_symbols():
             self.update_EMAs_single(symbol)
 
     def update_EMAs_single(self, symbol):
@@ -1647,9 +1644,12 @@ class Passivbot:
             traceback.print_exc()
             return False
 
+    def get_eligible_or_active_symbols(self):
+        return sorted(self.eligible_symbols | set(self.active_symbols))
+
     def get_ohlcvs_1m_file_mods(self, symbols=None):
         if symbols is None:
-            symbols = sorted(set(self.eligible_symbols))
+            symbols = self.get_eligible_or_active_symbols()
         last_update_tss = []
         for symbol in symbols:
             try:
@@ -1674,20 +1674,23 @@ class Passivbot:
             try:
                 symbols_too_old = []
                 now_utc = utc_ms()
-                for symbol in sorted(self.eligible_symbols):
+                for symbol in self.get_eligible_or_active_symbols():
                     filepath = self.get_ohlcvs_1m_filepath(symbol)
                     if os.path.exists(filepath):
                         mod_ts = or_default(get_file_mod_utc, filepath, default=0.0)
                         if now_utc - mod_ts > 1000 * 60 * self.ohlcvs_1m_max_age_minutes:
                             symbols_too_old.append((mod_ts, symbol))
                         else:
-                            if symbol not in self.ohlcvs_1m_update_timestamps or self.ohlcvs_1m_update_timestamps[symbol] < mod_ts:
+                            if (
+                                symbol not in self.ohlcvs_1m_update_timestamps
+                                or self.ohlcvs_1m_update_timestamps[symbol] < mod_ts
+                            ):
                                 # may have been updated from other instance
                                 self.update_ohlcvs_1m_single_from_cache(symbol)
                                 self.ohlcvs_1m_update_timestamps[symbol] = mod_ts
                     else:
                         symbols_too_old.append((0.0, symbol))
-                symbols_to_update = sorted(symbols_too_old)[:self.max_n_concurrent_ohlcvs_1m_updates]
+                symbols_to_update = sorted(symbols_too_old)[: self.max_n_concurrent_ohlcvs_1m_updates]
 
                 self.n_symbols_missing_ohlcvs_1m = len(symbols_too_old)
                 if verbose:
@@ -1697,12 +1700,17 @@ class Passivbot:
                     )
                 if not symbols_to_update:
                     if self.ohlcvs_1m_update_timestamps:
-                        symbol, ts = sorted(self.ohlcvs_1m_update_timestamps.items(), key=lambda x: x[1])[0]
+                        symbol, ts = sorted(
+                            self.ohlcvs_1m_update_timestamps.items(), key=lambda x: x[1]
+                        )[0]
                         if utc_ms() - ts > 1000 * 60 * self.ohlcvs_1m_max_age_minutes / 2:
                             symbols_to_update = [(ts, symbol)]
                 if symbols_to_update:
                     await asyncio.gather(
-                        *[self.update_ohlcvs_1m_single(x[1], verbose=verbose) for x in symbols_to_update]
+                        *[
+                            self.update_ohlcvs_1m_single(x[1], verbose=verbose)
+                            for x in symbols_to_update
+                        ]
                     )
                 sleep_time_ms = loop_sleep_time_ms - (utc_ms() - now_utc)
                 await asyncio.sleep(max(0.0, sleep_time_ms / 1000.0))
