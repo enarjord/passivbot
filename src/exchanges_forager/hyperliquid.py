@@ -288,7 +288,9 @@ class HyperliquidBot(Passivbot):
             return False
 
     async def fetch_ohlcvs_1m(self, symbol: str, since: float = None):
-        n_candles_limit = 5000
+        n_candles_limit = (
+            20 if symbol in self.ohlcvs_1m and len(self.ohlcvs_1m[symbol]) > 100 else 5000
+        )
         result = await self.cca.fetch_ohlcv(
             symbol,
             timeframe="1m",
