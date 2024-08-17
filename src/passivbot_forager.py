@@ -313,7 +313,7 @@ class Passivbot:
 
     def dump_ohlcvs_1m_to_cache(self, symbol):
         try:
-            to_dump = [x for x in self.ohlcvs_1m[symbol].values()][-self.ohlcvs_1m_max_len:]
+            to_dump = [x for x in self.ohlcvs_1m[symbol].values()][-self.ohlcvs_1m_max_len :]
             json.dump(to_dump, open(self.get_ohlcvs_1m_filepath(symbol), "w"))
             return True
         except Exception as e:
