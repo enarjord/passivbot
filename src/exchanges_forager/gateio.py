@@ -287,6 +287,7 @@ class GateIOBot(Passivbot):
         result = await self.cca.fetch_ohlcv(
             symbol,
             timeframe="1m",
+            limit=20 if symbol in self.ohlcvs_1m and len(self.ohlcvs_1m[symbol]) > 100 else 1440
         )
         return result
 
