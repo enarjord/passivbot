@@ -133,13 +133,14 @@ class Passivbot:
         self.ema_alphas = {"long": {}, "short": {}}
         self.upd_minute_emas = {}
         self.ineligible_symbols_with_pos = set()
-        self.ohlcvs_1m_max_age_minutes = 5
+        self.ohlcvs_1m_max_age_minutes = 8
         self.ohlcvs_1m_max_len = 10080
 
         self.n_symbols_missing_ohlcvs_1m = 1000
         self.ohlcvs_1m_update_timestamps = {}
-        self.max_n_concurrent_ohlcvs_1m_updates = 10
+        self.max_n_concurrent_ohlcvs_1m_updates = 6
         self.stop_signal_received = False
+        self.ohlcvs_1m_update_timestamps_WS = {}
 
     async def update_market_info(self):
         logging.info(f"initiating markets...")
@@ -153,6 +154,7 @@ class Passivbot:
                 now_minute = utc_ms() // (1000 * 60)
                 if now_minute != prev_minute:
                     prev_minute = now_minute
+                    await asyncio.sleep(1.0)
                     await self.execute_to_exchange()
                 await asyncio.sleep(0.1)
             except Exception as e:
@@ -241,6 +243,18 @@ class Passivbot:
         return f"{symbol: <{self.sym_padding}}"
 
     def stop_data_maintainers(self):
+        if hasattr(self, "ohlcv_1m_WS"):
+            try:
+                res = self.ohlcv_1m_WS.cancel()
+                logging.info(f"stopped ohlcv_1m_WS {res}")
+            except Exception as e:
+                logging.error(f"error stopping ohlcv_1m_WS {e}")
+        if hasattr(self, "WS_ohlcvs_1m_tasks"):
+            for key in self.WS_ohlcvs_1m_tasks:
+                try:
+                    res = self.WS_ohlcvs_1m_tasks[key].cancel()
+                except Exception as e:
+                    logging.error(f"error stopping WS_ohlcvs_1m_tasks {key} {e}")
         if not hasattr(self, "maintainers"):
             return
         res = {}
@@ -322,9 +336,13 @@ class Passivbot:
             return False
 
     async def update_ohlcvs_1m_single(self, symbol, since=None, verbose=True):
+        limit = 20
         if symbol not in self.ohlcvs_1m:
             self.ohlcvs_1m[symbol] = SortedDict()
-        candles = await self.fetch_ohlcvs_1m(symbol)
+            limit = None
+        elif len(self.ohlcvs_1m[symbol]) < 100:
+            limit = None
+        candles = await self.fetch_ohlcvs_1m(symbol, limit=limit)
         for x in candles:
             self.ohlcvs_1m[symbol][x[0]] = x
         if candles:
@@ -902,10 +920,11 @@ class Passivbot:
             traceback.print_exc()
 
     def handle_ohlcv_1m_update(self, symbol, upd):
+        if symbol not in self.ohlcvs_1m:
+            self.ohlcvs_1m[symbol] = SortedDict()
         for elm in upd:
-            if symbol not in self.ohlcvs_1m:
-                self.ohlcvs_1m[symbol] = SortedDict()
             self.ohlcvs_1m[symbol][elm[0]] = elm
+            self.ohlcvs_1m_update_timestamps_WS[symbol] = utc_ms()
 
     def calc_upnl_sum(self):
         upnl_sum = 0.0
@@ -1704,6 +1723,8 @@ class Passivbot:
                                 # may have been updated from other instance
                                 if self.update_ohlcvs_1m_single_from_cache(symbol):
                                     self.ohlcvs_1m_update_timestamps[symbol] = mod_ts
+                                else:
+                                    self.ohlcvs_1m_update_timestamps[symbol] = 0.0
                     else:
                         symbols_too_old.append((0.0, symbol))
                 symbols_to_update = sorted(symbols_too_old)[: self.max_n_concurrent_ohlcvs_1m_updates]
@@ -1766,9 +1787,17 @@ class Passivbot:
 
     async def update_ohlcvs_1m_for_actives(self):
         try:
-            await asyncio.gather(
-                *[self.update_ohlcvs_1m_single(s, verbose=False) for s in self.active_symbols]
-            )
+            utc_now = utc_ms()
+            symbols_to_update = [
+                s
+                for s in self.active_symbols
+                if s not in self.ohlcvs_1m_update_timestamps_WS
+                or utc_now - self.ohlcvs_1m_update_timestamps_WS[s] > 1000 * 60
+            ]
+            if symbols_to_update:
+                await asyncio.gather(
+                    *[self.update_ohlcvs_1m_single(s, verbose=False) for s in symbols_to_update]
+                )
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
             traceback.print_exc()
@@ -1796,11 +1825,12 @@ class Passivbot:
 
     async def start_bot(self, debug_mode=False):
         await self.init_markets_dict()
-        # self.ohlcv_1m_WS = asyncio.create_task(self.watch_ohlcvs_1m())
         await asyncio.sleep(1)
         # await self.init_ohlcvs_1m()
         await self.start_data_maintainers()
         await self.wait_for_ohlcvs_1m_to_update()
+        logging.info(f"starting websocket...")
+        self.ohlcv_1m_WS = asyncio.create_task(self.watch_ohlcvs_1m())
         logging.info(f"starting execution loop...")
         if not debug_mode:
             await self.run_execution_loop()
