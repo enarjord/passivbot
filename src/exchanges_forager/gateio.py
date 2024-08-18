@@ -96,7 +96,7 @@ class GateIOBot(Passivbot):
             self.ohlcvs_1m = {}
         self.WS_ohlcvs_1m_tasks = {}
         while not self.stop_websocket:
-            current_symbols = set(self.eligible_symbols)
+            current_symbols = set(self.active_symbols)
             started_symbols = set(self.WS_ohlcvs_1m_tasks.keys())
             to_print = []
             # Start watch_ohlcv_1m_single tasks for new symbols
@@ -283,11 +283,12 @@ class GateIOBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_ohlcvs_1m(self, symbol: str):
+    async def fetch_ohlcvs_1m(self, symbol: str, limit=None):
+        n_candles_limit = 1440 if limit is None else limit
         result = await self.cca.fetch_ohlcv(
             symbol,
             timeframe="1m",
-            limit=20 if symbol in self.ohlcvs_1m and len(self.ohlcvs_1m[symbol]) > 100 else 1440,
+            limit=n_candles_limit,
         )
         return result
 

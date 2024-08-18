@@ -114,7 +114,7 @@ class BingXBot(Passivbot):
         return
         if not hasattr(self, "ohlcvs_1m"):
             self.ohlcvs_1m = {}
-        symbols_and_timeframes = [[s, "1m"] for s in sorted(self.eligible_symbols)]
+        symbols_and_timeframes = [[s, "1m"] for s in sorted(self.active_symbols)]
         coins = [symbol_to_coin(x[0]) for x in symbols_and_timeframes]
         if coins:
             logging.info(f"Started watching ohlcv_1m for {','.join(coins)}")
@@ -228,10 +228,8 @@ class BingXBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_ohlcvs_1m(self, symbol: str, since: float = None):
-        n_candles_limit = (
-            20 if symbol in self.ohlcvs_1m and len(self.ohlcvs_1m[symbol]) > 100 else 1440
-        )
+    async def fetch_ohlcvs_1m(self, symbol: str, since: float = None, limit=None):
+        n_candles_limit = 1440 if limit is None else limit
         if since is None:
             result = await self.cca.fetch_ohlcv(symbol, timeframe="1m", limit=n_candles_limit)
             return result
