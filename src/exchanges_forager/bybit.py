@@ -110,11 +110,23 @@ class BybitBot(Passivbot):
     async def watch_ohlcvs_1m(self):
         if not hasattr(self, "ohlcvs_1m"):
             self.ohlcvs_1m = {}
-        symbols_and_timeframes = [[s, "1m"] for s in sorted(set(self.active_symbols))]
-        coins = [symbol_to_coin(x[0]) for x in symbols_and_timeframes]
-        if coins:
-            logging.info(f"Started watching ohlcv_1m for {','.join(coins)}")
+        currently_watching = set()
         while not self.stop_websocket:
+            if not self.active_symbols:
+                await asyncio.sleep(1)
+                continue
+            symbols_to_watch = set(self.active_symbols)
+            if symbols_to_watch != currently_watching:
+                new_symbols = [x for x in symbols_to_watch if x not in currently_watching]
+                stopped_symbols = [x for x in currently_watching if x not in symbols_to_watch]
+                if new_symbols:
+                    coins = [symbol_to_coin(x) for x in new_symbols]
+                    logging.info(f"Started watching ohlcv_1m for {','.join(coins)}")
+                if stopped_symbols:
+                    coins = [symbol_to_coin(x) for x in stopped_symbols]
+                    logging.info(f"Stopped watching ohlcv_1m for {','.join(coins)}")
+                currently_watching = symbols_to_watch
+            symbols_and_timeframes = [[s, "1m"] for s in sorted(symbols_to_watch)]
             try:
                 res = await self.ccp.watch_ohlcv_for_symbols(symbols_and_timeframes)
                 symbol = next(iter(res))
