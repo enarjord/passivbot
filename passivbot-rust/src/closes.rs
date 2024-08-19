@@ -621,7 +621,10 @@ pub fn calc_closes_short(
             if closes[closes.len() - 1].price == close.price {
                 let previous_close = closes.pop();
                 let merged_close = Order {
-                    qty: previous_close.unwrap().qty + close.qty,
+                    qty: round_(
+                        previous_close.unwrap().qty + close.qty,
+                        exchange_params.qty_step,
+                    ),
                     price: close.price,
                     order_type: close.order_type,
                 };
