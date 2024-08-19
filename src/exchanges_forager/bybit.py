@@ -132,8 +132,9 @@ class BybitBot(Passivbot):
                 symbol = next(iter(res))
                 self.handle_ohlcv_1m_update(symbol, res[symbol]["1m"])
             except Exception as e:
-                logging.error(f"Exception in watch_ohlcvs_1m: {e}")
-                traceback.print_exc()
+                if "already subscribed" not in str(e):
+                    logging.error(f"Exception in watch_ohlcvs_1m: {e}")
+                    traceback.print_exc()
                 await asyncio.sleep(1)
 
     async def fetch_open_orders(self, symbol: str = None) -> [dict]:
