@@ -1496,7 +1496,7 @@ class Passivbot:
                     if symbol in ideal_orders
                     else []
                 )
-                if not ideal_closes or close_price <= ideal_closes[0]["price"]:
+                if not ideal_closes or close_price <= ideal_closes[0][1]:
                     continue
                 close_qty = min(
                     abs(self.positions[symbol][pside]["size"]),
@@ -1826,7 +1826,6 @@ class Passivbot:
     async def start_bot(self, debug_mode=False):
         await self.init_markets_dict()
         await asyncio.sleep(1)
-        # await self.init_ohlcvs_1m()
         await self.start_data_maintainers()
         await self.wait_for_ohlcvs_1m_to_update()
         logging.info(f"starting websocket...")
