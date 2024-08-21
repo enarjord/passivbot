@@ -212,6 +212,7 @@ pub struct Fill {
 #[derive(Debug)]
 pub struct Analysis {
     pub adg: f64,
+    pub mdg: f64,
     pub sharpe_ratio: f64,
     pub drawdown_worst: f64,
     pub equity_balance_diff_mean: f64,
@@ -223,6 +224,7 @@ impl Default for Analysis {
     fn default() -> Self {
         Analysis {
             adg: 0.0,
+            mdg: 0.0,
             sharpe_ratio: 0.0,
             drawdown_worst: 1.0,
             equity_balance_diff_mean: 1.0,

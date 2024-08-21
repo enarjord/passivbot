@@ -2019,6 +2019,17 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
 
     // Calculate ADG and Sharpe ratio
     let adg = daily_eqs_pct_change.iter().sum::<f64>() / daily_eqs_pct_change.len() as f64;
+    // Calculate MDG
+    let mut sorted_pct_change = daily_eqs_pct_change.clone();
+    sorted_pct_change.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    let mdg = if sorted_pct_change.len() % 2 == 0 {
+        (sorted_pct_change[sorted_pct_change.len() / 2 - 1]
+            + sorted_pct_change[sorted_pct_change.len() / 2])
+            / 2.0
+    } else {
+        sorted_pct_change[sorted_pct_change.len() / 2]
+    };
+    // Calculate Sharpe Ratio
     let variance = daily_eqs_pct_change
         .iter()
         .map(|&x| (x - adg).powi(2))
@@ -2074,6 +2085,7 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
 
     Analysis {
         adg,
+        mdg,
         sharpe_ratio,
         drawdown_worst,
         equity_balance_diff_mean,

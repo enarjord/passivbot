@@ -93,6 +93,7 @@ pub fn run_backtest(
         let analysis = analyze_backtest(&fills, &equities);
         let py_analysis = PyDict::new(py);
         py_analysis.set_item("adg", analysis.adg)?;
+        py_analysis.set_item("mdg", analysis.mdg)?;
         py_analysis.set_item("sharpe_ratio", analysis.sharpe_ratio)?;
         py_analysis.set_item("drawdown_worst", analysis.drawdown_worst)?;
         py_analysis.set_item(
