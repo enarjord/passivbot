@@ -174,11 +174,11 @@ class Evaluator:
             self.exchange_params,
             self.backtest_params,
         )
-        w_adg, w_sharpe_ratio = self.calc_fitness(analysis)
-        analysis.update({"w_adg": w_adg, "w_sharpe_ratio": w_sharpe_ratio})
+        w_0, w_1 = self.calc_fitness(analysis)
+        analysis.update({"w_0": w_0, "w_1": w_1})
         with open(self.config["results_filename"], "a") as f:
             f.write(json.dumps(denumpyize({"analysis": analysis, "config": config})) + "\n")
-        return w_adg, w_sharpe_ratio
+        return w_0, w_1
 
     def calc_fitness(self, analysis):
         modifier = 0.0
@@ -192,11 +192,11 @@ class Evaluator:
                 - self.config["optimize"]["limits"][f"lower_bound_{key}"]
             ) * 10**i
         if analysis["drawdown_worst"] >= 1.0 or analysis["equity_balance_diff_max"] < 0.1:
-            w_adg = w_sharpe_ratio = modifier
+            w_0 = w_1 = modifier
         else:
-            w_adg = modifier - analysis["adg"]
-            w_sharpe_ratio = modifier - analysis["sharpe_ratio"]
-        return w_adg, w_sharpe_ratio
+            w_0 = modifier - analysis[self.config["optimize"]["scoring"][0]]
+            w_1 = modifier - analysis[self.config["optimize"]["scoring"][1]]
+        return w_0, w_1
 
     def cleanup(self):
         # Close and unlink the shared memory
