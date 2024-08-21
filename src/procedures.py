@@ -221,6 +221,7 @@ def load_config(filepath: str) -> dict:
         for k0, k1, v in [
             ("live", "time_in_force", "good_till_cancelled"),
             ("live", "noisiness_rolling_mean_window_size", 60),
+            ("optimize", "scoring", ["mdg", "sharpe_ratio"]),
         ]:
             if k1 not in config[k0]:
                 config[k0][k1] = v

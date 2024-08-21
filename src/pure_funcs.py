@@ -631,6 +631,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 "mutation_probability": 0.2,
                 "n_cpus": 5,
                 "population_size": 500,
+                "scoring": ["adg", "sharpe_ratio"],
             },
         }
     elif passivbot_mode == "multi_hjson":
