@@ -60,12 +60,15 @@ pub fn calc_grid_close_long(
         position.price,
     );
     let wallet_exposure_ratio = f64::min(1.0, wallet_exposure / bot_params.wallet_exposure_limit);
-    let close_price = round_up(
-        position.price
-            * (1.0
-                + bot_params.close_grid_min_markup
-                + bot_params.close_grid_markup_range * (1.0 - wallet_exposure_ratio)),
-        exchange_params.price_step,
+    let close_price = f64::max(
+        round_up(
+            position.price
+                * (1.0
+                    + bot_params.close_grid_min_markup
+                    + bot_params.close_grid_markup_range * (1.0 - wallet_exposure_ratio)),
+            exchange_params.price_step,
+        ),
+        state_params.order_book.ask,
     );
     let full_psize = cost_to_qty(
         state_params.balance * bot_params.wallet_exposure_limit,
@@ -321,12 +324,15 @@ pub fn calc_grid_close_short(
         position.price,
     );
     let wallet_exposure_ratio = f64::min(1.0, wallet_exposure / bot_params.wallet_exposure_limit);
-    let close_price = round_dn(
-        position.price
-            * (1.0
-                - bot_params.close_grid_min_markup
-                - bot_params.close_grid_markup_range * (1.0 - wallet_exposure_ratio)),
-        exchange_params.price_step,
+    let close_price = f64::min(
+        round_dn(
+            position.price
+                * (1.0
+                    - bot_params.close_grid_min_markup
+                    - bot_params.close_grid_markup_range * (1.0 - wallet_exposure_ratio)),
+            exchange_params.price_step,
+        ),
+        state_params.order_book.bid,
     );
     let full_psize = cost_to_qty(
         state_params.balance * bot_params.wallet_exposure_limit,
