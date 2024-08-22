@@ -7,11 +7,14 @@ import traceback
 import argparse
 import asyncio
 import json
+import sys
+import signal
 import hjson
 import pprint
 import numpy as np
 import inspect
 import passivbot_rust as pbr
+import logging
 from prettytable import PrettyTable
 from uuid import uuid4
 from copy import deepcopy
@@ -63,13 +66,23 @@ from pure_funcs import (
     ts_to_date_utc,
 )
 
-import logging
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(message)s",
     level=logging.INFO,
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
+
+
+def signal_handler(sig, frame):
+    print("\nReceived shutdown signal. Stopping bot...")
+    if "bot" in globals():
+        bot.stop_signal_received = True
+    else:
+        sys.exit(0)
+
+
+signal.signal(signal.SIGINT, signal_handler)
 
 
 def get_function_name():
@@ -127,7 +140,7 @@ class Passivbot:
         self.forager_mode = self.is_forager_mode()
 
         self.minimum_market_age_millis = (
-            self.config["live"]["minimum_market_age_days"] * 24 * 60 * 60 * 1000
+            self.config["live"]["minimum_coin_age_days"] * 24 * 60 * 60 * 1000
         )
         self.emas = {"long": {}, "short": {}}
         self.ema_alphas = {"long": {}, "short": {}}
@@ -138,7 +151,7 @@ class Passivbot:
 
         self.n_symbols_missing_ohlcvs_1m = 1000
         self.ohlcvs_1m_update_timestamps = {}
-        self.max_n_concurrent_ohlcvs_1m_updates = 6
+        self.max_n_concurrent_ohlcvs_1m_updates = 3
         self.stop_signal_received = False
         self.ohlcvs_1m_update_timestamps_WS = {}
 
@@ -160,7 +173,7 @@ class Passivbot:
             except Exception as e:
                 logging.error(f"error with {get_function_name()} {e}")
                 traceback.print_exc()
-                await asyncio.sleep(5.0)
+                await asyncio.sleep(1.0)
 
     async def prepare_for_execution(self):
         await asyncio.gather(
@@ -924,6 +937,7 @@ class Passivbot:
             self.ohlcvs_1m[symbol] = SortedDict()
         for elm in upd:
             self.ohlcvs_1m[symbol][elm[0]] = elm
+            # print("debug ohlcvs_1m WS", symbol, elm)
             self.ohlcvs_1m_update_timestamps_WS[symbol] = utc_ms()
 
     def calc_upnl_sum(self):
@@ -1703,7 +1717,7 @@ class Passivbot:
             self.ohlcvs_1m = {}
         error_count = 0
         self.ohlcvs_1m_update_timestamps = {}
-        loop_sleep_time_ms = 1000 * 2
+        loop_sleep_time_ms = 1000 * 1
         logging.info(f"starting {get_function_name()}")
         while not self.stop_signal_received:
             try:
@@ -1768,23 +1782,6 @@ class Passivbot:
         await self.ccp.close()
         raise Exception("Bot will restart.")
 
-    async def maintain_ohlcvs_1m_REST_old(self):
-        while True:
-            try:
-                # force update all ohlcvs_1m via REST every x mins (default 20)
-                sts = utc_ms()
-                sleep_interval_sec = max(
-                    1.0, (60 * self.ohlcvs_1m_update_cycle_duration_minutes) / len(self.ohlcvs_1m)
-                )
-                symbol = sorted(self.upd_tss_ohlcvs_1m_single.items(), key=lambda x: x[1])[0][0]
-                await self.update_ohlcvs_1m_single(symbol, verbose=False)
-                sleep_duration_sec = max(0.0, sleep_interval_sec - (utc_ms() - sts) / 1000)
-                await asyncio.sleep(sleep_duration_sec)
-            except Exception as e:
-                logging.error(f"error with {get_function_name()} {e}")
-                traceback.print_exc()
-                await asyncio.sleep(5)
-
     async def update_ohlcvs_1m_for_actives(self):
         try:
             utc_now = utc_ms()
@@ -1794,6 +1791,7 @@ class Passivbot:
                 if s not in self.ohlcvs_1m_update_timestamps_WS
                 or utc_now - self.ohlcvs_1m_update_timestamps_WS[s] > 1000 * 60
             ]
+            # print("debug update_ohlcvs_1m_for_actives", symbols_to_update)
             if symbols_to_update:
                 await asyncio.gather(
                     *[self.update_ohlcvs_1m_single(s, verbose=False) for s in symbols_to_update]
@@ -1803,7 +1801,8 @@ class Passivbot:
             traceback.print_exc()
 
     async def maintain_markets_info(self):
-        while not stop_signal_received:
+        logging.info(f"starting maintain_markets_info")
+        while not self.stop_signal_received:
             try:
                 # update markets dict once every hour
                 if utc_ms() - self.init_markets_last_update_ms > 1000 * 60 * 60:
@@ -1923,6 +1922,17 @@ def setup_bot(config):
     return bot
 
 
+async def shutdown_bot(bot):
+    print("Shutting down bot...")
+    bot.stop_data_maintainers()
+    try:
+        await asyncio.wait_for(bot.close(), timeout=3.0)
+    except asyncio.TimeoutError:
+        print("Shutdown timed out after 3 seconds. Forcing exit.")
+    except Exception as e:
+        print(f"Error during shutdown: {e}")
+
+
 async def main():
     parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
     parser.add_argument("hjson_config_path", type=str, help="path to hjson passivbot meta config")
@@ -1995,9 +2005,16 @@ async def main():
         logging.info(f"restarting bot...")
         print()
         for z in range(cooldown_secs, -1, -1):
+            if bot.stop_signal_received:
+                break
             print(f"\rcountdown {z}...  ")
             await asyncio.sleep(1)
         print()
+
+        if bot.stop_signal_received:
+            print("Bot stopped during cooldown. Exiting...")
+            break
+
         restarts.append(utc_ms())
         restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]
         if len(restarts) > max_n_restarts_per_day:
@@ -2006,4 +2023,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nBot shutdown complete.")
