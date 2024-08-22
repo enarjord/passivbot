@@ -137,8 +137,8 @@ def format_config(config: dict) -> dict:
         ("live", "noisiness_rolling_mean_window_size", 60),
         ("optimize", "scoring", ["mdg", "sharpe_ratio"]),
     ]:
-        if k1 not in config[k0]:
-            config[k0][k1] = v
+        if k1 not in result[k0]:
+            result[k0][k1] = v
             print(f"adding missing parameter {k0} {k1}: {v}")
     for k0, src, dst in [("live", "minimum_market_age_days", "minimum_coin_age_days")]:
         if src in result[k0]:
