@@ -132,6 +132,19 @@ def format_config(config: dict) -> dict:
         result = deepcopy(config["config"])
     else:
         raise Exception(f"failed to format config")
+    for k0, k1, v in [
+        ("live", "time_in_force", "good_till_cancelled"),
+        ("live", "noisiness_rolling_mean_window_size", 60),
+        ("optimize", "scoring", ["mdg", "sharpe_ratio"]),
+    ]:
+        if k1 not in config[k0]:
+            config[k0][k1] = v
+            print(f"adding missing parameter {k0} {k1}: {v}")
+    for k0, src, dst in [("live", "minimum_market_age_days", "minimum_coin_age_days")]:
+        if src in result[k0]:
+            result[k0][dst] = deepcopy(result[k0][src])
+            print(f"renaming parameter {k0} {src}: {dst}")
+            del result[k0][src]
     result["live"]["approved_coins"] = sorted(set(result["live"]["approved_coins"]))
     if result["backtest"]["symbols"]:
         result["backtest"]["symbols"] = coins_to_symbols(result["backtest"]["symbols"])
@@ -218,14 +231,6 @@ def load_config(filepath: str) -> dict:
     try:
         config = load_hjson_config(filepath)
         config = format_config(config)
-        for k0, k1, v in [
-            ("live", "time_in_force", "good_till_cancelled"),
-            ("live", "noisiness_rolling_mean_window_size", 60),
-            ("optimize", "scoring", ["mdg", "sharpe_ratio"]),
-        ]:
-            if k1 not in config[k0]:
-                config[k0][k1] = v
-                print(f"adding missing parameter {k0} {k1}: {v}")
         return config
     except Exception as e:
         raise Exception(f"failed to load config {filepath}: {e}")
