@@ -1098,7 +1098,7 @@ class Passivbot:
         if not hasattr(self, "positions"):
             self.positions = {}
         res = await self.fetch_positions()
-        if all(x in [None, False] for x in res):
+        if not res or all(x in [None, False] for x in res):
             return False
         positions_list_new, balance_new = res
         self.fetched_positions = positions_list_new
