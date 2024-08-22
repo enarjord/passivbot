@@ -1412,11 +1412,11 @@ async def prepare_hlcs_forager(config: dict):
             ]
         ]
     """
-    symbols = config['backtest']['symbols']
-    start_date = config['backtest']['start_date']
-    end_date = config['backtest']['end_date']
-    base_dir = config['backtest']['base_dir']
-    exchange = config['backtest']['exchange']
+    symbols = config["backtest"]["symbols"]
+    start_date = config["backtest"]["start_date"]
+    end_date = config["backtest"]["end_date"]
+    base_dir = config["backtest"]["base_dir"]
+    exchange = config["backtest"]["exchange"]
     if end_date in ["today", "now", ""]:
         end_date = ts_to_date_utc(utc_ms())[:10]
     hlcsd = {}
