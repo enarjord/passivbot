@@ -358,10 +358,11 @@ class Passivbot:
         candles = await self.fetch_ohlcvs_1m(symbol, limit=limit)
         for x in candles:
             self.ohlcvs_1m[symbol][x[0]] = x
-        if candles:
-            if verbose:
-                logging.info(f"updated ohlcvs_1m for {symbol} since {ts_to_date_utc(candles[0][0])}")
-            self.dump_ohlcvs_1m_to_cache(symbol)
+        if verbose:
+            logging.info(
+                f"updated ohlcvs_1m for {symbol} since {ts_to_date_utc(candles[0][0]) if candles else 0}"
+            )
+        self.dump_ohlcvs_1m_to_cache(symbol)
         i = 0
         while len(self.ohlcvs_1m[symbol]) > self.ohlcvs_1m_max_len:
             i += 1
@@ -1739,6 +1740,7 @@ class Passivbot:
                                     self.ohlcvs_1m_update_timestamps[symbol] = mod_ts
                                 else:
                                     self.ohlcvs_1m_update_timestamps[symbol] = 0.0
+                                    symbols_too_old.append((0.0, symbol))
                     else:
                         symbols_too_old.append((0.0, symbol))
                 symbols_to_update = sorted(symbols_too_old)[: self.max_n_concurrent_ohlcvs_1m_updates]
