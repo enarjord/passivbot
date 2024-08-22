@@ -344,7 +344,9 @@ class BitgetBot(Passivbot):
                     "price": str(order["price"]),
                     "side": self.order_side_map[order["side"]][order["position_side"]],
                     "orderType": "limit",
-                    "timeInForceValue": "post_only",
+                    "timeInForceValue": (
+                        "post_only" if self.config["live"]["time_in_force"] == "post_only" else "gtc"
+                    ),
                 }
             )
             if "msg" in executed and executed["msg"] == "success":
