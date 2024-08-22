@@ -113,7 +113,7 @@ class Passivbot:
         self.quote = "USDT"
         self.forager_mode = self.config["n_longs"] > 0 or self.config["n_shorts"] > 0
         self.config["minimum_market_age_millis"] = (
-            self.config["minimum_market_age_days"] * 24 * 60 * 60 * 1000
+            self.config["minimum_coin_age_days"] * 24 * 60 * 60 * 1000
         )
         self.ohlcvs = {}
         self.ohlcv_upd_timestamps = {}
@@ -456,7 +456,7 @@ class Passivbot:
                 if not self.markets_dict[symbol]["active"]:
                     self.forced_modes[pside][symbol] = "tp_only"
 
-        if self.forager_mode and self.config["minimum_market_age_days"] > 0:
+        if self.forager_mode and self.config["minimum_coin_age_days"] > 0:
             if not hasattr(self, "first_timestamps"):
                 self.first_timestamps = await get_first_ohlcv_timestamps(cc=self.cca)
                 for symbol in sorted(self.first_timestamps):
@@ -465,7 +465,7 @@ class Passivbot:
             self.first_timestamps = None
 
     def is_old_enough(self, symbol):
-        if self.forager_mode and self.config["minimum_market_age_days"] > 0:
+        if self.forager_mode and self.config["minimum_coin_age_days"] > 0:
             if symbol in self.first_timestamps:
                 # res = utc_ms() - self.first_timestamps[symbol] > self.config["minimum_market_age_millis"]
                 # logging.info(f"{symbol} {res}")
