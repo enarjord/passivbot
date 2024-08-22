@@ -1395,9 +1395,7 @@ def pad_hlcs(hlcs, timestamps):
     return padded_hlcs
 
 
-async def prepare_hlcs_forager(
-    symbols, start_date, end_date, base_dir="backtests", exchange="binance"
-):
+async def prepare_hlcs_forager(config: dict):
     """
     returns
         [timestamp],
@@ -1414,6 +1412,11 @@ async def prepare_hlcs_forager(
             ]
         ]
     """
+    symbols = config['backtest']['symbols']
+    start_date = config['backtest']['start_date']
+    end_date = config['backtest']['end_date']
+    base_dir = config['backtest']['base_dir']
+    exchange = config['backtest']['exchange']
     if end_date in ["today", "now", ""]:
         end_date = ts_to_date_utc(utc_ms())[:10]
     hlcsd = {}

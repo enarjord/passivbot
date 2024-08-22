@@ -214,13 +214,7 @@ async def prepare_hlcs_mss(config):
         except:
             raise Exception("failed to load market specific settings from cache")
 
-    timestamps, hlcs = await prepare_hlcs_forager(
-        config["backtest"]["symbols"],
-        config["backtest"]["start_date"],
-        config["backtest"]["end_date"],
-        base_dir=config["backtest"]["base_dir"],
-        exchange=config["backtest"]["exchange"],
-    )
+    timestamps, hlcs = await prepare_hlcs_forager(config)
 
     return hlcs, mss, results_path
 
