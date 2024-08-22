@@ -2443,6 +2443,9 @@ def add_missing_params_to_hjson_live_multi_config(config: dict) -> (dict, [str])
     if "universal_live_config" not in config:
         logging_lines.append(f"adding missing config param: 'universal_live_config': {{}}")
         config_copy["universal_live_config"] = {}
+    if "minimum_coin_age_days" not in config and "minimum_market_age_days" in config:
+        logging_lines.append(f"changed 'minimum_market_age_days' -> 'minimum_coin_age_days'")
+        config_copy["minimum_coin_age_days"] = config_copy["minimum_market_age_days"]
 
     template = get_template_live_config("multi_hjson")
     for key, val in template.items():
