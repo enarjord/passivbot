@@ -151,7 +151,11 @@ class GateIOBot(Passivbot):
 
     async def watch_orders(self):
         res = None
-        while True:
+        while not self.stop_signal_received:
+            if not self.ccp.uid:
+                print("debug waiting for ccp.uid", self.ccp.uid)
+                await asyncio.sleep(1)
+                continue
             try:
                 if self.stop_websocket:
                     break
@@ -228,6 +232,10 @@ class GateIOBot(Passivbot):
             positions_fetched, balance = await asyncio.gather(
                 self.cca.fetch_positions(), self.cca.fetch_balance()
             )
+            if not hasattr(self, "uid") or not self.uid:
+                self.uid = balance["info"][0]["user"]
+                self.cca.uid = self.uid
+                self.ccp.uid = self.uid
             balance = balance[self.quote]["total"]
             positions = []
             for x in positions_fetched:
@@ -296,32 +304,39 @@ class GateIOBot(Passivbot):
         self,
         start_time: int = None,
         end_time: int = None,
+        limit=None,
     ):
-        # TODO
-        return await self.fetch_pnl()
-        limit = 2000
-        if start_time is None and end_time is None:
-            return await self.fetch_pnl()
+        if start_time is None:
+            return await self.fetch_pnl(limit=limit)
         all_fetched = {}
+        if limit is None:
+            limit = 1000
+        offset = 0
         while True:
-            fetched = await self.fetch_pnl(start_time=start_time, end_time=end_time)
-            if fetched == []:
+            fetched = await self.fetch_pnl(offset=offset, limit=limit)
+            if not fetched:
                 break
             for elm in fetched:
                 all_fetched[elm["id"]] = elm
             if len(fetched) < limit:
                 break
+            if fetched[0]["timestamp"] <= start_time:
+                break
             logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
-            end_time = fetched[0]["timestamp"]
+            offset += limit
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
 
     async def fetch_pnl(
         self,
-        start_time: int = None,
+        offset=0,
+        limit=None,
     ):
         fetched = None
+        n_pnls_limit = 1000 if limit is None else limit
         try:
-            fetched = await self.cca.fetch_closed_orders(since=start_time)
+            fetched = await self.cca.fetch_closed_orders(
+                limit=n_pnls_limit, params={"offset": offset}
+            )
             for i in range(len(fetched)):
                 fetched[i]["pnl"] = float(fetched[i]["info"]["pnl"])
                 fetched[i]["position_side"] = self.determine_pos_side(fetched[i])
