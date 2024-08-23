@@ -58,6 +58,7 @@ pub fn calc_cropped_reentry_qty(
         entry_price,
         &exchange_params,
     );
+    let min_entry_qty = calc_min_entry_qty(entry_price, &exchange_params);
     if wallet_exposure_if_filled > bot_params.wallet_exposure_limit * 1.01 {
         // reentry too big. Crop current reentry qty.
         let entry_qty_abs = interpolate(
@@ -67,10 +68,16 @@ pub fn calc_cropped_reentry_qty(
         ) - position_size_abs;
         (
             wallet_exposure_if_filled,
-            round_(entry_qty_abs, exchange_params.qty_step),
+            f64::max(
+                round_(entry_qty_abs, exchange_params.qty_step),
+                min_entry_qty,
+            ),
         )
     } else {
-        (wallet_exposure_if_filled, entry_qty_abs)
+        (
+            wallet_exposure_if_filled,
+            f64::max(entry_qty_abs, min_entry_qty),
+        )
     }
 }
 
