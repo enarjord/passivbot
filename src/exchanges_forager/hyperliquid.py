@@ -301,16 +301,18 @@ class HyperliquidBot(Passivbot):
         self,
         start_time: int = None,
         end_time: int = None,
+        limit=None,
     ):
         # hyperliquid fetches from past to future
-        limit = 2000
-        if start_time is None and end_time is None:
+        if limit is None:
+            limit = 2000
+        if start_time is None:
             # hyperliquid returns latest trades if no time frame is passed
-            return await self.fetch_pnl()
+            return await self.fetch_pnl(limit=limit)
         all_fetched = {}
         prev_hash = ""
         while True:
-            fetched = await self.fetch_pnl(start_time=start_time)
+            fetched = await self.fetch_pnl(start_time=start_time, limit=limit)
             if fetched == []:
                 break
             for elm in fetched:
@@ -331,18 +333,14 @@ class HyperliquidBot(Passivbot):
     async def fetch_pnl(
         self,
         start_time: int = None,
-        end_time: int = None,
+        limit=None,
     ):
         fetched = None
-        # if there are more fills in timeframe than 100, it will fetch latest
         try:
-            if end_time is None:
-                end_time = self.get_exchange_time() + 1000 * 60 * 60 * 24
             if start_time is None:
-                start_time = end_time - 1000 * 60 * 60 * 24 * 7
-            fetched = await self.cca.fetch_my_trades(
-                since=int(start_time), params={"endTime": int(end_time)}
-            )
+                fetched = await self.cca.fetch_my_trades(limit=limit)
+            else:
+                fetched = await self.cca.fetch_my_trades(since=max(1, int(start_time)), limit=limit)
             for i in range(len(fetched)):
                 fetched[i]["pnl"] = float(fetched[i]["info"]["closedPnl"])
                 fetched[i]["position_side"] = (
