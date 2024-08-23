@@ -254,10 +254,12 @@ class BitgetBot(Passivbot):
         self,
         start_time: int = None,
         end_time: int = None,
+        limit=None,
     ):
-        limit = 100
+        if limit is None:
+            limit = 100
         if start_time is None and end_time is None:
-            return await self.fetch_pnl()
+            return await self.fetch_pnl(limit=limit)
         all_fetched = {}
         while True:
             fetched = await self.fetch_pnl(start_time=start_time, end_time=end_time)
@@ -267,22 +269,23 @@ class BitgetBot(Passivbot):
                 all_fetched[elm["id"]] = elm
             if len(fetched) < limit:
                 break
-            logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
+            if fetched[0]["timestamp"] <= start_time:
+                break
+            logging.info(f"debug fetching fills {ts_to_date_utc(fetched[-1]['timestamp'])}")
             end_time = fetched[0]["timestamp"]
-        return sorted(
-            [x for x in all_fetched.values() if x["pnl"] != 0.0], key=lambda x: x["timestamp"]
-        )
+        return sorted([x for x in all_fetched.values()], key=lambda x: x["timestamp"])
 
     async def fetch_pnl(
         self,
         start_time: int = None,
         end_time: int = None,
+        limit=None,
     ):
         fetched = None
         # if there are more fills in timeframe than 100, it will fetch latest
         try:
             if end_time is None:
-                end_time = utc_ms() + 1000 * 60 * 60 * 24
+                end_time = self.get_exchange_time() + 1000 * 60
             if start_time is None:
                 start_time = 0
             params = {"productType": "umcbl", "startTime": int(start_time), "endTime": int(end_time)}
@@ -293,9 +296,10 @@ class BitgetBot(Passivbot):
                 pnls[-1]["pnl"] = float(pnls[-1]["profit"])
                 pnls[-1]["timestamp"] = float(pnls[-1]["cTime"])
                 pnls[-1]["id"] = pnls[-1]["tradeId"]
+                pnls[-1]["symbol"] = self.symbol_ids_inv[pnls[-1]["symbol"].replace("_UMCBL", "")]
             return sorted(pnls, key=lambda x: x["timestamp"])
         except Exception as e:
-            logging.error(f"error fetching income {e}")
+            logging.error(f"error fetching fills {e}")
             print_async_exception(fetched)
             traceback.print_exc()
             return False
