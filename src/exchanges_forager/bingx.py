@@ -63,7 +63,9 @@ class BingXBot(Passivbot):
             self.price_steps[symbol] = elm["precision"]["price"]
             self.qty_steps[symbol] = elm["precision"]["amount"]
             self.min_qtys[symbol] = elm["limits"]["amount"]["min"]
-            self.min_costs[symbol] = elm["limits"]["cost"]["min"]
+            self.min_costs[symbol] = (
+                elm["limits"]["cost"]["min"] if elm["limits"]["cost"]["min"] else 2.0
+            )
             self.c_mults[symbol] = 1.0
 
     async def start_websockets(self):
@@ -111,6 +113,61 @@ class BingXBot(Passivbot):
                 await asyncio.sleep(1)
 
     async def watch_ohlcvs_1m(self):
+        if not hasattr(self, "ohlcvs_1m"):
+            self.ohlcvs_1m = {}
+        self.WS_ohlcvs_1m_tasks = {}
+        while not self.stop_websocket:
+            current_symbols = set(self.active_symbols)
+            started_symbols = set(self.WS_ohlcvs_1m_tasks.keys())
+            for key in self.WS_ohlcvs_1m_tasks:
+                if self.WS_ohlcvs_1m_tasks[key].cancelled():
+                    logging.info(
+                        f"debug ohlcv_1m watcher task is cancelled {key} {self.WS_ohlcvs_1m_tasks[key]}"
+                    )
+                if self.WS_ohlcvs_1m_tasks[key].done():
+                    logging.info(
+                        f"debug ohlcv_1m watcher task is done {key} {self.WS_ohlcvs_1m_tasks[key]}"
+                    )
+                try:
+                    ex = elf.WS_ohlcvs_1m_tasks[key].exception()
+                    logging.info(
+                        f"debug ohlcv_1m watcher task exception {key} {self.WS_ohlcvs_1m_tasks[key]} {ex}"
+                    )
+                except:
+                    pass
+            to_print = []
+            # Start watch_ohlcv_1m_single tasks for new symbols
+            for symbol in current_symbols - started_symbols:
+                task = asyncio.create_task(self.watch_ohlcv_1m_single(symbol))
+                self.WS_ohlcvs_1m_tasks[symbol] = task
+                to_print.append(symbol)
+            if to_print:
+                coins = [symbol_to_coin(s) for s in to_print]
+                logging.info(f"Started watching ohlcv_1m for {','.join(coins)}")
+            to_print = []
+            # Cancel tasks for symbols that are no longer active
+            for symbol in started_symbols - current_symbols:
+                self.WS_ohlcvs_1m_tasks[symbol].cancel()
+                del self.WS_ohlcvs_1m_tasks[symbol]
+                to_print.append(symbol)
+            if to_print:
+                coins = [symbol_to_coin(s) for s in to_print]
+                logging.info(f"Stopped watching ohlcv_1m for: {','.join(coins)}")
+            # Wait a bit before checking again
+            await asyncio.sleep(1)  # Adjust sleep time as needed
+
+    async def watch_ohlcv_1m_single(self, symbol):
+        while not self.stop_websocket and symbol in self.eligible_symbols:
+            try:
+                res = await self.ccp.watch_ohlcv(symbol)
+                self.handle_ohlcv_1m_update(symbol, res)
+            except Exception as e:
+                logging.error(f"exception watch_ohlcv_1m_single {symbol} {e}")
+                traceback.print_exc()
+                await asyncio.sleep(1)
+            await asyncio.sleep(0.1)
+
+    async def watch_ohlcvs_1m_old(self):
         if not hasattr(self, "ohlcvs_1m"):
             self.ohlcvs_1m = {}
         currently_watching = set()
@@ -259,12 +316,9 @@ class BingXBot(Passivbot):
         all_fetched_d = {x[0]: x for x in all_fetched}
         return sorted(all_fetched_d.values(), key=lambda x: x[0])
 
-    async def fetch_pnls(
-        self,
-        start_time: int = None,
-        end_time: int = None,
-    ):
-        limit = 1000
+    async def fetch_pnls(self, start_time: int = None, end_time: int = None, limit=None):
+        if limit is None:
+            limit = 1000
         if start_time is None and end_time is None:
             return await self.fetch_pnl()
         if end_time is None:
@@ -377,7 +431,8 @@ class BingXBot(Passivbot):
                     executed[key] = order[key]
             return executed
         except Exception as e:
-            if '"code":101400' in str(e):
+            str_e = str(e)
+            if '"code":101400' in str_e:
                 sym = order["symbol"]
                 new_min_qty = round_(
                     max(self.min_qtys[sym], order["qty"]) + self.qty_steps[sym], self.qty_steps[sym]
@@ -387,6 +442,14 @@ class BingXBot(Passivbot):
                 )
                 self.min_qtys[sym] = new_min_qty
                 logging.error(f"{order} {e}")
+                return {}
+            if (
+                "Due to the large market fluctuations, in order to reduce the risk of liquidation, API orders are temporarily disabled"
+                in str_e
+            ):
+                logging.info(
+                    f"debug {order} Due to the large market fluctuations, in order to reduce the risk of liquidation, API orders are temporarily disabled"
+                )
                 return {}
             logging.error(f"error executing order {order} {e}")
             print_async_exception(executed)
