@@ -128,10 +128,9 @@ class Passivbot:
         self.c_mults = {}
         self.max_leverage = {}
         self.live_configs = {}
-        self.stop_bot = False
         self.pnls_cache_filepath = make_get_filepath(f"caches/{self.exchange}/{self.user}_pnls.json")
         self.ohlcvs_1m_cache_dirpath = make_get_filepath(f"caches/{self.exchange}/ohlcvs_1m/")
-        self.previous_execution_ts = 0
+        self.previous_REST_update_ts = 0
         self.recent_fill = False
         self.execution_delay_millis = max(
             3000.0, self.config["live"]["execution_delay_seconds"] * 1000
@@ -146,9 +145,8 @@ class Passivbot:
         self.ema_alphas = {"long": {}, "short": {}}
         self.upd_minute_emas = {}
         self.ineligible_symbols_with_pos = set()
-        self.ohlcvs_1m_max_age_minutes = 8
+        self.ohlcvs_1m_max_age_minutes = 10
         self.ohlcvs_1m_max_len = 10080
-
         self.n_symbols_missing_ohlcvs_1m = 1000
         self.ohlcvs_1m_update_timestamps = {}
         self.max_n_concurrent_ohlcvs_1m_updates = 3
@@ -160,6 +158,22 @@ class Passivbot:
         await self.init_markets_dict()
 
     async def run_execution_loop(self):
+        while not self.stop_signal_received:
+            try:
+                now = utc_ms()
+                if now - self.previous_REST_update_ts > 1000 * 60:
+                    self.previous_REST_update_ts = utc_ms()
+                    await self.prepare_for_execution()
+                await self.execute_to_exchange()
+                await asyncio.sleep(
+                    max(0.0, self.config["live"]["execution_delay_seconds"] - (utc_ms() - now) / 1000)
+                )
+            except Exception as e:
+                logging.error(f"error with {get_function_name()} {e}")
+                traceback.print_exc()
+                await asyncio.sleep(1.0)
+
+    async def run_execution_loop_old(self):
         # simulates backtest which executes once every 1m
         prev_minute = utc_ms() // (1000 * 60)
         while not self.stop_signal_received:
@@ -181,13 +195,12 @@ class Passivbot:
             self.update_positions(),
             self.update_pnls(),
         )
-        self.update_effective_min_cost()
-        self.update_PB_modes()
         await asyncio.gather(self.update_ohlcvs_1m_for_actives(), self.update_exchange_configs())
-        self.update_EMAs()
 
     async def execute_to_exchange(self):
-        await self.prepare_for_execution()
+        self.update_effective_min_cost()
+        self.update_PB_modes()
+        self.update_EMAs()
         to_cancel, to_create = self.calc_orders_to_cancel_and_create()
 
         # debug duplicates
@@ -217,6 +230,8 @@ class Passivbot:
         if res:
             for elm in res:
                 self.add_new_order(elm, source="POST")
+        if to_cancel or to_create:
+            await asyncio.gather(self.update_open_orders(), self.update_positions())
 
     def is_forager_mode(self):
         n_approved_symbols = len(self.config["live"]["approved_coins"])
@@ -256,18 +271,6 @@ class Passivbot:
         return f"{symbol: <{self.sym_padding}}"
 
     def stop_data_maintainers(self):
-        if hasattr(self, "ohlcv_1m_WS"):
-            try:
-                res = self.ohlcv_1m_WS.cancel()
-                logging.info(f"stopped ohlcv_1m_WS {res}")
-            except Exception as e:
-                logging.error(f"error stopping ohlcv_1m_WS {e}")
-        if hasattr(self, "WS_ohlcvs_1m_tasks"):
-            for key in self.WS_ohlcvs_1m_tasks:
-                try:
-                    res = self.WS_ohlcvs_1m_tasks[key].cancel()
-                except Exception as e:
-                    logging.error(f"error stopping WS_ohlcvs_1m_tasks {key} {e}")
         if not hasattr(self, "maintainers"):
             return
         res = {}
@@ -276,6 +279,16 @@ class Passivbot:
                 res[key] = self.maintainers[key].cancel()
             except Exception as e:
                 logging.error(f"error stopping maintainer {key} {e}")
+        if hasattr(self, "WS_ohlcvs_1m_tasks"):
+            res0s = {}
+            for key in self.WS_ohlcvs_1m_tasks:
+                try:
+                    res0 = self.WS_ohlcvs_1m_tasks[key].cancel()
+                    res0s[key] = res0
+                except Exception as e:
+                    logging.error(f"error stopping WS_ohlcvs_1m_tasks {key} {e}")
+            if res0s:
+                logging.info(f"stopped ohlcvs watcher tasks {res0s}")
         logging.info(f"stopped data maintainers: {res}")
         return res
 
@@ -908,12 +921,13 @@ class Passivbot:
                         f"   filled {self.pad_sym(upd['symbol'])} {upd['side']} {upd['qty']} {upd['position_side']} @ {upd['price']} source: WS"
                     )
                     self.recent_fill = True
+                    self.previous_REST_update_ts = 0
                 elif upd["status"] in ["canceled", "expired", "rejected"]:
                     # remove order from open_orders
-                    self.remove_cancelled_order(upd)
+                    self.remove_cancelled_order(upd, source="WS")
                 elif upd["status"] == "open":
                     # add order to open_orders
-                    self.add_new_order(upd)
+                    self.add_new_order(upd, source="WS")
                 else:
                     print("debug open orders unknown type", upd)
         except Exception as e:
@@ -963,6 +977,41 @@ class Passivbot:
                 return 0.0
         return upnl_sum
 
+    async def init_pnls(self):
+        if not hasattr(self, "pnls"):
+            self.pnls = []
+        elif self.pnls:
+            return  # pnls already initiated; abort
+        age_limit = (
+            self.get_exchange_time()
+            - 1000 * 60 * 60 * 24 * self.config["live"]["pnls_max_lookback_days"]
+        )
+        pnls_cache = []
+        if os.path.exists(self.pnls_cache_filepath):
+            try:
+                pnls_cache = json.load(open(self.pnls_cache_filepath))
+            except Exception as e:
+                logging.error(f"error loading {self.pnls_cache_filepath} {e}")
+        if pnls_cache:
+            newest_pnls = await self.fetch_pnls(start_time=pnls_cache[-1]["timestamp"])
+            if pnls_cache[0]["timestamp"] > age_limit + 1000 * 60 * 60 * 4:
+                # might be older missing pnls
+                logging.info(f"fetching missing pnls {ts_to_date_utc(pnls_cache[0]['timestamp'])}")
+                missing_pnls = await self.fetch_pnls(
+                    start_time=age_limit, end_time=pnls_cache[0]["timestamp"]
+                )
+                pnls_cache = sorted(
+                    {
+                        elm["id"]: elm
+                        for elm in pnls_cache + missing_pnls + newest_pnls
+                        if elm["timestamp"] >= age_limit
+                    }.values(),
+                    key=lambda x: x["timestamp"],
+                )
+        else:
+            pnls_cache = await self.fetch_pnls(start_time=age_limit)
+        self.pnls = pnls_cache
+
     async def update_pnls(self):
         # fetch latest pnls
         # dump new pnls to cache
@@ -970,39 +1019,14 @@ class Passivbot:
             self.get_exchange_time()
             - 1000 * 60 * 60 * 24 * self.config["live"]["pnls_max_lookback_days"]
         )
-        if len(self.pnls) == 0:
-            # load pnls from cache
-            pnls_cache = []
-            try:
-                if os.path.exists(self.pnls_cache_filepath):
-                    pnls_cache = json.load(open(self.pnls_cache_filepath))
-            except Exception as e:
-                logging.error(f"error loading {self.pnls_cache_filepath} {e}")
-            if len(pnls_cache) > 0:
-                if pnls_cache[0]["timestamp"] > age_limit + 1000 * 60 * 60 * 4:
-                    # fetch missing pnls
-                    logging.info(
-                        f"fetching missing pnls {ts_to_date_utc(pnls_cache[0]['timestamp'])}"
-                    )
-                    missing_pnls = await self.fetch_pnls(
-                        start_time=age_limit - 1000, end_time=pnls_cache[0]["timestamp"]
-                    )
-                    if missing_pnls in [None, False]:
-                        return False
-                    pnls_cache = sorted(
-                        {
-                            elm["id"]: elm
-                            for elm in pnls_cache + missing_pnls
-                            if elm["timestamp"] >= age_limit
-                        }.values(),
-                        key=lambda x: x["timestamp"],
-                    )
-            self.pnls = pnls_cache
+        if not hasattr(self, "pnls") or len(self.pnls) == 0:
+            await self.init_pnls()
         start_time = self.pnls[-1]["timestamp"] - 1000 if self.pnls else age_limit
-        res = await self.fetch_pnls(start_time=start_time)
+        res = await self.fetch_pnls(start_time=start_time, limit=100)
         if res in [None, False]:
             return False
-        new_pnls = [x for x in res if x["id"] not in {elm["id"] for elm in self.pnls}]
+        old_ids = {elm["id"] for elm in self.pnls}
+        new_pnls = [x for x in res if x["id"] not in old_ids]
         self.pnls = sorted(
             {
                 elm["id"]: elm for elm in self.pnls + new_pnls if elm["timestamp"] >= age_limit
@@ -1821,7 +1845,12 @@ class Passivbot:
             self.stop_data_maintainers()
         self.maintainers = {
             k: asyncio.create_task(getattr(self, k)())
-            for k in ["maintain_markets_info", "maintain_ohlcvs_1m_REST"]
+            for k in [
+                "maintain_markets_info",
+                "maintain_ohlcvs_1m_REST",
+                "watch_ohlcvs_1m",
+                "watch_orders",
+            ]
         }
 
     async def start_bot(self, debug_mode=False):
@@ -1830,7 +1859,9 @@ class Passivbot:
         await self.start_data_maintainers()
         await self.wait_for_ohlcvs_1m_to_update()
         logging.info(f"starting websocket...")
-        self.ohlcv_1m_WS = asyncio.create_task(self.watch_ohlcvs_1m())
+        self.previous_REST_update_ts = utc_ms()
+        await self.prepare_for_execution()
+
         logging.info(f"starting execution loop...")
         if not debug_mode:
             await self.run_execution_loop()
@@ -2007,15 +2038,9 @@ async def main():
         logging.info(f"restarting bot...")
         print()
         for z in range(cooldown_secs, -1, -1):
-            if bot.stop_signal_received:
-                break
             print(f"\rcountdown {z}...  ")
             await asyncio.sleep(1)
         print()
-
-        if bot.stop_signal_received:
-            print("Bot stopped during cooldown. Exiting...")
-            break
 
         restarts.append(utc_ms())
         restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]
