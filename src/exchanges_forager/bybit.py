@@ -469,7 +469,7 @@ class BybitBot(Passivbot):
         fills = await self.fetch_fills2_sub_sub(start_time=start_time, end_time=end_time, limit=limit)
         if not fills:
             return []
-        start_time = min(start_time, fills[0]["timestamp"]) if start_time else fills[0]["timestamp"]
+        start_time = fills[0]["timestamp"]
         pnls = await self.fetch_pnls_sub(start_time=start_time, end_time=end_time)
 
         fillsd = defaultdict(list)
@@ -484,8 +484,7 @@ class BybitBot(Passivbot):
             if x["orderId"] in fillsd:
                 fillsd[x["orderId"]][-1]["pnl"] = x["pnl"]
             else:
-                pass
-                # logging.info(f"debug missing order id in fills {x['orderId']}")
+                logging.info(f"debug missing order id in fills {x['orderId']}")
         joined = {x["info"]["execId"]: x for x in flatten(fillsd.values())}
         return sorted(joined.values(), key=lambda x: x["timestamp"])
 
