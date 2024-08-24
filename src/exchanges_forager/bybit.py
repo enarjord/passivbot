@@ -484,7 +484,8 @@ class BybitBot(Passivbot):
             if x["orderId"] in fillsd:
                 fillsd[x["orderId"]][-1]["pnl"] = x["pnl"]
             else:
-                logging.info(f"debug missing order id in fills {x['orderId']}")
+                pass
+                # logging.info(f"debug missing order id in fills {x['orderId']}")
         joined = {x["info"]["execId"]: x for x in flatten(fillsd.values())}
         return sorted(joined.values(), key=lambda x: x["timestamp"])
 
