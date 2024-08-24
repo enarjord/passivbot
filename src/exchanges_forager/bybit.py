@@ -402,7 +402,9 @@ class BybitBot(Passivbot):
             end_time = int(self.get_exchange_time() + 1000 * 60 * 60 * 24)
         all_fetched_fills = []
         for _ in range(100):
-            fills = await self.fetch_fills_sub_sub(start_time, end_time)
+            fills = await self.cca.fetch_my_trades(
+                params={"paginate": True, "endTime": int(end_time)}
+            )
             if not fills:
                 break
             all_fetched_fills += fills
@@ -416,9 +418,52 @@ class BybitBot(Passivbot):
             logging.error(f"more than 100 calls to ccxt fetch_my_trades")
         return sorted(all_fetched_fills, key=lambda x: x["timestamp"])
 
+    async def fetch_fills2_sub_sub(self, start_time, end_time):
+        if start_time is None:
+            result = await self.cca.fetch_my_trades()
+            return sorted(result, key=lambda x: x["timestamp"])
+        if end_time is None:
+            end_time = int(self.get_exchange_time() + 1000 * 60 * 60 * 4)
+        all_fetched_fills = []
+        for _ in range(100):
+            fills = await self.cca.fetch_my_trades(
+                params={"paginate": True, "endTime": int(end_time)}
+            )
+            if not fills:
+                break
+            all_fetched_fills += fills
+            if fills[0]["timestamp"] <= start_time:
+                break
+            fills.sort(key=lambda x: x["timestamp"])
+            logging.info(
+                f"fetched fills: {fills[0]['datetime']} {fills[-1]['datetime']} {len(fills)}"
+            )
+            end_time = fills[0]["timestamp"]
+        else:
+            logging.error(f"more than 100 calls to ccxt fetch_my_trades")
+        return sorted(all_fetched_fills, key=lambda x: x["timestamp"])
+
+    async def fetch_fills2_sub(self, start_time, end_time):
+        if start_time is None:
+            result = await self.cca.fetch_my_trades()
+            return sorted(result, key=lambda x: x["timestamp"])
+        if end_time is None:
+            end_time = int(self.get_exchange_time() + 1000 * 60 * 60 * 24)
+        params = {"limit": 100}
+        all_fetched = []
+        week = 1000 * 60 * 60 * 24 * 7
+        fetch_windows = [
+            (i, min(i + week, end_time)) for i in range(int(start_time), int(end_time), int(week))
+        ]
+        results = await asyncio.gather(
+            *[self.fetch_fills2_sub_sub(sts, ets) for sts, ets in fetch_windows]
+        )
+        result = sorted(flatten(results), key=lambda x: x["timestamp"])
+        return result
+
     async def fetch_pnls(self, start_time=None, end_time=None, limit=None):
         # fetch fills first, then pnls (bybit has them in separate endpoints)
-        fills = await self.fetch_fills_sub(start_time=start_time, end_time=end_time)
+        fills = await self.fetch_fills2_sub_sub(start_time=start_time, end_time=end_time)
         if not fills:
             return []
         start_time = min(start_time, fills[0]["timestamp"]) if start_time else fills[0]["timestamp"]
