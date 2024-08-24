@@ -1019,13 +1019,15 @@ class Passivbot:
             self.get_exchange_time()
             - 1000 * 60 * 60 * 24 * self.config["live"]["pnls_max_lookback_days"]
         )
-        if not hasattr(self, "pnls") or len(self.pnls) == 0:
+        if not hasattr(self, "pnls"):
+            self.pnls = []
+        old_ids = {elm["id"] for elm in self.pnls}
+        if len(self.pnls) == 0:
             await self.init_pnls()
         start_time = self.pnls[-1]["timestamp"] - 1000 if self.pnls else age_limit
         res = await self.fetch_pnls(start_time=start_time, limit=100)
         if res in [None, False]:
             return False
-        old_ids = {elm["id"] for elm in self.pnls}
         new_pnls = [x for x in res if x["id"] not in old_ids]
         self.pnls = sorted(
             {
