@@ -339,9 +339,6 @@ class BybitBot(Passivbot):
             while True:
                 if fetched["result"]["list"] == []:
                     break
-                logging.info(
-                    f"fetching pnls {ts_to_date_utc(fetched['result']['list'][-1]['updatedTime'])}"
-                )
                 if (
                     fetched["result"]["list"][0]["orderId"] in ids_seen
                     and fetched["result"]["list"][-1]["orderId"] in ids_seen
@@ -356,6 +353,9 @@ class BybitBot(Passivbot):
                     break
                 if not fetched["result"]["nextPageCursor"]:
                     break
+                logging.info(
+                    f"fetching pnls {ts_to_date_utc(fetched['result']['list'][-1]['updatedTime'])}"
+                )
                 params["cursor"] = fetched["result"]["nextPageCursor"]
                 fetched = await self.cca.private_get_v5_position_closed_pnl(params)
                 fetched["result"]["list"] = sorted(
@@ -418,7 +418,7 @@ class BybitBot(Passivbot):
             logging.error(f"more than 100 calls to ccxt fetch_my_trades")
         return sorted(all_fetched_fills, key=lambda x: x["timestamp"])
 
-    async def fetch_fills2_sub_sub(self, start_time, end_time):
+    async def fetch_fills2_sub_sub(self, start_time, end_time, limit=None):
         if start_time is None:
             result = await self.cca.fetch_my_trades()
             return sorted(result, key=lambda x: x["timestamp"])
@@ -427,14 +427,14 @@ class BybitBot(Passivbot):
         all_fetched_fills = []
         for _ in range(100):
             fills = await self.cca.fetch_my_trades(
-                params={"paginate": True, "endTime": int(end_time)}
+                limit=limit, params={"paginate": True, "endTime": int(end_time)}
             )
             if not fills:
                 break
+            fills.sort(key=lambda x: x["timestamp"])
             all_fetched_fills += fills
             if fills[0]["timestamp"] <= start_time:
                 break
-            fills.sort(key=lambda x: x["timestamp"])
             logging.info(
                 f"fetched fills: {fills[0]['datetime']} {fills[-1]['datetime']} {len(fills)}"
             )
@@ -463,11 +463,15 @@ class BybitBot(Passivbot):
 
     async def fetch_pnls(self, start_time=None, end_time=None, limit=None):
         # fetch fills first, then pnls (bybit has them in separate endpoints)
-        fills = await self.fetch_fills2_sub_sub(start_time=start_time, end_time=end_time)
+        if start_time:
+            if self.get_exchange_time() - start_time < 1000 * 60 * 60 * 4 and limit == 100:
+                start_time = None
+        fills = await self.fetch_fills2_sub_sub(start_time=start_time, end_time=end_time, limit=limit)
         if not fills:
             return []
         start_time = min(start_time, fills[0]["timestamp"]) if start_time else fills[0]["timestamp"]
         pnls = await self.fetch_pnls_sub(start_time=start_time, end_time=end_time)
+
         fillsd = defaultdict(list)
         for x in fills:
             x["orderId"] = x["info"]["orderId"]
