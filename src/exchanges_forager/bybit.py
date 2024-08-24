@@ -426,6 +426,7 @@ class BybitBot(Passivbot):
         fillsd = defaultdict(list)
         for x in fills:
             x["orderId"] = x["info"]["orderId"]
+            x["position_side"] = self.determine_pos_side(x)
             x["pnl"] = 0.0
             fillsd[x["orderId"]].append(x)
         pnls_ids = set()
