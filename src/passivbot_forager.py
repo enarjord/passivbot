@@ -384,7 +384,7 @@ class Passivbot:
                     f"debug: more than 1000 deletions from ohlcvs_1m for {symbol} len: {len(self.ohlcvs_1m[symbol])}"
                 )
                 break
-            del self.ohlcvs_1m[symbol][self.ohlcvs_1m[symbol].peekitem(0)]
+            del self.ohlcvs_1m[symbol][self.ohlcvs_1m[symbol].peekitem(0)[0]]
 
     def update_trailing_data(self):
         if not hasattr(self, "trailing_prices"):
