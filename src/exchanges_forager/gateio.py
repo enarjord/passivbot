@@ -153,7 +153,6 @@ class GateIOBot(Passivbot):
         res = None
         while not self.stop_signal_received:
             if not self.ccp.uid:
-                print("debug waiting for ccp.uid", self.ccp.uid)
                 await asyncio.sleep(1)
                 continue
             try:
