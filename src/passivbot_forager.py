@@ -195,9 +195,10 @@ class Passivbot:
             self.update_positions(),
             self.update_pnls(),
         )
-        await asyncio.gather(self.update_ohlcvs_1m_for_actives(), self.update_exchange_configs())
+        await self.update_ohlcvs_1m_for_actives()
 
     async def execute_to_exchange(self):
+        await self.update_exchange_configs()
         self.update_effective_min_cost()
         self.update_PB_modes()
         self.update_EMAs()
