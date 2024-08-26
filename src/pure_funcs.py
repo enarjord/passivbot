@@ -2501,3 +2501,45 @@ def extract_and_sort_by_keys_recursive(nested_dict):
         sorted_values.append(extract_and_sort_by_keys_recursive(value))
 
     return sorted_values
+
+
+def v7_to_v6(config):
+    template = get_template_live_config("multi_hjson")
+    live_map = {"approved_coins": "approved_symbols"}
+    bot_map = {
+        "entry_grid_double_down_factor": "ddown_factor",
+        "entry_initial_ema_dist": "initial_eprice_ema_dist",
+        "entry_initial_qty_pct": "initial_qty_pct",
+        "close_grid_markup_range": "markup_range",
+        "close_grid_min_markup": "min_markup",
+        "entry_grid_spacing_pct": "rentry_pprice_dist",
+        "entry_grid_spacing_weight": "rentry_pprice_dist_wallet_exposure_weighting",
+        "ema_span_0": "ema_span_0",
+        "ema_span_1": "ema_span_1",
+    }
+    for k, v in config["live"].items():
+        if k in template:
+            template[k] = v
+        elif k in live_map and live_map[k] in template:
+            template[live_map[k]] = v
+    for pside in ["long", "short"]:
+        for k, v in config["bot"][pside].items():
+            if k in template["universal_live_config"][pside]:
+                template["universal_live_config"][pside][k] = v
+            elif k in bot_map and bot_map[k] in template["universal_live_config"][pside]:
+                template["universal_live_config"][pside][bot_map[k]] = v
+            elif "total_wallet_exposure" in k:
+                template[f"TWE_{pside}"] = v
+        template["universal_live_config"][pside]["n_close_orders"] = 1.0 / max(
+            config["bot"][pside]["close_grid_qty_pct"], 0.05
+        )
+        template[f"{pside}_enabled"] = (
+            config["bot"][pside]["n_positions"] > 0.0
+            and config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
+        )
+        template[f"n_{pside}s"] = config["bot"][pside]["n_positions"]
+    template["loss_allowance_pct"] = config["bot"]["long"]["unstuck_loss_allowance_pct"]
+    template["unstuck_close_pct"] = config["bot"]["long"]["unstuck_close_pct"]
+    template["stuck_threshold"] = config["bot"]["long"]["unstuck_threshold"]
+
+    return template
