@@ -198,10 +198,10 @@ class Passivbot:
         await self.update_ohlcvs_1m_for_actives()
 
     async def execute_to_exchange(self):
-        await self.update_exchange_configs()
         self.update_effective_min_cost()
         self.update_PB_modes()
         self.update_EMAs()
+        await self.update_exchange_configs()
         to_cancel, to_create = self.calc_orders_to_cancel_and_create()
 
         # debug duplicates
