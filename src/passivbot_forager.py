@@ -1476,7 +1476,10 @@ class Passivbot:
         stuck_positions = []
         for symbol in self.positions:
             for pside in ["long", "short"]:
-                if self.has_position(symbol, pside):
+                if (
+                    self.has_position(symbol, pside)
+                    and self.live_configs[symbol][pside]["unstuck_loss_allowance_pct"] > 0.0
+                ):
                     wallet_exposure = pbr.calc_wallet_exposure(
                         self.c_mults[symbol],
                         self.balance,
@@ -1488,12 +1491,24 @@ class Passivbot:
                         or wallet_exposure / self.live_configs[symbol][pside]["wallet_exposure_limit"]
                         > self.live_configs[symbol][pside]["unstuck_threshold"]
                     ):
-                        pprice_diff = calc_pprice_diff(
-                            pside,
-                            self.positions[symbol][pside]["price"],
-                            self.get_last_price(symbol),
+                        unstuck_allowance = (
+                            calc_AU_allowance(
+                                np.array([x["pnl"] for x in self.pnls]),
+                                self.balance,
+                                loss_allowance_pct=self.live_configs[symbol][pside][
+                                    "unstuck_loss_allowance_pct"
+                                ],
+                            )
+                            if len(self.pnls) > 0
+                            else 0.0
                         )
-                        stuck_positions.append((symbol, pside, pprice_diff))
+                        if unstuck_allowance >= 0.0:
+                            pprice_diff = calc_pprice_diff(
+                                pside,
+                                self.positions[symbol][pside]["price"],
+                                self.get_last_price(symbol),
+                            )
+                            stuck_positions.append((symbol, pside, pprice_diff))
         if not stuck_positions:
             return "", (0.0, 0.0, "")
         stuck_positions.sort(key=lambda x: x[2])
@@ -1512,7 +1527,7 @@ class Passivbot:
                     if symbol in ideal_orders
                     else []
                 )
-                if not ideal_closes or close_price >= ideal_closes[0][1]:
+                if ideal_closes and close_price >= ideal_closes[0][1]:
                     continue
                 close_qty = -min(
                     self.positions[symbol][pside]["size"],
@@ -1553,7 +1568,7 @@ class Passivbot:
                     if symbol in ideal_orders
                     else []
                 )
-                if not ideal_closes or close_price <= ideal_closes[0][1]:
+                if ideal_closes and close_price <= ideal_closes[0][1]:
                     continue
                 close_qty = min(
                     abs(self.positions[symbol][pside]["size"]),
@@ -2023,7 +2038,7 @@ class Passivbot:
                 get_file_mod_utc, filepath, default=0.0
             )
         except Exception as e:
-            logging.error(f"error with update_ohlcvs_1m_single_from_cache {symbol} {e}")
+            logging.error(f"error with update_ohlcvs_1m_single_from_disk {symbol} {e}")
             traceback.print_exc()
             try:
                 os.remove(filepath)
