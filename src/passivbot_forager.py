@@ -350,11 +350,27 @@ class Passivbot:
             await asyncio.sleep(0.1)
 
     def get_ohlcvs_1m_filepath(self, symbol):
-        return f"{self.ohlcvs_1m_cache_dirpath}{symbol_to_coin(symbol)}.json"
+        try:
+            return self.ohlcvs_1m_filepaths[symbol]
+        except:
+            if not hasattr(self, "filepath"):
+                self.ohlcvs_1m_filepaths = {}
+            filepath = f"{self.ohlcvs_1m_cache_dirpath}{symbol_to_coin(symbol)}.json"
+            self.ohlcvs_1m_filepaths[symbol] = filepath
+            return filepath
 
     def dump_ohlcvs_1m_to_cache(self, symbol):
         try:
-            to_dump = [x for x in self.ohlcvs_1m[symbol].values()][-self.ohlcvs_1m_max_len :]
+            i = 0
+            while len(self.ohlcvs_1m[symbol]) > self.ohlcvs_1m_max_len:
+                i += 1
+                if i > 1000:
+                    logging.info(
+                        f"debug: more than 1000 deletions from ohlcvs_1m for {symbol} len: {len(self.ohlcvs_1m[symbol])}"
+                    )
+                    break
+                del self.ohlcvs_1m[symbol][self.ohlcvs_1m[symbol].peekitem(0)[0]]
+            to_dump = [x for x in self.ohlcvs_1m[symbol].values()]
             json.dump(to_dump, open(self.get_ohlcvs_1m_filepath(symbol), "w"))
             return True
         except Exception as e:
@@ -1915,6 +1931,179 @@ class Passivbot:
                 print_async_exception(result)
                 traceback.print_exc()
         return results
+
+    async def maintain_ohlcvs_1m_REST_new(self):
+        if not hasattr(self, "ohlcvs_1m"):
+            self.ohlcvs_1m = {}
+        error_count = 0
+        self.ohlcvs_1m_update_timestamps = {}
+        for symbol in self.get_eligible_or_active_symbols():
+            self.update_ohlcvs_1m_single_from_disk(symbol)
+        self.ohlcvs_1m_max_age_ms = 1000 * 60 * self.ohlcvs_1m_max_age_minutes
+        loop_sleep_time_ms = 1000 * 1
+        logging.info(f"starting {get_function_name()}")
+        while not self.stop_signal_received:
+            try:
+                symbols_too_old = []
+                max_age_ms = self.ohlcvs_1m_max_age_ms
+                now_utc = utc_ms()
+                for symbol in self.get_eligible_or_active_symbols():
+                    if symbol not in self.ohlcvs_1m_update_timestamps:
+                        symbols_too_old.append((0, symbol))
+                    else:
+                        if (
+                            now_utc - self.ohlcvs_1m_update_timestamps[symbol]
+                            > self.ohlcvs_1m_max_age_ms
+                        ):
+                            symbols_too_old.append((self.ohlcvs_1m_update_timestamps[symbol], symbol))
+                symbols_to_update = sorted(symbols_too_old)[: self.max_n_concurrent_ohlcvs_1m_updates]
+                self.n_symbols_missing_ohlcvs_1m = len(symbols_too_old)
+                if not symbols_to_update:
+                    max_age_ms = self.ohlcvs_1m_max_age_ms / 2.0
+                    if self.ohlcvs_1m_update_timestamps:
+                        symbol, ts = sorted(
+                            self.ohlcvs_1m_update_timestamps.items(), key=lambda x: x[1]
+                        )[0]
+                        symbols_to_update = [(ts, symbol)]
+                if symbols_to_update:
+                    print("debug symbols_to_update", symbols_to_update)
+                    await asyncio.gather(
+                        *[
+                            self.update_ohlcvs_1m_single_new(x[1], max_age_ms=max_age_ms)
+                            for x in symbols_to_update
+                        ]
+                    )
+                sleep_time_ms = loop_sleep_time_ms - (utc_ms() - now_utc)
+                await asyncio.sleep(max(0.0, sleep_time_ms / 1000.0))
+            except Exception as e:
+                logging.error(f"error with {get_function_name()} {e}")
+                traceback.print_exc()
+                await asyncio.sleep(5)
+                error_count += 1
+                if error_count > 10:
+                    await self.restart_bot()
+
+    async def update_ohlcvs_1m_single_from_exchange(self, symbol):
+        print("update_ohlcvs_1m_single_from_exchange", symbol)
+        filepath = self.get_ohlcvs_1m_filepath(symbol)
+        if self.lock_exists(filepath):
+            return
+        try:
+            self.create_lock_file(filepath)
+            ms_to_min = 1000 * 60
+            if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
+                last_ts = self.ohlcvs_1m[symbol].peekitem(-1)[0]
+                now_minute = self.get_exchange_time() // ms_to_min * ms_to_min
+                limit = min(999, max(3, int(round((now_minute - last_ts) / ms_to_min)) + 5))
+                print("debug n ohlcvs", limit)
+            else:
+                self.ohlcvs_1m[symbol] = SortedDict()
+                limit = None
+            print("fetching candles...", symbol)
+            candles = await self.fetch_ohlcvs_1m(symbol, limit=limit)
+            for x in candles:
+                self.ohlcvs_1m[symbol][x[0]] = x
+            self.dump_ohlcvs_1m_to_cache(symbol)
+            self.ohlcvs_1m_update_timestamps[symbol] = or_default(
+                get_file_mod_utc, filepath, default=0.0
+            )
+        finally:
+            self.remove_lock_file(filepath)
+
+    def update_ohlcvs_1m_single_from_disk(self, symbol):
+        filepath = self.get_ohlcvs_1m_filepath(symbol)
+        if not os.path.exists(filepath):
+            return
+        if self.lock_exists(filepath):
+            return
+        try:
+            self.create_lock_file(filepath)
+            if symbol not in self.ohlcvs_1m:
+                self.ohlcvs_1m[symbol] = SortedDict()
+            data = json.load(open(filepath))
+            for x in data:
+                self.ohlcvs_1m[symbol][x[0]] = x
+            self.ohlcvs_1m_update_timestamps[symbol] = or_default(
+                get_file_mod_utc, filepath, default=0.0
+            )
+        except Exception as e:
+            logging.error(f"error with update_ohlcvs_1m_single_from_cache {symbol} {e}")
+            traceback.print_exc()
+            try:
+                os.remove(filepath)
+            except Exception as e0:
+                logging.error(f"failed to remove corrupted ohlcvs_1m file for {symbol} {e0}")
+        finally:
+            self.remove_lock_file(filepath)
+
+    async def update_ohlcvs_1m_single_new(self, symbol, max_age_ms=None):
+        if max_age_ms is None:
+            max_age_ms = self.ohlcvs_1m_max_age_ms
+        self.lock_timeout_ms = 5000.0
+        try:
+            if not (symbol in self.active_symbols or symbol in self.eligible_symbols):
+                return
+            filepath = self.get_ohlcvs_1m_filepath(symbol)
+            if self.lock_exists(filepath):
+                print("lock exists", symbol)
+                # is being updated by other instance
+                if self.get_lock_age_ms(filepath) > self.lock_timeout_ms:
+                    print("lock too old", symbol)
+                    # other instance took too long to finish; assume it crashed
+                    self.remove_lock_file(filepath)
+                    await self.update_ohlcvs_1m_single_from_exchange(symbol)
+            elif os.path.exists(filepath):
+                mod_ts = or_default(get_file_mod_utc, filepath, default=0.0)
+                if utc_ms() - mod_ts > max_age_ms:
+                    await self.update_ohlcvs_1m_single_from_exchange(symbol)
+                else:
+                    if (
+                        symbol not in self.ohlcvs_1m_update_timestamps
+                        or self.ohlcvs_1m_update_timestamps[symbol] != mod_ts
+                    ):
+                        # was updated by other instance
+                        self.update_ohlcvs_1m_single_from_disk(symbol)
+            else:
+                await self.update_ohlcvs_1m_single_from_exchange(symbol)
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} {e}")
+            traceback.print_exc()
+
+    def create_lock_file(self, filepath):
+        try:
+            open(f"{filepath}.lock", "w").close()
+            return True
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} {e}")
+            traceback.print_exc()
+            return False
+
+    def lock_exists(self, filepath):
+        try:
+            return os.path.exists(f"{filepath}.lock")
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} {e}")
+            traceback.print_exc()
+            return False
+
+    def get_lock_age_ms(self, filepath):
+        try:
+            if self.lock_exists(filepath):
+                return utc_ms() - get_file_mod_utc(f"{filepath}.lock")
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} {e}")
+            traceback.print_exc()
+        return utc_ms()
+
+    def remove_lock_file(self, filepath):
+        try:
+            if self.lock_exists(filepath):
+                os.remove(f"{filepath}.lock")
+                return True
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} {e}")
+            traceback.print_exc()
+        return False
 
     async def close(self):
         logging.info(f"Stopped data maintainers: {self.stop_data_maintainers()}")
