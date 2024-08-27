@@ -1502,7 +1502,7 @@ class Passivbot:
                             if len(self.pnls) > 0
                             else 0.0
                         )
-                        if unstuck_allowance >= 0.0:
+                        if unstuck_allowance > 0.0:
                             pprice_diff = calc_pprice_diff(
                                 pside,
                                 self.positions[symbol][pside]["price"],
