@@ -969,7 +969,6 @@ class Passivbot:
             self.ohlcvs_1m[symbol] = SortedDict()
         for elm in upd:
             self.ohlcvs_1m[symbol][elm[0]] = elm
-            # print("debug ohlcvs_1m WS", symbol, elm)
             self.ohlcvs_1m_update_timestamps_WS[symbol] = utc_ms()
 
     def calc_upnl_sum(self):
@@ -1756,7 +1755,7 @@ class Passivbot:
                 last_update_tss.append((0.0, symbol))
         return last_update_tss
 
-    async def maintain_ohlcvs_1m_REST(self, verbose=False):
+    async def maintain_ohlcvs_1m_REST_old(self, verbose=False):
         if not hasattr(self, "ohlcvs_1m"):
             self.ohlcvs_1m = {}
         error_count = 0
@@ -1836,7 +1835,6 @@ class Passivbot:
                 if s not in self.ohlcvs_1m_update_timestamps_WS
                 or utc_now - self.ohlcvs_1m_update_timestamps_WS[s] > 1000 * 60
             ]
-            # print("debug update_ohlcvs_1m_for_actives", symbols_to_update)
             if symbols_to_update:
                 await asyncio.gather(
                     *[self.update_ohlcvs_1m_single(s, verbose=False) for s in symbols_to_update]
@@ -1932,7 +1930,7 @@ class Passivbot:
                 traceback.print_exc()
         return results
 
-    async def maintain_ohlcvs_1m_REST_new(self):
+    async def maintain_ohlcvs_1m_REST(self):
         if not hasattr(self, "ohlcvs_1m"):
             self.ohlcvs_1m = {}
         error_count = 0
@@ -1966,7 +1964,6 @@ class Passivbot:
                         )[0]
                         symbols_to_update = [(ts, symbol)]
                 if symbols_to_update:
-                    print("debug symbols_to_update", symbols_to_update)
                     await asyncio.gather(
                         *[
                             self.update_ohlcvs_1m_single_new(x[1], max_age_ms=max_age_ms)
@@ -1984,7 +1981,6 @@ class Passivbot:
                     await self.restart_bot()
 
     async def update_ohlcvs_1m_single_from_exchange(self, symbol):
-        print("update_ohlcvs_1m_single_from_exchange", symbol)
         filepath = self.get_ohlcvs_1m_filepath(symbol)
         if self.lock_exists(filepath):
             return
@@ -1995,11 +1991,11 @@ class Passivbot:
                 last_ts = self.ohlcvs_1m[symbol].peekitem(-1)[0]
                 now_minute = self.get_exchange_time() // ms_to_min * ms_to_min
                 limit = min(999, max(3, int(round((now_minute - last_ts) / ms_to_min)) + 5))
-                print("debug n ohlcvs", limit)
+                if limit >= 999:
+                    limit = None
             else:
                 self.ohlcvs_1m[symbol] = SortedDict()
                 limit = None
-            print("fetching candles...", symbol)
             candles = await self.fetch_ohlcvs_1m(symbol, limit=limit)
             for x in candles:
                 self.ohlcvs_1m[symbol][x[0]] = x
@@ -2045,10 +2041,8 @@ class Passivbot:
                 return
             filepath = self.get_ohlcvs_1m_filepath(symbol)
             if self.lock_exists(filepath):
-                print("lock exists", symbol)
                 # is being updated by other instance
                 if self.get_lock_age_ms(filepath) > self.lock_timeout_ms:
-                    print("lock too old", symbol)
                     # other instance took too long to finish; assume it crashed
                     self.remove_lock_file(filepath)
                     await self.update_ohlcvs_1m_single_from_exchange(symbol)
