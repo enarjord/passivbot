@@ -100,6 +100,7 @@ pub struct BotParams {
     pub close_grid_qty_pct: f64,
     pub close_trailing_retracement_pct: f64,
     pub close_trailing_grid_ratio: f64,
+    pub close_trailing_qty_pct: f64,
     pub close_trailing_threshold_pct: f64,
     pub entry_grid_double_down_factor: f64,
     pub entry_grid_spacing_weight: f64,
