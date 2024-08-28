@@ -320,24 +320,6 @@ class Passivbot:
                             break
         return last_position_changes
 
-    def update_ohlcvs_1m_single_from_cache(self, symbol, verbose=False):
-        try:
-            data = json.load(open(self.get_ohlcvs_1m_filepath(symbol)))
-            self.ohlcvs_1m[symbol] = SortedDict()
-            for x in data:
-                self.ohlcvs_1m[symbol][x[0]] = x
-            if verbose:
-                logging.info(f"debug update_ohlcvs_1m_single_from_cache {symbol}")
-            return True
-        except Exception as e:
-            logging.error(f"error with update_ohlcvs_1m_single_from_cache {symbol} {e}")
-            traceback.print_exc()
-            try:
-                os.remove(self.get_ohlcvs_1m_filepath(symbol))
-            except Exception as e0:
-                logging.error(f"failed to remove corrupted ohlcvs_1m file for {symbol}")
-            return False
-
     async def wait_for_ohlcvs_1m_to_update(self):
         await asyncio.sleep(1.0)
         prev_print_ts = 0
@@ -377,31 +359,6 @@ class Passivbot:
             logging.error(f"error with {get_function_name()} for {symbol}: {e}")
             traceback.print_exc()
             return False
-
-    async def update_ohlcvs_1m_single(self, symbol, since=None, verbose=True):
-        limit = 20
-        if symbol not in self.ohlcvs_1m:
-            self.ohlcvs_1m[symbol] = SortedDict()
-            limit = None
-        elif len(self.ohlcvs_1m[symbol]) < 100:
-            limit = None
-        candles = await self.fetch_ohlcvs_1m(symbol, limit=limit)
-        for x in candles:
-            self.ohlcvs_1m[symbol][x[0]] = x
-        if verbose:
-            logging.info(
-                f"updated ohlcvs_1m for {symbol} since {ts_to_date_utc(candles[0][0]) if candles else 0}"
-            )
-        self.dump_ohlcvs_1m_to_cache(symbol)
-        i = 0
-        while len(self.ohlcvs_1m[symbol]) > self.ohlcvs_1m_max_len:
-            i += 1
-            if i > 1000:
-                logging.info(
-                    f"debug: more than 1000 deletions from ohlcvs_1m for {symbol} len: {len(self.ohlcvs_1m[symbol])}"
-                )
-                break
-            del self.ohlcvs_1m[symbol][self.ohlcvs_1m[symbol].peekitem(0)[0]]
 
     def update_trailing_data(self):
         if not hasattr(self, "trailing_prices"):
@@ -1335,8 +1292,8 @@ class Passivbot:
                     self.live_configs[symbol]["long"]["entry_grid_spacing_pct"],
                     self.live_configs[symbol]["long"]["entry_initial_ema_dist"],
                     self.live_configs[symbol]["long"]["entry_initial_qty_pct"],
-                    self.live_configs[symbol]["long"]["entry_trailing_retracement_pct"],
                     self.live_configs[symbol]["long"]["entry_trailing_grid_ratio"],
+                    self.live_configs[symbol]["long"]["entry_trailing_retracement_pct"],
                     self.live_configs[symbol]["long"]["entry_trailing_threshold_pct"],
                     self.live_configs[symbol]["long"]["wallet_exposure_limit"],
                     self.balance,
@@ -1356,8 +1313,9 @@ class Passivbot:
                     self.live_configs[symbol]["long"]["close_grid_markup_range"],
                     self.live_configs[symbol]["long"]["close_grid_min_markup"],
                     self.live_configs[symbol]["long"]["close_grid_qty_pct"],
-                    self.live_configs[symbol]["long"]["close_trailing_retracement_pct"],
                     self.live_configs[symbol]["long"]["close_trailing_grid_ratio"],
+                    self.live_configs[symbol]["long"]["close_trailing_qty_pct"],
+                    self.live_configs[symbol]["long"]["close_trailing_retracement_pct"],
                     self.live_configs[symbol]["long"]["close_trailing_threshold_pct"],
                     self.live_configs[symbol]["long"]["wallet_exposure_limit"],
                     self.balance,
@@ -1397,8 +1355,8 @@ class Passivbot:
                     self.live_configs[symbol]["short"]["entry_grid_spacing_pct"],
                     self.live_configs[symbol]["short"]["entry_initial_ema_dist"],
                     self.live_configs[symbol]["short"]["entry_initial_qty_pct"],
-                    self.live_configs[symbol]["short"]["entry_trailing_retracement_pct"],
                     self.live_configs[symbol]["short"]["entry_trailing_grid_ratio"],
+                    self.live_configs[symbol]["short"]["entry_trailing_retracement_pct"],
                     self.live_configs[symbol]["short"]["entry_trailing_threshold_pct"],
                     self.live_configs[symbol]["short"]["wallet_exposure_limit"],
                     self.balance,
@@ -1418,8 +1376,9 @@ class Passivbot:
                     self.live_configs[symbol]["short"]["close_grid_markup_range"],
                     self.live_configs[symbol]["short"]["close_grid_min_markup"],
                     self.live_configs[symbol]["short"]["close_grid_qty_pct"],
-                    self.live_configs[symbol]["short"]["close_trailing_retracement_pct"],
                     self.live_configs[symbol]["short"]["close_trailing_grid_ratio"],
+                    self.live_configs[symbol]["short"]["close_trailing_qty_pct"],
+                    self.live_configs[symbol]["short"]["close_trailing_retracement_pct"],
                     self.live_configs[symbol]["short"]["close_trailing_threshold_pct"],
                     self.live_configs[symbol]["short"]["wallet_exposure_limit"],
                     self.balance,
@@ -1663,6 +1622,7 @@ class Passivbot:
             f"error count: {len(self.error_counts)} of {max_n_errors_per_hour} errors per hour"
         )
         if len(self.error_counts) >= max_n_errors_per_hour:
+            await self.restart_bot()
             raise Exception("too many errors... restarting bot.")
 
     def format_custom_ids(self, orders: [dict]) -> [dict]:
@@ -1770,69 +1730,6 @@ class Passivbot:
                 last_update_tss.append((0.0, symbol))
         return last_update_tss
 
-    async def maintain_ohlcvs_1m_REST_old(self, verbose=False):
-        if not hasattr(self, "ohlcvs_1m"):
-            self.ohlcvs_1m = {}
-        error_count = 0
-        self.ohlcvs_1m_update_timestamps = {}
-        loop_sleep_time_ms = 1000 * 1
-        logging.info(f"starting {get_function_name()}")
-        while not self.stop_signal_received:
-            try:
-                symbols_too_old = []
-                now_utc = utc_ms()
-                for symbol in self.get_eligible_or_active_symbols():
-                    filepath = self.get_ohlcvs_1m_filepath(symbol)
-                    if os.path.exists(filepath):
-                        mod_ts = or_default(get_file_mod_utc, filepath, default=0.0)
-                        if now_utc - mod_ts > 1000 * 60 * self.ohlcvs_1m_max_age_minutes:
-                            symbols_too_old.append((mod_ts, symbol))
-                        else:
-                            if (
-                                symbol not in self.ohlcvs_1m_update_timestamps
-                                or self.ohlcvs_1m_update_timestamps[symbol] < mod_ts
-                            ):
-                                # may have been updated from other instance
-                                if self.update_ohlcvs_1m_single_from_cache(symbol):
-                                    self.ohlcvs_1m_update_timestamps[symbol] = mod_ts
-                                else:
-                                    self.ohlcvs_1m_update_timestamps[symbol] = 0.0
-                                    symbols_too_old.append((0.0, symbol))
-                    else:
-                        symbols_too_old.append((0.0, symbol))
-                symbols_to_update = sorted(symbols_too_old)[: self.max_n_concurrent_ohlcvs_1m_updates]
-
-                self.n_symbols_missing_ohlcvs_1m = len(symbols_too_old)
-                if verbose:
-                    coins = [symbol_to_coin(x[1]) for x in symbols_to_update]
-                    logging.info(
-                        f"updating ohlcvs_1m {','.join(coins)} n symbols to update: {len(symbols_too_old)}"
-                    )
-                if not symbols_to_update:
-                    if self.ohlcvs_1m_update_timestamps:
-                        symbol, ts = sorted(
-                            self.ohlcvs_1m_update_timestamps.items(), key=lambda x: x[1]
-                        )[0]
-                        if utc_ms() - ts > 1000 * 60 * self.ohlcvs_1m_max_age_minutes / 2:
-                            symbols_to_update = [(ts, symbol)]
-                if symbols_to_update:
-                    await asyncio.gather(
-                        *[
-                            self.update_ohlcvs_1m_single(x[1], verbose=verbose)
-                            for x in symbols_to_update
-                        ]
-                    )
-                sleep_time_ms = loop_sleep_time_ms - (utc_ms() - now_utc)
-                await asyncio.sleep(max(0.0, sleep_time_ms / 1000.0))
-
-            except Exception as e:
-                logging.error(f"error with {get_function_name()} {e}")
-                traceback.print_exc()
-                await asyncio.sleep(5)
-                error_count += 1
-                if error_count > 10:
-                    await self.restart_bot()
-
     async def restart_bot(self):
         logging.info("Initiating bot restart...")
         self.stop_signal_received = True
@@ -1851,9 +1748,7 @@ class Passivbot:
                 or utc_now - self.ohlcvs_1m_update_timestamps_WS[s] > 1000 * 60
             ]
             if symbols_to_update:
-                await asyncio.gather(
-                    *[self.update_ohlcvs_1m_single(s, verbose=False) for s in symbols_to_update]
-                )
+                await asyncio.gather(*[self.update_ohlcvs_1m_single(s) for s in symbols_to_update])
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
             traceback.print_exc()
@@ -1981,7 +1876,7 @@ class Passivbot:
                 if symbols_to_update:
                     await asyncio.gather(
                         *[
-                            self.update_ohlcvs_1m_single_new(x[1], max_age_ms=max_age_ms)
+                            self.update_ohlcvs_1m_single(x[1], max_age_ms=max_age_ms)
                             for x in symbols_to_update
                         ]
                     )
@@ -1991,9 +1886,7 @@ class Passivbot:
                 logging.error(f"error with {get_function_name()} {e}")
                 traceback.print_exc()
                 await asyncio.sleep(5)
-                error_count += 1
-                if error_count > 10:
-                    await self.restart_bot()
+                await self.restart_bot_on_too_many_errors()
 
     async def update_ohlcvs_1m_single_from_exchange(self, symbol):
         filepath = self.get_ohlcvs_1m_filepath(symbol)
@@ -2047,7 +1940,7 @@ class Passivbot:
         finally:
             self.remove_lock_file(filepath)
 
-    async def update_ohlcvs_1m_single_new(self, symbol, max_age_ms=None):
+    async def update_ohlcvs_1m_single(self, symbol, max_age_ms=None):
         if max_age_ms is None:
             max_age_ms = self.ohlcvs_1m_max_age_ms
         self.lock_timeout_ms = 5000.0
@@ -2077,6 +1970,7 @@ class Passivbot:
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
             traceback.print_exc()
+            self.restart_bot_on_too_many_errors()
 
     def create_lock_file(self, filepath):
         try:
