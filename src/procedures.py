@@ -132,6 +132,15 @@ def format_config(config: dict) -> dict:
         result = deepcopy(config["config"])
     else:
         raise Exception(f"failed to format config")
+    for k0, v0, v1 in [("close_trailing_qty_pct", 1.0, [0.05, 1.0])]:
+        for pside in ["long", "short"]:
+            if k0 not in result["bot"][pside]:
+                result["bot"][pside][k0] = v0
+                print(f"adding missing parameter {k0}: {v0}")
+            opt_key = f"{pside}_{k0}"
+            if opt_key not in result["optimize"]["bounds"]:
+                result["optimize"]["bounds"][opt_key] = v1
+                print(f"adding missing parameter {opt_key}: {v1}")
     for k0, k1, v in [
         ("live", "time_in_force", "good_till_cancelled"),
         ("live", "noisiness_rolling_mean_window_size", 60),
