@@ -1970,7 +1970,7 @@ class Passivbot:
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
             traceback.print_exc()
-            self.restart_bot_on_too_many_errors()
+            await self.restart_bot_on_too_many_errors()
 
     def create_lock_file(self, filepath):
         try:
