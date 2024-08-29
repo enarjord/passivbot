@@ -1000,7 +1000,6 @@ class Passivbot:
         if len(self.pnls) == 0:
             await self.init_pnls()
         start_time = self.pnls[-1]["timestamp"] - 1000 if self.pnls else age_limit
-        print(ts_to_date_utc(start_time))
         res = await self.fetch_pnls(start_time=start_time, limit=100)
         if res in [None, False]:
             return False
