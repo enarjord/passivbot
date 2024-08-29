@@ -467,6 +467,8 @@ class BybitBot(Passivbot):
             if self.get_exchange_time() - start_time < 1000 * 60 * 60 * 4 and limit == 100:
                 start_time = None
         fills = await self.fetch_fills2_sub_sub(start_time=start_time, end_time=end_time, limit=limit)
+        if start_time:
+            fills = [x for x in fills if x["timestamp"] >= start_time - 1000 * 60 * 60 * 4]
         if not fills:
             return []
         start_time = fills[0]["timestamp"]
