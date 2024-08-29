@@ -324,9 +324,10 @@ class Passivbot:
         await asyncio.sleep(1.0)
         prev_print_ts = 0
         while self.n_symbols_missing_ohlcvs_1m > self.max_n_concurrent_ohlcvs_1m_updates - 1:
-            if utc_ms() - prev_print_ts > 1000 * 20:
+            if utc_ms() - prev_print_ts > 1000 * 10:
                 logging.info(
-                    f"Waiting for ohlcvs to be refreshed. Number of symbols with out-of-date ohlcvs: {self.n_symbols_missing_ohlcvs_1m}"
+                    f"Waiting for ohlcvs to be refreshed. Number of symbols with "
+                    f"out-of-date ohlcvs: {self.n_symbols_missing_ohlcvs_1m}"
                 )
                 prev_print_ts = utc_ms()
             await asyncio.sleep(0.1)
@@ -955,6 +956,7 @@ class Passivbot:
             self.pnls = []
         elif self.pnls:
             return  # pnls already initiated; abort
+        logging.info(f"initiating pnls...")
         age_limit = (
             self.get_exchange_time()
             - 1000 * 60 * 60 * 24 * self.config["live"]["pnls_max_lookback_days"]
@@ -998,6 +1000,7 @@ class Passivbot:
         if len(self.pnls) == 0:
             await self.init_pnls()
         start_time = self.pnls[-1]["timestamp"] - 1000 if self.pnls else age_limit
+        print(ts_to_date_utc(start_time))
         res = await self.fetch_pnls(start_time=start_time, limit=100)
         if res in [None, False]:
             return False
