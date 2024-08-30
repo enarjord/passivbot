@@ -1,4 +1,4 @@
-from passivbot_forager import Passivbot, logging
+from passivbot_forager import Passivbot, logging, get_function_name
 from uuid import uuid4
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
@@ -326,8 +326,11 @@ class HyperliquidBot(Passivbot):
                 print("debug pnls hash", prev_hash, new_hash)
                 break
             prev_hash = new_hash
-            logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
+            logging.info(
+                f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])} len {len(fetched)}"
+            )
             start_time = fetched[-1]["timestamp"] - 1000
+            limit = 2000
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
 
     async def fetch_pnl(
@@ -348,7 +351,7 @@ class HyperliquidBot(Passivbot):
                 )
             return sorted(fetched, key=lambda x: x["timestamp"])
         except Exception as e:
-            logging.error(f"error fetching pnl {e}")
+            logging.error(f"error with {get_function_name()} {e}")
             print_async_exception(fetched)
             traceback.print_exc()
             return False
