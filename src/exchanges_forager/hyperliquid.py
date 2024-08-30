@@ -327,7 +327,7 @@ class HyperliquidBot(Passivbot):
                 break
             prev_hash = new_hash
             logging.info(
-                f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])} len {len(fetched)}"
+                f"debug fetching pnls {ts_to_date_utc(fetched[-1]['timestamp'])} len {len(fetched)}"
             )
             start_time = fetched[-1]["timestamp"] - 1000
             limit = 2000
