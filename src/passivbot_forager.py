@@ -147,6 +147,7 @@ class Passivbot:
         self.ineligible_symbols_with_pos = set()
         self.ohlcvs_1m_max_age_minutes = 10
         self.ohlcvs_1m_max_len = 10080
+        self.ohlcvs_1m_max_age_days = 7
         self.n_symbols_missing_ohlcvs_1m = 1000
         self.ohlcvs_1m_update_timestamps = {}
         self.max_n_concurrent_ohlcvs_1m_updates = 3
@@ -168,22 +169,6 @@ class Passivbot:
                 await asyncio.sleep(
                     max(0.0, self.config["live"]["execution_delay_seconds"] - (utc_ms() - now) / 1000)
                 )
-            except Exception as e:
-                logging.error(f"error with {get_function_name()} {e}")
-                traceback.print_exc()
-                await asyncio.sleep(1.0)
-
-    async def run_execution_loop_old(self):
-        # simulates backtest which executes once every 1m
-        prev_minute = utc_ms() // (1000 * 60)
-        while not self.stop_signal_received:
-            try:
-                now_minute = utc_ms() // (1000 * 60)
-                if now_minute != prev_minute:
-                    prev_minute = now_minute
-                    await asyncio.sleep(1.0)
-                    await self.execute_to_exchange()
-                await asyncio.sleep(0.1)
             except Exception as e:
                 logging.error(f"error with {get_function_name()} {e}")
                 traceback.print_exc()
@@ -232,7 +217,7 @@ class Passivbot:
             for elm in res:
                 self.add_new_order(elm, source="POST")
         if to_cancel or to_create:
-            await asyncio.gather(self.update_open_orders(), self.update_positions())
+            self.previous_REST_update_ts = 0
 
     def is_forager_mode(self):
         n_approved_symbols = len(self.config["live"]["approved_coins"])
@@ -342,17 +327,28 @@ class Passivbot:
             self.ohlcvs_1m_filepaths[symbol] = filepath
             return filepath
 
+    def trim_ohlcvs_1m(self, symbol):
+        try:
+            if not hasattr(self, "ohlcvs_1m"):
+                return
+            if symbol not in self.ohlcvs_1m:
+                return
+            age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * self.ohlcvs_1m_max_age_days
+            for i in range(len(self.ohlcvs_1m[symbol])):
+                ts = self.ohlcvs_1m[symbol].peekitem(0)[0]
+                if ts < age_limit:
+                    del self.ohlcvs_1m[symbol][ts]
+                else:
+                    break
+            return True
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} {symbol} {e}")
+            traceback.print_exc()
+            return False
+
     def dump_ohlcvs_1m_to_cache(self, symbol):
         try:
-            i = 0
-            while len(self.ohlcvs_1m[symbol]) > self.ohlcvs_1m_max_len:
-                i += 1
-                if i > 1000:
-                    logging.info(
-                        f"debug: more than 1000 deletions from ohlcvs_1m for {symbol} len: {len(self.ohlcvs_1m[symbol])}"
-                    )
-                    break
-                del self.ohlcvs_1m[symbol][self.ohlcvs_1m[symbol].peekitem(0)[0]]
+            self.trim_ohlcvs_1m(symbol)
             to_dump = [x for x in self.ohlcvs_1m[symbol].values()]
             json.dump(to_dump, open(self.get_ohlcvs_1m_filepath(symbol), "w"))
             return True
@@ -1080,7 +1076,7 @@ class Passivbot:
         self.upd_timestamps["open_orders"] = utc_ms()
         return True
 
-    async def determine_utc_offset(self):
+    async def determine_utc_offset(self, verbose=True):
         # returns millis to add to utc to get exchange timestamp
         # call some endpoint which includes timestamp for exchange's server
         # if timestamp is not included in self.cca.fetch_balance(),
@@ -1089,7 +1085,8 @@ class Passivbot:
         self.utc_offset = round((result["timestamp"] - utc_ms()) / (1000 * 60 * 60)) * (
             1000 * 60 * 60
         )
-        logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
+        if verbose:
+            logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
 
     def get_exchange_time(self):
         return utc_ms() + self.utc_offset
@@ -1783,8 +1780,10 @@ class Passivbot:
         }
 
     async def start_bot(self, debug_mode=False):
+        logging.info(f"initiating markets...")
         await self.init_markets_dict()
         await asyncio.sleep(1)
+        logging.info(f"starting data maintainers...")
         await self.start_data_maintainers()
         await self.wait_for_ohlcvs_1m_to_update()
         logging.info(f"starting websocket...")
