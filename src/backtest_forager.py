@@ -267,6 +267,7 @@ def post_process(config, hlcs, fills, equities, analysis, results_path):
         oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
     )
     json.dump(analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True)
+    config["analysis"] = analysis
     dump_config(config, f"{results_path}config.json")
     fdf.to_csv(f"{results_path}fills.csv")
     plot_forager(results_path, config["backtest"]["symbols"], fdf, bal_eq, hlcs)
