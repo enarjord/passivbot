@@ -50,7 +50,7 @@ Passivbot may be configured to make a grid of entry orders, the prices and quant
 
 ### Trailing Parameters
 
-Same logic applies to both trailing entries and trailing closes.
+The same logic applies to both trailing entries and trailing closes.
 - `trailing_grid_ratio`: 
 	- set trailing and grid allocations.
 	- if `trailing_grid_ratio==0.0`, grid orders only.
@@ -88,34 +88,49 @@ Same logic applies to both trailing entries and trailing closes.
 - `close_trailing_threshold_pct`: see Trailing Parameters above
 
 ### Unstuck Parameters
-- `unstuck_close_pct`: 
-- `unstuck_ema_dist`: 
+
+If a position is stuck, bot will use profits made on other positions to realize losses for the stuck position. If multiple positions are stuck, the stuck position whose price action distance is the lowest is selected for unstucking. 
+
+- `unstuck_close_pct`:
+	- percentage of full pos size to close for each unstucking order
+- `unstuck_ema_dist`:
+	- distance from EMA band to place unstucking order:
+	- `long_unstuck_close_price = upper_EMA_band * (1 + unstuck_ema_dist)`
+	- `short_unstuck_close_price = lower_EMA_band * (1 - unstuck_ema_dist)`
 - `unstuck_loss_allowance_pct`: 
-- `unstuck_threshold`: 
+	- percentage below past peak balance to allow losses.
+	- e.g. if past peak balance was $10,000 and `unstuck_loss_allowance_pct = 0.02`, the bot will stop taking losses when balance reaches `$10,000 * (1 - 0.02) == $9,800`
+- `unstuck_threshold`:
+	- if a position is bigger than a threshold, consider it stuck and activate unstucking.
+	- `if wallet_exposure / wallet_exposure_limit > unstuck_threshold: unstucking enabled`
+	- e.g. if a position size is $500 and max allowed position size is $1000, then position is 50% full. If unstuck_threshold==0.45, then unstuck the position until its size is $450.
 
 ## Live Trading Settings
-- `approved_coins`: 
-- `auto_gs`: 
-- `coin_flags`: 
-- `execution_delay_seconds`: 
-- `filter_by_min_effective_cost`: 
-- `forced_mode_long`: 
-- `forced_mode_short`: 
-- `ignored_coins`: 
-- `leverage`: 
-- `max_n_cancellations_per_batch`: 
-- `max_n_creations_per_batch`: 
-- `minimum_market_age_days`: 
-- `noisiness_rolling_mean_window_size`: 
-- `pnls_max_lookback_days`: 
-- `price_distance_threshold`: 
-- `relative_volume_filter_clip_pct`: 
-- `time_in_force`: 
-- `user`: 
+- `approved_coins`: list of coins approved for trading. If empty, all coins are approved.
+- `auto_gs`: automatically enable graceful stop for positions on disapproved coins
+	- graceful stop means the bot will continue trading as normal, but not open a new position after current position is fully closed.
+- `coin_flags`: not operational
+- `execution_delay_seconds`: wait x seconds after executing to exchange
+- `filter_by_min_effective_cost`: if true, will disallow coins where balance * WE_limit * initial_qty_pct < min_effective_cost
+	- e.g. if exchange's effective min cost for a coin is $5, but bot wants to make an order of $2, disallow that coin.
+- `forced_mode_long`, `forced_mode_short`: force all long positions to a given mode
+	- Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
+- `ignored_coins`: list of coins bot will not make positions on. If there are positions on that coin, turn on graceful stop
+- `leverage`: leverage set on exchange. Default 10.
+- `max_n_cancellations_per_batch`: will cancel n open orders per execution
+- `max_n_creations_per_batch`: will create n new orders per execution
+- `minimum_market_age_days`: disallow coins younger than a given number of days
+- `noisiness_rolling_mean_window_size`: number of minutes to look into the past to compute noisiness
+	- noisiness is normalized relative range of 1m ohlcvs: `mean((high - low) / close)`
+	- in forager mode, bot will select coins with highest noisiness for opening positions
+- `pnls_max_lookback_days`: how far into the past to fetch pnl history
+- `price_distance_threshold`: minimum distance to current price action required for EMA based limit orders
+- `relative_volume_filter_clip_pct`: Volume filter: disapprove the lowest relative volume coins. Default 0.1 == 10%. Set to zero to allow all.
+- `time_in_force`: default is good-till-cancelled
+- `user`: fetch API key/secret from api-keys.json
 
 ## Optimization Settings
 ### Bounds
-(Note: Bounds are specified for both long and short parameters. Fill in the explanation once, as they apply to both.)
 
 - `close_grid_markup_range`: 
 - `close_grid_min_markup`: 
