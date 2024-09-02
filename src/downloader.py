@@ -1287,6 +1287,7 @@ async def load_hlc_cache(
     spot=False,
     exchange="binance",
     start_tss=None,
+    minimum_coin_age_days=None,
 ):
     cache_fname = (
         f"{ts_to_date_utc(date_to_ts2(start_date))[:10]}_"
@@ -1316,6 +1317,17 @@ async def load_hlc_cache(
         count_longest_identical_data(data, symbol)
     except Exception as e:
         print("error checking integrity", e)
+    if minimum_coin_age_days:
+        if start_tss and symbol in start_tss:
+            first_ts = start_tss[symbol]
+        else:
+            first_ts = (await get_first_ohlcv_timestamps(symbols=[symbol]))[symbol]
+        new_start_ts = max(first_ts + 1000 * 60 * 60 * 24 * minimum_coin_age_days, data[0][0])
+        if new_start_ts != data[0][0]:
+            print(
+                f"changing start date for {symbol} {ts_to_date_utc(data[0][0])} -> {ts_to_date_utc(new_start_ts)}"
+            )
+            data = data[data[:, 0] >= new_start_ts]
     return data
 
 
@@ -1417,6 +1429,7 @@ async def prepare_hlcs_forager(config: dict):
     end_date = config["backtest"]["end_date"]
     base_dir = config["backtest"]["base_dir"]
     exchange = config["backtest"]["exchange"]
+    minimum_coin_age_days = config["live"]["minimum_coin_age_days"]
     if end_date in ["today", "now", ""]:
         end_date = ts_to_date_utc(utc_ms())[:10]
     hlcsd = {}
@@ -1426,7 +1439,15 @@ async def prepare_hlcs_forager(config: dict):
         start_tss = await get_first_ohlcv_timestamps(cc=ccxt.binanceusdm(), symbols=symbols)
     for symbol in symbols:
         data = await load_hlc_cache(
-            symbol, False, start_date, end_date, base_dir, False, exchange, start_tss=start_tss
+            symbol,
+            False,
+            start_date,
+            end_date,
+            base_dir,
+            False,
+            exchange,
+            start_tss=start_tss,
+            minimum_coin_age_days=minimum_coin_age_days,
         )
         if len(data) == 0:
             continue
