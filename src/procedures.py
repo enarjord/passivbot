@@ -815,20 +815,29 @@ def print_async_exception(coro):
 
 
 async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
+    supported_exchanges = [
+        "binanceusdm",
+        "bybit",
+        "bitget",
+        "okx",
+        "bingx",
+        "hyperliquid",
+        "gateio",
+    ]
+    default_exchange = "binanceusdm"
+    if symbols is not None and cc is None:
+        cache_fname = f"caches/first_ohlcv_timestamps_{default_exchange}.json"
+        try:
+            first_timestamps = json.load(open(cache_fname))
+            if all([symbol in first_timestamps for symbol in symbols]):
+                return first_timestamps
+        except:
+            pass
     if cc is None:
         import ccxt.async_support as ccxt
 
         cc = ccxt.binanceusdm()
     else:
-        supported_exchanges = [
-            "binanceusdm",
-            "bybit",
-            "bitget",
-            "okx",
-            "bingx",
-            "hyperliquid",
-            "gateio",
-        ]
         if cc.id not in supported_exchanges:
             print(f"get_first_ohlcv_timestamps() currently only supports {supported_exchanges}")
             return {}
