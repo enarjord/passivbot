@@ -2037,10 +2037,6 @@ def setup_bot(config):
         from exchanges_forager.okx import OKXBot
 
         bot = OKXBot(config)
-    elif user_info["exchange"] == "bingx":
-        from exchanges_forager.bingx import BingXBot
-
-        bot = BingXBot(config)
     elif user_info["exchange"] == "hyperliquid":
         from exchanges_forager.hyperliquid import HyperliquidBot
 

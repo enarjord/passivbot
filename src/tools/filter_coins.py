@@ -53,8 +53,8 @@ async def load_min_costs_single(exchange):
     print(f"fetching info for {exchange}")
     cc = getattr(ccxt, exchange)()
     cc.options["defaultType"] = "swap"
-    min_costs = {"bitget": 5.0, "bingx": 2.0, "hyperliquid": 10.0}
-    quotes = {x: "USDT" for x in ["binanceusdm", "bybit", "okx", "bitget", "bingx"]}
+    min_costs = {"bitget": 5.0, "hyperliquid": 10.0}
+    quotes = {x: "USDT" for x in ["binanceusdm", "bybit", "okx", "bitget"]}
     quotes["hyperliquid"] = "USDC"
     markets = await cc.load_markets()
     if exchange == "hyperliquid":
@@ -110,7 +110,7 @@ async def load_min_costs_single(exchange):
     return results
 
 
-async def load_min_costs(exchanges=["binanceusdm", "bybit", "okx", "bitget", "bingx", "hyperliquid"]):
+async def load_min_costs(exchanges=["binanceusdm", "bybit", "okx", "bitget", "hyperliquid"]):
     today = ts_to_date_utc(utc_ms())[:10]
     filepath = make_get_filepath(f"caches/min_costs_{today}.csv")
     if os.path.exists(filepath):
@@ -161,7 +161,7 @@ async def main():
         required=False,
         dest="exchange",
         default="bybit",
-        help="exchange (default bybit; choices [binance, bybit, okx, bitget, bingx, hyperliquid])",
+        help="exchange (default bybit; choices [binance, bybit, okx, bitget, hyperliquid])",
     )
     parser.add_argument(
         "-bs",
@@ -251,7 +251,7 @@ async def main():
     )
     args = parser.parse_args()
 
-    exchanges = ["binanceusdm", "bybit", "okx", "bitget", "bingx", "hyperliquid"]
+    exchanges = ["binanceusdm", "bybit", "okx", "bitget", "hyperliquid"]
     exchange = args.exchange
     if "binance" in exchange:
         exchange = "binanceusdm"

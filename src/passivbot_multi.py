@@ -1907,10 +1907,6 @@ async def main():
             from exchanges_multi.okx import OKXBot
 
             bot = OKXBot(config)
-        elif user_info["exchange"] == "bingx":
-            from exchanges_multi.bingx import BingXBot
-
-            bot = BingXBot(config)
         elif user_info["exchange"] == "hyperliquid":
             from exchanges_multi.hyperliquid import HyperliquidBot
 

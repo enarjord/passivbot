@@ -185,7 +185,6 @@ def get_all_eligible_symbols(config=None):
             # "bybit": "bybit", TODO
             "binance": "binanceusdm",
             # "bitget": "bitget", TODO
-            # "bingx": "bingx", TODO
             # "hyperliquid": "hyperliquid", TODO
         }
         quote = "USDT"
@@ -565,13 +564,6 @@ async def fetch_market_specific_settings_old(config: dict):
         settings_from_exchange["maker_fee"] = 0.0002
         settings_from_exchange["taker_fee"] = 0.0005
         settings_from_exchange["exchange"] = "okx"
-    elif exchange == "bingx":
-        if "spot" in config["market_type"]:
-            raise Exception("spot not implemented on bingx")
-        bot = await create_bingx_bot(tmp_live_settings)
-        settings_from_exchange["maker_fee"] = 0.0002
-        settings_from_exchange["taker_fee"] = 0.0005
-        settings_from_exchange["exchange"] = "bingx"
     else:
         raise Exception(f"unknown exchange {exchange}")
     if hasattr(bot, "session"):
@@ -648,14 +640,6 @@ async def create_kucoin_bot(config: dict):
     from exchanges.kucoin import KuCoinBot
 
     bot = KuCoinBot(config)
-    await bot._init()
-    return bot
-
-
-async def create_bingx_bot(config: dict):
-    from exchanges.bingx import BingXBot
-
-    bot = BingXBot(config)
     await bot._init()
     return bot
 
@@ -820,7 +804,6 @@ async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
         "bybit",
         "bitget",
         "okx",
-        "bingx",
         "hyperliquid",
         "gateio",
     ]
@@ -943,7 +926,6 @@ def fetch_market_specific_settings_multi(symbols=None, exchange="binance"):
         "bybit": "bybit",
         "binance": "binanceusdm",
         # "bitget": "bitget",
-        # "bingx": "bingx",
     }
     cc = getattr(ccxt, exchange_map[exchange])()
     cc.options["defaultType"] = "swap"
@@ -1130,7 +1112,7 @@ def main():
     return
     """
     # for exchange in ["bitget"]:
-    for exchange in ["kucoin", "bitget", "binance", "bybit", "okx", "bingx"]:
+    for exchange in ["kucoin", "bitget", "binance", "bybit", "okx"]:
         cfg = {"exchange": exchange, "symbol": "ETHUSDT", "market_type": "futures"}
         try:
             mss = fetch_market_specific_settings(cfg)
