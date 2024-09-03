@@ -1041,6 +1041,22 @@ def get_days_in_between(start_day, end_day):
 
 
 async def download_ohlcvs_bybit(symbol, start_date, end_date, spot=False, download_only=False):
+    try:
+        return await download_ohlcvs_bybit_sub(
+            symbol, start_date, end_date, spot=False, download_only=False, n_concurrent_fetches=10
+        )
+    except Exception as e:
+        print(
+            f"error fetching trades from bybit for {symbol} {e}. Retrying with fewer concurrent fetches."
+        )
+    return await download_ohlcvs_bybit_sub(
+        symbol, start_date, end_date, spot=False, download_only=False, n_concurrent_fetches=1
+    )
+
+
+async def download_ohlcvs_bybit_sub(
+    symbol, start_date, end_date, spot=False, download_only=False, n_concurrent_fetches=10
+):
     start_date, end_date = get_day(start_date), get_day(end_date)
     assert date_to_ts2(end_date) >= date_to_ts2(start_date), "end_date is older than start_date"
     dirpath = make_get_filepath(f"historical_data/ohlcvs_bybit{'_spot' if spot else ''}/{symbol}/")
@@ -1057,7 +1073,6 @@ async def download_ohlcvs_bybit(symbol, start_date, end_date, spot=False, downlo
             if (cand := f"{symbol}{'_' if spot else ''}{day}.csv.gz") in webpage
         ]
         if len(filenames) > 0:
-            n_concurrent_fetches = 2
             for i in range(0, len(filenames), n_concurrent_fetches):
                 filenames_sublist = filenames[i : i + n_concurrent_fetches]
                 print(
@@ -1236,7 +1251,7 @@ async def download_ohlcvs_binance(
         return df[col_names].set_index("timestamp").reindex(nindex).ffill().reset_index()
 
 
-def count_longest_identical_data(hlc, symbol):
+def count_longest_identical_data(hlc, symbol, verbose=True):
     line = f"checking ohlcv integrity of {symbol}"
     diffs = (np.diff(hlc[:, 1:], axis=0) == [0.0, 0.0, 0.0]).all(axis=1)
     longest_consecutive = 0
@@ -1250,9 +1265,10 @@ def count_longest_identical_data(hlc, symbol):
                 longest_consecutive = counter
                 i_ = i
             counter = 0
-    print(
-        f"{symbol} most n days of consecutive identical ohlcvs: {longest_consecutive / 60 / 24:.3f}, index last: {i_}"
-    )
+    if verbose:
+        print(
+            f"{symbol} most n days of consecutive identical ohlcvs: {longest_consecutive / 60 / 24:.3f}, index last: {i_}"
+        )
     return longest_consecutive
 
 
@@ -1276,6 +1292,21 @@ def attempt_gap_fix_hlcs(df):
     new_df.volume = new_df.volume.fillna(0.0)
     new_df = new_df.reset_index()
     return new_df[["timestamp", "open", "high", "low", "close", "volume"]]
+
+
+async def load_hlcvs(symbol, start_date, end_date, base_dir="backtests", exchange="binance"):
+    # returns matrix [[timestamp, high, low, close, volume]]
+    if exchange == "binance":
+        df = await download_ohlcvs_binance(symbol, False, start_date, end_date, False)
+    elif exchange == "bybit":
+        df = await download_ohlcvs_bybit(symbol, start_date, end_date)
+    else:
+        raise Exception(f"downloading ohlcvs from exchange {exchange} not supported")
+    if len(df) == 0:
+        return pd.DataFrame()
+    df = df[df.timestamp >= date_to_ts2(start_date)]
+    df = df[df.timestamp <= date_to_ts2(end_date)]
+    return df[["timestamp", "high", "low", "close", "volume"]].values
 
 
 async def load_hlc_cache(
