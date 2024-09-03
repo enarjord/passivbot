@@ -498,7 +498,7 @@ class Passivbot:
     def set_wallet_exposure_limits(self):
         for pside in ["long", "short"]:
             changed = {}
-            n_actives = len(self.is_active[pside])
+            n_actives = max(len(self.is_active[pside]), self.config["bot"][pside]["n_positions"])
             WE_limit_div = pbr.round_(
                 (
                     self.config["bot"][pside]["total_wallet_exposure_limit"] / n_actives
