@@ -132,39 +132,23 @@ If a position is stuck, bot will use profits made on other positions to realize 
 ## Optimization Settings
 ### Bounds
 
-- `close_grid_markup_range`: 
-- `close_grid_min_markup`: 
-- `close_grid_qty_pct`: 
-- `close_trailing_grid_ratio`: 
-- `close_trailing_qty_pct`: 
-- `close_trailing_retracement_pct`: 
-- `close_trailing_threshold_pct`: 
-- `ema_span_0`: 
-- `ema_span_1`: 
-- `entry_grid_double_down_factor`: 
-- `entry_grid_spacing_pct`: 
-- `entry_grid_spacing_weight`: 
-- `entry_initial_ema_dist`: 
-- `entry_initial_qty_pct`: 
-- `entry_trailing_grid_ratio`: 
-- `entry_trailing_retracement_pct`: 
-- `entry_trailing_threshold_pct`: 
-- `n_positions`: 
-- `total_wallet_exposure_limit`: 
-- `unstuck_close_pct`: 
-- `unstuck_ema_dist`: 
-- `unstuck_loss_allowance_pct`: 
-- `unstuck_threshold`: 
+When optimizing, parameter values are within the lower and upper bounds.
 
 ### Other Optimization Parameters
 - `crossover_probability`: 
-- `iters`: 
+- `iters`: number of backtests per optimize session
 - `mutation_probability`: 
-- `n_cpus`: 
-- `population_size`: 
-- `scoring`: 
+- `n_cpus`: number of CPU cores utilized in parallel
+- `population_size`: size of population for genetic optimization algorithm
+- `scoring`:
+	- the optimizer uses two objectives and finds the pareto front,
+	- finally choosing the optimal candidate based on lowest euclidian distance to ideal
+	- default values are median daily gain and sharpe ratio
 
 ### Optimization Limits
-- `lower_bound_drawdown_worst`: 
-- `lower_bound_equity_balance_diff_mean`: 
-- `lower_bound_loss_profit_ratio`:
+
+The optimizer will penalize backtests whose metrics exceed the given values.
+
+- `lower_bound_drawdown_worst`: lowest drawdown during backtest
+- `lower_bound_equity_balance_diff_mean`: mean of the difference between equity and balance
+- `lower_bound_loss_profit_ratio`: `abs(sum(losses)) / sum(profit)`
