@@ -297,6 +297,12 @@ class BitgetBot(Passivbot):
                 pnls[-1]["timestamp"] = float(pnls[-1]["cTime"])
                 pnls[-1]["id"] = pnls[-1]["tradeId"]
                 pnls[-1]["symbol"] = self.get_symbol_id_inv(pnls[-1]["symbol"].replace("_UMCBL", ""))
+                if "long" in pnls[-1]["side"]:
+                    pnls[-1]["position_side"] = "long"
+                elif "short" in pnls[-1]["side"]:
+                    pnls[-1]["position_side"] = "short"
+                else:
+                    raise Exception(f"unknown position side in fill {pnls[-1]}")
             return sorted(pnls, key=lambda x: x["timestamp"])
         except Exception as e:
             logging.error(f"error fetching fills {e}")
