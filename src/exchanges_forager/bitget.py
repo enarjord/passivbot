@@ -296,7 +296,7 @@ class BitgetBot(Passivbot):
                 pnls[-1]["pnl"] = float(pnls[-1]["profit"])
                 pnls[-1]["timestamp"] = float(pnls[-1]["cTime"])
                 pnls[-1]["id"] = pnls[-1]["tradeId"]
-                pnls[-1]["symbol"] = self.symbol_ids_inv[pnls[-1]["symbol"].replace("_UMCBL", "")]
+                pnls[-1]["symbol"] = self.get_symbol_id_inv(pnls[-1]["symbol"].replace("_UMCBL", ""))
             return sorted(pnls, key=lambda x: x["timestamp"])
         except Exception as e:
             logging.error(f"error fetching fills {e}")
