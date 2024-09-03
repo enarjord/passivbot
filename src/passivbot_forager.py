@@ -323,7 +323,7 @@ class Passivbot:
         except:
             if not hasattr(self, "filepath"):
                 self.ohlcvs_1m_filepaths = {}
-            filepath = f"{self.ohlcvs_1m_cache_dirpath}{symbol_to_coin(symbol)}.json"
+            filepath = f"{self.ohlcvs_1m_cache_dirpath}{symbol_to_coin(symbol)}.npy"
             self.ohlcvs_1m_filepaths[symbol] = filepath
             return filepath
 
@@ -349,8 +349,8 @@ class Passivbot:
     def dump_ohlcvs_1m_to_cache(self, symbol):
         try:
             self.trim_ohlcvs_1m(symbol)
-            to_dump = [x for x in self.ohlcvs_1m[symbol].values()]
-            json.dump(to_dump, open(self.get_ohlcvs_1m_filepath(symbol), "w"))
+            to_dump = np.array([x for x in self.ohlcvs_1m[symbol].values()])
+            np.save(self.get_ohlcvs_1m_filepath(symbol), to_dump)
             return True
         except Exception as e:
             logging.error(f"error with {get_function_name()} for {symbol}: {e}")
@@ -922,7 +922,7 @@ class Passivbot:
         if symbol not in self.ohlcvs_1m:
             self.ohlcvs_1m[symbol] = SortedDict()
         for elm in upd:
-            self.ohlcvs_1m[symbol][elm[0]] = elm
+            self.ohlcvs_1m[symbol][int(elm[0])] = elm
             self.ohlcvs_1m_update_timestamps_WS[symbol] = utc_ms()
 
     def calc_upnl_sum(self):
@@ -1658,7 +1658,7 @@ class Passivbot:
         now_minute = int(self.get_exchange_time() // 60000 * 60000)
         last_ts, last_ohlcv_1m = self.ohlcvs_1m[symbol].peekitem(-1)
         if now_minute > last_ts:
-            self.ohlcvs_1m[symbol][now_minute] = [now_minute] + [last_ohlcv_1m[4]] * 4 + [0.0]
+            self.ohlcvs_1m[symbol][now_minute] = [float(now_minute)] + [last_ohlcv_1m[4]] * 4 + [0.0]
         n_ohlcvs_1m = len(self.ohlcvs_1m[symbol])
         range_ms = self.ohlcvs_1m[symbol].peekitem(-1)[0] - self.ohlcvs_1m[symbol].peekitem(0)[0]
         ideal_n_ohlcvs_1m = int((range_ms) / 60000) + 1
@@ -1669,7 +1669,7 @@ class Passivbot:
                 ts += 60000
                 if ts not in self.ohlcvs_1m[symbol]:
                     self.ohlcvs_1m[symbol][ts] = (
-                        [ts] + [self.ohlcvs_1m[symbol][ts - 60000][4]] * 4 + [0.0]
+                        [float(ts)] + [self.ohlcvs_1m[symbol][ts - 60000][4]] * 4 + [0.0]
                     )
 
     def init_EMAs_single(self, symbol):
@@ -1800,7 +1800,7 @@ class Passivbot:
         n = int(round(self.config["live"]["noisiness_rolling_mean_window_size"]))
         for symbol in self.eligible_symbols:
             if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
-                ohlcvs_1m = [v for _, v in self.ohlcvs_1m[symbol].items()[-n:]]
+                ohlcvs_1m = [v for v in self.ohlcvs_1m[symbol].values()[-n:]]
                 self.noisiness[symbol] = np.mean([(x[2] - x[3]) / x[4] for x in ohlcvs_1m])
             else:
                 self.noisiness[symbol] = 0.0
@@ -1811,7 +1811,7 @@ class Passivbot:
         n = int(round(self.config["live"]["noisiness_rolling_mean_window_size"]))
         for symbol in self.ohlcvs_1m:
             if self.ohlcvs_1m[symbol] and len(self.ohlcvs_1m[symbol]) > 0:
-                ohlcvs_1m = [v for _, v in self.ohlcvs_1m[symbol].items()[-n:]]
+                ohlcvs_1m = [v for v in self.ohlcvs_1m[symbol].values()[-n:]]
                 self.volumes[symbol] = sum([x[4] * x[5] for x in ohlcvs_1m])
             else:
                 self.volumes[symbol] = 0.0
@@ -1846,8 +1846,11 @@ class Passivbot:
             self.ohlcvs_1m = {}
         error_count = 0
         self.ohlcvs_1m_update_timestamps = {}
+        init_ohlcvs_sleep_time = 4.0 / len(self.get_eligible_or_active_symbols())
         for symbol in self.get_eligible_or_active_symbols():
-            self.update_ohlcvs_1m_single_from_disk(symbol)
+            # print("debug update_ohlcvs_1m_single_from_disk", symbol)
+            asyncio.create_task(self.update_ohlcvs_1m_single_from_disk(symbol))
+            await asyncio.sleep(init_ohlcvs_sleep_time)
         self.ohlcvs_1m_max_age_ms = 1000 * 60 * self.ohlcvs_1m_max_age_minutes
         loop_sleep_time_ms = 1000 * 1
         logging.info(f"starting {get_function_name()}")
@@ -1907,7 +1910,7 @@ class Passivbot:
                 limit = None
             candles = await self.fetch_ohlcvs_1m(symbol, limit=limit)
             for x in candles:
-                self.ohlcvs_1m[symbol][x[0]] = x
+                self.ohlcvs_1m[symbol][int(x[0])] = x
             self.dump_ohlcvs_1m_to_cache(symbol)
             self.ohlcvs_1m_update_timestamps[symbol] = or_default(
                 get_file_mod_utc, filepath, default=0.0
@@ -1915,7 +1918,7 @@ class Passivbot:
         finally:
             self.remove_lock_file(filepath)
 
-    def update_ohlcvs_1m_single_from_disk(self, symbol):
+    async def update_ohlcvs_1m_single_from_disk(self, symbol):
         filepath = self.get_ohlcvs_1m_filepath(symbol)
         if not os.path.exists(filepath):
             return
@@ -1925,9 +1928,9 @@ class Passivbot:
             self.create_lock_file(filepath)
             if symbol not in self.ohlcvs_1m:
                 self.ohlcvs_1m[symbol] = SortedDict()
-            data = json.load(open(filepath))
+            data = np.load(filepath)
             for x in data:
-                self.ohlcvs_1m[symbol][x[0]] = x
+                self.ohlcvs_1m[symbol][int(x[0])] = x
             self.ohlcvs_1m_update_timestamps[symbol] = or_default(
                 get_file_mod_utc, filepath, default=0.0
             )
@@ -1965,7 +1968,7 @@ class Passivbot:
                         or self.ohlcvs_1m_update_timestamps[symbol] != mod_ts
                     ):
                         # was updated by other instance
-                        self.update_ohlcvs_1m_single_from_disk(symbol)
+                        await self.update_ohlcvs_1m_single_from_disk(symbol)
             else:
                 await self.update_ohlcvs_1m_single_from_exchange(symbol)
         except Exception as e:
