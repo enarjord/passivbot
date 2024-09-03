@@ -481,6 +481,20 @@ class Passivbot:
         self.symbol_ids = {symbol: self.markets_dict[symbol]["id"] for symbol in self.markets_dict}
         self.symbol_ids_inv = {v: k for k, v in self.symbol_ids.items()}
 
+    def get_symbol_id(self, symbol):
+        try:
+            return self.symbol_ids[symbol]
+        except:
+            logging.error(f"symbol {symbol} missing from self.symbol_ids. Using {symbol}")
+            return symbol
+
+    def get_symbol_id_inv(self, symbol):
+        try:
+            return self.symbol_ids_inv[symbol]
+        except:
+            logging.error(f"symbol {symbol} missing from self.symbol_ids_inv. Using {symbol}")
+            return symbol
+
     def set_wallet_exposure_limits(self):
         for pside in ["long", "short"]:
             changed = {}
@@ -1846,11 +1860,12 @@ class Passivbot:
             self.ohlcvs_1m = {}
         error_count = 0
         self.ohlcvs_1m_update_timestamps = {}
-        init_ohlcvs_sleep_time = 4.0 / len(self.get_eligible_or_active_symbols())
+        self.n_symbols_missing_ohlcvs_1m = len(self.get_eligible_or_active_symbols())
+        init_ohlcvs_sleep_time = 4.0 / self.n_symbols_missing_ohlcvs_1m
         for symbol in self.get_eligible_or_active_symbols():
             # print("debug update_ohlcvs_1m_single_from_disk", symbol)
             asyncio.create_task(self.update_ohlcvs_1m_single_from_disk(symbol))
-            await asyncio.sleep(init_ohlcvs_sleep_time)
+            await asyncio.sleep(min(0.1, init_ohlcvs_sleep_time))
         self.ohlcvs_1m_max_age_ms = 1000 * 60 * self.ohlcvs_1m_max_age_minutes
         loop_sleep_time_ms = 1000 * 1
         logging.info(f"starting {get_function_name()}")
