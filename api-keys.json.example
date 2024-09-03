@@ -5,7 +5,6 @@
         "bitget": "https://partner.bitget.com/bg/Y8FU1W",
         "okx": "https://www.okx.com/join/PASSIVBOT",
         "kucoin": "https://www.kucoin.com/r/rf/QBSFZ5HT",
-        "bingx": "https://bingx.com/invite/DFONXA"
     },
     "binance_01" : {
         "exchange": "binance",
@@ -39,11 +38,6 @@
         "key": "key",
         "secret": "secret",
         "passphrase": "passphrase"
-    },
-    "bingx_01" : {
-        "exchange": "bingx",
-        "key": "key",
-        "secret": "secret"
     },
     "hyperliquid_01" : {
         "exchange": "hyperliquid",
