@@ -23,6 +23,7 @@ from downloader import prepare_hlcs_forager
 from plotting import plot_fills_forager
 import matplotlib.pyplot as plt
 import logging
+from main import manage_rust_compilation
 
 plt.rcParams["figure.figsize"] = [29, 18]
 
@@ -320,12 +321,14 @@ def add_argparse_args_backtest_forager(parser):
 
 
 def calc_preferred_coins(hlcs, config):
+    # disqualify coins by coin age, relative volume, then sort by noisiness
     return np.argsort(
         -pbr.calc_noisiness_py(hlcs, config["live"]["noisiness_rolling_mean_window_size"])
     )
 
 
 async def main():
+    manage_rust_compilation()
     logging.basicConfig(
         format="%(asctime)s %(levelname)-8s %(message)s",
         level=logging.INFO,

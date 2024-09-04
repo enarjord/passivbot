@@ -22,6 +22,7 @@ from pure_funcs import (
 )
 from procedures import make_get_filepath, utc_ms, load_hjson_config, load_config, format_config
 from copy import deepcopy
+from main import manage_rust_compilation
 import numpy as np
 from uuid import uuid4
 import signal
@@ -287,6 +288,7 @@ def configs_to_individuals(cfgs):
 
 
 async def main():
+    manage_rust_compilation()
     parser = argparse.ArgumentParser(prog="optimize_forager", description="run forager optimizer")
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
