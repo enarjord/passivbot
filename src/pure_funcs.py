@@ -502,7 +502,6 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 "exchange": "binance",
                 "start_date": "2021-05-01",
                 "starting_balance": 100000.0,
-                "symbols": [],
             },
             "bot": {
                 "long": {
