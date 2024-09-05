@@ -7,1652 +7,1636 @@ import traceback
 import argparse
 import asyncio
 import json
+import sys
 import signal
+import hjson
 import pprint
 import numpy as np
-import time
-import random
+import inspect
+import passivbot_rust as pbr
+import logging
+from prettytable import PrettyTable
 from uuid import uuid4
+from copy import deepcopy
+from collections import defaultdict
+from sortedcontainers import SortedDict
+
 from procedures import (
-    load_live_config,
-    make_get_filepath,
-    load_exchange_key_secret_passphrase,
-    numpyize,
-    print_async_exception,
-    utc_ms,
     load_broker_code,
+    load_user_info,
+    utc_ms,
+    make_get_filepath,
+    load_live_config,
+    get_file_mod_utc,
+    get_first_ohlcv_timestamps,
+    load_config,
 )
-from pure_funcs import (
-    filter_orders,
-    create_xk,
-    round_dynamic,
-    denumpyize,
-    spotify_config,
-    determine_passivbot_mode,
-    config_pretty_str,
-    shorten_custom_id,
-    ts_to_date,
-)
+from njit_funcs_recursive_grid import calc_recursive_entries_long, calc_recursive_entries_short
 from njit_funcs import (
-    qty_to_cost,
-    calc_diff,
-    round_,
-    calc_close_grid_long,
-    calc_close_grid_short,
-    calc_upnl,
     calc_samples,
     calc_emas_last,
     calc_ema,
-    calc_delay_between_fills_ms_bid,
-    calc_delay_between_fills_ms_ask,
+    calc_close_grid_long,
+    calc_close_grid_short,
+    calc_diff,
+    qty_to_cost,
+    cost_to_qty,
+    calc_min_entry_qty,
+    round_,
+    round_up,
+    round_dn,
+    round_dynamic,
+    calc_pnl,
+    calc_pnl_long,
+    calc_pnl_short,
+    calc_pprice_diff,
 )
-from njit_funcs_neat_grid import (
-    calc_neat_grid_long,
-    calc_neat_grid_short,
+from njit_multisymbol import calc_AU_allowance
+from pure_funcs import (
+    numpyize,
+    denumpyize,
+    filter_orders,
+    multi_replace,
+    shorten_custom_id,
+    determine_side_from_order_tuple,
+    str2bool,
+    symbol_to_coin,
+    add_missing_params_to_hjson_live_multi_config,
+    expand_PB_mode,
+    ts_to_date_utc,
 )
-from njit_funcs_recursive_grid import (
-    calc_recursive_entries_long,
-    calc_recursive_entries_short,
+
+
+logging.basicConfig(
+    format="%(asctime)s %(levelname)-8s %(message)s",
+    level=logging.INFO,
+    datefmt="%Y-%m-%dT%H:%M:%S",
 )
-from njit_clock import (
-    calc_clock_entry_long,
-    calc_clock_entry_short,
-    calc_clock_close_long,
-    calc_clock_close_short,
-)
-from typing import Union, Dict, List
-
-import websockets
-import logging
-
-TEST_MODE_SUPPORTED_EXCHANGES = ["bybit", "binance"]
 
 
-class Bot:
+def signal_handler(sig, frame):
+    print("\nReceived shutdown signal. Stopping bot...")
+    if "bot" in globals():
+        bot.stop_signal_received = True
+    else:
+        sys.exit(0)
+
+
+signal.signal(signal.SIGINT, signal_handler)
+
+
+def get_function_name():
+    return inspect.currentframe().f_back.f_code.co_name
+
+
+def or_default(f, *args, default=None, **kwargs):
+    try:
+        return f(*args, **kwargs)
+    except:
+        return default
+
+
+class Passivbot:
     def __init__(self, config: dict):
-        self.spot = False
         self.config = config
-        self.config["max_leverage"] = 25
-        self.xk = {}
-
-        self.ws_user = None
-        self.ws_market = None
-
-        self.hedge_mode = self.config["hedge_mode"] = True
-        self.set_config(self.config)
-        self.server_time = utc_ms()
-
-        self.ts_locked = {
-            k: 0.0
-            for k in [
-                "cancel_orders",
-                "update_open_orders",
-                "cancel_and_create",
-                "update_position",
-                "create_orders",
-                "check_fills",
-                "update_fills",
-                "update_last_fills_timestamps",
-                "force_update",
-            ]
-        }
-        self.ts_released = {k: 1.0 for k in self.ts_locked}
-        self.error_halt = {
-            "update_open_orders": False,
-            "update_fills": False,
-            "update_position": False,
-        }
-        self.heartbeat_ts = 0
-        self.heartbeat_interval_seconds = 60 * 60
-        self.listen_key = None
-
-        self.position = {}
-        self.open_orders = []
-        self.fills = []
-        self.last_fills_timestamps = {
-            "clock_entry_long": 0,
-            "clock_entry_short": 0,
-            "clock_close_long": 0,
-            "clock_close_short": 0,
-            "unstuck_close_long": 0,
-            "unstuck_close_short": 0,
-        }
-        self.price = 0.0
-        self.ob = [0.0, 0.0]
-        self.emas_long = np.zeros(3)
-        self.emas_short = np.zeros(3)
-        self.ema_sec = 0
-        self.auto_unstuck_on_timer = True
-
-        self.n_orders_per_execution = 2
-        self.delay_between_executions = 3
-        self.force_update_interval = 30
-
-        self.c_mult = self.config["c_mult"] = 1.0
-
-        self.log_filepath = make_get_filepath(f"logs/{self.exchange}/{config['config_name']}.log")
-
-        self.api_keys = config["api_keys"] if "api_keys" in config else None
-        _, self.key, self.secret, self.passphrase = load_exchange_key_secret_passphrase(
-            self.user, self.api_keys
-        )
-        self.broker_code = load_broker_code(self.exchange)
-
-        self.log_level = 0
-
-        self.user_stream_task = None
-        self.market_stream_task = None
-
-        self.stop_websocket = False
-        self.process_websocket_ticks = True
-
+        self.user = config["live"]["user"]
+        self.user_info = load_user_info(self.user)
+        self.exchange = self.user_info["exchange"]
+        self.broker_code = load_broker_code(self.user_info["exchange"])
         self.custom_id_max_length = 36
-
-    def set_config(self, config):
-        for k, v in [
-            ("long_mode", None),
-            ("short_mode", None),
-            ("test_mode", False),
-            ("assigned_balance", None),
-            ("cross_wallet_pct", 1.0),
-            ("price_distance_threshold", 0.5),
-            ("c_mult", 1.0),
-            ("leverage", 7.0),
-            ("countdown", False),
-            ("countdown_offset", 0),
-            ("ohlcv", True),
-        ]:
-            if k not in config:
-                config[k] = v
-        self.passivbot_mode = config["passivbot_mode"] = determine_passivbot_mode(config)
-        if config["cross_wallet_pct"] > 1.0 or config["cross_wallet_pct"] <= 0.0:
-            logging.warning(
-                f"Invalid cross_wallet_pct given: {config['cross_wallet_pct']}.  "
-                + "It must be greater than zero and less than or equal to one.  Defaulting to 1.0."
-            )
-            config["cross_wallet_pct"] = 1.0
-        if self.passivbot_mode in ["neat_grid", "recursive_grid"]:
-            self.auto_unstuck_on_timer = any(
-                [
-                    self.config[side][key] != 0.0
-                    for side in ["long", "short"]
-                    for key in ["auto_unstuck_delay_minutes", "auto_unstuck_qty_pct"]
-                ]
-            )
-        self.config["do_long"] = config["long"]["enabled"]
-        self.config["do_short"] = config["short"]["enabled"]
-        self.ema_spans_long = np.array(
-            sorted(
-                [
-                    config["long"]["ema_span_0"],
-                    (config["long"]["ema_span_0"] * config["long"]["ema_span_1"]) ** 0.5,
-                    config["long"]["ema_span_1"],
-                ]
-            )
-        )
-        self.ema_spans_short = np.array(
-            sorted(
-                [
-                    config["short"]["ema_span_0"],
-                    (config["short"]["ema_span_0"] * config["short"]["ema_span_1"]) ** 0.5,
-                    config["short"]["ema_span_1"],
-                ]
-            )
-        )
-        self.config = config
-        for key in config:
-            setattr(self, key, config[key])
-            if key in self.xk:
-                self.xk[key] = config[key]
-
-    def set_config_value(self, key, value):
-        self.config[key] = value
-        setattr(self, key, self.config[key])
-
-    async def _init(self):
-        self.xk = create_xk(self.config)
-        if self.passivbot_mode == "clock":
-            self.xk["auto_unstuck_ema_dist"] = (0.0, 0.0)
-            self.xk["auto_unstuck_wallet_exposure_threshold"] = (0.0, 0.0)
-            self.xk["auto_unstuck_delay_minutes"] = (0.0, 0.0)
-            self.xk["auto_unstuck_qty_pct"] = (0.0, 0.0)
-            self.xk["delay_between_fills_ms_entry"] = (
-                self.config["long"]["delay_between_fills_minutes_entry"] * 60 * 1000.0,
-                self.config["short"]["delay_between_fills_minutes_entry"] * 60 * 1000.0,
-            )
-            self.xk["delay_between_fills_ms_close"] = (
-                self.config["long"]["delay_between_fills_minutes_close"] * 60 * 1000.0,
-                self.config["short"]["delay_between_fills_minutes_close"] * 60 * 1000.0,
-            )
-        print("initiating position, open orders, fills, exchange config, order book, and emas...")
-        await asyncio.sleep(self.countdown_offset)
-        await asyncio.gather(
-            self.update_position(),
-            self.update_open_orders(),
-            self.init_fills(),
-            self.init_exchange_config(),
-            self.init_order_book(),
-            self.update_server_time(),
-            self.update_last_fills_timestamps(),
-        )
-        await self.init_emas()
-        print("done")
-        if "price_step_custom" in self.config and self.config["price_step_custom"] not in [None, 0.0]:
-            new_price_step = max(
-                self.price_step, round_(self.config["price_step_custom"], self.price_step)
-            )
-            if new_price_step != self.price_step:
-                logging.info(f"changing price step from {self.price_step} to {new_price_step}")
-                self.price_step = self.config["price_step"] = self.xk["price_step"] = new_price_step
-        elif "price_precision_multiplier" in self.config and self.config[
-            "price_precision_multiplier"
-        ] not in [None, 0.0]:
-            new_price_step = max(
-                self.price_step,
-                round_(self.ob[0] * self.config["price_precision_multiplier"], self.price_step),
-            )
-            if new_price_step != self.price_step:
-                logging.info(f"changing price step from {self.price_step} to {new_price_step}")
-                self.price_step = self.config["price_step"] = self.xk["price_step"] = new_price_step
-
-    def dump_log(self, data) -> None:
-        if "logging_level" in self.config and self.config["logging_level"] > 0:
-            with open(self.log_filepath, "a") as f:
-                f.write(
-                    json.dumps({**{"log_timestamp": time.time(), "symbol": self.symbol}, **data})
-                    + "\n"
-                )
-
-    async def init_emas_1m(self, ohlcvs: dict) -> None:
-        samples1m = calc_samples(
-            numpyize(
-                [
-                    [o["timestamp"], o["volume"], o["close"]]
-                    for o in sorted(ohlcvs.values(), key=lambda x: x["timestamp"])
-                ]
-            ),
-            60000,
-        )
-        self.emas_long = calc_emas_last(samples1m[:, 2], self.ema_spans_long)
-        self.emas_short = calc_emas_last(samples1m[:, 2], self.ema_spans_short)
-        self.alpha_long = 2 / (self.ema_spans_long + 1)
-        self.alpha__long = 1 - self.alpha_long
-        self.alpha_short = 2 / (self.ema_spans_short + 1)
-        self.alpha__short = 1 - self.alpha_short
-        self.ema_minute = int(round(time.time() // 60 * 60))
-        return samples1m
-
-    async def init_emas(self) -> None:
-        ohlcvs1m = None
-        try:
-            ohlcvs1m = await self.fetch_ohlcvs(interval="1m")
-            max_span = max(list(self.ema_spans_long) + list(self.ema_spans_short))
-            for mins, interval in zip([5, 15, 30, 60, 60 * 4], ["5m", "15m", "30m", "1h", "4h"]):
-                if max_span <= len(ohlcvs1m) * mins:
-                    break
-            ohlcvs = await self.fetch_ohlcvs(interval=interval)
-            ohlcvs = {ohlcv["timestamp"]: ohlcv for ohlcv in ohlcvs + ohlcvs1m}
-            if self.ohlcv:
-                return await self.init_emas_1m(ohlcvs)
-            samples1s = calc_samples(
-                numpyize(
-                    [
-                        [o["timestamp"], o["volume"], o["close"]]
-                        for o in sorted(ohlcvs.values(), key=lambda x: x["timestamp"])
-                    ]
-                )
-            )
-            spans1s_long = np.array(self.ema_spans_long) * 60
-            spans1s_short = np.array(self.ema_spans_short) * 60
-            self.emas_long = calc_emas_last(samples1s[:, 2], spans1s_long)
-            self.emas_short = calc_emas_last(samples1s[:, 2], spans1s_short)
-            self.alpha_long = 2 / (spans1s_long + 1)
-            self.alpha__long = 1 - self.alpha_long
-            self.alpha_short = 2 / (spans1s_short + 1)
-            self.alpha__short = 1 - self.alpha_short
-            self.ema_sec = int(time.time())
-        except Exception as e:
-            logging.error(f"error with init_emas {e}")
-            traceback.print_exc()
-            print_async_exception(ohlcvs1m)
-            logging.info("using current market price as starting EMA")
-
-            self.emas_long = np.repeat(self.price, 3)
-            self.emas_short = np.repeat(self.price, 3)
-            self.alpha_long = 2 / (np.array(self.ema_spans_long) * (1 if self.ohlcv else 60) + 1)
-            self.alpha__long = 1 - self.alpha_long
-            self.alpha_short = 2 / (np.array(self.ema_spans_short) * (1 if self.ohlcv else 60) + 1)
-            self.alpha__short = 1 - self.alpha_short
-            self.ema_sec = int(time.time())
-            self.ema_minute = int(round(time.time() // 60 * 60))
-
-    def update_emas_1m(self, price: float, prev_price: float) -> None:
-        now_minute = int(round(time.time() // 60 * 60))
-        if now_minute <= self.ema_minute:
-            return
-        while self.ema_minute < int(round(now_minute - 60)):
-            self.emas_long = calc_ema(self.alpha_long, self.alpha__long, self.emas_long, prev_price)
-            self.emas_short = calc_ema(
-                self.alpha_short, self.alpha__short, self.emas_short, prev_price
-            )
-            self.ema_minute += 60
-        self.emas_long = calc_ema(self.alpha_long, self.alpha__long, self.emas_long, price)
-        self.emas_short = calc_ema(self.alpha_short, self.alpha__short, self.emas_short, price)
-        self.ema_minute = now_minute
-
-    def update_emas(self, price: float, prev_price: float) -> None:
-        if self.ohlcv:
-            return self.update_emas_1m(price, prev_price)
-        now_sec = int(time.time())
-        if now_sec <= self.ema_sec:
-            return
-        while self.ema_sec < int(round(now_sec - 1)):
-            self.emas_long = calc_ema(self.alpha_long, self.alpha__long, self.emas_long, prev_price)
-            self.emas_short = calc_ema(
-                self.alpha_short, self.alpha__short, self.emas_short, prev_price
-            )
-            self.ema_sec += 1
-        self.emas_long = calc_ema(self.alpha_long, self.alpha__long, self.emas_long, price)
-        self.emas_short = calc_ema(self.alpha_short, self.alpha__short, self.emas_short, price)
-        self.ema_sec = now_sec
-
-    async def update_open_orders(self) -> None:
-        if self.ts_locked["update_open_orders"] > self.ts_released["update_open_orders"]:
-            return
-        try:
-            open_orders = await self.fetch_open_orders()
-            open_orders = [x for x in open_orders if x["symbol"] == self.symbol]
-            if self.open_orders != open_orders:
-                self.dump_log({"log_type": "open_orders", "data": open_orders})
-            self.open_orders = open_orders
-            self.error_halt["update_open_orders"] = False
-            return True
-        except Exception as e:
-            self.error_halt["update_open_orders"] = True
-
-            logging.error(f"error with update open orders {e}")
-            traceback.print_exc()
-            return False
-        finally:
-            self.ts_released["update_open_orders"] = time.time()
-
-    async def update_ticker(self):
-        try:
-            self.ticker = await self.fetch_ticker()
-            self.ob = [self.ticker["bid"], self.ticker["ask"]]
-            self.price = self.ticker["last"]
-            return True
-
-        except Exception as e:
-            logging.error(f"error with update open orders {e}")
-            traceback.print_exc()
-            return False
-
-    def adjust_wallet_balance(self, balance: float) -> float:
-        return (
-            balance if self.assigned_balance is None else self.assigned_balance
-        ) * self.cross_wallet_pct
-
-    def add_wallet_exposures_to_pos(self, position_: dict):
-        position = position_.copy()
-        position["long"]["wallet_exposure"] = (
-            (
-                qty_to_cost(
-                    position["long"]["size"],
-                    position["long"]["price"],
-                    self.xk["inverse"],
-                    self.xk["c_mult"],
-                )
-                / position["wallet_balance"]
-            )
-            if position["wallet_balance"]
-            else 0.0
-        )
-        position["short"]["wallet_exposure"] = (
-            (
-                qty_to_cost(
-                    position["short"]["size"],
-                    position["short"]["price"],
-                    self.xk["inverse"],
-                    self.xk["c_mult"],
-                )
-                / position["wallet_balance"]
-            )
-            if position["wallet_balance"]
-            else 0.0
-        )
-        return position
-
-    async def update_position(self) -> None:
-        if self.ts_locked["update_position"] > self.ts_released["update_position"]:
-            return
-        self.ts_locked["update_position"] = time.time()
-        try:
-            position = await self.fetch_position()
-            assert position is not None
-            position["wallet_balance"] = self.adjust_wallet_balance(position["wallet_balance"])
-            # isolated equity, not cross equity
-            position["equity"] = position["wallet_balance"] + calc_upnl(
-                position["long"]["size"],
-                position["long"]["price"],
-                position["short"]["size"],
-                position["short"]["price"],
-                self.price,
-                self.inverse,
-                self.c_mult,
-            )
-            position = self.add_wallet_exposures_to_pos(position)
-            if self.position != position:
-                if (
-                    self.position
-                    and "spot" in self.market_type
-                    and (
-                        self.position["long"]["size"] != position["long"]["size"]
-                        or self.position["short"]["size"] != position["short"]["size"]
-                    )
-                ):
-                    # update fills if position size changed
-                    await self.update_fills()
-                self.dump_log({"log_type": "position", "data": position})
-            self.position = position
-            self.error_halt["update_position"] = False
-            return True
-        except Exception as e:
-            self.error_halt["update_position"] = True
-            logging.error(f"error with update position {e}")
-            traceback.print_exc()
-            return False
-        finally:
-            self.ts_released["update_position"] = time.time()
-
-    async def init_fills(self, n_days_limit=60):
-        fills = None
-        try:
-            fills = await self.fetch_fills()
-            self.fills = fills
-            return True
-        except Exception as e:
-            self.fills = []
-            traceback.print_exc()
-            print_async_exception(fills)
-            return False
-
-    async def update_fills(self) -> [dict]:
-        """
-        fetches recent fills
-        """
-        if self.ts_locked["update_fills"] > self.ts_released["update_fills"]:
-            return
-        self.ts_locked["update_fills"] = time.time()
-        try:
-            fetched = await self.fetch_fills()
-            seen = set()
-            updated_fills = []
-            for fill in fetched + self.fills:
-                if fill["order_id"] not in seen:
-                    updated_fills.append(fill)
-                    seen.add(fill["order_id"])
-            self.fills = sorted(updated_fills, key=lambda x: x["order_id"])[-5000:]
-            self.error_halt["update_fills"] = False
-        except Exception as e:
-            self.error_halt["update_fills"] = True
-            logging.error(f"error with update fills {e}")
-            traceback.print_exc()
-        finally:
-            self.ts_released["update_fills"] = time.time()
-
-    async def create_orders(self, orders_to_create: [dict]) -> [dict]:
-        if not orders_to_create:
-            return []
-        if self.ts_locked["create_orders"] > self.ts_released["create_orders"]:
-            return []
-        self.ts_locked["create_orders"] = time.time()
-        try:
-            orders = None
-            orders_to_create = [order for order in orders_to_create if self.order_is_valid(order)]
-            orders_to_create = self.format_custom_ids(orders_to_create)
-            orders = await self.execute_orders(orders_to_create)
-            orders_f = [x for x in orders if "price" in x]
-            for order in sorted(orders_f, key=lambda x: calc_diff(x["price"], self.price)):
-                if "side" in order:
-                    logging.info(
-                        f'  created order {order["symbol"]} {order["side"]: <4} '
-                        + f'{order["position_side"]: <5} {float(order["qty"])} {float(order["price"])}'
-                    )
-            return orders
-        except Exception as e:
-            print(f"error creating orders {e}")
-            print_async_exception(orders)
-            traceback.print_exc()
-            return []
-        finally:
-            self.ts_released["create_orders"] = time.time()
-
-    async def cancel_orders(self, orders_to_cancel: [dict]) -> [dict]:
-        if not orders_to_cancel:
-            return
-        if self.ts_locked["cancel_orders"] > self.ts_released["cancel_orders"]:
-            return
-        self.ts_locked["cancel_orders"] = time.time()
-        try:
-            deletions, orders_to_cancel_dedup, oo_ids = [], [], set()
-            for o in orders_to_cancel:
-                if o["order_id"] not in oo_ids:
-                    oo_ids.add(o["order_id"])
-                    orders_to_cancel_dedup.append(o)
-            cancellations = None
-            try:
-                cancellations = await self.execute_cancellations(orders_to_cancel_dedup)
-                for cancellation in cancellations:
-                    if "order_id" in cancellation:
-                        logging.info(
-                            f'cancelled order {cancellation["symbol"]} {cancellation["side"]: <4} '
-                            + f'{cancellation["position_side"]: <5} {cancellation["qty"]} {cancellation["price"]}'
-                        )
-                        self.open_orders = [
-                            oo
-                            for oo in self.open_orders
-                            if oo["order_id"] != cancellation["order_id"]
-                        ]
-                return cancellations
-            except Exception as e:
-                logging.error(f"error cancelling orders {cancellations} {e}")
-                print_async_exception(cancellations)
-                return []
-        finally:
-            self.ts_released["cancel_orders"] = time.time()
-
-    def stop(self, signum=None, frame=None) -> None:
-        logging.info("Stopping passivbot, please wait...")
-        self.stop_websocket = True
-        if not self.ohlcv:
-            try:
-                self.user_stream_task.cancel()
-                self.market_stream_task.cancel()
-
-            except Exception as e:
-                logging.error(f"An error occurred during shutdown: {e}")
-
-    def pause(self) -> None:
-        self.process_websocket_ticks = False
-
-    def resume(self) -> None:
-        self.process_websocket_ticks = True
-
-    def calc_orders(self):
-        balance = self.position["wallet_balance"]
-        psize_long = self.position["long"]["size"]
-        pprice_long = self.position["long"]["price"]
-        psize_short = self.position["short"]["size"]
-        pprice_short = self.position["short"]["price"]
-
-        if self.hedge_mode:
-            do_long = self.do_long or psize_long != 0.0
-            do_short = self.do_short or psize_short != 0.0
-        else:
-            no_pos = psize_long == 0.0 and psize_short == 0.0
-            do_long = (no_pos and self.do_long) or psize_long != 0.0
-            do_short = (no_pos and self.do_short) or psize_short != 0.0
-        self.xk["do_long"] = do_long
-        self.xk["do_short"] = do_short
-
-        orders = []
-
-        if self.long_mode == "panic":
-            if psize_long != 0.0:
-                orders.append(
-                    {
-                        "side": "sell",
-                        "position_side": "long",
-                        "qty": abs(psize_long),
-                        "price": float(self.ob[1]),
-                        "type": "limit",
-                        "reduce_only": True,
-                        "custom_id": "long_panic_close",
-                    }
-                )
-        else:
-            if do_long:
-                if self.passivbot_mode == "recursive_grid":
-                    entries_long = calc_recursive_entries_long(
-                        balance,
-                        psize_long,
-                        pprice_long,
-                        self.ob[0],
-                        min(self.emas_long),
-                        self.xk["inverse"],
-                        self.xk["qty_step"],
-                        self.xk["price_step"],
-                        self.xk["min_qty"],
-                        self.xk["min_cost"],
-                        self.xk["c_mult"],
-                        self.xk["initial_qty_pct"][0],
-                        self.xk["initial_eprice_ema_dist"][0],
-                        self.xk["ddown_factor"][0],
-                        self.xk["rentry_pprice_dist"][0],
-                        self.xk["rentry_pprice_dist_wallet_exposure_weighting"][0],
-                        self.xk["wallet_exposure_limit"][0],
-                        self.xk["auto_unstuck_ema_dist"][0],
-                        self.xk["auto_unstuck_wallet_exposure_threshold"][0],
-                        self.xk["auto_unstuck_delay_minutes"][0]
-                        or self.xk["auto_unstuck_qty_pct"][0],
-                    )
-                elif self.passivbot_mode == "neat_grid":
-                    entries_long = calc_neat_grid_long(
-                        balance,
-                        psize_long,
-                        pprice_long,
-                        self.ob[0],
-                        min(self.emas_long),
-                        self.xk["inverse"],
-                        self.xk["do_long"],
-                        self.xk["qty_step"],
-                        self.xk["price_step"],
-                        self.xk["min_qty"],
-                        self.xk["min_cost"],
-                        self.xk["c_mult"],
-                        self.xk["grid_span"][0],
-                        self.xk["wallet_exposure_limit"][0],
-                        self.xk["max_n_entry_orders"][0],
-                        self.xk["initial_qty_pct"][0],
-                        self.xk["initial_eprice_ema_dist"][0],
-                        self.xk["eqty_exp_base"][0],
-                        self.xk["eprice_exp_base"][0],
-                        self.xk["auto_unstuck_wallet_exposure_threshold"][0],
-                        self.xk["auto_unstuck_ema_dist"][0],
-                        self.xk["auto_unstuck_delay_minutes"][0]
-                        or self.xk["auto_unstuck_qty_pct"][0],
-                    )
-                elif self.passivbot_mode == "clock":
-                    entries_long = [
-                        calc_clock_entry_long(
-                            balance,
-                            psize_long,
-                            pprice_long,
-                            self.ob[0],
-                            self.emas_long,
-                            self.server_time,
-                            (
-                                0
-                                if psize_long == 0.0
-                                else self.last_fills_timestamps["clock_entry_long"]
-                            ),
-                            self.xk["inverse"],
-                            self.xk["qty_step"],
-                            self.xk["price_step"],
-                            self.xk["min_qty"],
-                            self.xk["min_cost"],
-                            self.xk["c_mult"],
-                            self.xk["ema_dist_entry"][0],
-                            self.xk["qty_pct_entry"][0],
-                            self.xk["we_multiplier_entry"][0],
-                            self.xk["delay_weight_entry"][0],
-                            self.xk["delay_between_fills_ms_entry"][0],
-                            self.xk["wallet_exposure_limit"][0],
-                        )
-                    ]
-                else:
-                    raise Exception(f"unknown passivbot mode {self.passivbot_mode}")
-                orders += [
-                    {
-                        "side": "buy",
-                        "position_side": "long",
-                        "qty": abs(float(o[0])),
-                        "price": float(o[1]),
-                        "type": "limit",
-                        "reduce_only": False,
-                        "custom_id": o[2],
-                    }
-                    for o in entries_long
-                    if o[0] > 0.0
-                ]
-            if do_long or self.long_mode == "tp_only":
-                closes_long = calc_close_grid_long(
-                    self.xk["backwards_tp"][0],
-                    balance,
-                    psize_long,
-                    pprice_long,
-                    self.ob[1],
-                    max(self.emas_long),
-                    self.server_time,
-                    self.last_fills_timestamps["unstuck_close_long"],
-                    self.xk["inverse"],
-                    self.xk["qty_step"],
-                    self.xk["price_step"],
-                    self.xk["min_qty"],
-                    self.xk["min_cost"],
-                    self.xk["c_mult"],
-                    self.xk["wallet_exposure_limit"][0],
-                    self.xk["min_markup"][0],
-                    self.xk["markup_range"][0],
-                    self.xk["n_close_orders"][0],
-                    self.xk["auto_unstuck_wallet_exposure_threshold"][0],
-                    self.xk["auto_unstuck_ema_dist"][0],
-                    self.xk["auto_unstuck_delay_minutes"][0],
-                    self.xk["auto_unstuck_qty_pct"][0],
-                )
-                if self.passivbot_mode == "clock":
-                    clock_close_long = calc_clock_close_long(
-                        balance,
-                        psize_long,
-                        pprice_long,
-                        self.ob[1],
-                        self.emas_long,
-                        self.server_time,
-                        self.last_fills_timestamps["clock_close_long"],
-                        self.xk["inverse"],
-                        self.xk["qty_step"],
-                        self.xk["price_step"],
-                        self.xk["min_qty"],
-                        self.xk["min_cost"],
-                        self.xk["c_mult"],
-                        self.xk["ema_dist_close"][0],
-                        self.xk["qty_pct_close"][0],
-                        self.xk["we_multiplier_close"][0],
-                        self.xk["delay_weight_close"][0],
-                        self.xk["delay_between_fills_ms_close"][0],
-                        self.xk["wallet_exposure_limit"][0],
-                    )
-                    if clock_close_long[0] != 0.0 and (
-                        not closes_long or clock_close_long[1] <= closes_long[0][1]
-                    ):
-                        closes_long = [clock_close_long]
-                        closes_long += calc_close_grid_long(
-                            True,
-                            balance,
-                            max(0.0, round_(psize_long - abs(clock_close_long[0]), self.qty_step)),
-                            pprice_long,
-                            self.ob[1],
-                            max(self.emas_long),
-                            self.server_time,
-                            self.last_fills_timestamps["unstuck_close_long"],
-                            self.xk["inverse"],
-                            self.xk["qty_step"],
-                            self.xk["price_step"],
-                            self.xk["min_qty"],
-                            self.xk["min_cost"],
-                            self.xk["c_mult"],
-                            self.xk["wallet_exposure_limit"][0],
-                            self.xk["min_markup"][0],
-                            self.xk["markup_range"][0],
-                            self.xk["n_close_orders"][0],
-                            self.xk["auto_unstuck_wallet_exposure_threshold"][0],
-                            self.xk["auto_unstuck_ema_dist"][0],
-                            self.xk["auto_unstuck_delay_minutes"][0],
-                            self.xk["auto_unstuck_qty_pct"][0],
-                        )
-                orders += [
-                    {
-                        "side": "sell",
-                        "position_side": "long",
-                        "qty": abs(float(o[0])),
-                        "price": float(o[1]),
-                        "type": "limit",
-                        "reduce_only": True,
-                        "custom_id": o[2],
-                    }
-                    for o in closes_long
-                    if o[0] < 0.0
-                ]
-        if self.short_mode == "panic":
-            if psize_short != 0.0:
-                orders.append(
-                    {
-                        "side": "buy",
-                        "position_side": "short",
-                        "qty": abs(psize_short),
-                        "price": float(self.ob[0]),
-                        "type": "limit",
-                        "reduce_only": True,
-                        "custom_id": "short_panic_close",
-                    }
-                )
-        else:
-            if do_short:
-                if self.passivbot_mode == "recursive_grid":
-                    entries_short = calc_recursive_entries_short(
-                        balance,
-                        psize_short,
-                        pprice_short,
-                        self.ob[1],
-                        max(self.emas_short),
-                        self.xk["inverse"],
-                        self.xk["qty_step"],
-                        self.xk["price_step"],
-                        self.xk["min_qty"],
-                        self.xk["min_cost"],
-                        self.xk["c_mult"],
-                        self.xk["initial_qty_pct"][1],
-                        self.xk["initial_eprice_ema_dist"][1],
-                        self.xk["ddown_factor"][1],
-                        self.xk["rentry_pprice_dist"][1],
-                        self.xk["rentry_pprice_dist_wallet_exposure_weighting"][1],
-                        self.xk["wallet_exposure_limit"][1],
-                        self.xk["auto_unstuck_ema_dist"][1],
-                        self.xk["auto_unstuck_wallet_exposure_threshold"][1],
-                        self.xk["auto_unstuck_delay_minutes"][1]
-                        or self.xk["auto_unstuck_qty_pct"][1],
-                    )
-                elif self.passivbot_mode == "neat_grid":
-                    entries_short = calc_neat_grid_short(
-                        balance,
-                        psize_short,
-                        pprice_short,
-                        self.ob[1],
-                        max(self.emas_short),
-                        self.xk["inverse"],
-                        self.xk["do_short"],
-                        self.xk["qty_step"],
-                        self.xk["price_step"],
-                        self.xk["min_qty"],
-                        self.xk["min_cost"],
-                        self.xk["c_mult"],
-                        self.xk["grid_span"][1],
-                        self.xk["wallet_exposure_limit"][1],
-                        self.xk["max_n_entry_orders"][1],
-                        self.xk["initial_qty_pct"][1],
-                        self.xk["initial_eprice_ema_dist"][1],
-                        self.xk["eqty_exp_base"][1],
-                        self.xk["eprice_exp_base"][1],
-                        self.xk["auto_unstuck_wallet_exposure_threshold"][1],
-                        self.xk["auto_unstuck_ema_dist"][1],
-                        self.xk["auto_unstuck_delay_minutes"][1]
-                        or self.xk["auto_unstuck_qty_pct"][1],
-                    )
-                elif self.passivbot_mode == "clock":
-                    entries_short = [
-                        calc_clock_entry_short(
-                            balance,
-                            psize_short,
-                            pprice_short,
-                            self.ob[1],
-                            self.emas_short,
-                            self.server_time,
-                            (
-                                0
-                                if psize_short == 0.0
-                                else self.last_fills_timestamps["clock_entry_short"]
-                            ),
-                            self.xk["inverse"],
-                            self.xk["qty_step"],
-                            self.xk["price_step"],
-                            self.xk["min_qty"],
-                            self.xk["min_cost"],
-                            self.xk["c_mult"],
-                            self.xk["ema_dist_entry"][1],
-                            self.xk["qty_pct_entry"][1],
-                            self.xk["we_multiplier_entry"][1],
-                            self.xk["delay_weight_entry"][1],
-                            self.xk["delay_between_fills_ms_entry"][1],
-                            self.xk["wallet_exposure_limit"][1],
-                        )
-                    ]
-                else:
-                    raise Exception(f"unknown passivbot mode {self.passivbot_mode}")
-                orders += [
-                    {
-                        "side": "sell",
-                        "position_side": "short",
-                        "qty": abs(float(o[0])),
-                        "price": float(o[1]),
-                        "type": "limit",
-                        "reduce_only": False,
-                        "custom_id": o[2],
-                    }
-                    for o in entries_short
-                    if o[0] < 0.0
-                ]
-            if do_short or self.short_mode == "tp_only":
-                closes_short = calc_close_grid_short(
-                    self.xk["backwards_tp"][1],
-                    balance,
-                    psize_short,
-                    pprice_short,
-                    self.ob[0],
-                    min(self.emas_short),
-                    self.server_time,
-                    self.last_fills_timestamps["unstuck_close_short"],
-                    self.xk["inverse"],
-                    self.xk["qty_step"],
-                    self.xk["price_step"],
-                    self.xk["min_qty"],
-                    self.xk["min_cost"],
-                    self.xk["c_mult"],
-                    self.xk["wallet_exposure_limit"][1],
-                    self.xk["min_markup"][1],
-                    self.xk["markup_range"][1],
-                    self.xk["n_close_orders"][1],
-                    self.xk["auto_unstuck_wallet_exposure_threshold"][1],
-                    self.xk["auto_unstuck_ema_dist"][1],
-                    self.xk["auto_unstuck_delay_minutes"][1],
-                    self.xk["auto_unstuck_qty_pct"][1],
-                )
-                if self.passivbot_mode == "clock":
-                    clock_close_short = calc_clock_close_short(
-                        balance,
-                        psize_short,
-                        pprice_short,
-                        self.ob[0],
-                        self.emas_short,
-                        self.server_time,
-                        self.last_fills_timestamps["clock_close_short"],
-                        self.xk["inverse"],
-                        self.xk["qty_step"],
-                        self.xk["price_step"],
-                        self.xk["min_qty"],
-                        self.xk["min_cost"],
-                        self.xk["c_mult"],
-                        self.xk["ema_dist_close"][1],
-                        self.xk["qty_pct_close"][1],
-                        self.xk["we_multiplier_close"][1],
-                        self.xk["delay_weight_close"][1],
-                        self.xk["delay_between_fills_ms_close"][1],
-                        self.xk["wallet_exposure_limit"][1],
-                    )
-                    if clock_close_short[0] != 0.0 and (
-                        not closes_short or clock_close_short[1] >= closes_short[0][1]
-                    ):
-                        closes_short = [clock_close_short]
-                        closes_short += calc_close_grid_short(
-                            True,
-                            balance,
-                            -max(
-                                0.0,
-                                round_(abs(psize_short) - abs(clock_close_short[0]), self.qty_step),
-                            ),
-                            pprice_short,
-                            self.ob[0],
-                            min(self.emas_short),
-                            self.server_time,
-                            self.last_fills_timestamps["unstuck_close_short"],
-                            self.xk["inverse"],
-                            self.xk["qty_step"],
-                            self.xk["price_step"],
-                            self.xk["min_qty"],
-                            self.xk["min_cost"],
-                            self.xk["c_mult"],
-                            self.xk["wallet_exposure_limit"][1],
-                            self.xk["min_markup"][1],
-                            self.xk["markup_range"][1],
-                            self.xk["n_close_orders"][1],
-                            self.xk["auto_unstuck_wallet_exposure_threshold"][1],
-                            self.xk["auto_unstuck_ema_dist"][1],
-                            self.xk["delay_between_fills_ms_close"][1],
-                            self.xk["wallet_exposure_limit"][1],
-                        )
-                orders += [
-                    {
-                        "side": "buy",
-                        "position_side": "short",
-                        "qty": abs(float(o[0])),
-                        "price": float(o[1]),
-                        "type": "limit",
-                        "reduce_only": True,
-                        "custom_id": o[2],
-                    }
-                    for o in closes_short
-                    if o[0] > 0.0
-                ]
-        return sorted(orders, key=lambda x: calc_diff(x["price"], self.price))
-
-    async def cancel_and_create(self):
-        if self.ts_locked["cancel_and_create"] > self.ts_released["cancel_and_create"]:
-            return
-        self.ts_locked["cancel_and_create"] = time.time()
-        try:
-            if any(self.error_halt.values()):
-                logging.warning(
-                    f"warning:  error in rest api fetch {self.error_halt}, "
-                    + "halting order creations/cancellations"
-                )
-                return []
-            ideal_orders = []
-            all_orders = self.calc_orders()
-            for o in all_orders:
-                if (
-                    not self.ohlcv
-                    and "ientry" in o["custom_id"]
-                    and calc_diff(o["price"], self.price) < 0.002
-                ):
-                    # call update_position() before making initial entry orders
-                    # in case websocket has failed
-                    logging.info(
-                        f"updating position with REST API before creating initial entries.  Last price {self.price}"
-                    )
-                    await self.update_position()
-                    all_orders = self.calc_orders()
-                    break
-            for o in all_orders:
-                if any(x in o["custom_id"] for x in ["ientry", "unstuck"]) and not self.ohlcv:
-                    if calc_diff(o["price"], self.price) < 0.01:
-                        # EMA based orders must be closer than 1% of current price unless ohlcv mode
-                        ideal_orders.append(o)
-                else:
-                    if calc_diff(o["price"], self.price) < self.price_distance_threshold:
-                        # all orders must be closer than x% of current price
-                        ideal_orders.append(o)
-            to_cancel_, to_create_ = filter_orders(
-                self.open_orders,
-                ideal_orders,
-                keys=["side", "position_side", "qty", "price"],
-            )
-            to_cancel, to_create = [], []
-            for elm in to_cancel_:
-                if elm["position_side"] == "long":
-                    if self.long_mode == "tp_only":
-                        if elm["side"] == "sell":
-                            to_cancel.append(elm)
-                    elif self.long_mode != "manual":
-                        to_cancel.append(elm)
-                elif elm["position_side"] == "short":
-                    if self.short_mode == "tp_only":
-                        if elm["side"] == "buy":
-                            to_cancel.append(elm)
-                    elif self.short_mode != "manual":
-                        to_cancel.append(elm)
-                else:
-                    to_cancel.append(elm)
-            for elm in to_create_:
-                if elm["position_side"] == "long":
-                    if self.long_mode == "tp_only":
-                        if elm["side"] == "sell":
-                            to_create.append(elm)
-                    elif self.long_mode != "manual":
-                        to_create.append(elm)
-                if elm["position_side"] == "short":
-                    if self.short_mode == "tp_only":
-                        if elm["side"] == "buy":
-                            to_create.append(elm)
-                    elif self.short_mode != "manual":
-                        to_create.append(elm)
-
-            to_cancel = sorted(
-                to_cancel,
-                key=lambda x: calc_diff(
-                    x["price"] if x["price"] is not None else self.price, self.price
-                ),
-            )
-            to_create = sorted(to_create, key=lambda x: calc_diff(x["price"], self.price))
-
-            """
-            logging.info(f"to_cancel {to_cancel}")
-            logging.info(f"to create {to_create}")
-            return
-            """
-
-            results = []
-            if to_cancel:
-                results.append(
-                    asyncio.create_task(
-                        self.cancel_orders(to_cancel[: self.max_n_cancellations_per_batch])
-                    )
-                )
-                await asyncio.sleep(
-                    0.1
-                )  # sleep 10 ms between sending cancellations and sending creations
-            if to_create:
-                results.append(await self.create_orders(to_create[: self.max_n_orders_per_batch]))
-            return results
-        finally:
-            await asyncio.sleep(self.delay_between_executions)  # sleep before releasing lock
-            self.ts_released["cancel_and_create"] = time.time()
-
-    async def on_market_stream_event(self, ticks: [dict]):
-        if ticks:
-            for tick in ticks:
-                if tick["is_buyer_maker"]:
-                    self.ob[0] = tick["price"]
-                else:
-                    self.ob[1] = tick["price"]
-            self.update_emas(ticks[-1]["price"], self.price)
-            self.price = ticks[-1]["price"]
-
-        now = time.time()
-        if now - self.ts_released["force_update"] > self.force_update_interval:
-            self.ts_released["force_update"] = now
-            # force update pos and open orders thru rest API every x sec (default 30)
-            await asyncio.gather(self.update_position(), self.update_open_orders())
-        if now - self.heartbeat_ts > self.heartbeat_interval_seconds:
-            # print heartbeat once an hour
-            self.heartbeat_print()
-            self.heartbeat_ts = time.time()
-        await self.cancel_and_create()
-
-    def heartbeat_print(self):
-        logging.info(f"heartbeat {self.symbol}  ")
-        self.log_position_long()
-        self.log_position_short()
-        liq_price = self.position["long"]["liquidation_price"]
-        if calc_diff(self.position["short"]["liquidation_price"], self.price) < calc_diff(
-            liq_price, self.price
-        ):
-            liq_price = self.position["short"]["liquidation_price"]
-        logging.info(
-            f'balance: {round_dynamic(self.position["wallet_balance"], 6)}'
-            + f' equity: {round_dynamic(self.position["equity"], 6)} last price: {self.price}'
-            + f" liq: {round_(liq_price, self.price_step)}"
-        )
-
-    def log_position_long(self, prev_pos=None):
-        closes_long = sorted(
-            [o for o in self.open_orders if o["side"] == "sell" and o["position_side"] == "long"],
-            key=lambda x: x["price"],
-        )
-        entries_long = sorted(
-            [o for o in self.open_orders if o["side"] == "buy" and o["position_side"] == "long"],
-            key=lambda x: x["price"],
-        )
-        leqty, leprice = (
-            (entries_long[-1]["qty"], entries_long[-1]["price"]) if entries_long else (0.0, 0.0)
-        )
-        lcqty, lcprice = (
-            (closes_long[0]["qty"], closes_long[0]["price"]) if closes_long else (0.0, 0.0)
-        )
-        prev_pos_line = (
-            (
-                f'long: {prev_pos["long"]["size"]} @'
-                + f' {round_(prev_pos["long"]["price"], self.price_step)} -> '
-            )
-            if prev_pos
-            else ""
-        )
-        logging.info(
-            prev_pos_line
-            + f'long: {self.position["long"]["size"]} @'
-            + f' {round_(self.position["long"]["price"], self.price_step)}'
-            + f' lWE: {self.position["long"]["wallet_exposure"]:.4f}'
-            + f' pprc diff {self.position["long"]["price"] / self.price - 1:.3f}'
-            + f" EMAs: {[round_dynamic(e, 5) for e in self.emas_long]}"
-            + f" e {leqty} @ {leprice} | c {lcqty} @ {lcprice}"
-        )
-
-    def log_position_short(self, prev_pos=None):
-        closes_short = sorted(
-            [o for o in self.open_orders if o["side"] == "buy" and o["position_side"] == "short"],
-            key=lambda x: x["price"],
-        )
-        entries_short = sorted(
-            [o for o in self.open_orders if o["side"] == "sell" and o["position_side"] == "short"],
-            key=lambda x: x["price"],
-        )
-        leqty, leprice = (
-            (entries_short[0]["qty"], entries_short[0]["price"]) if entries_short else (0.0, 0.0)
-        )
-        lcqty, lcprice = (
-            (closes_short[-1]["qty"], closes_short[-1]["price"]) if closes_short else (0.0, 0.0)
-        )
-        pprice_diff = (
-            (self.price / self.position["short"]["price"] - 1)
-            if self.position["short"]["price"] != 0.0
-            else 1.0
-        )
-        prev_pos_line = (
-            (
-                f'short: {prev_pos["short"]["size"]} @'
-                + f' {round_(prev_pos["short"]["price"], self.price_step)} -> '
-            )
-            if prev_pos
-            else ""
-        )
-        logging.info(
-            prev_pos_line
-            + f'short: {self.position["short"]["size"]} @'
-            + f' {round_(self.position["short"]["price"], self.price_step)}'
-            + f' sWE: {self.position["short"]["wallet_exposure"]:.4f}'
-            + f" pprc diff {pprice_diff:.3f}"
-            + f" EMAs: {[round_dynamic(e, 5) for e in self.emas_short]}"
-            + f" e {leqty} @ {leprice} | c {lcqty} @ {lcprice}"
-        )
-
-    async def on_user_stream_events(self, events: Union[List[Dict], List]) -> None:
-        if type(events) == list:
-            for event in events:
-                await self.on_user_stream_event(event)
-        else:
-            await self.on_user_stream_event(events)
-
-    async def on_user_stream_event(self, event: dict) -> None:
-        try:
-            if "logged_in" in event:
-                # bitget needs to login before sending subscribe requests
-                await self.subscribe_to_user_stream(self.ws_user)
-            pos_change = False
-            if "wallet_balance" in event:
-                new_wallet_balance = self.adjust_wallet_balance(event["wallet_balance"])
-                if new_wallet_balance != self.position["wallet_balance"]:
-                    liq_price = self.position["long"]["liquidation_price"]
-                    if calc_diff(self.position["short"]["liquidation_price"], self.price) < calc_diff(
-                        liq_price, self.price
-                    ):
-                        liq_price = self.position["short"]["liquidation_price"]
-                    logging.info(
-                        f"balance: {round_dynamic(new_wallet_balance, 6)}"
-                        + f' equity: {round_dynamic(self.position["equity"], 6)} last price: {self.price}'
-                        + f" liq: {round_(liq_price, self.price_step)}"
-                    )
-                self.position["wallet_balance"] = new_wallet_balance
-                pos_change = True
-            if "psize_long" in event:
-                do_log = False
-                if event["psize_long"] != self.position["long"]["size"]:
-                    do_log = True
-                self.position["long"]["size"] = event["psize_long"]
-                self.position["long"]["price"] = event["pprice_long"]
-                self.position = self.add_wallet_exposures_to_pos(self.position)
-                pos_change = True
-                if do_log:
-                    self.log_position_long()
-            if "psize_short" in event:
-                do_log = False
-                if event["psize_short"] != self.position["short"]["size"]:
-                    do_log = True
-                self.position["short"]["size"] = event["psize_short"]
-                self.position["short"]["price"] = event["pprice_short"]
-                self.position = self.add_wallet_exposures_to_pos(self.position)
-                pos_change = True
-                if do_log:
-                    self.log_position_short()
-            if "new_open_order" in event:
-                if event["new_open_order"]["order_id"] not in {
-                    x["order_id"] for x in self.open_orders
-                }:
-                    self.open_orders.append(event["new_open_order"])
-            if "deleted_order_id" in event:
-                self.open_orders = [
-                    oo for oo in self.open_orders if oo["order_id"] != event["deleted_order_id"]
-                ]
-            if "partially_filled" in event:
-                logging.info(f"partial fill {list(event.values())}")
-                await self.update_open_orders()
-            if pos_change:
-                self.position["equity"] = self.position["wallet_balance"] + calc_upnl(
-                    self.position["long"]["size"],
-                    self.position["long"]["price"],
-                    self.position["short"]["size"],
-                    self.position["short"]["price"],
-                    self.price,
-                    self.inverse,
-                    self.c_mult,
-                )
-                await asyncio.sleep(
-                    0.01
-                )  # sleep 10 ms to catch both pos update and open orders update
-                await self.cancel_and_create()
-        except Exception as e:
-            logging.error(f"error handling user stream event, {e}")
-            traceback.print_exc()
-
-    def flush_stuck_locks(self, timeout: float = 5.0) -> None:
-        timeout = max(timeout, self.delay_between_executions + 1)
-        now = time.time()
-        for key in self.ts_locked:
-            if self.ts_locked[key] > self.ts_released[key]:
-                if now - self.ts_locked[key] > timeout:
-                    logging.warning(f"flushing stuck lock {key}")
-                    self.ts_released[key] = now
-
-    async def start_websocket(self) -> None:
+        self.sym_padding = 17
         self.stop_websocket = False
-        self.process_websocket_ticks = True
-        logging.info("starting websockets...")
-        self.user_stream_task = asyncio.create_task(self.start_websocket_user_stream())
-        self.market_stream_task = asyncio.create_task(self.start_websocket_market_stream())
-        await asyncio.gather(self.user_stream_task, self.market_stream_task)
+        self.balance = 1e-12
+        self.upd_timestamps = {
+            "pnls": 0.0,
+            "open_orders": 0.0,
+            "positions": 0.0,
+        }
+        self.hedge_mode = True
+        self.inverse = False
+        self.active_symbols = []
+        self.fetched_positions = []
+        self.fetched_open_orders = []
+        self.open_orders = {}
+        self.positions = {}
+        self.pnls = []
+        self.symbol_ids = {}
+        self.min_costs = {}
+        self.min_qtys = {}
+        self.qty_steps = {}
+        self.price_steps = {}
+        self.c_mults = {}
+        self.max_leverage = {}
+        self.live_configs = {}
+        self.pnls_cache_filepath = make_get_filepath(f"caches/{self.exchange}/{self.user}_pnls.json")
+        self.ohlcvs_1m_cache_dirpath = make_get_filepath(f"caches/{self.exchange}/ohlcvs_1m/")
+        self.previous_REST_update_ts = 0
+        self.recent_fill = False
+        self.execution_delay_millis = max(
+            3000.0, self.config["live"]["execution_delay_seconds"] * 1000
+        )
+        self.quote = "USDT"
+        self.forager_mode = self.is_forager_mode()
 
-    async def beat_heart_user_stream(self) -> None:
-        pass
+        self.minimum_market_age_millis = (
+            self.config["live"]["minimum_coin_age_days"] * 24 * 60 * 60 * 1000
+        )
+        self.emas = {"long": {}, "short": {}}
+        self.ema_alphas = {"long": {}, "short": {}}
+        self.upd_minute_emas = {}
+        self.ineligible_symbols_with_pos = set()
+        self.ohlcvs_1m_max_age_minutes = 10
+        self.ohlcvs_1m_max_len = 10080
+        self.ohlcvs_1m_max_age_days = 7
+        self.n_symbols_missing_ohlcvs_1m = 1000
+        self.ohlcvs_1m_update_timestamps = {}
+        self.max_n_concurrent_ohlcvs_1m_updates = 3
+        self.stop_signal_received = False
+        self.ohlcvs_1m_update_timestamps_WS = {}
 
-    async def beat_heart_market_stream(self) -> None:
-        pass
+    async def update_market_info(self):
+        logging.info(f"initiating markets...")
+        await self.init_markets_dict()
 
-    async def init_user_stream(self) -> None:
-        pass
+    async def run_execution_loop(self):
+        while not self.stop_signal_received:
+            try:
+                now = utc_ms()
+                if now - self.previous_REST_update_ts > 1000 * 60:
+                    self.previous_REST_update_ts = utc_ms()
+                    await self.prepare_for_execution()
+                await self.execute_to_exchange()
+                await asyncio.sleep(
+                    max(0.0, self.config["live"]["execution_delay_seconds"] - (utc_ms() - now) / 1000)
+                )
+            except Exception as e:
+                logging.error(f"error with {get_function_name()} {e}")
+                traceback.print_exc()
+                await asyncio.sleep(1.0)
 
-    async def init_market_stream(self) -> None:
-        pass
+    async def prepare_for_execution(self):
+        await asyncio.gather(
+            self.update_open_orders(),
+            self.update_positions(),
+            self.update_pnls(),
+        )
+        await self.update_ohlcvs_1m_for_actives()
 
-    async def start_websocket_user_stream(self) -> None:
-        await self.init_user_stream()
-        asyncio.create_task(self.beat_heart_user_stream())
-        logging.info(f"url {self.endpoints['websocket_user']}")
-        async with websockets.connect(self.endpoints["websocket_user"]) as ws:
-            self.ws_user = ws
-            await self.subscribe_to_user_stream(ws)
-            async for msg in ws:
-                # print('debug user stream', msg)
-                if msg is None or msg == "pong":
-                    continue
-                if "type" in msg and "welcome" in msg or "ack" in msg:
-                    continue
-                try:
-                    if self.stop_websocket:
-                        break
-                    asyncio.create_task(
-                        self.on_user_stream_events(
-                            self.standardize_user_stream_event(json.loads(msg))
-                        )
-                    )
-                except Exception as e:
-                    logging.error(f"error in websocket user stream {e}")
-                    traceback.print_exc()
+    async def execute_to_exchange(self):
+        self.update_effective_min_cost()
+        self.update_PB_modes()
+        self.update_EMAs()
+        await self.update_exchange_configs()
+        to_cancel, to_create = self.calc_orders_to_cancel_and_create()
 
-    async def start_websocket_market_stream(self) -> None:
-        await self.init_market_stream()
-        k = 1
-        asyncio.create_task(self.beat_heart_market_stream())
-        async with websockets.connect(self.endpoints["websocket_market"]) as ws:
-            self.ws_market = ws
-            await self.subscribe_to_market_stream(ws)
-            async for msg in ws:
-                # print('debug market stream', msg)
-                if msg is None or msg == "pong":
-                    continue
-                if "type" in msg and "welcome" in msg or "ack" in msg:
-                    continue
-                try:
-                    if self.stop_websocket:
-                        break
-                    ticks = self.standardize_market_stream_event(json.loads(msg))
-                    if self.process_websocket_ticks:
-                        asyncio.create_task(self.on_market_stream_event(ticks))
-                    if k % 10 == 0:
-                        self.flush_stuck_locks()
-                        k = 1
-                    k += 1
+        # debug duplicates
+        seen = set()
+        for elm in to_cancel:
+            key = str(elm["price"]) + str(elm["qty"])
+            if key in seen:
+                logging.info(f"debug duplicate order cancel {elm}")
+            seen.add(key)
 
-                except Exception as e:
-                    if "success" not in msg:
-                        logging.error(f"error in websocket {e} {msg}")
+        seen = set()
+        for elm in to_create:
+            key = str(elm["price"]) + str(elm["qty"])
+            if key in seen:
+                logging.info(f"debug duplicate order create {elm}")
+            seen.add(key)
 
-    async def subscribe_to_market_stream(self, ws):
-        pass
+        # format custom_id
+        to_create = self.format_custom_ids(to_create)
+        res = await self.execute_cancellations(
+            to_cancel[: self.config["live"]["max_n_cancellations_per_batch"]]
+        )
+        if res:
+            for elm in res:
+                self.remove_cancelled_order(elm, source="POST")
+        res = await self.execute_orders(to_create[: self.config["live"]["max_n_creations_per_batch"]])
+        if res:
+            for elm in res:
+                self.add_new_order(elm, source="POST")
+        if to_cancel or to_create:
+            self.previous_REST_update_ts = 0
 
-    async def subscribe_to_user_stream(self, ws):
-        pass
-
-    async def update_last_fills_timestamps(self):
+    def is_forager_mode(self):
+        n_approved_symbols = len(self.config["live"]["approved_coins"])
+        if n_approved_symbols == 0:
+            return True
         if (
-            self.ts_locked["update_last_fills_timestamps"]
-            > self.ts_released["update_last_fills_timestamps"]
+            self.config["bot"]["long"]["total_wallet_exposure_limit"] > 0.0
+            and self.config["bot"]["long"]["n_positions"] > 0
+            and round(self.config["bot"]["long"]["n_positions"]) < n_approved_symbols
         ):
+            return True
+        if (
+            self.config["bot"]["short"]["total_wallet_exposure_limit"] > 0.0
+            and self.config["bot"]["short"]["n_positions"] > 0
+            and round(self.config["bot"]["short"]["n_positions"]) < n_approved_symbols
+        ):
+            return True
+        return False
+
+    def set_live_configs(self):
+        self.config["bot"]["long"]["n_positions"] = round(self.config["bot"]["long"]["n_positions"])
+        self.config["bot"]["short"]["n_positions"] = round(self.config["bot"]["short"]["n_positions"])
+        for symbol in self.markets_dict:
+            self.live_configs[symbol] = deepcopy(self.config["bot"])
+            self.live_configs[symbol]["leverage"] = self.config["live"]["leverage"]
+            for pside in ["long", "short"]:
+                self.live_configs[symbol][pside]["wallet_exposure_limit"] = (
+                    (
+                        self.live_configs[symbol][pside]["total_wallet_exposure_limit"]
+                        / self.live_configs[symbol][pside]["n_positions"]
+                    )
+                    if self.live_configs[symbol][pside]["n_positions"] > 0
+                    else 0.0
+                )
+
+    def pad_sym(self, symbol):
+        return f"{symbol: <{self.sym_padding}}"
+
+    def stop_data_maintainers(self):
+        if not hasattr(self, "maintainers"):
             return
-        self.ts_locked["update_last_fills_timestamps"] = time.time()
-        try:
-            fills = await self.fetch_latest_fills()
-            keys_done = set()
-            all_keys = set(self.last_fills_timestamps)
-            for fill in sorted(fills, key=lambda x: x["timestamp"], reverse=True):
-                # print("debug fills", fill["custom_id"])
-                for key in all_keys - keys_done:
-                    if any(k in fill["custom_id"] for k in [key, shorten_custom_id(key)]):
-                        self.last_fills_timestamps[key] = fill["timestamp"]
-                        keys_done.add(key)
-                        if all_keys == keys_done:
-                            break
-            return True
-        except Exception as e:
-            logging.error(f"error with update last fills timestamps {e}")
-            traceback.print_exc()
-            return False
-        finally:
-            self.ts_released["update_last_fills_timestamps"] = time.time()
-
-    async def update_server_time(self):
-        server_time = None
-        try:
-            server_time = await self.get_server_time()
-            self.server_time = server_time
-            return True
-        except Exception as e:
-            self.server_time = utc_ms()
-            traceback.print_exc()
-            print_async_exception(server_time)
-            return False
-
-    async def start_ohlcv_mode(self):
-        logging.info("starting bot...")
-        refresh_interval = 60
-        offset_adjusted = self.countdown_offset % refresh_interval
-        while True:
-            now = time.time()
-            secs_left = refresh_interval - (int(now) + offset_adjusted) % refresh_interval
-            for i in range(secs_left, -1, -1):
-                if self.stop_websocket:
-                    break
-                if self.countdown:
-                    line = f"\rcountdown: {i} last price: {self.price}"
-                    line += " | mins delay until next: "
-                    try:
-                        res = self.calc_minutes_until_next_orders()
-                        if self.passivbot_mode == "clock":
-                            line += f"entry long: {res['entry_long']:.1f}, close long: {res['close_long']:.1f}"
-                            line += " | "
-                            line += f"entry short: {res['entry_short']:.1f}, close short: {res['close_short']:.1f}"
-                        else:
-                            line += f"AU close long: {res['close_long']:.1f} | "
-                            line += f"AU close short: {res['close_short']:.1f}"
-                    except Exception as e:
-                        print("error computing minutes until next order", e)
-                        traceback.print_exc()
-                    if i == 0:
-                        print("\r" + " " * (len(line) + 10), end=" ")
-                    else:
-                        print(line + "                ", end=" ")
-                await asyncio.sleep(1)
-            if self.stop_websocket:
-                break
-            await asyncio.sleep(1.0)
-            await self.on_minute_mark()
-            await asyncio.sleep(1.0)
-
-    def calc_minutes_until_next_orders(self):
-        res = {"entry_long": 0.0, "close_long": 0.0, "entry_short": 0.0, "close_short": 0.0}
-        if self.passivbot_mode in ["recursive_grid", "neat_grid"]:
-            mins_since_prev_AU_close_long = (
-                (self.server_time - self.last_fills_timestamps["unstuck_close_long"]) / 1000 / 60
-            )
-            res["close_long"] = max(
-                0.0, self.xk["auto_unstuck_delay_minutes"][0] - mins_since_prev_AU_close_long
-            )
-            mins_since_prev_AU_close_short = (
-                (self.server_time - self.last_fills_timestamps["unstuck_close_short"]) / 1000 / 60
-            )
-            res["close_short"] = max(
-                0.0, self.xk["auto_unstuck_delay_minutes"][1] - mins_since_prev_AU_close_short
-            )
-            return res
-        if self.position["long"]["size"] != 0.0:
-            millis_delay_next_entry_long = calc_delay_between_fills_ms_bid(
-                self.position["long"]["price"],
-                self.price,
-                self.xk["delay_between_fills_ms_entry"][0],
-                self.xk["delay_weight_entry"][0],
-            )
-            millis_since_prev_close_long = (
-                self.server_time - self.last_fills_timestamps["clock_entry_long"]
-            )
-            res["entry_long"] = max(
-                0.0, (millis_delay_next_entry_long - millis_since_prev_close_long) / 1000 / 60
-            )
-        millis_delay_next_close_long = calc_delay_between_fills_ms_ask(
-            self.position["long"]["price"],
-            self.price,
-            self.xk["delay_between_fills_ms_close"][0],
-            self.xk["delay_weight_close"][0],
-        )
-        millis_since_prev_close_long = (
-            self.server_time - self.last_fills_timestamps["clock_close_long"]
-        )
-        res["close_long"] = max(
-            0.0, (millis_delay_next_close_long - millis_since_prev_close_long) / 1000 / 60
-        )
-        if self.position["short"]["size"] != 0.0:
-            millis_delay_next_entry_short = calc_delay_between_fills_ms_ask(
-                self.position["short"]["price"],
-                self.price,
-                self.xk["delay_between_fills_ms_entry"][1],
-                self.xk["delay_weight_entry"][1],
-            )
-            millis_since_prev_close_short = (
-                self.server_time - self.last_fills_timestamps["clock_entry_short"]
-            )
-            res["entry_short"] = max(
-                0.0, (millis_delay_next_entry_short - millis_since_prev_close_short) / 1000 / 60
-            )
-        millis_delay_next_close_short = calc_delay_between_fills_ms_bid(
-            self.position["short"]["price"],
-            self.price,
-            self.xk["delay_between_fills_ms_close"][1],
-            self.xk["delay_weight_close"][1],
-        )
-        millis_since_prev_close_short = (
-            self.server_time - self.last_fills_timestamps["clock_close_short"]
-        )
-        res["close_short"] = max(
-            0.0, (millis_delay_next_close_short - millis_since_prev_close_short) / 1000 / 60
-        )
+        res = {}
+        for key in self.maintainers:
+            try:
+                res[key] = self.maintainers[key].cancel()
+            except Exception as e:
+                logging.error(f"error stopping maintainer {key} {e}")
+        if hasattr(self, "WS_ohlcvs_1m_tasks"):
+            res0s = {}
+            for key in self.WS_ohlcvs_1m_tasks:
+                try:
+                    res0 = self.WS_ohlcvs_1m_tasks[key].cancel()
+                    res0s[key] = res0
+                except Exception as e:
+                    logging.error(f"error stopping WS_ohlcvs_1m_tasks {key} {e}")
+            if res0s:
+                logging.info(f"stopped ohlcvs watcher tasks {res0s}")
+        logging.info(f"stopped data maintainers: {res}")
         return res
 
-    async def on_minute_mark(self):
-        # called each whole minute
-        try:
-            if self.countdown:
-                print("\r", end="")
-            if time.time() - self.heartbeat_ts > self.heartbeat_interval_seconds:
-                # print heartbeat once an hour
-                self.heartbeat_print()
-                self.heartbeat_ts = time.time()
-        except Exception as e:
-            logging.error(f"error with printing heartbeat {e}")
-        try:
-            self.prev_price = self.ob[0]
-            prev_pos = self.position.copy()
-            to_update = [
-                self.update_position(),
-                self.update_open_orders(),
-                self.init_order_book(),
+    def has_position(self, symbol, pside=None):
+        if pside is None:
+            return self.has_position(symbol, "long") or self.has_position(symbol, "short")
+        return symbol in self.positions and self.positions[symbol][pside]["size"] != 0.0
+
+    def is_trailing(self, symbol, pside=None):
+        if pside is None:
+            return self.is_trailing(symbol, "long") or self.is_trailing(symbol, "short")
+        return symbol in self.live_configs and any(
+            [
+                self.live_configs[symbol][pside][f"{x}_trailing_grid_ratio"] != 0.0
+                for x in ["entry", "close"]
             ]
-            if self.passivbot_mode == "clock" or self.auto_unstuck_on_timer:
-                to_update.append(self.update_last_fills_timestamps())
-                to_update.append(self.update_server_time())
-            res = await asyncio.gather(*to_update)
-            self.update_emas(self.ob[0], self.prev_price)
-            """
-            print(self.last_fills_timestamps)
-            print(self.emas_long)
-            print(self.emas_short)
-            orders = self.calc_orders()
-            print(orders)
-            print(res)
-            """
-            if not all(res):
-                reskeys = ["pos", "open orders", "order book", "last fills", "server_time"]
-                line = "error with "
-                for i in range(len(to_update)):
-                    if not to_update[i]:
-                        line += reskeys[i]
-                logging.error(line)
-                return
-            await self.cancel_and_create()
-            if prev_pos["wallet_balance"] != self.position["wallet_balance"]:
+        )
+
+    def get_last_position_changes(self, symbol=None):
+        last_position_changes = defaultdict(dict)
+        for symbol in self.positions:
+            for pside in ["long", "short"]:
+                if self.has_position(symbol, pside) and self.is_trailing(symbol, pside):
+                    last_position_changes[symbol][pside] = utc_ms() - 1000 * 60 * 60 * 24 * 7
+                    for fill in self.pnls[::-1]:
+                        if fill["symbol"] == symbol and fill["position_side"] == pside:
+                            last_position_changes[symbol][pside] = fill["timestamp"]
+                            break
+        return last_position_changes
+
+    async def wait_for_ohlcvs_1m_to_update(self):
+        await asyncio.sleep(1.0)
+        prev_print_ts = utc_ms() - 5000.0
+        while self.n_symbols_missing_ohlcvs_1m > self.max_n_concurrent_ohlcvs_1m_updates - 1:
+            if utc_ms() - prev_print_ts > 1000 * 10:
                 logging.info(
-                    f"balance: {round_dynamic(prev_pos['wallet_balance'], 7)}"
-                    + f" -> {round_dynamic(self.position['wallet_balance'], 7)}"
+                    f"Waiting for ohlcvs to be refreshed. Number of symbols with "
+                    f"out-of-date ohlcvs: {self.n_symbols_missing_ohlcvs_1m}"
                 )
-            if prev_pos["long"]["size"] != self.position["long"]["size"]:
-                plp = prev_pos["long"]["size"], round_(prev_pos["long"]["price"], self.price_step)
-                clp = self.position["long"]["size"], round_(
-                    self.position["long"]["price"], self.price_step
-                )
-                self.log_position_long(prev_pos)
-            if prev_pos["short"]["size"] != self.position["short"]["size"]:
-                psp = prev_pos["short"]["size"], round_(prev_pos["short"]["price"], self.price_step)
-                csp = self.position["short"]["size"], round_(
-                    self.position["short"]["price"], self.price_step
-                )
-                self.log_position_short(prev_pos)
-        except Exception as e:
-            logging.error(f"error on minute mark {e}")
-            traceback.print_exc()
+                prev_print_ts = utc_ms()
+            await asyncio.sleep(0.1)
 
-    def order_is_valid(self, order: dict) -> bool:
-        # perform checks to detect abnormal orders
-        # such abnormal orders were observed in bitget bots where short entries exceeded exposure limit
-
+    def get_ohlcvs_1m_filepath(self, symbol):
         try:
-            order_good = True
-            fault = ""
-            if order["position_side"] == "long":
-                if order["side"] == "buy":
-                    max_cost = self.position["wallet_balance"] * self.xk["wallet_exposure_limit"][0]
-                    # check if order cost is too big
-                    order_cost = qty_to_cost(
-                        order["qty"],
-                        order["price"],
-                        self.xk["inverse"],
-                        self.xk["c_mult"],
-                    )
-                    position_cost = qty_to_cost(
-                        self.position["long"]["size"],
-                        self.position["long"]["price"],
-                        self.xk["inverse"],
-                        self.xk["c_mult"],
-                    )
-                    if order_cost + position_cost > max_cost * 1.2:
-                        fault = "Long pos cost would be more than 20% greater than max allowed"
-                        order_good = False
-                elif order["side"] == "sell":
-                    # check if price is above pos price
-                    if "n_close" in order["custom_id"]:
-                        if order["price"] < self.position["long"]["price"]:
-                            fault = "long nclose price below pos price"
-                            order_good = False
+            return self.ohlcvs_1m_filepaths[symbol]
+        except:
+            if not hasattr(self, "filepath"):
+                self.ohlcvs_1m_filepaths = {}
+            filepath = f"{self.ohlcvs_1m_cache_dirpath}{symbol_to_coin(symbol)}.npy"
+            self.ohlcvs_1m_filepaths[symbol] = filepath
+            return filepath
 
-            elif order["position_side"] == "short":
-                max_cost = self.position["wallet_balance"] * self.xk["wallet_exposure_limit"][1]
-                if order["side"] == "sell":
-                    order_cost = qty_to_cost(
-                        order["qty"],
-                        order["price"],
-                        self.xk["inverse"],
-                        self.xk["c_mult"],
-                    )
-                    position_cost = qty_to_cost(
-                        self.position["short"]["size"],
-                        self.position["short"]["price"],
-                        self.xk["inverse"],
-                        self.xk["c_mult"],
-                    )
-                    if order_cost + position_cost > max_cost * 1.2:
-                        fault = "Short pos cost would be more than 20% greater than max allowed"
-                        order_good = False
-                elif order["side"] == "buy":
-                    # check if price is below pos price
-                    if "n_close" in order["custom_id"]:
-                        if order["price"] > self.position["short"]["price"]:
-                            fault = "short nclose price above pos price"
-                            order_good = False
-
-            if not order_good:
-                logging.error(f"invalid order: {fault} {order}")
-                info = {
-                    "timestamp": utc_ms(),
-                    "date": ts_to_date(utc_ms()),
-                    "fault": fault,
-                    "order": order,
-                    "open_orders": self.open_orders,
-                    "position": self.position,
-                    "order_book": self.ob,
-                    "emas_long": self.emas_long,
-                    "emas_short": self.emas_short,
-                }
-                with open(self.log_filepath, "a") as f:
-                    f.write(json.dumps(denumpyize(info)) + "\n")
-            return order_good
+    def trim_ohlcvs_1m(self, symbol):
+        try:
+            if not hasattr(self, "ohlcvs_1m"):
+                return
+            if symbol not in self.ohlcvs_1m:
+                return
+            age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * self.ohlcvs_1m_max_age_days
+            for i in range(len(self.ohlcvs_1m[symbol])):
+                ts = self.ohlcvs_1m[symbol].peekitem(0)[0]
+                if ts < age_limit:
+                    del self.ohlcvs_1m[symbol][ts]
+                else:
+                    break
+            return True
         except Exception as e:
-            logging.error(f"error validating order")
+            logging.error(f"error with {get_function_name()} {symbol} {e}")
             traceback.print_exc()
             return False
+
+    def dump_ohlcvs_1m_to_cache(self, symbol):
+        try:
+            self.trim_ohlcvs_1m(symbol)
+            to_dump = np.array([x for x in self.ohlcvs_1m[symbol].values()])
+            np.save(self.get_ohlcvs_1m_filepath(symbol), to_dump)
+            return True
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} for {symbol}: {e}")
+            traceback.print_exc()
+            return False
+
+    def update_trailing_data(self):
+        if not hasattr(self, "trailing_prices"):
+            self.trailing_prices = {}
+        last_position_changes = self.get_last_position_changes()
+        symbols = set(self.trailing_prices) | set(last_position_changes) | set(self.active_symbols)
+        for symbol in symbols:
+            self.trailing_prices[symbol] = {
+                "long": {
+                    "max_since_open": 0.0,
+                    "min_since_max": np.inf,
+                    "min_since_open": np.inf,
+                    "max_since_min": 0.0,
+                },
+                "short": {
+                    "max_since_open": 0.0,
+                    "min_since_max": np.inf,
+                    "min_since_open": np.inf,
+                    "max_since_min": 0.0,
+                },
+            }
+            if symbol not in last_position_changes:
+                continue
+            for pside in last_position_changes[symbol]:
+                if symbol not in self.ohlcvs_1m:
+                    logging.info(f"debug: {symbol} missing from self.ohlcvs_1m")
+                    continue
+                for ts in self.ohlcvs_1m[symbol]:
+                    if ts <= last_position_changes[symbol][pside]:
+                        continue
+                    x = self.ohlcvs_1m[symbol][ts]
+                    if x[2] > self.trailing_prices[symbol][pside]["max_since_open"]:
+                        self.trailing_prices[symbol][pside]["max_since_open"] = x[2]
+                        self.trailing_prices[symbol][pside]["min_since_max"] = x[4]
+                    else:
+                        self.trailing_prices[symbol][pside]["min_since_max"] = min(
+                            self.trailing_prices[symbol][pside]["min_since_max"], x[3]
+                        )
+                    if x[3] < self.trailing_prices[symbol][pside]["min_since_open"]:
+                        self.trailing_prices[symbol][pside]["min_since_open"] = x[3]
+                        self.trailing_prices[symbol][pside]["max_since_min"] = x[4]
+                    else:
+                        self.trailing_prices[symbol][pside]["max_since_min"] = max(
+                            self.trailing_prices[symbol][pside]["max_since_min"], x[2]
+                        )
+
+    async def get_active_symbols(self):
+        # get symbols with open orders and/or positions
+        positions, balance = await self.fetch_positions()
+        open_orders = await self.fetch_open_orders()
+        return sorted(set([elm["symbol"] for elm in positions + open_orders]))
+
+    def format_symbol(self, symbol: str) -> str:
+        try:
+            return self.formatted_symbols_map[symbol]
+        except (KeyError, AttributeError):
+            pass
+        if not hasattr(self, "formatted_symbols_map"):
+            self.formatted_symbols_map = {}
+            self.formatted_symbols_map_inv = defaultdict(set)
+        formatted = f"{symbol_to_coin(symbol.replace(',', ''))}/{self.quote}:{self.quote}"
+        self.formatted_symbols_map[symbol] = formatted
+        self.formatted_symbols_map_inv[formatted].add(symbol)
+        return formatted
+
+    def symbol_is_eligible(self, symbol):
+        # defined for each child class
+        return True
+
+    async def init_markets_dict(self, verbose=True):
+        await self.update_exchange_config()
+        self.init_markets_last_update_ms = utc_ms()
+        self.markets_dict = {elm["symbol"]: elm for elm in (await self.cca.fetch_markets())}
+        await self.determine_utc_offset()
+        self.markets_dict_all = deepcopy(self.markets_dict)
+        # remove ineligible symbols from markets dict
+        ineligible_symbols = {}
+        for symbol in list(self.markets_dict):
+            if not self.markets_dict[symbol]["active"]:
+                ineligible_symbols[symbol] = "not active"
+                del self.markets_dict[symbol]
+            elif not self.markets_dict[symbol]["swap"]:
+                ineligible_symbols[symbol] = "wrong market type"
+                del self.markets_dict[symbol]
+            elif not self.markets_dict[symbol]["linear"]:
+                ineligible_symbols[symbol] = "not linear"
+                del self.markets_dict[symbol]
+            elif not symbol.endswith(f"/{self.quote}:{self.quote}"):
+                ineligible_symbols[symbol] = "wrong quote"
+                del self.markets_dict[symbol]
+            elif not self.symbol_is_eligible(symbol):
+                ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
+                del self.markets_dict[symbol]
+            elif not self.symbol_is_eligible(symbol):
+                ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
+                del self.markets_dict[symbol]
+        if verbose:
+            for line in set(ineligible_symbols.values()):
+                syms_ = [s for s in ineligible_symbols if ineligible_symbols[s] == line]
+                if len(syms_) > 12:
+                    logging.info(f"{line}: {len(syms_)} symbols")
+                elif len(syms_) > 0:
+                    logging.info(f"{line}: {','.join(sorted(set([s for s in syms_])))}")
+
+        for symbol in self.ineligible_symbols_with_pos:
+            if symbol not in self.markets_dict and symbol in self.markets_dict_all:
+                logging.info(f"There is a position in an ineligible market: {symbol}.")
+                self.markets_dict[symbol] = self.markets_dict_all[symbol]
+                self.config["live"]["ignored_coins"].append(symbol)
+
+        self.set_market_specific_settings()
+        for symbol in self.markets_dict:
+            self.format_symbol(symbol)
+        # for prettier printing
+        self.max_len_symbol = max([len(s) for s in self.markets_dict])
+        self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
+        await self.init_flags()
+        self.set_live_configs()
+
+    def set_market_specific_settings(self):
+        # set min cost, min qty, price step, qty step, c_mult
+        # defined individually for each exchange
+        self.symbol_ids = {symbol: self.markets_dict[symbol]["id"] for symbol in self.markets_dict}
+        self.symbol_ids_inv = {v: k for k, v in self.symbol_ids.items()}
+
+    def get_symbol_id(self, symbol):
+        try:
+            return self.symbol_ids[symbol]
+        except:
+            logging.error(f"symbol {symbol} missing from self.symbol_ids. Using {symbol}")
+            return symbol
+
+    def get_symbol_id_inv(self, symbol):
+        try:
+            return self.symbol_ids_inv[symbol]
+        except:
+            logging.error(f"symbol {symbol} missing from self.symbol_ids_inv. Using {symbol}")
+            return symbol
+
+    def set_wallet_exposure_limits(self):
+        for pside in ["long", "short"]:
+            changed = {}
+            n_actives = max(len(self.is_active[pside]), self.config["bot"][pside]["n_positions"])
+            WE_limit_div = pbr.round_(
+                (
+                    self.config["bot"][pside]["total_wallet_exposure_limit"] / n_actives
+                    if n_actives > 0
+                    else 0.001
+                ),
+                0.0001,
+            )
+            for symbol in self.is_active[pside]:
+                new_WE_limit = (
+                    getattr(self.flags[symbol], f"WE_limit_{pside}")
+                    if symbol in self.flags
+                    and getattr(self.flags[symbol], f"WE_limit_{pside}") is not None
+                    else WE_limit_div
+                )
+                if "wallet_exposure_limit" not in self.live_configs[symbol][pside]:
+                    changed[symbol] = (0.0, new_WE_limit)
+                elif self.live_configs[symbol][pside]["wallet_exposure_limit"] != new_WE_limit:
+                    changed[symbol] = (
+                        self.live_configs[symbol][pside]["wallet_exposure_limit"],
+                        new_WE_limit,
+                    )
+                self.live_configs[symbol][pside]["wallet_exposure_limit"] = new_WE_limit
+            if changed:
+                inv = defaultdict(set)
+                for symbol in changed:
+                    inv[changed[symbol]].add(symbol)
+                for k, v in inv.items():
+                    syms = ", ".join(sorted([symbol_to_coin(s) for s in v]))
+                    logging.info(f"changed {pside} WE limit from {k[0]} to {k[1]} for {syms}")
+
+    async def update_exchange_configs(self):
+        if not hasattr(self, "already_updated_exchange_config_symbols"):
+            self.already_updated_exchange_config_symbols = set()
+        symbols_not_done = [
+            x for x in self.active_symbols if x not in self.already_updated_exchange_config_symbols
+        ]
+        if symbols_not_done:
+            await self.update_exchange_config_by_symbols(symbols_not_done)
+            self.already_updated_exchange_config_symbols.update(symbols_not_done)
+
+    async def update_exchange_config_by_symbols(self, symbols):
+        # defined by each exchange child class
+        pass
+
+    async def update_exchange_config(self):
+        # defined by each exchange child class
+        pass
+
+    def reformat_symbol(self, symbol: str, verbose=False) -> str:
+        # tries to reformat symbol to correct variant for exchange
+        # (e.g. BONK -> 1000BONK/USDT:USDT, PEPE - kPEPE/USDC:USDC)
+        # if no reformatting is possible, return empty string
+        fsymbol = self.format_symbol(symbol)
+        if fsymbol in self.markets_dict:
+            return fsymbol
+        else:
+            if verbose:
+                logging.info(f"{symbol} missing from {self.exchange}")
+            if fsymbol in self.formatted_symbols_map_inv:
+                for x in self.formatted_symbols_map_inv[fsymbol]:
+                    if x in self.markets_dict:
+                        if verbose:
+                            logging.info(f"changing {symbol} -> {x}")
+                        return x
+        return ""
+
+    async def init_flags(self):
+        self.ignored_coins = {self.reformat_symbol(x) for x in self.config["live"]["ignored_coins"]}
+        self.flags = {}
+        self.eligible_symbols = set()  # symbols which may be approved for trading
+
+        for symbol in self.config["live"]["approved_coins"]:
+            reformatted_symbol = self.reformat_symbol(symbol, verbose=True)
+            if reformatted_symbol:
+                self.flags[reformatted_symbol] = (
+                    self.config["live"]["approved_coins"][symbol]
+                    if isinstance(self.config["live"]["approved_coins"], dict)
+                    else ""
+                )
+                self.eligible_symbols.add(reformatted_symbol)
+        if not self.config["live"]["approved_coins"]:
+            self.eligible_symbols = set(self.markets_dict)
+
+        # this argparser is used only internally
+        parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
+        parser.add_argument(
+            "-sm", type=expand_PB_mode, required=False, dest="short_mode", default=None
+        )
+        parser.add_argument(
+            "-lm", type=expand_PB_mode, required=False, dest="long_mode", default=None
+        )
+        parser.add_argument("-lw", type=float, required=False, dest="WE_limit_long", default=None)
+        parser.add_argument("-sw", type=float, required=False, dest="WE_limit_short", default=None)
+        parser.add_argument("-lev", type=float, required=False, dest="leverage", default=None)
+        parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
+        self.forced_modes = {"long": {}, "short": {}}
+        for symbol in self.markets_dict:
+            self.flags[symbol] = parser.parse_args(
+                self.flags[symbol].split() if symbol in self.flags else []
+            )
+            for pside in ["long", "short"]:
+                if (mode := getattr(self.flags[symbol], f"{pside}_mode")) is None:
+                    if symbol in self.ignored_coins:
+                        setattr(
+                            self.flags[symbol],
+                            f"{pside}_mode",
+                            "graceful_stop" if self.config["live"]["auto_gs"] else "manual",
+                        )
+                        self.forced_modes[pside][symbol] = getattr(
+                            self.flags[symbol], f"{pside}_mode"
+                        )
+                    elif self.config["live"][f"forced_mode_{pside}"]:
+                        try:
+                            setattr(
+                                self.flags[symbol],
+                                f"{pside}_mode",
+                                expand_PB_mode(self.config["live"][f"forced_mode_{pside}"]),
+                            )
+                            self.forced_modes[pside][symbol] = getattr(
+                                self.flags[symbol], f"{pside}_mode"
+                            )
+                        except Exception as e:
+                            logging.error(
+                                f"failed to set PB mode {self.config['live'][f'forced_mode_{pside}']} {e}"
+                            )
+                else:
+                    self.forced_modes[pside][symbol] = mode
+                if not self.markets_dict[symbol]["active"]:
+                    self.forced_modes[pside][symbol] = "tp_only"
+
+        if self.forager_mode and self.minimum_market_age_millis > 0:
+            if not hasattr(self, "first_timestamps"):
+                self.first_timestamps = await get_first_ohlcv_timestamps(
+                    cc=self.cca, symbols=sorted(self.eligible_symbols)
+                )
+                for symbol in sorted(self.first_timestamps):
+                    self.first_timestamps[self.format_symbol(symbol)] = self.first_timestamps[symbol]
+        else:
+            self.first_timestamps = None
+
+    def is_old_enough(self, symbol):
+        if self.forager_mode and self.minimum_market_age_millis > 0:
+            if symbol in self.first_timestamps:
+                return utc_ms() - self.first_timestamps[symbol] > self.minimum_market_age_millis
+            else:
+                return False
+        else:
+            return True
+
+    def update_PB_modes(self):
+        # update passivbot modes for all symbols
+        if hasattr(self, "PB_modes"):
+            previous_PB_modes = deepcopy(self.PB_modes)
+        else:
+            previous_PB_modes = None
+
+        # set modes for all symbols
+        self.PB_modes = {
+            "long": {},
+            "short": {},
+        }  # options: normal, graceful_stop, manual, tp_only, panic
+        self.actual_actives = {"long": set(), "short": set()}  # symbols with position
+        self.is_active = {"long": set(), "short": set()}  # actual actives plus symbols on "normal""
+        self.ideal_actives = {"long": {}, "short": {}}  # dicts as ordered sets
+
+        # actual actives, symbols with pos and/or open orders
+        for elm in self.fetched_positions + self.fetched_open_orders:
+            self.actual_actives[elm["position_side"]].add(elm["symbol"])
+
+        # find ideal actives
+        # set forced modes first
+        for pside in self.forced_modes:
+            for symbol in self.forced_modes[pside]:
+                if self.forced_modes[pside][symbol] == "normal":
+                    self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
+                    self.ideal_actives[pside][symbol] = ""
+                if symbol in self.actual_actives[pside]:
+                    self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
+        if self.forager_mode:
+            if self.config["live"]["relative_volume_filter_clip_pct"] > 0.0:
+                self.calc_volumes()
+                # filter by relative volume
+                eligible_symbols = sorted(self.volumes, key=lambda x: self.volumes[x])[
+                    int(
+                        round(
+                            len(self.volumes) * self.config["live"]["relative_volume_filter_clip_pct"]
+                        )
+                    ) :
+                ]
+            else:
+                eligible_symbols = list(self.eligible_symbols)
+            self.calc_noisiness()  # ideal symbols are high noise symbols
+
+            # calc ideal actives for long and short separately
+            for pside in self.actual_actives:
+                if self.config["bot"][pside]["n_positions"] > 0:
+                    self.warn_on_high_effective_min_cost(pside)
+                for symbol in sorted(eligible_symbols, key=lambda x: self.noisiness[x], reverse=True):
+                    if (
+                        symbol not in self.eligible_symbols
+                        or not self.is_old_enough(symbol)
+                        or not self.effective_min_cost_is_low_enough(pside, symbol)
+                    ):
+                        continue
+                    slots_full = (
+                        len(self.ideal_actives[pside]) >= self.config["bot"][pside]["n_positions"]
+                    )
+                    if slots_full:
+                        break
+                    if symbol not in self.ideal_actives[pside]:
+                        self.ideal_actives[pside][symbol] = ""
+
+                # actual actives fill slots first
+                for symbol in self.actual_actives[pside]:
+                    if symbol in self.forced_modes[pside]:
+                        continue  # is a forced mode
+                    if symbol in self.ideal_actives[pside]:
+                        self.PB_modes[pside][symbol] = "normal"
+                    else:
+                        self.PB_modes[pside][symbol] = (
+                            "graceful_stop" if self.config["live"]["auto_gs"] else "manual"
+                        )
+                # fill remaining slots with ideal actives
+                # a slot is filled if symbol in [normal, graceful_stop]
+                # symbols on other modes are ignored
+                for symbol in self.ideal_actives[pside]:
+                    if symbol in self.PB_modes[pside] or symbol in self.forced_modes[pside]:
+                        continue
+                    slots_filled = {
+                        k for k, v in self.PB_modes[pside].items() if v in ["normal", "graceful_stop"]
+                    }
+                    if len(slots_filled) >= self.config["bot"][pside]["n_positions"]:
+                        break
+                    self.PB_modes[pside][symbol] = "normal"
+        else:
+            # if not forager mode, all eligible symbols are ideal symbols, unless symbol in forced_modes
+            for pside in ["long", "short"]:
+                self.warn_on_high_effective_min_cost(pside)
+                for symbol in self.eligible_symbols:
+                    if self.is_enabled(symbol, pside):
+                        if not self.effective_min_cost_is_low_enough(pside, symbol):
+                            continue
+                        if symbol not in self.forced_modes[pside]:
+                            self.PB_modes[pside][symbol] = "normal"
+                            self.ideal_actives[pside][symbol] = ""
+                for symbol in self.actual_actives[pside]:
+                    if symbol not in self.PB_modes[pside]:
+                        self.PB_modes[pside][symbol] = (
+                            "graceful_stop" if self.config["live"]["auto_gs"] else "manual"
+                        )
+        self.active_symbols = sorted(
+            {s for subdict in self.PB_modes.values() for s in subdict.keys()}
+        )
+        self.is_active = deepcopy(self.actual_actives)
+        for pside in self.PB_modes:
+            for symbol in self.PB_modes[pside]:
+                if self.PB_modes[pside][symbol] == "normal":
+                    self.is_active[pside].add(symbol)
+
+        for symbol in self.active_symbols:
+            for pside in self.PB_modes:
+                if symbol in self.PB_modes[pside]:
+                    self.live_configs[symbol][pside]["mode"] = self.PB_modes[pside][symbol]
+                    self.live_configs[symbol][pside]["enabled"] = (
+                        self.PB_modes[pside][symbol] == "normal"
+                    )
+                else:
+                    if self.config["live"]["auto_gs"]:
+                        self.live_configs[symbol][pside]["mode"] = "graceful_stop"
+                        self.PB_modes[pside][symbol] = "graceful_stop"
+                    else:
+                        self.live_configs[symbol][pside]["mode"] = "manual"
+                        self.PB_modes[pside][symbol] = "manual"
+
+                    self.live_configs[symbol][pside]["enabled"] = False
+            if symbol not in self.positions:
+                self.positions[symbol] = {
+                    "long": {"size": 0.0, "price": 0.0},
+                    "short": {"size": 0.0, "price": 0.0},
+                }
+            if symbol not in self.open_orders:
+                self.open_orders[symbol] = []
+        self.set_wallet_exposure_limits()
+        self.update_trailing_data()
+
+        # log changes
+        for pside in self.PB_modes:
+            if previous_PB_modes is None:
+                for mode in set(self.PB_modes[pside].values()):
+                    coins = [
+                        symbol_to_coin(s)
+                        for s in self.PB_modes[pside]
+                        if self.PB_modes[pside][s] == mode
+                    ]
+                    logging.info(f" setting {pside: <5} {mode}: {','.join(coins)}")
+            else:
+                if previous_PB_modes[pside] != self.PB_modes[pside]:
+                    for symbol in self.active_symbols:
+                        if symbol in self.PB_modes[pside]:
+                            if symbol in previous_PB_modes[pside]:
+                                if self.PB_modes[pside][symbol] != previous_PB_modes[pside][symbol]:
+                                    logging.info(
+                                        f"changing {pside: <5} {self.pad_sym(symbol)}: {previous_PB_modes[pside][symbol]} -> {self.PB_modes[pside][symbol]}"
+                                    )
+                            else:
+                                logging.info(
+                                    f" setting {pside: <5} {self.pad_sym(symbol)}: {self.PB_modes[pside][symbol]}"
+                                )
+                        else:
+                            if symbol in previous_PB_modes[pside]:
+                                logging.info(
+                                    f"removing {pside: <5} {self.pad_sym(symbol)}: {previous_PB_modes[pside][symbol]}"
+                                )
+
+    def warn_on_high_effective_min_cost(self, pside):
+        if not self.config["live"]["filter_by_min_effective_cost"]:
+            return
+        eligible_symbols_filtered = [
+            x for x in self.eligible_symbols if self.effective_min_cost_is_low_enough(pside, x)
+        ]
+        if len(eligible_symbols_filtered) == 0:
+            logging.info(
+                f"Warning: No {pside} symbols are approved due to min effective cost too high. "
+                + f"Suggestions: 1) increase account balance, 2) "
+                + f"set 'filter_by_min_effective_cost' to false, 3) if in forager mode, reduce n_{pside}s"
+            )
+
+    def effective_min_cost_is_low_enough(self, pside, symbol):
+        if not self.config["live"]["filter_by_min_effective_cost"]:
+            return True
+        try:
+            WE_limit = self.live_configs[symbol][pside]["wallet_exposure_limit"]
+            assert WE_limit > 0.0
+        except:
+            if self.forager_mode:
+                WE_limit = (
+                    self.config["bot"][pside]["total_wallet_exposure_limit"]
+                    / self.config["bot"][pside]["n_positions"]
+                    if self.config["bot"][pside]["n_positions"] > 0
+                    else 0.0
+                )
+            else:
+                WE_limit = (
+                    self.config["bot"][pside]["total_wallet_exposure_limit"]
+                    / len(self.config["live"]["approved_coins"])
+                    if len(self.config["live"]["approved_coins"]) > 0
+                    else 0.0
+                )
+        return (
+            self.balance * WE_limit * self.live_configs[symbol][pside]["entry_initial_qty_pct"]
+            >= self.effective_min_cost[symbol]
+        )
+
+    def add_new_order(self, order, source="WS"):
+        try:
+            if not order or "id" not in order:
+                return False
+            if "symbol" not in order or order["symbol"] is None:
+                logging.info(f"symbol not in order: {order}")
+                return False
+            if order["symbol"] not in self.open_orders:
+                self.open_orders[order["symbol"]] = []
+            if order["id"] not in {x["id"] for x in self.open_orders[order["symbol"]]}:
+                self.open_orders[order["symbol"]].append(order)
+                logging.info(
+                    f"  created {self.pad_sym(order['symbol'])} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
+                )
+                return True
+        except Exception as e:
+            logging.error(f"failed to add order to self.open_orders {order} {e}")
+            traceback.print_exc()
+            return False
+
+    def remove_cancelled_order(self, order: dict, source="WS"):
+        try:
+            if not order or "id" not in order:
+                return False
+            if "symbol" not in order or order["symbol"] is None:
+                logging.info(f"{order}")
+                return False
+            if order["symbol"] not in self.open_orders:
+                self.open_orders[order["symbol"]] = []
+            if order["id"] in {x["id"] for x in self.open_orders[order["symbol"]]}:
+                self.open_orders[order["symbol"]] = [
+                    x for x in self.open_orders[order["symbol"]] if x["id"] != order["id"]
+                ]
+                logging.info(
+                    f"cancelled {self.pad_sym(order['symbol'])} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
+                )
+                return True
+        except Exception as e:
+            logging.error(f"failed to remove order from self.open_orders {order} {e}")
+            traceback.print_exc()
+            return False
+
+    def handle_order_update(self, upd_list):
+        try:
+            for upd in upd_list:
+                if upd["status"] == "closed" or (
+                    "filled" in upd and upd["filled"] is not None and upd["filled"] > 0.0
+                ):
+                    # There was a fill, partial or full. Schedule update of open orders, pnls, position.
+                    logging.info(
+                        f"   filled {self.pad_sym(upd['symbol'])} {upd['side']} {upd['qty']} {upd['position_side']} @ {upd['price']} source: WS"
+                    )
+                    self.recent_fill = True
+                    self.previous_REST_update_ts = 0
+                elif upd["status"] in ["canceled", "expired", "rejected"]:
+                    # remove order from open_orders
+                    self.remove_cancelled_order(upd, source="WS")
+                elif upd["status"] == "open":
+                    # add order to open_orders
+                    self.add_new_order(upd, source="WS")
+                else:
+                    print("debug open orders unknown type", upd)
+        except Exception as e:
+            logging.error(f"error updating open orders from websocket {upd_list} {e}")
+            traceback.print_exc()
+
+    def handle_balance_update(self, upd, source="WS"):
+        try:
+            upd[self.quote]["total"] = round_dynamic(upd[self.quote]["total"], 10)
+            equity = upd[self.quote]["total"] + self.calc_upnl_sum()
+            if self.balance != upd[self.quote]["total"]:
+                logging.info(
+                    f"balance changed: {self.balance} -> {upd[self.quote]['total']} equity: {equity:.4f} source: {source}"
+                )
+            self.balance = max(upd[self.quote]["total"], 1e-12)
+        except Exception as e:
+            logging.error(f"error updating balance from websocket {upd} {e}")
+            traceback.print_exc()
+
+    def handle_ohlcv_1m_update(self, symbol, upd):
+        if symbol not in self.ohlcvs_1m:
+            self.ohlcvs_1m[symbol] = SortedDict()
+        for elm in upd:
+            self.ohlcvs_1m[symbol][int(elm[0])] = elm
+            self.ohlcvs_1m_update_timestamps_WS[symbol] = utc_ms()
+
+    def calc_upnl_sum(self):
+        upnl_sum = 0.0
+        for elm in self.fetched_positions:
+            try:
+                upnl_sum += (
+                    calc_pnl(
+                        elm["position_side"],
+                        elm["price"],
+                        self.ohlcvs_1m[elm["symbol"]].peekitem(-1)[1][3],
+                        elm["size"],
+                        self.inverse,
+                        self.c_mults[elm["symbol"]],
+                    )
+                    if elm["symbol"] in self.ohlcvs_1m
+                    else 0.0
+                )
+            except Exception as e:
+                logging.error(f"error calculating upnl sum {e}")
+                traceback.print_exc()
+                return 0.0
+        return upnl_sum
+
+    async def init_pnls(self):
+        if not hasattr(self, "pnls"):
+            self.pnls = []
+        elif self.pnls:
+            return  # pnls already initiated; abort
+        logging.info(f"initiating pnls...")
+        age_limit = (
+            self.get_exchange_time()
+            - 1000 * 60 * 60 * 24 * self.config["live"]["pnls_max_lookback_days"]
+        )
+        pnls_cache = []
+        if os.path.exists(self.pnls_cache_filepath):
+            try:
+                pnls_cache = json.load(open(self.pnls_cache_filepath))
+            except Exception as e:
+                logging.error(f"error loading {self.pnls_cache_filepath} {e}")
+        if pnls_cache:
+            newest_pnls = await self.fetch_pnls(start_time=pnls_cache[-1]["timestamp"])
+            if pnls_cache[0]["timestamp"] > age_limit + 1000 * 60 * 60 * 4:
+                # might be older missing pnls
+                logging.info(f"fetching missing pnls {ts_to_date_utc(pnls_cache[0]['timestamp'])}")
+                missing_pnls = await self.fetch_pnls(
+                    start_time=age_limit, end_time=pnls_cache[0]["timestamp"]
+                )
+                pnls_cache = sorted(
+                    {
+                        elm["id"]: elm
+                        for elm in pnls_cache + missing_pnls + newest_pnls
+                        if elm["timestamp"] >= age_limit
+                    }.values(),
+                    key=lambda x: x["timestamp"],
+                )
+        else:
+            pnls_cache = await self.fetch_pnls(start_time=age_limit)
+        self.pnls = pnls_cache
+
+    async def update_pnls(self):
+        # fetch latest pnls
+        # dump new pnls to cache
+        age_limit = (
+            self.get_exchange_time()
+            - 1000 * 60 * 60 * 24 * self.config["live"]["pnls_max_lookback_days"]
+        )
+        if not hasattr(self, "pnls"):
+            self.pnls = []
+        old_ids = {elm["id"] for elm in self.pnls}
+        if len(self.pnls) == 0:
+            await self.init_pnls()
+        start_time = self.pnls[-1]["timestamp"] - 1000 if self.pnls else age_limit
+        res = await self.fetch_pnls(start_time=start_time, limit=100)
+        if res in [None, False]:
+            return False
+        new_pnls = [x for x in res if x["id"] not in old_ids]
+        self.pnls = sorted(
+            {
+                elm["id"]: elm for elm in self.pnls + new_pnls if elm["timestamp"] >= age_limit
+            }.values(),
+            key=lambda x: x["timestamp"],
+        )
+        if new_pnls:
+            new_income = sum([x["pnl"] for x in new_pnls])
+            if new_income != 0.0:
+                logging.info(
+                    f"{len(new_pnls)} new pnl{'s' if len(new_pnls) > 1 else ''} {new_income} {self.quote}"
+                )
+            try:
+                json.dump(self.pnls, open(self.pnls_cache_filepath, "w"))
+            except Exception as e:
+                logging.error(f"error dumping pnls to {self.pnls_cache_filepath} {e}")
+        self.upd_timestamps["pnls"] = utc_ms()
+        return True
+
+    async def check_for_inactive_markets(self):
+        self.ineligible_symbols_with_pos = [
+            elm["symbol"]
+            for elm in self.fetched_positions + self.fetched_open_orders
+            if elm["symbol"] not in self.markets_dict
+            or not self.markets_dict[elm["symbol"]]["active"]
+        ]
+        update = False
+        if self.ineligible_symbols_with_pos:
+            logging.info(
+                f"Caught symbol with pos for ineligible market: {self.ineligible_symbols_with_pos}"
+            )
+            update = True
+            await self.init_markets_dict()
+
+    async def update_open_orders(self):
+        if not hasattr(self, "open_orders"):
+            self.open_orders = {}
+        res = await self.fetch_open_orders()
+        if res in [None, False]:
+            return False
+        self.fetched_open_orders = res
+        await self.check_for_inactive_markets()
+        open_orders = res
+        oo_ids_old = {elm["id"] for sublist in self.open_orders.values() for elm in sublist}
+        created_prints, cancelled_prints = [], []
+        for oo in open_orders:
+            if oo["id"] not in oo_ids_old:
+                # there was a new open order not caught by websocket
+                created_prints.append(
+                    f"new order {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
+                )
+        oo_ids_new = {elm["id"] for elm in open_orders}
+        for oo in [elm for sublist in self.open_orders.values() for elm in sublist]:
+            if oo["id"] not in oo_ids_new:
+                # there was an order cancellation not caught by websocket
+                cancelled_prints.append(
+                    f"cancelled {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
+                )
+        self.open_orders = {}
+        for elm in open_orders:
+            if elm["symbol"] not in self.open_orders:
+                self.open_orders[elm["symbol"]] = []
+            self.open_orders[elm["symbol"]].append(elm)
+        if len(created_prints) > 12:
+            logging.info(f"{len(created_prints)} new open orders")
+        else:
+            for line in created_prints:
+                logging.info(line)
+        if len(cancelled_prints) > 12:
+            logging.info(f"{len(created_prints)} cancelled open orders")
+        else:
+            for line in cancelled_prints:
+                logging.info(line)
+        self.upd_timestamps["open_orders"] = utc_ms()
+        return True
+
+    async def determine_utc_offset(self, verbose=True):
+        # returns millis to add to utc to get exchange timestamp
+        # call some endpoint which includes timestamp for exchange's server
+        # if timestamp is not included in self.cca.fetch_balance(),
+        # implement method in exchange child class
+        result = await self.cca.fetch_balance()
+        self.utc_offset = round((result["timestamp"] - utc_ms()) / (1000 * 60 * 60)) * (
+            1000 * 60 * 60
+        )
+        if verbose:
+            logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
+
+    def get_exchange_time(self):
+        return utc_ms() + self.utc_offset
+
+    async def update_positions(self):
+        # also updates balance
+        if not hasattr(self, "positions"):
+            self.positions = {}
+        res = await self.fetch_positions()
+        if not res or all(x in [None, False] for x in res):
+            return False
+        positions_list_new, balance_new = res
+        self.fetched_positions = positions_list_new
+        await self.check_for_inactive_markets()
+        self.handle_balance_update({self.quote: {"total": balance_new}}, source="REST")
+        positions_new = {
+            sym: {
+                "long": {"size": 0.0, "price": 0.0},
+                "short": {"size": 0.0, "price": 0.0},
+            }
+            for sym in set(list(self.positions) + list(self.active_symbols))
+        }
+        position_changes = []
+        for elm in positions_list_new:
+            symbol, pside, pprice = elm["symbol"], elm["position_side"], elm["price"]
+            psize = abs(elm["size"]) * (-1.0 if elm["position_side"] == "short" else 1.0)
+            if symbol not in positions_new:
+                positions_new[symbol] = {
+                    "long": {"size": 0.0, "price": 0.0},
+                    "short": {"size": 0.0, "price": 0.0},
+                }
+            positions_new[symbol][pside] = {"size": psize, "price": pprice}
+            # check if changed
+            if symbol not in self.positions or self.positions[symbol][pside]["size"] != psize:
+                position_changes.append((symbol, pside))
+        try:
+            self.log_position_changes(position_changes, positions_new)
+        except Exception as e:
+            logging.error(f"error printing position changes {e}")
+        self.positions = positions_new
+        self.upd_timestamps["positions"] = utc_ms()
+        return True
+
+    def get_last_price(self, symbol):
+        try:
+            if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
+                return self.ohlcvs_1m[symbol].peekitem(-1)[1][4]
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} for {symbol}: {e}")
+            traceback.print_exc()
+        return 0.0
+
+    def log_position_changes(self, position_changes, positions_new, rd=6) -> str:
+        if not position_changes:
+            return ""
+        table = PrettyTable()
+        table.border = False
+        table.header = False
+        table.padding_width = 0  # Reduces padding between columns to zero
+        for symbol, pside in position_changes:
+            wallet_exposure = (
+                qty_to_cost(
+                    positions_new[symbol][pside]["size"],
+                    positions_new[symbol][pside]["price"],
+                    self.inverse,
+                    self.c_mults[symbol],
+                )
+                / self.balance
+            )
+            try:
+                WE_ratio = wallet_exposure / self.live_configs[symbol][pside]["wallet_exposure_limit"]
+            except:
+                WE_ratio = 0.0
+            last_price = or_default(self.get_last_price, symbol, default=0.0)
+            try:
+                pprice_diff = (
+                    calc_pprice_diff(pside, positions_new[symbol][pside]["price"], last_price)
+                    if last_price
+                    else 0.0
+                )
+            except:
+                pprice_diff = 0.0
+            try:
+                upnl = (
+                    calc_pnl(
+                        pside,
+                        positions_new[symbol][pside]["price"],
+                        self.get_last_price(symbol),
+                        positions_new[symbol][pside]["size"],
+                        self.inverse,
+                        self.c_mults[symbol],
+                    )
+                    if last_price
+                    else 0.0
+                )
+            except Exception as e:
+                upnl = 0.0
+            table.add_row(
+                [
+                    symbol + " ",
+                    pside + " ",
+                    (
+                        round_dynamic(self.positions[symbol][pside]["size"], rd)
+                        if symbol in self.positions
+                        else 0.0
+                    ),
+                    " @ ",
+                    (
+                        round_dynamic(self.positions[symbol][pside]["price"], rd)
+                        if symbol in self.positions
+                        else 0.0
+                    ),
+                    " -> ",
+                    round_dynamic(positions_new[symbol][pside]["size"], rd),
+                    " @ ",
+                    round_dynamic(positions_new[symbol][pside]["price"], rd),
+                    " WE: ",
+                    round_dynamic(wallet_exposure, max(3, rd - 2)),
+                    " WE ratio: ",
+                    round(WE_ratio, 3),
+                    " PA dist: ",
+                    round(pprice_diff, 4),
+                    " upnl: ",
+                    round_dynamic(upnl, max(3, rd - 1)),
+                ]
+            )
+        string = table.get_string()
+        for line in string.splitlines():
+            logging.info(line)
+        return string
+
+    def update_effective_min_cost(self, symbol=None):
+        if not hasattr(self, "effective_min_cost"):
+            self.effective_min_cost = {}
+        if symbol is None:
+            symbols = sorted(self.eligible_symbols)
+        else:
+            symbols = [symbol]
+        for symbol in symbols:
+            try:
+                self.effective_min_cost[symbol] = max(
+                    qty_to_cost(
+                        self.min_qtys[symbol],
+                        self.get_last_price(symbol),
+                        self.inverse,
+                        self.c_mults[symbol],
+                    ),
+                    self.min_costs[symbol],
+                )
+            except Exception as e:
+                logging.error(f"error with {get_function_name()} for {symbol}: {e}")
+                traceback.print_exc()
+
+    def is_enabled(self, symbol, pside=None):
+        if pside is None:
+            return self.is_enabled(symbol, "long") or self.is_enabled(symbol, "short")
+        return (
+            symbol in self.live_configs
+            and self.live_configs[symbol][pside]["wallet_exposure_limit"] > 0.0
+            and self.live_configs[symbol][pside]["n_positions"] > 0.0
+        )
+
+    def calc_ideal_orders(self):
+        ideal_orders = {symbol: [] for symbol in self.active_symbols}
+        for symbol in self.active_symbols:
+            if self.hedge_mode:
+                do_long = self.is_enabled(symbol, "long") or self.has_position(symbol, "long")
+                do_short = self.is_enabled(symbol, "short") or self.has_position(symbol, "short")
+            else:
+                no_pos = not self.has_position(symbol)
+                do_long = (no_pos and self.is_enabled(symbol, "long")) or self.has_position(
+                    symbol, "long"
+                )
+                do_short = (no_pos and self.is_enabled(symbol, "short")) or self.has_position(
+                    symbol, "short"
+                )
+            if self.live_configs[symbol]["long"]["mode"] == "panic":
+                if self.has_position(symbol, "long"):
+                    # if in panic mode, only one close order at current market price
+                    ideal_orders[symbol].append(
+                        (
+                            -abs(self.positions[symbol]["long"]["size"]),
+                            self.get_last_price(symbol),
+                            "panic_close_long",
+                        )
+                    )
+                # otherwise, no orders
+            elif self.live_configs[symbol]["long"][
+                "mode"
+            ] == "graceful_stop" and not self.has_position(symbol, "long"):
+                # if graceful stop and no pos, don't open new pos
+                pass
+            elif do_long:
+                entries_long = pbr.calc_entries_long_py(
+                    self.qty_steps[symbol],
+                    self.price_steps[symbol],
+                    self.min_qtys[symbol],
+                    self.min_costs[symbol],
+                    self.c_mults[symbol],
+                    self.live_configs[symbol]["long"]["entry_grid_double_down_factor"],
+                    self.live_configs[symbol]["long"]["entry_grid_spacing_weight"],
+                    self.live_configs[symbol]["long"]["entry_grid_spacing_pct"],
+                    self.live_configs[symbol]["long"]["entry_initial_ema_dist"],
+                    self.live_configs[symbol]["long"]["entry_initial_qty_pct"],
+                    self.live_configs[symbol]["long"]["entry_trailing_grid_ratio"],
+                    self.live_configs[symbol]["long"]["entry_trailing_retracement_pct"],
+                    self.live_configs[symbol]["long"]["entry_trailing_threshold_pct"],
+                    self.live_configs[symbol]["long"]["wallet_exposure_limit"],
+                    self.balance,
+                    self.positions[symbol]["long"]["size"],
+                    self.positions[symbol]["long"]["price"],
+                    self.trailing_prices[symbol]["long"]["min_since_open"],
+                    self.trailing_prices[symbol]["long"]["max_since_min"],
+                    self.emas["long"][symbol].min(),
+                    self.get_last_price(symbol),
+                )
+                closes_long = pbr.calc_closes_long_py(
+                    self.qty_steps[symbol],
+                    self.price_steps[symbol],
+                    self.min_qtys[symbol],
+                    self.min_costs[symbol],
+                    self.c_mults[symbol],
+                    self.live_configs[symbol]["long"]["close_grid_markup_range"],
+                    self.live_configs[symbol]["long"]["close_grid_min_markup"],
+                    self.live_configs[symbol]["long"]["close_grid_qty_pct"],
+                    self.live_configs[symbol]["long"]["close_trailing_grid_ratio"],
+                    self.live_configs[symbol]["long"]["close_trailing_qty_pct"],
+                    self.live_configs[symbol]["long"]["close_trailing_retracement_pct"],
+                    self.live_configs[symbol]["long"]["close_trailing_threshold_pct"],
+                    self.live_configs[symbol]["long"]["wallet_exposure_limit"],
+                    self.balance,
+                    self.positions[symbol]["long"]["size"],
+                    self.positions[symbol]["long"]["price"],
+                    self.trailing_prices[symbol]["long"]["max_since_open"],
+                    self.trailing_prices[symbol]["long"]["min_since_max"],
+                    self.get_last_price(symbol),
+                )
+                ideal_orders[symbol] += entries_long + closes_long
+
+            if self.live_configs[symbol]["short"]["mode"] == "panic":
+                if self.has_position(symbol, "short"):
+                    # if in panic mode, only one close order at current market price
+                    ideal_orders[symbol].append(
+                        (
+                            abs(self.positions[symbol]["short"]["size"]),
+                            self.get_last_price(symbol),
+                            "panic_close_short",
+                        )
+                    )
+                # otherwise, no orders
+            elif self.live_configs[symbol]["short"][
+                "mode"
+            ] == "graceful_stop" and not self.has_position(symbol, "short"):
+                # if graceful stop and no pos, don't open new pos
+                pass
+            elif do_short:
+                entries_short = pbr.calc_entries_short_py(
+                    self.qty_steps[symbol],
+                    self.price_steps[symbol],
+                    self.min_qtys[symbol],
+                    self.min_costs[symbol],
+                    self.c_mults[symbol],
+                    self.live_configs[symbol]["short"]["entry_grid_double_down_factor"],
+                    self.live_configs[symbol]["short"]["entry_grid_spacing_weight"],
+                    self.live_configs[symbol]["short"]["entry_grid_spacing_pct"],
+                    self.live_configs[symbol]["short"]["entry_initial_ema_dist"],
+                    self.live_configs[symbol]["short"]["entry_initial_qty_pct"],
+                    self.live_configs[symbol]["short"]["entry_trailing_grid_ratio"],
+                    self.live_configs[symbol]["short"]["entry_trailing_retracement_pct"],
+                    self.live_configs[symbol]["short"]["entry_trailing_threshold_pct"],
+                    self.live_configs[symbol]["short"]["wallet_exposure_limit"],
+                    self.balance,
+                    self.positions[symbol]["short"]["size"],
+                    self.positions[symbol]["short"]["price"],
+                    self.trailing_prices[symbol]["short"]["max_since_open"],
+                    self.trailing_prices[symbol]["short"]["min_since_max"],
+                    self.emas["short"][symbol].max(),
+                    self.get_last_price(symbol),
+                )
+                closes_short = pbr.calc_closes_short_py(
+                    self.qty_steps[symbol],
+                    self.price_steps[symbol],
+                    self.min_qtys[symbol],
+                    self.min_costs[symbol],
+                    self.c_mults[symbol],
+                    self.live_configs[symbol]["short"]["close_grid_markup_range"],
+                    self.live_configs[symbol]["short"]["close_grid_min_markup"],
+                    self.live_configs[symbol]["short"]["close_grid_qty_pct"],
+                    self.live_configs[symbol]["short"]["close_trailing_grid_ratio"],
+                    self.live_configs[symbol]["short"]["close_trailing_qty_pct"],
+                    self.live_configs[symbol]["short"]["close_trailing_retracement_pct"],
+                    self.live_configs[symbol]["short"]["close_trailing_threshold_pct"],
+                    self.live_configs[symbol]["short"]["wallet_exposure_limit"],
+                    self.balance,
+                    self.positions[symbol]["short"]["size"],
+                    self.positions[symbol]["short"]["price"],
+                    self.trailing_prices[symbol]["short"]["min_since_open"],
+                    self.trailing_prices[symbol]["short"]["max_since_min"],
+                    self.get_last_price(symbol),
+                )
+                ideal_orders[symbol] += entries_short + closes_short
+
+        unstucking_symbol, unstucking_close = self.calc_unstucking_close(ideal_orders)
+        if unstucking_close[0] != 0.0:
+            ideal_orders[unstucking_symbol] = [
+                x for x in ideal_orders[unstucking_symbol] if not "close" in x[2]
+            ]
+            ideal_orders[unstucking_symbol].append(unstucking_close)
+
+        ideal_orders_f = {}
+        for symbol in ideal_orders:
+            ideal_orders_f[symbol] = []
+            with_pprice_diff = [
+                (calc_diff(x[1], self.get_last_price(symbol)), x) for x in ideal_orders[symbol]
+            ]
+            seen = set()
+            for pprice_diff, order in sorted(with_pprice_diff):
+                position_side = "long" if "long" in order[2] else "short"
+                if order[0] == 0.0:
+                    continue
+                if pprice_diff > self.config["live"]["price_distance_threshold"]:
+                    if not self.has_position(symbol, position_side):
+                        continue
+                    if any([x in order[2] for x in ["initial", "unstuck"]]):
+                        continue
+                seen_key = str(abs(order[0])) + str(order[1])
+                if seen_key in seen:
+                    logging.info(f"debug duplicate ideal order {symbol} {order}")
+                    continue
+                ideal_orders_f[symbol].append(
+                    {
+                        "symbol": symbol,
+                        "side": determine_side_from_order_tuple(order),
+                        "position_side": position_side,
+                        "qty": abs(order[0]),
+                        "price": order[1],
+                        "reduce_only": "close" in order[2],
+                        "custom_id": order[2],
+                    }
+                )
+                seen.add(seen_key)
+        return ideal_orders_f
+
+    def calc_unstucking_close(self, ideal_orders):
+        stuck_positions = []
+        for symbol in self.positions:
+            for pside in ["long", "short"]:
+                if (
+                    self.has_position(symbol, pside)
+                    and self.live_configs[symbol][pside]["unstuck_loss_allowance_pct"] > 0.0
+                ):
+                    wallet_exposure = pbr.calc_wallet_exposure(
+                        self.c_mults[symbol],
+                        self.balance,
+                        self.positions[symbol][pside]["size"],
+                        self.positions[symbol][pside]["price"],
+                    )
+                    if (
+                        self.live_configs[symbol][pside]["wallet_exposure_limit"] == 0.0
+                        or wallet_exposure / self.live_configs[symbol][pside]["wallet_exposure_limit"]
+                        > self.live_configs[symbol][pside]["unstuck_threshold"]
+                    ):
+                        unstuck_allowance = (
+                            calc_AU_allowance(
+                                np.array([x["pnl"] for x in self.pnls]),
+                                self.balance,
+                                loss_allowance_pct=self.live_configs[symbol][pside][
+                                    "unstuck_loss_allowance_pct"
+                                ],
+                            )
+                            if len(self.pnls) > 0
+                            else 0.0
+                        )
+                        if unstuck_allowance > 0.0:
+                            pprice_diff = calc_pprice_diff(
+                                pside,
+                                self.positions[symbol][pside]["price"],
+                                self.get_last_price(symbol),
+                            )
+                            stuck_positions.append((symbol, pside, pprice_diff))
+        if not stuck_positions:
+            return "", (0.0, 0.0, "")
+        stuck_positions.sort(key=lambda x: x[2])
+        for symbol, pside, _ in stuck_positions:
+            if pside == "long":
+                close_price = max(
+                    self.get_last_price(symbol),
+                    pbr.round_up(
+                        self.emas[pside][symbol].max()
+                        * (1.0 + self.live_configs[symbol][pside]["unstuck_ema_dist"]),
+                        self.price_steps[symbol],
+                    ),
+                )
+                ideal_closes = (
+                    [x for x in ideal_orders[symbol] if "close" in x[2] and pside in x[2]]
+                    if symbol in ideal_orders
+                    else []
+                )
+                if ideal_closes and close_price >= ideal_closes[0][1]:
+                    continue
+                close_qty = -min(
+                    self.positions[symbol][pside]["size"],
+                    max(
+                        calc_min_entry_qty(
+                            close_price,
+                            False,
+                            self.c_mults[symbol],
+                            self.qty_steps[symbol],
+                            self.min_qtys[symbol],
+                            self.min_costs[symbol],
+                        ),
+                        pbr.round_dn(
+                            pbr.cost_to_qty(
+                                self.balance
+                                * self.live_configs[symbol][pside]["wallet_exposure_limit"]
+                                * self.live_configs[symbol][pside]["unstuck_close_pct"],
+                                close_price,
+                                self.c_mults[symbol],
+                            ),
+                            self.qty_steps[symbol],
+                        ),
+                    ),
+                )
+                if close_qty != 0.0:
+                    return symbol, (close_qty, close_price, "unstuck_close_long")
+            elif pside == "short":
+                close_price = min(
+                    self.get_last_price(symbol),
+                    pbr.round_dn(
+                        self.emas[pside][symbol].min()
+                        * (1.0 - self.live_configs[symbol][pside]["unstuck_ema_dist"]),
+                        self.price_steps[symbol],
+                    ),
+                )
+                ideal_closes = (
+                    [x for x in ideal_orders[symbol] if "close" in x[2] and pside in x[2]]
+                    if symbol in ideal_orders
+                    else []
+                )
+                if ideal_closes and close_price <= ideal_closes[0][1]:
+                    continue
+                close_qty = min(
+                    abs(self.positions[symbol][pside]["size"]),
+                    max(
+                        calc_min_entry_qty(
+                            close_price,
+                            False,
+                            self.c_mults[symbol],
+                            self.qty_steps[symbol],
+                            self.min_qtys[symbol],
+                            self.min_costs[symbol],
+                        ),
+                        pbr.round_dn(
+                            pbr.cost_to_qty(
+                                self.balance
+                                * self.live_configs[symbol][pside]["wallet_exposure_limit"]
+                                * self.live_configs[symbol][pside]["unstuck_close_pct"],
+                                close_price,
+                                self.c_mults[symbol],
+                            ),
+                            self.qty_steps[symbol],
+                        ),
+                    ),
+                )
+                if close_qty != 0.0:
+                    return symbol, (close_qty, close_price, "unstuck_close_short")
+        return "", (0.0, 0.0, "")
+
+    def calc_orders_to_cancel_and_create(self):
+        ideal_orders = self.calc_ideal_orders()
+        actual_orders = {}
+        for symbol in self.active_symbols:
+            actual_orders[symbol] = []
+            for x in self.open_orders[symbol] if symbol in self.open_orders else []:
+                try:
+                    actual_orders[symbol].append(
+                        {
+                            "symbol": x["symbol"],
+                            "side": x["side"],
+                            "position_side": x["position_side"],
+                            "qty": abs(x["qty"]),
+                            "price": x["price"],
+                            "reduce_only": (x["position_side"] == "long" and x["side"] == "sell")
+                            or (x["position_side"] == "short" and x["side"] == "buy"),
+                            "id": x["id"],
+                        }
+                    )
+                except Exception as e:
+                    logging.error(f"error in calc_orders_to_cancel_and_create {e}")
+                    traceback.print_exc()
+                    print(x)
+        keys = ("symbol", "side", "position_side", "qty", "price")
+        to_cancel, to_create = [], []
+        for symbol in actual_orders:
+            to_cancel_, to_create_ = filter_orders(actual_orders[symbol], ideal_orders[symbol], keys)
+            for pside in ["long", "short"]:
+                if self.live_configs[symbol][pside]["mode"] == "manual":
+                    # neither create nor cancel orders
+                    to_cancel_ = [x for x in to_cancel_ if x["position_side"] != pside]
+                    to_create_ = [x for x in to_create_ if x["position_side"] != pside]
+                elif self.live_configs[symbol][pside]["mode"] == "tp_only":
+                    # if take profit only mode, neither cancel nor create entries
+                    to_cancel_ = [
+                        x
+                        for x in to_cancel_
+                        if (
+                            x["position_side"] != pside
+                            or (x["position_side"] == pside and x["reduce_only"])
+                        )
+                    ]
+                    to_create_ = [
+                        x
+                        for x in to_create_
+                        if (
+                            x["position_side"] != pside
+                            or (x["position_side"] == pside and x["reduce_only"])
+                        )
+                    ]
+            to_cancel += to_cancel_
+            to_create += to_create_
+        return sorted(
+            to_cancel, key=lambda x: calc_diff(x["price"], self.get_last_price(x["symbol"]))
+        ), sorted(to_create, key=lambda x: calc_diff(x["price"], self.get_last_price(x["symbol"])))
+
+    async def restart_bot_on_too_many_errors(self):
+        if not hasattr(self, "error_counts"):
+            self.error_counts = []
+        now = utc_ms()
+        self.error_counts = [x for x in self.error_counts if x > now - 1000 * 60 * 60] + [now]
+        max_n_errors_per_hour = 10
+        logging.info(
+            f"error count: {len(self.error_counts)} of {max_n_errors_per_hour} errors per hour"
+        )
+        if len(self.error_counts) >= max_n_errors_per_hour:
+            await self.restart_bot()
+            raise Exception("too many errors... restarting bot.")
 
     def format_custom_ids(self, orders: [dict]) -> [dict]:
         new_orders = []
@@ -1663,377 +1647,520 @@ class Bot:
             new_orders.append(order)
         return new_orders
 
+    def debug_dump_bot_state_to_disk(self):
+        if not hasattr(self, "tmp_debug_ts"):
+            self.tmp_debug_ts = 0
+            self.tmp_debug_cache = make_get_filepath(f"caches/{self.exchange}/{self.user}_debug/")
+        if utc_ms() - self.tmp_debug_ts > 1000 * 60 * 3:
+            logging.info(f"debug dumping bot state to disk")
+            for k, v in vars(self).items():
+                try:
+                    json.dump(
+                        denumpyize(v), open(os.path.join(self.tmp_debug_cache, k + ".json"), "w")
+                    )
+                except Exception as e:
+                    logging.error(f"debug failed to dump to disk {k} {e}")
+            self.tmp_debug_ts = utc_ms()
 
-async def start_bot(bot):
-    if bot.ohlcv:
-        await bot.start_ohlcv_mode()
-    else:
-        while not bot.stop_websocket:
+    def fill_gaps_ohlcvs_1m(self):
+        for symbol in self.ohlcvs_1m:
+            self.fill_gaps_ohlcvs_1m_single(symbol)
+
+    def fill_gaps_ohlcvs_1m_single(self, symbol):
+        if symbol not in self.ohlcvs_1m or not self.ohlcvs_1m[symbol]:
+            return
+        now_minute = int(self.get_exchange_time() // 60000 * 60000)
+        last_ts, last_ohlcv_1m = self.ohlcvs_1m[symbol].peekitem(-1)
+        if now_minute > last_ts:
+            self.ohlcvs_1m[symbol][now_minute] = [float(now_minute)] + [last_ohlcv_1m[4]] * 4 + [0.0]
+        n_ohlcvs_1m = len(self.ohlcvs_1m[symbol])
+        range_ms = self.ohlcvs_1m[symbol].peekitem(-1)[0] - self.ohlcvs_1m[symbol].peekitem(0)[0]
+        ideal_n_ohlcvs_1m = int((range_ms) / 60000) + 1
+        if ideal_n_ohlcvs_1m > n_ohlcvs_1m:
+            ts = self.ohlcvs_1m[symbol].peekitem(0)[0]
+            last_ts = self.ohlcvs_1m[symbol].peekitem(-1)[0]
+            while ts < last_ts:
+                ts += 60000
+                if ts not in self.ohlcvs_1m[symbol]:
+                    self.ohlcvs_1m[symbol][ts] = (
+                        [float(ts)] + [self.ohlcvs_1m[symbol][ts - 60000][4]] * 4 + [0.0]
+                    )
+
+    def init_EMAs_single(self, symbol):
+        first_ts, first_ohlcv = self.ohlcvs_1m[symbol].peekitem(0)
+        for pside in ["long", "short"]:
+            self.emas[pside][symbol] = np.repeat(first_ohlcv[4], 3)
+            lc = self.live_configs[symbol][pside]
+            es = [lc["ema_span_0"], lc["ema_span_1"], (lc["ema_span_0"] * lc["ema_span_1"]) ** 0.5]
+            ema_spans = numpyize(sorted(es))
+            self.ema_alphas[pside][symbol] = (a := (2.0 / (ema_spans + 1)), 1.0 - a)
+        self.upd_minute_emas[symbol] = first_ts
+
+    def update_EMAs(self):
+        for symbol in self.get_eligible_or_active_symbols():
+            self.update_EMAs_single(symbol)
+
+    def update_EMAs_single(self, symbol):
+        try:
+            if symbol not in self.ohlcvs_1m or not self.ohlcvs_1m[symbol]:
+                return
+            self.fill_gaps_ohlcvs_1m_single(symbol)
+            if symbol not in self.emas["long"]:
+                self.init_EMAs_single(symbol)
+            last_ts, last_ohlcv_1m = self.ohlcvs_1m[symbol].peekitem(-1)
+            mn = 60000
+            for ts in range(self.upd_minute_emas[symbol] + mn, last_ts + mn, mn):
+                for pside in ["long", "short"]:
+                    self.emas[pside][symbol] = calc_ema(
+                        self.ema_alphas[pside][symbol][0],
+                        self.ema_alphas[pside][symbol][1],
+                        self.emas[pside][symbol],
+                        self.ohlcvs_1m[symbol][ts][4],
+                    )
+            self.upd_minute_emas[symbol] = last_ts
+            return True
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} for {symbol}: {e}")
+            traceback.print_exc()
+            return False
+
+    def get_eligible_or_active_symbols(self):
+        return sorted(self.eligible_symbols | set(self.active_symbols))
+
+    def get_ohlcvs_1m_file_mods(self, symbols=None):
+        if symbols is None:
+            symbols = self.get_eligible_or_active_symbols()
+        last_update_tss = []
+        for symbol in symbols:
             try:
-                await bot.start_websocket()
+                filepath = self.get_ohlcvs_1m_filepath(symbol)
+                if os.path.exists(filepath):
+                    last_update_tss.append((get_file_mod_utc(filepath), symbol))
+                else:
+                    last_update_tss.append((0.0, symbol))
             except Exception as e:
-                logging.warning(
-                    "Websocket connection has been lost, attempting to reinitialize the bot... {e}",
-                )
+                logging.info(f"debug error with get_file_mod_utc for {symbol} {e}")
+                last_update_tss.append((0.0, symbol))
+        return last_update_tss
+
+    async def restart_bot(self):
+        logging.info("Initiating bot restart...")
+        self.stop_signal_received = True
+        self.stop_data_maintainers()
+        await self.cca.close()
+        await self.ccp.close()
+        raise Exception("Bot will restart.")
+
+    async def update_ohlcvs_1m_for_actives(self):
+        try:
+            utc_now = utc_ms()
+            symbols_to_update = [
+                s
+                for s in self.active_symbols
+                if s not in self.ohlcvs_1m_update_timestamps_WS
+                or utc_now - self.ohlcvs_1m_update_timestamps_WS[s] > 1000 * 60
+            ]
+            if symbols_to_update:
+                await asyncio.gather(*[self.update_ohlcvs_1m_single(s) for s in symbols_to_update])
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} {e}")
+            traceback.print_exc()
+
+    async def maintain_markets_info(self):
+        logging.info(f"starting maintain_markets_info")
+        while not self.stop_signal_received:
+            try:
+                # update markets dict once every hour
+                if utc_ms() - self.init_markets_last_update_ms > 1000 * 60 * 60:
+                    await self.init_markets_dict(verbose=False)
+                await asyncio.sleep(1)
+            except Exception as e:
+                logging.error(f"error with {get_function_name()} {e}")
                 traceback.print_exc()
-                await asyncio.sleep(10)
+                await asyncio.sleep(5)
 
+    async def start_data_maintainers(self):
+        # maintains REST update_market_info and ohlcv_1m
+        if hasattr(self, "maintainers"):
+            self.stop_data_maintainers()
+        self.maintainers = {
+            k: asyncio.create_task(getattr(self, k)())
+            for k in [
+                "maintain_markets_info",
+                "maintain_ohlcvs_1m_REST",
+                "watch_ohlcvs_1m",
+                "watch_orders",
+            ]
+        }
 
-async def main() -> None:
-    logging.basicConfig(
-        format="%(asctime)s %(levelname)-8s %(message)s",
-        level=logging.INFO,
-        datefmt="%Y-%m-%dT%H:%M:%S",
-    )
-    parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
-    parser.add_argument("user", type=str, help="user/account_name defined in api-keys.json")
-    parser.add_argument("symbol", type=str, help="symbol to trade")
-    parser.add_argument("live_config_path", type=str, help="live config to use")
-    parser.add_argument(
-        "-m",
-        "--market_type",
-        type=str,
-        required=False,
-        dest="market_type",
-        default=None,
-        help="specify whether spot or futures (default), overriding value from backtest config",
-    )
-    parser.add_argument(
-        "-gs",
-        "--graceful_stop",
-        action="store_true",
-        help="if passed, set graceful stop to both long and short",
-    )
-    parser.add_argument(
-        "-sm",
-        "--short_mode",
-        "--short-mode",
-        type=str,
-        required=False,
-        dest="short_mode",
-        default=None,
-        help="specify one of following short modes: [n (normal), m (manual), gs (graceful_stop), p (panic), t (tp_only)]",
-    )
-    parser.add_argument(
-        "-lm",
-        "--long_mode",
-        "--long-mode",
-        type=str,
-        required=False,
-        dest="long_mode",
-        default=None,
-        help="specify one of following long modes: [n (normal), m (manual), gs (graceful_stop), p (panic), t (tp_only)]",
-    )
-    parser.add_argument(
-        "-ab",
-        "--assigned_balance",
-        type=float,
-        required=False,
-        dest="assigned_balance",
-        default=None,
-        help="add assigned_balance to live config, overriding balance fetched from exchange",
-    )
-    parser.add_argument(
-        "-pt",
-        "--price-distance-threshold",
-        "--price_distance_threshold",
-        type=float,
-        required=False,
-        dest="price_distance_threshold",
-        default=0.5,
-        help="only create limit orders closer to price than threshold.  default=0.5 (50%%)",
-    )
-    parser.add_argument(
-        "-ak",
-        "--api-keys",
-        "--api_keys",
-        type=str,
-        required=False,
-        dest="api_keys",
-        default="api-keys.json",
-        help="File containing users/accounts and api-keys for each exchange",
-    )
-    parser.add_argument(
-        "-lev",
-        "--leverage",
-        type=int,
-        required=False,
-        dest="leverage",
-        default=7,
-        help="Leverage set on exchange, if applicable.  Default is 7.",
-    )
-    parser.add_argument(
-        "-tm",
-        "--test_mode",
-        action="store_true",
-        help=f"if true, run on the test net instead of normal exchange. Supported exchanges: {TEST_MODE_SUPPORTED_EXCHANGES}",
-    )
-    parser.add_argument(
-        "-cd",
-        "--countdown",
-        action="store_true",
-        help=f"if true, print a countdown in ohlcv mode",
-    )
-    parser.add_argument(
-        "-pp",
-        "--price-precision",
-        "--price_precision",
-        type=float,
-        required=False,
-        dest="price_precision_multiplier",
-        default=None,
-        help="Override price step with market_price * price_precision_multiplier rounded to one significant digit. Suggested val 0.0001. Set to 0.0 to disable.",
-    )
-    parser.add_argument(
-        "-ps",
-        "--price-step",
-        "--price_step",
-        type=float,
-        required=False,
-        dest="price_step_custom",
-        default=None,
-        help="Override price step with custom price step.  Takes precedence over -pp. Set to 0.0 to disable.",
-    )
-    parser.add_argument(
-        "-co",
-        "--countdown-offset",
-        "--countdown_offset",
-        type=int,
-        required=False,
-        dest="countdown_offset",
-        default=random.randrange(60),
-        help="when in ohlcv mode, offset execution cycle in seconds from whole minute",
-    )
-    parser.add_argument(
-        "-oh",
-        "--ohlcv",
-        type=str,
-        required=False,
-        dest="ohlcv",
-        default=None,
-        nargs="?",
-        const="y",
-        help="if no arg or [y/yes], use 1m ohlcv instead of 1s ticks",
-    )
+    async def start_bot(self, debug_mode=False):
+        logging.info(f"initiating markets...")
+        await self.init_markets_dict()
+        await asyncio.sleep(1)
+        logging.info(f"starting data maintainers...")
+        await self.start_data_maintainers()
+        await self.wait_for_ohlcvs_1m_to_update()
+        logging.info(f"starting websocket...")
+        self.previous_REST_update_ts = utc_ms()
+        await self.prepare_for_execution()
 
-    float_kwargs = [
-        ("-lmm", "--long_min_markup", "--long-min-markup", "long_min_markup"),
-        ("-smm", "--short_min_markup", "--short-min-markup", "short_min_markup"),
-        ("-lmr", "--long_markup_range", "--long-markup-range", "long_markup_range"),
-        ("-smr", "--short_markup_range", "--short-markup-range", "short_markup_range"),
-        (
-            "-lw",
-            "--long_wallet_exposure_limit",
-            "--long-wallet-exposure-limit",
-            "long_wallet_exposure_limit",
-        ),
-        (
-            "-sw",
-            "--short_wallet_exposure_limit",
-            "--short-wallet-exposure-limit",
-            "short_wallet_exposure_limit",
-        ),
-    ]
-    for k0, k1, k2, dest in float_kwargs:
-        parser.add_argument(
-            k0,
-            k1,
-            k2,
-            type=float,
-            required=False,
-            dest=dest,
-            default=None,
-            help=f"specify {dest}, overriding value from live config",
-        )
+        logging.info(f"starting execution loop...")
+        if not debug_mode:
+            await self.run_execution_loop()
 
-    args = parser.parse_args()
-    try:
-        exchange = load_exchange_key_secret_passphrase(args.user, args.api_keys)[0]
-    except Exception as e:
-        logging.error(f"{e} failed to load api-keys.json file")
-        return
-    try:
-        config = load_live_config(args.live_config_path)
-    except Exception as e:
-        logging.error(f"{e} failed to load config {args.live_config_path}")
-        return
-    config["exchange"] = exchange
-    for k in [
-        "user",
-        "api_keys",
-        "symbol",
-        "leverage",
-        "price_distance_threshold",
-        "test_mode",
-        "countdown",
-        "countdown_offset",
-        "price_precision_multiplier",
-        "price_step_custom",
-    ]:
-        config[k] = getattr(args, k)
-    if config["test_mode"] and config["exchange"] not in TEST_MODE_SUPPORTED_EXCHANGES:
-        raise IOError(f"Exchange {config['exchange']} is not supported in test mode.")
-    config["market_type"] = args.market_type if args.market_type is not None else "futures"
-    config["passivbot_mode"] = determine_passivbot_mode(config)
-    if config["passivbot_mode"] == "clock":
-        config["ohlcv"] = True
-    elif hasattr(args, "ohlcv"):
-        if args.ohlcv is None:
-            config["ohlcv"] = True
-        else:
-            if args.ohlcv.lower() in ["y", "yes", "t", "true"]:
-                config["ohlcv"] = True
-            elif any(
-                [
-                    config[side][key] != 0.0
-                    for side in ["long", "short"]
-                    for key in ["auto_unstuck_delay_minutes", "auto_unstuck_qty_pct"]
-                ]
-            ):
-                # force ohlcv mode if auto unstuck is on timer
-                config["ohlcv"] = True
+    def calc_noisiness(self):
+        if not hasattr(self, "noisiness"):
+            self.noisiness = {}
+        n = int(round(self.config["live"]["noisiness_rolling_mean_window_size"]))
+        for symbol in self.eligible_symbols:
+            if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
+                ohlcvs_1m = [v for v in self.ohlcvs_1m[symbol].values()[-n:]]
+                self.noisiness[symbol] = np.mean([(x[2] - x[3]) / x[4] for x in ohlcvs_1m])
             else:
-                config["ohlcv"] = False
-    else:
-        config["ohlcv"] = True
-    if args.assigned_balance is not None:
-        logging.info(f"assigned balance set to {args.assigned_balance}")
-        config["assigned_balance"] = args.assigned_balance
+                self.noisiness[symbol] = 0.0
 
-    if args.long_mode is None:
-        if config["long"]["enabled"]:
-            logging.info("long normal mode")
-        else:
-            config["long_mode"] = "manual"
-            logging.info("long manual mode enabled; will neither cancel nor create long orders")
-    else:
-        if args.long_mode in ["gs", "graceful_stop", "graceful-stop"]:
-            logging.info(
-                "long graceful stop enabled; will not make new entries once existing positions are closed"
+    def calc_volumes(self):
+        if not hasattr(self, "volumes"):
+            self.volumes = {}
+        n = int(round(self.config["live"]["noisiness_rolling_mean_window_size"]))
+        for symbol in self.ohlcvs_1m:
+            if self.ohlcvs_1m[symbol] and len(self.ohlcvs_1m[symbol]) > 0:
+                ohlcvs_1m = [v for v in self.ohlcvs_1m[symbol].values()[-n:]]
+                self.volumes[symbol] = sum([x[4] * x[5] for x in ohlcvs_1m])
+            else:
+                self.volumes[symbol] = 0.0
+
+    async def execute_multiple(self, orders: [dict], type_: str, max_n_executions: int):
+        if not orders:
+            return []
+        executions = []
+        for order in orders[:max_n_executions]:  # sorted by PA dist
+            execution = None
+            try:
+                execution = asyncio.create_task(getattr(self, type_)(order))
+                executions.append((order, execution))
+            except Exception as e:
+                logging.error(f"error executing {type_} {order} {e}")
+                print_async_exception(execution)
+                traceback.print_exc()
+        results = []
+        for execution in executions:
+            result = None
+            try:
+                result = await execution[1]
+                results.append(result)
+            except Exception as e:
+                logging.error(f"error executing {type_} {execution} {e}")
+                print_async_exception(result)
+                traceback.print_exc()
+        return results
+
+    async def maintain_ohlcvs_1m_REST(self):
+        if not hasattr(self, "ohlcvs_1m"):
+            self.ohlcvs_1m = {}
+        error_count = 0
+        self.ohlcvs_1m_update_timestamps = {}
+        self.n_symbols_missing_ohlcvs_1m = len(self.get_eligible_or_active_symbols())
+        init_ohlcvs_sleep_time = 4.0 / self.n_symbols_missing_ohlcvs_1m
+        for symbol in self.get_eligible_or_active_symbols():
+            # print("debug update_ohlcvs_1m_single_from_disk", symbol)
+            asyncio.create_task(self.update_ohlcvs_1m_single_from_disk(symbol))
+            await asyncio.sleep(min(0.1, init_ohlcvs_sleep_time))
+        self.ohlcvs_1m_max_age_ms = 1000 * 60 * self.ohlcvs_1m_max_age_minutes
+        loop_sleep_time_ms = 1000 * 1
+        logging.info(f"starting {get_function_name()}")
+        while not self.stop_signal_received:
+            try:
+                symbols_too_old = []
+                max_age_ms = self.ohlcvs_1m_max_age_ms
+                now_utc = utc_ms()
+                for symbol in self.get_eligible_or_active_symbols():
+                    if symbol not in self.ohlcvs_1m_update_timestamps:
+                        symbols_too_old.append((0, symbol))
+                    else:
+                        if (
+                            now_utc - self.ohlcvs_1m_update_timestamps[symbol]
+                            > self.ohlcvs_1m_max_age_ms
+                        ):
+                            symbols_too_old.append((self.ohlcvs_1m_update_timestamps[symbol], symbol))
+                symbols_to_update = sorted(symbols_too_old)[: self.max_n_concurrent_ohlcvs_1m_updates]
+                self.n_symbols_missing_ohlcvs_1m = len(symbols_too_old)
+                if not symbols_to_update:
+                    max_age_ms = self.ohlcvs_1m_max_age_ms / 2.0
+                    if self.ohlcvs_1m_update_timestamps:
+                        symbol, ts = sorted(
+                            self.ohlcvs_1m_update_timestamps.items(), key=lambda x: x[1]
+                        )[0]
+                        symbols_to_update = [(ts, symbol)]
+                if symbols_to_update:
+                    await asyncio.gather(
+                        *[
+                            self.update_ohlcvs_1m_single(x[1], max_age_ms=max_age_ms)
+                            for x in symbols_to_update
+                        ]
+                    )
+                sleep_time_ms = loop_sleep_time_ms - (utc_ms() - now_utc)
+                await asyncio.sleep(max(0.0, sleep_time_ms / 1000.0))
+            except Exception as e:
+                logging.error(f"error with {get_function_name()} {e}")
+                traceback.print_exc()
+                await asyncio.sleep(5)
+                await self.restart_bot_on_too_many_errors()
+
+    async def update_ohlcvs_1m_single_from_exchange(self, symbol):
+        filepath = self.get_ohlcvs_1m_filepath(symbol)
+        if self.lock_exists(filepath):
+            return
+        try:
+            self.create_lock_file(filepath)
+            ms_to_min = 1000 * 60
+            if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
+                last_ts = self.ohlcvs_1m[symbol].peekitem(-1)[0]
+                now_minute = self.get_exchange_time() // ms_to_min * ms_to_min
+                limit = min(999, max(3, int(round((now_minute - last_ts) / ms_to_min)) + 5))
+                if limit >= 999:
+                    limit = None
+            else:
+                self.ohlcvs_1m[symbol] = SortedDict()
+                limit = None
+            candles = await self.fetch_ohlcvs_1m(symbol, limit=limit)
+            for x in candles:
+                self.ohlcvs_1m[symbol][int(x[0])] = x
+            self.dump_ohlcvs_1m_to_cache(symbol)
+            self.ohlcvs_1m_update_timestamps[symbol] = or_default(
+                get_file_mod_utc, filepath, default=0.0
             )
-            config["long"]["enabled"] = config["do_long"] = False
-        elif args.long_mode in ["m", "manual"]:
-            logging.info("long manual mode enabled; will neither cancel nor create long orders")
-            config["long_mode"] = "manual"
-        elif args.long_mode in ["n", "normal"]:
-            logging.info("long normal mode")
-            config["long"]["enabled"] = config["do_long"] = True
-        elif args.long_mode in ["p", "panic"]:
-            logging.info("long panic mode enabled")
-            config["long_mode"] = "panic"
-            config["long"]["enabled"] = config["do_long"] = False
-        elif args.long_mode.lower() in ["t", "tp_only", "tp-only"]:
-            logging.info("long tp only mode enabled")
-            config["long_mode"] = "tp_only"
+        finally:
+            self.remove_lock_file(filepath)
 
-    if args.short_mode is None:
-        if config["short"]["enabled"]:
-            logging.info("short normal mode")
-        else:
-            config["short_mode"] = "manual"
-            logging.info("short manual mode enabled; will neither cancel nor create short orders")
-    else:
-        if args.short_mode in ["gs", "graceful_stop", "graceful-stop"]:
-            logging.info(
-                "short graceful stop enabled; "
-                + "will not make new entries once existing positions are closed"
+    async def update_ohlcvs_1m_single_from_disk(self, symbol):
+        filepath = self.get_ohlcvs_1m_filepath(symbol)
+        if not os.path.exists(filepath):
+            return
+        if self.lock_exists(filepath):
+            return
+        try:
+            self.create_lock_file(filepath)
+            if symbol not in self.ohlcvs_1m:
+                self.ohlcvs_1m[symbol] = SortedDict()
+            data = np.load(filepath)
+            for x in data:
+                self.ohlcvs_1m[symbol][int(x[0])] = x
+            self.ohlcvs_1m_update_timestamps[symbol] = or_default(
+                get_file_mod_utc, filepath, default=0.0
             )
-            config["short"]["enabled"] = config["do_short"] = False
-        elif args.short_mode in ["m", "manual"]:
-            logging.info("short manual mode enabled; will neither cancel nor create short orders")
-            config["short_mode"] = "manual"
-        elif args.short_mode in ["n", "normal"]:
-            logging.info("short normal mode")
-            config["short"]["enabled"] = config["do_short"] = True
-        elif args.short_mode in ["p", "panic"]:
-            logging.info("short panic mode enabled")
-            config["short_mode"] = "panic"
-            config["short"]["enabled"] = config["do_short"] = False
-        elif args.short_mode.lower() in ["t", "tp_only", "tp-only"]:
-            logging.info("short tp only mode enabled")
-            config["short_mode"] = "tp_only"
-    if args.graceful_stop:
-        logging.info(
-            "\n\ngraceful stop enabled for both long and short; will not make new entries once existing positions are closed\n"
-        )
-        config["long"]["enabled"] = config["do_long"] = False
-        config["short"]["enabled"] = config["do_short"] = False
-        config["long_mode"] = None
-        config["short_mode"] = None
-    for _, _, _, dest in float_kwargs:
-        if getattr(args, dest) is not None:
-            side, key = dest[: dest.find("_")], dest[dest.find("_") + 1 :]
-            old_val = config[side][key]
-            config[side][key] = getattr(args, dest)
-            logging.info(f"overriding {dest} {old_val} " + f"with new value: {getattr(args, dest)}")
+        except Exception as e:
+            logging.error(f"error with update_ohlcvs_1m_single_from_disk {symbol} {e}")
+            traceback.print_exc()
+            try:
+                os.remove(filepath)
+            except Exception as e0:
+                logging.error(f"failed to remove corrupted ohlcvs_1m file for {symbol} {e0}")
+        finally:
+            self.remove_lock_file(filepath)
 
-    if "spot" in config["market_type"]:
-        config = spotify_config(config)
-    logging.info(f"using config \n{config_pretty_str(denumpyize(config))}")
+    async def update_ohlcvs_1m_single(self, symbol, max_age_ms=None):
+        if max_age_ms is None:
+            max_age_ms = self.ohlcvs_1m_max_age_ms
+        self.lock_timeout_ms = 5000.0
+        try:
+            if not (symbol in self.active_symbols or symbol in self.eligible_symbols):
+                return
+            filepath = self.get_ohlcvs_1m_filepath(symbol)
+            if self.lock_exists(filepath):
+                # is being updated by other instance
+                if self.get_lock_age_ms(filepath) > self.lock_timeout_ms:
+                    # other instance took too long to finish; assume it crashed
+                    self.remove_lock_file(filepath)
+                    await self.update_ohlcvs_1m_single_from_exchange(symbol)
+            elif os.path.exists(filepath):
+                mod_ts = or_default(get_file_mod_utc, filepath, default=0.0)
+                if utc_ms() - mod_ts > max_age_ms:
+                    await self.update_ohlcvs_1m_single_from_exchange(symbol)
+                else:
+                    if (
+                        symbol not in self.ohlcvs_1m_update_timestamps
+                        or self.ohlcvs_1m_update_timestamps[symbol] != mod_ts
+                    ):
+                        # was updated by other instance
+                        await self.update_ohlcvs_1m_single_from_disk(symbol)
+            else:
+                await self.update_ohlcvs_1m_single_from_exchange(symbol)
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} {e}")
+            traceback.print_exc()
+            await self.restart_bot_on_too_many_errors()
 
-    if config["exchange"] == "binance":
-        if "spot" in config["market_type"]:
-            from procedures import create_binance_bot_spot
+    def create_lock_file(self, filepath):
+        try:
+            open(f"{filepath}.lock", "w").close()
+            return True
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} {e}")
+            traceback.print_exc()
+            return False
 
-            bot = await create_binance_bot_spot(config)
-        else:
-            from procedures import create_binance_bot
+    def lock_exists(self, filepath):
+        try:
+            return os.path.exists(f"{filepath}.lock")
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} {e}")
+            traceback.print_exc()
+            return False
 
-            bot = await create_binance_bot(config)
-    elif config["exchange"] == "binance_us":
-        from procedures import create_binance_bot_spot
+    def get_lock_age_ms(self, filepath):
+        try:
+            if self.lock_exists(filepath):
+                return utc_ms() - get_file_mod_utc(f"{filepath}.lock")
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} {e}")
+            traceback.print_exc()
+        return utc_ms()
 
-        bot = await create_binance_bot_spot(config)
-    elif config["exchange"] == "bybit":
-        if "spot" in config["market_type"]:
-            from procedures import create_bybit_bot_spot
+    def remove_lock_file(self, filepath):
+        try:
+            if self.lock_exists(filepath):
+                os.remove(f"{filepath}.lock")
+                return True
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} {e}")
+            traceback.print_exc()
+        return False
 
-            bot = await create_bybit_bot_spot(config)
-        else:
-            from procedures import create_bybit_bot
+    async def close(self):
+        logging.info(f"Stopped data maintainers: {self.stop_data_maintainers()}")
+        await self.cca.close()
+        await self.ccp.close()
 
-            bot = await create_bybit_bot(config)
-    elif config["exchange"] == "bitget":
-        from procedures import create_bitget_bot
 
-        config["ohlcv"] = True
-        bot = await create_bitget_bot(config)
-    elif config["exchange"] == "okx":
-        from procedures import create_okx_bot
+def setup_bot(config):
+    # returns bot instance
+    user_info = load_user_info(config["live"]["user"])
+    if user_info["exchange"] == "bybit":
+        from exchanges_forager.bybit import BybitBot
 
-        config["ohlcv"] = True
-        bot = await create_okx_bot(config)
-    elif config["exchange"] == "kucoin":
-        from procedures import create_kucoin_bot
+        bot = BybitBot(config)
+    elif user_info["exchange"] == "binance":
+        from exchanges_forager.binance import BinanceBot
 
-        config["ohlcv"] = True
-        bot = await create_kucoin_bot(config)
-    elif config["exchange"] == "bingx":
-        from procedures import create_bingx_bot
+        bot = BinanceBot(config)
+    elif user_info["exchange"] == "bitget":
+        from exchanges_forager.bitget import BitgetBot
 
-        config["ohlcv"] = True
-        bot = await create_bingx_bot(config)
+        bot = BitgetBot(config)
+    elif user_info["exchange"] == "okx":
+        from exchanges_forager.okx import OKXBot
+
+        bot = OKXBot(config)
+    elif user_info["exchange"] == "hyperliquid":
+        from exchanges_forager.hyperliquid import HyperliquidBot
+
+        bot = HyperliquidBot(config)
+    elif user_info["exchange"] == "gateio":
+        from exchanges_forager.gateio import GateIOBot
+
+        bot = GateIOBot(config)
     else:
-        raise Exception("unknown exchange", config["exchange"])
+        raise Exception(f"unknown exchange {user_info['exchange']}")
+    return bot
 
-    if config["ohlcv"]:
-        logging.info(
-            "starting passivbot in ohlcv mode, using REST API only and updating once a minute"
+
+async def shutdown_bot(bot):
+    print("Shutting down bot...")
+    bot.stop_data_maintainers()
+    try:
+        await asyncio.wait_for(bot.close(), timeout=3.0)
+    except asyncio.TimeoutError:
+        print("Shutdown timed out after 3 seconds. Forcing exit.")
+    except Exception as e:
+        print(f"Error during shutdown: {e}")
+
+
+async def main():
+    parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
+    parser.add_argument("hjson_config_path", type=str, help="path to hjson passivbot meta config")
+    parser_items = [
+        (
+            "s",
+            "approved_symbols",
+            "approved_symbols",
+            str,
+            ", comma separated (SYM1USDT,SYM2USDT,...)",
+        ),
+        ("i", "ignored_coins", "ignored_coins", str, ", comma separated (SYM1USDT,SYM2USDT,...)"),
+        ("le", "long_enabled", "long_enabled", str2bool, " (y/n or t/f)"),
+        ("se", "short_enabled", "short_enabled", str2bool, " (y/n or t/f)"),
+        ("tl", "total_wallet_exposure_long", "TWE_long", float, ""),
+        ("ts", "total_wallet_exposure_short", "TWE_short", float, ""),
+        ("u", "user", "user", str, ""),
+        ("lap", "loss_allowance_pct", "loss_allowance_pct", float, " (set to 0.0 to disable)"),
+        ("pml", "pnls_max_lookback_days", "pnls_max_lookback_days", float, ""),
+        ("st", "stuck_threshold", "stuck_threshold", float, ""),
+        ("ucp", "unstuck_close_pct", "unstuck_close_pct", float, ""),
+        ("eds", "execution_delay_seconds", "execution_delay_seconds", float, ""),
+        ("lcd", "live_configs_dir", "live_configs_dir", str, ""),
+        ("dcp", "default_config_path", "default_config_path", str, ""),
+        ("ag", "auto_gs", "auto_gs", str2bool, " enabled (y/n or t/f)"),
+        ("nca", "max_n_cancellations_per_batch", "max_n_cancellations_per_batch", int, ""),
+        ("ncr", "max_n_creations_per_batch", "max_n_creations_per_batch", int, ""),
+        ("pt", "price_threshold", "price_threshold", float, ""),
+    ]
+    for k0, k1, d, t, h in parser_items:
+        parser.add_argument(
+            *[f"-{k0}", f"--{k1}"] + ([f"--{k1.replace('_', '-')}"] if "_" in k1 else []),
+            type=t,
+            required=False,
+            dest=d,
+            default=None,
+            help=f"specify {k1}{h}, overriding value from live hjson config.",
         )
+    max_n_restarts_per_day = 5
+    cooldown_secs = 60
+    restarts = []
+    while True:
+        args = parser.parse_args()
+        config = load_config(args.hjson_config_path)
+        """
+        for key in [x[2] for x in parser_items]:
+            if getattr(args, key) is not None:
+                if key.endswith("symbols"):
+                    old_value = sorted(set(config[key]))
+                    new_value = sorted(set(getattr(args, key).split(",")))
+                else:
+                    old_value = config[key]
+                    new_value = getattr(args, key)
+                logging.info(f"changing {key}: {old_value} -> {new_value}")
+                config[key] = new_value
+        """
+        bot = setup_bot(config)
+        try:
+            await bot.start_bot()
+        except Exception as e:
+            logging.error(f"passivbot error {e}")
+            traceback.print_exc()
+        finally:
+            try:
+                bot.stop_data_maintainers()
+                await bot.ccp.close()
+                await bot.cca.close()
+            except:
+                pass
+        logging.info(f"restarting bot...")
+        print()
+        for z in range(cooldown_secs, -1, -1):
+            print(f"\rcountdown {z}...  ")
+            await asyncio.sleep(1)
+        print()
 
-    signal.signal(signal.SIGINT, bot.stop)
-    signal.signal(signal.SIGTERM, bot.stop)
-    await start_bot(bot)
-    if hasattr(bot, "session"):
-        await bot.session.close()
+        restarts.append(utc_ms())
+        restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]
+        if len(restarts) > max_n_restarts_per_day:
+            logging.info(f"n restarts exceeded {max_n_restarts_per_day} last 24h")
+            break
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except Exception as e:
-        logging.error(f"There was an error starting the bot: {e}")
-        traceback.print_exc()
-    finally:
-        logging.info("Passivbot was stopped successfully")
-        os._exit(0)
+    except KeyboardInterrupt:
+        print("\nBot shutdown complete.")
