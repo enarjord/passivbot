@@ -5,7 +5,7 @@ import asyncio
 import argparse
 import multiprocessing
 from multiprocessing import shared_memory
-from backtest_forager import (
+from backtest import (
     prepare_hlcs_mss,
     prep_backtest_args,
     convert_to_v7,
