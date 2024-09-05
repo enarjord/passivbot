@@ -280,7 +280,7 @@ def configs_to_individuals(cfgs):
     inds = {}
     for cfg in cfgs:
         try:
-            individual = config_to_individual(format_config(cfg))
+            individual = config_to_individual(format_config(cfg, verbose=False))
             inds[calc_hash(individual)] = individual
         except Exception as e:
             logging.error(f"error with config_to_individual {e}")
