@@ -159,7 +159,9 @@ def format_config(config: dict, verbose=True) -> dict:
                 print(f"renaming parameter {k0} {src}: {dst}")
             del result[k0][src]
     if result["live"]["approved_coins"]:
-        result["live"]["approved_coins"] = coins_to_symbols(result["live"]["approved_coins"])
+        result["live"]["approved_coins"] = coins_to_symbols(
+            result["live"]["approved_coins"], verbose=verbose
+        )
         result["backtest"]["symbols"] = result["live"]["approved_coins"]
     else:
         result["backtest"]["symbols"] = get_all_eligible_symbols(result["backtest"]["exchange"])
@@ -207,7 +209,7 @@ def get_all_eligible_symbols(exchange="binance"):
         raise Exception("unable to fetch or load from cache")
 
 
-def coin_to_symbol(coin: str, eligible_symbols=None):
+def coin_to_symbol(coin: str, eligible_symbols=None, verbose=True):
     # formats coin to appropriate symbol
     if eligible_symbols is None:
         eligible_symbols = get_all_eligible_symbols()
@@ -216,20 +218,22 @@ def coin_to_symbol(coin: str, eligible_symbols=None):
     if len(candidates) == 1:
         return candidates[0]
     if len(candidates) == 0:
-        print(f"no candidate symbol found for {coin}")
+        if verbose:
+            print(f"no candidate symbol found for {coin}")
         return None
     for x in candidates:
         if x.replace("USDT", "") == coin:
             return x
     if coin == "":
         return None
-    print(f"ambiguous coin: {coin}, candidates: {candidates}")
+    if verbose:
+        print(f"ambiguous coin: {coin}, candidates: {candidates}")
     return None
 
 
-def coins_to_symbols(coins: [str], eligible_symbols=None):
+def coins_to_symbols(coins: [str], eligible_symbols=None, verbose=True):
     eligible_symbols = get_all_eligible_symbols()
-    symbols = [coin_to_symbol(x, eligible_symbols) for x in coins]
+    symbols = [coin_to_symbol(x, eligible_symbols, verbose=verbose) for x in coins]
     return sorted(set([x for x in symbols if x]))
 
 
