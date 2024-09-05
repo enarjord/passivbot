@@ -45,7 +45,7 @@ class BitgetBot(Passivbot):
         }
         self.custom_id_max_length = 64
 
-    async def determine_utc_offset(self):
+    async def determine_utc_offset(self, verbose=True):
         # returns millis to add to utc to get exchange timestamp
         # call some endpoint which includes timestamp for exchange's server
         # if timestamp is not included in self.cca.fetch_balance(),
@@ -54,7 +54,8 @@ class BitgetBot(Passivbot):
         self.utc_offset = round((result["timestamp"] - utc_ms()) / (1000 * 60 * 60)) * (
             1000 * 60 * 60
         )
-        logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
+        if verbose:
+            logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()

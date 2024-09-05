@@ -75,14 +75,15 @@ class GateIOBot(Passivbot):
             self.c_mults[symbol] = elm["contractSize"]
             self.max_leverage[symbol] = elm["limits"]["leverage"]["max"]
 
-    async def determine_utc_offset(self):
+    async def determine_utc_offset(self, verbose=True):
         # returns millis to add to utc to get exchange timestamp
         # call some endpoint which includes timestamp for exchange's server
         # if timestamp is not included in self.cca.fetch_balance(),
         # implement method in exchange child class
         result = await self.cca.fetch_ohlcv("BTC/USDT:USDT", timeframe="1m")
         self.utc_offset = round((result[-1][0] - utc_ms()) / (1000 * 60 * 60)) * (1000 * 60 * 60)
-        logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
+        if verbose:
+            logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
 
     async def start_websockets(self):
         await asyncio.gather(
