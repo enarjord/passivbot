@@ -142,7 +142,7 @@ When optimizing, parameter values are within the lower and upper bounds.
 - `population_size`: size of population for genetic optimization algorithm
 - `scoring`:
 	- the optimizer uses two objectives and finds the pareto front,
-	- finally choosing the optimal candidate based on lowest euclidian distance to ideal
+	- finally choosing the optimal candidate based on lowest euclidian distance to ideal point.
 	- default values are median daily gain and sharpe ratio
 
 ### Optimization Limits
