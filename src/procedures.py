@@ -40,7 +40,7 @@ from pure_funcs import (
 )
 
 
-def format_config(config: dict) -> dict:
+def format_config(config: dict, verbose=True) -> dict:
     # attempts to format a config to v7 config
     template = get_template_live_config("v7")
     cmap = {
@@ -136,11 +136,13 @@ def format_config(config: dict) -> dict:
         for pside in ["long", "short"]:
             if k0 not in result["bot"][pside]:
                 result["bot"][pside][k0] = v0
-                print(f"adding missing parameter {k0}: {v0}")
+                if verbose:
+                    print(f"adding missing parameter {k0}: {v0}")
             opt_key = f"{pside}_{k0}"
             if opt_key not in result["optimize"]["bounds"]:
                 result["optimize"]["bounds"][opt_key] = v1
-                print(f"adding missing parameter {opt_key}: {v1}")
+                if verbose:
+                    print(f"adding missing parameter {opt_key}: {v1}")
     for k0, k1, v in [
         ("live", "time_in_force", "good_till_cancelled"),
         ("live", "noisiness_rolling_mean_window_size", 60),
@@ -148,11 +150,13 @@ def format_config(config: dict) -> dict:
     ]:
         if k1 not in result[k0]:
             result[k0][k1] = v
-            print(f"adding missing parameter {k0} {k1}: {v}")
+            if verbose:
+                print(f"adding missing parameter {k0} {k1}: {v}")
     for k0, src, dst in [("live", "minimum_market_age_days", "minimum_coin_age_days")]:
         if src in result[k0]:
             result[k0][dst] = deepcopy(result[k0][src])
-            print(f"renaming parameter {k0} {src}: {dst}")
+            if verbose:
+                print(f"renaming parameter {k0} {src}: {dst}")
             del result[k0][src]
     if result["live"]["approved_coins"]:
         result["live"]["approved_coins"] = coins_to_symbols(result["live"]["approved_coins"])
