@@ -154,25 +154,27 @@ def format_config(config: dict) -> dict:
             result[k0][dst] = deepcopy(result[k0][src])
             print(f"renaming parameter {k0} {src}: {dst}")
             del result[k0][src]
-    result["live"]["approved_coins"] = sorted(set(result["live"]["approved_coins"]))
-    if result["backtest"]["symbols"]:
-        result["backtest"]["symbols"] = coins_to_symbols(result["backtest"]["symbols"])
+    if result["live"]["approved_coins"]:
+        result["live"]["approved_coins"] = coins_to_symbols(result["live"]["approved_coins"])
+        result["backtest"]["symbols"] = result["live"]["approved_coins"]
     else:
-        if result["live"]["approved_coins"]:
-            result["backtest"]["symbols"] = coins_to_symbols(result["live"]["approved_coins"])
-        else:
-            result["backtest"]["symbols"] = get_all_eligible_symbols(result)
+        result["backtest"]["symbols"] = get_all_eligible_symbols(result["backtest"]["exchange"])
     return result
 
 
-def get_all_eligible_symbols(config=None):
-    if config is None:
-        exchange = "binance"
-    elif config["backtest"]["exchange"] != "binance":
-        raise Exception(f"only exchange binance is supported for backtesting")
-    else:
-        exchange = config["backtest"]["exchange"]
-    filepath = make_get_filepath("caches/binance/eligible_symbols.json")
+def get_all_eligible_symbols(exchange="binance"):
+    exchange_map = {
+        "bybit": "bybit",
+        "binance": "binanceusdm",
+        # "bitget": "bitget", TODO
+        # "hyperliquid": "hyperliquid", TODO
+        # "gateio": "gateio", TODO
+    }
+    quote_map = {k: "USDT" for k in exchange_map}
+    quote_map["hyperliquid"] = "USDC"
+    if exchange not in exchange_map:
+        raise Exception(f"only exchanges {list(exchange_map.values())} are supported for backtesting")
+    filepath = make_get_filepath(f"caches/{exchange}/eligible_symbols.json")
     loaded_json = None
     try:
         loaded_json = json.load(open(filepath))
@@ -181,14 +183,7 @@ def get_all_eligible_symbols(config=None):
     except Exception as e:
         pass
     try:
-        exchange_map = {
-            # "bybit": "bybit", TODO
-            "binance": "binanceusdm",
-            # "bitget": "bitget", TODO
-            # "hyperliquid": "hyperliquid", TODO
-        }
-        quote = "USDT"
-        assert exchange in exchange_map, f"unsupported exchange {exchange}"
+        quote = quote_map[exchange]
         import ccxt
 
         cc = getattr(ccxt, exchange_map[exchange])()
@@ -196,7 +191,7 @@ def get_all_eligible_symbols(config=None):
         symbols = [
             x["symbol"] for x in markets if "symbol" in x and x["symbol"].endswith(f":{quote}")
         ]
-        eligible_symbols = sorted(set([x.replace("/USDT:", "") for x in symbols]))
+        eligible_symbols = sorted(set([x.replace(f"/{quote}:", "") for x in symbols]))
         eligible_symbols = [x for x in eligible_symbols if x]
         json.dump(eligible_symbols, open(filepath, "w"))
         return eligible_symbols
@@ -231,7 +226,7 @@ def coin_to_symbol(coin: str, eligible_symbols=None):
 def coins_to_symbols(coins: [str], eligible_symbols=None):
     eligible_symbols = get_all_eligible_symbols()
     symbols = [coin_to_symbol(x, eligible_symbols) for x in coins]
-    return [x for x in symbols if x]
+    return sorted(set([x for x in symbols if x]))
 
 
 def load_config(filepath: str) -> dict:
