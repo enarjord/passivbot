@@ -293,7 +293,7 @@ def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcs):
         plt.savefig(oj(plots_dir, f"{symbol}.png"))
 
 
-def add_argparse_args_backtest_forager(parser):
+def add_argparse_args_backtest(parser):
     parser_items = [
         ("s", "symbols", "symbols", str, ", comma separated (SYM1USDT,SYM2USDT,...)"),
         ("e", "exchange", "exchange", str, ""),
@@ -335,9 +335,9 @@ async def main():
         level=logging.INFO,
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
-    parser = argparse.ArgumentParser(prog="backtest_forager", description="run forager backtest")
+    parser = argparse.ArgumentParser(prog="backtest", description="run forager backtest")
     parser.add_argument("config_path", type=str, default=None, help="path to hjson passivbot config")
-    args = add_argparse_args_backtest_forager(parser)
+    args = add_argparse_args_backtest(parser)
     config = load_config("configs/template.hjson" if args.config_path is None else args.config_path)
     config = add_argparse_args_to_config(config, args)
     hlcs, mss, results_path = await prepare_hlcs_mss(config)
