@@ -2037,27 +2037,27 @@ def setup_bot(config):
     # returns bot instance
     user_info = load_user_info(config["live"]["user"])
     if user_info["exchange"] == "bybit":
-        from exchanges_forager.bybit import BybitBot
+        from exchanges.bybit import BybitBot
 
         bot = BybitBot(config)
     elif user_info["exchange"] == "binance":
-        from exchanges_forager.binance import BinanceBot
+        from exchanges.binance import BinanceBot
 
         bot = BinanceBot(config)
     elif user_info["exchange"] == "bitget":
-        from exchanges_forager.bitget import BitgetBot
+        from exchanges.bitget import BitgetBot
 
         bot = BitgetBot(config)
     elif user_info["exchange"] == "okx":
-        from exchanges_forager.okx import OKXBot
+        from exchanges.okx import OKXBot
 
         bot = OKXBot(config)
     elif user_info["exchange"] == "hyperliquid":
-        from exchanges_forager.hyperliquid import HyperliquidBot
+        from exchanges.hyperliquid import HyperliquidBot
 
         bot = HyperliquidBot(config)
     elif user_info["exchange"] == "gateio":
-        from exchanges_forager.gateio import GateIOBot
+        from exchanges.gateio import GateIOBot
 
         bot = GateIOBot(config)
     else:
