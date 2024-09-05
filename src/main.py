@@ -1,5 +1,5 @@
 import asyncio
-from passivbot_forager import main
+from passivbot import main
 import os
 import time
 import subprocess
