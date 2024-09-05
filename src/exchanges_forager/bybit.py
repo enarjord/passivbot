@@ -1,4 +1,4 @@
-from passivbot_forager import Passivbot, logging
+from passivbot import Passivbot, logging
 from uuid import uuid4
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
