@@ -19,7 +19,7 @@ from pure_funcs import (
     sort_dict_keys,
 )
 import pprint
-from downloader import prepare_hlcs_forager
+from downloader import prepare_hlcs_forager, prepare_hlcvs
 from plotting import plot_fills_forager
 import matplotlib.pyplot as plt
 import logging
@@ -215,7 +215,8 @@ async def prepare_hlcs_mss(config):
         except:
             raise Exception("failed to load market specific settings from cache")
 
-    timestamps, hlcs = await prepare_hlcs_forager(config)
+    symbols, timestamps, hlcvs = await prepare_hlcvs(config)
+    hlcs = hlcvs[:, :, :3]
 
     return hlcs, mss, results_path
 
