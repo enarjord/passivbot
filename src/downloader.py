@@ -1512,7 +1512,6 @@ def unify_hlcv_data(hlcv_list) -> (np.ndarray, np.ndarray):
     timestamps = np.arange(start_time, end_time + 60000, 60000)
 
     for i, ohlcv in enumerate(hlcv_list):
-        print("unifying", i)
         # Calculate the start and end indices for this coin
         start_idx = int((ohlcv[0, 0] - start_time) / 60000)
         end_idx = start_idx + len(ohlcv)
