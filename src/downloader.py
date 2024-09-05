@@ -1361,7 +1361,8 @@ async def prepare_hlcvs(config: dict):
         ).all(), f"gaps in hlcv data {symbol}"  # verify integrous 1m hlcs
         hlcvsd[symbol] = data
     symbols = list(hlcvsd.keys())
-    print(f"Unifying data for {len(symbols)} coins into single numpy array...")
+    if len(symbols) > 1:
+        print(f"Unifying data for {len(symbols)} coins into single numpy array...")
     timestamps, unified_data = unify_hlcv_data(hlcvsd.values())
     return symbols, timestamps, unified_data
 
