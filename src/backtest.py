@@ -165,9 +165,10 @@ def add_argparse_args_to_config(config, args):
                 continue
             if key == "symbols":
                 symbols = sorted([coin_to_symbol(x) for x in set(value.split(","))])
-                if symbols != sorted(set(config["backtest"]["symbols"])):
+                if symbols != sorted(set(config["live"]["approved_coins"])):
                     logging.info(f"new symbols: {symbols}")
-                    config["backtest"]["symbols"] = [coin_to_symbol(x) for x in symbols]
+                    config["live"]["approved_coins"] = [coin_to_symbol(x) for x in symbols]
+                    config["backtest"]["symbols"] = config["live"]["approved_coins"]
             elif key in config["backtest"]:
                 if not isinstance(config["backtest"][key], dict):
                     if config["backtest"][key] != value:
