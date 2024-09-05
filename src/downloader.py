@@ -1041,17 +1041,16 @@ def get_days_in_between(start_day, end_day):
 
 
 async def download_ohlcvs_bybit(symbol, start_date, end_date, spot=False, download_only=False):
-    try:
-        return await download_ohlcvs_bybit_sub(
-            symbol, start_date, end_date, spot=False, download_only=False, n_concurrent_fetches=10
-        )
-    except Exception as e:
-        print(
-            f"error fetching trades from bybit for {symbol} {e}. Retrying with fewer concurrent fetches."
-        )
-    return await download_ohlcvs_bybit_sub(
-        symbol, start_date, end_date, spot=False, download_only=False, n_concurrent_fetches=1
-    )
+    ns = [30, 10, 1]
+    for i, n in enumerate(ns):
+        try:
+            return await download_ohlcvs_bybit_sub(
+                symbol, start_date, end_date, spot=False, download_only=False, n_concurrent_fetches=n
+            )
+        except Exception as e:
+            print(f"Error fetching trades from bybit for {symbol} {e}. ")
+            if i < len(ns):
+                f"Retrying with concurrent fetches changed {n} -> {ns[i+1]}."
 
 
 async def download_ohlcvs_bybit_sub(
@@ -1185,8 +1184,6 @@ async def download_ohlcvs_binance(
         start_ts = get_first_ohlcv_ts(symbol, spot=spot)
     else:
         start_ts = (await get_first_ohlcv_timestamps(symbols=[symbol]))[symbol]
-    if start_ts != 0:
-        print(f"first ohlcv at {ts_to_date(start_ts)}")
     start_ts = int(max(start_ts, date_to_ts2(start_date)))
     end_ts = int(date_to_ts2(end_date))
     days = [ts_to_date_utc(x)[:10] for x in list(range(start_ts, end_ts, 1000 * 60 * 60 * 24))]
@@ -1272,17 +1269,20 @@ def count_longest_identical_data(hlc, symbol, verbose=True):
     return longest_consecutive
 
 
-def attempt_gap_fix_hlcs(df):
+def attempt_gap_fix_hlcs(df, symbol=None):
     interval = 60 * 1000
-    max_gap = interval * 60 * 12  # 12 hours
+    max_hours = 12
+    max_gap = interval * 60 * max_hours
     greatest_gap = df.timestamp.diff().max()
     if greatest_gap == interval:
         return df
     if greatest_gap > max_gap:
         raise Exception(
-            f"ohlcvs gap greater than {max_gap / (1000 * 60 * 60)} hours: {greatest_gap / (1000 * 60 * 60)} hours"
+            f"ohlcvs gap greater than {max_hours} hours: {greatest_gap / (1000 * 60 * 60)} hours"
         )
-    print("gap(s) in ohlcvs... attempting fix")
+    print(
+        f"ohlcvs for {symbol} has greatest gap {greatest_gap / (1000 * 60 * 60):.3f} hours. Filling gaps..."
+    )
     new_timestamps = np.arange(df["timestamp"].iloc[0], df["timestamp"].iloc[-1] + interval, interval)
     new_df = df.set_index("timestamp").reindex(new_timestamps)
     new_df.close = new_df.close.ffill()
@@ -1300,6 +1300,7 @@ async def load_hlcvs(symbol, start_date, end_date, base_dir="backtests", exchang
         df = await download_ohlcvs_binance(symbol, False, start_date, end_date, False)
     elif exchange == "bybit":
         df = await download_ohlcvs_bybit(symbol, start_date, end_date)
+        df = attempt_gap_fix_hlcs(df, symbol=symbol)
     else:
         raise Exception(f"downloading ohlcvs from exchange {exchange} not supported")
     if len(df) == 0:
@@ -1307,6 +1308,62 @@ async def load_hlcvs(symbol, start_date, end_date, base_dir="backtests", exchang
     df = df[df.timestamp >= date_to_ts2(start_date)]
     df = df[df.timestamp <= date_to_ts2(end_date)]
     return df[["timestamp", "high", "low", "close", "volume"]].values
+
+
+async def prepare_hlcvs(config: dict):
+    symbols = sorted(set(config["backtest"]["symbols"]))
+    start_date = config["backtest"]["start_date"]
+    end_date = config["backtest"]["end_date"]
+    base_dir = config["backtest"]["base_dir"]
+    exchange = config["backtest"]["exchange"]
+    minimum_coin_age_days = config["live"]["minimum_coin_age_days"]
+    if end_date in ["today", "now", "", None]:
+        end_ts = utc_ms() - 1000 * 60 * 60 * 24
+        end_date = ts_to_date_utc(end_ts)[:10]
+    else:
+        end_ts = date_to_ts2(end_date)
+    hlcvsd = {}
+    interval_ms = 60000
+    start_tss = None
+    if exchange == "binance":
+        start_tss = await get_first_ohlcv_timestamps(cc=ccxt.binanceusdm(), symbols=symbols)
+    elif exchange == "bybit":
+        start_tss = await get_first_ohlcv_timestamps(cc=ccxt.bybit(), symbols=symbols)
+    for symbol in symbols:
+        adjusted_start_ts = date_to_ts2(start_date)
+        if minimum_coin_age_days > 0.0:
+            min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
+            if symbol not in start_tss:
+                print(f"coin {symbol} missing from first timestamps, skipping")
+                continue
+            new_start_ts = start_tss[symbol] + min_coin_age_ms
+            if new_start_ts >= end_ts:
+                print(
+                    f"Coin {symbol} too young, start date {ts_to_date_utc(start_tss[symbol])}, skipping"
+                )
+                continue
+            if new_start_ts > adjusted_start_ts:
+                print(
+                    f"First date for {symbol} was {ts_to_date_utc(start_tss[symbol])}. Adjusting start date to {ts_to_date_utc(new_start_ts)}"
+                )
+                adjusted_start_ts = new_start_ts
+        data = await load_hlcvs(
+            symbol,
+            ts_to_date_utc(adjusted_start_ts)[:10],
+            end_date,
+            base_dir,
+            exchange,
+        )
+        if len(data) == 0:
+            continue
+        assert (
+            np.diff(data[:, 0]) == interval_ms
+        ).all(), f"gaps in hlcv data {symbol}"  # verify integrous 1m hlcs
+        hlcvsd[symbol] = data
+    symbols = list(hlcvsd.keys())
+    print(f"Unifying data for {len(symbols)} coins into single numpy array...")
+    timestamps, unified_data = unify_hlcv_data(hlcvsd.values())
+    return symbols, timestamps, unified_data
 
 
 async def load_hlc_cache(
@@ -1436,6 +1493,45 @@ def pad_hlcs(hlcs, timestamps):
     padded_hlcs = padded_hlcs[idx]
 
     return padded_hlcs
+
+
+def unify_hlcv_data(hlcv_list) -> (np.ndarray, np.ndarray):
+
+    # Find the global start and end timestamps
+    start_time = min(arr[0, 0] for arr in hlcv_list)
+    end_time = max(arr[-1, 0] for arr in hlcv_list)
+
+    # Calculate the number of timesteps
+    n_timesteps = int((end_time - start_time) / 60000) + 1
+
+    # Create the unified array
+    n_coins = len(hlcv_list)
+    unified_array = np.zeros((n_timesteps, n_coins, 4))
+
+    # Create the timestamp array
+    timestamps = np.arange(start_time, end_time + 60000, 60000)
+
+    for i, ohlcv in enumerate(hlcv_list):
+        print("unifying", i)
+        # Calculate the start and end indices for this coin
+        start_idx = int((ohlcv[0, 0] - start_time) / 60000)
+        end_idx = start_idx + len(ohlcv)
+
+        # Extract the required data (high, low, close, volume)
+        coin_data = ohlcv[:, 1:]
+
+        # Place the data in the unified array
+        unified_array[start_idx:end_idx, i, :] = coin_data
+
+        # Front-fill
+        if start_idx > 0:
+            unified_array[:start_idx, i, :3] = coin_data[0, 2]  # Set high, low, close to first close
+
+        # Back-fill
+        if end_idx < n_timesteps:
+            unified_array[end_idx:, i, :3] = coin_data[-1, 2]  # Set high, low, close to last close
+
+    return timestamps, unified_array
 
 
 async def prepare_hlcs_forager(config: dict):
