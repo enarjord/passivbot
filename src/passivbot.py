@@ -245,9 +245,10 @@ class Passivbot:
             self.live_configs[symbol]["leverage"] = self.config["live"]["leverage"]
             for pside in ["long", "short"]:
                 self.live_configs[symbol][pside]["wallet_exposure_limit"] = (
-                    (
+                    pbr.round_(
                         self.live_configs[symbol][pside]["total_wallet_exposure_limit"]
-                        / self.live_configs[symbol][pside]["n_positions"]
+                        / self.live_configs[symbol][pside]["n_positions"],
+                        0.0001,
                     )
                     if self.live_configs[symbol][pside]["n_positions"] > 0
                     else 0.0
@@ -429,7 +430,7 @@ class Passivbot:
         await self.update_exchange_config()
         self.init_markets_last_update_ms = utc_ms()
         self.markets_dict = {elm["symbol"]: elm for elm in (await self.cca.fetch_markets())}
-        await self.determine_utc_offset()
+        await self.determine_utc_offset(verbose)
         self.markets_dict_all = deepcopy(self.markets_dict)
         # remove ineligible symbols from markets dict
         ineligible_symbols = {}
