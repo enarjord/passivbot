@@ -207,7 +207,7 @@ class Evaluator:
         self.shared_preferred_coins.unlink()
 
 
-def add_argparse_args_optimize_forager(parser):
+def add_argparse_args_optimize(parser):
     parser_items = [
         ("s", "symbols", "symbols", str, ", comma separated (SYM1USDT,SYM2USDT,...)"),
         ("e", "exchange", "exchange", str, ""),
@@ -289,11 +289,11 @@ def configs_to_individuals(cfgs):
 
 async def main():
     manage_rust_compilation()
-    parser = argparse.ArgumentParser(prog="optimize_forager", description="run forager optimizer")
+    parser = argparse.ArgumentParser(prog="optimize", description="run forager optimizer")
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )
-    args = add_argparse_args_optimize_forager(parser)
+    args = add_argparse_args_optimize(parser)
     signal.signal(signal.SIGINT, signal_handler)
     logging.basicConfig(
         format="%(asctime)s %(levelname)-8s %(message)s",
