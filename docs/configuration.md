@@ -109,7 +109,18 @@ If a position is stuck, bot will use profits made on other positions to realize 
 - `approved_coins`: list of coins approved for trading. If empty, all coins are approved.
 - `auto_gs`: automatically enable graceful stop for positions on disapproved coins
 	- graceful stop means the bot will continue trading as normal, but not open a new position after current position is fully closed.
-- `coin_flags`: not operational
+- `coin_flags`:
+	- Specify flags for individual coins, overriding values from bot config.
+	- E.g. `coin_flags: {"ETH": "-sm n -lm gs", "XRP": "-lm p -lc path/to/other_config.json"}` will force short mode to normal, and long mode to graceful stop for ETH; will set long mode to panic and use other config for XRP.
+	- Flags:
+	- `-lm` or `-sm` long or short mode. Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
+		- normal mode: passivbot manages the position as normal
+		- manual mode: passivbot ignores the position
+		- graceful stop: if there is a position, passivbot will manage it, otherwise passivbot will not make new positions
+		- take profit only: passivbot will only manage closing orders
+	- `-lw` or `-sw` long or short wallet exposure limit.
+	- `-lev` leverage.
+	- `-lc` path to live config. Load most of the bot parameters from another config.
 - `execution_delay_seconds`: wait x seconds after executing to exchange
 - `filter_by_min_effective_cost`: if true, will disallow coins where balance * WE_limit * initial_qty_pct < min_effective_cost
 	- e.g. if exchange's effective min cost for a coin is $5, but bot wants to make an order of $2, disallow that coin.
