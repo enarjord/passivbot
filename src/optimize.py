@@ -6,9 +6,8 @@ import argparse
 import multiprocessing
 from multiprocessing import shared_memory
 from backtest import (
-    prepare_hlcs_mss,
+    prepare_hlcvs_mss,
     prep_backtest_args,
-    convert_to_v7,
     add_argparse_args_to_config,
     calc_preferred_coins,
 )
@@ -20,7 +19,15 @@ from pure_funcs import (
     sort_dict_keys,
     calc_hash,
 )
-from procedures import make_get_filepath, utc_ms, load_hjson_config, load_config, format_config
+from procedures import (
+    make_get_filepath,
+    utc_ms,
+    load_hjson_config,
+    load_config,
+    format_config,
+    add_arguments_recursively,
+    update_config_with_args,
+)
 from copy import deepcopy
 from main import manage_rust_compilation
 import numpy as np
@@ -293,6 +300,8 @@ async def main():
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )
+    # add_arguments_recursively(parser, get_template_live_config("v7"))
+    # args = parser.parse_args()
     args = add_argparse_args_optimize(parser)
     signal.signal(signal.SIGINT, signal_handler)
     logging.basicConfig(
@@ -307,8 +316,10 @@ async def main():
         logging.info(f"loading config {args.config_path}")
         config = load_config(args.config_path)
     config = add_argparse_args_to_config(config, args)
-    hlcs, mss, results_path = await prepare_hlcs_mss(config)
-    preferred_coins = calc_preferred_coins(hlcs, config)
+    symbols, hlcvs, mss, results_path = await prepare_hlcvs_mss(config)
+    config["backtest"]["symbols"] = symbols
+    preferred_coins = calc_preferred_coins(hlcvs, config)
+    hlcs = hlcvs[:, :, :3]
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
     coins = [symbol_to_coin(s) for s in config["backtest"]["symbols"]]
     coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
