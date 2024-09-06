@@ -64,7 +64,7 @@
           "noisiness_rolling_mean_window_size": 60,
           "pnls_max_lookback_days": 30.0,
           "price_distance_threshold": 0.002,
-          "relative_volume_filter_clip_pct": 0.1,
+          "relative_volume_filter_clip_pct": 0.5,
           "time_in_force": "good_till_cancelled",
           "user": "bybit_01"},
  "optimize": {"bounds": {"long_close_grid_markup_range": [0.0, 0.03],
