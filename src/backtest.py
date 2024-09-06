@@ -19,7 +19,7 @@ from pure_funcs import (
     sort_dict_keys,
 )
 import pprint
-from downloader import prepare_hlcs_forager, prepare_hlcvs
+from downloader import prepare_hlcvs
 from plotting import plot_fills_forager
 import matplotlib.pyplot as plt
 import logging
@@ -111,53 +111,6 @@ def check_keys(dict0, dict1):
     return check_nested(dict0, dict1)
 
 
-def convert_to_v7(cfg: dict):
-    formatted = get_template_live_config("v7")
-    if check_keys(formatted, cfg):
-        return cfg
-    cmap = {
-        "ddown_factor": "entry_grid_double_down_factor",
-        "initial_eprice_ema_dist": "entry_initial_ema_dist",
-        "initial_qty_pct": "entry_initial_qty_pct",
-        "markup_range": "close_grid_markup_range",
-        "min_markup": "close_grid_min_markup",
-        "rentry_pprice_dist": "entry_grid_spacing_pct",
-        "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_weight",
-        "ema_span_0": "ema_span_0",
-        "ema_span_1": "ema_span_1",
-    }
-    if "args" in cfg:
-        for key in ["start_date", "end_date", "starting_balance", "exchange"]:
-            if key in formatted["backtest"]:
-                formatted["backtest"][key] = cfg["args"][key]
-        formatted["approved_symbols"] = cfg["args"]["symbols"]
-        for pside in ["long", "short"]:
-            if not cfg["args"][f"{pside}_enabled"]:
-                cfg["live_config"]["global"][f"TWE_{pside}"] = 0.0
-    if "live_config" in cfg and all([x in cfg["live_config"] for x in ["global", "long", "short"]]):
-        for pside in ["long", "short"]:
-            for k0 in cfg["live_config"][pside]:
-                if k0 in cmap and cmap[k0] in formatted[pside]:
-                    formatted[pside][cmap[k0]] = cfg["live_config"][pside][k0]
-            formatted[pside]["close_grid_qty_pct"] = 1.0 / round(
-                cfg["live_config"][pside]["n_close_orders"]
-            )
-            formatted[pside]["unstuck_loss_allowance_pct"] = cfg["live_config"]["global"][
-                "loss_allowance_pct"
-            ]
-            formatted[pside]["unstuck_threshold"] = cfg["live_config"]["global"]["stuck_threshold"]
-            formatted[pside]["total_wallet_exposure_limit"] = cfg["live_config"]["global"][
-                f"TWE_{pside}"
-            ]
-            if formatted[pside]["total_wallet_exposure_limit"] > 0.00001:
-                formatted[pside]["n_positions"] = len(formatted["approved_symbols"])
-            else:
-                formatted[pside]["n_positions"] = 0
-            formatted[pside]["close_trailing_grid_ratio"] = 0.0
-            formatted[pside]["entry_trailing_grid_ratio"] = 0.0
-    return formatted
-
-
 def add_argparse_args_to_config(config, args):
     for key, value in vars(args).items():
         try:
@@ -194,7 +147,7 @@ def add_argparse_args_to_config(config, args):
     return config
 
 
-async def prepare_hlcs_mss(config):
+async def prepare_hlcvs_mss(config):
     results_path = oj(
         config["backtest"]["base_dir"],
         "forager",
@@ -217,9 +170,8 @@ async def prepare_hlcs_mss(config):
             raise Exception("failed to load market specific settings from cache")
 
     symbols, timestamps, hlcvs = await prepare_hlcvs(config)
-    hlcs = hlcvs[:, :, :3]
 
-    return hlcs, mss, results_path
+    return symbols, hlcvs, mss, results_path
 
 
 def prep_backtest_args(config, mss, exchange_params=None, backtest_params=None):
@@ -322,11 +274,48 @@ def add_argparse_args_backtest(parser):
     return args
 
 
-def calc_preferred_coins(hlcs, config):
-    # disqualify coins by coin age, relative volume, then sort by noisiness
-    return np.argsort(
-        -pbr.calc_noisiness_py(hlcs, config["live"]["noisiness_rolling_mean_window_size"])
-    )
+def calc_preferred_coins(hlcvs, config):
+    w_size = config["live"]["noisiness_rolling_mean_window_size"]
+    n_coins = hlcvs.shape[1]
+
+    # Calculate noisiness indices
+    noisiness_indices = np.argsort(-pbr.calc_noisiness_py(hlcvs[:, :, :3], w_size))
+
+    # Calculate volume-based eligibility
+    if config["live"]["relative_volume_filter_clip_pct"] > 0.0:
+        n_eligibles = int(round(n_coins * (1 - config["live"]["relative_volume_filter_clip_pct"])))
+
+        for pside in ["long", "short"]:
+            if (
+                config["bot"][pside]["n_positions"] > 0.0
+                and config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
+            ):
+                n_eligibles = max(n_eligibles, int(round(config["bot"][pside]["n_positions"])))
+
+        if n_eligibles < n_coins:
+            # Calculate rolling volumes and get volume-based ranking
+            rolling_volumes = pbr.calc_volumes_py(hlcvs, w_size)
+            volume_ranking = np.argsort(-rolling_volumes, axis=1)
+
+            # Create a mask for eligible coins based on volume (vectorized)
+            rows = np.arange(hlcvs.shape[0])[:, None]
+            cols = volume_ranking[:, :n_eligibles]
+            eligibility_mask = np.zeros((hlcvs.shape[0], n_coins), dtype=bool)
+            eligibility_mask[rows, cols] = True
+
+            # Filter noisiness_indices based on eligibility
+            filtered_noisiness_indices = np.array(
+                [
+                    indices[mask]
+                    for indices, mask in zip(
+                        noisiness_indices, eligibility_mask[rows, noisiness_indices]
+                    )
+                ]
+            )
+
+            return filtered_noisiness_indices
+
+    return noisiness_indices
 
 
 async def main():
@@ -341,8 +330,10 @@ async def main():
     args = add_argparse_args_backtest(parser)
     config = load_config("configs/template.hjson" if args.config_path is None else args.config_path)
     config = add_argparse_args_to_config(config, args)
-    hlcs, mss, results_path = await prepare_hlcs_mss(config)
-    preferred_coins = calc_preferred_coins(hlcs, config)
+    symbols, hlcvs, mss, results_path = await prepare_hlcvs_mss(config)
+    config["backtest"]["symbols"] = symbols
+    preferred_coins = calc_preferred_coins(hlcvs, config)
+    hlcs = hlcvs[:, :, :3]
     fills, equities, analysis = run_backtest(hlcs, preferred_coins, mss, config)
     post_process(config, hlcs, fills, equities, analysis, results_path)
 
