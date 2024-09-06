@@ -8,6 +8,8 @@ from time import time
 import numpy as np
 import pprint
 from copy import deepcopy
+import argparse
+from collections import defaultdict
 
 
 try:
@@ -1102,6 +1104,55 @@ def fetch_market_specific_settings(config: dict):
     # import pprint
     # pprint.pprint(elm)
     return sort_dict_keys(settings_from_exchange)
+
+
+def create_acronym(full_name):
+    return "".join(word[0] for word in full_name.split("_"))
+
+
+def add_arguments_recursively(parser, config, prefix=""):
+    acronyms = set()
+
+    for key, value in config.items():
+        full_name = f"{prefix}{key}"
+
+        if isinstance(value, dict):
+            add_arguments_recursively(parser, value, f"{full_name}_")
+        else:
+            acronym = create_acronym(full_name)
+            i = 2
+            while acronym in acronyms:
+                acronym = create_acronym(full_name) + str(i)
+                i += 1
+                if i > 100:
+                    raise Exception(f"too many acronym duplicates {acronym}")
+                    break
+            parser.add_argument(
+                f"--{full_name}",
+                f"-{acronym}",
+                type=type(value),
+                dest=full_name,
+                required=False,
+                default=None,
+                help=f"Override {full_name}",
+            )
+            acronyms.add(acronym)
+
+
+def recursive_config_update(config, key, value):
+    if key in config:
+        print(f"changed {key} {config[key]} -> {value}")
+        config[key] = value
+        return True
+    key_split = key.split("_")
+    if key_split[0] in config:
+        return recursive_config_update(config[key_split[0]], "_".join(key_split[1:]), value)
+
+
+def update_config_with_args(config, args):
+    for key, value in vars(args).items():
+        if value is not None:
+            recursive_config_update(config, key, value)
 
 
 def main():
