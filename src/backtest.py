@@ -117,7 +117,7 @@ def add_argparse_args_to_config(config, args):
             if value is None:
                 continue
             if key == "symbols":
-                symbols = sorted([coin_to_symbol(x) for x in set(value.split(","))])
+                symbols = sorted([xf for x in set(value.split(",")) if (xf := coin_to_symbol(x))])
                 if symbols != sorted(set(config["live"]["approved_coins"])):
                     logging.info(f"new symbols: {symbols}")
                     config["live"]["approved_coins"] = [coin_to_symbol(x) for x in symbols]
