@@ -322,7 +322,7 @@ class GateIOBot(Passivbot):
                 break
             if fetched[0]["timestamp"] <= start_time:
                 break
-            logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
+            logging.info(f"debug fetching pnls {ts_to_date_utc(fetched[-1]['timestamp'])}")
             offset += limit
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
 
