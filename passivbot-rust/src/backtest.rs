@@ -16,7 +16,7 @@ use crate::utils::{
     round_up,
 };
 use ndarray::s;
-use ndarray::{Array1, Array2, Array3};
+use ndarray::{Array1, Array2, Array3, Array4};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
@@ -2137,4 +2137,29 @@ pub fn calc_noisiness(hlcs: &Array3<f64>, window: usize) -> Array2<f64> {
         }
     }
     noisiness
+}
+
+pub fn calc_volumes(hlcvs: &Array3<f64>, window: usize) -> Array2<f64> {
+    let (n_minutes, n_coins, _) = hlcvs.dim();
+
+    // Calculate volume in quote currency (close * volume)
+    let quote_volumes = &hlcvs.slice(s![.., .., 2]) * &hlcvs.slice(s![.., .., 3]);
+
+    let mut rolling_volumes = Array2::<f64>::zeros((n_minutes, n_coins));
+    let mut sums = vec![0.0; n_coins];
+
+    for i in 0..n_minutes {
+        let idx_start = i.saturating_sub(window);
+        for j in 0..n_coins {
+            sums[j] += quote_volumes[[i, j]];
+            if i >= window {
+                sums[j] -= quote_volumes[[idx_start, j]];
+                rolling_volumes[[i, j]] = sums[j];
+            } else {
+                rolling_volumes[[i, j]] = sums[j];
+            }
+        }
+    }
+
+    rolling_volumes
 }
