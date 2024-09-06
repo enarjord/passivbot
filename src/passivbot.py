@@ -26,7 +26,6 @@ from procedures import (
     load_user_info,
     utc_ms,
     make_get_filepath,
-    load_live_config,
     get_file_mod_utc,
     get_first_ohlcv_timestamps,
     load_config,
@@ -182,7 +181,7 @@ class Passivbot:
         )
         await self.update_ohlcvs_1m_for_actives()
 
-    async def execute_to_exchange(self):
+    async def execute_to_exchange(self, debug_mode=False):
         self.update_effective_min_cost()
         self.update_PB_modes()
         self.update_EMAs()
@@ -206,16 +205,30 @@ class Passivbot:
 
         # format custom_id
         to_create = self.format_custom_ids(to_create)
-        res = await self.execute_cancellations(
-            to_cancel[: self.config["live"]["max_n_cancellations_per_batch"]]
-        )
-        if res:
-            for elm in res:
-                self.remove_cancelled_order(elm, source="POST")
-        res = await self.execute_orders(to_create[: self.config["live"]["max_n_creations_per_batch"]])
-        if res:
-            for elm in res:
-                self.add_new_order(elm, source="POST")
+        if debug_mode:
+            if to_cancel:
+                print("would cancel:")
+            for x in to_cancel[: self.config["live"]["max_n_cancellations_per_batch"]]:
+                pprint.pprint(x)
+        else:
+            res = await self.execute_cancellations(
+                to_cancel[: self.config["live"]["max_n_cancellations_per_batch"]]
+            )
+            if res:
+                for elm in res:
+                    self.remove_cancelled_order(elm, source="POST")
+        if debug_mode:
+            if to_create:
+                print("would create:")
+            for x in to_create[: self.config["live"]["max_n_creations_per_batch"]]:
+                pprint.pprint(x)
+        else:
+            res = await self.execute_orders(
+                to_create[: self.config["live"]["max_n_creations_per_batch"]]
+            )
+            if res:
+                for elm in res:
+                    self.add_new_order(elm, source="POST")
         if to_cancel or to_create:
             self.previous_REST_update_ts = 0
 
@@ -238,6 +251,7 @@ class Passivbot:
         return False
 
     def set_live_configs(self):
+        skip = {"n_positions", "total_wallet_exposure_limit"}
         self.config["bot"]["long"]["n_positions"] = round(self.config["bot"]["long"]["n_positions"])
         self.config["bot"]["short"]["n_positions"] = round(self.config["bot"]["short"]["n_positions"])
         for symbol in self.markets_dict:
@@ -253,6 +267,17 @@ class Passivbot:
                     if self.live_configs[symbol][pside]["n_positions"] > 0
                     else 0.0
                 )
+            if symbol in self.flags and self.flags[symbol].live_config_path is not None:
+                try:
+                    loaded = load_config(self.flags[symbol].live_config_path)
+                    for pside in loaded["bot"]:
+                        for k, v in loaded["bot"][pside].items():
+                            if k not in skip:
+                                self.live_configs[symbol][pside][k] = v
+                except Exception as e:
+                    logging.error(
+                        f"failed to load config {self.flags[symbol].live_config_path} for {symbol} {e}. Using default config."
+                    )
 
     def pad_sym(self, symbol):
         return f"{symbol: <{self.sym_padding}}"
@@ -568,20 +593,23 @@ class Passivbot:
         return ""
 
     async def init_flags(self):
-        self.ignored_coins = {self.reformat_symbol(x) for x in self.config["live"]["ignored_coins"]}
-        self.flags = {}
-        self.eligible_symbols = set()  # symbols which may be approved for trading
+        self.ignored_coins = set()
+        for x in self.config["live"]["ignored_coins"]:
+            if xr := self.reformat_symbol(x):
+                self.ignored_coins.add(xr)
 
-        for symbol in self.config["live"]["approved_coins"]:
-            reformatted_symbol = self.reformat_symbol(symbol, verbose=True)
-            if reformatted_symbol:
-                self.flags[reformatted_symbol] = (
-                    self.config["live"]["approved_coins"][symbol]
-                    if isinstance(self.config["live"]["approved_coins"], dict)
-                    else ""
-                )
-                self.eligible_symbols.add(reformatted_symbol)
-        if not self.config["live"]["approved_coins"]:
+        self.flags = {}
+        for k, v in self.config["live"]["coin_flags"].items():
+            if kr := self.reformat_symbol(k):
+                logging.info(f"setting flag for {kr}: {v}")
+                self.flags[kr] = v
+
+        self.eligible_symbols = set()  # symbols which may be approved for trading
+        if self.config["live"]["approved_coins"]:
+            for symbol in self.config["live"]["approved_coins"]:
+                if rs := self.reformat_symbol(symbol, verbose=True):
+                    self.eligible_symbols.add(rs)
+        else:
             self.eligible_symbols = set(self.markets_dict)
 
         # this argparser is used only internally
