@@ -7,7 +7,8 @@ from copy import deepcopy
 import json
 import numpy as np
 import dateutil.parser
-from njit_funcs import round_dynamic, qty_to_cost, calc_pnl_long, calc_pnl_short
+from njit_funcs import calc_pnl_long, calc_pnl_short
+import passivbot_rust as pbr
 
 try:
     import pandas as pd
@@ -30,7 +31,7 @@ def compress_float(n: float, d: int) -> str:
     if n / 10**d >= 1:
         n = round(n)
     else:
-        n = round_dynamic(n, d)
+        n = pbr.round_dynamic(n, d)
     nstr = format_float(n)
     if nstr.startswith("0."):
         nstr = nstr[1:]
@@ -1702,7 +1703,7 @@ def tuplify(xs, sort=False):
 
 def round_values(xs, n: int):
     if type(xs) in [float, np.float64]:
-        return round_dynamic(xs, n)
+        return pbr.round_dynamic(xs, n)
     if type(xs) == dict:
         return {k: round_values(xs[k], n) for k in xs}
     if type(xs) == list:
