@@ -275,7 +275,7 @@ def add_argparse_args_backtest(parser):
 
 
 def calc_preferred_coins(hlcvs, config):
-    w_size = config["live"]["noisiness_rolling_mean_window_size"]
+    w_size = config["live"]["ohlcv_rolling_window"]
     n_coins = hlcvs.shape[1]
 
     # Calculate noisiness indices

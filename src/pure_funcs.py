@@ -568,7 +568,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 "max_n_cancellations_per_batch": 5,
                 "max_n_creations_per_batch": 3,
                 "minimum_coin_age_days": 7.0,
-                "noisiness_rolling_mean_window_size": 60,
+                "ohlcv_rolling_window": 60,
                 "pnls_max_lookback_days": 30.0,
                 "price_distance_threshold": 0.002,
                 "relative_volume_filter_clip_pct": 0.1,
