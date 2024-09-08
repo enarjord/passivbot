@@ -9,9 +9,9 @@ import time
 from colorama import init, Fore
 from prettytable import PrettyTable
 
-from njit_funcs import round_up, calc_pnl_long, calc_pnl_short
 from procedures import dump_live_config, make_get_filepath
-from pure_funcs import round_dynamic, denumpyize, ts_to_date
+from pure_funcs import denumpyize, ts_to_date
+import passivbot_rust as pbr
 
 
 def make_table(result_):
@@ -35,8 +35,8 @@ def make_table(result_):
             result["adg_n_subdivisions"] if "adg_n_subdivisions" in result else "unknown",
         ]
     )
-    table.add_row(["No. days", round_dynamic(result["result"]["n_days"], 2)])
-    table.add_row(["Starting balance", round_dynamic(result["result"]["starting_balance"], 6)])
+    table.add_row(["No. days", pbr.round_dynamic(result["result"]["n_days"], 2)])
+    table.add_row(["Starting balance", pbr.round_dynamic(result["result"]["starting_balance"], 6)])
     for side in ["long", "short"]:
         if side not in result:
             result[side] = {"enabled": result[f"do_{side}"]}
@@ -99,7 +99,7 @@ def make_table(result_):
                 ("Ratio of time spent at max exposure", f"time_at_max_exposure_{side}", 4, 1, ""),
             ]:
                 if key in result["result"]:
-                    val = round_dynamic(result["result"][key] * mul, precision)
+                    val = pbr.round_dynamic(result["result"][key] * mul, precision)
                     table.add_row(
                         [
                             title,
@@ -126,7 +126,7 @@ def make_table(result_):
                 ("Max hours stuck", f"hrs_stuck_max_{side}", 6),
             ]:
                 if key in result["result"]:
-                    table.add_row([title, round_dynamic(result["result"][key], precision)])
+                    table.add_row([title, pbr.round_dynamic(result["result"][key], precision)])
 
             if f"pnl_sum_{side}" in result["result"]:
                 profit_color = Fore.RED if result["result"][f"pnl_sum_{side}"] < 0 else Fore.RESET
@@ -134,7 +134,7 @@ def make_table(result_):
                 table.add_row(
                     [
                         "PNL sum",
-                        f"{profit_color}{round_dynamic(result['result'][f'pnl_sum_{side}'], 4)}{Fore.RESET}",
+                        f"{profit_color}{pbr.round_dynamic(result['result'][f'pnl_sum_{side}'], 4)}{Fore.RESET}",
                     ]
                 )
             for title, key, precision in [
@@ -146,7 +146,7 @@ def make_table(result_):
                 ("Biggest pos size", f"biggest_psize_{side}", 3),
             ]:
                 if key in result["result"]:
-                    table.add_row([title, round_dynamic(result["result"][key], precision)])
+                    table.add_row([title, pbr.round_dynamic(result["result"][key], precision)])
     return table
 
 
@@ -189,7 +189,9 @@ def dump_plots(
     if disable_plotting:
         return
     n_parts = (
-        n_parts if n_parts is not None else min(12, max(3, int(round_up(result["n_days"] / 14, 1.0))))
+        n_parts
+        if n_parts is not None
+        else min(12, max(3, int(pbr.round_up(result["n_days"] / 14, 1.0))))
     )
     for side, fdf in [("long", longs), ("short", shorts)]:
         if result[side]["enabled"]:
