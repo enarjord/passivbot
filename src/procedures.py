@@ -1122,6 +1122,7 @@ def create_acronym(full_name, acronyms=set()):
             "optimize_bounds_",
             "optimize_limits_lower_bound_",
             "optimize_",
+            "bot_",
         ]:
             if full_name.startswith(k):
                 shortened_name = full_name.replace(k, "")
@@ -1176,12 +1177,14 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
 
 def recursive_config_update(config, key, value):
     if key in config:
-        print(f"changed {key} {config[key]} -> {value}")
-        config[key] = value
+        if value != config[key]:
+            print(f"changed {key} {config[key]} -> {value}")
+            config[key] = value
         return True
     key_split = key.split("_")
     if key_split[0] in config:
         return recursive_config_update(config[key_split[0]], "_".join(key_split[1:]), value)
+    return False
 
 
 def update_config_with_args(config, args):
