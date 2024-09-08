@@ -145,21 +145,24 @@ def format_config(config: dict, verbose=True) -> dict:
                 result["optimize"]["bounds"][opt_key] = v1
                 if verbose:
                     print(f"adding missing parameter {opt_key}: {v1}")
+    for k0, src, dst in [
+        ("live", "minimum_market_age_days", "minimum_coin_age_days"),
+        ("live", "noisiness_rolling_mean_window_size", "ohlcv_rolling_window"),
+    ]:
+        if src in result[k0]:
+            result[k0][dst] = deepcopy(result[k0][src])
+            if verbose:
+                print(f"renaming parameter {k0} {src}: {dst}")
+            del result[k0][src]
     for k0, k1, v in [
         ("live", "time_in_force", "good_till_cancelled"),
-        ("live", "noisiness_rolling_mean_window_size", 60),
+        ("live", "ohlcv_rolling_window", 60),
         ("optimize", "scoring", ["mdg", "sharpe_ratio"]),
     ]:
         if k1 not in result[k0]:
             result[k0][k1] = v
             if verbose:
                 print(f"adding missing parameter {k0} {k1}: {v}")
-    for k0, src, dst in [("live", "minimum_market_age_days", "minimum_coin_age_days")]:
-        if src in result[k0]:
-            result[k0][dst] = deepcopy(result[k0][src])
-            if verbose:
-                print(f"renaming parameter {k0} {src}: {dst}")
-            del result[k0][src]
     if result["live"]["approved_coins"]:
         result["live"]["approved_coins"] = coins_to_symbols(
             result["live"]["approved_coins"], verbose=verbose
