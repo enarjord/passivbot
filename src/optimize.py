@@ -4,11 +4,11 @@ import passivbot_rust as pbr
 import asyncio
 import argparse
 import multiprocessing
+import subprocess
 from multiprocessing import shared_memory
 from backtest import (
     prepare_hlcvs_mss,
     prep_backtest_args,
-    add_argparse_args_to_config,
     calc_preferred_coins,
 )
 from pure_funcs import (
@@ -398,6 +398,17 @@ async def main():
         print(logbook)
 
         logging.info(f"Optimization complete.")
+        try:
+            logging.info(f"Extracting best config...")
+            result = subprocess.run(
+                ["python3", "src/tools/extract_best_config.py", config["results_filename"], "-v"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            print(result.stdout)
+        except Exception as e:
+            logging.error(f"failed to extract best config {e}")
         ########
     except Exception as e:
         traceback.print_exc()
