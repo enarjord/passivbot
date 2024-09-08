@@ -145,8 +145,6 @@ def main(args):
         try:
             result = process_single(args.file_location, args.verbose)
             print(f"successfully processed {args.file_location}")
-            if args.user is not None:
-                pass
         except Exception as e:
             print(f"error with {args.file_location} {e}")
 
@@ -159,15 +157,6 @@ if __name__ == "__main__":
         "--verbose",
         action="store_true",
         help="Enable verbosity",
-    )
-    parser.add_argument(
-        "-u",
-        "--user",
-        type=str,
-        required=False,
-        dest="user",
-        default=None,
-        help="if user is passed, generate live config",
     )
     args = parser.parse_args()
 
