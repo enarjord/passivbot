@@ -87,14 +87,11 @@ def recompile_rust():
 
 def manage_rust_compilation():
     if check_compilation_needed():
-        if prompt_user_for_recompilation():
-            if recompile_rust():
-                print("Rust extension successfully recompiled.")
-            else:
-                print("Failed to recompile Rust extension. Please compile manually.")
-                sys.exit(1)
+        if recompile_rust():
+            print("Rust extension successfully recompiled.")
         else:
-            print("Compilation skipped. Note that the Rust extension might be outdated.")
+            print("Failed to recompile Rust extension. Please compile manually.")
+            sys.exit(1)
     else:
         print("Rust extension is up to date.")
 
