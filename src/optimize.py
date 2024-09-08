@@ -214,46 +214,7 @@ class Evaluator:
         self.shared_preferred_coins.unlink()
 
 
-def add_argparse_args_optimize(parser):
-    parser_items = [
-        ("s", "symbols", "symbols", str, ", comma separated (SYM1USDT,SYM2USDT,...)"),
-        ("e", "exchange", "exchange", str, ""),
-        ("sd", "start_date", "start_date", str, ""),
-        (
-            "ed",
-            "end_date",
-            "end_date",
-            str,
-            ", if end date is 'now', will use current date as end date",
-        ),
-        ("sb", "starting_balance", "starting_balance", float, ""),
-        ("bd", "base_dir", "base_dir", str, ""),
-        ("c", "n_cpus", "n_cpus", int, ""),
-        ("i", "iters", "iters", int, ""),
-        ("p", "population_size", "population_size", int, ""),
-    ]
-    template = get_template_live_config("v7")
-    shortened_already_added = set([x[0] for x in parser_items])
-    for key in list(template["optimize"]["bounds"]) + list(template["optimize"]["limits"]):
-        shortened = "".join([x[0] for x in key.split("_")])
-        if shortened in shortened_already_added:
-            for i in range(100):
-                shortened = "".join([x[0] for x in key.split("_")]) + str(i)
-                if shortened not in shortened_already_added:
-                    break
-            else:
-                raise Exception(f"too many duplicates of shortened key {key}")
-        parser_items.append((shortened, key, key, float, ", fixing optimizing bounds"))
-        shortened_already_added.add(shortened)
-    for k0, k1, d, t, h in parser_items:
-        parser.add_argument(
-            *[f"-{k0}", f"--{k1}"] + ([f"--{k1.replace('_', '-')}"] if "_" in k1 else []),
-            type=t,
-            required=False,
-            dest=d,
-            default=None,
-            help=f"specify {k1}{h}, overriding value from config.",
-        )
+def add_extra_options(parser):
     parser.add_argument(
         "-t",
         "--start",
@@ -261,10 +222,8 @@ def add_argparse_args_optimize(parser):
         required=False,
         dest="starting_configs",
         default=None,
-        help="start with given live configs.  single json file or dir with multiple json files",
+        help="Start with given live configs. Single json file or dir with multiple json files",
     )
-    args = parser.parse_args()
-    return args
 
 
 def get_starting_configs(starting_configs: str):
@@ -300,9 +259,20 @@ async def main():
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )
-    # add_arguments_recursively(parser, get_template_live_config("v7"))
-    # args = parser.parse_args()
-    args = add_argparse_args_optimize(parser)
+    template_config = get_template_live_config("v7")
+    del template_config["bot"]
+    keep_live_keys = {
+        "approved_coins",
+        "minimum_coin_age_days",
+        "ohlcv_rolling_window",
+        "relative_volume_filter_clip_pct",
+    }
+    for key in sorted(template_config["live"]):
+        if key not in keep_live_keys:
+            del template_config["live"][key]
+    add_arguments_recursively(parser, template_config)
+    add_extra_options(parser)
+    args = parser.parse_args()
     signal.signal(signal.SIGINT, signal_handler)
     logging.basicConfig(
         format="%(asctime)s %(levelname)-8s %(message)s",
@@ -315,7 +285,9 @@ async def main():
     else:
         logging.info(f"loading config {args.config_path}")
         config = load_config(args.config_path)
-    config = add_argparse_args_to_config(config, args)
+    old_config = deepcopy(config)
+    update_config_with_args(config, args)
+    config = format_config(config)
     symbols, hlcvs, mss, results_path = await prepare_hlcvs_mss(config)
     config["backtest"]["symbols"] = symbols
     preferred_coins = calc_preferred_coins(hlcvs, config)
