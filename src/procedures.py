@@ -23,7 +23,6 @@ except:
     print("pandas not found, trying without...")
     pass
 
-from njit_funcs import calc_samples, round_
 from pure_funcs import (
     numpyize,
     candidate_to_live_config,
@@ -1109,35 +1108,68 @@ def fetch_market_specific_settings(config: dict):
     return sort_dict_keys(settings_from_exchange)
 
 
-def create_acronym(full_name):
-    return "".join(word[0] for word in full_name.split("_"))
+def create_acronym(full_name, acronyms=set()):
+    i = 1
+    while True:
+        i += 1
+        if i > 100:
+            raise Exception(f"too many acronym duplicates {acronym}")
+            break
+        shortened_name = full_name
+        for k in [
+            "backtest_",
+            "live_",
+            "optimize_bounds_",
+            "optimize_limits_lower_bound_",
+            "optimize_",
+        ]:
+            if full_name.startswith(k):
+                shortened_name = full_name.replace(k, "")
+                break
+        acronym = "".join(word[0] for word in shortened_name.split("_"))
+        if acronym not in acronyms:
+            break
+        acronym += str(i)
+        if acronym not in acronyms:
+            break
+    return acronym
 
 
-def add_arguments_recursively(parser, config, prefix=""):
-    acronyms = set()
+def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
 
     for key, value in config.items():
         full_name = f"{prefix}{key}"
 
         if isinstance(value, dict):
-            add_arguments_recursively(parser, value, f"{full_name}_")
+            add_arguments_recursively(parser, value, f"{full_name}_", acronyms=acronyms)
         else:
-            acronym = create_acronym(full_name)
-            i = 2
-            while acronym in acronyms:
-                acronym = create_acronym(full_name) + str(i)
-                i += 1
-                if i > 100:
-                    raise Exception(f"too many acronym duplicates {acronym}")
-                    break
+            acronym = create_acronym(full_name, acronyms)
+            appendix = ""
+            type_ = type(value)
+            if "bounds" in full_name:
+                type_ = lambda x: [float(i) for i in x.split(",")]
+                appendix = ", comma separated values"
+            elif "approved_coins" in full_name:
+                acronym = "s"
+                type_ = lambda x: x.split(",")
+                appendix = ", comma separated values"
+            elif "optimize_scoring" in full_name:
+                type_ = lambda x: x.split(",")
+                acronym = "os"
+                appendix = ", comma separated values. Options: adg,sharpe_ratio or mdg,sharpe_ratio"
+            elif "cpus" in full_name:
+                acronym = "c"
+            elif "iters" in full_name:
+                acronym = "i"
             parser.add_argument(
                 f"--{full_name}",
                 f"-{acronym}",
-                type=type(value),
+                type=type_,
                 dest=full_name,
                 required=False,
                 default=None,
-                help=f"Override {full_name}",
+                metavar="",
+                help=f"Override {full_name}" + appendix,
             )
             acronyms.add(acronym)
 
