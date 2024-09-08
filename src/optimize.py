@@ -255,7 +255,7 @@ def configs_to_individuals(cfgs):
 
 async def main():
     manage_rust_compilation()
-    parser = argparse.ArgumentParser(prog="optimize", description="run forager optimizer")
+    parser = argparse.ArgumentParser(prog="optimize", description="run optimizer")
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )
@@ -297,7 +297,7 @@ async def main():
     coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
     hash_snippet = uuid4().hex[:8]
     config["results_filename"] = make_get_filepath(
-        f"opt_results_forager/{date_fname}_{coins_fname}_{hash_snippet}_all_results.txt"
+        f"optimize_results/{date_fname}_{coins_fname}_{hash_snippet}_all_results.txt"
     )
     try:
         evaluator = Evaluator(hlcs, preferred_coins, config, mss)
