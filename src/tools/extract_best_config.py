@@ -127,9 +127,8 @@ def process_single(file_location, verbose=False):
     coins = [s.replace("USDT", "") for s in best_d["backtest"]["symbols"]]
     print_(file_location)
     full_path = file_location.replace("_all_results.txt", "") + ".json"
-    full_path = make_get_filepath(
-        full_path.replace("optimize_results/", "optimize_results_analysis/")
-    )
+    base_path = os.path.split(full_path)[0]
+    full_path = make_get_filepath(full_path.replace(base_path, base_path + "_analysis/"))
     dump_config(format_config(best_d), full_path)
     return best_d
 
