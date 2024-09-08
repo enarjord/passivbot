@@ -126,8 +126,10 @@ def process_single(file_location, verbose=False):
     print_(fjson)
     coins = [s.replace("USDT", "") for s in best_d["backtest"]["symbols"]]
     print_(file_location)
-    fname = os.path.split(file_location)[-1].replace("_all_results.txt", "") + ".json"
-    full_path = make_get_filepath(os.path.join("opt_results_forager_analysis", fname))
+    full_path = file_location.replace("_all_results.txt", "") + ".json"
+    full_path = make_get_filepath(
+        full_path.replace("optimize_results/", "optimize_results_analysis/")
+    )
     dump_config(format_config(best_d), full_path)
     return best_d
 
