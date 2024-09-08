@@ -117,7 +117,6 @@ def check_keys(dict0, dict1):
 async def prepare_hlcvs_mss(config):
     results_path = oj(
         config["backtest"]["base_dir"],
-        "forager",
         config["backtest"]["exchange"],
         "",
     )
