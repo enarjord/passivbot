@@ -30,6 +30,39 @@ pub fn round_dn(n: f64, step: f64) -> f64 {
 }
 
 #[pyfunction]
+pub fn round_dynamic(n: f64, d: i32) -> f64 {
+    if n == 0.0 {
+        return n;
+    }
+    let shift = d - (n.abs().log10().floor() as i32) - 1;
+    let multiplier = 10f64.powi(shift);
+    let result = (n * multiplier).round() / multiplier;
+    round_to_decimal_places(result, 10)
+}
+
+#[pyfunction]
+pub fn round_dynamic_up(n: f64, d: i32) -> f64 {
+    if n == 0.0 {
+        return n;
+    }
+    let shift = d - (n.abs().log10().floor() as i32) - 1;
+    let multiplier = 10f64.powi(shift);
+    let result = (n * multiplier).ceil() / multiplier;
+    round_to_decimal_places(result, 10)
+}
+
+#[pyfunction]
+pub fn round_dynamic_dn(n: f64, d: i32) -> f64 {
+    if n == 0.0 {
+        return n;
+    }
+    let shift = d - (n.abs().log10().floor() as i32) - 1;
+    let multiplier = 10f64.powi(shift);
+    let result = (n * multiplier).floor() / multiplier;
+    round_to_decimal_places(result, 10)
+}
+
+#[pyfunction]
 pub fn calc_diff(x: f64, y: f64) -> f64 {
     if y == 0.0 {
         if x == 0.0 {
