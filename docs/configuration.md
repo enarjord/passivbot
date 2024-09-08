@@ -130,8 +130,8 @@ If a position is stuck, bot will use profits made on other positions to realize 
 - `leverage`: leverage set on exchange. Default 10.
 - `max_n_cancellations_per_batch`: will cancel n open orders per execution
 - `max_n_creations_per_batch`: will create n new orders per execution
-- `minimum_market_age_days`: disallow coins younger than a given number of days
-- `noisiness_rolling_mean_window_size`: number of minutes to look into the past to compute noisiness
+- `minimum_coin_age_days`: disallow coins younger than a given number of days
+- `ohlcv_rolling_window`: number of minutes to look into the past to compute volume and noisiness, used for dynamic coin selection in forager mode.
 	- noisiness is normalized relative range of 1m ohlcvs: `mean((high - low) / close)`
 	- in forager mode, bot will select coins with highest noisiness for opening positions
 - `pnls_max_lookback_days`: how far into the past to fetch pnl history

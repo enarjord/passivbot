@@ -1840,7 +1840,7 @@ class Passivbot:
     def calc_noisiness(self):
         if not hasattr(self, "noisiness"):
             self.noisiness = {}
-        n = int(round(self.config["live"]["noisiness_rolling_mean_window_size"]))
+        n = int(round(self.config["live"]["ohlcv_rolling_window"]))
         for symbol in self.eligible_symbols:
             if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
                 ohlcvs_1m = [v for v in self.ohlcvs_1m[symbol].values()[-n:]]
@@ -1851,7 +1851,7 @@ class Passivbot:
     def calc_volumes(self):
         if not hasattr(self, "volumes"):
             self.volumes = {}
-        n = int(round(self.config["live"]["noisiness_rolling_mean_window_size"]))
+        n = int(round(self.config["live"]["ohlcv_rolling_window"]))
         for symbol in self.ohlcvs_1m:
             if self.ohlcvs_1m[symbol] and len(self.ohlcvs_1m[symbol]) > 0:
                 ohlcvs_1m = [v for v in self.ohlcvs_1m[symbol].values()[-n:]]

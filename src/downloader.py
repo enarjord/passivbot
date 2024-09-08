@@ -21,7 +21,7 @@ import pandas as pd
 from dateutil import parser
 from tqdm import tqdm
 
-from njit_funcs import calc_samples, round_up, round_dn, round_
+from njit_funcs import calc_samples
 from procedures import (
     prepare_backtest_config,
     make_get_filepath,

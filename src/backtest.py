@@ -12,6 +12,9 @@ from procedures import (
     load_config,
     dump_config,
     coin_to_symbol,
+    add_arguments_recursively,
+    update_config_with_args,
+    format_config,
 )
 from pure_funcs import (
     get_template_live_config,
@@ -111,46 +114,9 @@ def check_keys(dict0, dict1):
     return check_nested(dict0, dict1)
 
 
-def add_argparse_args_to_config(config, args):
-    for key, value in vars(args).items():
-        try:
-            if value is None:
-                continue
-            if key == "symbols":
-                symbols = sorted([xf for x in set(value.split(",")) if (xf := coin_to_symbol(x))])
-                if symbols != sorted(set(config["live"]["approved_coins"])):
-                    logging.info(f"new symbols: {symbols}")
-                    config["live"]["approved_coins"] = [coin_to_symbol(x) for x in symbols]
-                    config["backtest"]["symbols"] = config["live"]["approved_coins"]
-            elif key in config["backtest"]:
-                if not isinstance(config["backtest"][key], dict):
-                    if config["backtest"][key] != value:
-                        logging.info(f"changing backtest {key} {config['backtest'][key]} -> {value}")
-                        config["backtest"][key] = value
-            elif key in config["optimize"]:
-                if not isinstance(config["optimize"][key], dict):
-                    if config["optimize"][key] != value:
-                        logging.info(f"changing optimize {key} {config['optimize'][key]} -> {value}")
-                        config["optimize"][key] = value
-            elif key in config["optimize"]["bounds"]:
-                new_value = [value, value]
-                if config["optimize"]["bounds"][key] != new_value:
-                    logging.info(f"fixing optimizing bound {key} to {value}")
-                    config["optimize"]["bounds"][key] = new_value
-            elif key in config["optimize"]["limits"]:
-                old_value = config["optimize"]["limits"][key]
-                if old_value != value:
-                    logging.info(f"changing optimizing limit {key} from {old_value} to {value}")
-                    config["optimize"]["limits"][key] = value
-        except Exception as e:
-            raise Exception(f"failed to add argparse arg to config {key}: {e}")
-    return config
-
-
 async def prepare_hlcvs_mss(config):
     results_path = oj(
         config["backtest"]["base_dir"],
-        "forager",
         config["backtest"]["exchange"],
         "",
     )
@@ -246,36 +212,8 @@ def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcs):
         plt.savefig(oj(plots_dir, f"{symbol}.png"))
 
 
-def add_argparse_args_backtest(parser):
-    parser_items = [
-        ("s", "symbols", "symbols", str, ", comma separated (SYM1USDT,SYM2USDT,...)"),
-        ("e", "exchange", "exchange", str, ""),
-        ("sd", "start_date", "start_date", str, ""),
-        (
-            "ed",
-            "end_date",
-            "end_date",
-            str,
-            ", if end date is 'now', will use current date as end date",
-        ),
-        ("sb", "starting_balance", "starting_balance", float, ""),
-        ("bd", "base_dir", "base_dir", str, ""),
-    ]
-    for k0, k1, d, t, h in parser_items:
-        parser.add_argument(
-            *[f"-{k0}", f"--{k1}"] + ([f"--{k1.replace('_', '-')}"] if "_" in k1 else []),
-            type=t,
-            required=False,
-            dest=d,
-            default=None,
-            help=f"specify {k1}{h}, overriding value from hjson config.",
-        )
-    args = parser.parse_args()
-    return args
-
-
 def calc_preferred_coins(hlcvs, config):
-    w_size = config["live"]["noisiness_rolling_mean_window_size"]
+    w_size = config["live"]["ohlcv_rolling_window"]
     n_coins = hlcvs.shape[1]
 
     # Calculate noisiness indices
@@ -327,9 +265,22 @@ async def main():
     )
     parser = argparse.ArgumentParser(prog="backtest", description="run forager backtest")
     parser.add_argument("config_path", type=str, default=None, help="path to hjson passivbot config")
-    args = add_argparse_args_backtest(parser)
+    template_config = get_template_live_config("v7")
+    del template_config["optimize"]
+    keep_live_keys = {
+        "approved_coins",
+        "minimum_coin_age_days",
+        "ohlcv_rolling_window",
+        "relative_volume_filter_clip_pct",
+    }
+    for key in sorted(template_config["live"]):
+        if key not in keep_live_keys:
+            del template_config["live"][key]
+    add_arguments_recursively(parser, template_config)
+    args = parser.parse_args()
     config = load_config("configs/template.hjson" if args.config_path is None else args.config_path)
-    config = add_argparse_args_to_config(config, args)
+    update_config_with_args(config, args)
+    config = format_config(config)
     symbols, hlcvs, mss, results_path = await prepare_hlcvs_mss(config)
     config["backtest"]["symbols"] = symbols
     preferred_coins = calc_preferred_coins(hlcvs, config)
