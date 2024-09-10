@@ -249,7 +249,7 @@ def configs_to_individuals(cfgs):
             individual = config_to_individual(format_config(cfg, verbose=False))
             inds[calc_hash(individual)] = individual
         except Exception as e:
-            logging.error(f"error with config_to_individual {e}")
+            logging.error(f"error loading starting config: {e}")
     return list(inds.values())
 
 
