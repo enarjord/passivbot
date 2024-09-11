@@ -201,15 +201,18 @@ def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcs):
     plt.savefig(oj(results_path, "balance_and_equity.png"))
 
     for i, symbol in enumerate(symbols):
-        print(f"Plotting fills for {symbol}")
-        hlcs_df = pd.DataFrame(hlcs[:, i, :], columns=["high", "low", "close"])
-        fdfc = fdf[fdf.symbol == symbol]
-        plt.clf()
-        plot_fills_forager(fdfc, hlcs_df)
-        plt.title(f"Fills {symbol}")
-        plt.xlabel = "time"
-        plt.ylabel = "price"
-        plt.savefig(oj(plots_dir, f"{symbol}.png"))
+        try:
+            print(f"Plotting fills for {symbol}")
+            hlcs_df = pd.DataFrame(hlcs[:, i, :], columns=["high", "low", "close"])
+            fdfc = fdf[fdf.symbol == symbol]
+            plt.clf()
+            plot_fills_forager(fdfc, hlcs_df)
+            plt.title(f"Fills {symbol}")
+            plt.xlabel = "time"
+            plt.ylabel = "price"
+            plt.savefig(oj(plots_dir, f"{symbol}.png"))
+        except Exception as e:
+            print(f"Error plotting {symbol} {e}")
 
 
 def calc_preferred_coins(hlcvs, config):
