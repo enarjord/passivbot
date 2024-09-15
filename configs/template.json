@@ -44,7 +44,7 @@
                    "entry_trailing_retracement_pct": 0.06044,
                    "entry_trailing_threshold_pct": -0.084207,
                    "n_positions": 7.6679,
-                   "total_wallet_exposure_limit": 0.0016034,
+                   "total_wallet_exposure_limit": 0.0,
                    "unstuck_close_pct": 0.052781,
                    "unstuck_ema_dist": -0.025389,
                    "unstuck_loss_allowance_pct": 0.04787,
