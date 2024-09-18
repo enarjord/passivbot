@@ -72,13 +72,17 @@ The same logic applies to both trailing entries and trailing closes.
 	- Take Profit (TP) prices are spread out from
 		- `pos_price * (1 + min_markup)` to `pos_price * (1 + min_markup + markup_range)` for long
 		- `pos_price * (1 - min_markup)` to `pos_price * (1 - min_markup - markup_range)` for short
-		- e.g. if `pos_price==100`, `min_markup=0.01`, `markup_range=0.02` and `close_grid_qty_pct=0.2`, TP prices are [101, 101.5, 102, 102.5, 103]
+		- e.g. if `long_pos_price==100`, `min_markup=0.01`, `markup_range=0.02` and `close_grid_qty_pct=0.2`, there is at most `1 / 0.2 == 5` TP orders, and TP prices are `[101, 101.5, 102, 102.5, 103]`.
 		- qty per order is `full pos size * close_grid_qty_pct`
+		- note that full pos size is when position is maxed out. If position is less than full, fewer than `1 / close_grid_qty_pct` may be created.
 		- the TP grid is built from the top down:
 			- first TP at 103 up to 20% of full pos size,
 			- next TP at 102.5 from 20% to 40% of full pos size,
 			- next TP at 102.0 from 40% to 60% of full pos size,
 			- etc.
+		- e.g. if `full_pos_size=100` and `long_pos_size==55`, then TP orders are `[15@102.0, 20@102.5, 20@103.0]`.
+		- if position is greater than full pos size, the leftovers are added to the lowest TP order.
+			- e.g. if `long_pos_size==130`, then TP orders are `[50@101.0, 20@101.5, 20@102.0, 20@102.5, 20@103.0]`
 
 ### Trailing Close Parameters
 
@@ -146,15 +150,17 @@ If a position is stuck, bot will use profits made on other positions to realize 
 When optimizing, parameter values are within the lower and upper bounds.
 
 ### Other Optimization Parameters
-- `crossover_probability`: 
+- `crossover_probability`: The probability of performing crossover between two individuals in the genetic algorithm. It determines how often parents will exchange genetic information to create offspring.
 - `iters`: number of backtests per optimize session
-- `mutation_probability`: 
+- `mutation_probability`: The probability of mutating an individual in the genetic algorithm. It determines how often random changes will be introduced to the population to maintain diversity.
 - `n_cpus`: number of CPU cores utilized in parallel
 - `population_size`: size of population for genetic optimization algorithm
 - `scoring`:
-	- the optimizer uses two objectives and finds the pareto front,
-	- finally choosing the optimal candidate based on lowest euclidian distance to ideal point.
-	- default values are median daily gain and sharpe ratio
+	- The optimizer uses two objectives and finds the Pareto front,
+	- Finally choosing the optimal candidate based on lowest Euclidean distance to the ideal point.
+	- Default values are median daily gain and Sharpe ratio.
+	- The script uses the NSGA-II algorithm (Non-dominated Sorting Genetic Algorithm II) for multi-objective optimization.
+	- The fitness function is set up to minimize both objectives (converted to negative values internally).
 
 ### Optimization Limits
 
