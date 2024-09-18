@@ -57,14 +57,9 @@ python3 -m venv venv
 
 Activate the virtual environment:
 
-- On Windows:
-  ```sh
-  .\venv\Scripts\activate
-  ```
-- On macOS and Linux:
-  ```sh
-  source venv/bin/activate
-  ```
+```sh
+source venv/bin/activate
+```
 
 ### Step 4: Install Python Dependencies
 
@@ -142,7 +137,6 @@ www.passivbotmanager.com
 
 **Referrals:**  
 Signing up using these referrals is appreciated:  
-https://accounts.binance.me/en/register?ref=TII4B07C  
 https://partner.bybit.com/b/passivbot  
 https://partner.bitget.com/bg/Y8FU1W  
 https://www.okx.com/join/PASSIVBOT  (20% rebate)  
@@ -153,19 +147,14 @@ https://www.buymeacoffee.com/enarjord
 
 **Donations:**  
 If the robot is profitable, consider donating as showing gratitude for its development:  
-Tether USD (USDT):  
-- USDT Solana:  
-9hUCHBQA261PU6rUSbwgMoxn8nrdcXPAYgbASRgA8dtm  
-- USDT Binance Smart Chain BEP20 (TSS address):  
-0xa1e290ec13bf716dadf81640447df9639128460a  
-- USDT Matic Polygon:  
-0xa1e290ec13bf716dadf81640447df9639128460a  
 
-Monero (XMR):  
-49gUQ1jasDK23tJTMCvP4mQUUwndeLWAwSgdCFn6ovmRKXZAjQnVp2JZ2K4UuDDdYMNam1HE8ELZoWdeJPRfYEa9QSEK6XZ
+- USDT or USDC Binance Smart Chain BEP20:  
+0x4b7b5bf6bea228052b775c052843fde1c63ec530  
+- USDT or USDC Arbitrum One:  
+0x4b7b5bf6bea228052b775c052843fde1c63ec530  
 
-Bitcoin (BTC):  
-bc1qcc3kr9gudg35gnsljg64zeaurt0y24pfej36w6
+Bitcoin (BTC) via Strike:  
+enarjord@strike.me
 
 ## License
 
