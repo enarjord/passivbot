@@ -29,6 +29,9 @@ from procedures import (
     get_file_mod_utc,
     get_first_ohlcv_timestamps,
     load_config,
+    add_arguments_recursively,
+    update_config_with_args,
+    format_config,
 )
 from njit_funcs_recursive_grid import calc_recursive_entries_long, calc_recursive_entries_short
 from njit_funcs import (
@@ -63,6 +66,7 @@ from pure_funcs import (
     add_missing_params_to_hjson_live_multi_config,
     expand_PB_mode,
     ts_to_date_utc,
+    get_template_live_config,
 )
 
 
@@ -2107,48 +2111,22 @@ async def shutdown_bot(bot):
 
 async def main():
     parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
-    parser.add_argument("hjson_config_path", type=str, help="path to hjson passivbot meta config")
-    parser_items = [
-        (
-            "s",
-            "approved_symbols",
-            "approved_symbols",
-            str,
-            ", comma separated (SYM1USDT,SYM2USDT,...)",
-        ),
-        ("i", "ignored_coins", "ignored_coins", str, ", comma separated (SYM1USDT,SYM2USDT,...)"),
-        ("le", "long_enabled", "long_enabled", str2bool, " (y/n or t/f)"),
-        ("se", "short_enabled", "short_enabled", str2bool, " (y/n or t/f)"),
-        ("tl", "total_wallet_exposure_long", "TWE_long", float, ""),
-        ("ts", "total_wallet_exposure_short", "TWE_short", float, ""),
-        ("u", "user", "user", str, ""),
-        ("lap", "loss_allowance_pct", "loss_allowance_pct", float, " (set to 0.0 to disable)"),
-        ("pml", "pnls_max_lookback_days", "pnls_max_lookback_days", float, ""),
-        ("st", "stuck_threshold", "stuck_threshold", float, ""),
-        ("ucp", "unstuck_close_pct", "unstuck_close_pct", float, ""),
-        ("eds", "execution_delay_seconds", "execution_delay_seconds", float, ""),
-        ("lcd", "live_configs_dir", "live_configs_dir", str, ""),
-        ("dcp", "default_config_path", "default_config_path", str, ""),
-        ("ag", "auto_gs", "auto_gs", str2bool, " enabled (y/n or t/f)"),
-        ("nca", "max_n_cancellations_per_batch", "max_n_cancellations_per_batch", int, ""),
-        ("ncr", "max_n_creations_per_batch", "max_n_creations_per_batch", int, ""),
-        ("pt", "price_threshold", "price_threshold", float, ""),
-    ]
-    for k0, k1, d, t, h in parser_items:
-        parser.add_argument(
-            *[f"-{k0}", f"--{k1}"] + ([f"--{k1.replace('_', '-')}"] if "_" in k1 else []),
-            type=t,
-            required=False,
-            dest=d,
-            default=None,
-            help=f"specify {k1}{h}, overriding value from live hjson config.",
-        )
+    parser.add_argument("config_path", type=str, default=None, help="path to hjson passivbot config")
+    template_config = get_template_live_config("v7")
+    del template_config["optimize"]
+    del template_config["backtest"]
+    add_arguments_recursively(parser, template_config)
+    args = parser.parse_args()
+    config = load_config("configs/template.hjson" if args.config_path is None else args.config_path)
+    update_config_with_args(config, args)
+    config = format_config(config)
+
     max_n_restarts_per_day = 5
     cooldown_secs = 60
     restarts = []
     while True:
         args = parser.parse_args()
-        config = load_config(args.hjson_config_path)
+        config = load_config(args.config_path)
         """
         for key in [x[2] for x in parser_items]:
             if getattr(args, key) is not None:
