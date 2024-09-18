@@ -25,16 +25,25 @@ pub fn calc_close_qty(
     );
     let position_size_abs = position.size.abs();
     let leftover = f64::max(0.0, position_size_abs - full_psize);
-    f64::min(
+    let min_entry_qty = calc_min_entry_qty(close_price, &exchange_params);
+    let close_qty = f64::min(
         round_(position_size_abs, exchange_params.qty_step),
         f64::max(
-            calc_min_entry_qty(close_price, &exchange_params),
+            min_entry_qty,
             round_up(
                 full_psize * close_qty_pct + leftover,
                 exchange_params.qty_step,
             ),
         ),
-    )
+    );
+    if close_qty > 0.0
+        && close_qty < position_size_abs
+        && position_size_abs - close_qty < min_entry_qty
+    {
+        position_size_abs
+    } else {
+        close_qty
+    }
 }
 
 pub fn calc_grid_close_long(
@@ -255,25 +264,23 @@ pub fn calc_next_close_long(
             )
         } else {
             // return grid order, but leave full_psize * close_trailing_grid_ratio for trailing close
-            let trailing_allocation = cost_to_qty(
+            let mut trailing_allocation = cost_to_qty(
                 state_params.balance
                     * bot_params.wallet_exposure_limit
                     * bot_params.close_trailing_grid_ratio,
                 position.price,
                 exchange_params.c_mult,
             );
+            let min_entry_qty = calc_min_entry_qty(position.price, &exchange_params);
+            if trailing_allocation < min_entry_qty {
+                trailing_allocation = 0.0;
+            }
             let grid_allocation = round_(
                 position.size - trailing_allocation,
                 exchange_params.qty_step,
             );
             let position_mod = Position {
-                size: f64::min(
-                    position.size,
-                    f64::max(
-                        grid_allocation,
-                        calc_min_entry_qty(position.price, &exchange_params),
-                    ),
-                ),
+                size: f64::min(position.size, f64::max(grid_allocation, min_entry_qty)),
                 price: position.price,
             };
             calc_grid_close_long(&exchange_params, &state_params, &bot_params, &position_mod)
@@ -285,23 +292,21 @@ pub fn calc_next_close_long(
             calc_grid_close_long(&exchange_params, &state_params, &bot_params, &position)
         } else {
             // return trailing order, but leave full_psize * (1.0 + close_trailing_grid_ratio) for grid close
-            let grid_allocation = cost_to_qty(
+            let mut grid_allocation = cost_to_qty(
                 state_params.balance
                     * bot_params.wallet_exposure_limit
                     * (1.0 + bot_params.close_trailing_grid_ratio),
                 position.price,
                 exchange_params.c_mult,
             );
+            let min_entry_qty = calc_min_entry_qty(position.price, &exchange_params);
+            if grid_allocation < min_entry_qty {
+                grid_allocation = 0.0;
+            }
             let trailing_allocation =
                 round_(position.size - grid_allocation, exchange_params.qty_step);
             let position_mod = Position {
-                size: f64::min(
-                    position.size,
-                    f64::max(
-                        trailing_allocation,
-                        calc_min_entry_qty(position.price, &exchange_params),
-                    ),
-                ),
+                size: f64::min(position.size, f64::max(trailing_allocation, min_entry_qty)),
                 price: position.price,
             };
             calc_trailing_close_long(
@@ -535,25 +540,23 @@ pub fn calc_next_close_short(
             )
         } else {
             // return grid order, but leave full_psize * close_trailing_grid_ratio for trailing close
-            let trailing_allocation = cost_to_qty(
+            let mut trailing_allocation = cost_to_qty(
                 state_params.balance
                     * bot_params.wallet_exposure_limit
                     * bot_params.close_trailing_grid_ratio,
                 position.price,
                 exchange_params.c_mult,
             );
+            let min_entry_qty = calc_min_entry_qty(position.price, &exchange_params);
+            if trailing_allocation < min_entry_qty {
+                trailing_allocation = 0.0;
+            }
             let grid_allocation = round_(
                 position_size_abs - trailing_allocation,
                 exchange_params.qty_step,
             );
             let position_mod = Position {
-                size: -f64::min(
-                    position_size_abs,
-                    f64::max(
-                        grid_allocation,
-                        calc_min_entry_qty(position.price, &exchange_params),
-                    ),
-                ),
+                size: -f64::min(position_size_abs, f64::max(grid_allocation, min_entry_qty)),
                 price: position.price,
             };
             calc_grid_close_short(&exchange_params, &state_params, &bot_params, &position_mod)
@@ -564,13 +567,17 @@ pub fn calc_next_close_short(
             return calc_grid_close_short(&exchange_params, &state_params, &bot_params, &position);
         } else {
             // return trailing order, but leave full_psize * (1.0 + close_trailing_grid_ratio) for grid close
-            let grid_allocation = cost_to_qty(
+            let mut grid_allocation = cost_to_qty(
                 state_params.balance
                     * bot_params.wallet_exposure_limit
                     * (1.0 + bot_params.close_trailing_grid_ratio),
                 position.price,
                 exchange_params.c_mult,
             );
+            let min_entry_qty = calc_min_entry_qty(position.price, &exchange_params);
+            if grid_allocation < min_entry_qty {
+                grid_allocation = 0.0;
+            }
             let trailing_allocation = round_(
                 position_size_abs - grid_allocation,
                 exchange_params.qty_step,
@@ -578,10 +585,7 @@ pub fn calc_next_close_short(
             let position_mod = Position {
                 size: -f64::min(
                     position_size_abs,
-                    f64::max(
-                        trailing_allocation,
-                        calc_min_entry_qty(position.price, &exchange_params),
-                    ),
+                    f64::max(trailing_allocation, min_entry_qty),
                 ),
                 price: position.price,
             };
