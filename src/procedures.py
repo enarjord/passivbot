@@ -38,6 +38,7 @@ from pure_funcs import (
     date2ts_utc,
     remove_OD,
     symbol_to_coin,
+    str2bool,
 )
 
 
@@ -174,13 +175,19 @@ def format_config(config: dict, verbose=True) -> dict:
             try:
                 if path.endswith(".json"):
                     result["live"]["ignored_coins"] = json.load(open(path))
+                    if verbose:
+                        print(f"set ignored coins {result['live']['ignored_coins']}")
                 elif path.endswith(".hjson"):
                     result["live"]["ignored_coins"] = hjson.load(open(path))
+                    if verbose:
+                        print(f"set ignored coins {result['live']['ignored_coins']}")
                 elif path.endswith(".txt"):
                     with open(path) as f:
                         result["live"]["ignored_coins"] = [
                             xx for x in f.readlines() if (xx := x.strip())
                         ]
+                        if verbose:
+                            print(f"set ignored coins {result['live']['ignored_coins']}")
                 else:
                     print(f"failed to load ignored coins from file {path}, unknown file format")
             except Exception as e:
@@ -1155,6 +1162,14 @@ def create_acronym(full_name, acronyms=set()):
     return acronym
 
 
+def comma_separated_values(x):
+    return x.split(",")
+
+
+def comma_separated_values_float(x):
+    return [float(z) for z in x.split(",")]
+
+
 def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
 
     for key, value in config.items():
@@ -1167,20 +1182,23 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             appendix = ""
             type_ = type(value)
             if "bounds" in full_name:
-                type_ = lambda x: [float(i) for i in x.split(",")]
-                appendix = ", comma separated values"
+                type_ = comma_separated_values_float
             elif "approved_coins" in full_name:
                 acronym = "s"
-                type_ = lambda x: x.split(",")
-                appendix = ", comma separated values"
+                type_ = comma_separated_values
+            elif "ignored_coins" in full_name:
+                type_ = comma_separated_values
             elif "optimize_scoring" in full_name:
-                type_ = lambda x: x.split(",")
+                type_ = comma_separated_values
                 acronym = "os"
-                appendix = ", comma separated values. Options: adg,sharpe_ratio or mdg,sharpe_ratio"
+                appendix = "Options: adg,sharpe_ratio or mdg,sharpe_ratio"
             elif "cpus" in full_name:
                 acronym = "c"
             elif "iters" in full_name:
                 acronym = "i"
+            elif "auto_gs" in full_name:
+                type_ = str2bool
+                appendix = "[y/n]"
             parser.add_argument(
                 f"--{full_name}",
                 f"-{acronym}",
@@ -1189,7 +1207,7 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
                 required=False,
                 default=None,
                 metavar="",
-                help=f"Override {full_name}" + appendix,
+                help=f"Override {full_name}: {str(type_.__name__)} " + appendix,
             )
             acronyms.add(acronym)
 
