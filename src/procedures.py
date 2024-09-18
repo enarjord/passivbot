@@ -170,7 +170,6 @@ def format_config(config: dict, verbose=True) -> dict:
     else:
         result["backtest"]["symbols"] = get_all_eligible_symbols(result["backtest"]["exchange"])
     if isinstance(path := result["live"]["ignored_coins"], str):
-
         if os.path.exists(path):
             try:
                 if path.endswith(".json"):
@@ -185,7 +184,7 @@ def format_config(config: dict, verbose=True) -> dict:
                 else:
                     print(f"failed to load ignored coins from file {path}, unknown file format")
             except Exception as e:
-                print(f"failed to load ignored coins from file {path}")
+                print(f"failed to load ignored coins from file {path} {e}")
         else:
             print(f"path to ignored coins file does not exist {path}")
             result["live"]["ignored_coins"] = []
