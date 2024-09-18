@@ -205,6 +205,11 @@ class HyperliquidBot(Passivbot):
             else:
                 return "long" if order["side"] == "buy" else "short"
         else:
+            if "reduceOnly" in order:
+                if order["side"] == "buy":
+                    return "short" if order["reduceOnly"] else "long"
+                if order["side"] == "sell":
+                    return "long" if order["reduceOnly"] else "short"
             return "long" if order["side"] == "buy" else "short"
 
     async def fetch_open_orders(self, symbol: str = None):
@@ -447,7 +452,7 @@ class HyperliquidBot(Passivbot):
                     executed.append({**ex, **order})
             return executed
         except Exception as e:
-            logging.error(f"error executing orders {e}")
+            logging.error(f"error executing orders {e} {orders}")
             print_async_exception(res)
             traceback.print_exc()
 
