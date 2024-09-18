@@ -130,7 +130,7 @@ If a position is stuck, bot will use profits made on other positions to realize 
 	- e.g. if exchange's effective min cost for a coin is $5, but bot wants to make an order of $2, disallow that coin.
 - `forced_mode_long`, `forced_mode_short`: force all long positions to a given mode
 	- Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
-- `ignored_coins`: list of coins bot will not make positions on. If there are positions on that coin, turn on graceful stop
+- `ignored_coins`: list of coins bot will not make positions on. If there are positions on that coin, turn on graceful stop. May be given as a path to a json, hjson or txt file with list of coins to be ignored. If txt, each coin is on its own line.
 - `leverage`: leverage set on exchange. Default 10.
 - `max_n_cancellations_per_batch`: will cancel n open orders per execution
 - `max_n_creations_per_batch`: will create n new orders per execution
