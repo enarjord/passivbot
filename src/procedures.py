@@ -169,6 +169,26 @@ def format_config(config: dict, verbose=True) -> dict:
         result["backtest"]["symbols"] = result["live"]["approved_coins"]
     else:
         result["backtest"]["symbols"] = get_all_eligible_symbols(result["backtest"]["exchange"])
+    if isinstance(path := result["live"]["ignored_coins"], str):
+
+        if os.path.exists(path):
+            try:
+                if path.endswith(".json"):
+                    result["live"]["ignored_coins"] = json.load(open(path))
+                elif path.endswith(".hjson"):
+                    result["live"]["ignored_coins"] = hjson.load(open(path))
+                elif path.endswith(".txt"):
+                    with open(path) as f:
+                        result["live"]["ignored_coins"] = [
+                            xx for x in f.readlines() if (xx := x.strip())
+                        ]
+                else:
+                    print(f"failed to load ignored coins from file {path}, unknown file format")
+            except Exception as e:
+                print(f"failed to load ignored coins from file {path}")
+        else:
+            print(f"path to ignored coins file does not exist {path}")
+            result["live"]["ignored_coins"] = []
     return result
 
 
