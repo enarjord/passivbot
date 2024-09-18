@@ -12,10 +12,14 @@ from procedures import (
     create_bybit_bot,
     make_get_filepath,
     load_exchange_key_secret_passphrase,
+    load_user_info,
+    utc_ms,
 )
+from passivbot import setup_bot
 from pure_funcs import get_template_live_config, flatten
 from njit_funcs import round_dynamic
 from time import sleep
+import pprint
 import logging
 import logging.config
 
@@ -50,19 +54,11 @@ async def main():
         help="quote coin, default USDT",
     )
     args = parser.parse_args()
-    config = get_template_live_config()
-    config["user"] = args.user
-    config["symbol"] = "BTCUSDT"  # dummy symbol
-    config["market_type"] = "futures"
-    exchange = load_exchange_key_secret_passphrase(args.user)[0]
-    if exchange == "binance":
-        bot = await create_binance_bot(config)
-    elif exchange == "bybit":
-        bot = await create_bybit_bot(config)
-    else:
-        raise Exception(f"unknown exchange {exchange}")
+    user_info = load_user_info(args.user)
+    exchange = user_info["exchange"]
+    pnls_fname = os.path.join("caches", exchange, args.user + "_pnls.json")
     transfer_log_fpath = make_get_filepath(
-        os.path.join("logs", f"automatic_profit_transfer_log_{exchange}_{config['user']}.json")
+        os.path.join("logs", f"automatic_profit_transfer_log_{exchange}_{args.user}.json")
     )
     try:
         already_transferred_ids = set(json.load(open(transfer_log_fpath)))
@@ -70,27 +66,33 @@ async def main():
     except:
         already_transferred_ids = set()
         logging.info(f"no previous transfers to load")
+    if exchange == "bybit":
+        config = get_template_live_config("v7")
+        config["user"] = args.user
+        bot = setup_bot(config)
+        await bot.determine_utc_offset()
+    else:
+        raise Exception(f"unsupported exchange {exchange}")
+    day_ms = 1000 * 60 * 60 * 24
     while True:
-        now = await bot.get_server_time()
-        try:
-            income = await bot.get_all_income(start_time=now - 1000 * 60 * 60 * 24)
-        except Exception as e:
-            logging.error(f"failed fetching income {e}")
-            # traceback.print_exc()
-            income = []
-        income = [e for e in income if e["transaction_id"] not in already_transferred_ids]
-        income = [x for x in income if x["timestamp"] > now - 1000 * 60 * 60 * 24]
-        income = [e for e in income if e["token"] == args.quote]
-        profit = sum([e["income"] for e in income])
+        if os.path.exists(pnls_fname):
+            pnls = json.load(open(f"caches/{user_info['exchange']}/{args.user}_pnls.json"))
+        else:
+            logging.info(f"pnls file does not exist {pnls_fname}")
+            pnls = []
+        now = bot.get_exchange_time()
+        pnls_last_24_h = [x for x in pnls if x["timestamp"] >= now - day_ms]
+        pnls_last_24_h = [x for x in pnls_last_24_h if x["id"] not in already_transferred_ids]
+        profit = sum([e["pnl"] for e in pnls_last_24_h])
         to_transfer = round_dynamic(profit * args.percentage, 4)
         if args.quote in ["USDT", "BUSD", "USDC"]:
             to_transfer = round(to_transfer, 4)
         if to_transfer > 0:
             try:
-                transferred = await bot.transfer_from_derivatives_to_spot(args.quote, to_transfer)
-                logging.info(f"income: {profit} transferred {to_transfer} {args.quote}")
+                transferred = await bot.cca.transfer(args.quote, to_transfer, "CONTRACT", "SPOT")
+                logging.info(f"pnl: {profit} transferred {to_transfer} {args.quote}")
                 logging.info(f"{transferred}")
-                already_transferred_ids.update([e["transaction_id"] for e in income])
+                already_transferred_ids.update([e["id"] for e in pnls_last_24_h])
                 json.dump(list(already_transferred_ids), open(transfer_log_fpath, "w"))
             except Exception as e:
                 logging.error(f"failed transferring {e}")
