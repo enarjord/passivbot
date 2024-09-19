@@ -189,14 +189,16 @@ def format_config(config: dict, verbose=True) -> dict:
         )
     if result["live"]["approved_coins"]:
         result["live"]["approved_coins"] = [
-            x for x in coins_to_symbols(
-            result["live"]["approved_coins"], verbose=verbose
-        ) if x not in result["live"]["ignored_coins"]
+            x
+            for x in coins_to_symbols(result["live"]["approved_coins"], verbose=verbose)
+            if x not in result["live"]["ignored_coins"]
         ]
         result["backtest"]["symbols"] = result["live"]["approved_coins"]
     else:
         result["backtest"]["symbols"] = [
-            x for x in get_all_eligible_symbols(result["backtest"]["exchange"]) if x not in result["live"]["ignored_coins"]
+            x
+            for x in get_all_eligible_symbols(result["backtest"]["exchange"])
+            if x not in result["live"]["ignored_coins"]
         ]
     return result
 
