@@ -727,11 +727,15 @@ class Passivbot:
 
             # calc ideal actives for long and short separately
             for pside in self.actual_actives:
-                if self.config["bot"][pside]["n_positions"] > 0:
+                if (
+                    self.config["bot"][pside]["n_positions"] > 0
+                    and self.config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
+                ):
                     self.warn_on_high_effective_min_cost(pside)
                 for symbol in sorted(eligible_symbols, key=lambda x: self.noisiness[x], reverse=True):
                     if (
-                        symbol not in self.eligible_symbols
+                        not self.is_enabled(symbol, pside)
+                        or symbol not in self.eligible_symbols
                         or not self.is_old_enough(symbol)
                         or not self.effective_min_cost_is_low_enough(pside, symbol)
                     ):
