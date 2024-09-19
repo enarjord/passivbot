@@ -1508,9 +1508,10 @@ class Passivbot:
                             calc_AU_allowance(
                                 np.array([x["pnl"] for x in self.pnls]),
                                 self.balance,
-                                loss_allowance_pct=self.live_configs[symbol][pside][
+                                loss_allowance_pct=self.config["bot"][pside][
                                     "unstuck_loss_allowance_pct"
-                                ],
+                                ]
+                                * self.config["bot"][pside]["total_wallet_exposure_limit"],
                             )
                             if len(self.pnls) > 0
                             else 0.0
