@@ -254,7 +254,12 @@ class Passivbot:
         return False
 
     def set_live_configs(self):
-        skip = {"n_positions", "total_wallet_exposure_limit"}
+        skip = {
+            "n_positions",
+            "total_wallet_exposure_limit",
+            "unstuck_loss_allowance_pct",
+            "unstuck_close_pct",
+        }
         self.config["bot"]["long"]["n_positions"] = round(self.config["bot"]["long"]["n_positions"])
         self.config["bot"]["short"]["n_positions"] = round(self.config["bot"]["short"]["n_positions"])
         for symbol in self.markets_dict:
