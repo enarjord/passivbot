@@ -4,7 +4,7 @@
         "bybit": "https://partner.bybit.com/b/passivbot",
         "bitget": "https://partner.bitget.com/bg/Y8FU1W",
         "okx": "https://www.okx.com/join/PASSIVBOT",
-        "kucoin": "https://www.kucoin.com/r/rf/QBSFZ5HT",
+        "kucoin": "https://www.kucoin.com/r/rf/QBSFZ5HT"
     },
     "binance_01" : {
         "exchange": "binance",
