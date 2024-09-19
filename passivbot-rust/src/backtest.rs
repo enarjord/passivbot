@@ -915,7 +915,8 @@ impl Backtest {
         if self.bot_params_pair.long.unstuck_loss_allowance_pct > 0.0 {
             unstuck_allowances.0 = calc_auto_unstuck_allowance(
                 self.balance,
-                self.bot_params_pair.long.unstuck_loss_allowance_pct,
+                self.bot_params_pair.long.unstuck_loss_allowance_pct
+                    * self.bot_params_pair.long.total_wallet_exposure_limit,
                 self.pnl_cumsum_max,
                 self.pnl_cumsum_running,
             );
@@ -942,7 +943,8 @@ impl Backtest {
         if self.bot_params_pair.short.unstuck_loss_allowance_pct > 0.0 {
             unstuck_allowances.1 = calc_auto_unstuck_allowance(
                 self.balance,
-                self.bot_params_pair.short.unstuck_loss_allowance_pct,
+                self.bot_params_pair.short.unstuck_loss_allowance_pct
+                    * self.bot_params_pair.short.total_wallet_exposure_limit,
                 self.pnl_cumsum_max,
                 self.pnl_cumsum_running,
             );
