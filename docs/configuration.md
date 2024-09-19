@@ -96,14 +96,15 @@ The same logic applies to both trailing entries and trailing closes.
 If a position is stuck, bot will use profits made on other positions to realize losses for the stuck position. If multiple positions are stuck, the stuck position whose price action distance is the lowest is selected for unstucking. 
 
 - `unstuck_close_pct`:
-	- percentage of full pos size to close for each unstucking order
+	- percentage of `full pos size * wallet_exposure_limit` to close for each unstucking order
 - `unstuck_ema_dist`:
 	- distance from EMA band to place unstucking order:
 	- `long_unstuck_close_price = upper_EMA_band * (1 + unstuck_ema_dist)`
 	- `short_unstuck_close_price = lower_EMA_band * (1 - unstuck_ema_dist)`
 - `unstuck_loss_allowance_pct`: 
-	- percentage below past peak balance to allow losses.
-	- e.g. if past peak balance was $10,000 and `unstuck_loss_allowance_pct = 0.02`, the bot will stop taking losses when balance reaches `$10,000 * (1 - 0.02) == $9,800`
+	- weighted percentage below past peak balance to allow losses.
+	- `loss_allowance = past_peak_balance * (1 - unstuck_loss_allowance_pct * total_wallet_exposure_limit)`
+	- e.g. if past peak balance was $10,000, `unstuck_loss_allowance_pct = 0.02` and `total_wallet_exposure_limit = 1.5`, the bot will stop taking losses when balance reaches `$10,000 * (1 - 0.02 * 1.5) == $9,700`
 - `unstuck_threshold`:
 	- if a position is bigger than a threshold, consider it stuck and activate unstucking.
 	- `if wallet_exposure / wallet_exposure_limit > unstuck_threshold: unstucking enabled`
@@ -124,7 +125,7 @@ If a position is stuck, bot will use profits made on other positions to realize 
 		- take profit only: passivbot will only manage closing orders
 	- `-lw` or `-sw` long or short wallet exposure limit.
 	- `-lev` leverage.
-	- `-lc` path to live config. Load most of the bot parameters from another config.
+	- `-lc` path to live config. Load all of another config's bot parameters except [n_positions, total_wallet_exposure_limit, unstuck_loss_allowance_pct, unstuck_close_pct].
 - `execution_delay_seconds`: wait x seconds after executing to exchange
 - `filter_by_min_effective_cost`: if true, will disallow coins where balance * WE_limit * initial_qty_pct < min_effective_cost
 	- e.g. if exchange's effective min cost for a coin is $5, but bot wants to make an order of $2, disallow that coin.
