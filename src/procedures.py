@@ -163,38 +163,41 @@ def format_config(config: dict, verbose=True) -> dict:
             result[k0][k1] = v
             if verbose:
                 print(f"adding missing parameter {k0} {k1}: {v}")
-    if result["live"]["approved_coins"]:
-        result["live"]["approved_coins"] = coins_to_symbols(
-            result["live"]["approved_coins"], verbose=verbose
+    for k_coins in ["approved_coins", "ignored_coins"]:
+        if isinstance(path := result["live"][k_coins], str):
+            if os.path.exists(path):
+                try:
+                    if path.endswith(".json") or path.endswith(".hjson"):
+                        result["live"][k_coins] = hjson.load(open(path))
+                        if verbose:
+                            print(f"set {k_coins} {result['live'][k_coins]}")
+                    elif path.endswith(".txt"):
+                        with open(path) as f:
+                            result["live"][k_coins] = [xx for x in f.readlines() if (xx := x.strip())]
+                            if verbose:
+                                print(f"set {k_coins} {result['live'][k_coins]}")
+                    else:
+                        print(f"failed to load {k_coins} from file {path}, unknown file format")
+                except Exception as e:
+                    print(f"failed to load {k_coins} from file {path} {e}")
+            else:
+                print(f"path to {k_coins} file does not exist {path}")
+                result["live"][k_coins] = []
+    if result["live"]["ignored_coins"]:
+        result["live"]["ignored_coins"] = coins_to_symbols(
+            result["live"]["ignored_coins"], verbose=verbose
         )
+    if result["live"]["approved_coins"]:
+        result["live"]["approved_coins"] = [
+            x for x in coins_to_symbols(
+            result["live"]["approved_coins"], verbose=verbose
+        ) if x not in result["live"]["ignored_coins"]
+        ]
         result["backtest"]["symbols"] = result["live"]["approved_coins"]
     else:
-        result["backtest"]["symbols"] = get_all_eligible_symbols(result["backtest"]["exchange"])
-    if isinstance(path := result["live"]["ignored_coins"], str):
-        if os.path.exists(path):
-            try:
-                if path.endswith(".json"):
-                    result["live"]["ignored_coins"] = json.load(open(path))
-                    if verbose:
-                        print(f"set ignored coins {result['live']['ignored_coins']}")
-                elif path.endswith(".hjson"):
-                    result["live"]["ignored_coins"] = hjson.load(open(path))
-                    if verbose:
-                        print(f"set ignored coins {result['live']['ignored_coins']}")
-                elif path.endswith(".txt"):
-                    with open(path) as f:
-                        result["live"]["ignored_coins"] = [
-                            xx for x in f.readlines() if (xx := x.strip())
-                        ]
-                        if verbose:
-                            print(f"set ignored coins {result['live']['ignored_coins']}")
-                else:
-                    print(f"failed to load ignored coins from file {path}, unknown file format")
-            except Exception as e:
-                print(f"failed to load ignored coins from file {path} {e}")
-        else:
-            print(f"path to ignored coins file does not exist {path}")
-            result["live"]["ignored_coins"] = []
+        result["backtest"]["symbols"] = [
+            x for x in get_all_eligible_symbols(result["backtest"]["exchange"]) if x not in result["live"]["ignored_coins"]
+        ]
     return result
 
 
