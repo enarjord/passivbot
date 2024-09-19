@@ -149,7 +149,6 @@ class Passivbot:
         self.upd_minute_emas = {}
         self.ineligible_symbols_with_pos = set()
         self.ohlcvs_1m_max_age_minutes = 10
-        self.ohlcvs_1m_max_len = 10080
         self.ohlcvs_1m_max_age_days = 7
         self.n_symbols_missing_ohlcvs_1m = 1000
         self.ohlcvs_1m_update_timestamps = {}
@@ -2111,34 +2110,25 @@ async def shutdown_bot(bot):
 
 async def main():
     parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
-    parser.add_argument("config_path", type=str, default=None, help="path to hjson passivbot config")
-    template_config = get_template_live_config("v7")
-    del template_config["optimize"]
-    del template_config["backtest"]
-    add_arguments_recursively(parser, template_config)
-    args = parser.parse_args()
-    config = load_config("configs/template.hjson" if args.config_path is None else args.config_path)
-    update_config_with_args(config, args)
-    config = format_config(config)
+    parser.add_argument(
+        "config_path", type=str, nargs="?", default=None, help="path to hjson passivbot config"
+    )
 
-    max_n_restarts_per_day = 5
+    max_n_restarts_per_day = 10
     cooldown_secs = 60
     restarts = []
     while True:
+        template_config = get_template_live_config("v7")
+        del template_config["optimize"]
+        del template_config["backtest"]
+        add_arguments_recursively(parser, template_config)
         args = parser.parse_args()
-        config = load_config(args.config_path)
-        """
-        for key in [x[2] for x in parser_items]:
-            if getattr(args, key) is not None:
-                if key.endswith("symbols"):
-                    old_value = sorted(set(config[key]))
-                    new_value = sorted(set(getattr(args, key).split(",")))
-                else:
-                    old_value = config[key]
-                    new_value = getattr(args, key)
-                logging.info(f"changing {key}: {old_value} -> {new_value}")
-                config[key] = new_value
-        """
+        config = load_config(
+            "configs/template.json" if args.config_path is None else args.config_path
+        )
+        update_config_with_args(config, args)
+        config = format_config(config)
+
         bot = setup_bot(config)
         try:
             await bot.start_bot()
