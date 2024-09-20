@@ -74,32 +74,38 @@ async def main():
     else:
         raise Exception(f"unsupported exchange {exchange}")
     day_ms = 1000 * 60 * 60 * 24
+    sleep_time_error = 10
     while True:
-        if os.path.exists(pnls_fname):
-            pnls = json.load(open(f"caches/{user_info['exchange']}/{args.user}_pnls.json"))
-        else:
-            logging.info(f"pnls file does not exist {pnls_fname}")
-            pnls = []
-        now = bot.get_exchange_time()
-        pnls_last_24_h = [x for x in pnls if x["timestamp"] >= now - day_ms]
-        pnls_last_24_h = [x for x in pnls_last_24_h if x["id"] not in already_transferred_ids]
-        profit = sum([e["pnl"] for e in pnls_last_24_h])
-        to_transfer = round_dynamic(profit * args.percentage, 4)
-        if args.quote in ["USDT", "BUSD", "USDC"]:
-            to_transfer = round(to_transfer, 4)
-        if to_transfer > 0:
-            try:
-                transferred = await bot.cca.transfer(args.quote, to_transfer, "CONTRACT", "SPOT")
-                logging.info(f"pnl: {profit} transferred {to_transfer} {args.quote}")
-                logging.info(f"{transferred}")
-                already_transferred_ids.update([e["id"] for e in pnls_last_24_h])
-                json.dump(list(already_transferred_ids), open(transfer_log_fpath, "w"))
-            except Exception as e:
-                logging.error(f"failed transferring {e}")
-                traceback.print_exc()
-        else:
-            logging.info("nothing to transfer")
-        sleep(60 * 60)
+        try:
+            if os.path.exists(pnls_fname):
+                pnls = json.load(open(f"caches/{user_info['exchange']}/{args.user}_pnls.json"))
+            else:
+                logging.info(f"pnls file does not exist {pnls_fname}")
+                pnls = []
+            now = bot.get_exchange_time()
+            pnls_last_24_h = [x for x in pnls if x["timestamp"] >= now - day_ms]
+            pnls_last_24_h = [x for x in pnls_last_24_h if x["id"] not in already_transferred_ids]
+            profit = sum([e["pnl"] for e in pnls_last_24_h])
+            to_transfer = round_dynamic(profit * args.percentage, 4)
+            if args.quote in ["USDT", "BUSD", "USDC"]:
+                to_transfer = round(to_transfer, 4)
+            if to_transfer > 0:
+                try:
+                    transferred = await bot.cca.transfer(args.quote, to_transfer, "CONTRACT", "SPOT")
+                    logging.info(f"pnl: {profit} transferred {to_transfer} {args.quote}")
+                    logging.info(f"{transferred}")
+                    already_transferred_ids.update([e["id"] for e in pnls_last_24_h])
+                    json.dump(list(already_transferred_ids), open(transfer_log_fpath, "w"))
+                except Exception as e:
+                    logging.error(f"failed transferring {e}")
+                    traceback.print_exc()
+            else:
+                logging.info("nothing to transfer")
+            sleep(60 * 60)
+        except Exception as e:
+            logging.info(f"error with profit transfer {e}")
+            logging.info(f"trying again in {sleep_time_error} minutes")
+            sleep(60 * sleep_time_error)
 
 
 if __name__ == "__main__":
