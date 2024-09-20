@@ -1,20 +1,9 @@
 {
     "referrals": {
-        "binance": "https://accounts.binance.me/en/register?ref=TII4B07C",
         "bybit": "https://partner.bybit.com/b/passivbot",
         "bitget": "https://partner.bitget.com/bg/Y8FU1W",
         "okx": "https://www.okx.com/join/PASSIVBOT",
-        "kucoin": "https://www.kucoin.com/r/rf/QBSFZ5HT"
-    },
-    "binance_01" : {
-        "exchange": "binance",
-        "key": "key",
-        "secret": "secret"
-    },
-    "binance_02" : {
-        "exchange": "binance",
-        "key": "key",
-        "secret": "secret"
+        "gateio": "https://www.gate.io/signup/AQCRUVTE?ref_type=103"
     },
     "bybit_01" : {
         "exchange": "bybit",
@@ -29,12 +18,6 @@
     },
     "okx_01" : {
         "exchange": "okx",
-        "key": "key",
-        "secret": "secret",
-        "passphrase": "passphrase"
-    },
-    "kucoin_01" : {
-        "exchange": "kucoin",
         "key": "key",
         "secret": "secret",
         "passphrase": "passphrase"
