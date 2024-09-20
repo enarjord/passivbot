@@ -1,10 +1,10 @@
 ![Passivbot](docs/images/pbot_logo_full.svg)
 
-# Trading bot running on Bybit, Binance, OKX, Bitget, GateIO and Hyperliquid
+# Trading bot running on Bybit, OKX, Bitget, GateIO and Hyperliquid
 
 :warning: **Used at one's own risk** :warning:
 
-v7.0.5
+v7.0.6
 
 
 ## Overview
