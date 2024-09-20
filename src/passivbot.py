@@ -185,9 +185,8 @@ class Passivbot:
         await self.update_ohlcvs_1m_for_actives()
 
     async def execute_to_exchange(self, debug_mode=False):
-        self.update_effective_min_cost()
         self.update_PB_modes()
-        self.update_EMAs()
+        await self.update_EMAs()
         await self.update_exchange_configs()
         to_cancel, to_create = self.calc_orders_to_cancel_and_create()
 
@@ -687,6 +686,7 @@ class Passivbot:
             return True
 
     def update_PB_modes(self):
+        self.update_effective_min_cost()
         # update passivbot modes for all symbols
         if hasattr(self, "PB_modes"):
             previous_PB_modes = deepcopy(self.PB_modes)
@@ -737,10 +737,11 @@ class Passivbot:
                     and self.config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
                 ):
                     self.warn_on_high_effective_min_cost(pside)
-                for symbol in sorted(eligible_symbols, key=lambda x: self.noisiness[x], reverse=True):
+                for symbol in sorted(self.noisiness, key=lambda x: self.noisiness[x], reverse=True):
                     if (
                         not self.is_enabled(symbol, pside)
                         or symbol not in self.eligible_symbols
+                        or symbol not in eligible_symbols
                         or not self.is_old_enough(symbol)
                         or not self.effective_min_cost_is_low_enough(pside, symbol)
                     ):
@@ -778,7 +779,11 @@ class Passivbot:
         else:
             # if not forager mode, all eligible symbols are ideal symbols, unless symbol in forced_modes
             for pside in ["long", "short"]:
-                self.warn_on_high_effective_min_cost(pside)
+                if (
+                    self.config["bot"][pside]["n_positions"] > 0
+                    and self.config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
+                ):
+                    self.warn_on_high_effective_min_cost(pside)
                 for symbol in self.eligible_symbols:
                     if self.is_enabled(symbol, pside):
                         if not self.effective_min_cost_is_low_enough(pside, symbol):
@@ -1079,7 +1084,6 @@ class Passivbot:
             elm["symbol"]
             for elm in self.fetched_positions + self.fetched_open_orders
             if elm["symbol"] not in self.markets_dict
-            or not self.markets_dict[elm["symbol"]]["active"]
         ]
         update = False
         if self.ineligible_symbols_with_pos:
@@ -1738,8 +1742,16 @@ class Passivbot:
             self.ema_alphas[pside][symbol] = (a := (2.0 / (ema_spans + 1)), 1.0 - a)
         self.upd_minute_emas[symbol] = first_ts
 
-    def update_EMAs(self):
+    async def update_EMAs(self):
         for symbol in self.get_eligible_or_active_symbols():
+            if symbol not in self.ohlcvs_1m or not self.ohlcvs_1m[symbol]:
+                await self.update_ohlcvs_1m_single(symbol)
+                sts = utc_ms()
+                while symbol not in self.ohlcvs_1m:
+                    await asyncio.sleep(0.2)
+                    if utc_ms() - sts > 1000 * 5:
+                        logging.error(f"timeout 5 secs waiting for ohlcvs_1m update for {symbol}")
+                        break
             self.update_EMAs_single(symbol)
 
     def update_EMAs_single(self, symbol):
@@ -2124,20 +2136,19 @@ async def main():
         "config_path", type=str, nargs="?", default=None, help="path to hjson passivbot config"
     )
 
+    template_config = get_template_live_config("v7")
+    del template_config["optimize"]
+    del template_config["backtest"]
+    add_arguments_recursively(parser, template_config)
+    args = parser.parse_args()
+    config = load_config("configs/template.json" if args.config_path is None else args.config_path)
+    update_config_with_args(config, args)
+    config = format_config(config)
+
     max_n_restarts_per_day = 10
     cooldown_secs = 60
     restarts = []
     while True:
-        template_config = get_template_live_config("v7")
-        del template_config["optimize"]
-        del template_config["backtest"]
-        add_arguments_recursively(parser, template_config)
-        args = parser.parse_args()
-        config = load_config(
-            "configs/template.json" if args.config_path is None else args.config_path
-        )
-        update_config_with_args(config, args)
-        config = format_config(config)
 
         bot = setup_bot(config)
         try:
