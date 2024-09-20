@@ -164,7 +164,12 @@ def format_config(config: dict, verbose=True) -> dict:
             if verbose:
                 print(f"adding missing parameter {k0} {k1}: {v}")
     for k_coins in ["approved_coins", "ignored_coins"]:
-        if isinstance(path := result["live"][k_coins], str):
+        path = result["live"][k_coins]
+        if isinstance(path, list):
+            if len(path) == 1 and isinstance(path[0], str) and os.path.exists(path[0]):
+                if any([path[0].endswith(k) for k in [".txt", ".json", ".hjson"]]):
+                    path = path[0]
+        if isinstance(path, str):
             if os.path.exists(path):
                 try:
                     if path.endswith(".json") or path.endswith(".hjson"):
