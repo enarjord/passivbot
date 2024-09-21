@@ -72,7 +72,7 @@ def analyze_fills_forager(symbols, hlcs, fdf, equities):
     bdf = fdf.groupby((fdf.minute // 60) * 60).balance.last()
     edf = equities.iloc[::60]
     nidx = np.arange(min(bdf.index[0], edf.index[0]), max(bdf.index[-1], edf.index[-1]), 60)
-    bal_eq = pd.DataFrame({"balance": bdf, "equity": edf}, index=nidx).ffill().bfill()
+    bal_eq = pd.DataFrame({"balance": bdf, "equity": edf}, index=nidx).astype(float).ffill().bfill()
     return sort_dict_keys(analysis), bal_eq
 
 
@@ -272,6 +272,7 @@ async def main():
     del template_config["optimize"]
     keep_live_keys = {
         "approved_coins",
+        "ignored_coins",
         "minimum_coin_age_days",
         "ohlcv_rolling_window",
         "relative_volume_filter_clip_pct",
