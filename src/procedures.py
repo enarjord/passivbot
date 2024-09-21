@@ -190,12 +190,16 @@ def format_config(config: dict, verbose=True) -> dict:
                 result["live"][k_coins] = []
     if result["live"]["ignored_coins"]:
         result["live"]["ignored_coins"] = coins_to_symbols(
-            result["live"]["ignored_coins"], verbose=verbose
+            result["live"]["ignored_coins"], exchange=result["backtest"]["exchange"], verbose=verbose
         )
     if result["live"]["approved_coins"]:
         result["live"]["approved_coins"] = [
             x
-            for x in coins_to_symbols(result["live"]["approved_coins"], verbose=verbose)
+            for x in coins_to_symbols(
+                result["live"]["approved_coins"],
+                exchange=result["backtest"]["exchange"],
+                verbose=verbose,
+            )
             if x not in result["live"]["ignored_coins"]
         ]
         result["backtest"]["symbols"] = result["live"]["approved_coins"]
@@ -227,6 +231,7 @@ def get_all_eligible_symbols(exchange="binance"):
         assert utc_ms() - get_file_mod_utc(filepath) < 1000 * 60 * 60 * 24
         return loaded_json
     except Exception as e:
+        print(f"failed to load {filepath}. Fetching from {exchange}")
         pass
     try:
         quote = quote_map[exchange]
@@ -271,8 +276,8 @@ def coin_to_symbol(coin: str, eligible_symbols=None, verbose=True):
     return None
 
 
-def coins_to_symbols(coins: [str], eligible_symbols=None, verbose=True):
-    eligible_symbols = get_all_eligible_symbols()
+def coins_to_symbols(coins: [str], eligible_symbols=None, exchange=None, verbose=True):
+    eligible_symbols = get_all_eligible_symbols(exchange)
     symbols = [coin_to_symbol(x, eligible_symbols, verbose=verbose) for x in coins]
     return sorted(set([x for x in symbols if x]))
 
