@@ -454,7 +454,7 @@ def plot_fills_forager(fdf: pd.DataFrame, hlcs_df: pd.DataFrame, start_pct=0.0, 
         return plt
     legend = ["close", "high", "low"]
     if len(longs) > 0:
-        pprices_long = hlcc.join(longs[["pprice", "psize"]]).ffill()
+        pprices_long = hlcc.join(longs[["pprice", "psize"]]).astype(float).ffill()
         pprices_long.loc[pprices_long.pprice.pct_change() != 0.0, "pprice"] = np.nan
         pprices_long = pprices_long[pprices_long.psize != 0.0].pprice
         longs[longs.type.str.contains("entry")].price.plot(style="b.")
@@ -468,7 +468,7 @@ def plot_fills_forager(fdf: pd.DataFrame, hlcs_df: pd.DataFrame, start_pct=0.0, 
             ]
         )
     if len(shorts) > 0:
-        pprices_short = hlcc.join(shorts[["pprice", "psize"]]).ffill()
+        pprices_short = hlcc.join(shorts[["pprice", "psize"]]).astype(float).ffill()
         pprices_short.loc[pprices_short.pprice.pct_change() != 0.0, "pprice"] = np.nan
         pprices_short = pprices_short[pprices_short.psize != 0.0].pprice
         shorts[shorts.type.str.contains("entry")].price.plot(style="mx")
