@@ -1,4 +1,4 @@
-use crate::backtest::{analyze_backtest, calc_noisiness, calc_volumes, Backtest};
+use crate::backtest::{analyze_backtest, Backtest};
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_grid_close_long, calc_next_close_long,
     calc_next_close_short, calc_trailing_close_long,
@@ -22,53 +22,13 @@ use pyo3::types::{PyDict, PyList};
 use pyo3::wrap_pyfunction;
 
 #[pyfunction]
-pub fn calc_volumes_py(hlcvs: PyReadonlyArray3<f64>, window: usize) -> PyResult<Py<PyArray2<f64>>> {
-    // Convert PyReadonlyArray3 to owned Array3
-    let hlcvs_rust: Array3<f64> = hlcvs.as_array().to_owned();
-
-    // Call the existing calc_volumes function
-    let volumes = calc_volumes(&hlcvs_rust, window);
-
-    // Convert the result back to a PyArray
-    Python::with_gil(|py| Ok(volumes.into_pyarray(py).to_owned()))
-}
-
-#[pyfunction]
-pub fn calc_noisiness_py(
-    hlcs: PyReadonlyArray3<f64>,
-    window: usize,
-) -> PyResult<Py<PyArray2<f64>>> {
-    // Convert PyReadonlyArray3 to owned Array3
-    let hlcs_rust: Array3<f64> = hlcs.as_array().to_owned();
-
-    // Call the existing calc_noisiness function
-    let noisiness = calc_noisiness(&hlcs_rust, window);
-
-    // Convert the result back to a PyArray
-    Python::with_gil(|py| Ok(noisiness.into_pyarray(py).to_owned()))
-}
-
-#[pyfunction]
 pub fn run_backtest(
-    hlcs: PyReadonlyArray3<f64>,
-    preferred_coins: &PyAny,
+    hlcvs: PyReadonlyArray3<f64>,
     bot_params_pair_dict: &PyDict,
     exchange_params_list: &PyAny,
     backtest_params_dict: &PyDict,
 ) -> PyResult<(Py<PyArray2<PyObject>>, Py<PyArray1<f64>>, Py<PyDict>)> {
-    let hlcs_rust = hlcs.as_array();
-
-    let preferred_coins_rust: Array2<i32> =
-        if let Ok(arr) = preferred_coins.downcast::<PyArray2<i32>>() {
-            unsafe { arr.as_array().to_owned() }
-        } else if let Ok(arr) = preferred_coins.downcast::<PyArray2<i64>>() {
-            let preferred_coins_i64: ArrayBase<_, _> = unsafe { arr.as_array() };
-            preferred_coins_i64.mapv(|x| x as i32)
-        } else {
-            return Err(PyValueError::new_err(
-                "Unsupported data type for preferred_coins",
-            ));
-        };
+    let hlcvs_rust = hlcvs.as_array();
 
     let bot_params_pair = bot_params_pair_from_dict(bot_params_pair_dict)?;
     let exchange_params = {
@@ -95,8 +55,7 @@ pub fn run_backtest(
     let backtest_params = backtest_params_from_dict(backtest_params_dict)?;
 
     let mut backtest = Backtest::new(
-        hlcs_rust.to_owned(),
-        preferred_coins_rust,
+        hlcvs_rust.to_owned(),
         bot_params_pair,
         exchange_params,
         &backtest_params,
@@ -186,6 +145,11 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         entry_trailing_retracement_pct: extract_value(dict, "entry_trailing_retracement_pct")?,
         entry_trailing_grid_ratio: extract_value(dict, "entry_trailing_grid_ratio")?,
         entry_trailing_threshold_pct: extract_value(dict, "entry_trailing_threshold_pct")?,
+        filter_rolling_window: {
+            let filter_rolling_window_float: f64 = extract_value(dict, "filter_rolling_window")?;
+            filter_rolling_window_float.round() as usize
+        },
+        filter_relative_volume_clip_pct: extract_value(dict, "filter_relative_volume_clip_pct")?,
         ema_span_0: extract_value(dict, "ema_span_0")?,
         ema_span_1: extract_value(dict, "ema_span_1")?,
         n_positions: {

@@ -1,7 +1,7 @@
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
 };
-use crate::constants::{CLOSE, HIGH, LONG, LOW, NO_POS, SHORT};
+use crate::constants::{CLOSE, HIGH, LONG, LOW, NO_POS, SHORT, VOLUME};
 use crate::entries::{
     calc_entries_long, calc_entries_short, calc_min_entry_qty, calc_next_entry_long,
     calc_next_entry_short,
@@ -15,8 +15,7 @@ use crate::utils::{
     calc_pprice_diff_int, calc_wallet_exposure, cost_to_qty, qty_to_cost, round_, round_dn,
     round_up,
 };
-use ndarray::s;
-use ndarray::{Array1, Array2, Array3, Array4};
+use ndarray::{s, Array1, Array2, Array3, Array4, Axis};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
@@ -122,9 +121,14 @@ pub struct TradingEnabled {
     short: bool,
 }
 
+pub struct PreferredCoins {
+    long: Vec<usize>,
+    short: Vec<usize>,
+}
+
 pub struct Backtest {
-    hlcs: Array3<f64>,            // 3D array: (n_timesteps, n_markets, 3)
-    preferred_coins: Array2<i32>, // 2D array: (n_timesteps, n_markets)
+    hlcvs: Array3<f64>, // 3D array: (n_timesteps, n_markets, 4)
+    preferred_coins: PreferredCoins,
     bot_params_pair: BotParamsPair,
     exchange_params_list: Vec<ExchangeParams>,
     backtest_params: BacktestParams,
@@ -147,33 +151,46 @@ pub struct Backtest {
     delist_timestamps: HashMap<usize, usize>,
     did_fill_long: HashSet<usize>,
     did_fill_short: HashSet<usize>,
+    rolling_volumes: Vec<Vec<f64>>,
 }
 
 impl Backtest {
     pub fn new(
-        hlcs: Array3<f64>,
-        preferred_coins: Array2<i32>,
+        hlcvs: Array3<f64>,
         bot_params_pair: BotParamsPair,
         exchange_params_list: Vec<ExchangeParams>,
         backtest_params: &BacktestParams,
     ) -> Self {
-        let n_markets = hlcs.shape()[1];
+        let n_timesteps = hlcvs.shape()[0];
+        let n_markets = hlcvs.shape()[1];
+        let max_window = bot_params_pair
+            .long
+            .filter_rolling_window
+            .max(bot_params_pair.short.filter_rolling_window);
+
+        // Initialize rolling_volumes with zeros
+        let rolling_volumes = vec![vec![0.0; n_markets]; n_timesteps];
+
         let initial_emas = (0..n_markets)
             .map(|i| {
-                let close_price = hlcs[[0, i, CLOSE]];
+                let close_price = hlcvs[[0, i, CLOSE]];
                 EMAs {
                     long: [close_price; 3],
                     short: [close_price; 3],
                 }
             })
             .collect();
+        let preferred_coins = PreferredCoins {
+            long: Vec::<usize>::new(),
+            short: Vec::<usize>::new(),
+        };
         let mut equities = Vec::<f64>::new();
         equities.push(backtest_params.starting_balance);
         let mut bot_params_pair_cloned = bot_params_pair.clone();
         bot_params_pair_cloned.long.n_positions = n_markets.min(bot_params_pair.long.n_positions);
         bot_params_pair_cloned.short.n_positions = n_markets.min(bot_params_pair.short.n_positions);
-        Backtest {
-            hlcs,
+        let mut backtest = Backtest {
+            hlcvs,
             preferred_coins,
             bot_params_pair: bot_params_pair_cloned,
             exchange_params_list,
@@ -207,12 +224,109 @@ impl Backtest {
             delist_timestamps: HashMap::new(),
             did_fill_long: HashSet::new(),
             did_fill_short: HashSet::new(),
+            rolling_volumes,
+        };
+        backtest.initialize_rolling_volumes(max_window);
+        backtest
+    }
+
+    fn initialize_rolling_volumes(&mut self, max_window: usize) {
+        let n_markets = self.hlcvs.shape()[1];
+        let n_timesteps = self.hlcvs.shape()[0];
+
+        for k in 0..n_timesteps {
+            let start = k.saturating_sub(max_window - 1);
+            for i in 0..n_markets {
+                // Update rolling volume
+                self.rolling_volumes[k][i] = self.hlcvs.slice(s![start..=k, i, VOLUME]).sum();
+            }
         }
+    }
+
+    fn update_rolling_volumes(&mut self, k: usize) {
+        let n_markets = self.hlcvs.shape()[1];
+        let max_window = self
+            .bot_params_pair
+            .long
+            .filter_rolling_window
+            .max(self.bot_params_pair.short.filter_rolling_window);
+
+        if k >= max_window {
+            let old_k = k - max_window;
+            for i in 0..n_markets {
+                self.rolling_volumes[k][i] = self.rolling_volumes[k - 1][i]
+                    + self.hlcvs[[k, i, VOLUME]]
+                    - self.hlcvs[[old_k, i, VOLUME]];
+            }
+        } else {
+            // For the first max_window steps, we need to recalculate the full sum
+            let start = 0;
+            for i in 0..n_markets {
+                self.rolling_volumes[k][i] = self.hlcvs.slice(s![start..=k, i, VOLUME]).sum();
+            }
+        }
+    }
+
+    fn calc_noisiness(&self, k: usize, idx: usize, window: usize) -> f64 {
+        let start = k.saturating_sub(window - 1);
+        let slice = self.hlcvs.slice(s![start..=k, idx, ..]);
+        let nrr_sum: f64 = slice
+            .axis_iter(Axis(0))
+            .map(|row| (row[HIGH] - row[LOW]) / row[CLOSE])
+            .sum();
+        nrr_sum / (k - start + 1) as f64
+    }
+
+    fn calc_preferred_coins(&self, k: usize, pside: usize) -> Vec<usize> {
+        let bot_params = match pside {
+            LONG => &self.bot_params_pair.long,
+            SHORT => &self.bot_params_pair.short,
+            _ => panic!("Invalid pside"),
+        };
+
+        let n_coins = self.hlcvs.shape()[1];
+
+        // Use pre-computed rolling volumes
+        let mut volume_sums: Vec<(usize, f64)> = self.rolling_volumes[k]
+            .iter()
+            .enumerate()
+            .map(|(idx, &sum)| (idx, sum))
+            .collect();
+
+        // Sort by volume in descending order
+        volume_sums.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+
+        // Filter by volume
+        let n_eligible = bot_params.n_positions.max(
+            (n_coins as f64 * (1.0 - bot_params.filter_relative_volume_clip_pct)).round() as usize,
+        );
+        let filtered_indices: Vec<usize> = volume_sums
+            .iter()
+            .take(n_eligible)
+            .map(|&(idx, _)| idx)
+            .collect();
+
+        // Calculate noisiness on-the-fly for filtered coins
+        let mut noisiness: Vec<(usize, f64)> = filtered_indices
+            .into_iter()
+            .map(|idx| {
+                (
+                    idx,
+                    self.calc_noisiness(k, idx, bot_params.filter_rolling_window),
+                )
+            })
+            .collect();
+
+        // Sort by noisiness in descending order
+        noisiness.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+
+        // Return indices sorted by noisiness
+        noisiness.into_iter().map(|(idx, _)| idx).collect()
     }
 
     pub fn run(&mut self) -> (Vec<Fill>, Vec<f64>) {
         let check_points: Vec<usize> = (0..7).map(|i| i * 60 * 24).collect();
-        let n_timesteps = self.hlcs.shape()[0];
+        let n_timesteps = self.hlcvs.shape()[0];
 
         for idx in 0..self.n_markets {
             self.trailing_prices
@@ -224,18 +338,18 @@ impl Backtest {
 
             // check if the coin was delisted at any point
             if n_timesteps > *check_points.last().unwrap() {
-                let last_hlc_close = self.hlcs[[n_timesteps - 1, idx, CLOSE]];
+                let last_hlc_close = self.hlcvs[[n_timesteps - 1, idx, CLOSE]];
                 if check_points.iter().all(|&point| {
-                    self.hlcs[[n_timesteps - 1 - point, idx, HIGH]] == last_hlc_close
-                        && self.hlcs[[n_timesteps - 1 - point, idx, LOW]] == last_hlc_close
-                        && self.hlcs[[n_timesteps - 1 - point, idx, CLOSE]] == last_hlc_close
+                    self.hlcvs[[n_timesteps - 1 - point, idx, HIGH]] == last_hlc_close
+                        && self.hlcvs[[n_timesteps - 1 - point, idx, LOW]] == last_hlc_close
+                        && self.hlcvs[[n_timesteps - 1 - point, idx, CLOSE]] == last_hlc_close
                 }) {
                     // was delisted. Find timestamp of delisting
                     let mut i = n_timesteps - check_points.last().unwrap();
                     while i > 0
-                        && self.hlcs[[i, idx, HIGH]] == last_hlc_close
-                        && self.hlcs[[i, idx, LOW]] == last_hlc_close
-                        && self.hlcs[[i, idx, CLOSE]] == last_hlc_close
+                        && self.hlcvs[[i, idx, HIGH]] == last_hlc_close
+                        && self.hlcvs[[i, idx, LOW]] == last_hlc_close
+                        && self.hlcvs[[i, idx, CLOSE]] == last_hlc_close
                     {
                         i -= 1;
                     }
@@ -246,6 +360,7 @@ impl Backtest {
             }
         }
         for k in 1..(n_timesteps - 1) {
+            self.update_rolling_volumes(k);
             self.check_for_fills(k);
             self.update_emas(k);
             self.update_open_orders(k);
@@ -255,7 +370,7 @@ impl Backtest {
     }
 
     fn create_state_params(&self, k: usize, idx: usize, pside: usize) -> StateParams {
-        let close_price = self.hlcs[[k, idx, CLOSE]];
+        let close_price = self.hlcvs[[k, idx, CLOSE]];
         StateParams {
             balance: self.balance,
             order_book: OrderBook {
@@ -278,7 +393,7 @@ impl Backtest {
         let mut equity = self.balance;
         // Calculate unrealized PnL for long positions
         for (&idx, position) in &self.positions.long {
-            let current_price = self.hlcs[[k, idx, CLOSE]];
+            let current_price = self.hlcvs[[k, idx, CLOSE]];
             let upnl = calc_pnl_long(
                 position.price,
                 current_price,
@@ -289,7 +404,7 @@ impl Backtest {
         }
         // Calculate unrealized PnL for short positions
         for (&idx, position) in &self.positions.short {
-            let current_price = self.hlcs[[k, idx, CLOSE]];
+            let current_price = self.hlcvs[[k, idx, CLOSE]];
             let upnl = calc_pnl_short(
                 position.price,
                 current_price,
@@ -302,6 +417,9 @@ impl Backtest {
     }
 
     fn update_actives(&mut self, k: usize, pside: usize) -> Vec<usize> {
+        // Calculate preferred coins first
+        let preferred_coins = self.calc_preferred_coins(k, pside);
+
         let (actives, positions, n_positions) = match pside {
             LONG => (
                 &mut self.actives.long,
@@ -315,23 +433,26 @@ impl Backtest {
             ),
             _ => panic!("Invalid pside"),
         };
+
         let mut actives_without_pos = Vec::with_capacity(n_positions);
         actives.clear();
+
+        // First, add all markets with existing positions
         for &market_idx in positions.keys() {
             actives.insert(market_idx);
         }
-        // Add additional markets based on preferred_coins
-        for &market_idx in self.preferred_coins.row(k).iter() {
-            let market_idx = market_idx as usize;
+
+        // Then, add additional markets based on preferred_coins
+        for &market_idx in &preferred_coins {
             if actives.len() < n_positions {
                 if actives.insert(market_idx) {
-                    // Only add to actives_without_pos if it's a new insertion
                     actives_without_pos.push(market_idx);
                 }
             } else {
                 break;
             }
         }
+
         actives_without_pos
     }
 
@@ -705,21 +826,21 @@ impl Backtest {
         } else {
             self.trailing_prices.short.entry(idx).or_default()
         };
-        if self.hlcs[[k, idx, LOW]] < trailing_price_bundle.min_since_open {
-            trailing_price_bundle.min_since_open = self.hlcs[[k, idx, LOW]];
-            trailing_price_bundle.max_since_min = self.hlcs[[k, idx, CLOSE]];
+        if self.hlcvs[[k, idx, LOW]] < trailing_price_bundle.min_since_open {
+            trailing_price_bundle.min_since_open = self.hlcvs[[k, idx, LOW]];
+            trailing_price_bundle.max_since_min = self.hlcvs[[k, idx, CLOSE]];
         } else {
             trailing_price_bundle.max_since_min = trailing_price_bundle
                 .max_since_min
-                .max(self.hlcs[[k, idx, HIGH]]);
+                .max(self.hlcvs[[k, idx, HIGH]]);
         }
-        if self.hlcs[[k, idx, HIGH]] > trailing_price_bundle.max_since_open {
-            trailing_price_bundle.max_since_open = self.hlcs[[k, idx, HIGH]];
-            trailing_price_bundle.min_since_max = self.hlcs[[k, idx, CLOSE]];
+        if self.hlcvs[[k, idx, HIGH]] > trailing_price_bundle.max_since_open {
+            trailing_price_bundle.max_since_open = self.hlcvs[[k, idx, HIGH]];
+            trailing_price_bundle.min_since_max = self.hlcvs[[k, idx, CLOSE]];
         } else {
             trailing_price_bundle.min_since_max = trailing_price_bundle
                 .min_since_max
-                .min(self.hlcs[[k, idx, LOW]]);
+                .min(self.hlcvs[[k, idx, LOW]]);
         }
     }
 
@@ -767,7 +888,7 @@ impl Backtest {
                     qty: -self.positions.long[&idx].size,
                     price: round_(
                         f64::min(
-                            self.hlcs[[k, idx, HIGH]] - self.exchange_params_list[idx].price_step,
+                            self.hlcvs[[k, idx, HIGH]] - self.exchange_params_list[idx].price_step,
                             self.positions.long[&idx].price,
                         ),
                         self.exchange_params_list[idx].price_step,
@@ -839,7 +960,7 @@ impl Backtest {
                     qty: self.positions.short[&idx].size.abs(),
                     price: round_(
                         f64::max(
-                            self.hlcs[[k, idx, LOW]] + self.exchange_params_list[idx].price_step,
+                            self.hlcvs[[k, idx, LOW]] + self.exchange_params_list[idx].price_step,
                             self.positions.short[&idx].price,
                         ),
                         self.exchange_params_list[idx].price_step,
@@ -900,9 +1021,9 @@ impl Backtest {
     fn order_filled(&self, k: usize, idx: usize, order: &Order) -> bool {
         // check if will fill in next candle
         if order.qty > 0.0 {
-            self.hlcs[[k, idx, LOW]] < order.price
+            self.hlcvs[[k, idx, LOW]] < order.price
         } else if order.qty < 0.0 {
-            self.hlcs[[k, idx, HIGH]] > order.price
+            self.hlcvs[[k, idx, HIGH]] > order.price
         } else {
             false
         }
@@ -933,7 +1054,7 @@ impl Backtest {
                         > self.bot_params_pair.long.unstuck_threshold
                     {
                         let pprice_diff =
-                            calc_pprice_diff_int(LONG, position.price, self.hlcs[[k, idx, CLOSE]]);
+                            calc_pprice_diff_int(LONG, position.price, self.hlcvs[[k, idx, CLOSE]]);
                         stuck_positions.push((idx, LONG, pprice_diff));
                     }
                 }
@@ -960,8 +1081,11 @@ impl Backtest {
                     if wallet_exposure / self.bot_params_pair.short.wallet_exposure_limit
                         > self.bot_params_pair.short.unstuck_threshold
                     {
-                        let pprice_diff =
-                            calc_pprice_diff_int(SHORT, position.price, self.hlcs[[k, idx, CLOSE]]);
+                        let pprice_diff = calc_pprice_diff_int(
+                            SHORT,
+                            position.price,
+                            self.hlcvs[[k, idx, CLOSE]],
+                        );
                         stuck_positions.push((idx, SHORT, pprice_diff));
                     }
                 }
@@ -976,7 +1100,7 @@ impl Backtest {
             match pside {
                 LONG => {
                     let close_price = f64::max(
-                        self.hlcs[[k, idx, CLOSE]],
+                        self.hlcvs[[k, idx, CLOSE]],
                         round_up(
                             self.emas[idx].compute_bands(LONG).upper
                                 * (1.0 + self.bot_params_pair.long.unstuck_ema_dist),
@@ -1018,7 +1142,7 @@ impl Backtest {
                 }
                 SHORT => {
                     let close_price = f64::min(
-                        self.hlcs[[k, idx, CLOSE]],
+                        self.hlcvs[[k, idx, CLOSE]],
                         round_dn(
                             self.emas[idx].compute_bands(SHORT).lower
                                 * (1.0 - self.bot_params_pair.short.unstuck_ema_dist),
@@ -1240,7 +1364,7 @@ impl Backtest {
     #[inline]
     fn update_emas(&mut self, k: usize) {
         for i in 0..self.n_markets {
-            let close_price = self.hlcs[[k, i, CLOSE]];
+            let close_price = self.hlcvs[[k, i, CLOSE]];
 
             let long_alphas = &self.ema_alphas.long.alphas;
             let long_alphas_inv = &self.ema_alphas.long.alphas_inv;
@@ -1409,56 +1533,4 @@ fn calc_drawdowns(equity_series: &[f64]) -> Vec<f64> {
         .zip(cumulative_max.iter())
         .map(|(&ret, &max)| (ret - max) / max)
         .collect()
-}
-
-pub fn calc_noisiness(hlcs: &Array3<f64>, window: usize) -> Array2<f64> {
-    let (n_minutes, n_coins, _) = hlcs.dim();
-
-    // Calculate Normalized Relative Range (NRR)
-    let nrrs =
-        (&hlcs.slice(s![.., .., 0]) - &hlcs.slice(s![.., .., 1])) / &hlcs.slice(s![.., .., 2]);
-
-    let mut noisiness = Array2::<f64>::zeros((n_minutes, n_coins));
-    let mut sums = vec![0.0; n_coins];
-
-    for i in 1..n_minutes {
-        let idx_start = i.saturating_sub(window);
-
-        for j in 0..n_coins {
-            sums[j] += nrrs[[i - 1, j]];
-
-            if idx_start > 0 {
-                sums[j] -= nrrs[[idx_start - 1, j]];
-                noisiness[[i, j]] = sums[j] / window as f64;
-            } else {
-                noisiness[[i, j]] = sums[j] / i as f64;
-            }
-        }
-    }
-    noisiness
-}
-
-pub fn calc_volumes(hlcvs: &Array3<f64>, window: usize) -> Array2<f64> {
-    let (n_minutes, n_coins, _) = hlcvs.dim();
-
-    // Calculate volume in quote currency (close * volume)
-    let quote_volumes = &hlcvs.slice(s![.., .., 2]) * &hlcvs.slice(s![.., .., 3]);
-
-    let mut rolling_volumes = Array2::<f64>::zeros((n_minutes, n_coins));
-    let mut sums = vec![0.0; n_coins];
-
-    for i in 0..n_minutes {
-        let idx_start = i.saturating_sub(window);
-        for j in 0..n_coins {
-            sums[j] += quote_volumes[[i, j]];
-            if i >= window {
-                sums[j] -= quote_volumes[[idx_start, j]];
-                rolling_volumes[[i, j]] = sums[j];
-            } else {
-                rolling_volumes[[i, j]] = sums[j];
-            }
-        }
-    }
-
-    rolling_volumes
 }

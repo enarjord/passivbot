@@ -110,6 +110,8 @@ pub struct BotParams {
     pub entry_trailing_retracement_pct: f64,
     pub entry_trailing_grid_ratio: f64,
     pub entry_trailing_threshold_pct: f64,
+    pub filter_rolling_window: usize,
+    pub filter_relative_volume_clip_pct: f64,
     pub ema_span_0: f64,
     pub ema_span_1: f64,
     pub n_positions: usize,
