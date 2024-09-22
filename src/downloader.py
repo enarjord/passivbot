@@ -1520,6 +1520,9 @@ def unify_hlcv_data(hlcv_list) -> (np.ndarray, np.ndarray):
         # Extract the required data (high, low, close, volume)
         coin_data = ohlcv[:, 1:]
 
+        # Use quote volume as volume
+        coin_data[:, 3] = coin_data[:, 2] * coin_data[:, 3]
+
         # Place the data in the unified array
         unified_array[start_idx:end_idx, i, :] = coin_data
 
