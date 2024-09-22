@@ -54,7 +54,7 @@ def process_forager_fills(fills):
     return fdf
 
 
-def analyze_fills_forager(symbols, hlcs, fdf, equities):
+def analyze_fills_forager(symbols, hlcvs, fdf, equities):
     analysis = {}
     pnls = {}
     for pside in ["long", "short"]:
@@ -163,22 +163,20 @@ def prep_backtest_args(config, mss, exchange_params=None, backtest_params=None):
     return bot_params, exchange_params, backtest_params
 
 
-def run_backtest(hlcs, preferred_coins, mss, config: dict):
+def run_backtest(hlcvs, mss, config: dict):
     bot_params, exchange_params, backtest_params = prep_backtest_args(config, mss)
     print(f"Starting backtest...")
     sts = utc_ms()
-    fills, equities, analysis = pbr.run_backtest(
-        hlcs, preferred_coins, bot_params, exchange_params, backtest_params
-    )
+    fills, equities, analysis = pbr.run_backtest(hlcvs, bot_params, exchange_params, backtest_params)
     print(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
     return fills, equities, analysis
 
 
-def post_process(config, hlcs, fills, equities, analysis, results_path):
+def post_process(config, hlcvs, fills, equities, analysis, results_path):
     sts = utc_ms()
     fdf = process_forager_fills(fills)
     equities = pd.Series(equities)
-    analysis_py, bal_eq = analyze_fills_forager(config["backtest"]["symbols"], hlcs, fdf, equities)
+    analysis_py, bal_eq = analyze_fills_forager(config["backtest"]["symbols"], hlcvs, fdf, equities)
     for k in analysis_py:
         if k not in analysis:
             analysis[k] = analysis_py[k]
@@ -191,10 +189,10 @@ def post_process(config, hlcs, fills, equities, analysis, results_path):
     config["analysis"] = analysis
     dump_config(config, f"{results_path}config.json")
     fdf.to_csv(f"{results_path}fills.csv")
-    plot_forager(results_path, config["backtest"]["symbols"], fdf, bal_eq, hlcs)
+    plot_forager(results_path, config["backtest"]["symbols"], fdf, bal_eq, hlcvs)
 
 
-def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcs):
+def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcvs):
     plots_dir = make_get_filepath(oj(results_path, "fills_plots", ""))
     plt.clf()
     bal_eq.plot()
@@ -203,60 +201,16 @@ def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcs):
     for i, symbol in enumerate(symbols):
         try:
             print(f"Plotting fills for {symbol}")
-            hlcs_df = pd.DataFrame(hlcs[:, i, :], columns=["high", "low", "close"])
+            hlcvs_df = pd.DataFrame(hlcvs[:, i, :3], columns=["high", "low", "close"])
             fdfc = fdf[fdf.symbol == symbol]
             plt.clf()
-            plot_fills_forager(fdfc, hlcs_df)
+            plot_fills_forager(fdfc, hlcvs_df)
             plt.title(f"Fills {symbol}")
             plt.xlabel = "time"
             plt.ylabel = "price"
             plt.savefig(oj(plots_dir, f"{symbol}.png"))
         except Exception as e:
             print(f"Error plotting {symbol} {e}")
-
-
-def calc_preferred_coins(hlcvs, config):
-    w_size = config["live"]["ohlcv_rolling_window"]
-    n_coins = hlcvs.shape[1]
-
-    # Calculate noisiness indices
-    noisiness_indices = np.argsort(-pbr.calc_noisiness_py(hlcvs[:, :, :3], w_size))
-
-    # Calculate volume-based eligibility
-    if config["live"]["relative_volume_filter_clip_pct"] > 0.0:
-        n_eligibles = int(round(n_coins * (1 - config["live"]["relative_volume_filter_clip_pct"])))
-
-        for pside in ["long", "short"]:
-            if (
-                config["bot"][pside]["n_positions"] > 0.0
-                and config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
-            ):
-                n_eligibles = max(n_eligibles, int(round(config["bot"][pside]["n_positions"])))
-
-        if n_eligibles < n_coins:
-            # Calculate rolling volumes and get volume-based ranking
-            rolling_volumes = pbr.calc_volumes_py(hlcvs, w_size)
-            volume_ranking = np.argsort(-rolling_volumes, axis=1)
-
-            # Create a mask for eligible coins based on volume (vectorized)
-            rows = np.arange(hlcvs.shape[0])[:, None]
-            cols = volume_ranking[:, :n_eligibles]
-            eligibility_mask = np.zeros((hlcvs.shape[0], n_coins), dtype=bool)
-            eligibility_mask[rows, cols] = True
-
-            # Filter noisiness_indices based on eligibility
-            filtered_noisiness_indices = np.array(
-                [
-                    indices[mask]
-                    for indices, mask in zip(
-                        noisiness_indices, eligibility_mask[rows, noisiness_indices]
-                    )
-                ]
-            )
-
-            return filtered_noisiness_indices
-
-    return noisiness_indices
 
 
 async def main():
@@ -274,8 +228,6 @@ async def main():
         "approved_coins",
         "ignored_coins",
         "minimum_coin_age_days",
-        "ohlcv_rolling_window",
-        "relative_volume_filter_clip_pct",
     }
     for key in sorted(template_config["live"]):
         if key not in keep_live_keys:
@@ -287,10 +239,8 @@ async def main():
     config = format_config(config)
     symbols, hlcvs, mss, results_path = await prepare_hlcvs_mss(config)
     config["backtest"]["symbols"] = symbols
-    preferred_coins = calc_preferred_coins(hlcvs, config)
-    hlcs = hlcvs[:, :, :3]
-    fills, equities, analysis = run_backtest(hlcs, preferred_coins, mss, config)
-    post_process(config, hlcs, fills, equities, analysis, results_path)
+    fills, equities, analysis = run_backtest(hlcvs, mss, config)
+    post_process(config, hlcvs, fills, equities, analysis, results_path)
 
 
 if __name__ == "__main__":
