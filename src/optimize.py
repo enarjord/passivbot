@@ -9,7 +9,6 @@ from multiprocessing import shared_memory
 from backtest import (
     prepare_hlcvs_mss,
     prep_backtest_args,
-    calc_preferred_coins,
 )
 from pure_funcs import (
     get_template_live_config,
@@ -146,26 +145,15 @@ def config_to_individual(config):
 
 
 class Evaluator:
-    def __init__(self, hlcs, preferred_coins, config, mss):
-        self.hlcs = hlcs
-        self.shared_hlcs = shared_memory.SharedMemory(create=True, size=self.hlcs.nbytes)
-        self.shared_hlcs_np = np.ndarray(
-            self.hlcs.shape, dtype=self.hlcs.dtype, buffer=self.shared_hlcs.buf
+    def __init__(self, hlcvs, config, mss):
+        self.hlcvs = hlcvs
+        self.shared_hlcvs = shared_memory.SharedMemory(create=True, size=self.hlcvs.nbytes)
+        self.shared_hlcvs_np = np.ndarray(
+            self.hlcvs.shape, dtype=self.hlcvs.dtype, buffer=self.shared_hlcvs.buf
         )
-        np.copyto(self.shared_hlcs_np, self.hlcs)
-        del self.hlcs
+        np.copyto(self.shared_hlcvs_np, self.hlcvs)
+        del self.hlcvs
 
-        self.preferred_coins = preferred_coins
-        self.shared_preferred_coins = shared_memory.SharedMemory(
-            create=True, size=self.preferred_coins.nbytes
-        )
-        self.shared_preferred_coins_np = np.ndarray(
-            self.preferred_coins.shape,
-            dtype=self.preferred_coins.dtype,
-            buffer=self.shared_preferred_coins.buf,
-        )
-        np.copyto(self.shared_preferred_coins_np, self.preferred_coins)
-        del self.preferred_coins
         self.config = config
 
         _, self.exchange_params, self.backtest_params = prep_backtest_args(config, mss)
@@ -176,8 +164,7 @@ class Evaluator:
             config, [], exchange_params=self.exchange_params, backtest_params=self.backtest_params
         )
         fills, equities, analysis = pbr.run_backtest(
-            self.shared_hlcs_np,
-            self.shared_preferred_coins_np,
+            self.shared_hlcvs_np,
             bot_params,
             self.exchange_params,
             self.backtest_params,
@@ -208,10 +195,8 @@ class Evaluator:
 
     def cleanup(self):
         # Close and unlink the shared memory
-        self.shared_hlcs.close()
-        self.shared_hlcs.unlink()
-        self.shared_preferred_coins.close()
-        self.shared_preferred_coins.unlink()
+        self.shared_hlcvs.close()
+        self.shared_hlcvs.unlink()
 
 
 def add_extra_options(parser):
@@ -290,8 +275,6 @@ async def main():
     config = format_config(config)
     symbols, hlcvs, mss, results_path = await prepare_hlcvs_mss(config)
     config["backtest"]["symbols"] = symbols
-    preferred_coins = calc_preferred_coins(hlcvs, config)
-    hlcs = hlcvs[:, :, :3]
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
     coins = [symbol_to_coin(s) for s in config["backtest"]["symbols"]]
     coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
@@ -300,7 +283,7 @@ async def main():
         f"optimize_results/{date_fname}_{coins_fname}_{hash_snippet}_all_results.txt"
     )
     try:
-        evaluator = Evaluator(hlcs, preferred_coins, config, mss)
+        evaluator = Evaluator(hlcvs, config, mss)
         creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -1.0))  # Minimize both objectives
         creator.create("Individual", list, fitness=creator.FitnessMulti)
 
