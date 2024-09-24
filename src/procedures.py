@@ -1211,7 +1211,7 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
                 acronym = "c"
             elif "iters" in full_name:
                 acronym = "i"
-            elif "auto_gs" in full_name:
+            elif any([x in full_name for x in ["auto_gs", "filter_by_min_effective_cost"]]):
                 type_ = str2bool
                 appendix = "[y/n]"
             parser.add_argument(
