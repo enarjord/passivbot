@@ -253,7 +253,7 @@ class BinanceBot(Passivbot):
                 if hasattr(self, "active_symbols") and self.active_symbols:
                     symbols_.update(list(self.active_symbols))
                 if hasattr(self, "fetched_positions"):
-                    symbols_.update([x['symbol'] for x in self.fetched_positions])
+                    symbols_.update([x["symbol"] for x in self.fetched_positions])
                 symbols_ = sorted(set(symbols_))
                 fetched = await asyncio.gather(
                     *[self.cca.fetch_open_orders(symbol=symbol) for symbol in symbols_]
@@ -287,7 +287,9 @@ class BinanceBot(Passivbot):
                         "price": float(elm["entryPrice"]),
                     }
                 )
-            balance = float(fetched_balance["info"]["totalCrossWalletBalance"]) - float(fetched_balance["info"]["totalCrossUnPnl"])
+            balance = float(fetched_balance["info"]["totalCrossWalletBalance"]) - float(
+                fetched_balance["info"]["totalCrossUnPnl"]
+            )
             return positions, balance
         except Exception as e:
             logging.error(f"error fetching positions {e}")
