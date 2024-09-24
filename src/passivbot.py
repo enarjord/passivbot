@@ -342,7 +342,10 @@ class Passivbot:
     async def wait_for_ohlcvs_1m_to_update(self):
         await asyncio.sleep(1.0)
         prev_print_ts = utc_ms() - 5000.0
-        while self.n_symbols_missing_ohlcvs_1m > self.max_n_concurrent_ohlcvs_1m_updates - 1:
+        while (
+            not self.stop_signal_received
+            and self.n_symbols_missing_ohlcvs_1m > self.max_n_concurrent_ohlcvs_1m_updates - 1
+        ):
             if utc_ms() - prev_print_ts > 1000 * 10:
                 logging.info(
                     f"Waiting for ohlcvs to be refreshed. Number of symbols with "
