@@ -32,6 +32,7 @@ from procedures import (
     add_arguments_recursively,
     update_config_with_args,
     format_config,
+    print_async_exception,
 )
 from njit_funcs_recursive_grid import calc_recursive_entries_long, calc_recursive_entries_short
 from njit_funcs import (
@@ -870,7 +871,7 @@ class Passivbot:
             logging.info(
                 f"Warning: No {pside} symbols are approved due to min effective cost too high. "
                 + f"Suggestions: 1) increase account balance, 2) "
-                + f"set 'filter_by_min_effective_cost' to false, 3) if in forager mode, reduce n_{pside}s"
+                + f"set 'filter_by_min_effective_cost' to false, 3) reduce n_{pside}s"
             )
 
     def effective_min_cost_is_low_enough(self, pside, symbol):
@@ -915,7 +916,7 @@ class Passivbot:
                 )
                 return True
         except Exception as e:
-            logging.error(f"failed to add order to self.open_orders {order} {e}")
+            logging.error(f"failed to add order to self.open_orders {source} {order} {e}")
             traceback.print_exc()
             return False
 
@@ -1027,7 +1028,9 @@ class Passivbot:
             newest_pnls = await self.fetch_pnls(start_time=pnls_cache[-1]["timestamp"])
             if pnls_cache[0]["timestamp"] > age_limit + 1000 * 60 * 60 * 4:
                 # might be older missing pnls
-                logging.info(f"fetching missing pnls {ts_to_date_utc(pnls_cache[0]['timestamp'])}")
+                logging.info(
+                    f"fetching missing pnls from before {ts_to_date_utc(pnls_cache[0]['timestamp'])}"
+                )
                 missing_pnls = await self.fetch_pnls(
                     start_time=age_limit, end_time=pnls_cache[0]["timestamp"]
                 )
@@ -1096,44 +1099,51 @@ class Passivbot:
     async def update_open_orders(self):
         if not hasattr(self, "open_orders"):
             self.open_orders = {}
-        res = await self.fetch_open_orders()
-        if res in [None, False]:
+        res = None
+        try:
+            res = await self.fetch_open_orders()
+            if res in [None, False]:
+                return False
+            self.fetched_open_orders = res
+            await self.check_for_inactive_markets()
+            open_orders = res
+            oo_ids_old = {elm["id"] for sublist in self.open_orders.values() for elm in sublist}
+            created_prints, cancelled_prints = [], []
+            for oo in open_orders:
+                if oo["id"] not in oo_ids_old:
+                    # there was a new open order not caught by websocket
+                    created_prints.append(
+                        f"new order {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
+                    )
+            oo_ids_new = {elm["id"] for elm in open_orders}
+            for oo in [elm for sublist in self.open_orders.values() for elm in sublist]:
+                if oo["id"] not in oo_ids_new:
+                    # there was an order cancellation not caught by websocket
+                    cancelled_prints.append(
+                        f"cancelled {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
+                    )
+            self.open_orders = {}
+            for elm in open_orders:
+                if elm["symbol"] not in self.open_orders:
+                    self.open_orders[elm["symbol"]] = []
+                self.open_orders[elm["symbol"]].append(elm)
+            if len(created_prints) > 12:
+                logging.info(f"{len(created_prints)} new open orders")
+            else:
+                for line in created_prints:
+                    logging.info(line)
+            if len(cancelled_prints) > 12:
+                logging.info(f"{len(created_prints)} cancelled open orders")
+            else:
+                for line in cancelled_prints:
+                    logging.info(line)
+            self.upd_timestamps["open_orders"] = utc_ms()
+            return True
+        except Exception as e:
+            logging.error(f"error with {get_function_name()} {e}")
+            print_async_exception(res)
+            traceback.print_exc()
             return False
-        self.fetched_open_orders = res
-        await self.check_for_inactive_markets()
-        open_orders = res
-        oo_ids_old = {elm["id"] for sublist in self.open_orders.values() for elm in sublist}
-        created_prints, cancelled_prints = [], []
-        for oo in open_orders:
-            if oo["id"] not in oo_ids_old:
-                # there was a new open order not caught by websocket
-                created_prints.append(
-                    f"new order {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
-                )
-        oo_ids_new = {elm["id"] for elm in open_orders}
-        for oo in [elm for sublist in self.open_orders.values() for elm in sublist]:
-            if oo["id"] not in oo_ids_new:
-                # there was an order cancellation not caught by websocket
-                cancelled_prints.append(
-                    f"cancelled {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
-                )
-        self.open_orders = {}
-        for elm in open_orders:
-            if elm["symbol"] not in self.open_orders:
-                self.open_orders[elm["symbol"]] = []
-            self.open_orders[elm["symbol"]].append(elm)
-        if len(created_prints) > 12:
-            logging.info(f"{len(created_prints)} new open orders")
-        else:
-            for line in created_prints:
-                logging.info(line)
-        if len(cancelled_prints) > 12:
-            logging.info(f"{len(created_prints)} cancelled open orders")
-        else:
-            for line in cancelled_prints:
-                logging.info(line)
-        self.upd_timestamps["open_orders"] = utc_ms()
-        return True
 
     async def determine_utc_offset(self, verbose=True):
         # returns millis to add to utc to get exchange timestamp
