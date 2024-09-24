@@ -142,8 +142,15 @@ https://partner.bybit.com/b/passivbot
 https://partner.bitget.com/bg/Y8FU1W  
 https://www.okx.com/join/PASSIVBOT  (20% rebate)  
 
-**Note on Binance**
-To support continued Passivbot development, please consider using a Binance account created after 2024-09-21 and either: a) don't use a referral link, or b) use referral ID: "TII4B07C". Passivbot receives commissions from trades only for accounts meeting these criteria.  
+**Note on Binance**  
+To support continued Passivbot development, please use a Binance account which  
+1) was created after 2024-09-21 and  
+2) either:  
+  a) was created without a referral link, or  
+  b) was created with referral ID: "TII4B07C".  
+                                                                                      
+Passivbot receives commissions from trades only for accounts meeting these criteria.  
+
 
 **BuyMeACoffee:**  
 https://www.buymeacoffee.com/enarjord  
