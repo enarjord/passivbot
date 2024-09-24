@@ -2098,6 +2098,10 @@ def setup_bot(config):
         from exchanges.bitget import BitgetBot
 
         bot = BitgetBot(config)
+    elif user_info["exchange"] == "binance":
+        from exchanges.binance import BinanceBot
+
+        bot = BinanceBot(config)
     elif user_info["exchange"] == "okx":
         from exchanges.okx import OKXBot
 
