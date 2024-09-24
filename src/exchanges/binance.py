@@ -7,8 +7,16 @@ import pprint
 import asyncio
 import traceback
 import numpy as np
-from pure_funcs import floatify, ts_to_date_utc, calc_hash, determine_pos_side_ccxt, flatten
-from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
+import json
+from pure_funcs import (
+    floatify,
+    ts_to_date_utc,
+    calc_hash,
+    determine_pos_side_ccxt,
+    flatten,
+    shorten_custom_id,
+)
+from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version, load_broker_code
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
@@ -16,23 +24,65 @@ assert_correct_ccxt_version(ccxt=ccxt_async)
 class BinanceBot(Passivbot):
     def __init__(self, config: dict):
         super().__init__(config)
-        self.ccp = getattr(ccxt_pro, "binanceusdm")(
-            {
-                "apiKey": self.user_info["key"],
-                "secret": self.user_info["secret"],
-                "password": self.user_info["passphrase"],
-            }
-        )
-        self.ccp.options['defaultType'] = 'swap'
-        self.cca = getattr(ccxt_async, "binanceusdm")(
-            {
-                "apiKey": self.user_info["key"],
-                "secret": self.user_info["secret"],
-                "password": self.user_info["passphrase"],
-            }
-        )
-        self.cca.options['defaultType'] = 'swap'
+        self.broker_code_spot = load_broker_code("binance_spot")
+        for ccx, ccxt_module in [("cca", ccxt_async), ("ccp", ccxt_pro)]:
+            exchange_class = getattr(ccxt_module, "binanceusdm")
+            setattr(
+                self,
+                ccx,
+                exchange_class(
+                    {
+                        "apiKey": self.user_info["key"],
+                        "secret": self.user_info["secret"],
+                        "password": self.user_info["passphrase"],
+                    }
+                ),
+            )
+            getattr(self, ccx).options["defaultType"] = "swap"
+            if self.broker_code:
+                for key in ["future", "delivery", "swap", "option"]:
+                    getattr(self, ccx).options["broker"][key] = "x-" + self.broker_code
+            if self.broker_code_spot:
+                for key in ["spot", "margin"]:
+                    getattr(self, ccx).options["broker"][key] = "x-" + self.broker_code_spot
+        self.custom_id_max_length = 36
 
+    async def print_new_user_suggestion(self):
+        res = None
+        try:
+            res = await self.cca.fapiprivate_get_apireferral_ifnewuser(
+                params={"brokerid": self.broker_code}
+            )
+        except Exception as e:
+            logging.error(f"failed to fetch fapiprivate_get_apireferral_ifnewuser {e}")
+            print_async_exception(res)
+            return
+        if res["ifNewUser"] and res["rebateWorking"]:
+            return
+        lines = [
+            "To support continued Passivbot development, please use a Binance account which",
+            "1) was created after 2024-09-21 and",
+            "2) either:",
+            "  a) was created without a referral link, or",
+            '  b) was created with referral ID: "TII4B07C".',
+            " ",
+            "Passivbot receives commissions from trades only for accounts meeting these criteria.",
+            " ",
+            json.dumps(res),
+        ]
+        front_pad = " " * 8 + "##"
+        back_pad = "##"
+        max_len = max([len(line) for line in lines])
+        print("\n\n")
+        print(front_pad + "#" * (max_len + 2) + back_pad)
+        for line in lines:
+            print(front_pad + " " + line + " " * (max_len - len(line) + 1) + back_pad)
+        print(front_pad + "#" * (max_len + 2) + back_pad)
+        print("\n\n")
+
+    async def init_markets_dict(self):
+        await self.print_new_user_suggestion()
+        await super().init_markets_dict()
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
@@ -42,8 +92,8 @@ class BinanceBot(Passivbot):
                 0.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
             )
             self.min_qtys[symbol] = elm["limits"]["amount"]["min"]
-            self.price_steps[symbol] = elm['precision']['price']
-            self.qty_steps[symbol] = elm['precision']['amount']
+            self.price_steps[symbol] = elm["precision"]["price"]
+            self.qty_steps[symbol] = elm["precision"]["amount"]
             self.c_mults[symbol] = elm["contractSize"]
 
     async def get_active_symbols(self):
@@ -83,8 +133,9 @@ class BinanceBot(Passivbot):
                     res[i]["qty"] = res[i]["amount"]
                 self.handle_order_update(res)
             except Exception as e:
-                print(f"exception watch_orders", e)
-                traceback.print_exc()
+                if "Abnormal closure of client" not in str(e):
+                    print(f"exception watch_orders", e)
+                    traceback.print_exc()
                 await asyncio.sleep(1)
 
     async def watch_tickers(self):
@@ -198,10 +249,12 @@ class BinanceBot(Passivbot):
                 fetched = await self.cca.fetch_open_orders()
                 self.cca.options["warnOnFetchOpenOrdersWithoutSymbol"] = True
             else:
+                symbols_ = set()
                 if hasattr(self, "active_symbols") and self.active_symbols:
-                    symbols_ = self.active_symbols
-                else:
-                    symbols_ = sorted(set(self.positions))
+                    symbols_.update(list(self.active_symbols))
+                if hasattr(self, "fetched_positions"):
+                    symbols_.update([x['symbol'] for x in self.fetched_positions])
+                symbols_ = sorted(set(symbols_))
                 fetched = await asyncio.gather(
                     *[self.cca.fetch_open_orders(symbol=symbol) for symbol in symbols_]
                 )
@@ -219,33 +272,27 @@ class BinanceBot(Passivbot):
 
     async def fetch_positions(self) -> ([dict], float):
         # also fetches balance
-        fetched = None
+        fetched_positions, fetched_balance = None, None
         try:
-            fetched = await self.cca.fetch_balance()
-            fetched = floatify(fetched)
+            fetched_positions, fetched_balance = await asyncio.gather(
+                self.cca.fapiprivatev3_get_positionrisk(), self.cca.fetch_balance()
+            )
             positions = []
-            for elm in fetched["info"]["positions"]:
-                if elm["positionAmt"] == 0.0:
-                    continue
+            for elm in fetched_positions:
                 positions.append(
                     {
                         "symbol": self.symbol_ids_inv[elm["symbol"]],
                         "position_side": elm["positionSide"].lower(),
-                        "size": elm["positionAmt"],
-                        "price": elm["entryPrice"],
+                        "size": float(elm["positionAmt"]),
+                        "price": float(elm["entryPrice"]),
                     }
                 )
-            if "BNFCR" in fetched:
-                elm = [x for x in fetched["info"]["assets"] if x["asset"] == "BNFCR"][0]
-                balance = float(elm["availableBalance"]) + float(elm["openOrderInitialMargin"])
-            else:
-                balance = [x for x in fetched["info"]["assets"] if x["asset"] == self.quote][0][
-                    "availableBalance"
-                ]
+            balance = float(fetched_balance["info"]["totalCrossWalletBalance"]) - float(fetched_balance["info"]["totalCrossUnPnl"])
             return positions, balance
         except Exception as e:
             logging.error(f"error fetching positions {e}")
-            print_async_exception(fetched)
+            print_async_exception(fetched_positions)
+            print_async_exception(fetched_balance)
             traceback.print_exc()
             return False
 
@@ -293,22 +340,26 @@ class BinanceBot(Passivbot):
         limit: int = None,
     ):
         pnls = await self.fetch_pnls_sub(start_time, end_time, limit)
-        symbols = sorted(set(self.positions) | set([x['symbol'] for x in pnls]))
+        symbols = sorted(set(self.positions) | set([x["symbol"] for x in pnls]))
         tasks = {}
         for symbol in symbols:
-            tasks[symbol] = asyncio.create_task(self.fetch_fills_sub(symbol, start_time, end_time, limit))
+            tasks[symbol] = asyncio.create_task(
+                self.fetch_fills_sub(symbol, start_time, end_time, limit)
+            )
         fills = {}
         for symbol in tasks:
             fills[symbol] = await tasks[symbol]
-        pnls = [x for x in pnls if x['timestamp'] >= start_time]
-        fills = [x for x in flatten(fills.values()) if x['timestamp'] >= start_time]
-        unified = {x['id']: x for x in pnls}
+        fills = flatten(fills.values())
+        if start_time:
+            pnls = [x for x in pnls if x["timestamp"] >= start_time]
+            fills = [x for x in fills if x["timestamp"] >= start_time]
+        unified = {x["id"]: x for x in pnls}
         for x in fills:
-            if x['id'] in unified:
-                unified[x['id']].update(x)
+            if x["id"] in unified:
+                unified[x["id"]].update(x)
             else:
-                unified[x['id']] = x
-        return sorted(unified.values(), key=lambda x: x['timestamp'])
+                unified[x["id"]] = x
+        return sorted(unified.values(), key=lambda x: x["timestamp"])
 
     async def fetch_pnls_sub(
         self,
@@ -354,25 +405,32 @@ class BinanceBot(Passivbot):
             sts = start_time
             while True:
                 ets = min(end_time, sts + week * 0.999)
-                fills = await self.cca.fetch_my_trades(symbol, limit=limit, params={'startTime': int(sts), 'endTime': int(ets)})
-                if not fills and end_time - sts < week:
-                    break
-                if fills and fills[0]['id'] in all_fills and fills[-1]['id'] in all_fills:
-                    break
-                for x in fills:
-                    all_fills[x['id']] = x
-                if fills and fills[-1]['timestamp'] >= end_time:
-                    break
-                sts = fills[-1]['timestamp'] if fills else sts + week * 0.999
-                limit = 1000
+                fills = await self.cca.fetch_my_trades(
+                    symbol, limit=limit, params={"startTime": int(sts), "endTime": int(ets)}
+                )
                 if fills:
-                    logging.info(f"fetched {len(fills)} fill{'s' if len(fills) > 1 else ''} for {symbol} {ts_to_date_utc(fills[0]['timestamp'])}")
-            all_fills = sorted(all_fills.values(), key=lambda x: x['timestamp'])
+                    if fills[0]["id"] in all_fills and fills[-1]["id"] in all_fills:
+                        break
+                    for x in fills:
+                        all_fills[x["id"]] = x
+                    if fills[-1]["timestamp"] >= end_time:
+                        break
+                    if end_time - sts < week and len(fills) < limit:
+                        break
+                    sts = fills[-1]["timestamp"]
+                    logging.info(
+                        f"fetched {len(fills)} fill{'s' if len(fills) > 1 else ''} for {symbol} {ts_to_date_utc(fills[0]['timestamp'])}"
+                    )
+                else:
+                    if end_time - sts < week:
+                        break
+                    sts = sts + week * 0.999
+                limit = 1000
+            all_fills = sorted(all_fills.values(), key=lambda x: x["timestamp"])
         for i in range(len(all_fills)):
-            all_fills[i]['pnl'] = float(all_fills[i]['info']['realizedPnl'])
-            all_fills[i]['position_side'] = all_fills[i]['info']['positionSide'].lower()
+            all_fills[i]["pnl"] = float(all_fills[i]["info"]["realizedPnl"])
+            all_fills[i]["position_side"] = all_fills[i]["info"]["positionSide"].lower()
         return all_fills
-
 
     async def fetch_pnl(
         self,
@@ -392,7 +450,7 @@ class BinanceBot(Passivbot):
                 params["endTime"] = int(end_time)
             fetched = await self.cca.fapiprivate_get_income(params=params)
             for i in range(len(fetched)):
-                fetched[i]['symbol'] = self.symbol_ids_inv[fetched[i]['symbol']]
+                fetched[i]["symbol"] = self.symbol_ids_inv[fetched[i]["symbol"]]
                 fetched[i]["pnl"] = float(fetched[i]["income"])
                 fetched[i]["timestamp"] = float(fetched[i]["time"])
                 fetched[i]["id"] = fetched[i]["tradeId"]
@@ -420,8 +478,9 @@ class BinanceBot(Passivbot):
             }
         except Exception as e:
             logging.error(f"error cancelling order {order} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
+            if "-2011" not in str(e):
+                print_async_exception(executed)
+                traceback.print_exc()
             return {}
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
@@ -444,7 +503,9 @@ class BinanceBot(Passivbot):
                 params={
                     "positionSide": order["position_side"].upper(),
                     "newClientOrderId": order["custom_id"],
-                    "timeInForce": "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC",
+                    "timeInForce": (
+                        "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
+                    ),
                 },
             )
             if (
@@ -482,7 +543,9 @@ class BinanceBot(Passivbot):
                     "params": {
                         "positionSide": order["position_side"].upper(),
                         "newClientOrderId": order["custom_id"],
-                        "timeInForce": "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC",
+                        "timeInForce": (
+                            "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
+                        ),
                     },
                 }
             )
@@ -490,6 +553,16 @@ class BinanceBot(Passivbot):
         try:
             executed = await self.cca.create_orders(to_execute)
             for i in range(len(executed)):
+                executed[i]["position_side"] = (
+                    executed[i]["info"]["positionSide"].lower()
+                    if "info" in executed[i] and "positionSide" in executed[i]["info"]
+                    else None
+                )
+                executed[i]["qty"] = executed[i]["amount"] if "amount" in executed[i] else 0.0
+                executed[i]["reduce_only"] = (
+                    executed[i]["reduceOnly"] if "reduceOnly" in executed[i] else None
+                )
+
                 if (
                     "info" in executed[i]
                     and "code" in executed[i]["info"]
@@ -497,10 +570,6 @@ class BinanceBot(Passivbot):
                 ):
                     logging.info(f"{executed[i]['info']['msg']}")
                     executed[i] = {}
-                elif "status" in executed[i] and executed[i]["status"] == "open":
-                    executed[i]["position_side"] = executed[i]["info"]["positionSide"].lower()
-                    executed[i]["qty"] = executed[i]["amount"]
-                    executed[i]["reduce_only"] = executed[i]["reduceOnly"]
             return executed
         except Exception as e:
             logging.error(f"error executing orders {orders} {e}")
@@ -579,3 +648,13 @@ class BinanceBot(Passivbot):
             since = fetched[-1][0]
         all_fetched_d = {x[0]: x for x in all_fetched}
         return sorted(all_fetched_d.values(), key=lambda x: x[0])
+
+    def format_custom_ids(self, orders: [dict]) -> [dict]:
+        # binance needs broker code at the beginning of the custom_id
+        new_orders = []
+        for order in orders:
+            order["custom_id"] = (
+                "x-" + self.broker_code + shorten_custom_id(order["custom_id"]) + uuid4().hex
+            )[: self.custom_id_max_length]
+            new_orders.append(order)
+        return new_orders
