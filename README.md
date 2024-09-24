@@ -1,10 +1,10 @@
 ![Passivbot](docs/images/pbot_logo_full.svg)
 
-# Trading bot running on Bybit, OKX, Bitget, GateIO and Hyperliquid
+# Trading bot running on Bybit, OKX, Bitget, GateIO, Binance and Hyperliquid
 
 :warning: **Used at one's own risk** :warning:
 
-v7.0.7
+v7.0.8
 
 
 ## Overview
@@ -137,10 +137,13 @@ www.passivbotmanager.com
 
 **Referrals:**  
 Signing up using these referrals is appreciated:  
+https://accounts.binance.com/register?ref=TII4B07C  
 https://partner.bybit.com/b/passivbot  
 https://partner.bitget.com/bg/Y8FU1W  
 https://www.okx.com/join/PASSIVBOT  (20% rebate)  
-https://www.kucoin.com/r/rf/QBSFZ5HT  
+
+**Note on Binance**
+To support continued Passivbot development, please consider using a Binance account created after 2024-09-21 and either: a) don't use a referral link, or b) use referral ID: "TII4B07C". Passivbot receives commissions from trades only for accounts meeting these criteria.  
 
 **BuyMeACoffee:**  
 https://www.buymeacoffee.com/enarjord  
