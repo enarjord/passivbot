@@ -1107,7 +1107,7 @@ impl Backtest {
             }
         }
         let (unstucking_idx, unstucking_pside, unstucking_close) = self.calc_unstucking_close(k);
-        if unstucking_idx != NO_POS {
+        if unstucking_pside != NO_POS {
             match unstucking_pside {
                 LONG => {
                     self.open_orders_new
@@ -1211,7 +1211,7 @@ impl Backtest {
         if !self.is_stuck.long.is_empty() || !self.is_stuck.short.is_empty() {
             let (unstucking_idx, unstucking_pside, unstucking_close) =
                 self.calc_unstucking_close(k);
-            if unstucking_idx != NO_POS {
+            if unstucking_pside != NO_POS {
                 match unstucking_pside {
                     LONG => {
                         if let Some(orders) = self.open_orders_new.long.get_mut(&unstucking_idx) {
