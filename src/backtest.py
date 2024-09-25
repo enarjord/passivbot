@@ -194,6 +194,7 @@ def post_process(config, hlcvs, fills, equities, analysis, results_path):
 
 def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcvs):
     plots_dir = make_get_filepath(oj(results_path, "fills_plots", ""))
+    bal_eq.to_csv(oj(results_path, "balance_and_equity.csv"))
     plt.clf()
     bal_eq.plot()
     plt.savefig(oj(results_path, "balance_and_equity.png"))
