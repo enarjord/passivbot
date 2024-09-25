@@ -1360,10 +1360,10 @@ async def prepare_hlcvs(config: dict):
             np.diff(data[:, 0]) == interval_ms
         ).all(), f"gaps in hlcv data {symbol}"  # verify integrous 1m hlcs
         hlcvsd[symbol] = data
-    symbols = list(hlcvsd.keys())
+    symbols = sorted(hlcvsd.keys())
     if len(symbols) > 1:
         print(f"Unifying data for {len(symbols)} coins into single numpy array...")
-    timestamps, unified_data = unify_hlcv_data(hlcvsd.values())
+    timestamps, unified_data = unify_hlcv_data([hlcvsd[s] for s in symbols])
     return symbols, timestamps, unified_data
 
 
