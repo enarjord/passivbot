@@ -1,4 +1,3 @@
-use crate::constants::{CLOSE, LONG, NO_POS, SHORT};
 use crate::entries::calc_min_entry_qty;
 use crate::types::{
     BotParams, BotParamsPair, EMABands, ExchangeParams, Order, OrderType, Position, Positions,
