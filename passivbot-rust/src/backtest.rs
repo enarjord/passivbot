@@ -110,52 +110,10 @@ pub struct TradingEnabled {
 }
 
 pub struct RollingVolumeSum {
-    long: HashMap<usize, f64>,
-    short: HashMap<usize, f64>,
+    long: Vec<f64>,
+    short: Vec<f64>,
     prev_k_long: usize,
     prev_k_short: usize,
-}
-
-impl RollingVolumeSum {
-    fn new() -> Self {
-        RollingVolumeSum {
-            long: HashMap::new(),
-            short: HashMap::new(),
-            prev_k_long: 0,
-            prev_k_short: 0,
-        }
-    }
-
-    fn update(&mut self, hlcvs: &Array3<f64>, k: usize, pside: usize, window: usize) {
-        let (volume_sums, prev_k) = match pside {
-            LONG => (&mut self.long, &mut self.prev_k_long),
-            SHORT => (&mut self.short, &mut self.prev_k_short),
-            _ => panic!("Invalid pside"),
-        };
-
-        let start_idx = k.saturating_sub(window);
-        let prev_start_idx = prev_k.saturating_sub(window);
-
-        for idx in 0..hlcvs.shape()[1] {
-            let mut sum = *volume_sums.entry(idx).or_insert(0.0);
-
-            // Remove volumes outside the new window
-            if *prev_k > start_idx {
-                for i in prev_start_idx..start_idx {
-                    sum -= hlcvs[[i, idx, VOLUME]];
-                }
-            }
-
-            // Add new volumes
-            for i in (*prev_k).max(start_idx)..k {
-                sum += hlcvs[[i, idx, VOLUME]];
-            }
-
-            volume_sums.insert(idx, sum);
-        }
-
-        *prev_k = k;
-    }
 }
 
 pub struct Backtest {
@@ -184,6 +142,7 @@ pub struct Backtest {
     n_eligible_long: usize,
     n_eligible_short: usize,
     rolling_volume_sum: RollingVolumeSum,
+    volume_indices_buffer: Option<Vec<(f64, usize)>>,
 }
 
 impl Backtest {
@@ -252,7 +211,13 @@ impl Backtest {
             did_fill_short: HashSet::new(),
             n_eligible_long,
             n_eligible_short,
-            rolling_volume_sum: RollingVolumeSum::new(),
+            rolling_volume_sum: RollingVolumeSum {
+                long: vec![0.0; n_coins],
+                short: vec![0.0; n_coins],
+                prev_k_long: 0,
+                prev_k_short: 0,
+            },
+            volume_indices_buffer: Some(vec![(0.0, 0); n_coins]), // Initialize here
         }
     }
 
@@ -264,93 +229,65 @@ impl Backtest {
         };
 
         let window = bot_params.filter_rolling_window;
-        let start_idx = k.saturating_sub(window);
+        let start_k = k.saturating_sub(window);
 
-        // Calculate volume sums for all coins
-        let mut volume_sums: Vec<(usize, f64)> = (0..self.n_coins)
-            .map(|idx| {
-                let sum = self.hlcvs.slice(s![start_idx..k, idx, VOLUME]).sum();
-                (idx, sum)
-            })
-            .collect();
-
-        // Sort by volume in descending order
-        volume_sums.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-
-        // Take top n_eligible indices
-        let filtered_indices: Vec<usize> = volume_sums
-            .into_iter()
-            .take(n_eligible)
-            .map(|(idx, _)| idx)
-            .collect();
-
-        // Calculate noisiness
-        let mut noisiness: Vec<(usize, f64)> = filtered_indices
-            .into_iter()
-            .map(|idx| {
-                let slice = self.hlcvs.slice(s![start_idx..k, idx, ..]);
-                let nrr_sum: f64 = slice
-                    .axis_iter(Axis(0))
-                    .map(|row| (row[HIGH] - row[LOW]) / row[CLOSE])
-                    .sum();
-                let mean_nrr = nrr_sum / (k - start_idx) as f64;
-                (idx, mean_nrr)
-            })
-            .collect();
-
-        // Sort by noisiness in descending order
-        noisiness.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-
-        // Return indices sorted by noisiness
-        noisiness.into_iter().map(|(idx, _)| idx).collect()
-    }
-
-    pub fn calc_preferred_coins_old(&self, k: usize, pside: usize) -> Vec<usize> {
-        let (bot_params, n_eligible) = match pside {
-            LONG => (&self.bot_params_pair.long, self.n_eligible_long),
-            SHORT => (&self.bot_params_pair.short, self.n_eligible_short),
+        let (rolling_volume_sum, prev_k) = match pside {
+            LONG => (
+                &mut self.rolling_volume_sum.long,
+                &mut self.rolling_volume_sum.prev_k_long,
+            ),
+            SHORT => (
+                &mut self.rolling_volume_sum.short,
+                &mut self.rolling_volume_sum.prev_k_short,
+            ),
             _ => panic!("Invalid pside"),
         };
 
-        let start_idx = k.saturating_sub(bot_params.filter_rolling_window);
+        // Use the pre-allocated buffer for volume indices
+        let volume_indices = self.volume_indices_buffer.as_mut().unwrap();
 
-        // Calculate volume sums
-        let mut volume_sums: Vec<(usize, f64)> = (0..self.n_coins)
-            .map(|idx| {
-                let sum = self.hlcvs.slice(s![start_idx..k, idx, VOLUME]).sum();
-                (idx, sum)
-            })
-            .collect();
-
-        // Sort by volume in descending order
-        volume_sums.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-
-        // Filter by volume
-        let filtered_indices: Vec<usize> = volume_sums
-            .into_iter()
-            .take(n_eligible)
-            .map(|(idx, _)| idx)
-            .collect();
-
-        // Calculate noisiness
-        let mut noisiness: Vec<(usize, f64)> = filtered_indices
-            .into_iter()
-            .map(|idx| {
-                let slice = self.hlcvs.slice(s![start_idx..k, idx, ..]);
-                let nrr_sum: f64 = slice
-                    .axis_iter(Axis(0))
-                    .map(|row| (row[HIGH] - row[LOW]) / row[CLOSE])
+        // Update rolling volume sums
+        if k > window && k - *prev_k < window {
+            // Rolling calculation
+            for idx in 0..self.n_coins {
+                rolling_volume_sum[idx] -= self
+                    .hlcvs
+                    .slice(s![*prev_k - window..start_k, idx, VOLUME])
                     .sum();
-                let mean_nrr = nrr_sum / (k - start_idx) as f64;
-                (idx, mean_nrr)
-            })
-            .collect();
+                rolling_volume_sum[idx] += self.hlcvs.slice(s![*prev_k..k, idx, VOLUME]).sum();
+                volume_indices[idx] = (rolling_volume_sum[idx], idx);
+            }
+        } else {
+            // Full calculation
+            for idx in 0..self.n_coins {
+                rolling_volume_sum[idx] = self.hlcvs.slice(s![start_k..k, idx, VOLUME]).sum();
+                volume_indices[idx] = (rolling_volume_sum[idx], idx);
+            }
+        }
+        *prev_k = k;
+
+        // Partial sort to get top n_eligible coins by volume
+        volume_indices.select_nth_unstable_by(n_eligible, |a, b| {
+            b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal)
+        });
+
+        // Calculate noisiness for top n_eligible coins
+        let mut noisinesses = vec![(0.0f64, 0usize); n_eligible];
+        for (i, &(_, idx)) in volume_indices.iter().take(n_eligible).enumerate() {
+            let noisiness: f64 = self
+                .hlcvs
+                .slice(s![start_k..k, idx, ..])
+                .axis_iter(Axis(0))
+                .map(|row| (row[HIGH] - row[LOW]) / row[CLOSE])
+                .sum();
+            noisinesses[i] = (noisiness, idx);
+        }
 
         // Sort by noisiness in descending order
-        noisiness.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        noisinesses.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
 
         // Return indices sorted by noisiness
-        noisiness.into_iter().map(|(idx, _)| idx).collect()
+        noisinesses.into_iter().map(|(_, idx)| idx).collect()
     }
 
     pub fn run(&mut self) -> (Vec<Fill>, Vec<f64>) {
