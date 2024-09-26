@@ -154,14 +154,6 @@ impl Backtest {
     ) -> Self {
         let n_timesteps = hlcvs.shape()[0];
         let n_coins = hlcvs.shape()[1];
-        let n_eligible_long = bot_params_pair.long.n_positions.max(
-            (n_coins as f64 * (1.0 - bot_params_pair.long.filter_relative_volume_clip_pct)).round()
-                as usize,
-        );
-        let n_eligible_short = bot_params_pair.short.n_positions.max(
-            (n_coins as f64 * (1.0 - bot_params_pair.short.filter_relative_volume_clip_pct)).round()
-                as usize,
-        );
         let initial_emas = (0..n_coins)
             .map(|i| {
                 let close_price = hlcvs[[0, i, CLOSE]];
@@ -176,6 +168,14 @@ impl Backtest {
         let mut bot_params_pair_cloned = bot_params_pair.clone();
         bot_params_pair_cloned.long.n_positions = n_coins.min(bot_params_pair.long.n_positions);
         bot_params_pair_cloned.short.n_positions = n_coins.min(bot_params_pair.short.n_positions);
+        let n_eligible_long = bot_params_pair_cloned.long.n_positions.max(
+            (n_coins as f64 * (1.0 - bot_params_pair.long.filter_relative_volume_clip_pct)).round()
+                as usize,
+        );
+        let n_eligible_short = bot_params_pair_cloned.short.n_positions.max(
+            (n_coins as f64 * (1.0 - bot_params_pair.short.filter_relative_volume_clip_pct)).round()
+                as usize,
+        );
         Backtest {
             hlcvs,
             bot_params_pair: bot_params_pair_cloned,
@@ -222,9 +222,26 @@ impl Backtest {
     }
 
     pub fn calc_preferred_coins(&mut self, k: usize, pside: usize) -> Vec<usize> {
-        let (bot_params, n_eligible) = match pside {
-            LONG => (&self.bot_params_pair.long, self.n_eligible_long),
-            SHORT => (&self.bot_params_pair.short, self.n_eligible_short),
+        let (bot_params, n_positions) = match pside {
+            LONG => (
+                &self.bot_params_pair.long,
+                self.bot_params_pair.long.n_positions,
+            ),
+            SHORT => (
+                &self.bot_params_pair.short,
+                self.bot_params_pair.short.n_positions,
+            ),
+            _ => panic!("Invalid pside"),
+        };
+
+        // Early return if all coins are already eligible
+        if self.n_coins <= n_positions {
+            return (0..self.n_coins).collect();
+        }
+
+        let n_eligible = match pside {
+            LONG => self.n_eligible_long,
+            SHORT => self.n_eligible_short,
             _ => panic!("Invalid pside"),
         };
 
@@ -266,21 +283,21 @@ impl Backtest {
         }
         *prev_k = k;
 
-        // Partial sort to get top n_eligible coins by volume
-        volume_indices.select_nth_unstable_by(n_eligible, |a, b| {
-            b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal)
-        });
+        // Sort by volume in descending order
+        volume_indices.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
 
         // Calculate noisiness for top n_eligible coins
-        let mut noisinesses = vec![(0.0f64, 0usize); n_eligible];
-        for (i, &(_, idx)) in volume_indices.iter().take(n_eligible).enumerate() {
+        let actual_n_eligible = n_eligible.min(self.n_coins);
+        let mut noisinesses = Vec::with_capacity(actual_n_eligible);
+
+        for &(_, idx) in volume_indices.iter().take(actual_n_eligible) {
             let noisiness: f64 = self
                 .hlcvs
                 .slice(s![start_k..k, idx, ..])
                 .axis_iter(Axis(0))
                 .map(|row| (row[HIGH] - row[LOW]) / row[CLOSE])
                 .sum();
-            noisinesses[i] = (noisiness, idx);
+            noisinesses.push((noisiness, idx));
         }
 
         // Sort by noisiness in descending order
@@ -289,7 +306,6 @@ impl Backtest {
         // Return indices sorted by noisiness
         noisinesses.into_iter().map(|(_, idx)| idx).collect()
     }
-
     pub fn run(&mut self) -> (Vec<Fill>, Vec<f64>) {
         let check_points: Vec<usize> = (0..7).map(|i| i * 60 * 24).collect();
         let n_timesteps = self.hlcvs.shape()[0];
