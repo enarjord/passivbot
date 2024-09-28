@@ -235,20 +235,16 @@ class Passivbot:
         if to_cancel or to_create:
             self.previous_REST_update_ts = 0
 
-    def is_forager_mode(self):
+    def is_forager_mode(self, pside=None):
         n_approved_symbols = len(self.config["live"]["approved_coins"])
         if n_approved_symbols == 0:
             return True
+        if pside is None:
+            return self.is_forager_mode("long") or self.is_forager_mode("short")
         if (
-            self.config["bot"]["long"]["total_wallet_exposure_limit"] > 0.0
-            and self.config["bot"]["long"]["n_positions"] > 0
-            and round(self.config["bot"]["long"]["n_positions"]) < n_approved_symbols
-        ):
-            return True
-        if (
-            self.config["bot"]["short"]["total_wallet_exposure_limit"] > 0.0
-            and self.config["bot"]["short"]["n_positions"] > 0
-            and round(self.config["bot"]["short"]["n_positions"]) < n_approved_symbols
+            self.config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
+            and self.config["bot"][pside]["n_positions"] > 0
+            and round(self.config["bot"][pside]["n_positions"]) < n_approved_symbols
         ):
             return True
         return False
@@ -259,6 +255,8 @@ class Passivbot:
             "total_wallet_exposure_limit",
             "unstuck_loss_allowance_pct",
             "unstuck_close_pct",
+            "filter_rolling_window",
+            "filter_relative_volume_clip_pct",
         }
         self.config["bot"]["long"]["n_positions"] = round(self.config["bot"]["long"]["n_positions"])
         self.config["bot"]["short"]["n_positions"] = round(self.config["bot"]["short"]["n_positions"])
@@ -719,29 +717,24 @@ class Passivbot:
                     self.ideal_actives[pside][symbol] = ""
                 if symbol in self.actual_actives[pside]:
                     self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
-        if self.forager_mode:
-            if self.config["live"]["relative_volume_filter_clip_pct"] > 0.0:
-                self.calc_volumes()
-                # filter by relative volume
-                eligible_symbols = sorted(self.volumes, key=lambda x: self.volumes[x])[
-                    int(
-                        round(
-                            len(self.volumes) * self.config["live"]["relative_volume_filter_clip_pct"]
-                        )
-                    ) :
-                ]
-            else:
-                eligible_symbols = list(self.eligible_symbols)
-            self.calc_noisiness()  # ideal symbols are high noise symbols
-
-            # calc ideal actives for long and short separately
-            for pside in self.actual_actives:
-                if (
-                    self.config["bot"][pside]["n_positions"] > 0
-                    and self.config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
-                ):
+            if self.is_forager_mode(pside):
+                if self.config["bot"][pside]["filter_relative_volume_clip_pct"] > 0.0:
+                    volumes = self.calc_volumes(pside)
+                    # filter by relative volume
+                    n_eligible = round(
+                        len(volumes)
+                        * (1 - self.config["bot"][pside]["filter_relative_volume_clip_pct"])
+                    )
+                    eligible_symbols = sorted(volumes, key=lambda x: volumes[x], reverse=True)[
+                        : int(max(n_eligible, self.config["bot"][pside]["n_positions"]))
+                    ]
+                else:
+                    eligible_symbols = list(self.eligible_symbols)
+                # ideal symbols are high noise symbols
+                noisiness = self.calc_noisiness(pside, eligible_symbols=eligible_symbols)
+                if self.is_enabled(pside=pside):
                     self.warn_on_high_effective_min_cost(pside)
-                for symbol in sorted(self.noisiness, key=lambda x: self.noisiness[x], reverse=True):
+                for symbol in sorted(noisiness, key=lambda x: noisiness[x], reverse=True):
                     if (
                         not self.is_enabled(symbol, pside)
                         or symbol not in self.eligible_symbols
@@ -750,10 +743,8 @@ class Passivbot:
                         or not self.effective_min_cost_is_low_enough(pside, symbol)
                     ):
                         continue
-                    slots_full = (
-                        len(self.ideal_actives[pside]) >= self.config["bot"][pside]["n_positions"]
-                    )
-                    if slots_full:
+                    if len(self.ideal_actives[pside]) >= self.config["bot"][pside]["n_positions"]:
+                        # slots full
                         break
                     if symbol not in self.ideal_actives[pside]:
                         self.ideal_actives[pside][symbol] = ""
@@ -780,14 +771,12 @@ class Passivbot:
                     if len(slots_filled) >= self.config["bot"][pside]["n_positions"]:
                         break
                     self.PB_modes[pside][symbol] = "normal"
-        else:
-            # if not forager mode, all eligible symbols are ideal symbols, unless symbol in forced_modes
-            for pside in ["long", "short"]:
-                if (
-                    self.config["bot"][pside]["n_positions"] > 0
-                    and self.config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
-                ):
+            else:
+                # if not forager mode, all eligible symbols are ideal symbols, unless symbol in forced_modes
+                if self.is_enabled(pside=pside):
                     self.warn_on_high_effective_min_cost(pside)
+                else:
+                    continue
                 for symbol in self.eligible_symbols:
                     if self.is_enabled(symbol, pside):
                         if not self.effective_min_cost_is_low_enough(pside, symbol):
@@ -1312,9 +1301,11 @@ class Passivbot:
                 logging.error(f"error with {get_function_name()} for {symbol}: {e}")
                 traceback.print_exc()
 
-    def is_enabled(self, symbol, pside=None):
+    def is_enabled(self, symbol=None, pside=None):
         if pside is None:
             return self.is_enabled(symbol, "long") or self.is_enabled(symbol, "short")
+        if symbol is None:
+            return any([self.is_enabled(symbol, pside) for symbol in self.live_configs])
         return (
             symbol in self.live_configs
             and self.live_configs[symbol][pside]["wallet_exposure_limit"] > 0.0
@@ -1875,27 +1866,29 @@ class Passivbot:
         if not debug_mode:
             await self.run_execution_loop()
 
-    def calc_noisiness(self):
-        if not hasattr(self, "noisiness"):
-            self.noisiness = {}
-        n = int(round(self.config["live"]["ohlcv_rolling_window"]))
-        for symbol in self.eligible_symbols:
+    def calc_noisiness(self, pside, eligible_symbols=None):
+        if eligible_symbols is None:
+            eligible_symbols = self.eligible_symbols
+        noisiness = {}
+        n = int(round(self.config["bot"][pside]["filter_rolling_window"]))
+        for symbol in eligible_symbols:
             if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
                 ohlcvs_1m = [v for v in self.ohlcvs_1m[symbol].values()[-n:]]
-                self.noisiness[symbol] = np.mean([(x[2] - x[3]) / x[4] for x in ohlcvs_1m])
+                noisiness[symbol] = np.mean([(x[2] - x[3]) / x[4] for x in ohlcvs_1m])
             else:
-                self.noisiness[symbol] = 0.0
+                noisiness[symbol] = 0.0
+        return noisiness
 
-    def calc_volumes(self):
-        if not hasattr(self, "volumes"):
-            self.volumes = {}
-        n = int(round(self.config["live"]["ohlcv_rolling_window"]))
+    def calc_volumes(self, pside):
+        n = int(round(self.config["bot"][pside]["filter_rolling_window"]))
+        volumes = {}
         for symbol in self.ohlcvs_1m:
             if self.ohlcvs_1m[symbol] and len(self.ohlcvs_1m[symbol]) > 0:
                 ohlcvs_1m = [v for v in self.ohlcvs_1m[symbol].values()[-n:]]
-                self.volumes[symbol] = sum([x[4] * x[5] for x in ohlcvs_1m])
+                volumes[symbol] = sum([x[4] * x[5] for x in ohlcvs_1m])
             else:
-                self.volumes[symbol] = 0.0
+                volumes[symbol] = 0.0
+        return volumes
 
     async def execute_multiple(self, orders: [dict], type_: str, max_n_executions: int):
         if not orders:
