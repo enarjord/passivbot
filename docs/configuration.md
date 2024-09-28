@@ -108,7 +108,16 @@ If a position is stuck, bot will use profits made on other positions to realize 
 - `unstuck_threshold`:
 	- if a position is bigger than a threshold, consider it stuck and activate unstucking.
 	- `if wallet_exposure / wallet_exposure_limit > unstuck_threshold: unstucking enabled`
-	- e.g. if a position size is $500 and max allowed position size is $1000, then position is 50% full. If unstuck_threshold==0.45, then unstuck the position until its size is $450.
+	- e.g. if a position size is $500 and max allowed position size is $1000, then position is 50% full. If unstuck_threshold==0.45, then unstuck the position until its size is $450.  
+
+### Filter Parameters
+
+Coins selected for trading are filtered by volume and noisiness. First, filter coins by volume, dropping x% of the lowest volume coins, then sort the eligible coins by noisiness and select the top noisiest coins for trading.  
+
+- `filter_relative_volume_clip_pct`: Volume filter: disapprove the lowest relative volume coins. E.g. `filter_relative_volume_clip_pct=0.1`: drop 10% lowest volume coins. Set to zero to allow all.
+- `filter_rolling_window`: number of minutes to look into the past to compute volume and noisiness, used for dynamic coin selection in forager mode.
+	- noisiness is normalized relative range of 1m ohlcvs: `mean((high - low) / close)`
+	- in forager mode, bot will select coins with highest noisiness for opening positions
 
 ## Live Trading Settings
 - `approved_coins`: list of coins approved for trading. If empty, all coins are approved.
@@ -136,12 +145,8 @@ If a position is stuck, bot will use profits made on other positions to realize 
 - `max_n_cancellations_per_batch`: will cancel n open orders per execution
 - `max_n_creations_per_batch`: will create n new orders per execution
 - `minimum_coin_age_days`: disallow coins younger than a given number of days
-- `ohlcv_rolling_window`: number of minutes to look into the past to compute volume and noisiness, used for dynamic coin selection in forager mode.
-	- noisiness is normalized relative range of 1m ohlcvs: `mean((high - low) / close)`
-	- in forager mode, bot will select coins with highest noisiness for opening positions
 - `pnls_max_lookback_days`: how far into the past to fetch pnl history
 - `price_distance_threshold`: minimum distance to current price action required for EMA based limit orders
-- `relative_volume_filter_clip_pct`: Volume filter: disapprove the lowest relative volume coins. Default 0.1 == 10%. Set to zero to allow all.
 - `time_in_force`: default is good-till-cancelled
 - `user`: fetch API key/secret from api-keys.json
 
