@@ -140,7 +140,6 @@ class Passivbot:
             3000.0, self.config["live"]["execution_delay_seconds"] * 1000
         )
         self.quote = "USDT"
-        self.forager_mode = self.is_forager_mode()
 
         self.minimum_market_age_millis = (
             self.config["live"]["minimum_coin_age_days"] * 24 * 60 * 60 * 1000
@@ -258,8 +257,10 @@ class Passivbot:
             "filter_rolling_window",
             "filter_relative_volume_clip_pct",
         }
-        self.config["bot"]["long"]["n_positions"] = round(self.config["bot"]["long"]["n_positions"])
-        self.config["bot"]["short"]["n_positions"] = round(self.config["bot"]["short"]["n_positions"])
+        for pside in ["long", "short"]:
+            self.config["bot"][pside]["n_positions"] = min(
+                len(self.eligible_symbols), int(round(self.config["bot"]["long"]["n_positions"]))
+            )
         for symbol in self.markets_dict:
             self.live_configs[symbol] = deepcopy(self.config["bot"])
             self.live_configs[symbol]["leverage"] = self.config["live"]["leverage"]
@@ -668,7 +669,7 @@ class Passivbot:
                 if not self.markets_dict[symbol]["active"]:
                     self.forced_modes[pside][symbol] = "tp_only"
 
-        if self.forager_mode and self.minimum_market_age_millis > 0:
+        if self.is_forager_mode() and self.minimum_market_age_millis > 0:
             if not hasattr(self, "first_timestamps"):
                 self.first_timestamps = await get_first_ohlcv_timestamps(
                     cc=self.cca, symbols=sorted(self.eligible_symbols)
@@ -679,7 +680,7 @@ class Passivbot:
             self.first_timestamps = None
 
     def is_old_enough(self, symbol):
-        if self.forager_mode and self.minimum_market_age_millis > 0:
+        if self.is_forager_mode() and self.minimum_market_age_millis > 0:
             if symbol in self.first_timestamps:
                 return utc_ms() - self.first_timestamps[symbol] > self.minimum_market_age_millis
             else:
@@ -873,7 +874,7 @@ class Passivbot:
             WE_limit = self.live_configs[symbol][pside]["wallet_exposure_limit"]
             assert WE_limit > 0.0
         except:
-            if self.forager_mode:
+            if self.is_forager_mode(pside):
                 WE_limit = (
                     self.config["bot"][pside]["total_wallet_exposure_limit"]
                     / self.config["bot"][pside]["n_positions"]
