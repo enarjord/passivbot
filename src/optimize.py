@@ -32,7 +32,6 @@ from copy import deepcopy
 from main import manage_rust_compilation
 import numpy as np
 from uuid import uuid4
-import signal
 import logging
 import traceback
 import json
@@ -136,11 +135,6 @@ def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up):
     return ind1, ind2
 
 
-def signal_handler(signal, frame):
-    print("\nOptimization interrupted by user. Exiting gracefully...")
-    sys.exit(0)
-
-
 def individual_to_config(individual, template=None):
     if template is None:
         template = get_template_live_config("v7")
@@ -163,11 +157,18 @@ def config_to_individual(config):
 
 @contextmanager
 def managed_mmap(filename, dtype, shape):
+    mmap = None
     try:
         mmap = np.memmap(filename, dtype=dtype, mode="r", shape=shape)
         yield mmap
+    except FileNotFoundError:
+        if shutdown_event.is_set():
+            yield None
+        else:
+            raise
     finally:
-        del mmap
+        if mmap is not None:
+            del mmap
 
 
 class Evaluator:
@@ -230,10 +231,11 @@ class Evaluator:
         return state
 
     def __setstate__(self, state):
-        # This method is called when unpickling. We recreate mmap_context and shared_hlcvs_np
         self.__dict__.update(state)
         self.mmap_context = managed_mmap(self.shared_memory_file, self.hlcvs_dtype, self.hlcvs_shape)
         self.shared_hlcvs_np = self.mmap_context.__enter__()
+        if self.shared_hlcvs_np is None:
+            print("Warning: Unable to recreate shared memory mapping during unpickling.")
 
 
 def add_extra_options(parser):
@@ -295,7 +297,6 @@ async def main():
     add_arguments_recursively(parser, template_config)
     add_extra_options(parser)
     args = parser.parse_args()
-    signal.signal(signal.SIGINT, signal_handler)
     logging.basicConfig(
         format="%(asctime)s %(levelname)-8s %(message)s",
         level=logging.INFO,
@@ -419,6 +420,7 @@ async def main():
         print(logbook)
 
         logging.info(f"Optimization complete.")
+
         try:
             logging.info(f"Extracting best config...")
             result = subprocess.run(
@@ -430,16 +432,25 @@ async def main():
             print(result.stdout)
         except Exception as e:
             logging.error(f"failed to extract best config {e}")
-        ########
     except Exception as e:
+        logging.error(f"An error occurred: {e}")
         traceback.print_exc()
     finally:
-        # Close the pool
-        logging.info(f"attempting clean shutdown...")
-        os.unlink(shared_memory_file)
+        if "pool" in locals():
+            logging.info("Closing and terminating the process pool...")
+            pool.close()
+            pool.terminate()
+            pool.join()
+
+        if shared_memory_file and os.path.exists(shared_memory_file):
+            logging.info(f"Removing shared memory file: {shared_memory_file}")
+            try:
+                os.unlink(shared_memory_file)
+            except Exception as e:
+                logging.error(f"Error removing shared memory file: {e}")
+
+        logging.info("Cleanup complete. Exiting.")
         sys.exit(0)
-        # pool.close()
-        # pool.join()
 
 
 if __name__ == "__main__":
