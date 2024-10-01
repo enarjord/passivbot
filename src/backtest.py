@@ -222,7 +222,9 @@ async def main():
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
     parser = argparse.ArgumentParser(prog="backtest", description="run forager backtest")
-    parser.add_argument("config_path", type=str, default=None, help="path to hjson passivbot config")
+    parser.add_argument(
+        "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
+    )
     template_config = get_template_live_config("v7")
     del template_config["optimize"]
     keep_live_keys = {
@@ -235,7 +237,12 @@ async def main():
             del template_config["live"][key]
     add_arguments_recursively(parser, template_config)
     args = parser.parse_args()
-    config = load_config("configs/template.hjson" if args.config_path is None else args.config_path)
+    if args.config_path is None:
+        logging.info(f"loading default template config configs/template.json")
+        config = load_config("configs/template.json")
+    else:
+        logging.info(f"loading config {args.config_path}")
+        config = load_config(args.config_path)
     update_config_with_args(config, args)
     config = format_config(config)
     symbols, hlcvs, mss, results_path = await prepare_hlcvs_mss(config)
