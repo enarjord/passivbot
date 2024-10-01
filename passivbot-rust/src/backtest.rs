@@ -116,8 +116,8 @@ pub struct RollingVolumeSum {
     prev_k_short: usize,
 }
 
-pub struct Backtest {
-    hlcvs: Array3<f64>, // 3D array: (n_timesteps, n_coins, 4)
+pub struct Backtest<'a> {
+    hlcvs: &'a Array3<f64>,
     bot_params_pair: BotParamsPair,
     exchange_params_list: Vec<ExchangeParams>,
     backtest_params: BacktestParams,
@@ -145,9 +145,9 @@ pub struct Backtest {
     volume_indices_buffer: Option<Vec<(f64, usize)>>,
 }
 
-impl Backtest {
+impl<'a> Backtest<'a> {
     pub fn new(
-        hlcvs: Array3<f64>,
+        hlcvs: &'a Array3<f64>,
         bot_params_pair: BotParamsPair,
         exchange_params_list: Vec<ExchangeParams>,
         backtest_params: &BacktestParams,

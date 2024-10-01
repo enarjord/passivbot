@@ -11,6 +11,8 @@ use crate::types::{
     Analysis, BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Order, OrderBook,
     Position, StateParams, TrailingPriceBundle,
 };
+use memmap::MmapOptions;
+use ndarray::ShapeBuilder;
 use ndarray::{Array1, Array2, Array3, Array4, ArrayBase, ArrayD};
 use numpy::{
     IntoPyArray, PyArray1, PyArray2, PyArray3, PyArray4, PyReadonlyArray2, PyReadonlyArray3,
@@ -20,15 +22,40 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use pyo3::wrap_pyfunction;
+use std::{fs::File, slice};
 
 #[pyfunction]
 pub fn run_backtest(
-    hlcvs: PyReadonlyArray3<f64>,
+    shared_memory_file: &str,
+    hlcvs_shape: (usize, usize, usize),
+    hlcvs_dtype: &str,
     bot_params_pair_dict: &PyDict,
     exchange_params_list: &PyAny,
     backtest_params_dict: &PyDict,
 ) -> PyResult<(Py<PyArray2<PyObject>>, Py<PyArray1<f64>>, Py<PyDict>)> {
-    let hlcvs_rust = hlcvs.as_array();
+    // Open the memory-mapped file
+    let file = File::open(shared_memory_file)
+        .map_err(|e| PyValueError::new_err(format!("Unable to open shared memory file: {}", e)))?;
+
+    let mmap = unsafe {
+        MmapOptions::new()
+            .map(&file)
+            .map_err(|e| PyValueError::new_err(format!("Unable to map file: {}", e)))?
+    };
+
+    // Create an ndarray view of the memory-mapped file
+    let hlcvs_rust = unsafe {
+        match hlcvs_dtype {
+            "<f8" => {
+                let data = slice::from_raw_parts(
+                    mmap.as_ptr() as *const f64,
+                    hlcvs_shape.0 * hlcvs_shape.1 * hlcvs_shape.2,
+                );
+                Array3::<f64>::from_shape_vec(hlcvs_shape.into_shape(), data.to_vec()).unwrap()
+            }
+            _ => return Err(PyValueError::new_err("Unsupported dtype for HLCV data")),
+        }
+    };
 
     let bot_params_pair = bot_params_pair_from_dict(bot_params_pair_dict)?;
     let exchange_params = {
@@ -55,7 +82,7 @@ pub fn run_backtest(
     let backtest_params = backtest_params_from_dict(backtest_params_dict)?;
 
     let mut backtest = Backtest::new(
-        hlcvs_rust.to_owned(),
+        &hlcvs_rust,
         bot_params_pair,
         exchange_params,
         &backtest_params,
