@@ -28,6 +28,22 @@ import matplotlib.pyplot as plt
 import logging
 from main import manage_rust_compilation
 
+import tempfile
+from contextlib import contextmanager
+
+
+@contextmanager
+def create_shared_memory_file(hlcvs):
+    temp_file = tempfile.NamedTemporaryFile(delete=False)
+    shared_memory_file = temp_file.name
+    try:
+        with open(shared_memory_file, "wb") as f:
+            f.write(hlcvs.tobytes())
+        yield shared_memory_file
+    finally:
+        os.unlink(shared_memory_file)
+
+
 plt.rcParams["figure.figsize"] = [29, 18]
 
 
@@ -167,7 +183,17 @@ def run_backtest(hlcvs, mss, config: dict):
     bot_params, exchange_params, backtest_params = prep_backtest_args(config, mss)
     print(f"Starting backtest...")
     sts = utc_ms()
-    fills, equities, analysis = pbr.run_backtest(hlcvs, bot_params, exchange_params, backtest_params)
+
+    with create_shared_memory_file(hlcvs) as shared_memory_file:
+        fills, equities, analysis = pbr.run_backtest(
+            shared_memory_file,
+            hlcvs.shape,
+            hlcvs.dtype.str,
+            bot_params,
+            exchange_params,
+            backtest_params,
+        )
+
     print(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
     return fills, equities, analysis
 
