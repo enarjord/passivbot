@@ -5,6 +5,7 @@ import asyncio
 import argparse
 import multiprocessing
 import subprocess
+import mmap
 from multiprocessing import shared_memory
 from backtest import (
     prepare_hlcvs_mss,
@@ -37,6 +38,22 @@ import traceback
 import json
 import pprint
 from deap import base, creator, tools, algorithms
+from contextlib import contextmanager
+import tempfile
+
+
+def create_shared_memory_file(hlcvs):
+    temp_file = tempfile.NamedTemporaryFile(delete=False)
+    shared_memory_file = temp_file.name
+
+    try:
+        with open(shared_memory_file, "wb") as f:
+            f.write(hlcvs.tobytes())
+    except IOError as e:
+        print(f"Error writing to shared memory file: {e}")
+        raise
+
+    return shared_memory_file
 
 
 def mutPolynomialBoundedWrapper(individual, eta, low, up, indpb):
@@ -144,18 +161,24 @@ def config_to_individual(config):
     return individual
 
 
+@contextmanager
+def managed_mmap(filename, dtype, shape):
+    try:
+        mmap = np.memmap(filename, dtype=dtype, mode="r", shape=shape)
+        yield mmap
+    finally:
+        del mmap
+
+
 class Evaluator:
-    def __init__(self, hlcvs, config, mss):
-        self.hlcvs = hlcvs
-        self.shared_hlcvs = shared_memory.SharedMemory(create=True, size=self.hlcvs.nbytes)
-        self.shared_hlcvs_np = np.ndarray(
-            self.hlcvs.shape, dtype=self.hlcvs.dtype, buffer=self.shared_hlcvs.buf
-        )
-        np.copyto(self.shared_hlcvs_np, self.hlcvs)
-        del self.hlcvs
+    def __init__(self, shared_memory_file, hlcvs_shape, hlcvs_dtype, config, mss):
+        self.shared_memory_file = shared_memory_file
+        self.hlcvs_shape = hlcvs_shape
+        self.hlcvs_dtype = hlcvs_dtype
 
+        self.mmap_context = managed_mmap(self.shared_memory_file, self.hlcvs_dtype, self.hlcvs_shape)
+        self.shared_hlcvs_np = self.mmap_context.__enter__()
         self.config = config
-
         _, self.exchange_params, self.backtest_params = prep_backtest_args(config, mss)
 
     def evaluate(self, individual):
@@ -164,7 +187,9 @@ class Evaluator:
             config, [], exchange_params=self.exchange_params, backtest_params=self.backtest_params
         )
         fills, equities, analysis = pbr.run_backtest(
-            self.shared_hlcvs_np,
+            self.shared_memory_file,
+            self.shared_hlcvs_np.shape,
+            self.shared_hlcvs_np.dtype.str,
             bot_params,
             self.exchange_params,
             self.backtest_params,
@@ -193,10 +218,22 @@ class Evaluator:
             w_1 = modifier - analysis[self.config["optimize"]["scoring"][1]]
         return w_0, w_1
 
-    def cleanup(self):
-        # Close and unlink the shared memory
-        self.shared_hlcvs.close()
-        self.shared_hlcvs.unlink()
+    def __del__(self):
+        if hasattr(self, "mmap_context"):
+            self.mmap_context.__exit__(None, None, None)
+
+    def __getstate__(self):
+        # This method is called when pickling. We exclude mmap_context and shared_hlcvs_np
+        state = self.__dict__.copy()
+        del state["mmap_context"]
+        del state["shared_hlcvs_np"]
+        return state
+
+    def __setstate__(self, state):
+        # This method is called when unpickling. We recreate mmap_context and shared_hlcvs_np
+        self.__dict__.update(state)
+        self.mmap_context = managed_mmap(self.shared_memory_file, self.hlcvs_dtype, self.hlcvs_shape)
+        self.shared_hlcvs_np = self.mmap_context.__enter__()
 
 
 def add_extra_options(parser):
@@ -283,7 +320,8 @@ async def main():
         f"optimize_results/{date_fname}_{coins_fname}_{hash_snippet}_all_results.txt"
     )
     try:
-        evaluator = Evaluator(hlcvs, config, mss)
+        shared_memory_file = create_shared_memory_file(hlcvs)
+        evaluator = Evaluator(shared_memory_file, hlcvs.shape, hlcvs.dtype, config, mss)
         creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -1.0))  # Minimize both objectives
         creator.create("Individual", list, fitness=creator.FitnessMulti)
 
@@ -398,7 +436,7 @@ async def main():
     finally:
         # Close the pool
         logging.info(f"attempting clean shutdown...")
-        evaluator.cleanup()
+        os.unlink(shared_memory_file)
         sys.exit(0)
         # pool.close()
         # pool.join()
