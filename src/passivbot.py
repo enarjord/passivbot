@@ -277,6 +277,9 @@ class Passivbot:
             if symbol in self.flags and self.flags[symbol].live_config_path is not None:
                 try:
                     loaded = load_config(self.flags[symbol].live_config_path)
+                    logging.info(
+                        f"successfully loaded {self.flags[symbol].live_config_path} for {symbol}"
+                    )
                     for pside in loaded["bot"]:
                         for k, v in loaded["bot"][pside].items():
                             if k not in skip:
