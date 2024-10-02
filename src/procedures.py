@@ -1246,15 +1246,22 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             acronyms.add(acronym)
 
 
-def recursive_config_update(config, key, value):
+def recursive_config_update(config, key, value, path=None):
+    if path is None:
+        path = []
+
     if key in config:
         if value != config[key]:
-            print(f"changed {key} {config[key]} -> {value}")
+            full_path = ".".join(path + [key])
+            print(f"changed {full_path} {config[key]} -> {value}")
             config[key] = value
         return True
+
     key_split = key.split("_")
     if key_split[0] in config:
-        return recursive_config_update(config[key_split[0]], "_".join(key_split[1:]), value)
+        new_path = path + [key_split[0]]
+        return recursive_config_update(config[key_split[0]], "_".join(key_split[1:]), value, new_path)
+
     return False
 
 
