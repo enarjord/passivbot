@@ -26,6 +26,7 @@ def check_compilation_needed():
         # Find the most recently modified compiled extension
         compiled_files = [path for path in COMPILED_EXTENSION_PATHS if os.path.exists(path)]
         if not compiled_files:
+            print(f"No Rust extension found. Compiling...")
             return True  # No extension found, compilation needed
 
         compiled_time = max(os.path.getmtime(path) for path in compiled_files)
@@ -36,6 +37,7 @@ def check_compilation_needed():
                 if file.endswith(".rs"):
                     file_path = os.path.join(root, file)
                     if os.path.getmtime(file_path) > compiled_time:
+                        print(f"Rust extension found, but out of date. Recompiling...")
                         return True  # A source file is newer, compilation needed
 
         return False  # No compilation needed
@@ -98,4 +100,5 @@ def manage_rust_compilation():
 if __name__ == "__main__":
     manage_rust_compilation()
     from passivbot import main
+
     asyncio.run(main())
