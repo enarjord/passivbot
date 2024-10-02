@@ -293,7 +293,9 @@ class BybitBot(Passivbot):
         start_time: int = None,
         end_time: int = None,
     ):
-        if start_time is not None:
+        if start_time is None:
+            pnls = await self.fetch_pnl(start_time=start_time, end_time=end_time)
+        else:
             week = 1000 * 60 * 60 * 24 * 7
             pnls = []
             if end_time is None:
@@ -310,9 +312,7 @@ class BybitBot(Passivbot):
                 if sts <= start_time:
                     break
                 i += 1
-                logging.info(f"fetching pnls for more than a week {ts_to_date_utc(sts)}")
-        else:
-            pnls = await self.fetch_pnl(start_time=start_time, end_time=end_time)
+                logging.info(f"fetched pnls for more than a week {ts_to_date_utc(sts)}")
         return sorted(pnls, key=lambda x: x["timestamp"])
 
     async def fetch_pnl(
@@ -332,38 +332,44 @@ class BybitBot(Passivbot):
                 params["startTime"] = int(start_time)
             if end_time is not None:
                 params["endTime"] = int(end_time)
-            fetched = await self.cca.private_get_v5_position_closed_pnl(params)
-            fetched["result"]["list"] = sorted(
-                floatify(fetched["result"]["list"]), key=lambda x: x["updatedTime"]
-            )
+            fetched = (await self.cca.private_get_v5_position_closed_pnl(params))["result"]
             while True:
-                if fetched["result"]["list"] == []:
+                fetched["list"] = sorted(
+                    floatify(fetched["list"]), key=lambda x: float(x["updatedTime"])
+                )
+                for i in range(len(fetched["list"])):
+                    fetched["list"][i]["timestamp"] = float(fetched["list"][i]["updatedTime"])
+                    fetched["list"][i]["symbol"] = self.get_symbol_id_inv(
+                        fetched["list"][i]["symbol"]
+                    )
+                    fetched["list"][i]["pnl"] = float(fetched["list"][i]["closedPnl"])
+                    fetched["list"][i]["side"] = fetched["list"][i]["side"].lower()
+                    fetched["list"][i]["position_side"] = (
+                        "long" if fetched["list"][i]["side"] == "sell" else "short"
+                    )
+                if fetched["list"] == []:
                     break
                 if (
-                    fetched["result"]["list"][0]["orderId"] in ids_seen
-                    and fetched["result"]["list"][-1]["orderId"] in ids_seen
+                    fetched["list"][0]["orderId"] in ids_seen
+                    and fetched["list"][-1]["orderId"] in ids_seen
                 ):
                     break
-                all_pnls.extend(fetched["result"]["list"])
-                for elm in fetched["result"]["list"]:
+                all_pnls.extend(fetched["list"])
+                for elm in fetched["list"]:
                     ids_seen.add(elm["orderId"])
                 if start_time is None:
                     break
-                if fetched["result"]["list"][0]["updatedTime"] <= start_time:
+                if fetched["list"][0]["updatedTime"] <= start_time:
                     break
-                if not fetched["result"]["nextPageCursor"]:
+                if not fetched["nextPageCursor"]:
+                    break
+                if len(fetched["list"]) < limit:
                     break
                 logging.info(
-                    f"fetching pnls {ts_to_date_utc(fetched['result']['list'][-1]['updatedTime'])}"
+                    f"fetched pnls from {ts_to_date_utc(fetched['list'][-1]['updatedTime'])} n pnls: {len(fetched['list'])}"
                 )
-                params["cursor"] = fetched["result"]["nextPageCursor"]
-                fetched = await self.cca.private_get_v5_position_closed_pnl(params)
-                fetched["result"]["list"] = sorted(
-                    floatify(fetched["result"]["list"]), key=lambda x: x["updatedTime"]
-                )
-            for i in range(len(all_pnls)):
-                all_pnls[i]["pnl"] = all_pnls[i]["closedPnl"]
-                all_pnls[i]["timestamp"] = all_pnls[i]["updatedTime"]
+                params["cursor"] = fetched["nextPageCursor"]
+                fetched = (await self.cca.private_get_v5_position_closed_pnl(params))["result"]
             return sorted(all_pnls, key=lambda x: x["updatedTime"])
         except Exception as e:
             logging.error(f"error fetching pnls {e}")
@@ -371,54 +377,7 @@ class BybitBot(Passivbot):
             traceback.print_exc()
             return []
 
-    async def fetch_fills_sub_sub(self, start_time=None, end_time=None):
-        assert start_time is not None
-        params = {"limit": 100}
-        all_fetched = []
-        week = 1000 * 60 * 60 * 24 * 7
-        fetch_windows = [
-            (i, min(i + week, end_time)) for i in range(int(start_time), int(end_time), int(week))
-        ]
-        results = await asyncio.gather(
-            *[
-                self.cca.fetch_my_trades(params={"paginate": True, "endTime": int(ets)})
-                for sts, ets in fetch_windows
-            ]
-        )
-        result = sorted(flatten(results), key=lambda x: x["timestamp"])
-        return result
-        if start_time and end_time and end_time - start_time > week:
-            start_end_times = [start_time]
-        result = await self.cca.fetch_my_trades(
-            since=int(start_time) if start_time else start_time, params=params
-        )
-        return sorted(result, key=lambda x: x["timestamp"])
-
-    async def fetch_fills_sub(self, start_time=None, end_time=None):
-        if start_time is None:
-            result = await self.cca.fetch_my_trades()
-            return sorted(result, key=lambda x: x["timestamp"])
-        if end_time is None:
-            end_time = int(self.get_exchange_time() + 1000 * 60 * 60 * 24)
-        all_fetched_fills = []
-        for _ in range(100):
-            fills = await self.cca.fetch_my_trades(
-                params={"paginate": True, "endTime": int(end_time)}
-            )
-            if not fills:
-                break
-            all_fetched_fills += fills
-            if fills[0]["timestamp"] <= start_time:
-                break
-            logging.info(
-                f"fetched fills: {fills[0]['datetime']} {fills[-1]['datetime']} {len(fills)}"
-            )
-            end_time = fills[0]["timestamp"]
-        else:
-            logging.error(f"more than 100 calls to ccxt fetch_my_trades")
-        return sorted(all_fetched_fills, key=lambda x: x["timestamp"])
-
-    async def fetch_fills2_sub_sub(self, start_time, end_time, limit=None):
+    async def fetch_fills(self, start_time, end_time, limit=None):
         if start_time is None:
             result = await self.cca.fetch_my_trades()
             return sorted(result, key=lambda x: x["timestamp"])
@@ -436,39 +395,23 @@ class BybitBot(Passivbot):
             if fills[0]["timestamp"] <= start_time:
                 break
             logging.info(
-                f"fetched fills: {fills[0]['datetime']} {fills[-1]['datetime']} {len(fills)}"
+                f"fetched fills from {fills[0]['datetime']} to {fills[-1]['datetime']} n fills: {len(fills)}"
             )
             end_time = fills[0]["timestamp"]
+            limit = 1000
         else:
             logging.error(f"more than 100 calls to ccxt fetch_my_trades")
         return sorted(all_fetched_fills, key=lambda x: x["timestamp"])
-
-    async def fetch_fills2_sub(self, start_time, end_time):
-        if start_time is None:
-            result = await self.cca.fetch_my_trades()
-            return sorted(result, key=lambda x: x["timestamp"])
-        if end_time is None:
-            end_time = int(self.get_exchange_time() + 1000 * 60 * 60 * 24)
-        params = {"limit": 100}
-        all_fetched = []
-        week = 1000 * 60 * 60 * 24 * 7
-        fetch_windows = [
-            (i, min(i + week, end_time)) for i in range(int(start_time), int(end_time), int(week))
-        ]
-        results = await asyncio.gather(
-            *[self.fetch_fills2_sub_sub(sts, ets) for sts, ets in fetch_windows]
-        )
-        result = sorted(flatten(results), key=lambda x: x["timestamp"])
-        return result
 
     async def fetch_pnls(self, start_time=None, end_time=None, limit=None):
         # fetch fills first, then pnls (bybit has them in separate endpoints)
         if start_time:
             if self.get_exchange_time() - start_time < 1000 * 60 * 60 * 4 and limit == 100:
+                # set start time to None (fetch latest) if start time is recent
                 start_time = None
-        fills = await self.fetch_fills2_sub_sub(start_time=start_time, end_time=end_time, limit=limit)
+        fills = await self.fetch_fills(start_time=start_time, end_time=end_time, limit=limit)
         if start_time:
-            fills = [x for x in fills if x["timestamp"] >= start_time - 1000 * 60 * 60 * 4]
+            fills = [x for x in fills if x["timestamp"] >= start_time - 1000 * 60 * 60]
         if not fills:
             return []
         start_time = fills[0]["timestamp"]

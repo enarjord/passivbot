@@ -5,11 +5,11 @@ import asyncio
 import argparse
 import multiprocessing
 import subprocess
+import mmap
 from multiprocessing import shared_memory
 from backtest import (
     prepare_hlcvs_mss,
     prep_backtest_args,
-    calc_preferred_coins,
 )
 from pure_funcs import (
     get_template_live_config,
@@ -32,12 +32,27 @@ from copy import deepcopy
 from main import manage_rust_compilation
 import numpy as np
 from uuid import uuid4
-import signal
 import logging
 import traceback
 import json
 import pprint
 from deap import base, creator, tools, algorithms
+from contextlib import contextmanager
+import tempfile
+
+
+def create_shared_memory_file(hlcvs):
+    temp_file = tempfile.NamedTemporaryFile(delete=False)
+    shared_memory_file = temp_file.name
+
+    try:
+        with open(shared_memory_file, "wb") as f:
+            f.write(hlcvs.tobytes())
+    except IOError as e:
+        print(f"Error writing to shared memory file: {e}")
+        raise
+
+    return shared_memory_file
 
 
 def mutPolynomialBoundedWrapper(individual, eta, low, up, indpb):
@@ -120,11 +135,6 @@ def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up):
     return ind1, ind2
 
 
-def signal_handler(signal, frame):
-    print("\nOptimization interrupted by user. Exiting gracefully...")
-    sys.exit(0)
-
-
 def individual_to_config(individual, template=None):
     if template is None:
         template = get_template_live_config("v7")
@@ -145,29 +155,31 @@ def config_to_individual(config):
     return individual
 
 
+@contextmanager
+def managed_mmap(filename, dtype, shape):
+    mmap = None
+    try:
+        mmap = np.memmap(filename, dtype=dtype, mode="r", shape=shape)
+        yield mmap
+    except FileNotFoundError:
+        if shutdown_event.is_set():
+            yield None
+        else:
+            raise
+    finally:
+        if mmap is not None:
+            del mmap
+
+
 class Evaluator:
-    def __init__(self, hlcs, preferred_coins, config, mss):
-        self.hlcs = hlcs
-        self.shared_hlcs = shared_memory.SharedMemory(create=True, size=self.hlcs.nbytes)
-        self.shared_hlcs_np = np.ndarray(
-            self.hlcs.shape, dtype=self.hlcs.dtype, buffer=self.shared_hlcs.buf
-        )
-        np.copyto(self.shared_hlcs_np, self.hlcs)
-        del self.hlcs
+    def __init__(self, shared_memory_file, hlcvs_shape, hlcvs_dtype, config, mss):
+        self.shared_memory_file = shared_memory_file
+        self.hlcvs_shape = hlcvs_shape
+        self.hlcvs_dtype = hlcvs_dtype
 
-        self.preferred_coins = preferred_coins
-        self.shared_preferred_coins = shared_memory.SharedMemory(
-            create=True, size=self.preferred_coins.nbytes
-        )
-        self.shared_preferred_coins_np = np.ndarray(
-            self.preferred_coins.shape,
-            dtype=self.preferred_coins.dtype,
-            buffer=self.shared_preferred_coins.buf,
-        )
-        np.copyto(self.shared_preferred_coins_np, self.preferred_coins)
-        del self.preferred_coins
+        self.mmap_context = managed_mmap(self.shared_memory_file, self.hlcvs_dtype, self.hlcvs_shape)
+        self.shared_hlcvs_np = self.mmap_context.__enter__()
         self.config = config
-
         _, self.exchange_params, self.backtest_params = prep_backtest_args(config, mss)
 
     def evaluate(self, individual):
@@ -176,8 +188,9 @@ class Evaluator:
             config, [], exchange_params=self.exchange_params, backtest_params=self.backtest_params
         )
         fills, equities, analysis = pbr.run_backtest(
-            self.shared_hlcs_np,
-            self.shared_preferred_coins_np,
+            self.shared_memory_file,
+            self.shared_hlcvs_np.shape,
+            self.shared_hlcvs_np.dtype.str,
             bot_params,
             self.exchange_params,
             self.backtest_params,
@@ -206,12 +219,23 @@ class Evaluator:
             w_1 = modifier - analysis[self.config["optimize"]["scoring"][1]]
         return w_0, w_1
 
-    def cleanup(self):
-        # Close and unlink the shared memory
-        self.shared_hlcs.close()
-        self.shared_hlcs.unlink()
-        self.shared_preferred_coins.close()
-        self.shared_preferred_coins.unlink()
+    def __del__(self):
+        if hasattr(self, "mmap_context"):
+            self.mmap_context.__exit__(None, None, None)
+
+    def __getstate__(self):
+        # This method is called when pickling. We exclude mmap_context and shared_hlcvs_np
+        state = self.__dict__.copy()
+        del state["mmap_context"]
+        del state["shared_hlcvs_np"]
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.mmap_context = managed_mmap(self.shared_memory_file, self.hlcvs_dtype, self.hlcvs_shape)
+        self.shared_hlcvs_np = self.mmap_context.__enter__()
+        if self.shared_hlcvs_np is None:
+            print("Warning: Unable to recreate shared memory mapping during unpickling.")
 
 
 def add_extra_options(parser):
@@ -273,7 +297,6 @@ async def main():
     add_arguments_recursively(parser, template_config)
     add_extra_options(parser)
     args = parser.parse_args()
-    signal.signal(signal.SIGINT, signal_handler)
     logging.basicConfig(
         format="%(asctime)s %(levelname)-8s %(message)s",
         level=logging.INFO,
@@ -290,8 +313,6 @@ async def main():
     config = format_config(config)
     symbols, hlcvs, mss, results_path = await prepare_hlcvs_mss(config)
     config["backtest"]["symbols"] = symbols
-    preferred_coins = calc_preferred_coins(hlcvs, config)
-    hlcs = hlcvs[:, :, :3]
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
     coins = [symbol_to_coin(s) for s in config["backtest"]["symbols"]]
     coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
@@ -300,7 +321,8 @@ async def main():
         f"optimize_results/{date_fname}_{coins_fname}_{hash_snippet}_all_results.txt"
     )
     try:
-        evaluator = Evaluator(hlcs, preferred_coins, config, mss)
+        shared_memory_file = create_shared_memory_file(hlcvs)
+        evaluator = Evaluator(shared_memory_file, hlcvs.shape, hlcvs.dtype, config, mss)
         creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -1.0))  # Minimize both objectives
         creator.create("Individual", list, fitness=creator.FitnessMulti)
 
@@ -398,6 +420,7 @@ async def main():
         print(logbook)
 
         logging.info(f"Optimization complete.")
+
         try:
             logging.info(f"Extracting best config...")
             result = subprocess.run(
@@ -409,16 +432,25 @@ async def main():
             print(result.stdout)
         except Exception as e:
             logging.error(f"failed to extract best config {e}")
-        ########
     except Exception as e:
+        logging.error(f"An error occurred: {e}")
         traceback.print_exc()
     finally:
-        # Close the pool
-        logging.info(f"attempting clean shutdown...")
-        evaluator.cleanup()
+        if "pool" in locals():
+            logging.info("Closing and terminating the process pool...")
+            pool.close()
+            pool.terminate()
+            pool.join()
+
+        if shared_memory_file and os.path.exists(shared_memory_file):
+            logging.info(f"Removing shared memory file: {shared_memory_file}")
+            try:
+                os.unlink(shared_memory_file)
+            except Exception as e:
+                logging.error(f"Error removing shared memory file: {e}")
+
+        logging.info("Cleanup complete. Exiting.")
         sys.exit(0)
-        # pool.close()
-        # pool.join()
 
 
 if __name__ == "__main__":

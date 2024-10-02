@@ -1,7 +1,7 @@
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
 };
-use crate::constants::{CLOSE, HIGH, LONG, LOW, NO_POS, SHORT};
+use crate::constants::{CLOSE, HIGH, LONG, LOW, NO_POS, SHORT, VOLUME};
 use crate::entries::{
     calc_entries_long, calc_entries_short, calc_min_entry_qty, calc_next_entry_long,
     calc_next_entry_short,
@@ -15,8 +15,7 @@ use crate::utils::{
     calc_pprice_diff_int, calc_wallet_exposure, cost_to_qty, qty_to_cost, round_, round_dn,
     round_up,
 };
-use ndarray::s;
-use ndarray::{Array1, Array2, Array3, Array4};
+use ndarray::{s, Array1, Array2, Array3, Array4, Axis};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
@@ -71,12 +70,6 @@ impl EMAs {
 }
 
 #[derive(Debug, Default)]
-pub struct OpenOrders {
-    pub long: HashMap<usize, OpenOrderBundle>,
-    pub short: HashMap<usize, OpenOrderBundle>,
-}
-
-#[derive(Debug, Default)]
 pub struct OpenOrdersNew {
     pub long: HashMap<usize, OpenOrderBundleNew>,
     pub short: HashMap<usize, OpenOrderBundleNew>,
@@ -86,12 +79,6 @@ pub struct OpenOrdersNew {
 pub struct OpenOrderBundleNew {
     pub entries: Vec<Order>,
     pub closes: Vec<Order>,
-}
-
-#[derive(Debug, Default)]
-pub struct OpenOrderBundle {
-    pub entry: Order,
-    pub close: Order,
 }
 
 #[derive(Default, Debug)]
@@ -122,19 +109,24 @@ pub struct TradingEnabled {
     short: bool,
 }
 
-pub struct Backtest {
-    hlcs: Array3<f64>,            // 3D array: (n_timesteps, n_markets, 3)
-    preferred_coins: Array2<i32>, // 2D array: (n_timesteps, n_markets)
+pub struct RollingVolumeSum {
+    long: Vec<f64>,
+    short: Vec<f64>,
+    prev_k_long: usize,
+    prev_k_short: usize,
+}
+
+pub struct Backtest<'a> {
+    hlcvs: &'a Array3<f64>,
     bot_params_pair: BotParamsPair,
     exchange_params_list: Vec<ExchangeParams>,
     backtest_params: BacktestParams,
     balance: f64,
-    n_markets: usize,
+    n_coins: usize,
     ema_alphas: EmaAlphas,
     emas: Vec<EMAs>,
     positions: Positions,
-    open_orders: OpenOrders, // keys are symbol indices
-    open_orders_new: OpenOrdersNew,
+    open_orders: OpenOrdersNew,
     trailing_prices: TrailingPrices,
     actives: Actives,
     pnl_cumsum_running: f64,
@@ -147,20 +139,24 @@ pub struct Backtest {
     delist_timestamps: HashMap<usize, usize>,
     did_fill_long: HashSet<usize>,
     did_fill_short: HashSet<usize>,
+    n_eligible_long: usize,
+    n_eligible_short: usize,
+    rolling_volume_sum: RollingVolumeSum,
+    volume_indices_buffer: Option<Vec<(f64, usize)>>,
 }
 
-impl Backtest {
+impl<'a> Backtest<'a> {
     pub fn new(
-        hlcs: Array3<f64>,
-        preferred_coins: Array2<i32>,
+        hlcvs: &'a Array3<f64>,
         bot_params_pair: BotParamsPair,
         exchange_params_list: Vec<ExchangeParams>,
         backtest_params: &BacktestParams,
     ) -> Self {
-        let n_markets = hlcs.shape()[1];
-        let initial_emas = (0..n_markets)
+        let n_timesteps = hlcvs.shape()[0];
+        let n_coins = hlcvs.shape()[1];
+        let initial_emas = (0..n_coins)
             .map(|i| {
-                let close_price = hlcs[[0, i, CLOSE]];
+                let close_price = hlcvs[[0, i, CLOSE]];
                 EMAs {
                     long: [close_price; 3],
                     short: [close_price; 3],
@@ -170,21 +166,27 @@ impl Backtest {
         let mut equities = Vec::<f64>::new();
         equities.push(backtest_params.starting_balance);
         let mut bot_params_pair_cloned = bot_params_pair.clone();
-        bot_params_pair_cloned.long.n_positions = n_markets.min(bot_params_pair.long.n_positions);
-        bot_params_pair_cloned.short.n_positions = n_markets.min(bot_params_pair.short.n_positions);
+        bot_params_pair_cloned.long.n_positions = n_coins.min(bot_params_pair.long.n_positions);
+        bot_params_pair_cloned.short.n_positions = n_coins.min(bot_params_pair.short.n_positions);
+        let n_eligible_long = bot_params_pair_cloned.long.n_positions.max(
+            (n_coins as f64 * (1.0 - bot_params_pair.long.filter_relative_volume_clip_pct)).round()
+                as usize,
+        );
+        let n_eligible_short = bot_params_pair_cloned.short.n_positions.max(
+            (n_coins as f64 * (1.0 - bot_params_pair.short.filter_relative_volume_clip_pct)).round()
+                as usize,
+        );
         Backtest {
-            hlcs,
-            preferred_coins,
+            hlcvs,
             bot_params_pair: bot_params_pair_cloned,
             exchange_params_list,
             backtest_params: backtest_params.clone(),
             balance: backtest_params.starting_balance,
-            n_markets,
+            n_coins,
             ema_alphas: calc_ema_alphas(&bot_params_pair),
             emas: initial_emas,
             positions: Positions::default(),
-            open_orders: OpenOrders::default(),
-            open_orders_new: OpenOrdersNew::default(),
+            open_orders: OpenOrdersNew::default(),
             trailing_prices: TrailingPrices::default(),
             actives: Actives::default(),
             pnl_cumsum_running: 0.0,
@@ -207,14 +209,108 @@ impl Backtest {
             delist_timestamps: HashMap::new(),
             did_fill_long: HashSet::new(),
             did_fill_short: HashSet::new(),
+            n_eligible_long,
+            n_eligible_short,
+            rolling_volume_sum: RollingVolumeSum {
+                long: vec![0.0; n_coins],
+                short: vec![0.0; n_coins],
+                prev_k_long: 0,
+                prev_k_short: 0,
+            },
+            volume_indices_buffer: Some(vec![(0.0, 0); n_coins]), // Initialize here
         }
     }
 
+    pub fn calc_preferred_coins(&mut self, k: usize, pside: usize) -> Vec<usize> {
+        let (bot_params, n_positions) = match pside {
+            LONG => (
+                &self.bot_params_pair.long,
+                self.bot_params_pair.long.n_positions,
+            ),
+            SHORT => (
+                &self.bot_params_pair.short,
+                self.bot_params_pair.short.n_positions,
+            ),
+            _ => panic!("Invalid pside"),
+        };
+
+        // Early return if all coins are already eligible
+        if self.n_coins <= n_positions {
+            return (0..self.n_coins).collect();
+        }
+
+        let n_eligible = match pside {
+            LONG => self.n_eligible_long,
+            SHORT => self.n_eligible_short,
+            _ => panic!("Invalid pside"),
+        };
+
+        let window = bot_params.filter_rolling_window;
+        let start_k = k.saturating_sub(window);
+
+        let (rolling_volume_sum, prev_k) = match pside {
+            LONG => (
+                &mut self.rolling_volume_sum.long,
+                &mut self.rolling_volume_sum.prev_k_long,
+            ),
+            SHORT => (
+                &mut self.rolling_volume_sum.short,
+                &mut self.rolling_volume_sum.prev_k_short,
+            ),
+            _ => panic!("Invalid pside"),
+        };
+
+        // Use the pre-allocated buffer for volume indices
+        let volume_indices = self.volume_indices_buffer.as_mut().unwrap();
+
+        // Update rolling volume sums
+        if k > window && k - *prev_k < window {
+            // Rolling calculation
+            for idx in 0..self.n_coins {
+                rolling_volume_sum[idx] -= self
+                    .hlcvs
+                    .slice(s![*prev_k - window..start_k, idx, VOLUME])
+                    .sum();
+                rolling_volume_sum[idx] += self.hlcvs.slice(s![*prev_k..k, idx, VOLUME]).sum();
+                volume_indices[idx] = (rolling_volume_sum[idx], idx);
+            }
+        } else {
+            // Full calculation
+            for idx in 0..self.n_coins {
+                rolling_volume_sum[idx] = self.hlcvs.slice(s![start_k..k, idx, VOLUME]).sum();
+                volume_indices[idx] = (rolling_volume_sum[idx], idx);
+            }
+        }
+        *prev_k = k;
+
+        // Sort by volume in descending order
+        volume_indices.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+
+        // Calculate noisiness for top n_eligible coins
+        let actual_n_eligible = n_eligible.min(self.n_coins);
+        let mut noisinesses = Vec::with_capacity(actual_n_eligible);
+
+        for &(_, idx) in volume_indices.iter().take(actual_n_eligible) {
+            let noisiness: f64 = self
+                .hlcvs
+                .slice(s![start_k..k, idx, ..])
+                .axis_iter(Axis(0))
+                .map(|row| (row[HIGH] - row[LOW]) / row[CLOSE])
+                .sum();
+            noisinesses.push((noisiness, idx));
+        }
+
+        // Sort by noisiness in descending order
+        noisinesses.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+
+        // Return indices sorted by noisiness
+        noisinesses.into_iter().map(|(_, idx)| idx).collect()
+    }
     pub fn run(&mut self) -> (Vec<Fill>, Vec<f64>) {
         let check_points: Vec<usize> = (0..7).map(|i| i * 60 * 24).collect();
-        let n_timesteps = self.hlcs.shape()[0];
+        let n_timesteps = self.hlcvs.shape()[0];
 
-        for idx in 0..self.n_markets {
+        for idx in 0..self.n_coins {
             self.trailing_prices
                 .long
                 .insert(idx, TrailingPriceBundle::default());
@@ -224,18 +320,18 @@ impl Backtest {
 
             // check if the coin was delisted at any point
             if n_timesteps > *check_points.last().unwrap() {
-                let last_hlc_close = self.hlcs[[n_timesteps - 1, idx, CLOSE]];
+                let last_hlc_close = self.hlcvs[[n_timesteps - 1, idx, CLOSE]];
                 if check_points.iter().all(|&point| {
-                    self.hlcs[[n_timesteps - 1 - point, idx, HIGH]] == last_hlc_close
-                        && self.hlcs[[n_timesteps - 1 - point, idx, LOW]] == last_hlc_close
-                        && self.hlcs[[n_timesteps - 1 - point, idx, CLOSE]] == last_hlc_close
+                    self.hlcvs[[n_timesteps - 1 - point, idx, HIGH]] == last_hlc_close
+                        && self.hlcvs[[n_timesteps - 1 - point, idx, LOW]] == last_hlc_close
+                        && self.hlcvs[[n_timesteps - 1 - point, idx, CLOSE]] == last_hlc_close
                 }) {
                     // was delisted. Find timestamp of delisting
                     let mut i = n_timesteps - check_points.last().unwrap();
                     while i > 0
-                        && self.hlcs[[i, idx, HIGH]] == last_hlc_close
-                        && self.hlcs[[i, idx, LOW]] == last_hlc_close
-                        && self.hlcs[[i, idx, CLOSE]] == last_hlc_close
+                        && self.hlcvs[[i, idx, HIGH]] == last_hlc_close
+                        && self.hlcvs[[i, idx, LOW]] == last_hlc_close
+                        && self.hlcvs[[i, idx, CLOSE]] == last_hlc_close
                     {
                         i -= 1;
                     }
@@ -255,7 +351,7 @@ impl Backtest {
     }
 
     fn create_state_params(&self, k: usize, idx: usize, pside: usize) -> StateParams {
-        let close_price = self.hlcs[[k, idx, CLOSE]];
+        let close_price = self.hlcvs[[k, idx, CLOSE]];
         StateParams {
             balance: self.balance,
             order_book: OrderBook {
@@ -278,7 +374,7 @@ impl Backtest {
         let mut equity = self.balance;
         // Calculate unrealized PnL for long positions
         for (&idx, position) in &self.positions.long {
-            let current_price = self.hlcs[[k, idx, CLOSE]];
+            let current_price = self.hlcvs[[k, idx, CLOSE]];
             let upnl = calc_pnl_long(
                 position.price,
                 current_price,
@@ -289,7 +385,7 @@ impl Backtest {
         }
         // Calculate unrealized PnL for short positions
         for (&idx, position) in &self.positions.short {
-            let current_price = self.hlcs[[k, idx, CLOSE]];
+            let current_price = self.hlcvs[[k, idx, CLOSE]];
             let upnl = calc_pnl_short(
                 position.price,
                 current_price,
@@ -302,36 +398,51 @@ impl Backtest {
     }
 
     fn update_actives(&mut self, k: usize, pside: usize) -> Vec<usize> {
-        let (actives, positions, n_positions) = match pside {
-            LONG => (
-                &mut self.actives.long,
-                &self.positions.long,
-                self.bot_params_pair.long.n_positions,
-            ),
+        // Calculate all the information we need before borrowing
+        let (positions, n_positions) = match pside {
+            LONG => (&self.positions.long, self.bot_params_pair.long.n_positions),
             SHORT => (
-                &mut self.actives.short,
                 &self.positions.short,
                 self.bot_params_pair.short.n_positions,
             ),
             _ => panic!("Invalid pside"),
         };
-        let mut actives_without_pos = Vec::with_capacity(n_positions);
+
+        let current_positions: Vec<usize> = positions.keys().cloned().collect();
+        let mut preferred_coins = Vec::new();
+
+        // Only calculate preferred coins if there are open slots
+        if current_positions.len() < n_positions {
+            preferred_coins = self.calc_preferred_coins(k, pside);
+        }
+
+        // Now we can mutably borrow self.actives
+        let actives = match pside {
+            LONG => &mut self.actives.long,
+            SHORT => &mut self.actives.short,
+            _ => unreachable!(),
+        };
+
         actives.clear();
-        for &market_idx in positions.keys() {
+
+        // Add all markets with existing positions
+        for &market_idx in &current_positions {
             actives.insert(market_idx);
         }
+
+        let mut actives_without_pos = Vec::new();
+
         // Add additional markets based on preferred_coins
-        for &market_idx in self.preferred_coins.row(k).iter() {
-            let market_idx = market_idx as usize;
+        for &market_idx in &preferred_coins {
             if actives.len() < n_positions {
                 if actives.insert(market_idx) {
-                    // Only add to actives_without_pos if it's a new insertion
                     actives_without_pos.push(market_idx);
                 }
             } else {
                 break;
             }
         }
+
         actives_without_pos
     }
 
@@ -340,14 +451,14 @@ impl Backtest {
         self.did_fill_short.clear();
         if self.trading_enabled.long {
             let mut open_orders_keys_long: Vec<usize> =
-                self.open_orders_new.long.keys().cloned().collect();
+                self.open_orders.long.keys().cloned().collect();
             open_orders_keys_long.sort();
             for idx in open_orders_keys_long {
                 // Process close fills long
-                if !self.open_orders_new.long[&idx].closes.is_empty() {
+                if !self.open_orders.long[&idx].closes.is_empty() {
                     let mut closes_to_process = Vec::new();
                     {
-                        for close_order in &self.open_orders_new.long[&idx].closes {
+                        for close_order in &self.open_orders.long[&idx].closes {
                             if self.order_filled(k, idx, close_order) {
                                 closes_to_process.push(close_order.clone());
                             }
@@ -364,10 +475,10 @@ impl Backtest {
                     }
                 }
                 // Process entry fills long
-                if !self.open_orders_new.long[&idx].entries.is_empty() {
+                if !self.open_orders.long[&idx].entries.is_empty() {
                     let mut entries_to_process = Vec::new();
                     {
-                        for entry_order in &self.open_orders_new.long[&idx].entries {
+                        for entry_order in &self.open_orders.long[&idx].entries {
                             if self.order_filled(k, idx, entry_order) {
                                 entries_to_process.push(entry_order.clone());
                             }
@@ -383,14 +494,14 @@ impl Backtest {
         }
         if self.trading_enabled.short {
             let mut open_orders_keys_short: Vec<usize> =
-                self.open_orders_new.short.keys().cloned().collect();
+                self.open_orders.short.keys().cloned().collect();
             open_orders_keys_short.sort();
             for idx in open_orders_keys_short {
                 // Process close fills short
-                if !self.open_orders_new.short[&idx].closes.is_empty() {
+                if !self.open_orders.short[&idx].closes.is_empty() {
                     let mut closes_to_process = Vec::new();
                     {
-                        for close_order in &self.open_orders_new.short[&idx].closes {
+                        for close_order in &self.open_orders.short[&idx].closes {
                             if self.order_filled(k, idx, close_order) {
                                 closes_to_process.push(close_order.clone());
                             }
@@ -405,10 +516,10 @@ impl Backtest {
                     }
                 }
                 // Process entry fills short
-                if !self.open_orders_new.short[&idx].entries.is_empty() {
+                if !self.open_orders.short[&idx].entries.is_empty() {
                     let mut entries_to_process = Vec::new();
                     {
-                        for entry_order in &self.open_orders_new.short[&idx].entries {
+                        for entry_order in &self.open_orders.short[&idx].entries {
                             if self.order_filled(k, idx, entry_order) {
                                 entries_to_process.push(entry_order.clone());
                             }
@@ -705,21 +816,21 @@ impl Backtest {
         } else {
             self.trailing_prices.short.entry(idx).or_default()
         };
-        if self.hlcs[[k, idx, LOW]] < trailing_price_bundle.min_since_open {
-            trailing_price_bundle.min_since_open = self.hlcs[[k, idx, LOW]];
-            trailing_price_bundle.max_since_min = self.hlcs[[k, idx, CLOSE]];
+        if self.hlcvs[[k, idx, LOW]] < trailing_price_bundle.min_since_open {
+            trailing_price_bundle.min_since_open = self.hlcvs[[k, idx, LOW]];
+            trailing_price_bundle.max_since_min = self.hlcvs[[k, idx, CLOSE]];
         } else {
             trailing_price_bundle.max_since_min = trailing_price_bundle
                 .max_since_min
-                .max(self.hlcs[[k, idx, HIGH]]);
+                .max(self.hlcvs[[k, idx, HIGH]]);
         }
-        if self.hlcs[[k, idx, HIGH]] > trailing_price_bundle.max_since_open {
-            trailing_price_bundle.max_since_open = self.hlcs[[k, idx, HIGH]];
-            trailing_price_bundle.min_since_max = self.hlcs[[k, idx, CLOSE]];
+        if self.hlcvs[[k, idx, HIGH]] > trailing_price_bundle.max_since_open {
+            trailing_price_bundle.max_since_open = self.hlcvs[[k, idx, HIGH]];
+            trailing_price_bundle.min_since_max = self.hlcvs[[k, idx, CLOSE]];
         } else {
             trailing_price_bundle.min_since_max = trailing_price_bundle
                 .min_since_max
-                .min(self.hlcs[[k, idx, LOW]]);
+                .min(self.hlcvs[[k, idx, LOW]]);
         }
     }
 
@@ -763,11 +874,11 @@ impl Backtest {
         // check if coin is delisted; if so, close pos as unstuck close
         if let Some(&delist_timestamp) = self.delist_timestamps.get(&idx) {
             if k >= delist_timestamp && self.positions.long.contains_key(&idx) {
-                self.open_orders_new.long.get_mut(&idx).unwrap().closes = [Order {
+                self.open_orders.long.get_mut(&idx).unwrap().closes = [Order {
                     qty: -self.positions.long[&idx].size,
                     price: round_(
                         f64::min(
-                            self.hlcs[[k, idx, HIGH]] - self.exchange_params_list[idx].price_step,
+                            self.hlcvs[[k, idx, HIGH]] - self.exchange_params_list[idx].price_step,
                             self.positions.long[&idx].price,
                         ),
                         self.exchange_params_list[idx].price_step,
@@ -775,7 +886,7 @@ impl Backtest {
                     order_type: OrderType::CloseUnstuckLong,
                 }]
                 .to_vec();
-                self.open_orders_new.long.entry(idx).or_default().entries = Vec::new();
+                self.open_orders.long.entry(idx).or_default().entries = Vec::new();
                 return;
             }
         }
@@ -790,7 +901,7 @@ impl Backtest {
         if self.order_filled(k + 1, idx, &next_entry_order)
             && self.has_next_grid_order(&next_entry_order, LONG)
         {
-            self.open_orders_new.long.entry(idx).or_default().entries = calc_entries_long(
+            self.open_orders.long.entry(idx).or_default().entries = calc_entries_long(
                 &self.exchange_params_list[idx],
                 &state_params,
                 &self.bot_params_pair.long,
@@ -798,7 +909,7 @@ impl Backtest {
                 &self.trailing_prices.long[&idx],
             );
         } else {
-            self.open_orders_new.long.entry(idx).or_default().entries = [next_entry_order].to_vec();
+            self.open_orders.long.entry(idx).or_default().entries = [next_entry_order].to_vec();
         }
         let next_close_order = calc_next_close_long(
             &self.exchange_params_list[idx],
@@ -811,7 +922,7 @@ impl Backtest {
         if self.order_filled(k + 1, idx, &next_close_order)
             && self.has_next_grid_order(&next_close_order, LONG)
         {
-            self.open_orders_new.long.entry(idx).or_default().closes = calc_closes_long(
+            self.open_orders.long.entry(idx).or_default().closes = calc_closes_long(
                 &self.exchange_params_list[idx],
                 &state_params,
                 &self.bot_params_pair.long,
@@ -819,7 +930,7 @@ impl Backtest {
                 &self.trailing_prices.long[&idx],
             );
         } else {
-            self.open_orders_new.long.entry(idx).or_default().closes = [next_close_order].to_vec();
+            self.open_orders.long.entry(idx).or_default().closes = [next_close_order].to_vec();
         }
     }
 
@@ -835,11 +946,11 @@ impl Backtest {
         // check if coin is delisted; if so, close pos as unstuck close
         if let Some(&delist_timestamp) = self.delist_timestamps.get(&idx) {
             if k >= delist_timestamp && self.positions.short.contains_key(&idx) {
-                self.open_orders_new.short.get_mut(&idx).unwrap().closes = [Order {
+                self.open_orders.short.get_mut(&idx).unwrap().closes = [Order {
                     qty: self.positions.short[&idx].size.abs(),
                     price: round_(
                         f64::max(
-                            self.hlcs[[k, idx, LOW]] + self.exchange_params_list[idx].price_step,
+                            self.hlcvs[[k, idx, LOW]] + self.exchange_params_list[idx].price_step,
                             self.positions.short[&idx].price,
                         ),
                         self.exchange_params_list[idx].price_step,
@@ -847,7 +958,7 @@ impl Backtest {
                     order_type: OrderType::CloseUnstuckLong,
                 }]
                 .to_vec();
-                self.open_orders_new.short.entry(idx).or_default().entries = Vec::new();
+                self.open_orders.short.entry(idx).or_default().entries = Vec::new();
                 return;
             }
         }
@@ -862,7 +973,7 @@ impl Backtest {
         if self.order_filled(k + 1, idx, &next_entry_order)
             && self.has_next_grid_order(&next_entry_order, SHORT)
         {
-            self.open_orders_new.short.entry(idx).or_default().entries = calc_entries_short(
+            self.open_orders.short.entry(idx).or_default().entries = calc_entries_short(
                 &self.exchange_params_list[idx],
                 &state_params,
                 &self.bot_params_pair.short,
@@ -870,8 +981,7 @@ impl Backtest {
                 &self.trailing_prices.short[&idx],
             );
         } else {
-            self.open_orders_new.short.entry(idx).or_default().entries =
-                [next_entry_order].to_vec();
+            self.open_orders.short.entry(idx).or_default().entries = [next_entry_order].to_vec();
         }
 
         let next_close_order = calc_next_close_short(
@@ -885,7 +995,7 @@ impl Backtest {
         if self.order_filled(k + 1, idx, &next_close_order)
             && self.has_next_grid_order(&next_close_order, SHORT)
         {
-            self.open_orders_new.short.entry(idx).or_default().closes = calc_closes_short(
+            self.open_orders.short.entry(idx).or_default().closes = calc_closes_short(
                 &self.exchange_params_list[idx],
                 &state_params,
                 &self.bot_params_pair.short,
@@ -893,16 +1003,16 @@ impl Backtest {
                 &self.trailing_prices.short[&idx],
             );
         } else {
-            self.open_orders_new.short.entry(idx).or_default().closes = [next_close_order].to_vec()
+            self.open_orders.short.entry(idx).or_default().closes = [next_close_order].to_vec()
         }
     }
 
     fn order_filled(&self, k: usize, idx: usize, order: &Order) -> bool {
         // check if will fill in next candle
         if order.qty > 0.0 {
-            self.hlcs[[k, idx, LOW]] < order.price
+            self.hlcvs[[k, idx, LOW]] < order.price
         } else if order.qty < 0.0 {
-            self.hlcs[[k, idx, HIGH]] > order.price
+            self.hlcvs[[k, idx, HIGH]] > order.price
         } else {
             false
         }
@@ -933,7 +1043,7 @@ impl Backtest {
                         > self.bot_params_pair.long.unstuck_threshold
                     {
                         let pprice_diff =
-                            calc_pprice_diff_int(LONG, position.price, self.hlcs[[k, idx, CLOSE]]);
+                            calc_pprice_diff_int(LONG, position.price, self.hlcvs[[k, idx, CLOSE]]);
                         stuck_positions.push((idx, LONG, pprice_diff));
                     }
                 }
@@ -960,8 +1070,11 @@ impl Backtest {
                     if wallet_exposure / self.bot_params_pair.short.wallet_exposure_limit
                         > self.bot_params_pair.short.unstuck_threshold
                     {
-                        let pprice_diff =
-                            calc_pprice_diff_int(SHORT, position.price, self.hlcs[[k, idx, CLOSE]]);
+                        let pprice_diff = calc_pprice_diff_int(
+                            SHORT,
+                            position.price,
+                            self.hlcvs[[k, idx, CLOSE]],
+                        );
                         stuck_positions.push((idx, SHORT, pprice_diff));
                     }
                 }
@@ -976,16 +1089,16 @@ impl Backtest {
             match pside {
                 LONG => {
                     let close_price = f64::max(
-                        self.hlcs[[k, idx, CLOSE]],
+                        self.hlcvs[[k, idx, CLOSE]],
                         round_up(
                             self.emas[idx].compute_bands(LONG).upper
                                 * (1.0 + self.bot_params_pair.long.unstuck_ema_dist),
                             self.exchange_params_list[idx].price_step,
                         ),
                     );
-                    if self.open_orders_new.long[&idx].closes.is_empty()
-                        || self.open_orders_new.long[&idx].closes[0].qty == 0.0
-                        || close_price < self.open_orders_new.long[&idx].closes[0].price
+                    if self.open_orders.long[&idx].closes.is_empty()
+                        || self.open_orders.long[&idx].closes[0].qty == 0.0
+                        || close_price < self.open_orders.long[&idx].closes[0].price
                     {
                         let close_qty = -f64::min(
                             self.positions.long[&idx].size,
@@ -1018,16 +1131,16 @@ impl Backtest {
                 }
                 SHORT => {
                     let close_price = f64::min(
-                        self.hlcs[[k, idx, CLOSE]],
+                        self.hlcvs[[k, idx, CLOSE]],
                         round_dn(
                             self.emas[idx].compute_bands(SHORT).lower
                                 * (1.0 - self.bot_params_pair.short.unstuck_ema_dist),
                             self.exchange_params_list[idx].price_step,
                         ),
                     );
-                    if self.open_orders_new.short[&idx].closes.is_empty()
-                        || self.open_orders_new.short[&idx].closes[0].qty == 0.0
-                        || close_price > self.open_orders_new.short[&idx].closes[0].price
+                    if self.open_orders.short[&idx].closes.is_empty()
+                        || self.open_orders.short[&idx].closes[0].qty == 0.0
+                        || close_price > self.open_orders.short[&idx].closes[0].price
                     {
                         let close_qty = f64::min(
                             self.positions.short[&idx].size.abs(),
@@ -1110,14 +1223,14 @@ impl Backtest {
         if unstucking_pside != NO_POS {
             match unstucking_pside {
                 LONG => {
-                    self.open_orders_new
+                    self.open_orders
                         .long
                         .get_mut(&unstucking_idx)
                         .unwrap()
                         .closes = [unstucking_close].to_vec();
                 }
                 SHORT => {
-                    self.open_orders_new
+                    self.open_orders
                         .short
                         .get_mut(&unstucking_idx)
                         .unwrap()
@@ -1146,7 +1259,7 @@ impl Backtest {
             let mut actives_without_pos = Vec::<usize>::new();
             if positions_long_indices.len() < self.bot_params_pair.long.n_positions {
                 actives_without_pos = self.update_actives(k, LONG);
-                self.open_orders_new
+                self.open_orders
                     .long
                     .retain(|&idx, _| self.actives.long.contains(&idx));
             }
@@ -1154,7 +1267,7 @@ impl Backtest {
 
             for idx in active_long_indices {
                 if actives_without_pos.contains(&idx)
-                    || self.open_orders_new.long.get(&idx).map_or(false, |orders| {
+                    || self.open_orders.long.get(&idx).map_or(false, |orders| {
                         orders.closes.iter().any(|order| {
                             order.order_type == OrderType::CloseUnstuckLong
                                 || order.order_type == OrderType::CloseTrailingLong
@@ -1182,26 +1295,22 @@ impl Backtest {
             let mut actives_without_pos = Vec::<usize>::new();
             if positions_short_indices.len() < self.bot_params_pair.short.n_positions {
                 actives_without_pos = self.update_actives(k, SHORT);
-                self.open_orders_new
+                self.open_orders
                     .short
                     .retain(|&idx, _| self.actives.short.contains(&idx));
             }
             let active_short_indices: Vec<usize> = self.actives.short.iter().cloned().collect();
             for idx in active_short_indices {
                 if actives_without_pos.contains(&idx)
-                    || self
-                        .open_orders_new
-                        .short
-                        .get(&idx)
-                        .map_or(false, |orders| {
-                            orders.closes.iter().any(|order| {
-                                order.order_type == OrderType::CloseUnstuckShort
-                                    || order.order_type == OrderType::CloseTrailingShort
-                            }) || orders.entries.iter().any(|order| {
-                                order.order_type == OrderType::EntryTrailingNormalShort
-                                    || order.order_type == OrderType::EntryTrailingCroppedShort
-                            })
+                    || self.open_orders.short.get(&idx).map_or(false, |orders| {
+                        orders.closes.iter().any(|order| {
+                            order.order_type == OrderType::CloseUnstuckShort
+                                || order.order_type == OrderType::CloseTrailingShort
+                        }) || orders.entries.iter().any(|order| {
+                            order.order_type == OrderType::EntryTrailingNormalShort
+                                || order.order_type == OrderType::EntryTrailingCroppedShort
                         })
+                    })
                 {
                     self.update_open_orders_short_single(k, idx);
                 }
@@ -1214,12 +1323,12 @@ impl Backtest {
             if unstucking_pside != NO_POS {
                 match unstucking_pside {
                     LONG => {
-                        if let Some(orders) = self.open_orders_new.long.get_mut(&unstucking_idx) {
+                        if let Some(orders) = self.open_orders.long.get_mut(&unstucking_idx) {
                             orders.closes = vec![unstucking_close];
                         }
                     }
                     SHORT => {
-                        if let Some(orders) = self.open_orders_new.short.get_mut(&unstucking_idx) {
+                        if let Some(orders) = self.open_orders.short.get_mut(&unstucking_idx) {
                             orders.closes = vec![unstucking_close];
                         }
                     }
@@ -1239,8 +1348,8 @@ impl Backtest {
 
     #[inline]
     fn update_emas(&mut self, k: usize) {
-        for i in 0..self.n_markets {
-            let close_price = self.hlcs[[k, i, CLOSE]];
+        for i in 0..self.n_coins {
+            let close_price = self.hlcvs[[k, i, CLOSE]];
 
             let long_alphas = &self.ema_alphas.long.alphas;
             let long_alphas_inv = &self.ema_alphas.long.alphas_inv;
@@ -1409,56 +1518,4 @@ fn calc_drawdowns(equity_series: &[f64]) -> Vec<f64> {
         .zip(cumulative_max.iter())
         .map(|(&ret, &max)| (ret - max) / max)
         .collect()
-}
-
-pub fn calc_noisiness(hlcs: &Array3<f64>, window: usize) -> Array2<f64> {
-    let (n_minutes, n_coins, _) = hlcs.dim();
-
-    // Calculate Normalized Relative Range (NRR)
-    let nrrs =
-        (&hlcs.slice(s![.., .., 0]) - &hlcs.slice(s![.., .., 1])) / &hlcs.slice(s![.., .., 2]);
-
-    let mut noisiness = Array2::<f64>::zeros((n_minutes, n_coins));
-    let mut sums = vec![0.0; n_coins];
-
-    for i in 1..n_minutes {
-        let idx_start = i.saturating_sub(window);
-
-        for j in 0..n_coins {
-            sums[j] += nrrs[[i - 1, j]];
-
-            if idx_start > 0 {
-                sums[j] -= nrrs[[idx_start - 1, j]];
-                noisiness[[i, j]] = sums[j] / window as f64;
-            } else {
-                noisiness[[i, j]] = sums[j] / i as f64;
-            }
-        }
-    }
-    noisiness
-}
-
-pub fn calc_volumes(hlcvs: &Array3<f64>, window: usize) -> Array2<f64> {
-    let (n_minutes, n_coins, _) = hlcvs.dim();
-
-    // Calculate volume in quote currency (close * volume)
-    let quote_volumes = &hlcvs.slice(s![.., .., 2]) * &hlcvs.slice(s![.., .., 3]);
-
-    let mut rolling_volumes = Array2::<f64>::zeros((n_minutes, n_coins));
-    let mut sums = vec![0.0; n_coins];
-
-    for i in 0..n_minutes {
-        let idx_start = i.saturating_sub(window);
-        for j in 0..n_coins {
-            sums[j] += quote_volumes[[i, j]];
-            if i >= window {
-                sums[j] -= quote_volumes[[idx_start, j]];
-                rolling_volumes[[i, j]] = sums[j];
-            } else {
-                rolling_volumes[[i, j]] = sums[j];
-            }
-        }
-    }
-
-    rolling_volumes
 }

@@ -134,17 +134,37 @@ def format_config(config: dict, verbose=True) -> dict:
         result = deepcopy(config["config"])
     else:
         raise Exception(f"failed to format config")
-    for k0, v0, v1 in [("close_trailing_qty_pct", 1.0, [0.05, 1.0])]:
+    for k0, v0, v1 in [
+        ("close_trailing_qty_pct", 1.0, [0.05, 1.0]),
+        (
+            "filter_rolling_window",
+            (
+                result["live"]["ohlcv_rolling_window"]
+                if "ohlcv_rolling_window" in result["live"]
+                else 60.0
+            ),
+            [10.0, 1440.0],
+        ),
+        (
+            "filter_relative_volume_clip_pct",
+            (
+                result["live"]["relative_volume_filter_clip_pct"]
+                if "relative_volume_filter_clip_pct" in result["live"]
+                else 0.5
+            ),
+            [0.0, 1.0],
+        ),
+    ]:
         for pside in ["long", "short"]:
             if k0 not in result["bot"][pside]:
                 result["bot"][pside][k0] = v0
                 if verbose:
-                    print(f"adding missing parameter {k0}: {v0}")
+                    print(f"adding missing backtest parameter {pside} {k0}: {v0}")
             opt_key = f"{pside}_{k0}"
             if opt_key not in result["optimize"]["bounds"]:
                 result["optimize"]["bounds"][opt_key] = v1
                 if verbose:
-                    print(f"adding missing parameter {opt_key}: {v1}")
+                    print(f"adding missing optimize parameter {pside} {opt_key}: {v1}")
     for k0, src, dst in [
         ("live", "minimum_market_age_days", "minimum_coin_age_days"),
         ("live", "noisiness_rolling_mean_window_size", "ohlcv_rolling_window"),
@@ -156,7 +176,6 @@ def format_config(config: dict, verbose=True) -> dict:
             del result[k0][src]
     for k0, k1, v in [
         ("live", "time_in_force", "good_till_cancelled"),
-        ("live", "ohlcv_rolling_window", 60),
         ("optimize", "scoring", ["mdg", "sharpe_ratio"]),
     ]:
         if k1 not in result[k0]:
@@ -1227,15 +1246,22 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             acronyms.add(acronym)
 
 
-def recursive_config_update(config, key, value):
+def recursive_config_update(config, key, value, path=None):
+    if path is None:
+        path = []
+
     if key in config:
         if value != config[key]:
-            print(f"changed {key} {config[key]} -> {value}")
+            full_path = ".".join(path + [key])
+            print(f"changed {full_path} {config[key]} -> {value}")
             config[key] = value
         return True
+
     key_split = key.split("_")
     if key_split[0] in config:
-        return recursive_config_update(config[key_split[0]], "_".join(key_split[1:]), value)
+        new_path = path + [key_split[0]]
+        return recursive_config_update(config[key_split[0]], "_".join(key_split[1:]), value, new_path)
+
     return False
 
 
