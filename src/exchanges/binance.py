@@ -8,6 +8,7 @@ import asyncio
 import traceback
 import numpy as np
 import json
+import passivbot_rust as pbr
 from pure_funcs import (
     floatify,
     ts_to_date_utc,
@@ -290,6 +291,8 @@ class BinanceBot(Passivbot):
             balance = float(fetched_balance["info"]["totalCrossWalletBalance"]) - float(
                 fetched_balance["info"]["totalCrossUnPnl"]
             )
+            step = pbr.round_dynamic(balance * 0.02, 1)
+            balance = pbr.round_(balance, step)
             return positions, balance
         except Exception as e:
             logging.error(f"error fetching positions {e}")
