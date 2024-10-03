@@ -65,6 +65,7 @@ class HyperliquidBot(Passivbot):
             self.min_costs[symbol] = (
                 10.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
             )
+            self.min_costs[symbol] *= 1.1
             self.qty_steps[symbol] = round_(10 ** -elm["precision"]["amount"], 0.0000000001)
             self.min_qtys[symbol] = (
                 self.qty_steps[symbol]
