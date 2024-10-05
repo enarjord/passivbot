@@ -86,7 +86,13 @@ def process_single(file_location, verbose=False):
     with open(file_location) as f:
         lines = [x.strip() for x in f.readlines()]
     print_(f"n backtests: {len(lines)}")
-    xs = [json.loads(x) for x in lines if x]
+    xs = []
+    for line in lines:
+        try:
+            if line:
+                xs.append(json.loads(line))
+        except Exception as e:
+            print(f"failed to read line in {file_location}: {line}")
     res = pd.DataFrame([flatten_dict(x) for x in xs])
 
     keys, higher_is_better = ["w_0", "w_1"], [False, False]
