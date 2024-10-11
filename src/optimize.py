@@ -300,8 +300,15 @@ def configs_to_individuals(cfgs):
     inds = {}
     for cfg in cfgs:
         try:
-            individual = config_to_individual(format_config(cfg, verbose=False))
+            fcfg = format_config(cfg, verbose=False)
+            individual = config_to_individual(fcfg)
             inds[calc_hash(individual)] = individual
+            # add duplicate of config, but with lowered total wallet exposure limit
+            fcfg2 = deepcopy(fcfg)
+            for pside in ["long", "short"]:
+                fcfg2["bot"][pside]["total_wallet_exposure_limit"] *= 0.75
+            individual2 = config_to_individual(fcfg2)
+            inds[calc_hash(individual2)] = individual2
         except Exception as e:
             logging.error(f"error loading starting config: {e}")
     return list(inds.values())
@@ -361,7 +368,6 @@ async def main():
         toolbox = base.Toolbox()
 
         # Define parameter bounds
-        param_bounds = sort_dict_keys(config["optimize"]["bounds"])
         param_bounds = sort_dict_keys(config["optimize"]["bounds"])
 
         # Register attribute generators
