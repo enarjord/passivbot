@@ -176,6 +176,9 @@ def format_config(config: dict, verbose=True) -> dict:
             del result[k0][src]
     for k0, k1, v in [
         ("live", "time_in_force", "good_till_cancelled"),
+        ("live", "max_n_restarts_per_day", 10),
+        ("live", "ohlcvs_1m_rolling_window_days", 7.0),
+        ("live", "ohlcvs_1m_update_after_minutes", 10.0),
         ("optimize", "scoring", ["mdg", "sharpe_ratio"]),
     ]:
         if k1 not in result[k0]:
