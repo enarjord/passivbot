@@ -148,8 +148,8 @@ class Passivbot:
         self.ema_alphas = {"long": {}, "short": {}}
         self.upd_minute_emas = {}
         self.ineligible_symbols_with_pos = set()
-        self.ohlcvs_1m_max_age_minutes = 10
-        self.ohlcvs_1m_max_age_days = 7
+        self.ohlcvs_1m_update_after_minutes = config["live"]["ohlcvs_1m_update_after_minutes"]
+        self.ohlcvs_1m_rolling_window_days = config["live"]["ohlcvs_1m_rolling_window_days"]
         self.n_symbols_missing_ohlcvs_1m = 1000
         self.ohlcvs_1m_update_timestamps = {}
         self.max_n_concurrent_ohlcvs_1m_updates = 3
@@ -372,7 +372,9 @@ class Passivbot:
                 return
             if symbol not in self.ohlcvs_1m:
                 return
-            age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * self.ohlcvs_1m_max_age_days
+            age_limit = (
+                self.get_exchange_time() - 1000 * 60 * 60 * 24 * self.ohlcvs_1m_rolling_window_days
+            )
             for i in range(len(self.ohlcvs_1m[symbol])):
                 ts = self.ohlcvs_1m[symbol].peekitem(0)[0]
                 if ts < age_limit:
@@ -1930,7 +1932,7 @@ class Passivbot:
             # print("debug update_ohlcvs_1m_single_from_disk", symbol)
             asyncio.create_task(self.update_ohlcvs_1m_single_from_disk(symbol))
             await asyncio.sleep(min(0.1, init_ohlcvs_sleep_time))
-        self.ohlcvs_1m_max_age_ms = 1000 * 60 * self.ohlcvs_1m_max_age_minutes
+        self.ohlcvs_1m_max_age_ms = 1000 * 60 * self.ohlcvs_1m_update_after_minutes
         loop_sleep_time_ms = 1000 * 1
         logging.info(f"starting {get_function_name()}")
         while not self.stop_signal_received:
@@ -2154,8 +2156,6 @@ async def main():
     config = load_config("configs/template.json" if args.config_path is None else args.config_path)
     update_config_with_args(config, args)
     config = format_config(config)
-
-    max_n_restarts_per_day = 10
     cooldown_secs = 60
     restarts = []
     while True:
@@ -2182,8 +2182,8 @@ async def main():
 
         restarts.append(utc_ms())
         restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]
-        if len(restarts) > max_n_restarts_per_day:
-            logging.info(f"n restarts exceeded {max_n_restarts_per_day} last 24h")
+        if len(restarts) > bot.config["max_n_restarts_per_day"]:
+            logging.info(f"n restarts exceeded {bot.config['max_n_restarts_per_day']} last 24h")
             break
 
 
