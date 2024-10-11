@@ -259,7 +259,7 @@ class Passivbot:
         }
         for pside in ["long", "short"]:
             self.config["bot"][pside]["n_positions"] = min(
-                len(self.eligible_symbols), int(round(self.config["bot"]["long"]["n_positions"]))
+                len(self.eligible_symbols), int(round(self.config["bot"][pside]["n_positions"]))
             )
         for symbol in self.markets_dict:
             self.live_configs[symbol] = deepcopy(self.config["bot"])
