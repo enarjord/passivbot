@@ -2182,8 +2182,10 @@ async def main():
 
         restarts.append(utc_ms())
         restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]
-        if len(restarts) > bot.config["max_n_restarts_per_day"]:
-            logging.info(f"n restarts exceeded {bot.config['max_n_restarts_per_day']} last 24h")
+        if len(restarts) > bot.config["live"]["max_n_restarts_per_day"]:
+            logging.info(
+                f"n restarts exceeded {bot.config['live']['max_n_restarts_per_day']} last 24h"
+            )
             break
 
 
