@@ -289,9 +289,7 @@ class BinanceBot(Passivbot):
                         "price": float(elm["entryPrice"]),
                     }
                 )
-            balance = float(fetched_balance["info"]["totalCrossWalletBalance"]) - float(
-                fetched_balance["info"]["totalCrossUnPnl"]
-            )
+            balance = float(fetched_balance["info"]["totalCrossWalletBalance"])
             if not hasattr(self, "previous_rounded_balance"):
                 self.previous_rounded_balance = balance
             self.previous_rounded_balance = hysteresis_rounding(
