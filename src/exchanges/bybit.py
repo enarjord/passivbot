@@ -384,6 +384,7 @@ class BybitBot(Passivbot):
         if end_time is None:
             end_time = int(self.get_exchange_time() + 1000 * 60 * 60 * 4)
         all_fetched_fills = []
+        prev_hash = ""
         for _ in range(100):
             fills = await self.cca.fetch_my_trades(
                 limit=limit, params={"paginate": True, "endTime": int(end_time)}
@@ -394,6 +395,10 @@ class BybitBot(Passivbot):
             all_fetched_fills += fills
             if fills[0]["timestamp"] <= start_time:
                 break
+            new_hash = calc_hash([x["id"] for x in fills])
+            if new_hash == prev_hash:
+                break
+            prev_hash = new_hash
             logging.info(
                 f"fetched fills from {fills[0]['datetime']} to {fills[-1]['datetime']} n fills: {len(fills)}"
             )
