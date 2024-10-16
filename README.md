@@ -75,9 +75,9 @@ Install all the required Python dependencies listed in the `requirements.txt` fi
 pip install -r requirements.txt
 ```
 
-### Step 5: Build Rust Extensions
+### Step 5 (optional): Build Rust Extensions
 
-Navigate to the `passivbot-rust` directory and build the Rust extensions using `maturin`:
+Passivbot will attempt to build the necessary Rust extensions automatically, but they can also be built manually by navigating to the `passivbot-rust` directory and using `maturin`:
 
 ```sh
 cd passivbot-rust
@@ -85,7 +85,7 @@ maturin develop --release
 cd ..
 ```
 
-Note that the Rust bindings must be recompiled for changes in the Rust source to take effect.
+If changes in the Rust source are detected, recompilation is needed, which Passivbot will attempt to do automatically when starting. To manually recompile, use the commands given above.
 
 ### Step 6: Add API keys
 
@@ -97,19 +97,19 @@ cp api-keys.json.example api-keys.json
 
 Add your keys to api-keys.json.
 
-### Step 6: Run Passivbot
+### Step 7: Run Passivbot
 
 To start the bot with the default settings, run:
 
 ```sh
-python src/main.py -u {account_name_from_api-keys.json}
+python3 src/main.py -u {account_name_from_api-keys.json}
 ```
 
-or make a new configuration file, using `configs/template.json` as a template.
+or make a new configuration file, using `configs/template.json` as a template, and start the bot with:
 
 
 ```sh
-python src/main.py path/to/config.json
+python3 src/main.py path/to/config.json
 ```
 
 ## Jupyter Lab
