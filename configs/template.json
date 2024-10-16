@@ -66,7 +66,7 @@
           "max_n_creations_per_batch": 3,
           "max_n_restarts_per_day": 10,
           "minimum_coin_age_days": 30.0,
-          "ohlcvs_1m_rolling_window_days": 7.0,
+          "ohlcvs_1m_rolling_window_days": 4.0,
           "ohlcvs_1m_update_after_minutes": 10.0,
           "pnls_max_lookback_days": 30.0,
           "price_distance_threshold": 0.002,
