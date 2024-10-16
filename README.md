@@ -99,12 +99,17 @@ Add your keys to api-keys.json.
 
 ### Step 6: Run Passivbot
 
-Make a live configuration file, using `configs/live/example_config.hjson` as a template.
-
-To start the bot, run:
+To start the bot with the default settings, run:
 
 ```sh
-python src/main.py configs/live/example_config.hjson
+python src/main.py -u {account_name_from_api-keys.json}
+```
+
+or make a new configuration file, using `configs/template.json` as a template.
+
+
+```sh
+python src/main.py path/to/config.json
 ```
 
 ## Jupyter Lab
