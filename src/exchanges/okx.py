@@ -59,13 +59,6 @@ class OKXBot(Passivbot):
             self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
 
-    async def start_websockets(self):
-        await asyncio.gather(
-            self.watch_balance(),
-            self.watch_orders(),
-            self.watch_tickers(),
-        )
-
     async def watch_balance(self):
         while True:
             try:
@@ -95,82 +88,6 @@ class OKXBot(Passivbot):
                 self.handle_order_update(res)
             except Exception as e:
                 print(f"exception watch_orders", e)
-                traceback.print_exc()
-                await asyncio.sleep(1)
-
-    async def watch_ohlcvs_1m(self):
-        if not hasattr(self, "ohlcvs_1m"):
-            self.ohlcvs_1m = {}
-        self.WS_ohlcvs_1m_tasks = {}
-        while not self.stop_websocket:
-            current_symbols = set(self.active_symbols)
-            started_symbols = set(self.WS_ohlcvs_1m_tasks.keys())
-            for key in self.WS_ohlcvs_1m_tasks:
-                if self.WS_ohlcvs_1m_tasks[key].cancelled():
-                    logging.info(
-                        f"debug ohlcv_1m watcher task is cancelled {key} {self.WS_ohlcvs_1m_tasks[key]}"
-                    )
-                if self.WS_ohlcvs_1m_tasks[key].done():
-                    logging.info(
-                        f"debug ohlcv_1m watcher task is done {key} {self.WS_ohlcvs_1m_tasks[key]}"
-                    )
-                try:
-                    ex = elf.WS_ohlcvs_1m_tasks[key].exception()
-                    logging.info(
-                        f"debug ohlcv_1m watcher task exception {key} {self.WS_ohlcvs_1m_tasks[key]} {ex}"
-                    )
-                except:
-                    pass
-            to_print = []
-            # Start watch_ohlcv_1m_single tasks for new symbols
-            for symbol in current_symbols - started_symbols:
-                task = asyncio.create_task(self.watch_ohlcv_1m_single(symbol))
-                self.WS_ohlcvs_1m_tasks[symbol] = task
-                to_print.append(symbol)
-            if to_print:
-                coins = [symbol_to_coin(s) for s in to_print]
-                logging.info(f"Started watching ohlcv_1m for {','.join(coins)}")
-            to_print = []
-            # Cancel tasks for symbols that are no longer active
-            for symbol in started_symbols - current_symbols:
-                self.WS_ohlcvs_1m_tasks[symbol].cancel()
-                del self.WS_ohlcvs_1m_tasks[symbol]
-                to_print.append(symbol)
-            if to_print:
-                coins = [symbol_to_coin(s) for s in to_print]
-                logging.info(f"Stopped watching ohlcv_1m for: {','.join(coins)}")
-            # Wait a bit before checking again
-            await asyncio.sleep(1)  # Adjust sleep time as needed
-
-    async def watch_ohlcv_1m_single(self, symbol):
-        while not self.stop_websocket and symbol in self.eligible_symbols:
-            try:
-                res = await self.ccp.watch_ohlcv(symbol)
-                self.handle_ohlcv_1m_update(symbol, res)
-            except Exception as e:
-                logging.error(f"exception watch_ohlcv_1m_single {symbol} {e}")
-                traceback.print_exc()
-                await asyncio.sleep(1)
-            await asyncio.sleep(0.1)
-
-    async def watch_tickers(self, symbols=None):
-        self.prev_active_symbols = set()
-        while not self.stop_websocket:
-            try:
-                if (actives := set(self.active_symbols)) != self.prev_active_symbols:
-                    for symbol in actives - self.prev_active_symbols:
-                        logging.info(f"Started watching ticker for symbol: {symbol}")
-                    for symbol in self.prev_active_symbols - actives:
-                        logging.info(f"Stopped watching ticker for symbol: {symbol}")
-                    self.prev_active_symbols = actives
-                res = await self.ccp.watch_tickers(self.active_symbols)
-                for k in res:
-                    self.handle_ticker_update(res[k])
-                await asyncio.sleep(0.1)
-            except Exception as e:
-                logging.error(
-                    f"Exception in watch_tickers: {e}, active symbols: {len(self.active_symbols)}"
-                )
                 traceback.print_exc()
                 await asyncio.sleep(1)
 

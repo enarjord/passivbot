@@ -70,13 +70,6 @@ class BitgetBot(Passivbot):
             self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
 
-    async def start_websockets(self):
-        await asyncio.gather(
-            self.watch_balance(),
-            self.watch_orders(),
-            self.watch_tickers(),
-        )
-
     async def watch_balance(self):
         # bitget ccxt watch balance doesn't return required info.
         # relying instead on periodic REST updates
@@ -108,55 +101,6 @@ class BitgetBot(Passivbot):
                 self.handle_order_update(res)
             except Exception as e:
                 print(f"exception watch_orders", e)
-                traceback.print_exc()
-                await asyncio.sleep(1)
-
-    async def watch_tickers(self, symbols=None):
-        self.prev_active_symbols = set()
-        while not self.stop_websocket:
-            try:
-                if (actives := set(self.active_symbols)) != self.prev_active_symbols:
-                    for symbol in actives - self.prev_active_symbols:
-                        logging.info(f"Started watching ticker for symbol: {symbol}")
-                    for symbol in self.prev_active_symbols - actives:
-                        logging.info(f"Stopped watching ticker for symbol: {symbol}")
-                    self.prev_active_symbols = actives
-                res = await self.ccp.watch_tickers(self.active_symbols)
-                self.handle_ticker_update(res)
-                await asyncio.sleep(0.1)
-            except Exception as e:
-                logging.error(
-                    f"Exception in watch_tickers: {e}, active symbols: {len(self.active_symbols)}"
-                )
-                traceback.print_exc()
-                await asyncio.sleep(1)
-
-    async def watch_ohlcvs_1m(self):
-        if not hasattr(self, "ohlcvs_1m"):
-            self.ohlcvs_1m = {}
-        currently_watching = set()
-        while not self.stop_websocket:
-            if not self.active_symbols:
-                await asyncio.sleep(1)
-                continue
-            symbols_to_watch = set(self.active_symbols)
-            if symbols_to_watch != currently_watching:
-                new_symbols = [x for x in symbols_to_watch if x not in currently_watching]
-                stopped_symbols = [x for x in currently_watching if x not in symbols_to_watch]
-                if new_symbols:
-                    coins = [symbol_to_coin(x) for x in new_symbols]
-                    logging.info(f"Started watching ohlcv_1m for {','.join(coins)}")
-                if stopped_symbols:
-                    coins = [symbol_to_coin(x) for x in stopped_symbols]
-                    logging.info(f"Stopped watching ohlcv_1m for {','.join(coins)}")
-                currently_watching = symbols_to_watch
-            symbols_and_timeframes = [[s, "1m"] for s in sorted(symbols_to_watch)]
-            try:
-                res = await self.ccp.watch_ohlcv_for_symbols(symbols_and_timeframes)
-                symbol = next(iter(res))
-                self.handle_ohlcv_1m_update(symbol, res[symbol]["1m"])
-            except Exception as e:
-                logging.error(f"Exception in watch_ohlcvs_1m: {e}")
                 traceback.print_exc()
                 await asyncio.sleep(1)
 
