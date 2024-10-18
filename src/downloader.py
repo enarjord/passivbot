@@ -445,7 +445,6 @@ async def prepare_hlcvs(config: dict):
         # Extract and process the required data (high, low, close, volume)
         coin_data = data[:, 1:]
         coin_data[:, 3] = coin_data[:, 2] * coin_data[:, 3]  # Use quote volume as volume
-        print(i, symbol, coin_data.shape, unified_array.shape)
 
         # Place the data in the unified array
         unified_array[start_idx:end_idx, i, :] = coin_data
