@@ -16,6 +16,10 @@ import traceback
 import aiohttp
 import ccxt.async_support as ccxt
 
+
+from functools import partial
+
+
 import numpy as np
 import pandas as pd
 from dateutil import parser
@@ -373,7 +377,7 @@ async def load_hlcvs(symbol, start_date, end_date, base_dir="backtests", exchang
     return df[["timestamp", "high", "low", "close", "volume"]].values
 
 
-async def prepare_hlcvs(config: dict):
+async def prepare_hlcvs_old(config: dict):
     symbols = sorted(set(config["backtest"]["symbols"]))
     start_date = config["backtest"]["start_date"]
     end_date = config["backtest"]["end_date"]
@@ -461,6 +465,133 @@ async def prepare_hlcvs(config: dict):
     timestamps = np.arange(global_start_ts, global_end_ts + interval_ms, interval_ms)
 
     return symbols, timestamps, unified_array
+
+
+async def prepare_hlcvs(config: dict):
+    symbols = sorted(set(config["backtest"]["symbols"]))
+    start_date = config["backtest"]["start_date"]
+    end_date = config["backtest"]["end_date"]
+    base_dir = config["backtest"]["base_dir"]
+    exchange = config["backtest"]["exchange"]
+    minimum_coin_age_days = config["live"]["minimum_coin_age_days"]
+
+    ms2day = 1000 * 60 * 60 * 24
+    if end_date in ["today", "now", "", None]:
+        end_ts = (utc_ms() - ms2day) // ms2day * ms2day
+        end_date = ts_to_date_utc(end_ts)[:10]
+    else:
+        end_ts = date_to_ts2(end_date) // ms2day * ms2day
+
+    interval_ms = 60000
+    start_tss = None
+    if exchange == "binance":
+        start_tss = await get_first_ohlcv_timestamps(cc=ccxt.binanceusdm(), symbols=symbols)
+    elif exchange == "bybit":
+        start_tss = await get_first_ohlcv_timestamps(cc=ccxt.bybit(), symbols=symbols)
+    else:
+        raise Exception("failed to load start timestamps")
+
+    # Calculate global start and end times
+    global_start_ts = date_to_ts2(start_date)
+    global_end_ts = end_ts
+    n_timesteps = int((global_end_ts - global_start_ts) / interval_ms) + 1
+
+    # Pre-allocate the unified array
+    n_coins = len(symbols)
+    unified_array = np.zeros((n_timesteps, n_coins, 4), dtype=np.float64)
+
+    # Create a partial function with fixed arguments
+    process_symbol_partial = partial(
+        process_symbol,
+        start_date=start_date,
+        end_date=end_date,
+        base_dir=base_dir,
+        exchange=exchange,
+        minimum_coin_age_days=minimum_coin_age_days,
+        global_start_ts=global_start_ts,
+        global_end_ts=global_end_ts,
+        interval_ms=interval_ms,
+        start_tss=start_tss,
+    )
+
+    # Use asyncio.gather for concurrent processing
+    tasks = [process_symbol_partial(symbol) for symbol in symbols]
+    results = await asyncio.gather(*tasks)
+
+    # Process results and update unified_array
+    for i, (symbol, data) in enumerate(zip(symbols, results)):
+        if data is not None:
+            start_idx, end_idx, coin_data = data
+            unified_array[start_idx:end_idx, i, :] = coin_data
+
+            # Front-fill
+            if start_idx > 0:
+                unified_array[:start_idx, i, :3] = coin_data[0, 2]
+
+            # Back-fill
+            if end_idx < n_timesteps:
+                unified_array[end_idx:, i, :3] = coin_data[-1, 2]
+
+    print(f"Finished fetching all data. Returning unified array.")
+
+    timestamps = np.arange(global_start_ts, global_end_ts + interval_ms, interval_ms)
+
+    return symbols, timestamps, unified_array
+
+
+async def process_symbol(
+    symbol,
+    start_date,
+    end_date,
+    base_dir,
+    exchange,
+    minimum_coin_age_days,
+    global_start_ts,
+    global_end_ts,
+    interval_ms,
+    start_tss,
+):
+    if symbol not in start_tss:
+        print(f"coin {symbol} missing from first timestamps, skipping")
+        return None
+
+    adjusted_start_ts = global_start_ts
+    if minimum_coin_age_days > 0.0:
+        min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
+        new_start_ts = start_tss[symbol] + min_coin_age_ms
+        if new_start_ts >= global_end_ts:
+            print(
+                f"Coin {symbol} too young, start date {ts_to_date_utc(start_tss[symbol])}, skipping"
+            )
+            return None
+        if new_start_ts > adjusted_start_ts:
+            print(
+                f"First date for {symbol} was {ts_to_date_utc(start_tss[symbol])}. Adjusting start date to {ts_to_date_utc(new_start_ts)}"
+            )
+        adjusted_start_ts = max(adjusted_start_ts, new_start_ts)
+
+    data = await load_hlcvs(
+        symbol,
+        ts_to_date_utc(adjusted_start_ts)[:10],
+        end_date,
+        base_dir,
+        exchange,
+    )
+
+    if len(data) == 0:
+        return None
+
+    assert (np.diff(data[:, 0]) == interval_ms).all(), f"gaps in hlcv data {symbol}"
+
+    # Calculate indices for this coin's data
+    start_idx = int((data[0, 0] - global_start_ts) / interval_ms)
+    end_idx = start_idx + len(data)
+
+    # Extract and process the required data (high, low, close, volume)
+    coin_data = data[:, 1:]
+    coin_data[:, 3] = coin_data[:, 2] * coin_data[:, 3]  # Use quote volume as volume
+
+    return start_idx, end_idx, coin_data
 
 
 def convert_csv_to_npy(filepath):
