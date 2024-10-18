@@ -42,16 +42,7 @@ from contextlib import contextmanager
 import tempfile
 import time
 import fcntl
-import psutil
 from tqdm import tqdm
-
-
-def log_system_resources():
-    cpu_percent = psutil.cpu_percent(interval=1)
-    memory = psutil.virtual_memory()
-    logging.info(f"CPU Usage: {cpu_percent}%")
-    logging.info(f"Memory Usage: {memory.percent}%")
-    logging.info(f"Available Memory: {memory.available / (1024 * 1024):.2f} MB")
 
 
 def create_shared_memory_file(hlcvs):
