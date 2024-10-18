@@ -56,6 +56,7 @@ class HyperliquidBot(Passivbot):
                 f"parameter 'is_vault' missing from api-keys.json for user {self.user}. Setting to false"
             )
             self.user_info["is_vault"] = False
+        self.max_n_concurrent_ohlcvs_1m_updates = 2
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
