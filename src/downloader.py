@@ -380,25 +380,39 @@ async def prepare_hlcvs(config: dict):
     base_dir = config["backtest"]["base_dir"]
     exchange = config["backtest"]["exchange"]
     minimum_coin_age_days = config["live"]["minimum_coin_age_days"]
+
+    ms2day = 1000 * 60 * 60 * 24
     if end_date in ["today", "now", "", None]:
-        end_ts = utc_ms() - 1000 * 60 * 60 * 24
+        end_ts = (utc_ms() - ms2day) // ms2day * ms2day
         end_date = ts_to_date_utc(end_ts)[:10]
     else:
-        end_ts = date_to_ts2(end_date)
-    hlcvsd = {}
+        end_ts = date_to_ts2(end_date) // ms2day * ms2day
+
     interval_ms = 60000
     start_tss = None
     if exchange == "binance":
         start_tss = await get_first_ohlcv_timestamps(cc=ccxt.binanceusdm(), symbols=symbols)
     elif exchange == "bybit":
         start_tss = await get_first_ohlcv_timestamps(cc=ccxt.bybit(), symbols=symbols)
-    for symbol in symbols:
-        adjusted_start_ts = date_to_ts2(start_date)
+    else:
+        raise Exception("failed to load start timestamps")
+
+    # Calculate global start and end times
+    global_start_ts = date_to_ts2(start_date)
+    global_end_ts = end_ts
+    n_timesteps = int((global_end_ts - global_start_ts) / interval_ms) + 1
+
+    # Pre-allocate the unified array
+    n_coins = len(symbols)
+    unified_array = np.zeros((n_timesteps, n_coins, 4), dtype=np.float64)
+
+    for i, symbol in enumerate(symbols):
+        if symbol not in start_tss:
+            print(f"coin {symbol} missing from first timestamps, skipping")
+            continue
+        adjusted_start_ts = global_start_ts
         if minimum_coin_age_days > 0.0:
             min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
-            if symbol not in start_tss:
-                print(f"coin {symbol} missing from first timestamps, skipping")
-                continue
             new_start_ts = start_tss[symbol] + min_coin_age_ms
             if new_start_ts >= end_ts:
                 print(
@@ -409,7 +423,8 @@ async def prepare_hlcvs(config: dict):
                 print(
                     f"First date for {symbol} was {ts_to_date_utc(start_tss[symbol])}. Adjusting start date to {ts_to_date_utc(new_start_ts)}"
                 )
-                adjusted_start_ts = new_start_ts
+            adjusted_start_ts = max(adjusted_start_ts, new_start_ts)
+
         data = await load_hlcvs(
             symbol,
             ts_to_date_utc(adjusted_start_ts)[:10],
@@ -417,58 +432,36 @@ async def prepare_hlcvs(config: dict):
             base_dir,
             exchange,
         )
+
         if len(data) == 0:
             continue
-        assert (
-            np.diff(data[:, 0]) == interval_ms
-        ).all(), f"gaps in hlcv data {symbol}"  # verify integrous 1m hlcvs
-        hlcvsd[symbol] = data
-    symbols = sorted(hlcvsd.keys())
-    if len(symbols) > 1:
-        print(f"Unifying data for {len(symbols)} coins into single numpy array...")
-    timestamps, unified_data = unify_hlcv_data([hlcvsd[s] for s in symbols])
-    return symbols, timestamps, unified_data
 
+        assert (np.diff(data[:, 0]) == interval_ms).all(), f"gaps in hlcv data {symbol}"
 
-def unify_hlcv_data(hlcv_list) -> (np.ndarray, np.ndarray):
+        # Calculate indices for this coin's data
+        start_idx = int((data[0, 0] - global_start_ts) / interval_ms)
+        end_idx = start_idx + len(data)
 
-    # Find the global start and end timestamps
-    start_time = min(arr[0, 0] for arr in hlcv_list)
-    end_time = max(arr[-1, 0] for arr in hlcv_list)
-
-    # Calculate the number of timesteps
-    n_timesteps = int((end_time - start_time) / 60000) + 1
-
-    # Create the unified array
-    n_coins = len(hlcv_list)
-    unified_array = np.zeros((n_timesteps, n_coins, 4))
-
-    # Create the timestamp array
-    timestamps = np.arange(start_time, end_time + 60000, 60000)
-
-    for i, ohlcv in enumerate(hlcv_list):
-        # Calculate the start and end indices for this coin
-        start_idx = int((ohlcv[0, 0] - start_time) / 60000)
-        end_idx = start_idx + len(ohlcv)
-
-        # Extract the required data (high, low, close, volume)
-        coin_data = ohlcv[:, 1:]
-
-        # Use quote volume as volume
-        coin_data[:, 3] = coin_data[:, 2] * coin_data[:, 3]
+        # Extract and process the required data (high, low, close, volume)
+        coin_data = data[:, 1:]
+        coin_data[:, 3] = coin_data[:, 2] * coin_data[:, 3]  # Use quote volume as volume
+        print(i, symbol, coin_data.shape, unified_array.shape)
 
         # Place the data in the unified array
         unified_array[start_idx:end_idx, i, :] = coin_data
 
         # Front-fill
         if start_idx > 0:
-            unified_array[:start_idx, i, :3] = coin_data[0, 2]  # Set high, low, close to first close
+            unified_array[:start_idx, i, :3] = coin_data[0, 2]
 
         # Back-fill
         if end_idx < n_timesteps:
-            unified_array[end_idx:, i, :3] = coin_data[-1, 2]  # Set high, low, close to last close
+            unified_array[end_idx:, i, :3] = coin_data[-1, 2]
+    print(f"Finished fetching all data. Returning unified array.")
 
-    return timestamps, unified_array
+    timestamps = np.arange(global_start_ts, global_end_ts + interval_ms, interval_ms)
+
+    return symbols, timestamps, unified_array
 
 
 def convert_csv_to_npy(filepath):
