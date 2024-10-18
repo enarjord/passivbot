@@ -15,7 +15,7 @@ use crate::utils::{
     calc_pprice_diff_int, calc_wallet_exposure, cost_to_qty, qty_to_cost, round_, round_dn,
     round_up,
 };
-use ndarray::{s, Array1, Array2, Array3, Array4, Axis};
+use ndarray::{s, Array1, Array2, Array3, Array4, ArrayView3, Axis, Dim, ViewRepr};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
@@ -117,7 +117,7 @@ pub struct RollingVolumeSum {
 }
 
 pub struct Backtest<'a> {
-    hlcvs: &'a Array3<f64>,
+    hlcvs: &'a ArrayView3<'a, f64>,
     bot_params_pair: BotParamsPair,
     exchange_params_list: Vec<ExchangeParams>,
     backtest_params: BacktestParams,
@@ -147,7 +147,7 @@ pub struct Backtest<'a> {
 
 impl<'a> Backtest<'a> {
     pub fn new(
-        hlcvs: &'a Array3<f64>,
+        hlcvs: &'a ArrayView3<'a, f64>,
         bot_params_pair: BotParamsPair,
         exchange_params_list: Vec<ExchangeParams>,
         backtest_params: &BacktestParams,

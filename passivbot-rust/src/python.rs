@@ -12,8 +12,7 @@ use crate::types::{
     Position, StateParams, TrailingPriceBundle,
 };
 use memmap::MmapOptions;
-use ndarray::ShapeBuilder;
-use ndarray::{Array1, Array2, Array3, Array4, ArrayBase, ArrayD};
+use ndarray::{Array1, Array2, Array3, Array4, ArrayBase, ArrayD, ArrayView, ShapeBuilder};
 use numpy::{
     IntoPyArray, PyArray1, PyArray2, PyArray3, PyArray4, PyReadonlyArray2, PyReadonlyArray3,
     PyReadonlyArray4,
@@ -43,16 +42,9 @@ pub fn run_backtest(
             .map_err(|e| PyValueError::new_err(format!("Unable to map file: {}", e)))?
     };
 
-    // Create an ndarray view of the memory-mapped file
     let hlcvs_rust = unsafe {
         match hlcvs_dtype {
-            "<f8" => {
-                let data = slice::from_raw_parts(
-                    mmap.as_ptr() as *const f64,
-                    hlcvs_shape.0 * hlcvs_shape.1 * hlcvs_shape.2,
-                );
-                Array3::<f64>::from_shape_vec(hlcvs_shape.into_shape(), data.to_vec()).unwrap()
-            }
+            "<f8" => ArrayView::from_shape_ptr(hlcvs_shape.f(), mmap.as_ptr() as *const f64),
             _ => return Err(PyValueError::new_err("Unsupported dtype for HLCV data")),
         }
     };
