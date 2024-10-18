@@ -156,9 +156,53 @@ class Passivbot:
         self.stop_signal_received = False
         self.ohlcvs_1m_update_timestamps_WS = {}
 
-    async def update_market_info(self):
-        logging.info(f"initiating markets...")
-        await self.init_markets_dict()
+    async def hourly_cycle(self):
+        # called at bot startup and once an hour thereafter
+        await self.update_exchange_config()  # set hedge mode
+        self.init_markets_last_update_ms = utc_ms()
+        self.markets_dict = {elm["symbol"]: elm for elm in (await self.cca.fetch_markets())}
+        await self.determine_utc_offset(verbose)
+        # find ineligible symbols
+        ineligible_symbols = {}
+        for symbol in list(self.markets_dict):
+            if not self.markets_dict[symbol]["active"]:
+                ineligible_symbols[symbol] = "not active"
+            elif not self.markets_dict[symbol]["swap"]:
+                ineligible_symbols[symbol] = "wrong market type"
+            elif not self.markets_dict[symbol]["linear"]:
+                ineligible_symbols[symbol] = "not linear"
+            elif not symbol.endswith(f"/{self.quote}:{self.quote}"):
+                ineligible_symbols[symbol] = "wrong quote"
+            elif not self.symbol_is_eligible(symbol):
+                ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
+            elif not self.symbol_is_eligible(symbol):
+                ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
+        if verbose:
+            for line in set(ineligible_symbols.values()):
+                syms_ = [s for s in ineligible_symbols if ineligible_symbols[s] == line]
+                if len(syms_) > 12:
+                    logging.info(f"{line}: {len(syms_)} symbols")
+                elif len(syms_) > 0:
+                    logging.info(f"{line}: {','.join(sorted(set([s for s in syms_])))}")
+
+        for symbol in self.ineligible_symbols_with_pos:
+            if symbol not in self.markets_dict and symbol in self.markets_dict_all:
+                logging.info(f"There is a position in an ineligible market: {symbol}.")
+                self.markets_dict[symbol] = self.markets_dict_all[symbol]
+                self.config["live"]["ignored_coins"].append(symbol)
+
+        self.set_market_specific_settings()
+        for symbol in self.markets_dict:
+            self.format_symbol(symbol)
+        # for prettier printing
+        self.max_len_symbol = max([len(s) for s in self.markets_dict])
+        self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
+        await self.init_flags()
+        self.set_live_configs()
+
+    async def execution_cycle(self):
+        # called before every execution to exchange
+        pass
 
     async def run_execution_loop(self):
         while not self.stop_signal_received:
@@ -526,14 +570,16 @@ class Passivbot:
         try:
             return self.symbol_ids[symbol]
         except:
-            logging.error(f"symbol {symbol} missing from self.symbol_ids. Using {symbol}")
+            logging.info(f"debug: symbol {symbol} missing from self.symbol_ids. Using {symbol}")
+            self.symbol_ids[symbol] = symbol
             return symbol
 
     def get_symbol_id_inv(self, symbol):
         try:
             return self.symbol_ids_inv[symbol]
         except:
-            logging.error(f"symbol {symbol} missing from self.symbol_ids_inv. Using {symbol}")
+            logging.info(f"debug: symbol {symbol} missing from self.symbol_ids_inv. Using {symbol}")
+            self.symbol_ids_inv[symbol] = symbol
             return symbol
 
     def set_wallet_exposure_limits(self):
@@ -1844,7 +1890,7 @@ class Passivbot:
                 await asyncio.sleep(5)
 
     async def start_data_maintainers(self):
-        # maintains REST update_market_info and ohlcv_1m
+        # maintains REST init_markets_dict and ohlcv_1m
         if hasattr(self, "maintainers"):
             self.stop_data_maintainers()
         self.maintainers = {
@@ -2152,6 +2198,61 @@ class Passivbot:
         logging.info(f"Stopped data maintainers: {self.stop_data_maintainers()}")
         await self.cca.close()
         await self.ccp.close()
+
+    def refresh_coins_lists(self):
+        # if config.live.approved_coins or config.live.approved_coins are external files,
+        # use content of files as approved/ignored coins
+        for k_coins in ["approved_coins", "ignored_coins"]:
+            if not hasattr(self, k_coins):
+                setattr(self, k_coins, set())
+            path = self.config["live"][k_coins]
+            if isinstance(path, str) and os.path.exists(path):
+                try:
+                    coins = read_file_contents(path)
+                    if coins:
+                        symbols = sorted(
+                            set([rc for coin in coins if (rc := self.reformat_symbol(coin))])
+                        )
+                        if symbols and getattr(self, k_coins) != symbols:
+                            added = set(symbols) - set(getattr(self, k_coins))
+                            if added:
+                                logging.info(
+                                    f"added {','.join([symbol_to_coin(x) for x in sorted(added)])} to {k_coins}"
+                                )
+                            removed = set(getattr(self, k_coins)) - set(symbols)
+                            if removed:
+                                logging.info(
+                                    f"removed {','.join([symbol_to_coin(x) for x in sorted(removed)])} from {k_coins}"
+                                )
+                            setattr(self, k_coins, set(symbols))
+                except Exception as e:
+                    logging.error(f"Failed to read contents of {path}")
+
+
+def read_file_contents(filepath):
+    with open(filepath, "r") as file:
+        content = file.read().strip()
+
+    # Check if the content is in list format (case 5)
+    if content.startswith("[") and content.endswith("]"):
+        # Remove brackets and split by comma
+        items = content[1:-1].split(",")
+        # Remove quotes and whitespace
+        return [item.strip().strip("\"'") for item in items if item.strip()]
+
+    # Check if the content is in quotes with commas (case 6)
+    if all(
+        line.strip().startswith('"') and line.strip().endswith('"')
+        for line in content.split("\n")
+        if line.strip()
+    ):
+        # Split by newline, remove quotes and whitespace
+        return [line.strip().strip("\"'") for line in content.split("\n") if line.strip()]
+
+    # For all other cases (1, 2, 3, 4)
+    # Split by newline, comma, and/or space, and filter out empty strings
+    items = content.replace(",", " ").split()
+    return [item.strip() for item in items if item.strip()]
 
 
 def setup_bot(config):
