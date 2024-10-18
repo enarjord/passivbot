@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import passivbot_rust as pbr
 import asyncio
@@ -41,20 +42,53 @@ from contextlib import contextmanager
 import tempfile
 import time
 import fcntl
+import psutil
+from tqdm import tqdm
+
+
+def log_system_resources():
+    cpu_percent = psutil.cpu_percent(interval=1)
+    memory = psutil.virtual_memory()
+    logging.info(f"CPU Usage: {cpu_percent}%")
+    logging.info(f"Memory Usage: {memory.percent}%")
+    logging.info(f"Available Memory: {memory.available / (1024 * 1024):.2f} MB")
 
 
 def create_shared_memory_file(hlcvs):
     temp_file = tempfile.NamedTemporaryFile(delete=False)
+    logging.info(f"Creating shared memory file: {temp_file.name}...")
     shared_memory_file = temp_file.name
 
     try:
-        with open(shared_memory_file, "wb") as f:
-            f.write(hlcvs.tobytes())
-    except IOError as e:
-        print(f"Error writing to shared memory file: {e}")
-        raise
+        total_size = hlcvs.nbytes
+        chunk_size = 1024 * 1024  # 1 MB chunks
+        hlcvs_bytes = hlcvs.tobytes()
 
+        with open(shared_memory_file, "wb") as f:
+            with tqdm(
+                total=total_size, unit="B", unit_scale=True, desc="Writing to shared memory"
+            ) as pbar:
+                for i in range(0, len(hlcvs_bytes), chunk_size):
+                    chunk = hlcvs_bytes[i : i + chunk_size]
+                    f.write(chunk)
+                    pbar.update(len(chunk))
+
+    except IOError as e:
+        logging.error(f"Error writing to shared memory file: {e}")
+        raise
+    logging.info(f"Done creating shared memory file")
     return shared_memory_file
+
+
+def check_disk_space(path, required_space):
+    total, used, free = shutil.disk_usage(path)
+    logging.info(
+        f"Disk space - Total: {total/(1024**3):.2f} GB, Used: {used/(1024**3):.2f} GB, Free: {free/(1024**3):.2f} GB"
+    )
+    if free < required_space:
+        raise IOError(
+            f"Not enough disk space. Required: {required_space/(1024**3):.2f} GB, Available: {free/(1024**3):.2f} GB"
+        )
 
 
 def mutPolynomialBoundedWrapper(individual, eta, low, up, indpb):
@@ -175,15 +209,21 @@ def managed_mmap(filename, dtype, shape):
 
 class Evaluator:
     def __init__(self, shared_memory_file, hlcvs_shape, hlcvs_dtype, config, mss):
+        logging.info("Initializing Evaluator...")
         self.shared_memory_file = shared_memory_file
         self.hlcvs_shape = hlcvs_shape
         self.hlcvs_dtype = hlcvs_dtype
 
+        logging.info("Setting up managed_mmap...")
         self.mmap_context = managed_mmap(self.shared_memory_file, self.hlcvs_dtype, self.hlcvs_shape)
+        logging.info("Entering mmap_context...")
         self.shared_hlcvs_np = self.mmap_context.__enter__()
+        logging.info("mmap_context entered successfully.")
+
         self.config = config
         _, self.exchange_params, self.backtest_params = prep_backtest_args(config, mss)
         self.lock_filepath = self.config["lock_filepath"]
+        logging.info("Evaluator initialization complete.")
 
     @contextmanager
     def file_lock(self, timeout=1):
@@ -360,8 +400,13 @@ async def main():
     config["lock_filepath"] = config["results_filename"] + ".lock"
 
     try:
+        required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
+        check_disk_space(tempfile.gettempdir(), required_space)
+        logging.info(f"Starting to create shared memory file...")
         shared_memory_file = create_shared_memory_file(hlcvs)
+        logging.info(f"Finished creating shared memory file: {shared_memory_file}")
         evaluator = Evaluator(shared_memory_file, hlcvs.shape, hlcvs.dtype, config, mss)
+        logging.info(f"Finished initializing evaluator...")
         creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -1.0))  # Minimize both objectives
         creator.create("Individual", list, fitness=creator.FitnessMulti)
 
@@ -404,10 +449,13 @@ async def main():
         toolbox.register("select", tools.selNSGA2)
 
         # Parallelization setup
+        logging.info(f"Initializing multiprocessing pool. N cpus: {config['optimize']['n_cpus']}")
         pool = multiprocessing.Pool(processes=config["optimize"]["n_cpus"])
         toolbox.register("map", pool.map)
+        logging.info(f"Finished initializing multiprocessing pool.")
 
         # Create initial population
+        logging.info(f"Creating initial population...")
 
         starting_individuals = configs_to_individuals(get_starting_configs(args.starting_configs))
         if len(starting_individuals) > config["optimize"]["population_size"]:
@@ -441,6 +489,7 @@ async def main():
         hof = tools.ParetoFront()
 
         # Run the optimization
+        logging.info(f"Starting optimize...")
         population, logbook = algorithms.eaMuPlusLambda(
             population,
             toolbox,
