@@ -152,6 +152,7 @@ async def prepare_hlcvs_mss(config):
             raise Exception("failed to load market specific settings from cache")
 
     symbols, timestamps, hlcvs = await prepare_hlcvs(config)
+    logging.info(f"Finished preparing hlcvs data. Shape: {hlcvs.shape}")
 
     return symbols, hlcvs, mss, results_path
 
