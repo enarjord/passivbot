@@ -156,41 +156,34 @@ class Passivbot:
         self.stop_signal_received = False
         self.ohlcvs_1m_update_timestamps_WS = {}
 
-    async def hourly_cycle(self):
+    async def hourly_cycle(self, verbose=True):
         # called at bot startup and once an hour thereafter
         await self.update_exchange_config()  # set hedge mode
         self.init_markets_last_update_ms = utc_ms()
         self.markets_dict = {elm["symbol"]: elm for elm in (await self.cca.fetch_markets())}
         await self.determine_utc_offset(verbose)
         # find ineligible symbols
-        ineligible_symbols = {}
+        self.ineligible_symbols = {}
         for symbol in list(self.markets_dict):
             if not self.markets_dict[symbol]["active"]:
-                ineligible_symbols[symbol] = "not active"
+                self.ineligible_symbols[symbol] = "not active"
             elif not self.markets_dict[symbol]["swap"]:
-                ineligible_symbols[symbol] = "wrong market type"
+                self.ineligible_symbols[symbol] = "wrong market type"
             elif not self.markets_dict[symbol]["linear"]:
-                ineligible_symbols[symbol] = "not linear"
+                self.ineligible_symbols[symbol] = "not linear"
             elif not symbol.endswith(f"/{self.quote}:{self.quote}"):
-                ineligible_symbols[symbol] = "wrong quote"
+                self.ineligible_symbols[symbol] = "wrong quote"
             elif not self.symbol_is_eligible(symbol):
-                ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
+                self.ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
             elif not self.symbol_is_eligible(symbol):
-                ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
+                self.ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
         if verbose:
-            for line in set(ineligible_symbols.values()):
-                syms_ = [s for s in ineligible_symbols if ineligible_symbols[s] == line]
+            for line in set(self.ineligible_symbols.values()):
+                syms_ = [s for s in self.ineligible_symbols if self.ineligible_symbols[s] == line]
                 if len(syms_) > 12:
                     logging.info(f"{line}: {len(syms_)} symbols")
                 elif len(syms_) > 0:
                     logging.info(f"{line}: {','.join(sorted(set([s for s in syms_])))}")
-
-        for symbol in self.ineligible_symbols_with_pos:
-            if symbol not in self.markets_dict and symbol in self.markets_dict_all:
-                logging.info(f"There is a position in an ineligible market: {symbol}.")
-                self.markets_dict[symbol] = self.markets_dict_all[symbol]
-                self.config["live"]["ignored_coins"].append(symbol)
-
         self.set_market_specific_settings()
         for symbol in self.markets_dict:
             self.format_symbol(symbol)
@@ -203,6 +196,16 @@ class Passivbot:
     async def execution_cycle(self):
         # called before every execution to exchange
         pass
+
+    def coin_to_symbol(self, coin):
+        if not hasattr(self, "coin_to_symbol_map"):
+            self.coin_to_symbol_map = {}
+        if coin in self.coin_to_symbol_map:
+            return self.coin_to_symbol_map[coin]
+        coin = symbol_to_coin(coin)
+        if coin in self.coin_to_symbol_map:
+            return self.coin_to_symbol_map[coin]
+        candidates = {s for s in self.markets_dict if coin in s}
 
     async def run_execution_loop(self):
         while not self.stop_signal_received:
@@ -380,9 +383,14 @@ class Passivbot:
                 if self.has_position(symbol, pside) and self.is_trailing(symbol, pside):
                     last_position_changes[symbol][pside] = utc_ms() - 1000 * 60 * 60 * 24 * 7
                     for fill in self.pnls[::-1]:
-                        if fill["symbol"] == symbol and fill["position_side"] == pside:
-                            last_position_changes[symbol][pside] = fill["timestamp"]
-                            break
+                        try:
+                            if fill["symbol"] == symbol and fill["position_side"] == pside:
+                                last_position_changes[symbol][pside] = fill["timestamp"]
+                                break
+                        except Exception as e:
+                            logging.error(
+                                f"Error with get_last_position_changes. Faulty element: {fill}"
+                            )
         return last_position_changes
 
     async def wait_for_ohlcvs_1m_to_update(self):
