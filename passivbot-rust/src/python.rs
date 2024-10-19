@@ -44,7 +44,7 @@ pub fn run_backtest(
 
     let hlcvs_rust = unsafe {
         match hlcvs_dtype {
-            "<f8" => ArrayView::from_shape_ptr(hlcvs_shape.f(), mmap.as_ptr() as *const f64),
+            "<f8" => ArrayView::from_shape_ptr(hlcvs_shape, mmap.as_ptr() as *const f64),
             _ => return Err(PyValueError::new_err("Unsupported dtype for HLCV data")),
         }
     };
@@ -72,7 +72,6 @@ pub fn run_backtest(
     };
 
     let backtest_params = backtest_params_from_dict(backtest_params_dict)?;
-
     let mut backtest = Backtest::new(
         &hlcvs_rust,
         bot_params_pair,
