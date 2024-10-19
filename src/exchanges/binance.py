@@ -259,7 +259,13 @@ class BinanceBot(Passivbot):
                 unified[x["id"]].update(x)
             else:
                 unified[x["id"]] = x
-        return sorted(unified.values(), key=lambda x: x["timestamp"])
+        result = []
+        for x in sorted(unified.values(), key=lambda x: x["timestamp"]):
+            if "position_side" not in x:
+                logging.info(f"debug: pnl without corresponding fill {x}")
+                x["position_side"] = "unknown"
+            result.append(x)
+        return result
 
     async def fetch_pnls_sub(
         self,
