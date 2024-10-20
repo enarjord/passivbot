@@ -42,7 +42,7 @@ from pure_funcs import (
 )
 
 
-def format_config(config: dict, verbose=True) -> dict:
+def format_config(config: dict, verbose=True, live_only=False) -> dict:
     # attempts to format a config to v7 config
     template = get_template_live_config("v7")
     cmap = {
@@ -210,11 +210,11 @@ def format_config(config: dict, verbose=True) -> dict:
             else:
                 print(f"path to {k_coins} file does not exist {path}")
                 result["live"][k_coins] = []
-    if result["live"]["ignored_coins"]:
+    if result["live"]["ignored_coins"] and not live_only:
         result["live"]["ignored_coins"] = coins_to_symbols(
             result["live"]["ignored_coins"], exchange=result["backtest"]["exchange"], verbose=verbose
         )
-    if result["live"]["approved_coins"]:
+    if result["live"]["approved_coins"] and not live_only:
         result["live"]["approved_coins"] = [
             x
             for x in coins_to_symbols(
@@ -225,7 +225,7 @@ def format_config(config: dict, verbose=True) -> dict:
             if x not in result["live"]["ignored_coins"]
         ]
         result["backtest"]["symbols"] = result["live"]["approved_coins"]
-    else:
+    elif not live_only:
         result["backtest"]["symbols"] = [
             x
             for x in get_all_eligible_symbols(result["backtest"]["exchange"])
@@ -304,11 +304,11 @@ def coins_to_symbols(coins: [str], eligible_symbols=None, exchange=None, verbose
     return sorted(set([x for x in symbols if x]))
 
 
-def load_config(filepath: str) -> dict:
+def load_config(filepath: str, live_only=False) -> dict:
     # loads hjson or json v7 config
     try:
         config = load_hjson_config(filepath)
-        config = format_config(config)
+        config = format_config(config, live_only=live_only)
         return config
     except Exception as e:
         raise Exception(f"failed to load config {filepath}: {e}")
@@ -866,6 +866,78 @@ def print_async_exception(coro):
         print(f"returned: {coro}")
     except:
         pass
+
+
+async def get_first_ohlcv_timestamps_new(symbols=None, exchange="binance"):
+    supported_exchanges = {
+        "binance": "binanceusdm",
+        "binanceusdm": "binanceusdm",
+        "bybit": "bybit",
+        "bitget": "bitget",
+        "okx": "okx",
+        "hyperliquid": "hyperliquid",
+        "gateio": "gateio",
+    }
+    assert (
+        exchange in supported_exchanges
+    ), f"exchange {exchange} not in supported_exchanges {sorted(supported_exchanges)}"
+    cache_fname = f"caches/first_ohlcv_timestamps_{exchange}.json"
+    ftss = {}
+    try:
+        if os.path.exists(cache_fname):
+            ftss = json.load(open(cache_fname))
+    except Exception as e:
+        print(f"failed to load {cache_fname} {e}")
+    if isinstance(symbols, str):
+        if symbols in ftss:
+            return ftss[symbols]
+        else:
+            symbols = [symbols]
+    elif isinstance(symbols, list):
+        if all([s in ftss for s in symbols]):
+            return {k: v for k, v in ftss.items() if k in symbols}
+    import ccxt.async_support as ccxt
+
+    cc = getattr(ccxt, supported_exchanges[exchange])()
+    try:
+        markets = await cc.load_markets()
+        if symbols is None:
+            symbols = [x for x in markets if markets[x]["swap"]]
+        symbols.sort()
+        to_fetch = [s for s in symbols if s not in ftss]
+        if to_fetch:
+            fetched = []
+            since = int(date_to_ts2("2015-01-01"))
+            n_concurrent = 20
+            for i, symbol in enumerate(to_fetch):
+                if cc.id in ["bybit", "binanceusdm"]:
+                    coro = cc.fetch_ohlcv(symbol, timeframe="1d", since=since)
+                else:
+                    timeframe_ = "1w" if cc.id in ["hyperliquid", "gateio"] else "1M"
+                    coro = cc.fetch_ohlcv(symbol, timeframe=timeframe_)
+                fetched.append((symbol, asyncio.ensure_future(coro)))
+
+                if i + 1 == len(to_fetch) or (i + 1) % n_concurrent == 0:
+                    for sym, task in fetched:
+                        try:
+                            res = await task
+                            ftss[sym] = res[0][0]
+                        except Exception as e:
+                            print(f"Error fetching ohlcvs for {sym} {e}")
+                            if "The symbol has been removed" in str(e):
+                                ftss[sym] = 0
+                    try:
+                        make_get_filepath(cache_fname)
+                        json.dump(ftss, open(cache_fname, "w"), indent=4, sort_keys=True)
+                        syms = [x[0] for x in fetched]
+                        print(f"Dumped first ohlcv timestamp, {cc.id}: {','.join(syms)}")
+                    except Exception as e:
+                        print(f"Error dumping ohlcv first timestamps {cc.id} {e}")
+                    fetched = []
+                    await asyncio.sleep(1)
+    finally:
+        await cc.close()
+    return ftss
 
 
 async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
