@@ -2386,7 +2386,10 @@ def determine_side_from_order_tuple(order_tuple):
 
 
 def symbol_to_coin(symbol: str) -> str:
-    coin = symbol
+    if "/" in symbol:
+        coin = symbol[: symbol.find("/")]
+    else:
+        coin = symbol
     for x in ["USDT", "USDC", "BUSD", "USD", "/:"]:
         coin = coin.replace(x, "")
     if "1000" in coin:
@@ -2481,15 +2484,15 @@ def dict_keysort(d: dict):
 
 
 def expand_PB_mode(mode: str) -> str:
-    if mode.lower() == "gs":
+    if mode.lower() in ["gs", "graceful_stop", "graceful-stop"]:
         return "graceful_stop"
-    elif mode.lower() == "m":
+    elif mode.lower() in ["m", "manual"]:
         return "manual"
-    elif mode.lower() == "n":
+    elif mode.lower() in ["n", "normal"]:
         return "normal"
-    elif mode.lower() == "p":
+    elif mode.lower() in ["p", "panic"]:
         return "panic"
-    elif mode.lower() in ["t", "tp"]:
+    elif mode.lower() in ["t", "tp", "tp_only", "tp-only"]:
         return "tp_only"
     else:
         raise Exception(f"unknown passivbot mode {mode}")
