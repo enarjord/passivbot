@@ -128,7 +128,11 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
 
 ## Live Trading Settings
 
-- `approved_coins`: List of coins approved for trading. If empty, all coins are approved.
+- `approved_coins`:
+	- List of coins approved for trading. If empty, all coins are approved.
+	- May be given as path to external file which is read by Passivbot continuously.
+	- May be split into long and short by giving a json on the form:
+		- `{"long": ["COIN1", "COIN2"], "short": ["COIN2", "COIN3"]}`
 - `auto_gs`: Automatically enable graceful stop for positions on disapproved coins.
   - Graceful stop means the bot will continue trading as normal, but not open a new position after the current position is fully closed.
 - `coin_flags`:
@@ -148,7 +152,11 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
   - For example, if exchange's effective minimum cost for a coin is $5, but bot wants to make an order of $2, disallow that coin.
 - `forced_mode_long`, `forced_mode_short`: Force all long positions to a given mode.
   - Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
-- `ignored_coins`: List of coins bot will not make positions on. If there are positions on that coin, turn on graceful stop. May be given as a path to a json, hjson, or txt file with list of coins to be ignored. If txt, each coin is on its own line.
+- `ignored_coins`:
+	- List of coins bot will not make positions on. If there are positions on that coin, turn on graceful stop or manual mode.
+	- May be given as path to external file which is read by Passivbot continuously.
+	- May be split into long and short by giving a json on the form:
+		- `{"long": ["COIN1", "COIN2"], "short": ["COIN2", "COIN3"]}`
 - `leverage`: Leverage set on exchange. Default is 10.
 - `max_n_cancellations_per_batch`: Will cancel n open orders per execution.
 - `max_n_creations_per_batch`: Will create n new orders per execution.
