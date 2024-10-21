@@ -178,6 +178,7 @@ class Passivbot:
         await self.determine_utc_offset(verbose)
         # ineligible symbols cannot open new positions
         self.ineligible_symbols = {}
+        self.eligible_symbols = set()
         for symbol in list(self.markets_dict):
             if not self.markets_dict[symbol]["active"]:
                 self.ineligible_symbols[symbol] = "not active"
@@ -191,6 +192,8 @@ class Passivbot:
                 self.ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
             elif not self.symbol_is_eligible(symbol):
                 self.ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
+            else:
+                self.eligible_symbols.add(symbol)
         if verbose:
             for line in set(self.ineligible_symbols.values()):
                 syms_ = [s for s in self.ineligible_symbols if self.ineligible_symbols[s] == line]
@@ -203,6 +206,9 @@ class Passivbot:
         self.max_len_symbol = max([len(s) for s in self.markets_dict])
         self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
         await self.init_flags_new()
+        await self.update_tickers()
+        await self.update_positions()
+        await self.update_open_orders()
 
     async def init_flags_new(self):
         self.flags = {}
@@ -319,20 +325,20 @@ class Passivbot:
         if coinf in self.coin_to_symbol_map:
             self.coin_to_symbol_map[coin] = self.coin_to_symbol_map[coinf]
             return self.coin_to_symbol_map[coinf]
-        candidate_symbol = f"{coin}/{self.quote}:{self.quote}"
+        candidate_symbol = f"{coinf}/{self.quote}:{self.quote}"
         if candidate_symbol in self.markets_dict:
             self.coin_to_symbol_map[coin] = candidate_symbol
             return candidate_symbol
-        candidates = {s for s in self.markets_dict if coin in s}
+        candidates = {s for s in self.eligible_symbols if coinf in s}
         if len(candidates) > 1:
             logging.info(
-                f"debug coin_to_symbol {coin}: ambiguous coin, multiple candidates {candidates}"
+                f"debug coin_to_symbol {coinf}: ambiguous coin, multiple candidates {candidates}"
             )
         elif len(candidates) == 1:
             self.coin_to_symbol_map[coin] = next(iter(candidates))
             return self.coin_to_symbol_map[coin]
         else:
-            logging.info(f"debug coin_to_symbol no candidate symbol for {coin}")
+            logging.info(f"debug coin_to_symbol no candidate symbol for {coinf}")
         return ""
 
     async def run_execution_loop(self):
@@ -875,6 +881,26 @@ class Passivbot:
         else:
             return True
 
+    async def update_tickers(self):
+        if not hasattr(self, "tickers"):
+            self.tickers = {}
+        tickers = None
+        try:
+            tickers = await self.cca.fetch_tickers()
+            for symbol in tickers:
+                if tickers[symbol]["last"] is None:
+                    if tickers[symbol]["bid"] is not None and tickers[symbol]["ask"] is not None:
+                        tickers[symbol]["last"] = np.mean(
+                            [tickers[symbol]["bid"], tickers[symbol]["ask"]]
+                        )
+                else:
+                    for oside in ["bid", "ask"]:
+                        if tickers[symbol][oside] is None and tickers[symbol]["last"] is not None:
+                            tickers[symbol][oside] = tickers[symbol]["last"]
+            self.tickers = tickers
+        except Exception as e:
+            logging.error(f"Error with {get_function_name()} {e}")
+
     async def execution_cycle(self):
         # called before every execution to exchange
         # assumes positions, open orders are up to date
@@ -892,13 +918,15 @@ class Passivbot:
         # active_coins are coins currently actively traded. May be on normal or gs modes.
 
         self.update_effective_min_cost()
-        PB_modes = {"long": {}, "short": {}}
-        for pside in PB_modes:
+        self.refresh_approved_ignored_coins_lists()
+        self.PB_modes = {"long": {}, "short": {}}
+        for pside in self.PB_modes:
             syms_with_pos = {s for s in self.positions if self.positions[s][pside]["size"] != 0.0}
+            print("syms_with_pos", syms_with_pos)
             syms_with_open_orders = {s for s in self.open_orders if self.open_orders[s]}
-            eligible_symbols = {s for s in self.markets_dict if s not in self.ineligible_symbols}
+            print("syms_with_open_orders", syms_with_open_orders)
             for symbol in self.forced_modes[pside]:
-                PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
+                self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
 
     def update_PB_modes(self):
         self.update_effective_min_cost()
@@ -1195,18 +1223,16 @@ class Passivbot:
         upnl_sum = 0.0
         for elm in self.fetched_positions:
             try:
-                upnl_sum += (
-                    calc_pnl(
-                        elm["position_side"],
-                        elm["price"],
-                        self.ohlcvs_1m[elm["symbol"]].peekitem(-1)[1][3],
-                        elm["size"],
-                        self.inverse,
-                        self.c_mults[elm["symbol"]],
-                    )
-                    if elm["symbol"] in self.ohlcvs_1m
-                    else 0.0
+                upnl = calc_pnl(
+                    elm["position_side"],
+                    elm["price"],
+                    self.get_last_price(elm["symbol"]),
+                    elm["size"],
+                    self.inverse,
+                    self.c_mults[elm["symbol"]],
                 )
+                if upnl:
+                    upnl_sum += upnl
             except Exception as e:
                 logging.error(f"error calculating upnl sum {e}")
                 traceback.print_exc()
@@ -1374,7 +1400,6 @@ class Passivbot:
             return False
         positions_list_new, balance_new = res
         self.fetched_positions = positions_list_new
-        await self.check_for_inactive_markets()
         self.handle_balance_update({self.quote: {"total": balance_new}}, source="REST")
         positions_new = {
             sym: {
@@ -1405,6 +1430,12 @@ class Passivbot:
         return True
 
     def get_last_price(self, symbol):
+        if not hasattr(self, "ohlcvs_1m") or symbol not in self.ohlcvs_1m:
+            try:
+                if hasattr(self, "tickers") and symbol in self.tickers:
+                    return self.tickers[symbol]["last"]
+            except Exception as e:
+                logging.error(f"Error fetching last price from tickers")
         try:
             if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
                 return self.ohlcvs_1m[symbol].peekitem(-1)[1][4]
@@ -2385,60 +2416,89 @@ class Passivbot:
         await self.cca.close()
         await self.ccp.close()
 
-    def refresh_coins_lists(self):
+    def add_to_coins_lists(self, content, k_coins):
+        symbols = None
+        psides_equal = content["long"] == content["short"]
+        for pside in content:
+            if not psides_equal or symbols is None:
+                symbols = [self.coin_to_symbol(coin) for coin in content[pside]]
+                symbols = set([s for s in symbols if s])
+            symbols_already = getattr(self, k_coins)[pside]
+            if symbols and symbols_already != symbols:
+                added = symbols - symbols_already
+                if added:
+                    cstr = ",".join([symbol_to_coin(x) for x in sorted(added)])
+                    logging.info(f"added {cstr} to {k_coins} {pside}")
+                removed = symbols_already - symbols
+                if removed:
+                    cstr = ",".join([symbol_to_coin(x) for x in sorted(removed)])
+                    logging.info(f"removed {cstr} from {k_coins} {pside}")
+                getattr(self, k_coins)[pside] = symbols
+
+    def refresh_approved_ignored_coins_lists(self):
         # if config.live.approved_coins or config.live.approved_coins are external files,
         # use content of files as approved/ignored coins
+        # approved/ignored coins may be list of coins or {'long': list, 'short': list}
         for k_coins in ["approved_coins", "ignored_coins"]:
             if not hasattr(self, k_coins):
-                setattr(self, k_coins, set())
+                setattr(self, k_coins, {"long": set(), "short": set()})
             path = self.config["live"][k_coins]
             if isinstance(path, str) and os.path.exists(path):
                 try:
-                    coins = read_file_contents(path)
-                    if coins:
-                        symbols = sorted(
-                            set([rc for coin in coins if (rc := self.reformat_symbol(coin))])
-                        )
-                        if symbols and getattr(self, k_coins) != symbols:
-                            added = set(symbols) - set(getattr(self, k_coins))
-                            if added:
-                                logging.info(
-                                    f"added {','.join([symbol_to_coin(x) for x in sorted(added)])} to {k_coins}"
-                                )
-                            removed = set(getattr(self, k_coins)) - set(symbols)
-                            if removed:
-                                logging.info(
-                                    f"removed {','.join([symbol_to_coin(x) for x in sorted(removed)])} from {k_coins}"
-                                )
-                            setattr(self, k_coins, set(symbols))
+                    content = read_external_coins_lists(path)
+                    if content:
+                        self.add_to_coins_lists(content, k_coins)
                 except Exception as e:
-                    logging.error(f"Failed to read contents of {path}")
+                    logging.error(f"Failed to read contents of {path} {e}")
+            else:
+                try:
+                    if isinstance(path, (list, tuple)):
+                        self.add_to_coins_lists({"long": path, "short": path}, k_coins)
+                    elif isinstance(path, dict):
+                        self.add_to_coins_lists(path, k_coins)
+                except Exception as e:
+                    logging.error(f"Failed to read {k_coins} from config: {path}")
 
 
-def read_file_contents(filepath):
+def read_external_coins_lists(filepath) -> dict:
+    """
+    reads filepath and returns dict {'long': [str], 'short': [str]}
+    """
+    try:
+        content = hjson.load(open(filepath))
+        if isinstance(content, list) and all([isinstance(x, str) for x in content]):
+            return {"long": content, "short": content}
+        elif isinstance(content, dict):
+            if all(
+                [
+                    pside in content
+                    and isinstance(content[pside], list)
+                    and all([isinstance(x, str) for x in content[pside]])
+                    for pside in ["long", "short"]
+                ]
+            ):
+                return content
+    except:
+        pass
     with open(filepath, "r") as file:
         content = file.read().strip()
-
-    # Check if the content is in list format (case 5)
+    # Check if the content is in list format
     if content.startswith("[") and content.endswith("]"):
         # Remove brackets and split by comma
         items = content[1:-1].split(",")
         # Remove quotes and whitespace
-        return [item.strip().strip("\"'") for item in items if item.strip()]
-
-    # Check if the content is in quotes with commas (case 6)
-    if all(
+        items = [item.strip().strip("\"'") for item in items if item.strip()]
+    elif all(
         line.strip().startswith('"') and line.strip().endswith('"')
         for line in content.split("\n")
         if line.strip()
     ):
         # Split by newline, remove quotes and whitespace
-        return [line.strip().strip("\"'") for line in content.split("\n") if line.strip()]
-
-    # For all other cases (1, 2, 3, 4)
-    # Split by newline, comma, and/or space, and filter out empty strings
-    items = content.replace(",", " ").split()
-    return [item.strip() for item in items if item.strip()]
+        items = [line.strip().strip("\"'") for line in content.split("\n") if line.strip()]
+    else:
+        # Split by newline, comma, and/or space, and filter out empty strings
+        items = [item.strip() for item in content.replace(",", " ").split() if item.strip()]
+    return {"long": items, "short": items}
 
 
 def setup_bot(config):
