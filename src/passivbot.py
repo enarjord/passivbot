@@ -321,22 +321,47 @@ class Passivbot:
             self.coin_to_symbol_map = {}
         if coin in self.coin_to_symbol_map:
             return self.coin_to_symbol_map[coin]
+
+        # first check if coin/quote:quote has a match
+        candidate_symbol = f"{coin}/{self.quote}:{self.quote}"
+        if candidate_symbol in self.markets_dict:
+            self.coin_to_symbol_map[coin] = candidate_symbol
+            return candidate_symbol
+
+        # next check if there is a single match
+        candidates = {s for s in self.eligible_symbols if coin in s}
+        if len(candidates) == 1:
+            self.coin_to_symbol_map[coin] = next(iter(candidates))
+            return self.coin_to_symbol_map[coin]
+
+        # next format coin (e.g. 1000SHIB -> SHIB, kPEPE -> PEPE, etc)
         coinf = symbol_to_coin(coin)
-        if coinf in self.coin_to_symbol_map:
+        if coin in self.coin_to_symbol_map:
             self.coin_to_symbol_map[coin] = self.coin_to_symbol_map[coinf]
-            return self.coin_to_symbol_map[coinf]
+            return self.coin_to_symbol_map[coin]
+
+        # first check if coinf/quote:quote has a match
         candidate_symbol = f"{coinf}/{self.quote}:{self.quote}"
         if candidate_symbol in self.markets_dict:
             self.coin_to_symbol_map[coin] = candidate_symbol
             return candidate_symbol
+
+        # next check if there is a single match
         candidates = {s for s in self.eligible_symbols if coinf in s}
+        if len(candidates) == 1:
+            self.coin_to_symbol_map[coin] = next(iter(candidates))
+            return self.coin_to_symbol_map[coin]
+
+        # next check if multiple matches
         if len(candidates) > 1:
+            for candidate in candidates:
+                candidate_coin = symbol_to_coin(candidate)
+                if candidate_coin == coinf:
+                    self.coin_to_symbol_map[coin] = candidate
+                    return candidate
             logging.info(
                 f"debug coin_to_symbol {coinf}: ambiguous coin, multiple candidates {candidates}"
             )
-        elif len(candidates) == 1:
-            self.coin_to_symbol_map[coin] = next(iter(candidates))
-            return self.coin_to_symbol_map[coin]
         else:
             logging.info(f"debug coin_to_symbol no candidate symbol for {coinf}")
         return ""
@@ -919,12 +944,13 @@ class Passivbot:
 
         self.update_effective_min_cost()
         self.refresh_approved_ignored_coins_lists()
+        previous_PB_modes = deepcopy(self.PB_modes) if hasattr(self, 'PB_modes') else None
         self.PB_modes = {"long": {}, "short": {}}
         for pside in self.PB_modes:
             syms_with_pos = {s for s in self.positions if self.positions[s][pside]["size"] != 0.0}
-            print("syms_with_pos", syms_with_pos)
+            print("syms_with_pos", pside, syms_with_pos)
             syms_with_open_orders = {s for s in self.open_orders if self.open_orders[s]}
-            print("syms_with_open_orders", syms_with_open_orders)
+            print("syms_with_open_orders", pside, syms_with_open_orders)
             for symbol in self.forced_modes[pside]:
                 self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
 
