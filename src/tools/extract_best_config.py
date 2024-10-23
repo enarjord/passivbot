@@ -98,6 +98,8 @@ def process_single(file_location, verbose=False):
     keys, higher_is_better = ["w_0", "w_1"], [False, False]
     keys = ["analysis_" + key for key in keys]
     candidates = res[(res.analysis_w_0 <= 0.0) & (res.analysis_w_1 <= 0.0)][keys]
+    if len(candidates) == 0:
+        candidates = res[keys]
     print_("n candidates", len(candidates))
     if len(candidates) == 1:
         best = candidates.iloc[0].name
