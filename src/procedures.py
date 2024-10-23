@@ -175,10 +175,11 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                 print(f"renaming parameter {k0} {src}: {dst}")
             del result[k0][src]
     for k0, k1, v in [
-        ("live", "time_in_force", "good_till_cancelled"),
+        ("live", "empty_means_all_approved", False),
         ("live", "max_n_restarts_per_day", 10),
         ("live", "ohlcvs_1m_rolling_window_days", 7.0),
         ("live", "ohlcvs_1m_update_after_minutes", 10.0),
+        ("live", "time_in_force", "good_till_cancelled"),
         ("optimize", "scoring", ["mdg", "sharpe_ratio"]),
     ]:
         if k1 not in result[k0]:
@@ -276,7 +277,59 @@ def get_all_eligible_symbols(exchange="binance"):
         raise Exception("unable to fetch or load from cache")
 
 
-def coin_to_symbol(coin: str, eligible_symbols=None, verbose=True):
+def coin_to_symbol(coin, eligible_symbols=None, coin_to_symbol_map={}, quote="USDT", verbose=True):
+    # side effect: coin_to_symbol_map might get mutated
+    if eligible_symbols is None:
+        eligible_symbols = get_all_eligible_symbols()
+    if coin in coin_to_symbol_map:
+        return coin_to_symbol_map[coin]
+
+    # first check if coin/quote:quote has a match
+    candidate_symbol = f"{coin}/{quote}:{quote}"
+    if candidate_symbol in eligible_symbols:
+        coin_to_symbol_map[coin] = candidate_symbol
+        return candidate_symbol
+
+    # next check if there is a single match
+    candidates = {s for s in eligible_symbols if coin in s}
+    if len(candidates) == 1:
+        coin_to_symbol_map[coin] = next(iter(candidates))
+        return coin_to_symbol_map[coin]
+
+    # next format coin (e.g. 1000SHIB -> SHIB, kPEPE -> PEPE, etc)
+    coinf = symbol_to_coin(coin)
+    if coin in coin_to_symbol_map:
+        coin_to_symbol_map[coin] = coin_to_symbol_map[coinf]
+        return coin_to_symbol_map[coin]
+
+    # first check if coinf/quote:quote has a match
+    candidate_symbol = f"{coinf}/{quote}:{quote}"
+    if candidate_symbol in eligible_symbols:
+        coin_to_symbol_map[coin] = candidate_symbol
+        return candidate_symbol
+
+    # next check if there is a single match
+    candidates = {s for s in eligible_symbols if coinf in s}
+    if len(candidates) == 1:
+        coin_to_symbol_map[coin] = next(iter(candidates))
+        return coin_to_symbol_map[coin]
+
+    # next check if multiple matches
+    if len(candidates) > 1:
+        for candidate in candidates:
+            candidate_coin = symbol_to_coin(candidate)
+            if candidate_coin == coinf:
+                coin_to_symbol_map[coin] = candidate
+                return candidate
+        if verbose:
+            print(f"debug coin_to_symbol {coinf}: ambiguous coin, multiple candidates {candidates}")
+    else:
+        if verbose:
+            print(f"debug coin_to_symbol no candidate symbol for {coinf}")
+    return ""
+
+
+def coin_to_symbol_old(coin: str, eligible_symbols=None, verbose=True):
     # formats coin to appropriate symbol
     if eligible_symbols is None:
         eligible_symbols = get_all_eligible_symbols()
@@ -302,6 +355,15 @@ def coins_to_symbols(coins: [str], eligible_symbols=None, exchange=None, verbose
     eligible_symbols = get_all_eligible_symbols(exchange)
     symbols = [coin_to_symbol(x, eligible_symbols, verbose=verbose) for x in coins]
     return sorted(set([x for x in symbols if x]))
+
+
+def format_end_date(end_date) -> str:
+    if end_date in ["today", "now", "", None]:
+        ms2day = 1000 * 60 * 60 * 24
+        end_date = ts_to_date_utc((utc_ms() - ms2day) // ms2day * ms2day)
+    else:
+        end_date = ts_to_date_utc(date_to_ts2(end_date))
+    return end_date[:10]
 
 
 def load_config(filepath: str, live_only=False) -> dict:
@@ -383,10 +445,7 @@ def prepare_backtest_config(args) -> dict:
     else:
         config["spot"] = args.market_type == "spot"
     config["start_date"] = ts_to_date_utc(date_to_ts2(config["start_date"]))[:10]
-    if config["end_date"] in ["today", "now", ""]:
-        config["end_date"] = ts_to_date_utc(utc_ms())[:10]
-    else:
-        config["end_date"] = ts_to_date_utc(date_to_ts2(config["end_date"]))[:10]
+    config["end_date"] = format_end_date(config["end_date"])
     config["exchange"] = load_exchange_key_secret_passphrase(config["user"])[0]
     config["session_name"] = (
         f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_"
