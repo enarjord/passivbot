@@ -15,6 +15,8 @@ import zipfile
 import traceback
 import aiohttp
 import ccxt.async_support as ccxt
+import logging
+import pprint
 
 
 from functools import partial
@@ -36,8 +38,21 @@ from procedures import (
     add_argparse_args,
     utc_ms,
     get_first_ohlcv_timestamps,
+    add_arguments_recursively,
+    load_config,
+    update_config_with_args,
+    format_config,
+    format_end_date,
 )
-from pure_funcs import ts_to_date, ts_to_date_utc, date_to_ts2, get_dummy_settings, get_day, numpyize
+from pure_funcs import (
+    ts_to_date,
+    ts_to_date_utc,
+    date_to_ts2,
+    get_dummy_settings,
+    get_day,
+    numpyize,
+    get_template_live_config,
+)
 
 
 async def fetch_zips(url):
@@ -252,6 +267,7 @@ async def download_ohlcvs_binance(
     else:
         start_ts = (await get_first_ohlcv_timestamps(symbols=[symbol]))[symbol]
     start_ts = int(max(start_ts, date_to_ts2(start_date)))
+    end_date = format_end_date(end_date)
     end_ts = int(date_to_ts2(end_date))
     days = [ts_to_date_utc(x)[:10] for x in list(range(start_ts, end_ts, 1000 * 60 * 60 * 24))]
     months = sorted({x[:7] for x in days})
@@ -361,7 +377,8 @@ def attempt_gap_fix_hlcvs(df, symbol=None):
     return new_df[["timestamp", "open", "high", "low", "close", "volume"]]
 
 
-async def load_hlcvs(symbol, start_date, end_date, base_dir="backtests", exchange="binance"):
+async def load_hlcvs(symbol, start_date, end_date, exchange="binance"):
+    end_date = format_end_date(end_date)
     # returns matrix [[timestamp, high, low, close, volume]]
     if exchange == "binance":
         df = await download_ohlcvs_binance(symbol, False, start_date, end_date, False)
@@ -377,109 +394,13 @@ async def load_hlcvs(symbol, start_date, end_date, base_dir="backtests", exchang
     return df[["timestamp", "high", "low", "close", "volume"]].values
 
 
-async def prepare_hlcvs_old(config: dict):
-    symbols = sorted(set(config["backtest"]["symbols"]))
-    start_date = config["backtest"]["start_date"]
-    end_date = config["backtest"]["end_date"]
-    base_dir = config["backtest"]["base_dir"]
-    exchange = config["backtest"]["exchange"]
-    minimum_coin_age_days = config["live"]["minimum_coin_age_days"]
-
-    ms2day = 1000 * 60 * 60 * 24
-    if end_date in ["today", "now", "", None]:
-        end_ts = (utc_ms() - ms2day) // ms2day * ms2day
-        end_date = ts_to_date_utc(end_ts)[:10]
-    else:
-        end_ts = date_to_ts2(end_date) // ms2day * ms2day
-
-    interval_ms = 60000
-    start_tss = None
-    if exchange == "binance":
-        start_tss = await get_first_ohlcv_timestamps(cc=ccxt.binanceusdm(), symbols=symbols)
-    elif exchange == "bybit":
-        start_tss = await get_first_ohlcv_timestamps(cc=ccxt.bybit(), symbols=symbols)
-    else:
-        raise Exception("failed to load start timestamps")
-
-    # Calculate global start and end times
-    global_start_ts = date_to_ts2(start_date)
-    global_end_ts = end_ts
-    n_timesteps = int((global_end_ts - global_start_ts) / interval_ms) + 1
-
-    # Pre-allocate the unified array
-    n_coins = len(symbols)
-    unified_array = np.zeros((n_timesteps, n_coins, 4), dtype=np.float64)
-
-    for i, symbol in enumerate(symbols):
-        if symbol not in start_tss:
-            print(f"coin {symbol} missing from first timestamps, skipping")
-            continue
-        adjusted_start_ts = global_start_ts
-        if minimum_coin_age_days > 0.0:
-            min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
-            new_start_ts = start_tss[symbol] + min_coin_age_ms
-            if new_start_ts >= end_ts:
-                print(
-                    f"Coin {symbol} too young, start date {ts_to_date_utc(start_tss[symbol])}, skipping"
-                )
-                continue
-            if new_start_ts > adjusted_start_ts:
-                print(
-                    f"First date for {symbol} was {ts_to_date_utc(start_tss[symbol])}. Adjusting start date to {ts_to_date_utc(new_start_ts)}"
-                )
-            adjusted_start_ts = max(adjusted_start_ts, new_start_ts)
-
-        data = await load_hlcvs(
-            symbol,
-            ts_to_date_utc(adjusted_start_ts)[:10],
-            end_date,
-            base_dir,
-            exchange,
-        )
-
-        if len(data) == 0:
-            continue
-
-        assert (np.diff(data[:, 0]) == interval_ms).all(), f"gaps in hlcv data {symbol}"
-
-        # Calculate indices for this coin's data
-        start_idx = int((data[0, 0] - global_start_ts) / interval_ms)
-        end_idx = start_idx + len(data)
-
-        # Extract and process the required data (high, low, close, volume)
-        coin_data = data[:, 1:]
-        coin_data[:, 3] = coin_data[:, 2] * coin_data[:, 3]  # Use quote volume as volume
-
-        # Place the data in the unified array
-        unified_array[start_idx:end_idx, i, :] = coin_data
-
-        # Front-fill
-        if start_idx > 0:
-            unified_array[:start_idx, i, :3] = coin_data[0, 2]
-
-        # Back-fill
-        if end_idx < n_timesteps:
-            unified_array[end_idx:, i, :3] = coin_data[-1, 2]
-    print(f"Finished fetching all data. Returning unified array.")
-
-    timestamps = np.arange(global_start_ts, global_end_ts + interval_ms, interval_ms)
-
-    return symbols, timestamps, unified_array
-
-
 async def prepare_hlcvs(config: dict):
     symbols = sorted(set(config["backtest"]["symbols"]))
     start_date = config["backtest"]["start_date"]
-    end_date = config["backtest"]["end_date"]
-    base_dir = config["backtest"]["base_dir"]
+    end_date = format_end_date(config["backtest"]["end_date"])
+    end_ts = date_to_ts2(end_date)
     exchange = config["backtest"]["exchange"]
     minimum_coin_age_days = config["live"]["minimum_coin_age_days"]
-    ms2day = 1000 * 60 * 60 * 24
-    if end_date in ["today", "now", "", None]:
-        end_ts = (utc_ms() - ms2day) // ms2day * ms2day
-        end_date = ts_to_date_utc(end_ts)[:10]
-    else:
-        end_ts = date_to_ts2(end_date) // ms2day * ms2day
     hlcvsd = {}
     interval_ms = 60000
     start_tss = None
@@ -509,7 +430,6 @@ async def prepare_hlcvs(config: dict):
             symbol,
             ts_to_date_utc(adjusted_start_ts)[:10],
             end_date,
-            base_dir,
             exchange,
         )
         if len(data) == 0:
@@ -612,27 +532,43 @@ def load_ohlcv_data(filepath):
 
 
 async def main():
-    parser = argparse.ArgumentParser(
-        prog="Downloader", description="Download ticks from exchange API."
+    logging.basicConfig(
+        format="%(asctime)s %(levelname)-8s %(message)s",
+        level=logging.INFO,
+        datefmt="%Y-%m-%dT%H:%M:%S",
     )
+    parser = argparse.ArgumentParser(prog="downloader", description="download hlcv data")
     parser.add_argument(
-        "-d",
-        "--download-only",
-        help="download only, do not dump ticks caches",
-        action="store_true",
+        "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )
-    parser = add_argparse_args(parser)
-
+    template_config = get_template_live_config("v7")
+    del template_config["optimize"]
+    del template_config["bot"]
+    keep_live_keys = {
+        "approved_coins",
+        "minimum_coin_age_days",
+    }
+    del template_config["backtest"]["base_dir"]
+    for key in sorted(template_config["live"]):
+        if key not in keep_live_keys:
+            del template_config["live"][key]
+    add_arguments_recursively(parser, template_config)
     args = parser.parse_args()
-    config = prepare_backtest_config(args)
-    data = await load_hlc_cache(
-        config["symbol"],
-        config["inverse"],
-        config["start_date"],
-        config["end_date"],
-        spot=config["spot"],
-        exchange=config["exchange"],
-    )
+    if args.config_path is None:
+        logging.info(f"loading default template config configs/template.json")
+        config = load_config("configs/template.json")
+    else:
+        logging.info(f"loading config {args.config_path}")
+        config = load_config(args.config_path)
+    update_config_with_args(config, args)
+    config = format_config(config)
+    for symbol in config["backtest"]["symbols"]:
+        data = await load_hlcvs(
+            symbol,
+            config["backtest"]["start_date"],
+            config["backtest"]["end_date"],
+            exchange=config["backtest"]["exchange"],
+        )
 
 
 if __name__ == "__main__":
