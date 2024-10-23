@@ -147,6 +147,9 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
     - `-lw` or `-sw`: Long or short wallet exposure limit.
     - `-lev`: Leverage.
     - `-lc`: Path to live config. Load all of another config's bot parameters except `[n_positions, total_wallet_exposure_limit, unstuck_loss_allowance_pct, unstuck_close_pct]`.
+- empty_means_all_approved:
+	- If true, will interpret approved_coins=[] as all coins approved.
+	- If false, will interpret approved_coins=[] as no coins approved.
 - `execution_delay_seconds`: Wait x seconds after executing to exchange.
 - `filter_by_min_effective_cost`: If true, will disallow coins where `balance * WE_limit * initial_qty_pct < min_effective_cost`.
   - For example, if exchange's effective minimum cost for a coin is $5, but bot wants to make an order of $2, disallow that coin.
