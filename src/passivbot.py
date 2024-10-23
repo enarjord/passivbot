@@ -34,6 +34,7 @@ from procedures import (
     update_config_with_args,
     format_config,
     print_async_exception,
+    coin_to_symbol,
 )
 from njit_funcs_recursive_grid import calc_recursive_entries_long, calc_recursive_entries_short
 from njit_funcs import (
@@ -205,12 +206,15 @@ class Passivbot:
         # for prettier printing
         self.max_len_symbol = max([len(s) for s in self.markets_dict])
         self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
-        await self.init_flags_new()
+        await self.init_flags()
         await self.update_tickers()
         await self.update_positions()
         await self.update_open_orders()
+        self.update_effective_min_cost()
+        self.refresh_approved_ignored_coins_lists()
+        self.set_live_configs()
 
-    async def init_flags_new(self):
+    async def init_flags(self):
         self.flags = {}
         for k, v in self.config["live"]["coin_flags"].items():
             if kr := self.coin_to_symbol(k):
@@ -273,98 +277,15 @@ class Passivbot:
             await self.update_first_timestamps(symbols=[symbol])
         return self.first_timestamps[symbol]
 
-    def set_live_configs_new(self, symbols, n_eligible_long, n_eligible_short):
-        skip = {
-            "n_positions",
-            "total_wallet_exposure_limit",
-            "unstuck_loss_allowance_pct",
-            "unstuck_close_pct",
-            "filter_rolling_window",
-            "filter_relative_volume_clip_pct",
-        }  # skip parameters affecting global behavior
-        self.config["bot"]["long"]["n_positions"] = min(
-            n_eligible_long, int(round(self.config["bot"]["long"]["n_positions"]))
-        )
-        self.config["bot"]["short"]["n_positions"] = min(
-            n_eligible_short, int(round(self.config["bot"]["short"]["n_positions"]))
-        )
-        for symbol in symbols:
-            self.live_configs[symbol] = deepcopy(self.config["bot"])
-            self.live_configs[symbol]["leverage"] = self.config["live"]["leverage"]
-            for pside in ["long", "short"]:
-                self.live_configs[symbol][pside]["wallet_exposure_limit"] = (
-                    pbr.round_(
-                        self.live_configs[symbol][pside]["total_wallet_exposure_limit"]
-                        / self.live_configs[symbol][pside]["n_positions"],
-                        0.0001,
-                    )
-                    if self.live_configs[symbol][pside]["n_positions"] > 0
-                    else 0.0
-                )
-            if symbol in self.flags and self.flags[symbol].live_config_path is not None:
-                try:
-                    loaded = load_config(self.flags[symbol].live_config_path)
-                    logging.info(
-                        f"successfully loaded {self.flags[symbol].live_config_path} for {symbol}"
-                    )
-                    for pside in loaded["bot"]:
-                        for k, v in loaded["bot"][pside].items():
-                            if k not in skip:
-                                self.live_configs[symbol][pside][k] = v
-                except Exception as e:
-                    logging.error(
-                        f"failed to load config {self.flags[symbol].live_config_path} for {symbol} {e}. Using default config."
-                    )
-
     def coin_to_symbol(self, coin):
         if not hasattr(self, "coin_to_symbol_map"):
             self.coin_to_symbol_map = {}
-        if coin in self.coin_to_symbol_map:
-            return self.coin_to_symbol_map[coin]
-
-        # first check if coin/quote:quote has a match
-        candidate_symbol = f"{coin}/{self.quote}:{self.quote}"
-        if candidate_symbol in self.markets_dict:
-            self.coin_to_symbol_map[coin] = candidate_symbol
-            return candidate_symbol
-
-        # next check if there is a single match
-        candidates = {s for s in self.eligible_symbols if coin in s}
-        if len(candidates) == 1:
-            self.coin_to_symbol_map[coin] = next(iter(candidates))
-            return self.coin_to_symbol_map[coin]
-
-        # next format coin (e.g. 1000SHIB -> SHIB, kPEPE -> PEPE, etc)
-        coinf = symbol_to_coin(coin)
-        if coin in self.coin_to_symbol_map:
-            self.coin_to_symbol_map[coin] = self.coin_to_symbol_map[coinf]
-            return self.coin_to_symbol_map[coin]
-
-        # first check if coinf/quote:quote has a match
-        candidate_symbol = f"{coinf}/{self.quote}:{self.quote}"
-        if candidate_symbol in self.markets_dict:
-            self.coin_to_symbol_map[coin] = candidate_symbol
-            return candidate_symbol
-
-        # next check if there is a single match
-        candidates = {s for s in self.eligible_symbols if coinf in s}
-        if len(candidates) == 1:
-            self.coin_to_symbol_map[coin] = next(iter(candidates))
-            return self.coin_to_symbol_map[coin]
-
-        # next check if multiple matches
-        if len(candidates) > 1:
-            for candidate in candidates:
-                candidate_coin = symbol_to_coin(candidate)
-                if candidate_coin == coinf:
-                    self.coin_to_symbol_map[coin] = candidate
-                    return candidate
-            logging.info(
-                f"debug coin_to_symbol {coinf}: ambiguous coin, multiple candidates {candidates}"
-            )
-        else:
-            logging.info(f"debug coin_to_symbol no candidate symbol for {coinf}")
-        return ""
+        return coin_to_symbol(
+            coin,
+            eligible_symbols=self.eligible_symbols,
+            coin_to_symbol_map=self.coin_to_symbol_map,
+            quote=self.quote,
+        )
 
     async def run_execution_loop(self):
         while not self.stop_signal_received:
@@ -441,15 +362,12 @@ class Passivbot:
             self.previous_REST_update_ts = 0
 
     def is_forager_mode(self, pside=None):
-        n_approved_symbols = len(self.config["live"]["approved_coins"])
-        if n_approved_symbols == 0:
-            return True
         if pside is None:
             return self.is_forager_mode("long") or self.is_forager_mode("short")
         if (
             self.config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
             and self.config["bot"][pside]["n_positions"] > 0
-            and round(self.config["bot"][pside]["n_positions"]) < n_approved_symbols
+            and self.config["bot"][pside]["n_positions"] < len(self.approved_coins[pside])
         ):
             return True
         return False
@@ -472,13 +390,7 @@ class Passivbot:
             self.live_configs[symbol]["leverage"] = self.config["live"]["leverage"]
             for pside in ["long", "short"]:
                 self.live_configs[symbol][pside]["wallet_exposure_limit"] = (
-                    pbr.round_(
-                        self.live_configs[symbol][pside]["total_wallet_exposure_limit"]
-                        / self.live_configs[symbol][pside]["n_positions"],
-                        0.0001,
-                    )
-                    if self.live_configs[symbol][pside]["n_positions"] > 0
-                    else 0.0
+                    self.get_wallet_exposure_limit(pside, symbol)
                 )
             if symbol in self.flags and self.flags[symbol].live_config_path is not None:
                 try:
@@ -677,56 +589,6 @@ class Passivbot:
         # defined for each child class
         return True
 
-    async def init_markets_dict(self, verbose=True):
-        await self.update_exchange_config()
-        self.init_markets_last_update_ms = utc_ms()
-        self.markets_dict = {elm["symbol"]: elm for elm in (await self.cca.fetch_markets())}
-        await self.determine_utc_offset(verbose)
-        self.markets_dict_all = deepcopy(self.markets_dict)
-        # remove ineligible symbols from markets dict
-        ineligible_symbols = {}
-        for symbol in list(self.markets_dict):
-            if not self.markets_dict[symbol]["active"]:
-                ineligible_symbols[symbol] = "not active"
-                del self.markets_dict[symbol]
-            elif not self.markets_dict[symbol]["swap"]:
-                ineligible_symbols[symbol] = "wrong market type"
-                del self.markets_dict[symbol]
-            elif not self.markets_dict[symbol]["linear"]:
-                ineligible_symbols[symbol] = "not linear"
-                del self.markets_dict[symbol]
-            elif not symbol.endswith(f"/{self.quote}:{self.quote}"):
-                ineligible_symbols[symbol] = "wrong quote"
-                del self.markets_dict[symbol]
-            elif not self.symbol_is_eligible(symbol):
-                ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
-                del self.markets_dict[symbol]
-            elif not self.symbol_is_eligible(symbol):
-                ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
-                del self.markets_dict[symbol]
-        if verbose:
-            for line in set(ineligible_symbols.values()):
-                syms_ = [s for s in ineligible_symbols if ineligible_symbols[s] == line]
-                if len(syms_) > 12:
-                    logging.info(f"{line}: {len(syms_)} symbols")
-                elif len(syms_) > 0:
-                    logging.info(f"{line}: {','.join(sorted(set([s for s in syms_])))}")
-
-        for symbol in self.ineligible_symbols_with_pos:
-            if symbol not in self.markets_dict and symbol in self.markets_dict_all:
-                logging.info(f"There is a position in an ineligible market: {symbol}.")
-                self.markets_dict[symbol] = self.markets_dict_all[symbol]
-                self.config["live"]["ignored_coins"].append(symbol)
-
-        self.set_market_specific_settings()
-        for symbol in self.markets_dict:
-            self.format_symbol(symbol)
-        # for prettier printing
-        self.max_len_symbol = max([len(s) for s in self.markets_dict])
-        self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
-        await self.init_flags()
-        self.set_live_configs()
-
     def set_market_specific_settings(self):
         # set min cost, min qty, price step, qty step, c_mult
         # defined individually for each exchange
@@ -748,6 +610,15 @@ class Passivbot:
             logging.info(f"debug: symbol {symbol} missing from self.symbol_ids_inv. Using {symbol}")
             self.symbol_ids_inv[symbol] = symbol
             return symbol
+
+    def is_approved(self, pside, symbol) -> bool:
+        if symbol not in self.approved_coins[pside]:
+            return False
+        if symbol in self.ignored_coins[pside]:
+            return False
+        if not self.is_old_enough(pside, symbol):
+            return False
+        return True
 
     def set_wallet_exposure_limits(self):
         for pside in ["long", "short"]:
@@ -820,85 +691,8 @@ class Passivbot:
                         return x
         return ""
 
-    async def init_flags(self):
-        self.ignored_coins = set()
-        for x in self.config["live"]["ignored_coins"]:
-            if xr := self.reformat_symbol(x):
-                self.ignored_coins.add(xr)
-
-        self.flags = {}
-        for k, v in self.config["live"]["coin_flags"].items():
-            if kr := self.reformat_symbol(k):
-                logging.info(f"setting flag for {kr}: {v}")
-                self.flags[kr] = v
-
-        self.eligible_symbols = set()  # symbols which may be approved for trading
-        if self.config["live"]["approved_coins"]:
-            for symbol in self.config["live"]["approved_coins"]:
-                if rs := self.reformat_symbol(symbol, verbose=True):
-                    self.eligible_symbols.add(rs)
-        else:
-            self.eligible_symbols = set(self.markets_dict)
-
-        # this argparser is used only internally
-        parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
-        parser.add_argument(
-            "-sm", type=expand_PB_mode, required=False, dest="short_mode", default=None
-        )
-        parser.add_argument(
-            "-lm", type=expand_PB_mode, required=False, dest="long_mode", default=None
-        )
-        parser.add_argument("-lw", type=float, required=False, dest="WE_limit_long", default=None)
-        parser.add_argument("-sw", type=float, required=False, dest="WE_limit_short", default=None)
-        parser.add_argument("-lev", type=float, required=False, dest="leverage", default=None)
-        parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
-        self.forced_modes = {"long": {}, "short": {}}
-        for symbol in self.markets_dict:
-            self.flags[symbol] = parser.parse_args(
-                self.flags[symbol].split() if symbol in self.flags else []
-            )
-            for pside in ["long", "short"]:
-                if (mode := getattr(self.flags[symbol], f"{pside}_mode")) is None:
-                    if symbol in self.ignored_coins:
-                        setattr(
-                            self.flags[symbol],
-                            f"{pside}_mode",
-                            "graceful_stop" if self.config["live"]["auto_gs"] else "manual",
-                        )
-                        self.forced_modes[pside][symbol] = getattr(
-                            self.flags[symbol], f"{pside}_mode"
-                        )
-                    elif self.config["live"][f"forced_mode_{pside}"]:
-                        try:
-                            setattr(
-                                self.flags[symbol],
-                                f"{pside}_mode",
-                                expand_PB_mode(self.config["live"][f"forced_mode_{pside}"]),
-                            )
-                            self.forced_modes[pside][symbol] = getattr(
-                                self.flags[symbol], f"{pside}_mode"
-                            )
-                        except Exception as e:
-                            logging.error(
-                                f"failed to set PB mode {self.config['live'][f'forced_mode_{pside}']} {e}"
-                            )
-                else:
-                    self.forced_modes[pside][symbol] = mode
-                if not self.markets_dict[symbol]["active"]:
-                    self.forced_modes[pside][symbol] = "tp_only"
-
-        if self.is_forager_mode() and self.minimum_market_age_millis > 0:
-            if not hasattr(self, "first_timestamps"):
-                self.first_timestamps = await get_first_ohlcv_timestamps(
-                    cc=self.cca, symbols=sorted(self.eligible_symbols)
-                )
-                for symbol in sorted(self.first_timestamps):
-                    self.first_timestamps[self.format_symbol(symbol)] = self.first_timestamps[symbol]
-        else:
-            self.first_timestamps = None
-
-    def is_old_enough(self, symbol):
-        if self.is_forager_mode() and self.minimum_market_age_millis > 0:
+    def is_old_enough(self, pside, symbol):
+        if self.is_forager_mode(pside) and self.minimum_market_age_millis > 0:
             if symbol in self.first_timestamps:
                 return utc_ms() - self.first_timestamps[symbol] > self.minimum_market_age_millis
             else:
@@ -926,6 +720,9 @@ class Passivbot:
         except Exception as e:
             logging.error(f"Error with {get_function_name()} {e}")
 
+    def determine_empty_slots(self, pside):
+        n_positions = 0
+
     async def execution_cycle(self):
         # called before every execution to exchange
         # assumes positions, open orders are up to date
@@ -944,7 +741,7 @@ class Passivbot:
 
         self.update_effective_min_cost()
         self.refresh_approved_ignored_coins_lists()
-        previous_PB_modes = deepcopy(self.PB_modes) if hasattr(self, 'PB_modes') else None
+        previous_PB_modes = deepcopy(self.PB_modes) if hasattr(self, "PB_modes") else None
         self.PB_modes = {"long": {}, "short": {}}
         for pside in self.PB_modes:
             syms_with_pos = {s for s in self.positions if self.positions[s][pside]["size"] != 0.0}
@@ -1006,7 +803,7 @@ class Passivbot:
                         not self.is_enabled(symbol, pside)
                         or symbol not in self.eligible_symbols
                         or symbol not in eligible_symbols
-                        or not self.is_old_enough(symbol)
+                        or not self.is_old_enough(pside, symbol)
                         or not self.effective_min_cost_is_low_enough(pside, symbol)
                     ):
                         continue
@@ -1133,27 +930,46 @@ class Passivbot:
                 + f"set 'filter_by_min_effective_cost' to false, 3) reduce n_{pside}s"
             )
 
+    def get_max_n_positions(self, pside):
+        max_n_positions = min(
+            self.config["bot"][pside]["n_positions"],
+            len(self.approved_coins[pside] - self.ignored_coins[pside]),
+        )
+        return max(0, max_n_positions)
+
+    def get_current_n_positions(self, pside):
+        n_positions = 0
+        for symbol in self.positions:
+            if self.positions[symbol][pside]["size"] != 0.0:
+                if symbol in self.forced_modes[pside]:
+                    if self.forced_modes[pside][symbol] in ["normal", "graceful_stop"]:
+                        n_positions += 1
+                else:
+                    n_positions += 1
+        return n_positions
+
+    def get_wallet_exposure_limit(self, pside, symbol):
+        if (
+            symbol in self.flags
+            and (fwel := getattr(self.flags[symbol], f"WE_limit_{pside}")) is not None
+        ):
+            return fwel
+        else:
+            twel = self.config["bot"][pside]["total_wallet_exposure_limit"]
+            if twel == 0.0:
+                return 0.0
+            n_positions = max(self.get_max_n_positions(pside), self.get_current_n_positions(pside))
+            if n_positions == 0:
+                return 0.0
+            return round(twel / n_positions, 8)
+
     def effective_min_cost_is_low_enough(self, pside, symbol):
         if not self.config["live"]["filter_by_min_effective_cost"]:
             return True
-        try:
-            WE_limit = self.live_configs[symbol][pside]["wallet_exposure_limit"]
-            assert WE_limit > 0.0
-        except:
-            if self.is_forager_mode(pside):
-                WE_limit = (
-                    self.config["bot"][pside]["total_wallet_exposure_limit"]
-                    / self.config["bot"][pside]["n_positions"]
-                    if self.config["bot"][pside]["n_positions"] > 0
-                    else 0.0
-                )
-            else:
-                WE_limit = (
-                    self.config["bot"][pside]["total_wallet_exposure_limit"]
-                    / len(self.config["live"]["approved_coins"])
-                    if len(self.config["live"]["approved_coins"]) > 0
-                    else 0.0
-                )
+        n_positions = self.get_max_n_positions(pside)
+        if n_positions <= 0:
+            return False
+        WE_limit = self.config["bot"][pside]["total_wallet_exposure_limit"] / n_positions
         return (
             self.balance * WE_limit * self.live_configs[symbol][pside]["entry_initial_qty_pct"]
             >= self.effective_min_cost[symbol]
@@ -1576,8 +1392,8 @@ class Passivbot:
             return any([self.is_enabled(symbol, pside) for symbol in self.live_configs])
         return (
             symbol in self.live_configs
-            and self.live_configs[symbol][pside]["wallet_exposure_limit"] > 0.0
-            and self.live_configs[symbol][pside]["n_positions"] > 0.0
+            and self.config["bot"][pside]["wallet_exposure_limit"] > 0.0
+            and self.get_max_n_positions(pside) > 0.0
         )
 
     def calc_ideal_orders(self):
@@ -2484,6 +2300,10 @@ class Passivbot:
                         self.add_to_coins_lists(path, k_coins)
                 except Exception as e:
                     logging.error(f"Failed to read {k_coins} from config: {path}")
+        for pside in self.approved_coins:
+            if self.config["live"]["empty_means_all_approved"] and not self.approved_coins[pside]:
+                # if approved_coins is empty, all coins are approved
+                self.approved_coins[pside] = self.eligible_symbols
 
 
 def read_external_coins_lists(filepath) -> dict:
