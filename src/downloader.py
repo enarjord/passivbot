@@ -17,11 +17,7 @@ import aiohttp
 import ccxt.async_support as ccxt
 import logging
 import pprint
-
-
-from functools import partial
-
-
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from dateutil import parser
@@ -52,6 +48,7 @@ from pure_funcs import (
     get_day,
     numpyize,
     get_template_live_config,
+    safe_filename,
 )
 
 
@@ -395,6 +392,131 @@ async def load_hlcvs(symbol, start_date, end_date, exchange="binance"):
 
 
 async def prepare_hlcvs(config: dict):
+    symbols = sorted(set(config["backtest"]["symbols"]))
+    start_date = config["backtest"]["start_date"]
+    end_date = format_end_date(config["backtest"]["end_date"])
+    end_ts = date_to_ts2(end_date)
+    exchange = config["backtest"]["exchange"]
+    minimum_coin_age_days = config["live"]["minimum_coin_age_days"]
+    interval_ms = 60000
+
+    # Create cache directory if it doesn't exist
+    cache_dir = Path("./cache/hlcv_data")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # First pass: Download data and store metadata
+    symbol_metadata = {}
+    start_tss = None
+    if exchange == "binance":
+        start_tss = await get_first_ohlcv_timestamps(cc=ccxt.binanceusdm(), symbols=symbols)
+    elif exchange == "bybit":
+        start_tss = await get_first_ohlcv_timestamps(cc=ccxt.bybit(), symbols=symbols)
+
+    valid_symbols = {}
+    global_start_time = float("inf")
+    global_end_time = float("-inf")
+
+    # First pass: Download and save data, collect metadata
+    for symbol in symbols:
+        adjusted_start_ts = date_to_ts2(start_date)
+
+        if minimum_coin_age_days > 0.0:
+            min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
+            if symbol not in start_tss:
+                print(f"coin {symbol} missing from first timestamps, skipping")
+                continue
+            new_start_ts = start_tss[symbol] + min_coin_age_ms
+            if new_start_ts >= end_ts:
+                print(
+                    f"Coin {symbol} too young, start date {ts_to_date_utc(start_tss[symbol])}, skipping"
+                )
+                continue
+            if new_start_ts > adjusted_start_ts:
+                print(
+                    f"First date for {symbol} was {ts_to_date_utc(start_tss[symbol])}. Adjusting start date to {ts_to_date_utc(new_start_ts)}"
+                )
+                adjusted_start_ts = new_start_ts
+        try:
+            data = await load_hlcvs(
+                symbol,
+                ts_to_date_utc(adjusted_start_ts)[:10],
+                end_date,
+                exchange,
+            )
+        except Exception as e:
+            logging.error(f"error with load_hlcvs for {symbol} {e}. Skipping")
+            continue
+        if len(data) == 0:
+            continue
+
+        assert (np.diff(data[:, 0]) == interval_ms).all(), f"gaps in hlcv data {symbol}"
+
+        # Save data to disk
+        file_path = cache_dir / f"{safe_filename(symbol)}.npy"
+        np.save(file_path, data)
+
+        # Update metadata
+        symbol_metadata[symbol] = {
+            "start_time": int(data[0, 0]),
+            "end_time": int(data[-1, 0]),
+            "length": len(data),
+        }
+
+        valid_symbols[symbol] = file_path
+        global_start_time = min(global_start_time, data[0, 0])
+        global_end_time = max(global_end_time, data[-1, 0])
+
+    if not valid_symbols:
+        raise ValueError("No valid symbols found with data")
+
+    # Calculate dimensions for the unified array
+    n_timesteps = int((global_end_time - global_start_time) / interval_ms) + 1
+    n_coins = len(valid_symbols)
+
+    # Create the timestamp array
+    timestamps = np.arange(global_start_time, global_end_time + interval_ms, interval_ms)
+
+    # Pre-allocate the unified array
+    unified_array = np.zeros((n_timesteps, n_coins, 4))
+
+    # Second pass: Load data from disk and populate the unified array
+    print(f"Unifying data for {len(valid_symbols)} coins into single numpy array...")
+    for i, symbol in enumerate(tqdm(valid_symbols, desc="Processing symbols", unit="symbol")):
+        file_path = valid_symbols[symbol]
+        ohlcv = np.load(file_path)
+
+        # Calculate indices
+        start_idx = int((ohlcv[0, 0] - global_start_time) / interval_ms)
+        end_idx = start_idx + len(ohlcv)
+
+        # Extract and process data
+        coin_data = ohlcv[:, 1:]
+        coin_data[:, 3] = coin_data[:, 2] * coin_data[:, 3]  # Use quote volume
+
+        # Place the data in the unified array
+        unified_array[start_idx:end_idx, i, :] = coin_data
+
+        # Front-fill
+        if start_idx > 0:
+            unified_array[:start_idx, i, :3] = coin_data[0, 2]
+
+        # Back-fill
+        if end_idx < n_timesteps:
+            unified_array[end_idx:, i, :3] = coin_data[-1, 2]
+
+        # Clean up temporary file
+        os.remove(file_path)
+
+    # Clean up cache directory if empty
+    try:
+        os.rmdir(cache_dir)
+    except OSError:
+        pass
+
+    return list(valid_symbols), timestamps, unified_array
+
+
+async def prepare_hlcvs_old(config: dict):
     symbols = sorted(set(config["backtest"]["symbols"]))
     start_date = config["backtest"]["start_date"]
     end_date = format_end_date(config["backtest"]["end_date"])
