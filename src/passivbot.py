@@ -208,11 +208,11 @@ class Passivbot:
         self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
         await self.init_flags()
         await self.update_tickers()
+        self.refresh_approved_ignored_coins_lists()
+        self.set_live_configs()
         await self.update_positions()
         await self.update_open_orders()
         self.update_effective_min_cost()
-        self.refresh_approved_ignored_coins_lists()
-        self.set_live_configs()
 
     async def init_flags(self):
         self.flags = {}
@@ -364,13 +364,14 @@ class Passivbot:
     def is_forager_mode(self, pside=None):
         if pside is None:
             return self.is_forager_mode("long") or self.is_forager_mode("short")
-        if (
-            self.config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
-            and self.config["bot"][pside]["n_positions"] > 0
-            and self.config["bot"][pside]["n_positions"] < len(self.approved_coins[pside])
-        ):
-            return True
-        return False
+        if self.config["bot"][pside]["total_wallet_exposure_limit"] <= 0.0:
+            return False
+        n_positions = self.get_max_n_positions(pside)
+        if n_positions == 0:
+            return False
+        if n_positions >= len(self.approved_coins):
+            return False
+        return True
 
     def set_live_configs(self):
         skip = {
@@ -385,13 +386,10 @@ class Passivbot:
             self.config["bot"][pside]["n_positions"] = min(
                 len(self.eligible_symbols), int(round(self.config["bot"][pside]["n_positions"]))
             )
+        self.set_wallet_exposure_limits()
         for symbol in self.markets_dict:
             self.live_configs[symbol] = deepcopy(self.config["bot"])
             self.live_configs[symbol]["leverage"] = self.config["live"]["leverage"]
-            for pside in ["long", "short"]:
-                self.live_configs[symbol][pside]["wallet_exposure_limit"] = (
-                    self.get_wallet_exposure_limit(pside, symbol)
-                )
             if symbol in self.flags and self.flags[symbol].live_config_path is not None:
                 try:
                     loaded = load_config(self.flags[symbol].live_config_path)
@@ -620,7 +618,7 @@ class Passivbot:
             return False
         return True
 
-    def set_wallet_exposure_limits(self):
+    def set_wallet_exposure_limits_old(self):
         for pside in ["long", "short"]:
             changed = {}
             n_actives = max(len(self.is_active[pside]), self.config["bot"][pside]["n_positions"])
@@ -720,9 +718,6 @@ class Passivbot:
         except Exception as e:
             logging.error(f"Error with {get_function_name()} {e}")
 
-    def determine_empty_slots(self, pside):
-        n_positions = 0
-
     async def execution_cycle(self):
         # called before every execution to exchange
         # assumes positions, open orders are up to date
@@ -741,6 +736,7 @@ class Passivbot:
 
         self.update_effective_min_cost()
         self.refresh_approved_ignored_coins_lists()
+        self.set_wallet_exposure_limits()
         previous_PB_modes = deepcopy(self.PB_modes) if hasattr(self, "PB_modes") else None
         self.PB_modes = {"long": {}, "short": {}}
         for pside in self.PB_modes:
@@ -750,6 +746,12 @@ class Passivbot:
             print("syms_with_open_orders", pside, syms_with_open_orders)
             for symbol in self.forced_modes[pside]:
                 self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
+            if self.is_forager_mode(pside):
+                # filter coins by relative volume and noisiness
+                pass
+            else:
+                # all approved coins are selected, no filtering
+                ideal_coins = sorted(self.approved_coins_minus_ignored_coins[pside])
 
     def update_PB_modes(self):
         self.update_effective_min_cost()
@@ -947,6 +949,13 @@ class Passivbot:
                 else:
                     n_positions += 1
         return n_positions
+
+    def set_wallet_exposure_limits(self):
+        for symbol in self.live_configs:
+            for pside in ["long", "short"]:
+                self.live_configs[symbol][pside]["wallet_exposure_limit"] = (
+                    self.get_wallet_exposure_limit(pside, symbol)
+                )
 
     def get_wallet_exposure_limit(self, pside, symbol):
         if (
@@ -2300,10 +2309,14 @@ class Passivbot:
                         self.add_to_coins_lists(path, k_coins)
                 except Exception as e:
                     logging.error(f"Failed to read {k_coins} from config: {path}")
+        self.approved_coins_minus_ignored_coins = {}
         for pside in self.approved_coins:
             if self.config["live"]["empty_means_all_approved"] and not self.approved_coins[pside]:
                 # if approved_coins is empty, all coins are approved
                 self.approved_coins[pside] = self.eligible_symbols
+            self.approved_coins_minus_ignored_coins[pside] = (
+                self.approved_coins[pside] - self.ignored_coins[pside]
+            )
 
 
 def read_external_coins_lists(filepath) -> dict:
