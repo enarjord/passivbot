@@ -5,6 +5,7 @@ from hashlib import sha256
 from copy import deepcopy
 
 import json
+import re
 import numpy as np
 import dateutil.parser
 from njit_funcs import calc_pnl_long, calc_pnl_short
@@ -21,6 +22,12 @@ except:
             self.DataFrame = None
 
     pd = PD()
+
+
+def safe_filename(symbol: str) -> str:
+    """Convert symbol to a safe filename by replacing invalid characters."""
+    # Replace / and : with underscores, and remove any other potentially problematic characters
+    return re.sub(r'[<>:"/\\|?*]', "_", symbol)
 
 
 def format_float(num):
