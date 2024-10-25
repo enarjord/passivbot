@@ -98,13 +98,6 @@ class BinanceBot(Passivbot):
             self.qty_steps[symbol] = elm["precision"]["amount"]
             self.c_mults[symbol] = elm["contractSize"]
 
-    async def get_active_symbols(self):
-        # get symbols with open orders and/or positions
-        positions, balance = await self.fetch_positions()
-        return sorted(set(elm["symbol"] for elm in positions))
-        # open_orders = await self.fetch_open_orders(all=True)
-        # return sorted(set([elm["symbol"] for elm in positions + open_orders]))
-
     async def watch_balance(self):
         while True:
             try:
