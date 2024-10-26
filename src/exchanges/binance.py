@@ -169,7 +169,7 @@ class BinanceBot(Passivbot):
             for elm in fetched_positions:
                 positions.append(
                     {
-                        "symbol": self.symbol_ids_inv[elm["symbol"]],
+                        "symbol": self.get_symbol_id_inv(elm["symbol"]),
                         "position_side": elm["positionSide"].lower(),
                         "size": float(elm["positionAmt"]),
                         "price": float(elm["entryPrice"]),
@@ -194,12 +194,11 @@ class BinanceBot(Passivbot):
         try:
             fetched = await self.cca.fapipublic_get_ticker_bookticker()
             tickers = {
-                self.symbol_ids_inv[elm["symbol"]]: {
+                self.get_symbol_id_inv(elm["symbol"]): {
                     "bid": float(elm["bidPrice"]),
                     "ask": float(elm["askPrice"]),
                 }
                 for elm in fetched
-                if elm["symbol"] in self.symbol_ids_inv
             }
             for sym in tickers:
                 tickers[sym]["last"] = np.random.choice([tickers[sym]["bid"], tickers[sym]["ask"]])
@@ -349,7 +348,7 @@ class BinanceBot(Passivbot):
                 params["endTime"] = int(end_time)
             fetched = await self.cca.fapiprivate_get_income(params=params)
             for i in range(len(fetched)):
-                fetched[i]["symbol"] = self.symbol_ids_inv[fetched[i]["symbol"]]
+                fetched[i]["symbol"] = self.get_symbol_ids_inv(fetched[i]["symbol"])
                 fetched[i]["pnl"] = float(fetched[i]["income"])
                 fetched[i]["timestamp"] = float(fetched[i]["time"])
                 fetched[i]["id"] = fetched[i]["tradeId"]
