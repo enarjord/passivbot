@@ -1349,6 +1349,7 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             acronym = create_acronym(full_name, acronyms)
             appendix = ""
             type_ = type(value)
+            str2bool_list = ["auto_gs", "filter_by_min_effective_cost", "empty_means_all_approved"]
             if "bounds" in full_name:
                 type_ = comma_separated_values_float
             elif "approved_coins" in full_name:
@@ -1364,7 +1365,7 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
                 acronym = "c"
             elif "iters" in full_name:
                 acronym = "i"
-            elif any([x in full_name for x in ["auto_gs", "filter_by_min_effective_cost"]]):
+            elif any([x in full_name for x in str2bool_list]):
                 type_ = str2bool
                 appendix = "[y/n]"
             parser.add_argument(
