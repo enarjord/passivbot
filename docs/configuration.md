@@ -135,6 +135,7 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
 		- `{"long": ["COIN1", "COIN2"], "short": ["COIN2", "COIN3"]}`
 - `auto_gs`: Automatically enable graceful stop for positions on disapproved coins.
   - Graceful stop means the bot will continue trading as normal, but not open a new position after the current position is fully closed.
+  - If auto_gs=false, positions on disapproved coins are put on manual mode.
 - `coin_flags`:
   - Specify flags for individual coins, overriding values from bot config.
   - For example, `coin_flags: {"ETH": "-sm n -lm gs", "XRP": "-lm p -lc path/to/other_config.json"}` will force short mode to normal and long mode to graceful stop for ETH; it will set long mode to panic and use other config for XRP.
