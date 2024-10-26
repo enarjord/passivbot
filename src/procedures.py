@@ -322,10 +322,10 @@ def coin_to_symbol(coin, eligible_symbols=None, coin_to_symbol_map={}, quote="US
                 coin_to_symbol_map[coin] = candidate
                 return candidate
         if verbose:
-            print(f"debug coin_to_symbol {coinf}: ambiguous coin, multiple candidates {candidates}")
+            print(f"coin_to_symbol {coinf}: ambiguous coin, multiple candidates {candidates}")
     else:
         if verbose:
-            print(f"debug coin_to_symbol no candidate symbol for {coinf}")
+            print(f"coin_to_symbol no candidate symbol for {coinf}")
     return ""
 
 
