@@ -355,7 +355,7 @@ class BinanceBot(Passivbot):
                 params["endTime"] = int(end_time)
             fetched = await self.cca.fapiprivate_get_income(params=params)
             for i in range(len(fetched)):
-                fetched[i]["symbol"] = self.get_symbol_ids_inv(fetched[i]["symbol"])
+                fetched[i]["symbol"] = self.get_symbol_id_inv(fetched[i]["symbol"])
                 fetched[i]["pnl"] = float(fetched[i]["income"])
                 fetched[i]["timestamp"] = float(fetched[i]["time"])
                 fetched[i]["id"] = fetched[i]["tradeId"]
