@@ -175,7 +175,7 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                 print(f"renaming parameter {k0} {src}: {dst}")
             del result[k0][src]
     for k0, k1, v in [
-        ("live", "empty_means_all_approved", False),
+        ("live", "empty_means_all_approved", True),
         ("live", "max_n_restarts_per_day", 10),
         ("live", "ohlcvs_1m_rolling_window_days", 7.0),
         ("live", "ohlcvs_1m_update_after_minutes", 10.0),
