@@ -773,7 +773,7 @@ class Passivbot:
         res = log_dict_changes(previous_PB_modes, self.PB_modes)
         for k, v in res.items():
             for elm in v:
-                print(k, elm)
+                logging.info(f"{k} {elm}")
 
     def get_filtered_coins(self, pside):
         # determine n slots
