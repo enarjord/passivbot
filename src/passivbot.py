@@ -68,6 +68,8 @@ from pure_funcs import (
     expand_PB_mode,
     ts_to_date_utc,
     get_template_live_config,
+    flatten,
+    log_dict_changes,
 )
 
 
@@ -157,12 +159,12 @@ class Passivbot:
         self.stop_signal_received = False
         self.ohlcvs_1m_update_timestamps_WS = {}
 
-    async def start_bot_new(self, debug_mode=False):
+    async def start_bot(self, debug_mode=False):
         logging.info(f"Starting bot...")
         await self.hourly_cycle()
         await asyncio.sleep(1)
         logging.info(f"Starting data maintainers...")
-        await self.start_data_maintainers_new()
+        await self.start_data_maintainers()
         await self.wait_for_ohlcvs_1m_to_update()
         logging.info(f"starting websocket...")
         self.previous_REST_update_ts = utc_ms()
@@ -214,7 +216,9 @@ class Passivbot:
         await self.update_positions()
         await self.update_open_orders()
         self.update_effective_min_cost()
-        self.n_symbols_missing_ohlcvs_1m = len(self.get_approved_or_active_symbols())
+        self.n_symbols_missing_ohlcvs_1m = len(self.get_symbols_approved_or_has_pos())
+        if self.is_forager_mode():
+            await self.update_first_timestamps()
 
     async def init_flags(self):
         self.flags = {}
@@ -262,32 +266,42 @@ class Passivbot:
     async def update_first_timestamps(self, symbols=[]):
         if not hasattr(self, "first_timestamps"):
             self.first_timestamps = {}
-        symbols = sorted(set(symbols + list(self.eligible_symbols)))
+        symbols = sorted(set(symbols + flatten(self.approved_coins_minus_ignored_coins.values())))
         if all([s in self.first_timestamps for s in symbols]):
             return
         first_timestamps = await get_first_ohlcv_timestamps_new(
             symbols=symbols, exchange=self.exchange
         )
         self.first_timestamps.update(first_timestamps)
-        for s in self.first_timestamps:
+        for s in sorted(self.first_timestamps):
             sf = self.coin_to_symbol(s)
             if sf not in self.first_timestamps:
                 self.first_timestamps[sf] = self.first_timestamps[s]
+        for s in symbols:
+            if s not in self.first_timestamps:
+                logging.info(f"warning: unable to get first timestamp for {symbol}. Setting to zero.")
+                self.first_timestamps[s] = 0.0
 
-    async def get_first_timestamp(self, symbol):
-        if not hasattr(self, "first_timestamps") or symbol not in self.first_timestamps:
-            await self.update_first_timestamps(symbols=[symbol])
+    def get_first_timestamp(self, symbol):
+        if symbol not in self.first_timestamps:
+            logging.info(f"warning: {symbol} missing from first_timestamps. Setting to zero.")
+            return 0.0
         return self.first_timestamps[symbol]
 
     def coin_to_symbol(self, coin):
         if not hasattr(self, "coin_to_symbol_map"):
             self.coin_to_symbol_map = {}
-        return coin_to_symbol(
+        if coin in self.coin_to_symbol_map:
+            return self.coin_to_symbol_map[coin]
+        result = coin_to_symbol(
             coin,
             eligible_symbols=self.eligible_symbols,
             coin_to_symbol_map=self.coin_to_symbol_map,
             quote=self.quote,
         )
+        if result == "":
+            self.coin_to_symbol_map[coin] = ""
+        return result
 
     async def run_execution_loop(self):
         while not self.stop_signal_received:
@@ -314,7 +328,7 @@ class Passivbot:
         await self.update_ohlcvs_1m_for_actives()
 
     async def execute_to_exchange(self, debug_mode=False):
-        self.update_PB_modes()
+        await self.execution_cycle()
         await self.update_EMAs()
         await self.update_exchange_configs()
         to_cancel, to_create = self.calc_orders_to_cancel_and_create()
@@ -657,8 +671,9 @@ class Passivbot:
 
     def is_old_enough(self, pside, symbol):
         if self.is_forager_mode(pside) and self.minimum_market_age_millis > 0:
-            if symbol in self.first_timestamps:
-                return utc_ms() - self.first_timestamps[symbol] > self.minimum_market_age_millis
+            first_timestamp = self.get_first_timestamp(symbol)
+            if first_timestamp:
+                return utc_ms() - first_timestamp > self.minimum_market_age_millis
             else:
                 return False
         else:
@@ -706,153 +721,40 @@ class Passivbot:
         previous_PB_modes = deepcopy(self.PB_modes) if hasattr(self, "PB_modes") else None
         self.PB_modes = {"long": {}, "short": {}}
         for pside in self.PB_modes:
+            if self.is_forager_mode(pside):
+                await self.update_first_timestamps()
             for symbol in self.forced_modes[pside]:
                 self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
             ideal_coins = self.get_filtered_coins(pside)
-            print("ideal_coins", pside, ideal_coins)
-
-    def get_filtered_coins(self, pside):
-        if self.is_forager_mode(pside):
-            # filter coins by relative volume and noisiness
-            if self.config["bot"][pside]["filter_relative_volume_clip_pct"] > 0.0:
-                volumes = self.calc_volumes(pside)
-                # filter by relative volume
-                n_eligible = round(
-                    len(volumes) * (1 - self.config["bot"][pside]["filter_relative_volume_clip_pct"])
-                )
-                max_n_positions = self.get_max_n_positions(pside)
-                eligible_symbols = sorted(volumes, key=lambda x: volumes[x], reverse=True)[
-                    : int(max(n_eligible, max_n_positions))
-                ]
-            else:
-                eligible_symbols = list(self.eligible_symbols)
-            # ideal symbols are high noise symbols
-            noisiness = self.calc_noisiness(pside, eligible_symbols=eligible_symbols)
-            noisiness = {k: v for k, v in sorted(noisiness.items(), key=lambda x: x[1], reverse=True)}
-            ideal_coins = [k for k in noisiness.keys()][:max_n_positions]
-        else:
-            # all approved coins are selected, no filtering
-            ideal_coins = sorted(self.get_approved_or_active_symbols(pside))
-        return ideal_coins
-
-    def update_PB_modes(self):
-        self.update_effective_min_cost()
-        # update passivbot modes for all symbols
-        if hasattr(self, "PB_modes"):
-            previous_PB_modes = deepcopy(self.PB_modes)
-        else:
-            previous_PB_modes = None
-
-        # set modes for all symbols
-        self.PB_modes = {
-            "long": {},
-            "short": {},
-        }  # options: normal, graceful_stop, manual, tp_only, panic
-        self.actual_actives = {"long": set(), "short": set()}  # symbols with position
-        self.is_active = {"long": set(), "short": set()}  # actual actives plus symbols on "normal""
-        self.ideal_actives = {"long": {}, "short": {}}  # dicts as ordered sets
-
-        # actual actives, symbols with pos and/or open orders
-        for elm in self.fetched_positions + self.fetched_open_orders:
-            self.actual_actives[elm["position_side"]].add(elm["symbol"])
-
-        # find ideal actives
-        # set forced modes first
-        for pside in self.forced_modes:
-            for symbol in self.forced_modes[pside]:
-                if self.forced_modes[pside][symbol] == "normal":
-                    self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
-                    self.ideal_actives[pside][symbol] = ""
-                if symbol in self.actual_actives[pside]:
-                    self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
-            if self.is_forager_mode(pside):
-                if self.config["bot"][pside]["filter_relative_volume_clip_pct"] > 0.0:
-                    volumes = self.calc_volumes(pside)
-                    # filter by relative volume
-                    n_eligible = round(
-                        len(volumes)
-                        * (1 - self.config["bot"][pside]["filter_relative_volume_clip_pct"])
-                    )
-                    eligible_symbols = sorted(volumes, key=lambda x: volumes[x], reverse=True)[
-                        : int(max(n_eligible, self.config["bot"][pside]["n_positions"]))
-                    ]
+            slots_filled = {
+                k for k, v in self.PB_modes[pside].items() if v in ["normal", "graceful_stop"]
+            }
+            for symbol in self.get_symbols_with_pos(pside):
+                if symbol in self.PB_modes[pside]:
+                    continue
                 else:
-                    eligible_symbols = list(self.eligible_symbols)
-                # ideal symbols are high noise symbols
-                noisiness = self.calc_noisiness(pside, eligible_symbols=eligible_symbols)
-                if self.is_enabled(pside=pside):
-                    self.warn_on_high_effective_min_cost(pside)
-                for symbol in sorted(noisiness, key=lambda x: noisiness[x], reverse=True):
-                    if (
-                        not self.is_enabled(symbol, pside)
-                        or symbol not in self.eligible_symbols
-                        or symbol not in eligible_symbols
-                        or not self.is_old_enough(pside, symbol)
-                        or not self.effective_min_cost_is_low_enough(pside, symbol)
-                    ):
-                        continue
-                    if len(self.ideal_actives[pside]) >= self.config["bot"][pside]["n_positions"]:
-                        # slots full
-                        break
-                    if symbol not in self.ideal_actives[pside]:
-                        self.ideal_actives[pside][symbol] = ""
-
-                # actual actives fill slots first
-                for symbol in self.actual_actives[pside]:
-                    if symbol in self.forced_modes[pside]:
-                        continue  # is a forced mode
-                    if symbol in self.ideal_actives[pside]:
+                    if symbol in ideal_coins:
                         self.PB_modes[pside][symbol] = "normal"
                     else:
                         self.PB_modes[pside][symbol] = (
                             "graceful_stop" if self.config["live"]["auto_gs"] else "manual"
                         )
-                # fill remaining slots with ideal actives
-                # a slot is filled if symbol in [normal, graceful_stop]
-                # symbols on other modes are ignored
-                for symbol in self.ideal_actives[pside]:
-                    if symbol in self.PB_modes[pside] or symbol in self.forced_modes[pside]:
-                        continue
-                    slots_filled = {
-                        k for k, v in self.PB_modes[pside].items() if v in ["normal", "graceful_stop"]
-                    }
-                    if len(slots_filled) >= self.config["bot"][pside]["n_positions"]:
-                        break
-                    self.PB_modes[pside][symbol] = "normal"
-            else:
-                # if not forager mode, all eligible symbols are ideal symbols, unless symbol in forced_modes
-                if self.is_enabled(pside=pside):
-                    self.warn_on_high_effective_min_cost(pside)
-                else:
+                    slots_filled.add(symbol)
+            max_n_positions = self.get_max_n_positions(pside)
+            for symbol in ideal_coins:
+                if len(slots_filled) >= max_n_positions:
+                    break
+                if symbol in self.PB_modes[pside]:
                     continue
-                for symbol in self.eligible_symbols:
-                    if self.is_enabled(symbol, pside):
-                        if not self.effective_min_cost_is_low_enough(pside, symbol):
-                            continue
-                        if symbol not in self.forced_modes[pside]:
-                            self.PB_modes[pside][symbol] = "normal"
-                            self.ideal_actives[pside][symbol] = ""
-                for symbol in self.actual_actives[pside]:
-                    if symbol not in self.PB_modes[pside]:
-                        self.PB_modes[pside][symbol] = (
-                            "graceful_stop" if self.config["live"]["auto_gs"] else "manual"
-                        )
+                self.PB_modes[pside][symbol] = "normal"
+                slots_filled.add(symbol)
         self.active_symbols = sorted(
             {s for subdict in self.PB_modes.values() for s in subdict.keys()}
         )
-        self.is_active = deepcopy(self.actual_actives)
-        for pside in self.PB_modes:
-            for symbol in self.PB_modes[pside]:
-                if self.PB_modes[pside][symbol] == "normal":
-                    self.is_active[pside].add(symbol)
-
         for symbol in self.active_symbols:
             for pside in self.PB_modes:
                 if symbol in self.PB_modes[pside]:
                     self.live_configs[symbol][pside]["mode"] = self.PB_modes[pside][symbol]
-                    self.live_configs[symbol][pside]["enabled"] = (
-                        self.PB_modes[pside][symbol] == "normal"
-                    )
                 else:
                     if self.config["live"]["auto_gs"]:
                         self.live_configs[symbol][pside]["mode"] = "graceful_stop"
@@ -860,8 +762,6 @@ class Passivbot:
                     else:
                         self.live_configs[symbol][pside]["mode"] = "manual"
                         self.PB_modes[pside][symbol] = "manual"
-
-                    self.live_configs[symbol][pside]["enabled"] = False
             if symbol not in self.positions:
                 self.positions[symbol] = {
                     "long": {"size": 0.0, "price": 0.0},
@@ -871,35 +771,40 @@ class Passivbot:
                 self.open_orders[symbol] = []
         self.set_wallet_exposure_limits()
         self.update_trailing_data()
+        res = log_dict_changes(previous_PB_modes, self.PB_modes)
+        for k, v in res.items():
+            for elm in v:
+                print(k, elm)
 
-        # log changes
-        for pside in self.PB_modes:
-            if previous_PB_modes is None:
-                for mode in set(self.PB_modes[pside].values()):
-                    coins = [
-                        symbol_to_coin(s)
-                        for s in self.PB_modes[pside]
-                        if self.PB_modes[pside][s] == mode
-                    ]
-                    logging.info(f" setting {pside: <5} {mode}: {','.join(coins)}")
-            else:
-                if previous_PB_modes[pside] != self.PB_modes[pside]:
-                    for symbol in self.active_symbols:
-                        if symbol in self.PB_modes[pside]:
-                            if symbol in previous_PB_modes[pside]:
-                                if self.PB_modes[pside][symbol] != previous_PB_modes[pside][symbol]:
-                                    logging.info(
-                                        f"changing {pside: <5} {self.pad_sym(symbol)}: {previous_PB_modes[pside][symbol]} -> {self.PB_modes[pside][symbol]}"
-                                    )
-                            else:
-                                logging.info(
-                                    f" setting {pside: <5} {self.pad_sym(symbol)}: {self.PB_modes[pside][symbol]}"
-                                )
-                        else:
-                            if symbol in previous_PB_modes[pside]:
-                                logging.info(
-                                    f"removing {pside: <5} {self.pad_sym(symbol)}: {previous_PB_modes[pside][symbol]}"
-                                )
+    def get_filtered_coins(self, pside):
+        # determine n slots
+        # filter coins by age
+        # filter coins by min effective cost
+        # filter coins by relative volume
+        # filter coins by noisiness
+        candidates = self.approved_coins_minus_ignored_coins[pside]
+        if self.is_forager_mode(pside):
+            candidates = [s for s in candidates if self.is_old_enough(pside, s)]
+            candidates = [s for s in candidates if self.effective_min_cost_is_low_enough(pside, s)]
+            if candidates == []:
+                self.warn_on_high_effective_min_cost(pside)
+            # filter coins by relative volume and noisiness
+            clip_pct = self.config["bot"][pside]["filter_relative_volume_clip_pct"]
+            if clip_pct > 0.0:
+                volumes = self.calc_volumes(pside, symbols=candidates)
+                # filter by relative volume
+                n_eligible = round(len(volumes) * (1 - clip_pct))
+                max_n_positions = self.get_max_n_positions(pside)
+                candidates = sorted(volumes, key=lambda x: volumes[x], reverse=True)
+                candidates = candidates[: int(max(n_eligible, max_n_positions))]
+            # ideal symbols are high noise symbols
+            noisiness = self.calc_noisiness(pside, eligible_symbols=candidates)
+            noisiness = {k: v for k, v in sorted(noisiness.items(), key=lambda x: x[1], reverse=True)}
+            ideal_coins = [k for k in noisiness.keys()][:max_n_positions]
+        else:
+            # all approved coins are selected, no filtering
+            ideal_coins = sorted(self.approved_coins_minus_ignored_coins[pside])
+        return ideal_coins
 
     def warn_on_high_effective_min_cost(self, pside):
         if not self.config["live"]["filter_by_min_effective_cost"]:
@@ -957,12 +862,10 @@ class Passivbot:
     def effective_min_cost_is_low_enough(self, pside, symbol):
         if not self.config["live"]["filter_by_min_effective_cost"]:
             return True
-        n_positions = self.get_max_n_positions(pside)
-        if n_positions <= 0:
-            return False
-        WE_limit = self.config["bot"][pside]["total_wallet_exposure_limit"] / n_positions
         return (
-            self.balance * WE_limit * self.live_configs[symbol][pside]["entry_initial_qty_pct"]
+            self.balance
+            * self.get_wallet_exposure_limit(pside, symbol)
+            * self.live_configs[symbol][pside]["entry_initial_qty_pct"]
             >= self.effective_min_cost[symbol]
         )
 
@@ -1383,7 +1286,7 @@ class Passivbot:
             return any([self.is_enabled(symbol, pside) for symbol in self.live_configs])
         return (
             symbol in self.live_configs
-            and self.config["bot"][pside]["wallet_exposure_limit"] > 0.0
+            and self.live_configs[symbol][pside]["wallet_exposure_limit"] > 0.0
             and self.get_max_n_positions(pside) > 0.0
         )
 
@@ -1822,7 +1725,7 @@ class Passivbot:
         self.upd_minute_emas[symbol] = first_ts
 
     async def update_EMAs(self):
-        for symbol in self.get_approved_or_active_symbols():
+        for symbol in self.get_symbols_approved_or_has_pos():
             if symbol not in self.ohlcvs_1m or not self.ohlcvs_1m[symbol]:
                 await self.update_ohlcvs_1m_single(symbol)
                 sts = utc_ms()
@@ -1858,39 +1761,47 @@ class Passivbot:
             return False
 
     def get_symbols_with_pos(self, pside=None):
+        # returns symbols that have position
         if pside is None:
             return self.get_symbols_with_pos("long") | self.get_symbols_with_pos("short")
         return set([s for s in self.positions if self.positions[s][pside]["size"] != 0.0])
 
-    def get_active_symbols(self, pside=None) -> set:
+    def get_active_symbolszzz(self, pside=None) -> set:
         if pside is None:
             return self.get_active_symbols("long") | self.get_active_symbols("short")
-        # an active symbol is a symbol currently traded. Either on normal or gs mode
+        # An active symbol is a symbol currently traded.
+        # Either on normal mode or with pos on gs mode.
+        # Positions with panic, manual or tp_only modes are not considered active.
         active_symbols = set()
         for symbol in self.forced_modes[pside]:
             if self.forced_modes[pside][symbol] == "normal":
                 active_symbols.add(symbol)
         for symbol in self.get_symbols_with_pos(pside):
-            if symbol not in self.forced_modes[pside]:
+            if symbol in self.forced_modes[pside]:
+                if self.forced_modes[pside][symbol] in ["normal", "graceful_stop"]:
+                    active_symbols.add(symbol)
+            else:
+                pass
+            if symbol not in self.forced_modes[pside] or self.forced_modes[pside][symbol] in [
+                "normal",
+                "graceful_stop",
+            ]:
                 active_symbols.add(symbol)
         for symbol in self.PB_modes[pside]:
             if self.PB_modes[pside][symbol] == "normal":
                 active_symbols.add(symbol)
         return active_symbols
 
-    def get_approved_or_active_symbols(self, pside=None) -> set:
+    def get_symbols_approved_or_has_pos(self, pside=None) -> set:
         if pside is None:
-            return self.get_approved_or_active_symbols("long") | self.get_approved_or_active_symbols(
-                "short"
-            )
-        return self.approved_coins_minus_ignored_coins[pside] | self.get_active_symbols(pside)
-
-    def get_eligible_or_active_symbols(self):
-        return sorted(self.eligible_symbols | set(self.active_symbols))
+            return self.get_symbols_approved_or_has_pos(
+                "long"
+            ) | self.get_symbols_approved_or_has_pos("short")
+        return self.approved_coins_minus_ignored_coins[pside] | self.get_symbols_with_pos(pside)
 
     def get_ohlcvs_1m_file_mods(self, symbols=None):
         if symbols is None:
-            symbols = self.get_approved_or_active_symbols()
+            symbols = self.get_symbols_approved_or_has_pos()
         last_update_tss = []
         for symbol in symbols:
             try:
@@ -1953,20 +1864,6 @@ class Passivbot:
                 traceback.print_exc()
                 await asyncio.sleep(5)
 
-    async def start_data_maintainers_new(self):
-        # maintains REST init_markets_dict and ohlcv_1m
-        if hasattr(self, "maintainers"):
-            self.stop_data_maintainers()
-        self.maintainers = {
-            k: asyncio.create_task(getattr(self, k)())
-            for k in [
-                "maintain_hourly_cycle",
-                "maintain_ohlcvs_1m_REST",
-                "watch_ohlcvs_1m",
-                "watch_orders",
-            ]
-        }
-
     async def start_data_maintainers(self):
         # maintains REST init_markets_dict and ohlcv_1m
         if hasattr(self, "maintainers"):
@@ -1974,7 +1871,7 @@ class Passivbot:
         self.maintainers = {
             k: asyncio.create_task(getattr(self, k)())
             for k in [
-                "maintain_markets_info",
+                "maintain_hourly_cycle",
                 "maintain_ohlcvs_1m_REST",
                 "watch_ohlcvs_1m",
                 "watch_orders",
@@ -2036,21 +1933,6 @@ class Passivbot:
                 await asyncio.sleep(1)
             await asyncio.sleep(0.1)
 
-    async def start_bot(self, debug_mode=False):
-        logging.info(f"initiating markets...")
-        await self.init_markets_dict()
-        await asyncio.sleep(1)
-        logging.info(f"starting data maintainers...")
-        await self.start_data_maintainers()
-        await self.wait_for_ohlcvs_1m_to_update()
-        logging.info(f"starting websocket...")
-        self.previous_REST_update_ts = utc_ms()
-        await self.prepare_for_execution()
-
-        logging.info(f"starting execution loop...")
-        if not debug_mode:
-            await self.run_execution_loop()
-
     def calc_noisiness(self, pside, eligible_symbols=None):
         if eligible_symbols is None:
             eligible_symbols = self.eligible_symbols
@@ -2064,10 +1946,12 @@ class Passivbot:
                 noisiness[symbol] = 0.0
         return noisiness
 
-    def calc_volumes(self, pside):
+    def calc_volumes(self, pside, symbols=None):
         n = int(round(self.config["bot"][pside]["filter_rolling_window"]))
         volumes = {}
-        for symbol in self.get_approved_or_active_symbols(pside):
+        if symbols is None:
+            symbols = self.get_symbols_approved_or_has_pos(pside)
+        for symbol in symbols:
             if (
                 symbol in self.ohlcvs_1m
                 and self.ohlcvs_1m[symbol]
@@ -2109,7 +1993,7 @@ class Passivbot:
             self.ohlcvs_1m = {}
         error_count = 0
         self.ohlcvs_1m_update_timestamps = {}
-        approved_or_active_symbols = self.get_approved_or_active_symbols()
+        approved_or_active_symbols = self.get_symbols_approved_or_has_pos()
         self.n_symbols_missing_ohlcvs_1m = len(approved_or_active_symbols)
         init_ohlcvs_sleep_time = 4.0 / self.n_symbols_missing_ohlcvs_1m
         for symbol in approved_or_active_symbols:
@@ -2124,7 +2008,7 @@ class Passivbot:
                 symbols_too_old = []
                 max_age_ms = self.ohlcvs_1m_max_age_ms
                 now_utc = utc_ms()
-                for symbol in self.get_approved_or_active_symbols():
+                for symbol in self.get_symbols_approved_or_has_pos():
                     if symbol not in self.ohlcvs_1m_update_timestamps:
                         symbols_too_old.append((0, symbol))
                     else:
