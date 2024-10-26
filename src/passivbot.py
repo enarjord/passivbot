@@ -1196,8 +1196,10 @@ class Passivbot:
                 / self.balance
             )
             try:
-                WE_ratio = wallet_exposure / self.live_configs[symbol][pside]["wallet_exposure_limit"]
-            except:
+                wel = self.live_configs[symbol][pside]["wallet_exposure_limit"]
+                WE_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
+            except Exception as e:
+                logging.error(f"error with log_position_changes {e}")
                 WE_ratio = 0.0
             last_price = or_default(self.get_last_price, symbol, default=0.0)
             try:
@@ -1996,10 +1998,10 @@ class Passivbot:
             self.ohlcvs_1m = {}
         error_count = 0
         self.ohlcvs_1m_update_timestamps = {}
-        approved_or_active_symbols = self.get_symbols_approved_or_has_pos()
-        self.n_symbols_missing_ohlcvs_1m = len(approved_or_active_symbols)
+        symbol_approved_or_has_pos = self.get_symbols_approved_or_has_pos()
+        self.n_symbols_missing_ohlcvs_1m = len(symbol_approved_or_has_pos)
         init_ohlcvs_sleep_time = 4.0 / self.n_symbols_missing_ohlcvs_1m
-        for symbol in approved_or_active_symbols:
+        for symbol in symbol_approved_or_has_pos:
             # print("debug update_ohlcvs_1m_single_from_disk", symbol)
             asyncio.create_task(self.update_ohlcvs_1m_single_from_disk(symbol))
             await asyncio.sleep(min(0.1, init_ohlcvs_sleep_time))
