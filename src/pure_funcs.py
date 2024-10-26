@@ -2579,3 +2579,55 @@ def hysteresis_rounding(balance, last_rounded_balance, percentage=0.02, h=0.5):
     else:
         rounded_balance = last_rounded_balance
     return pbr.round_dynamic(rounded_balance, 6)
+
+
+def log_dict_changes(d1, d2, parent_key=""):
+    """
+    Compare two nested dictionaries and log the changes between them.
+
+    Args:
+        dict1: The original dictionary
+        dict2: The new dictionary to compare against
+
+    Returns:
+        tuple: Lists of added items, removed items, and value changes
+    """
+
+    changes = {"added": [], "removed": [], "changed": []}
+
+    # Handle the case where either dictionary is empty
+    if not d1:
+        changes["added"].extend([f"{parent_key}{k}: {v}" for k, v in d2.items()])
+        return changes
+    if not d2:
+        changes["removed"].extend([f"{parent_key}{k}: {v}" for k, v in d1.items()])
+        return changes
+
+    # Compare items in both dictionaries
+    for key in set(d1.keys()) | set(d2.keys()):
+        new_parent = f"{parent_key}{key}." if parent_key else f"{key}."
+
+        # If key exists in both dictionaries
+        if key in d1 and key in d2:
+            if isinstance(d1[key], dict) and isinstance(d2[key], dict):
+                nested_changes = log_dict_changes(d1[key], d2[key], new_parent)
+                for change_type, items in nested_changes.items():
+                    changes[change_type].extend(items)
+            elif d1[key] != d2[key]:
+                changes["changed"].append(f"{parent_key}{key}: {d1[key]} -> {d2[key]}")
+        # If key only exists in dict2
+        elif key in d2:
+            if isinstance(d2[key], dict):
+                nested_changes = log_dict_changes({}, d2[key], new_parent)
+                changes["added"].extend(nested_changes["added"])
+            else:
+                changes["added"].append(f"{parent_key}{key}: {d2[key]}")
+        # If key only exists in dict1
+        else:
+            if isinstance(d1[key], dict):
+                nested_changes = log_dict_changes(d1[key], {}, new_parent)
+                changes["removed"].extend(nested_changes["removed"])
+            else:
+                changes["removed"].append(f"{parent_key}{key}: {d1[key]}")
+
+    return changes
