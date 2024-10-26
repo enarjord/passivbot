@@ -54,7 +54,6 @@ from njit_funcs import (
     calc_pnl_short,
     calc_pprice_diff,
 )
-from njit_multisymbol import calc_AU_allowance
 from pure_funcs import (
     numpyize,
     denumpyize,
@@ -1453,7 +1452,7 @@ class Passivbot:
                         continue
                     if any([x in order[2] for x in ["initial", "unstuck"]]):
                         continue
-                seen_key = str(abs(order[0])) + str(order[1])
+                seen_key = str(abs(order[0])) + str(order[1]) + order[2]
                 if seen_key in seen:
                     logging.info(f"debug duplicate ideal order {symbol} {order}")
                     continue
@@ -1473,6 +1472,7 @@ class Passivbot:
 
     def calc_unstucking_close(self, ideal_orders):
         stuck_positions = []
+        pnls_cumsum = np.array([x["pnl"] for x in self.pnls]).cumsum()
         for symbol in self.positions:
             for pside in ["long", "short"]:
                 if (
@@ -1491,15 +1491,14 @@ class Passivbot:
                         > self.live_configs[symbol][pside]["unstuck_threshold"]
                     ):
                         unstuck_allowance = (
-                            calc_AU_allowance(
-                                np.array([x["pnl"] for x in self.pnls]),
+                            pbr.calc_auto_unstuck_allowance(
                                 self.balance,
-                                loss_allowance_pct=self.config["bot"][pside][
-                                    "unstuck_loss_allowance_pct"
-                                ]
+                                self.config["bot"][pside]["unstuck_loss_allowance_pct"]
                                 * self.config["bot"][pside]["total_wallet_exposure_limit"],
+                                pnls_cumsum.max(),
+                                pnls_cumsum[-1],
                             )
-                            if len(self.pnls) > 0
+                            if len(pnls_cumsum) > 0
                             else 0.0
                         )
                         if unstuck_allowance > 0.0:
@@ -1797,7 +1796,11 @@ class Passivbot:
             return self.get_symbols_approved_or_has_pos(
                 "long"
             ) | self.get_symbols_approved_or_has_pos("short")
-        return self.approved_coins_minus_ignored_coins[pside] | self.get_symbols_with_pos(pside)
+        return (
+            self.approved_coins_minus_ignored_coins[pside]
+            | self.get_symbols_with_pos(pside)
+            | {s for s in self.forced_modes[pside] if self.forced_modes[pside][s] == "normal"}
+        )
 
     def get_ohlcvs_1m_file_mods(self, symbols=None):
         if symbols is None:
