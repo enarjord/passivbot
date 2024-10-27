@@ -298,7 +298,7 @@ class BinanceBot(Passivbot):
 
     async def fetch_fills_sub(self, symbol, start_time=None, end_time=None, limit=None):
         try:
-            if symbol not in self.markets_dict:
+            if symbol not in self.markets_dict_all:
                 return []
             # limit is max 1000
             if limit is None:
@@ -340,8 +340,6 @@ class BinanceBot(Passivbot):
                 all_fills[i]["position_side"] = all_fills[i]["info"]["positionSide"].lower()
             return all_fills
         except Exception as e:
-            if symbol in self.ineligible_symbols:
-                return []
             logging.error(f"error with fetch_fills_sub {symbol} {e}")
             return []
 
