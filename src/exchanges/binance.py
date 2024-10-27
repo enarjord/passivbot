@@ -291,7 +291,7 @@ class BinanceBot(Passivbot):
 
     async def fetch_fills_sub(self, symbol, start_time=None, end_time=None, limit=None):
         try:
-            if symbol not in self.markets_dict_all:
+            if symbol not in self.markets_dict:
                 return []
             # limit is max 1000
             if limit is None:
