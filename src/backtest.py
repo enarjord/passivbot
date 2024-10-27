@@ -84,10 +84,11 @@ def analyze_fills_forager(symbols, hlcvs, fdf, equities):
         pnls[pside] = profit + loss
         analysis[f"loss_profit_ratio_{pside}"] = abs(loss / profit)
 
+    div_by = 60 # save some disk space. Set to 1 to dump uncropped
     analysis["pnl_ratio_long_short"] = pnls["long"] / (pnls["long"] + pnls["short"])
-    bdf = fdf.groupby((fdf.minute // 60) * 60).balance.last()
-    edf = equities.iloc[::60]
-    nidx = np.arange(min(bdf.index[0], edf.index[0]), max(bdf.index[-1], edf.index[-1]), 60)
+    bdf = fdf.groupby((fdf.minute // div_by) * div_by).balance.last()
+    edf = equities.iloc[::div_by]
+    nidx = np.arange(min(bdf.index[0], edf.index[0]), max(bdf.index[-1], edf.index[-1]), div_by)
     bal_eq = pd.DataFrame({"balance": bdf, "equity": edf}, index=nidx).astype(float).ffill().bfill()
     return sort_dict_keys(analysis), bal_eq
 
