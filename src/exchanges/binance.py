@@ -290,45 +290,51 @@ class BinanceBot(Passivbot):
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
 
     async def fetch_fills_sub(self, symbol, start_time=None, end_time=None, limit=None):
-        # limit is max 1000
-        if limit is None:
-            limit = 1000
-        if start_time is None:
-            all_fills = await self.cca.fetch_my_trades(symbol, limit=limit)
-        else:
-            week = 1000 * 60 * 60 * 24 * 7.0
-            all_fills = {}
-            if end_time is None:
-                end_time = self.get_exchange_time() + 1000 * 60 * 60
-            sts = start_time
-            while True:
-                ets = min(end_time, sts + week * 0.999)
-                fills = await self.cca.fetch_my_trades(
-                    symbol, limit=limit, params={"startTime": int(sts), "endTime": int(ets)}
-                )
-                if fills:
-                    if fills[0]["id"] in all_fills and fills[-1]["id"] in all_fills:
-                        break
-                    for x in fills:
-                        all_fills[x["id"]] = x
-                    if fills[-1]["timestamp"] >= end_time:
-                        break
-                    if end_time - sts < week and len(fills) < limit:
-                        break
-                    sts = fills[-1]["timestamp"]
-                    logging.info(
-                        f"fetched {len(fills)} fill{'s' if len(fills) > 1 else ''} for {symbol} {ts_to_date_utc(fills[0]['timestamp'])}"
-                    )
-                else:
-                    if end_time - sts < week:
-                        break
-                    sts = sts + week * 0.999
+        try:
+            if symbol not in self.markets_dict_all:
+                return []
+            # limit is max 1000
+            if limit is None:
                 limit = 1000
-            all_fills = sorted(all_fills.values(), key=lambda x: x["timestamp"])
-        for i in range(len(all_fills)):
-            all_fills[i]["pnl"] = float(all_fills[i]["info"]["realizedPnl"])
-            all_fills[i]["position_side"] = all_fills[i]["info"]["positionSide"].lower()
-        return all_fills
+            if start_time is None:
+                all_fills = await self.cca.fetch_my_trades(symbol, limit=limit)
+            else:
+                week = 1000 * 60 * 60 * 24 * 7.0
+                all_fills = {}
+                if end_time is None:
+                    end_time = self.get_exchange_time() + 1000 * 60 * 60
+                sts = start_time
+                while True:
+                    ets = min(end_time, sts + week * 0.999)
+                    fills = await self.cca.fetch_my_trades(
+                        symbol, limit=limit, params={"startTime": int(sts), "endTime": int(ets)}
+                    )
+                    if fills:
+                        if fills[0]["id"] in all_fills and fills[-1]["id"] in all_fills:
+                            break
+                        for x in fills:
+                            all_fills[x["id"]] = x
+                        if fills[-1]["timestamp"] >= end_time:
+                            break
+                        if end_time - sts < week and len(fills) < limit:
+                            break
+                        sts = fills[-1]["timestamp"]
+                        logging.info(
+                            f"fetched {len(fills)} fill{'s' if len(fills) > 1 else ''} for {symbol} {ts_to_date_utc(fills[0]['timestamp'])}"
+                        )
+                    else:
+                        if end_time - sts < week:
+                            break
+                        sts = sts + week * 0.999
+                    limit = 1000
+                all_fills = sorted(all_fills.values(), key=lambda x: x["timestamp"])
+            for i in range(len(all_fills)):
+                all_fills[i]["pnl"] = float(all_fills[i]["info"]["realizedPnl"])
+                all_fills[i]["position_side"] = all_fills[i]["info"]["positionSide"].lower()
+            return all_fills
+        except Exception as e:
+            logging.error(f"error with fetch_fills_sub {symbol} {e}")
+            return []
 
     async def fetch_pnl(
         self,
