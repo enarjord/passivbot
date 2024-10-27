@@ -732,7 +732,12 @@ class Passivbot:
                 if symbol in self.PB_modes[pside]:
                     continue
                 else:
-                    if symbol in ideal_coins:
+                    if symbol in self.ineligible_symbols:
+                        if self.ineligible_symbols[symbol] == "not active":
+                            self.PB_modes[pside][symbol] = "tp_only"
+                        else:
+                            self.PB_modes[pside][symbol] = "manual"
+                    elif symbol in ideal_coins:
                         self.PB_modes[pside][symbol] = "normal"
                     else:
                         self.PB_modes[pside][symbol] = (
@@ -776,7 +781,6 @@ class Passivbot:
                 logging.info(f"{k} {elm}")
 
     def get_filtered_coins(self, pside):
-        # determine n slots
         # filter coins by age
         # filter coins by min effective cost
         # filter coins by relative volume
