@@ -1465,14 +1465,14 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
                 break;
             }
         }
-        bal_eq.push((equity, last_balance));
+        bal_eq.push((last_balance, equity));
     }
 
     let (equity_balance_diff_sum, equity_balance_diff_max) =
         bal_eq
             .iter()
-            .fold((0.0, 0.0), |(sum, max), &(equity, balance)| {
-                let diff = (balance - equity).abs() / ((equity + balance) / 2.0);
+            .fold((0.0, 0.0), |(sum, max), &(balance, equity)| {
+                let diff = (equity - balance).abs() / balance;
                 (sum + diff, f64::max(max, diff))
             });
     let equity_balance_diff_mean = equity_balance_diff_sum / bal_eq.len() as f64;
