@@ -84,7 +84,7 @@ def analyze_fills_forager(symbols, hlcvs, fdf, equities):
         pnls[pside] = profit + loss
         analysis[f"loss_profit_ratio_{pside}"] = abs(loss / profit)
 
-    div_by = 60 # save some disk space. Set to 1 to dump uncropped
+    div_by = 60  # save some disk space. Set to 1 to dump uncropped
     analysis["pnl_ratio_long_short"] = pnls["long"] / (pnls["long"] + pnls["short"])
     bdf = fdf.groupby((fdf.minute // div_by) * div_by).balance.last()
     edf = equities.iloc[::div_by]
