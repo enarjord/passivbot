@@ -35,6 +35,7 @@ from procedures import (
     format_config,
     print_async_exception,
     coin_to_symbol,
+    read_external_coins_lists,
 )
 from njit_funcs_recursive_grid import calc_recursive_entries_long, calc_recursive_entries_short
 from njit_funcs import (
@@ -2202,6 +2203,8 @@ class Passivbot:
             if not hasattr(self, k_coins):
                 setattr(self, k_coins, {"long": set(), "short": set()})
             path = self.config["live"][k_coins]
+            if isinstance(path, list) and len(path) == 1 and isinstance(path[0], str):
+                path = path[0]
             if isinstance(path, str) and os.path.exists(path):
                 try:
                     content = read_external_coins_lists(path)
@@ -2225,47 +2228,6 @@ class Passivbot:
             self.approved_coins_minus_ignored_coins[pside] = (
                 self.approved_coins[pside] - self.ignored_coins[pside]
             )
-
-
-def read_external_coins_lists(filepath) -> dict:
-    """
-    reads filepath and returns dict {'long': [str], 'short': [str]}
-    """
-    try:
-        content = hjson.load(open(filepath))
-        if isinstance(content, list) and all([isinstance(x, str) for x in content]):
-            return {"long": content, "short": content}
-        elif isinstance(content, dict):
-            if all(
-                [
-                    pside in content
-                    and isinstance(content[pside], list)
-                    and all([isinstance(x, str) for x in content[pside]])
-                    for pside in ["long", "short"]
-                ]
-            ):
-                return content
-    except:
-        pass
-    with open(filepath, "r") as file:
-        content = file.read().strip()
-    # Check if the content is in list format
-    if content.startswith("[") and content.endswith("]"):
-        # Remove brackets and split by comma
-        items = content[1:-1].split(",")
-        # Remove quotes and whitespace
-        items = [item.strip().strip("\"'") for item in items if item.strip()]
-    elif all(
-        line.strip().startswith('"') and line.strip().endswith('"')
-        for line in content.split("\n")
-        if line.strip()
-    ):
-        # Split by newline, remove quotes and whitespace
-        items = [line.strip().strip("\"'") for line in content.split("\n") if line.strip()]
-    else:
-        # Split by newline, comma, and/or space, and filter out empty strings
-        items = [item.strip() for item in content.replace(",", " ").split() if item.strip()]
-    return {"long": items, "short": items}
 
 
 def setup_bot(config):
@@ -2326,7 +2288,7 @@ async def main():
         "configs/template.json" if args.config_path is None else args.config_path, live_only=True
     )
     update_config_with_args(config, args)
-    config = format_config(config)
+    config = format_config(config, live_only=True)
     cooldown_secs = 60
     restarts = []
     while True:
