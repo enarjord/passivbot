@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 from tqdm import tqdm
+from uuid import uuid4
 
 from njit_funcs import calc_samples
 from procedures import (
@@ -401,7 +402,7 @@ async def prepare_hlcvs(config: dict):
     interval_ms = 60000
 
     # Create cache directory if it doesn't exist
-    cache_dir = Path("./cache/hlcv_data")
+    cache_dir = Path(f"./cache/hlcv_data/{uuid4().hex[:16]}")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # First pass: Download data and store metadata
