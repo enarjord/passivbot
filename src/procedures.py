@@ -39,6 +39,7 @@ from pure_funcs import (
     remove_OD,
     symbol_to_coin,
     str2bool,
+    flatten,
 )
 
 
@@ -186,52 +187,54 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
             result[k0][k1] = v
             if verbose:
                 print(f"adding missing parameter {k0} {k1}: {v}")
-    for k_coins in ["approved_coins", "ignored_coins"]:
-        path = result["live"][k_coins]
-        if isinstance(path, list):
-            if len(path) == 1 and isinstance(path[0], str) and os.path.exists(path[0]):
-                if any([path[0].endswith(k) for k in [".txt", ".json", ".hjson"]]):
-                    path = path[0]
-        if isinstance(path, str):
-            if os.path.exists(path):
-                try:
-                    if path.endswith(".json") or path.endswith(".hjson"):
-                        result["live"][k_coins] = hjson.load(open(path))
-                        if verbose:
-                            print(f"set {k_coins} {result['live'][k_coins]}")
-                    elif path.endswith(".txt"):
-                        with open(path) as f:
-                            result["live"][k_coins] = [xx for x in f.readlines() if (xx := x.strip())]
+    if not live_only:
+        for k_coins in ["approved_coins", "ignored_coins"]:
+            path = result["live"][k_coins]
+            if isinstance(path, list):
+                if len(path) == 1 and isinstance(path[0], str) and os.path.exists(path[0]):
+                    if any([path[0].endswith(k) for k in [".txt", ".json", ".hjson"]]):
+                        path = path[0]
+            if isinstance(path, str):
+                if os.path.exists(path):
+                    try:
+                        content = read_external_coins_lists(path)
+                        if content:
                             if verbose:
-                                print(f"set {k_coins} {result['live'][k_coins]}")
-                    else:
-                        print(f"failed to load {k_coins} from file {path}, unknown file format")
-                except Exception as e:
-                    print(f"failed to load {k_coins} from file {path} {e}")
-            else:
-                print(f"path to {k_coins} file does not exist {path}")
-                result["live"][k_coins] = []
-    if result["live"]["ignored_coins"] and not live_only:
-        result["live"]["ignored_coins"] = coins_to_symbols(
-            result["live"]["ignored_coins"], exchange=result["backtest"]["exchange"], verbose=verbose
+                                if result["live"][k_coins] != content:
+                                    print(f"set {k_coins} {content}")
+                            result["live"][k_coins] = content
+                    except Exception as e:
+                        print(f"failed to load {k_coins} from file {path} {e}")
+                else:
+                    print(f"path to {k_coins} file does not exist {path}")
+                    result["live"][k_coins] = {"long": [], "short": []}
+            if isinstance(result["live"][k_coins], list):
+                result["live"][k_coins] = {
+                    "long": deepcopy(result["live"][k_coins]),
+                    "short": deepcopy(result["live"][k_coins]),
+                }
+        eligible_symbols = get_all_eligible_symbols(result["backtest"]["exchange"])
+        ignored_coins = coins_to_symbols(
+            set(flatten(result["live"]["ignored_coins"].values())), eligible_symbols=eligible_symbols
         )
-    if result["live"]["approved_coins"] and not live_only:
-        result["live"]["approved_coins"] = [
-            x
-            for x in coins_to_symbols(
-                result["live"]["approved_coins"],
-                exchange=result["backtest"]["exchange"],
-                verbose=verbose,
-            )
-            if x not in result["live"]["ignored_coins"]
-        ]
-        result["backtest"]["symbols"] = result["live"]["approved_coins"]
-    elif not live_only:
-        result["backtest"]["symbols"] = [
-            x
-            for x in get_all_eligible_symbols(result["backtest"]["exchange"])
-            if x not in result["live"]["ignored_coins"]
-        ]
+        approved_coins = coins_to_symbols(
+            set(flatten(result["live"]["approved_coins"].values())), eligible_symbols=eligible_symbols
+        )
+        if approved_coins:
+            result["backtest"]["symbols"] = [
+                x
+                for x in coins_to_symbols(
+                    sorted(approved_coins), exchange=result["backtest"]["exchange"], verbose=verbose
+                )
+                if x not in ignored_coins
+            ]
+        else:
+            result["backtest"]["symbols"] = [
+                s
+                for s in sorted(get_all_eligible_symbols(result["backtest"]["exchange"]))
+                if s not in ignored_coins
+            ]
+
     return result
 
 
@@ -352,7 +355,8 @@ def coin_to_symbol_old(coin: str, eligible_symbols=None, verbose=True):
 
 
 def coins_to_symbols(coins: [str], eligible_symbols=None, exchange=None, verbose=True):
-    eligible_symbols = get_all_eligible_symbols(exchange)
+    if eligible_symbols is None:
+        eligible_symbols = get_all_eligible_symbols(exchange)
     symbols = [coin_to_symbol(x, eligible_symbols, verbose=verbose) for x in coins]
     return sorted(set([x for x in symbols if x]))
 
@@ -1404,6 +1408,47 @@ def update_config_with_args(config, args):
     for key, value in vars(args).items():
         if value is not None:
             recursive_config_update(config, key, value)
+
+
+def read_external_coins_lists(filepath) -> dict:
+    """
+    reads filepath and returns dict {'long': [str], 'short': [str]}
+    """
+    try:
+        content = hjson.load(open(filepath))
+        if isinstance(content, list) and all([isinstance(x, str) for x in content]):
+            return {"long": content, "short": content}
+        elif isinstance(content, dict):
+            if all(
+                [
+                    pside in content
+                    and isinstance(content[pside], list)
+                    and all([isinstance(x, str) for x in content[pside]])
+                    for pside in ["long", "short"]
+                ]
+            ):
+                return content
+    except:
+        pass
+    with open(filepath, "r") as file:
+        content = file.read().strip()
+    # Check if the content is in list format
+    if content.startswith("[") and content.endswith("]"):
+        # Remove brackets and split by comma
+        items = content[1:-1].split(",")
+        # Remove quotes and whitespace
+        items = [item.strip().strip("\"'") for item in items if item.strip()]
+    elif all(
+        line.strip().startswith('"') and line.strip().endswith('"')
+        for line in content.split("\n")
+        if line.strip()
+    ):
+        # Split by newline, remove quotes and whitespace
+        items = [line.strip().strip("\"'") for line in content.split("\n") if line.strip()]
+    else:
+        # Split by newline, comma, and/or space, and filter out empty strings
+        items = [item.strip() for item in content.replace(",", " ").split() if item.strip()]
+    return {"long": items, "short": items}
 
 
 def main():
