@@ -167,14 +167,15 @@ class BinanceBot(Passivbot):
             )
             positions = []
             for elm in fetched_positions:
-                positions.append(
-                    {
-                        "symbol": self.get_symbol_id_inv(elm["symbol"]),
-                        "position_side": elm["positionSide"].lower(),
-                        "size": float(elm["positionAmt"]),
-                        "price": float(elm["entryPrice"]),
-                    }
-                )
+                if float(elm["positionAmt"]) != 0.0:
+                    positions.append(
+                        {
+                            "symbol": self.get_symbol_id_inv(elm["symbol"]),
+                            "position_side": elm["positionSide"].lower(),
+                            "size": float(elm["positionAmt"]),
+                            "price": float(elm["entryPrice"]),
+                        }
+                    )
             balance = float(fetched_balance["info"]["totalCrossWalletBalance"])
             if not hasattr(self, "previous_rounded_balance"):
                 self.previous_rounded_balance = balance
