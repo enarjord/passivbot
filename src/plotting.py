@@ -434,11 +434,11 @@ def plot_pnls_stuck(sdf, fdf, symbol=None, start_pct=0.0, end_pct=1.0, unstuck_t
     return plt
 
 
-def plot_fills_forager(fdf: pd.DataFrame, hlcs_df: pd.DataFrame, start_pct=0.0, end_pct=1.0):
+def plot_fills_forager(fdf: pd.DataFrame, hlcvs_df: pd.DataFrame, start_pct=0.0, end_pct=1.0):
     plt.clf()
     if len(fdf) == 0:
         return
-    hlcc = hlcs_df.loc[fdf.iloc[0].minute : fdf.iloc[-1].minute]
+    hlcc = hlcvs_df[["high", "low", "close"]].loc[fdf.iloc[0].minute : fdf.iloc[-1].minute]
     fdfc = fdf.set_index(fdf.minute.astype(int))
 
     start_minute = int(hlcc.index[0] + hlcc.index[-1] * start_pct)
