@@ -61,7 +61,7 @@
           "filter_by_min_effective_cost": true,
           "forced_mode_long": "",
           "forced_mode_short": "",
-          "ignored_coins": ["COIN1", "COIN2"],
+          "ignored_coins": [],
           "leverage": 10.0,
           "max_n_cancellations_per_batch": 5,
           "max_n_creations_per_batch": 3,
