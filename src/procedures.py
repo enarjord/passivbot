@@ -10,7 +10,8 @@ import pprint
 from copy import deepcopy
 import argparse
 from collections import defaultdict
-
+from typing import Union, Optional
+from pathlib import Path
 
 try:
     import hjson
@@ -254,8 +255,10 @@ def get_all_eligible_symbols(exchange="binance"):
     loaded_json = None
     try:
         loaded_json = json.load(open(filepath))
-        assert utc_ms() - get_file_mod_utc(filepath) < 1000 * 60 * 60 * 24
-        return loaded_json
+        if utc_ms() - get_file_mod_utc(filepath) > 1000 * 60 * 60 * 24:
+            print(f"Eligible_symbols cache more than 24h old. Fetching new.")
+        else:
+            return loaded_json
     except Exception as e:
         print(f"failed to load {filepath}. Fetching from {exchange}")
         pass
@@ -569,6 +572,53 @@ def add_market_specific_settings(config):
         except:
             raise Exception(f"failed to load cached market_specific_settings for symbol {symbol}")
     config.update(market_specific_settings)
+
+
+def ensure_parent_directory(
+    filepath: Union[str, Path], mode: int = 0o755, exist_ok: bool = True
+) -> Path:
+    """
+    Creates directory and subdirectories for a given filepath if they don't exist,
+    then returns the path as a Path object.
+
+    Args:
+        filepath: String or Path object representing the file or directory path
+        mode: Directory permissions (default: 0o755)
+        exist_ok: If False, raise FileExistsError if directory exists (default: True)
+
+    Returns:
+        Path object representing the input filepath
+
+    Raises:
+        TypeError: If filepath is neither str nor Path
+        PermissionError: If user lacks permission to create directory
+        FileExistsError: If directory exists and exist_ok is False
+    """
+    try:
+        # Convert to Path object
+        path = Path(filepath)
+
+        # Determine if the path points to a directory
+        # (either ends with separator or is explicitly a directory)
+        if str(path).endswith(os.path.sep) or (path.exists() and path.is_dir()):
+            dirpath = path
+        else:
+            dirpath = path.parent
+
+        # Create directory if it doesn't exist
+        if not dirpath.exists():
+            dirpath.mkdir(parents=True, mode=mode, exist_ok=exist_ok)
+        elif not exist_ok:
+            raise FileExistsError(f"Directory already exists: {dirpath}")
+
+        return path
+
+    except TypeError as e:
+        raise TypeError(f"filepath must be str or Path, not {type(filepath)}") from e
+    except PermissionError as e:
+        raise PermissionError(f"Permission denied creating directory: {dirpath}") from e
+    except Exception as e:
+        raise RuntimeError(f"Error processing filepath: {str(e)}") from e
 
 
 def make_get_filepath(filepath: str) -> str:
