@@ -729,7 +729,9 @@ class Passivbot:
             slots_filled = {
                 k for k, v in self.PB_modes[pside].items() if v in ["normal", "graceful_stop"]
             }
-            for symbol in self.get_symbols_with_pos(pside):
+            max_n_positions = self.get_max_n_positions(pside)
+            symbols_with_pos = self.get_symbols_with_pos(pside)
+            for symbol in symbols_with_pos:
                 if symbol in self.PB_modes[pside]:
                     continue
                 else:
@@ -738,6 +740,10 @@ class Passivbot:
                             self.PB_modes[pside][symbol] = "tp_only"
                         else:
                             self.PB_modes[pside][symbol] = "manual"
+                    elif len(symbols_with_pos) > max_n_positions:
+                        self.PB_modes[pside][symbol] = (
+                            "graceful_stop" if self.config["live"]["auto_gs"] else "manual"
+                        )
                     elif symbol in ideal_coins:
                         self.PB_modes[pside][symbol] = "normal"
                     else:
@@ -745,7 +751,6 @@ class Passivbot:
                             "graceful_stop" if self.config["live"]["auto_gs"] else "manual"
                         )
                     slots_filled.add(symbol)
-            max_n_positions = self.get_max_n_positions(pside)
             for symbol in ideal_coins:
                 if len(slots_filled) >= max_n_positions:
                     break
@@ -878,7 +883,7 @@ class Passivbot:
             if not order or "id" not in order:
                 return False
             if "symbol" not in order or order["symbol"] is None:
-                logging.info(f"symbol not in order: {order}")
+                logging.info(f"symbol not in order. Source: {source} {order}")
                 return False
             if order["symbol"] not in self.open_orders:
                 self.open_orders[order["symbol"]] = []
