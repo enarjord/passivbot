@@ -52,6 +52,12 @@ from pure_funcs import (
     safe_filename,
 )
 
+logging.basicConfig(
+    format="%(asctime)s %(levelname)-8s %(message)s",
+    level=logging.INFO,
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
+
 
 async def fetch_zips(url):
     try:
@@ -66,11 +72,11 @@ async def fetch_zips(url):
         return zips
 
     except aiohttp.ClientError as e:
-        print("Error during HTTP request:", e)
+        logging.error(f"Error during HTTP request: {e}")
     except zipfile.BadZipFile:
-        print("Error extracting the zip file. Make sure it contains a valid CSV file.")
+        logging.error(f"Error extracting the zip file. Make sure it contains a valid CSV file.")
     except pd.errors.EmptyDataError:
-        print("The CSV file is empty or could not be loaded as a DataFrame.")
+        logging.error("The CSV file is empty or could not be loaded as a DataFrame.")
 
 
 async def get_zip_binance(url):
@@ -98,7 +104,7 @@ def get_first_ohlcv_ts(symbol: str, spot=False) -> int:
         first_ts = first_ohlcvs[0][0]
         return first_ts
     except Exception as e:
-        print(f"error getting first ohlcv ts {e}, returning 0")
+        logging.error(f"error getting first ohlcv ts {e}, returning 0")
         return 0
 
 
@@ -124,9 +130,9 @@ async def download_ohlcvs_bybit(symbol, start_date, end_date, spot=False, downlo
                 symbol, start_date, end_date, spot=False, download_only=False, n_concurrent_fetches=n
             )
         except Exception as e:
-            print(f"Error fetching trades from bybit for {symbol} {e}. ")
+            logging.error(f"Error fetching trades from bybit for {symbol} {e}. ")
             if i < len(ns):
-                f"Retrying with concurrent fetches changed {n} -> {ns[i+1]}."
+                logging.info(f"Retrying with concurrent fetches changed {n} -> {ns[i+1]}.")
 
 
 async def download_ohlcvs_bybit_sub(
@@ -151,7 +157,7 @@ async def download_ohlcvs_bybit_sub(
         if len(filenames) > 0:
             for i in range(0, len(filenames), n_concurrent_fetches):
                 filenames_sublist = filenames[i : i + n_concurrent_fetches]
-                print(
+                logging.info(
                     f"fetching {len(filenames_sublist)} files with {symbol} trades from {filenames_sublist[0][-17:-7]} to {filenames_sublist[-1][-17:-7]}"
                 )
                 dfs_ = await get_bybit_trades(base_url, symbol, filenames_sublist)
@@ -206,7 +212,7 @@ async def get_csv_gz(session, url: str):
             tdf = pd.read_csv(f)
         return tdf
     except Exception as e:
-        print("error fetching bybit trades", e)
+        logging.error(f"error fetching bybit trades {e}")
         traceback.print_exc()
         return pd.DataFrame()
 
@@ -237,11 +243,11 @@ def convert_to_ohlcv(df, spot, interval=60000):
 
 async def download_single_ohlcvs_binance(url: str, fpath: str):
     try:
-        print(f"fetching {url}")
+        logging.info(f"fetching {url}")
         csv = await get_zip_binance(url)
         dump_ohlcv_data(csv, fpath)
     except Exception as e:
-        print(f"failed to download {url} {e}")
+        logging.error(f"failed to download {url} {e}")
 
 
 async def download_ohlcvs_binance(
@@ -307,7 +313,7 @@ async def download_ohlcvs_binance(
     for fname in fnames:
         if fname.endswith(".npy") and len(fname) == 14:
             if fname[:7] + ".npy" in fnames:
-                print("deleting", os.path.join(dirpath, fname))
+                logging.info(f"deleting {os.path.join(dirpath, fname)}")
                 os.remove(os.path.join(dirpath, fname))
 
     if not download_only:
@@ -320,7 +326,7 @@ async def download_ohlcvs_binance(
         try:
             df = pd.concat(dfs)[col_names].sort_values("timestamp")
         except ValueError as e:
-            print(
+            logging.error(
                 f"error with download_ohlcvs_binance {symbol} {start_date} {end_date}: {e}. Returning empty"
             )
             return pd.DataFrame()
@@ -344,7 +350,7 @@ def count_longest_identical_data(hlc, symbol, verbose=True):
                 i_ = i
             counter = 0
     if verbose:
-        print(
+        logging.info(
             f"{symbol} most n days of consecutive identical ohlcvs: {longest_consecutive / 60 / 24:.3f}, index last: {i_}"
         )
     return longest_consecutive
@@ -361,7 +367,7 @@ def attempt_gap_fix_hlcvs(df, symbol=None):
         raise Exception(
             f"ohlcvs gap greater than {max_hours} hours: {greatest_gap / (1000 * 60 * 60)} hours"
         )
-    print(
+    logging.info(
         f"ohlcvs for {symbol} has greatest gap {greatest_gap / (1000 * 60 * 60):.3f} hours. Filling gaps..."
     )
     new_timestamps = np.arange(df["timestamp"].iloc[0], df["timestamp"].iloc[-1] + interval, interval)
@@ -424,16 +430,16 @@ async def prepare_hlcvs(config: dict):
         if minimum_coin_age_days > 0.0:
             min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
             if symbol not in start_tss:
-                print(f"coin {symbol} missing from first timestamps, skipping")
+                logging.info(f"coin {symbol} missing from first timestamps, skipping")
                 continue
             new_start_ts = start_tss[symbol] + min_coin_age_ms
             if new_start_ts >= end_ts:
-                print(
+                logging.info(
                     f"Coin {symbol} too young, start date {ts_to_date_utc(start_tss[symbol])}, skipping"
                 )
                 continue
             if new_start_ts > adjusted_start_ts:
-                print(
+                logging.info(
                     f"First date for {symbol} was {ts_to_date_utc(start_tss[symbol])}. Adjusting start date to {ts_to_date_utc(new_start_ts)}"
                 )
                 adjusted_start_ts = new_start_ts
@@ -481,7 +487,7 @@ async def prepare_hlcvs(config: dict):
     unified_array = np.zeros((n_timesteps, n_coins, 4))
 
     # Second pass: Load data from disk and populate the unified array
-    print(f"Unifying data for {len(valid_symbols)} coins into single numpy array...")
+    logging.info(f"Unifying data for {len(valid_symbols)} coins into single numpy array...")
     for i, symbol in enumerate(tqdm(valid_symbols, desc="Processing symbols", unit="symbol")):
         file_path = valid_symbols[symbol]
         ohlcv = np.load(file_path)
@@ -515,57 +521,6 @@ async def prepare_hlcvs(config: dict):
         pass
 
     return list(valid_symbols), timestamps, unified_array
-
-
-async def prepare_hlcvs_old(config: dict):
-    symbols = sorted(set(config["backtest"]["symbols"]))
-    start_date = config["backtest"]["start_date"]
-    end_date = format_end_date(config["backtest"]["end_date"])
-    end_ts = date_to_ts2(end_date)
-    exchange = config["backtest"]["exchange"]
-    minimum_coin_age_days = config["live"]["minimum_coin_age_days"]
-    hlcvsd = {}
-    interval_ms = 60000
-    start_tss = None
-    if exchange == "binance":
-        start_tss = await get_first_ohlcv_timestamps(cc=ccxt.binanceusdm(), symbols=symbols)
-    elif exchange == "bybit":
-        start_tss = await get_first_ohlcv_timestamps(cc=ccxt.bybit(), symbols=symbols)
-    for symbol in symbols:
-        adjusted_start_ts = date_to_ts2(start_date)
-        if minimum_coin_age_days > 0.0:
-            min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
-            if symbol not in start_tss:
-                print(f"coin {symbol} missing from first timestamps, skipping")
-                continue
-            new_start_ts = start_tss[symbol] + min_coin_age_ms
-            if new_start_ts >= end_ts:
-                print(
-                    f"Coin {symbol} too young, start date {ts_to_date_utc(start_tss[symbol])}, skipping"
-                )
-                continue
-            if new_start_ts > adjusted_start_ts:
-                print(
-                    f"First date for {symbol} was {ts_to_date_utc(start_tss[symbol])}. Adjusting start date to {ts_to_date_utc(new_start_ts)}"
-                )
-                adjusted_start_ts = new_start_ts
-        data = await load_hlcvs(
-            symbol,
-            ts_to_date_utc(adjusted_start_ts)[:10],
-            end_date,
-            exchange,
-        )
-        if len(data) == 0:
-            continue
-        assert (
-            np.diff(data[:, 0]) == interval_ms
-        ).all(), f"gaps in hlcv data {symbol}"  # verify integrous 1m hlcvs
-        hlcvsd[symbol] = data
-    symbols = sorted(hlcvsd.keys())
-    if len(symbols) > 1:
-        print(f"Unifying data for {len(symbols)} coins into single numpy array...")
-    timestamps, unified_data = unify_hlcv_data([hlcvsd[s] for s in symbols])
-    return symbols, timestamps, unified_data
 
 
 def unify_hlcv_data(hlcv_list) -> (np.ndarray, np.ndarray):
@@ -622,7 +577,7 @@ def convert_csv_to_npy(filepath):
         csv_data = pd.read_csv(filepath)[columns]
         dump_ohlcv_data(csv_data, npy_filepath)
         os.remove(filepath)
-        print(f"successfully converted {filepath} to {npy_filepath}")
+        logging.info(f"successfully converted {filepath} to {npy_filepath}")
         return True
 
 
@@ -644,22 +599,17 @@ def load_ohlcv_data(filepath):
     if os.path.exists(npy_filepath):
         loaded_data = np.load(npy_filepath, allow_pickle=True)
     else:
-        print(f"loading {filepath}")
+        logging.info(f"loading {filepath}")
         csv_data = pd.read_csv(filepath)[columns]
-        print(f"dumping {npy_filepath}")
+        logging.info(f"dumping {npy_filepath}")
         dump_ohlcv_data(csv_data, npy_filepath)
-        print(f"removing {filepath}")
+        logging.info(f"removing {filepath}")
         os.remove(filepath)
         loaded_data = csv_data.values
     return pd.DataFrame(loaded_data, columns=columns)
 
 
 async def main():
-    logging.basicConfig(
-        format="%(asctime)s %(levelname)-8s %(message)s",
-        level=logging.INFO,
-        datefmt="%Y-%m-%dT%H:%M:%S",
-    )
     parser = argparse.ArgumentParser(prog="downloader", description="download hlcv data")
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
