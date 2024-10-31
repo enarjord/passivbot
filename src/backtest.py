@@ -15,14 +15,17 @@ from procedures import (
     add_arguments_recursively,
     update_config_with_args,
     format_config,
+    format_end_date,
 )
 from pure_funcs import (
     get_template_live_config,
     ts_to_date,
     sort_dict_keys,
+    calc_hash,
 )
 import pprint
 from downloader import prepare_hlcvs
+from pathlib import Path
 from plotting import plot_fills_forager
 import matplotlib.pyplot as plt
 import logging
@@ -30,6 +33,12 @@ from main import manage_rust_compilation
 
 import tempfile
 from contextlib import contextmanager
+
+logging.basicConfig(
+    format="%(asctime)s %(levelname)-8s %(message)s",
+    level=logging.INFO,
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
 
 
 @contextmanager
@@ -131,6 +140,39 @@ def check_keys(dict0, dict1):
     return check_nested(dict0, dict1)
 
 
+def get_cache_hash(config):
+    to_hash = {
+        **config["backtest"],
+        **{"minimum_coin_age_days": config["live"]["minimum_coin_age_days"]},
+    }
+    to_hash["end_date"] = format_end_date(to_hash["end_date"])
+    return calc_hash(to_hash)
+
+
+def load_symbols_hlcvs_from_cache(config):
+    cache_hash = get_cache_hash(config)
+    cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
+    if os.path.exists(cache_dir):
+        symbols = json.load(open(cache_dir / "symbols.json"))
+        hlcvs = np.load(cache_dir / "hlcvs.npy")
+        return symbols, hlcvs
+
+
+def save_symbols_hlcvs_to_cache(config, symbols, hlcvs):
+    cache_hash = get_cache_hash(config)
+    cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    if all([os.path.exists(cache_dir / x) for x in ["symbols.json", "hlcvs.npy"]]):
+        return
+    logging.info(f"Dumping cache...")
+    json.dump(symbols, open(cache_dir / "symbols.json", "w"))
+    np.save(cache_dir / "hlcvs.npy", hlcvs)
+    size = hlcvs.nbytes
+    logging.info(
+        f"Successfully dumped hlcvs cache {cache_dir / 'hlcvs.npy'}: {size/(1024**3):.2f} GB"
+    )
+
+
 async def prepare_hlcvs_mss(config):
     results_path = oj(
         config["backtest"]["base_dir"],
@@ -142,19 +184,31 @@ async def prepare_hlcvs_mss(config):
         "market_specific_settings.json",
     )
     try:
+        result = load_symbols_hlcvs_from_cache(config)
+        if result:
+            symbols, hlcvs = result
+            mss = json.load(open(mss_path))
+            logging.info(f"Successfully loaded hlcvs data from cache")
+            return symbols, hlcvs, mss, results_path
+    except:
+        logging.info(f"Unable to load hlcvs data from cache. Fetching...")
+    try:
         mss = fetch_market_specific_settings_multi(exchange=config["backtest"]["exchange"])
         json.dump(mss, open(make_get_filepath(mss_path), "w"))
     except Exception as e:
-        print("failed to fetch market specific settings", e)
+        logging.error(f"failed to fetch market specific settings {e}")
         try:
             mss = json.load(open(mss_path))
-            print(f"loaded market specific settings from cache {mss_path}")
+            logging.info(f"loaded market specific settings from cache {mss_path}")
         except:
             raise Exception("failed to load market specific settings from cache")
 
     symbols, timestamps, hlcvs = await prepare_hlcvs(config)
     logging.info(f"Finished preparing hlcvs data. Shape: {hlcvs.shape}")
-
+    try:
+        save_symbols_hlcvs_to_cache(config, symbols, hlcvs)
+    except Exception as e:
+        logging.error(f"failed to save hlcvs to cache {e}")
     return symbols, hlcvs, mss, results_path
 
 
@@ -183,7 +237,7 @@ def prep_backtest_args(config, mss, exchange_params=None, backtest_params=None):
 
 def run_backtest(hlcvs, mss, config: dict):
     bot_params, exchange_params, backtest_params = prep_backtest_args(config, mss)
-    print(f"Starting backtest...")
+    logging.info(f"Backtesting...")
     sts = utc_ms()
 
     with create_shared_memory_file(hlcvs) as shared_memory_file:
@@ -196,7 +250,7 @@ def run_backtest(hlcvs, mss, config: dict):
             backtest_params,
         )
 
-    print(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
+    logging.info(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
     return fills, equities, analysis
 
 
@@ -208,7 +262,7 @@ def post_process(config, hlcvs, fills, equities, analysis, results_path):
     for k in analysis_py:
         if k not in analysis:
             analysis[k] = analysis_py[k]
-    print(f"seconds elapsed for analysis: {(utc_ms() - sts) / 1000:.4f}")
+    logging.info(f"seconds elapsed for analysis: {(utc_ms() - sts) / 1000:.4f}")
     pprint.pprint(analysis)
     results_path = make_get_filepath(
         oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
@@ -217,19 +271,20 @@ def post_process(config, hlcvs, fills, equities, analysis, results_path):
     config["analysis"] = analysis
     dump_config(config, f"{results_path}config.json")
     fdf.to_csv(f"{results_path}fills.csv")
-    plot_forager(results_path, config["backtest"]["symbols"], fdf, bal_eq, hlcvs)
+    bal_eq.to_csv(oj(results_path, "balance_and_equity.csv"))
+    if not config["disable_plotting"]:
+        plot_forager(results_path, config["backtest"]["symbols"], fdf, bal_eq, hlcvs)
 
 
 def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcvs):
     plots_dir = make_get_filepath(oj(results_path, "fills_plots", ""))
-    bal_eq.to_csv(oj(results_path, "balance_and_equity.csv"))
     plt.clf()
     bal_eq.plot()
     plt.savefig(oj(results_path, "balance_and_equity.png"))
 
     for i, symbol in enumerate(symbols):
         try:
-            print(f"Plotting fills for {symbol}")
+            logging.info(f"Plotting fills for {symbol}")
             hlcvs_df = pd.DataFrame(hlcvs[:, i, :3], columns=["high", "low", "close"])
             fdfc = fdf[fdf.symbol == symbol]
             plt.clf()
@@ -239,19 +294,21 @@ def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcvs)
             plt.ylabel = "price"
             plt.savefig(oj(plots_dir, f"{symbol}.png"))
         except Exception as e:
-            print(f"Error plotting {symbol} {e}")
+            logging.info(f"Error plotting {symbol} {e}")
 
 
 async def main():
     manage_rust_compilation()
-    logging.basicConfig(
-        format="%(asctime)s %(levelname)-8s %(message)s",
-        level=logging.INFO,
-        datefmt="%Y-%m-%dT%H:%M:%S",
-    )
     parser = argparse.ArgumentParser(prog="backtest", description="run forager backtest")
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
+    )
+    parser.add_argument(
+        "--disable_plotting",
+        "-dp",
+        dest="disable_plotting",
+        action="store_true",
+        help="disable plotting",
     )
     template_config = get_template_live_config("v7")
     del template_config["optimize"]
@@ -273,6 +330,7 @@ async def main():
         config = load_config(args.config_path)
     update_config_with_args(config, args)
     config = format_config(config)
+    config["disable_plotting"] = args.disable_plotting
     symbols, hlcvs, mss, results_path = await prepare_hlcvs_mss(config)
     config["backtest"]["symbols"] = symbols
     fills, equities, analysis = run_backtest(hlcvs, mss, config)
