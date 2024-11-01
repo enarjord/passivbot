@@ -506,6 +506,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
         return {
             "backtest": {
                 "base_dir": "backtests",
+                "compress_cache": True,
                 "end_date": "now",
                 "exchange": "binance",
                 "start_date": "2021-05-01",
@@ -568,7 +569,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 },
             },
             "live": {
-                "approved_coins": ["BCH", "BTC", "DOGE", "ETH", "LTC", "XLM", "XRP"],
+                "approved_coins": [],
                 "auto_gs": True,
                 "coin_flags": {},
                 "empty_means_all_approved": True,
@@ -576,7 +577,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 "filter_by_min_effective_cost": True,
                 "forced_mode_long": "",
                 "forced_mode_short": "",
-                "ignored_coins": ["COIN1", "COIN2"],
+                "ignored_coins": [],
                 "leverage": 10.0,
                 "max_n_cancellations_per_batch": 5,
                 "max_n_creations_per_batch": 3,
