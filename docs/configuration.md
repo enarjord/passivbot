@@ -5,6 +5,7 @@ Here follows an overview of the parameters found in `config/template.json`.
 ## Backtest Settings
 
 - `base_dir`: Location to save backtest results.
+- `compress_cache`: set to true to save disk space. Set to false to load faster.
 - `end_date`: End date of backtest, e.g., 2024-06-23. Set to 'now' to use today's date as end date.
 - `exchange`: Exchange from which to fetch 1m OHLCV data. Default is Binance.
 - `start_date`: Start date of backtest.

@@ -1,4 +1,5 @@
 {"backtest": {"base_dir": "backtests",
+              "compress_cache": true,
               "end_date": "now",
               "exchange": "binance",
               "start_date": "2021-05-01",
