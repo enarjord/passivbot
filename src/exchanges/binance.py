@@ -398,38 +398,27 @@ class BinanceBot(Passivbot):
         )
 
     async def execute_order(self, order: dict) -> dict:
-        executed = None
-        try:
-            executed = await self.cca.create_limit_order(
-                symbol=order["symbol"],
-                side=order["side"],
-                amount=abs(order["qty"]),
-                price=order["price"],
-                params={
-                    "positionSide": order["position_side"].upper(),
-                    "newClientOrderId": order["custom_id"],
-                    "timeInForce": (
-                        "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
-                    ),
-                },
-            )
-            if (
-                "info" in executed
-                and "code" in executed["info"]
-                and executed["info"]["code"] == "-5022"
-            ):
-                logging.info(f"{executed['info']['msg']}")
-                return {}
-            elif "status" in executed and executed["status"] in ["open", "closed"]:
-                executed["position_side"] = executed["info"]["positionSide"].lower()
-                executed["qty"] = executed["amount"]
-                executed["reduce_only"] = executed["reduceOnly"]
-                return executed
-        except Exception as e:
-            logging.error(f"error executing order {order} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
+        executed = await self.cca.create_limit_order(
+            symbol=order["symbol"],
+            side=order["side"],
+            amount=abs(order["qty"]),
+            price=order["price"],
+            params={
+                "positionSide": order["position_side"].upper(),
+                "newClientOrderId": order["custom_id"],
+                "timeInForce": (
+                    "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
+                ),
+            },
+        )
+        if "info" in executed and "code" in executed["info"] and executed["info"]["code"] == "-5022":
+            logging.info(f"{executed['info']['msg']}")
             return {}
+        elif "status" in executed and executed["status"] in ["open", "closed"]:
+            executed["position_side"] = executed["info"]["positionSide"].lower()
+            executed["qty"] = executed["amount"]
+            executed["reduce_only"] = executed["reduceOnly"]
+            return executed
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if len(orders) == 0:

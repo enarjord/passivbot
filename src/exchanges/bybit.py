@@ -368,32 +368,25 @@ class BybitBot(Passivbot):
         )
 
     async def execute_order(self, order: dict) -> dict:
-        executed = None
-        try:
-            executed = await self.cca.create_limit_order(
-                symbol=order["symbol"],
-                side=order["side"],
-                amount=abs(order["qty"]),
-                price=order["price"],
-                params={
-                    "positionIdx": 1 if order["position_side"] == "long" else 2,
-                    "timeInForce": (
-                        "postOnly" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
-                    ),
-                    "orderLinkId": order["custom_id"],
-                },
-            )
-            if "symbol" not in executed or executed["symbol"] is None:
-                executed["symbol"] = order["symbol"]
-            for key in ["side", "position_side", "qty", "price"]:
-                if key not in executed or executed[key] is None:
-                    executed[key] = order[key]
-            return executed
-        except Exception as e:
-            logging.error(f"error executing order {order} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return {}
+        executed = await self.cca.create_limit_order(
+            symbol=order["symbol"],
+            side=order["side"],
+            amount=abs(order["qty"]),
+            price=order["price"],
+            params={
+                "positionIdx": 1 if order["position_side"] == "long" else 2,
+                "timeInForce": (
+                    "postOnly" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
+                ),
+                "orderLinkId": order["custom_id"],
+            },
+        )
+        if "symbol" not in executed or executed["symbol"] is None:
+            executed["symbol"] = order["symbol"]
+        for key in ["side", "position_side", "qty", "price"]:
+            if key not in executed or executed[key] is None:
+                executed[key] = order[key]
+        return executed
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(

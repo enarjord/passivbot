@@ -368,12 +368,19 @@ class Passivbot:
             for x in to_create[: self.config["live"]["max_n_creations_per_batch"]]:
                 pprint.pprint(x)
         else:
-            res = await self.execute_orders(
-                to_create[: self.config["live"]["max_n_creations_per_batch"]]
-            )
-            if res:
-                for elm in res:
-                    self.add_new_order(elm, source="POST")
+            res = None
+            try:
+                res = await self.execute_orders(
+                    to_create[: self.config["live"]["max_n_creations_per_batch"]]
+                )
+                if res:
+                    for elm in res:
+                        self.add_new_order(elm, source="POST")
+            except Exception as e:
+                logging.error(f"error executing orders {to_create} {e}")
+                print_async_exception(res)
+                traceback.print_exc()
+                await self.restart_bot_on_too_many_errors()
         if to_cancel or to_create:
             self.previous_REST_update_ts = 0
 
@@ -1982,6 +1989,7 @@ class Passivbot:
         if not orders:
             return []
         executions = []
+        any_exceptions = False
         for order in orders[:max_n_executions]:  # sorted by PA dist
             execution = None
             try:
@@ -1991,6 +1999,7 @@ class Passivbot:
                 logging.error(f"error executing {type_} {order} {e}")
                 print_async_exception(execution)
                 traceback.print_exc()
+                any_exceptions = True
         results = []
         for execution in executions:
             result = None
@@ -2001,6 +2010,9 @@ class Passivbot:
                 logging.error(f"error executing {type_} {execution} {e}")
                 print_async_exception(result)
                 traceback.print_exc()
+                any_exceptions = True
+        if any_exceptions:
+            await self.restart_bot_on_too_many_errors()
         return results
 
     async def maintain_ohlcvs_1m_REST(self):
