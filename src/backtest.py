@@ -30,6 +30,7 @@ from plotting import plot_fills_forager
 import matplotlib.pyplot as plt
 import logging
 from main import manage_rust_compilation
+import gzip
 
 import tempfile
 from contextlib import contextmanager
@@ -141,11 +142,9 @@ def check_keys(dict0, dict1):
 
 
 def get_cache_hash(config):
-    to_hash = {
-        **config["backtest"],
-        **{"minimum_coin_age_days": config["live"]["minimum_coin_age_days"]},
-    }
+    to_hash = {k: config["backtest"][k] for k in ["end_date", "exchange", "start_date"]}
     to_hash["end_date"] = format_end_date(to_hash["end_date"])
+    to_hash["minimum_coin_age_days"] = config["live"]["minimum_coin_age_days"]
     return calc_hash(to_hash)
 
 
@@ -154,7 +153,11 @@ def load_symbols_hlcvs_from_cache(config):
     cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
     if os.path.exists(cache_dir):
         symbols = json.load(open(cache_dir / "symbols.json"))
-        hlcvs = np.load(cache_dir / "hlcvs.npy")
+        if config["backtest"]["compress_cache"]:
+            with gzip.open(cache_dir / "hlcvs.npy.gz", "rb") as f:
+                hlcvs = np.load(f)
+        else:
+            hlcvs = np.load(cache_dir / "hlcvs.npy")
         return symbols, hlcvs
 
 
@@ -166,11 +169,28 @@ def save_symbols_hlcvs_to_cache(config, symbols, hlcvs):
         return
     logging.info(f"Dumping cache...")
     json.dump(symbols, open(cache_dir / "symbols.json", "w"))
-    np.save(cache_dir / "hlcvs.npy", hlcvs)
-    size = hlcvs.nbytes
+    uncompressed_size = hlcvs.nbytes
+    sts = utc_ms()
+    if config["backtest"]["compress_cache"]:
+        fpath = cache_dir / "hlcvs.npy.gz"
+        with gzip.open(fpath, "wb", compresslevel=1) as f:
+            np.save(f, hlcvs)
+        compressed_size = (cache_dir / "hlcvs.npy.gz").stat().st_size
+        line = (
+            f"{compressed_size/(1024**3):.2f} GB compressed "
+            f"({compressed_size/uncompressed_size*100:.1f}%)"
+        )
+    else:
+        fpath = cache_dir / "hlcvs.npy"
+        np.save(fpath, hlcvs)
+        line = ""
     logging.info(
-        f"Successfully dumped hlcvs cache {cache_dir / 'hlcvs.npy'}: {size/(1024**3):.2f} GB"
+        f"Successfully dumped hlcvs cache {fpath}: "
+        f"{uncompressed_size/(1024**3):.2f} GB uncompressed, "
+        f"{line}"
     )
+
+    logging.info(f"Seconds to dump cache: {(utc_ms() - sts) / 1000:.4f}")
 
 
 async def prepare_hlcvs_mss(config):
@@ -184,8 +204,10 @@ async def prepare_hlcvs_mss(config):
         "market_specific_settings.json",
     )
     try:
+        sts = utc_ms()
         result = load_symbols_hlcvs_from_cache(config)
         if result:
+            logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
             symbols, hlcvs = result
             mss = json.load(open(mss_path))
             logging.info(f"Successfully loaded hlcvs data from cache")
