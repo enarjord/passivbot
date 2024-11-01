@@ -134,7 +134,7 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
         [k in config["config"] for k in template]
     ):
         result = deepcopy(config["config"])
-    elif "bot" in config and "live" in config and live_only:
+    elif "bot" in config and "live" in config:
         # live only config
         result = deepcopy(config)
         for key in ["optimize", "backtest"]:
