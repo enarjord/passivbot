@@ -176,18 +176,14 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
             if verbose:
                 print(f"renaming parameter {k0} {src}: {dst}")
             del result[k0][src]
-    for k0, k1, v in [
-        ("live", "empty_means_all_approved", True),
-        ("live", "max_n_restarts_per_day", 10),
-        ("live", "ohlcvs_1m_rolling_window_days", 7.0),
-        ("live", "ohlcvs_1m_update_after_minutes", 10.0),
-        ("live", "time_in_force", "good_till_cancelled"),
-        ("optimize", "scoring", ["mdg", "sharpe_ratio"]),
-    ]:
-        if k1 not in result[k0]:
-            result[k0][k1] = v
-            if verbose:
-                print(f"adding missing parameter {k0} {k1}: {v}")
+    for k0 in template:
+        for k1 in template[k0]:
+            if k0 not in result:
+                raise Exception(f"Fatal: {k0} missing from config")
+            if k1 not in result[k0]:
+                result[k0][k1] = template[k0][k1]
+                if verbose:
+                    print(f"adding missing parameter {k0}.{k1}: {template[k0][k1]}")
     if not live_only:
         for k_coins in ["approved_coins", "ignored_coins"]:
             path = result["live"][k_coins]
@@ -1403,7 +1399,6 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             acronym = create_acronym(full_name, acronyms)
             appendix = ""
             type_ = type(value)
-            str2bool_list = ["auto_gs", "filter_by_min_effective_cost", "empty_means_all_approved"]
             if "bounds" in full_name:
                 type_ = comma_separated_values_float
             elif "approved_coins" in full_name:
@@ -1419,7 +1414,7 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
                 acronym = "c"
             elif "iters" in full_name:
                 acronym = "i"
-            elif any([x in full_name for x in str2bool_list]):
+            elif type_ == bool:
                 type_ = str2bool
                 appendix = "[y/n]"
             parser.add_argument(
