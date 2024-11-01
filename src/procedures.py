@@ -134,6 +134,12 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
         [k in config["config"] for k in template]
     ):
         result = deepcopy(config["config"])
+    elif "bot" in config and "live" in config and live_only:
+        # live only config
+        result = deepcopy(config)
+        for key in ["optimize", "backtest"]:
+            if key not in result:
+                result[key] = deepcopy(template[key])
     else:
         raise Exception(f"failed to format config")
     for k0, v0, v1 in [
