@@ -154,10 +154,14 @@ def load_symbols_hlcvs_from_cache(config):
     if os.path.exists(cache_dir):
         symbols = json.load(open(cache_dir / "symbols.json"))
         if config["backtest"]["compress_cache"]:
-            with gzip.open(cache_dir / "hlcvs.npy.gz", "rb") as f:
+            fname = cache_dir / "hlcvs.npy.gz"
+            logging.info(f"Attempting to load hlcvs data from cache {fname}...")
+            with gzip.open(fname, "rb") as f:
                 hlcvs = np.load(f)
         else:
-            hlcvs = np.load(cache_dir / "hlcvs.npy")
+            fname = cache_dir / "hlcvs.npy"
+            logging.info(f"Attempting to load hlcvs data from cache {fname}...")
+            hlcvs = np.load(fname)
         return symbols, hlcvs
 
 
@@ -173,6 +177,7 @@ def save_symbols_hlcvs_to_cache(config, symbols, hlcvs):
     sts = utc_ms()
     if config["backtest"]["compress_cache"]:
         fpath = cache_dir / "hlcvs.npy.gz"
+        logging.info(f"Attempting to save hlcvs data to cache {fpath}...")
         with gzip.open(fpath, "wb", compresslevel=1) as f:
             np.save(f, hlcvs)
         compressed_size = (cache_dir / "hlcvs.npy.gz").stat().st_size
@@ -182,6 +187,7 @@ def save_symbols_hlcvs_to_cache(config, symbols, hlcvs):
         )
     else:
         fpath = cache_dir / "hlcvs.npy"
+        logging.info(f"Attempting to save hlcvs data to cache {fpath}...")
         np.save(fpath, hlcvs)
         line = ""
     logging.info(
