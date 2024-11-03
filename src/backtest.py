@@ -142,7 +142,7 @@ def check_keys(dict0, dict1):
 
 
 def get_cache_hash(config):
-    to_hash = {k: config["backtest"][k] for k in ["end_date", "exchange", "start_date"]}
+    to_hash = {k: config["backtest"][k] for k in ["end_date", "exchange", "start_date", "symbols"]}
     to_hash["end_date"] = format_end_date(to_hash["end_date"])
     to_hash["minimum_coin_age_days"] = config["live"]["minimum_coin_age_days"]
     return calc_hash(to_hash)
