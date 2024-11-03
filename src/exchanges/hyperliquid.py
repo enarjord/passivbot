@@ -379,7 +379,12 @@ class HyperliquidBot(Passivbot):
 
     def symbol_is_eligible(self, symbol):
         try:
-            if self.markets_dict[symbol]["info"]["onlyIsolated"]:
+            if (
+                "onlyIsolated" in self.markets_dict[symbol]["info"]
+                and self.markets_dict[symbol]["info"]["onlyIsolated"]
+            ):
+                return False
+            if float(self.markets_dict[symbol]["info"]["openInterest"]) == 0.0:
                 return False
         except Exception as e:
             logging.error(f"error with symbol_is_eligible {e} {symbol}")
