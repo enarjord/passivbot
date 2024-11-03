@@ -168,10 +168,12 @@ pub fn interpolate(x: f64, xs: &[f64], ys: &[f64]) -> f64 {
     result
 }
 
+#[pyfunction]
 pub fn calc_pnl_long(entry_price: f64, close_price: f64, qty: f64, c_mult: f64) -> f64 {
     qty.abs() * c_mult * (close_price - entry_price)
 }
 
+#[pyfunction]
 pub fn calc_pnl_short(entry_price: f64, close_price: f64, qty: f64, c_mult: f64) -> f64 {
     qty.abs() * c_mult * (entry_price - close_price)
 }
