@@ -158,6 +158,7 @@ class Passivbot:
         self.max_n_concurrent_ohlcvs_1m_updates = 3
         self.stop_signal_received = False
         self.ohlcvs_1m_update_timestamps_WS = {}
+        self.PB_mode_stop = "graceful_stop" if self.config["live"]["auto_gs"] else "manual"
 
     async def start_bot(self, debug_mode=False):
         logging.info(f"Starting bot...")
@@ -458,9 +459,11 @@ class Passivbot:
         logging.info(f"stopped data maintainers: {res}")
         return res
 
-    def has_position(self, symbol, pside=None):
+    def has_position(self, pside=None, symbol=None):
         if pside is None:
-            return self.has_position(symbol, "long") or self.has_position(symbol, "short")
+            return self.has_position("long", symbol) or self.has_position("short", symbol)
+        if symbol is None:
+            return any([self.has_position(pside, s) for s in self.positions])
         return symbol in self.positions and self.positions[symbol][pside]["size"] != 0.0
 
     def is_trailing(self, symbol, pside=None):
@@ -477,7 +480,7 @@ class Passivbot:
         last_position_changes = defaultdict(dict)
         for symbol in self.positions:
             for pside in ["long", "short"]:
-                if self.has_position(symbol, pside) and self.is_trailing(symbol, pside):
+                if self.has_position(pside, symbol) and self.is_trailing(symbol, pside):
                     last_position_changes[symbol][pside] = utc_ms() - 1000 * 60 * 60 * 24 * 7
                     for fill in self.pnls[::-1]:
                         try:
@@ -727,7 +730,7 @@ class Passivbot:
         self.set_wallet_exposure_limits()
         previous_PB_modes = deepcopy(self.PB_modes) if hasattr(self, "PB_modes") else None
         self.PB_modes = {"long": {}, "short": {}}
-        for pside in self.PB_modes:
+        for pside, other_pside in [("long", "short"), ("short", "long")]:
             if self.is_forager_mode(pside):
                 await self.update_first_timestamps()
             for symbol in self.forced_modes[pside]:
@@ -748,23 +751,27 @@ class Passivbot:
                         else:
                             self.PB_modes[pside][symbol] = "manual"
                     elif len(symbols_with_pos) > max_n_positions:
-                        self.PB_modes[pside][symbol] = (
-                            "graceful_stop" if self.config["live"]["auto_gs"] else "manual"
-                        )
+                        self.PB_modes[pside][symbol] = self.PB_mode_stop
                     elif symbol in ideal_coins:
                         self.PB_modes[pside][symbol] = "normal"
                     else:
-                        self.PB_modes[pside][symbol] = (
-                            "graceful_stop" if self.config["live"]["auto_gs"] else "manual"
-                        )
+                        self.PB_modes[pside][symbol] = self.PB_mode_stop
                     slots_filled.add(symbol)
             for symbol in ideal_coins:
                 if len(slots_filled) >= max_n_positions:
                     break
                 if symbol in self.PB_modes[pside]:
                     continue
+                if not self.hedge_mode and self.has_position(other_pside, symbol):
+                    continue
                 self.PB_modes[pside][symbol] = "normal"
                 slots_filled.add(symbol)
+            for symbol in self.open_orders:
+                if symbol in self.PB_modes[pside]:
+                    continue
+                if len(self.open_orders[symbol]) == 0:
+                    continue
+                self.PB_modes[pside][symbol] = self.PB_mode_stop
         self.active_symbols = sorted(
             {s for subdict in self.PB_modes.values() for s in subdict.keys()}
         )
@@ -1297,156 +1304,71 @@ class Passivbot:
                 logging.error(f"error with {get_function_name()} for {symbol}: {e}")
                 traceback.print_exc()
 
-    def is_enabled(self, symbol=None, pside=None):
-        if pside is None:
-            return self.is_enabled(symbol, "long") or self.is_enabled(symbol, "short")
-        if symbol is None:
-            return any([self.is_enabled(symbol, pside) for symbol in self.live_configs])
-        return (
-            symbol in self.live_configs
-            and self.live_configs[symbol][pside]["wallet_exposure_limit"] > 0.0
-            and self.get_max_n_positions(pside) > 0.0
-        )
-
     def calc_ideal_orders(self):
         ideal_orders = {symbol: [] for symbol in self.active_symbols}
-        for symbol in self.active_symbols:
-            if self.hedge_mode:
-                do_long = self.is_enabled(symbol, "long") or self.has_position(symbol, "long")
-                do_short = self.is_enabled(symbol, "short") or self.has_position(symbol, "short")
-            else:
-                no_pos = not self.has_position(symbol)
-                do_long = (no_pos and self.is_enabled(symbol, "long")) or self.has_position(
-                    symbol, "long"
-                )
-                do_short = (no_pos and self.is_enabled(symbol, "short")) or self.has_position(
-                    symbol, "short"
-                )
-            if self.live_configs[symbol]["long"]["mode"] == "panic":
-                if self.has_position(symbol, "long"):
-                    # if in panic mode, only one close order at current market price
-                    ideal_orders[symbol].append(
-                        (
-                            -abs(self.positions[symbol]["long"]["size"]),
-                            self.get_last_price(symbol),
-                            "panic_close_long",
+        for pside in self.PB_modes:
+            for symbol in self.PB_modes[pside]:
+                if self.PB_modes[pside][symbol] == "panic":
+                    if self.has_position(pside, symbol):
+                        # if in panic mode, only one close order at current market price
+                        qmul = -1 if pside == "long" else 1
+                        ideal_orders[symbol].append(
+                            (
+                                abs(self.positions[symbol][pside]["size"]) * qmul,
+                                self.get_last_price(symbol),
+                                f"panic_close_{pside}",
+                            )
                         )
+                elif self.PB_modes[pside][symbol] == "graceful_stop" and not self.has_position(
+                    pside, symbol
+                ):
+                    pass
+                else:
+                    entries = getattr(pbr, f"calc_entries_{pside}_py")(
+                        self.qty_steps[symbol],
+                        self.price_steps[symbol],
+                        self.min_qtys[symbol],
+                        self.min_costs[symbol],
+                        self.c_mults[symbol],
+                        self.live_configs[symbol][pside]["entry_grid_double_down_factor"],
+                        self.live_configs[symbol][pside]["entry_grid_spacing_weight"],
+                        self.live_configs[symbol][pside]["entry_grid_spacing_pct"],
+                        self.live_configs[symbol][pside]["entry_initial_ema_dist"],
+                        self.live_configs[symbol][pside]["entry_initial_qty_pct"],
+                        self.live_configs[symbol][pside]["entry_trailing_grid_ratio"],
+                        self.live_configs[symbol][pside]["entry_trailing_retracement_pct"],
+                        self.live_configs[symbol][pside]["entry_trailing_threshold_pct"],
+                        self.live_configs[symbol][pside]["wallet_exposure_limit"],
+                        self.balance,
+                        self.positions[symbol][pside]["size"],
+                        self.positions[symbol][pside]["price"],
+                        self.trailing_prices[symbol][pside]["min_since_open"],
+                        self.trailing_prices[symbol][pside]["max_since_min"],
+                        self.emas[pside][symbol].min(),
+                        self.get_last_price(symbol),
                     )
-                # otherwise, no orders
-            elif self.live_configs[symbol]["long"][
-                "mode"
-            ] == "graceful_stop" and not self.has_position(symbol, "long"):
-                # if graceful stop and no pos, don't open new pos
-                pass
-            elif do_long:
-                entries_long = pbr.calc_entries_long_py(
-                    self.qty_steps[symbol],
-                    self.price_steps[symbol],
-                    self.min_qtys[symbol],
-                    self.min_costs[symbol],
-                    self.c_mults[symbol],
-                    self.live_configs[symbol]["long"]["entry_grid_double_down_factor"],
-                    self.live_configs[symbol]["long"]["entry_grid_spacing_weight"],
-                    self.live_configs[symbol]["long"]["entry_grid_spacing_pct"],
-                    self.live_configs[symbol]["long"]["entry_initial_ema_dist"],
-                    self.live_configs[symbol]["long"]["entry_initial_qty_pct"],
-                    self.live_configs[symbol]["long"]["entry_trailing_grid_ratio"],
-                    self.live_configs[symbol]["long"]["entry_trailing_retracement_pct"],
-                    self.live_configs[symbol]["long"]["entry_trailing_threshold_pct"],
-                    self.live_configs[symbol]["long"]["wallet_exposure_limit"],
-                    self.balance,
-                    self.positions[symbol]["long"]["size"],
-                    self.positions[symbol]["long"]["price"],
-                    self.trailing_prices[symbol]["long"]["min_since_open"],
-                    self.trailing_prices[symbol]["long"]["max_since_min"],
-                    self.emas["long"][symbol].min(),
-                    self.get_last_price(symbol),
-                )
-                closes_long = pbr.calc_closes_long_py(
-                    self.qty_steps[symbol],
-                    self.price_steps[symbol],
-                    self.min_qtys[symbol],
-                    self.min_costs[symbol],
-                    self.c_mults[symbol],
-                    self.live_configs[symbol]["long"]["close_grid_markup_range"],
-                    self.live_configs[symbol]["long"]["close_grid_min_markup"],
-                    self.live_configs[symbol]["long"]["close_grid_qty_pct"],
-                    self.live_configs[symbol]["long"]["close_trailing_grid_ratio"],
-                    self.live_configs[symbol]["long"]["close_trailing_qty_pct"],
-                    self.live_configs[symbol]["long"]["close_trailing_retracement_pct"],
-                    self.live_configs[symbol]["long"]["close_trailing_threshold_pct"],
-                    self.live_configs[symbol]["long"]["wallet_exposure_limit"],
-                    self.balance,
-                    self.positions[symbol]["long"]["size"],
-                    self.positions[symbol]["long"]["price"],
-                    self.trailing_prices[symbol]["long"]["max_since_open"],
-                    self.trailing_prices[symbol]["long"]["min_since_max"],
-                    self.get_last_price(symbol),
-                )
-                ideal_orders[symbol] += entries_long + closes_long
-
-            if self.live_configs[symbol]["short"]["mode"] == "panic":
-                if self.has_position(symbol, "short"):
-                    # if in panic mode, only one close order at current market price
-                    ideal_orders[symbol].append(
-                        (
-                            abs(self.positions[symbol]["short"]["size"]),
-                            self.get_last_price(symbol),
-                            "panic_close_short",
-                        )
+                    closes = getattr(pbr, f"calc_closes_{pside}_py")(
+                        self.qty_steps[symbol],
+                        self.price_steps[symbol],
+                        self.min_qtys[symbol],
+                        self.min_costs[symbol],
+                        self.c_mults[symbol],
+                        self.live_configs[symbol][pside]["close_grid_markup_range"],
+                        self.live_configs[symbol][pside]["close_grid_min_markup"],
+                        self.live_configs[symbol][pside]["close_grid_qty_pct"],
+                        self.live_configs[symbol][pside]["close_trailing_grid_ratio"],
+                        self.live_configs[symbol][pside]["close_trailing_qty_pct"],
+                        self.live_configs[symbol][pside]["close_trailing_retracement_pct"],
+                        self.live_configs[symbol][pside]["close_trailing_threshold_pct"],
+                        self.live_configs[symbol][pside]["wallet_exposure_limit"],
+                        self.balance,
+                        self.positions[symbol][pside]["size"],
+                        self.positions[symbol][pside]["price"],
+                        self.trailing_prices[symbol][pside]["max_since_open"],
+                        self.trailing_prices[symbol][pside]["min_since_max"],
+                        self.get_last_price(symbol),
                     )
-                # otherwise, no orders
-            elif self.live_configs[symbol]["short"][
-                "mode"
-            ] == "graceful_stop" and not self.has_position(symbol, "short"):
-                # if graceful stop and no pos, don't open new pos
-                pass
-            elif do_short:
-                entries_short = pbr.calc_entries_short_py(
-                    self.qty_steps[symbol],
-                    self.price_steps[symbol],
-                    self.min_qtys[symbol],
-                    self.min_costs[symbol],
-                    self.c_mults[symbol],
-                    self.live_configs[symbol]["short"]["entry_grid_double_down_factor"],
-                    self.live_configs[symbol]["short"]["entry_grid_spacing_weight"],
-                    self.live_configs[symbol]["short"]["entry_grid_spacing_pct"],
-                    self.live_configs[symbol]["short"]["entry_initial_ema_dist"],
-                    self.live_configs[symbol]["short"]["entry_initial_qty_pct"],
-                    self.live_configs[symbol]["short"]["entry_trailing_grid_ratio"],
-                    self.live_configs[symbol]["short"]["entry_trailing_retracement_pct"],
-                    self.live_configs[symbol]["short"]["entry_trailing_threshold_pct"],
-                    self.live_configs[symbol]["short"]["wallet_exposure_limit"],
-                    self.balance,
-                    self.positions[symbol]["short"]["size"],
-                    self.positions[symbol]["short"]["price"],
-                    self.trailing_prices[symbol]["short"]["max_since_open"],
-                    self.trailing_prices[symbol]["short"]["min_since_max"],
-                    self.emas["short"][symbol].max(),
-                    self.get_last_price(symbol),
-                )
-                closes_short = pbr.calc_closes_short_py(
-                    self.qty_steps[symbol],
-                    self.price_steps[symbol],
-                    self.min_qtys[symbol],
-                    self.min_costs[symbol],
-                    self.c_mults[symbol],
-                    self.live_configs[symbol]["short"]["close_grid_markup_range"],
-                    self.live_configs[symbol]["short"]["close_grid_min_markup"],
-                    self.live_configs[symbol]["short"]["close_grid_qty_pct"],
-                    self.live_configs[symbol]["short"]["close_trailing_grid_ratio"],
-                    self.live_configs[symbol]["short"]["close_trailing_qty_pct"],
-                    self.live_configs[symbol]["short"]["close_trailing_retracement_pct"],
-                    self.live_configs[symbol]["short"]["close_trailing_threshold_pct"],
-                    self.live_configs[symbol]["short"]["wallet_exposure_limit"],
-                    self.balance,
-                    self.positions[symbol]["short"]["size"],
-                    self.positions[symbol]["short"]["price"],
-                    self.trailing_prices[symbol]["short"]["min_since_open"],
-                    self.trailing_prices[symbol]["short"]["max_since_min"],
-                    self.get_last_price(symbol),
-                )
-                ideal_orders[symbol] += entries_short + closes_short
+                    ideal_orders[symbol] += entries + closes
 
         unstucking_symbol, unstucking_close = self.calc_unstucking_close(ideal_orders)
         if unstucking_close[0] != 0.0:
@@ -1467,7 +1389,7 @@ class Passivbot:
                 if order[0] == 0.0:
                     continue
                 if pprice_diff > self.config["live"]["price_distance_threshold"]:
-                    if not self.has_position(symbol, position_side):
+                    if not self.has_position(position_side, symbol):
                         continue
                     if any([x in order[2] for x in ["initial", "unstuck"]]):
                         continue
@@ -1492,10 +1414,11 @@ class Passivbot:
     def calc_unstucking_close(self, ideal_orders):
         stuck_positions = []
         pnls_cumsum = np.array([x["pnl"] for x in self.pnls]).cumsum()
+        unstuck_allowances = {"long": 0.0, "short": 0.0}
         for symbol in self.positions:
             for pside in ["long", "short"]:
                 if (
-                    self.has_position(symbol, pside)
+                    self.has_position(pside, symbol)
                     and self.live_configs[symbol][pside]["unstuck_loss_allowance_pct"] > 0.0
                 ):
                     wallet_exposure = pbr.calc_wallet_exposure(
@@ -1520,6 +1443,7 @@ class Passivbot:
                             if len(pnls_cumsum) > 0
                             else 0.0
                         )
+                        unstuck_allowances[pside] = unstuck_allowance
                         if unstuck_allowance > 0.0:
                             pprice_diff = calc_pprice_diff(
                                 pside,
@@ -1571,6 +1495,15 @@ class Passivbot:
                     ),
                 )
                 if close_qty != 0.0:
+                    pnl_if_closed = getattr(pbr, f"calc_pnl_{pside}")(
+                        self.positions[symbol][pside]["price"],
+                        close_price,
+                        close_qty,
+                        self.c_mults[symbol],
+                    )
+                    pnl_if_closed_abs = abs(pnl_if_closed)
+                    if pnl_if_closed < 0.0 and pnl_if_closed_abs > unstuck_allowances[pside]:
+                        close_qty *= unstuck_allowances[pside] / pnl_if_closed_abs
                     return symbol, (close_qty, close_price, "unstuck_close_long")
             elif pside == "short":
                 close_price = min(
@@ -1612,6 +1545,15 @@ class Passivbot:
                     ),
                 )
                 if close_qty != 0.0:
+                    pnl_if_closed = getattr(pbr, f"calc_pnl_{pside}")(
+                        self.positions[symbol][pside]["price"],
+                        close_price,
+                        close_qty,
+                        self.c_mults[symbol],
+                    )
+                    pnl_if_closed_abs = abs(pnl_if_closed)
+                    if pnl_if_closed < 0.0 and pnl_if_closed_abs > unstuck_allowances[pside]:
+                        close_qty *= unstuck_allowances[pside] / pnl_if_closed_abs
                     return symbol, (close_qty, close_price, "unstuck_close_short")
         return "", (0.0, 0.0, "")
 
