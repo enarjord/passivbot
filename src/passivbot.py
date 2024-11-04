@@ -769,13 +769,14 @@ class Passivbot:
             for symbol in self.open_orders:
                 if symbol in self.PB_modes[pside]:
                     continue
-                if len(self.open_orders[symbol]) == 0:
-                    continue
                 self.PB_modes[pside][symbol] = self.PB_mode_stop
         self.active_symbols = sorted(
             {s for subdict in self.PB_modes.values() for s in subdict.keys()}
         )
         for symbol in self.active_symbols:
+            for pside in self.PB_modes:
+                if symbol not in self.PB_modes[pside]:
+                    self.PB_modes[pside][symbol] = self.PB_mode_stop
             if symbol not in self.positions:
                 self.positions[symbol] = {
                     "long": {"size": 0.0, "price": 0.0},
