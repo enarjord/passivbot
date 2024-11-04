@@ -389,8 +389,6 @@ class HyperliquidBot(Passivbot):
                 and self.markets_dict[symbol]["info"]["onlyIsolated"]
             ):
                 return False
-            if float(self.markets_dict[symbol]["info"]["openInterest"]) == 0.0:
-                return False
         except Exception as e:
             logging.error(f"error with symbol_is_eligible {e} {symbol}")
             return False
