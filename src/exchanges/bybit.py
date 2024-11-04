@@ -123,7 +123,7 @@ class BybitBot(Passivbot):
             )
             balinfo = fetched_balance["info"]["result"]["list"][0]
             if balinfo["accountType"] == "UNIFIED":
-                balance = float(balinfo["totalMarginBalance"])
+                balance = float(balinfo["totalWalletBalance"])
                 if not hasattr(self, "previous_rounded_balance"):
                     self.previous_rounded_balance = balance
                 self.previous_rounded_balance = hysteresis_rounding(
