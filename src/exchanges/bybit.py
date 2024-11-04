@@ -15,6 +15,7 @@ from pure_funcs import (
     determine_pos_side_ccxt,
     symbol_to_coin,
     flatten,
+    hysteresis_rounding,
 )
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
 
@@ -120,7 +121,17 @@ class BybitBot(Passivbot):
             fetched_positions, fetched_balance = await asyncio.gather(
                 self.cca.fetch_positions(params={"limit": limit}), self.cca.fetch_balance()
             )
-            balance = fetched_balance[self.quote]["total"]
+            balinfo = fetched_balance["info"]["result"]["list"][0]
+            if balinfo["accountType"] == "UNIFIED":
+                balance = float(balinfo["totalMarginBalance"])
+                if not hasattr(self, "previous_rounded_balance"):
+                    self.previous_rounded_balance = balance
+                self.previous_rounded_balance = hysteresis_rounding(
+                    balance, self.previous_rounded_balance, 0.02, 0.5
+                )
+                balance = self.previous_rounded_balance
+            else:
+                balance = fetched_balance[self.quote]["total"]
             while True:
                 if all([elm["symbol"] + elm["side"] in positions for elm in fetched_positions]):
                     break
