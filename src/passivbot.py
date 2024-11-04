@@ -776,16 +776,6 @@ class Passivbot:
             {s for subdict in self.PB_modes.values() for s in subdict.keys()}
         )
         for symbol in self.active_symbols:
-            for pside in self.PB_modes:
-                if symbol in self.PB_modes[pside]:
-                    self.live_configs[symbol][pside]["mode"] = self.PB_modes[pside][symbol]
-                else:
-                    if self.config["live"]["auto_gs"]:
-                        self.live_configs[symbol][pside]["mode"] = "graceful_stop"
-                        self.PB_modes[pside][symbol] = "graceful_stop"
-                    else:
-                        self.live_configs[symbol][pside]["mode"] = "manual"
-                        self.PB_modes[pside][symbol] = "manual"
             if symbol not in self.positions:
                 self.positions[symbol] = {
                     "long": {"size": 0.0, "price": 0.0},
@@ -1585,11 +1575,11 @@ class Passivbot:
         for symbol in actual_orders:
             to_cancel_, to_create_ = filter_orders(actual_orders[symbol], ideal_orders[symbol], keys)
             for pside in ["long", "short"]:
-                if self.live_configs[symbol][pside]["mode"] == "manual":
+                if self.PB_modes[pside][symbol] == "manual":
                     # neither create nor cancel orders
                     to_cancel_ = [x for x in to_cancel_ if x["position_side"] != pside]
                     to_create_ = [x for x in to_create_ if x["position_side"] != pside]
-                elif self.live_configs[symbol][pside]["mode"] == "tp_only":
+                elif self.PB_modes[pside][symbol] == "tp_only":
                     # if take profit only mode, neither cancel nor create entries
                     to_cancel_ = [
                         x
@@ -1725,32 +1715,6 @@ class Passivbot:
         if pside is None:
             return self.get_symbols_with_pos("long") | self.get_symbols_with_pos("short")
         return set([s for s in self.positions if self.positions[s][pside]["size"] != 0.0])
-
-    def get_active_symbolszzz(self, pside=None) -> set:
-        if pside is None:
-            return self.get_active_symbols("long") | self.get_active_symbols("short")
-        # An active symbol is a symbol currently traded.
-        # Either on normal mode or with pos on gs mode.
-        # Positions with panic, manual or tp_only modes are not considered active.
-        active_symbols = set()
-        for symbol in self.forced_modes[pside]:
-            if self.forced_modes[pside][symbol] == "normal":
-                active_symbols.add(symbol)
-        for symbol in self.get_symbols_with_pos(pside):
-            if symbol in self.forced_modes[pside]:
-                if self.forced_modes[pside][symbol] in ["normal", "graceful_stop"]:
-                    active_symbols.add(symbol)
-            else:
-                pass
-            if symbol not in self.forced_modes[pside] or self.forced_modes[pside][symbol] in [
-                "normal",
-                "graceful_stop",
-            ]:
-                active_symbols.add(symbol)
-        for symbol in self.PB_modes[pside]:
-            if self.PB_modes[pside][symbol] == "normal":
-                active_symbols.add(symbol)
-        return active_symbols
 
     def get_symbols_approved_or_has_pos(self, pside=None) -> set:
         if pside is None:
