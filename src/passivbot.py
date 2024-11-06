@@ -1462,17 +1462,18 @@ class Passivbot:
                 )
                 if ideal_closes and close_price >= ideal_closes[0][1]:
                     continue
+                min_entry_qty = calc_min_entry_qty(
+                    close_price,
+                    False,
+                    self.c_mults[symbol],
+                    self.qty_steps[symbol],
+                    self.min_qtys[symbol],
+                    self.min_costs[symbol],
+                )
                 close_qty = -min(
                     self.positions[symbol][pside]["size"],
                     max(
-                        calc_min_entry_qty(
-                            close_price,
-                            False,
-                            self.c_mults[symbol],
-                            self.qty_steps[symbol],
-                            self.min_qtys[symbol],
-                            self.min_costs[symbol],
-                        ),
+                        min_entry_qty,
                         pbr.round_dn(
                             pbr.cost_to_qty(
                                 self.balance
@@ -1494,7 +1495,16 @@ class Passivbot:
                     )
                     pnl_if_closed_abs = abs(pnl_if_closed)
                     if pnl_if_closed < 0.0 and pnl_if_closed_abs > unstuck_allowances[pside]:
-                        close_qty *= unstuck_allowances[pside] / pnl_if_closed_abs
+                        close_qty = -min(
+                            self.positions[symbol][pside]["size"],
+                            max(
+                                min_entry_qty,
+                                pbr.round_dn(
+                                    abs(close_qty) * (unstuck_allowances[pside] / pnl_if_closed_abs),
+                                    self.qty_steps[symbol],
+                                ),
+                            ),
+                        )
                     return symbol, (close_qty, close_price, "unstuck_close_long")
             elif pside == "short":
                 close_price = min(
@@ -1512,17 +1522,18 @@ class Passivbot:
                 )
                 if ideal_closes and close_price <= ideal_closes[0][1]:
                     continue
+                min_entry_qty = calc_min_entry_qty(
+                    close_price,
+                    False,
+                    self.c_mults[symbol],
+                    self.qty_steps[symbol],
+                    self.min_qtys[symbol],
+                    self.min_costs[symbol],
+                )
                 close_qty = min(
                     abs(self.positions[symbol][pside]["size"]),
                     max(
-                        calc_min_entry_qty(
-                            close_price,
-                            False,
-                            self.c_mults[symbol],
-                            self.qty_steps[symbol],
-                            self.min_qtys[symbol],
-                            self.min_costs[symbol],
-                        ),
+                        min_entry_qty,
                         pbr.round_dn(
                             pbr.cost_to_qty(
                                 self.balance
@@ -1544,7 +1555,16 @@ class Passivbot:
                     )
                     pnl_if_closed_abs = abs(pnl_if_closed)
                     if pnl_if_closed < 0.0 and pnl_if_closed_abs > unstuck_allowances[pside]:
-                        close_qty *= unstuck_allowances[pside] / pnl_if_closed_abs
+                        close_qty = min(
+                            abs(self.positions[symbol][pside]["size"]),
+                            max(
+                                min_entry_qty,
+                                pbr.round_dn(
+                                    close_qty * (unstuck_allowances[pside] / pnl_if_closed_abs),
+                                    self.qty_steps[symbol],
+                                ),
+                            ),
+                        )
                     return symbol, (close_qty, close_price, "unstuck_close_short")
         return "", (0.0, 0.0, "")
 
