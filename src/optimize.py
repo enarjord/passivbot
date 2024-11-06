@@ -7,7 +7,7 @@ import argparse
 import multiprocessing
 import subprocess
 import mmap
-from multiprocessing import shared_memory
+from multiprocessing import Queue, Process
 from backtest import (
     prepare_hlcvs_mss,
     prep_backtest_args,
@@ -43,6 +43,26 @@ import tempfile
 import time
 import fcntl
 from tqdm import tqdm
+
+
+def results_writer_process(queue: Queue, results_filename: str):
+    """
+    Manager process that handles writing results to file.
+    Runs in a separate process and receives results through a queue.
+    """
+    try:
+        while True:
+            data = queue.get()
+            if data == "DONE":  # Sentinel value to signal shutdown
+                break
+            try:
+                with open(results_filename, "a") as f:
+                    json.dump(denumpyize(data), f)
+                    f.write("\n")
+            except Exception as e:
+                logging.error(f"Error writing results: {e}")
+    except Exception as e:
+        logging.error(f"Results writer process error: {e}")
 
 
 def create_shared_memory_file(hlcvs):
@@ -199,7 +219,7 @@ def managed_mmap(filename, dtype, shape):
 
 
 class Evaluator:
-    def __init__(self, shared_memory_file, hlcvs_shape, hlcvs_dtype, config, mss):
+    def __init__(self, shared_memory_file, hlcvs_shape, hlcvs_dtype, config, mss, results_queue):
         logging.info("Initializing Evaluator...")
         self.shared_memory_file = shared_memory_file
         self.hlcvs_shape = hlcvs_shape
@@ -213,27 +233,8 @@ class Evaluator:
 
         self.config = config
         _, self.exchange_params, self.backtest_params = prep_backtest_args(config, mss)
-        self.lock_filepath = self.config["lock_filepath"]
         logging.info("Evaluator initialization complete.")
-
-    @contextmanager
-    def file_lock(self, timeout=1):
-        start_time = time.time()
-        while True:
-            try:
-                with open(self.lock_filepath, "w") as lock_file:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    try:
-                        yield
-                    finally:
-                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                break
-            except IOError:
-                if time.time() - start_time > timeout:
-                    logging.warning(f"Timeout while waiting for lock. Proceeding without lock.")
-                    yield
-                    break
-                time.sleep(0.1)
+        self.results_queue = results_queue
 
     def evaluate(self, individual):
         config = individual_to_config(individual, template=self.config)
@@ -250,17 +251,8 @@ class Evaluator:
         )
         w_0, w_1 = self.calc_fitness(analysis)
         analysis.update({"w_0": w_0, "w_1": w_1})
-        self.write_results({"analysis": analysis, "config": config})
+        self.results_queue.put({"analysis": analysis, "config": config})
         return w_0, w_1
-
-    def write_results(self, data):
-        with self.file_lock():
-            try:
-                with open(self.config["results_filename"], "a") as f:
-                    json.dump(denumpyize(data), f)
-                    f.write("\n")
-            except Exception as e:
-                logging.error(f"Error writing results: {e}")
 
     def calc_fitness(self, analysis):
         modifier = 0.0
@@ -388,7 +380,6 @@ async def main():
     config["results_filename"] = make_get_filepath(
         f"optimize_results/{date_fname}_{coins_fname}_{hash_snippet}_all_results.txt"
     )
-    config["lock_filepath"] = config["results_filename"] + ".lock"
 
     try:
         required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
@@ -396,7 +387,20 @@ async def main():
         logging.info(f"Starting to create shared memory file...")
         shared_memory_file = create_shared_memory_file(hlcvs)
         logging.info(f"Finished creating shared memory file: {shared_memory_file}")
-        evaluator = Evaluator(shared_memory_file, hlcvs.shape, hlcvs.dtype, config, mss)
+
+        # Create results queue and start manager process
+        manager = multiprocessing.Manager()
+        results_queue = manager.Queue()
+        writer_process = Process(
+            target=results_writer_process, args=(results_queue, config["results_filename"])
+        )
+        writer_process.start()
+
+        # Initialize evaluator with results queue
+        evaluator = Evaluator(
+            shared_memory_file, hlcvs.shape, hlcvs.dtype, config, mss, results_queue
+        )
+
         logging.info(f"Finished initializing evaluator...")
         creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -1.0))  # Minimize both objectives
         creator.create("Individual", list, fitness=creator.FitnessMulti)
@@ -514,12 +518,10 @@ async def main():
         logging.error(f"An error occurred: {e}")
         traceback.print_exc()
     finally:
-        if os.path.exists(config["lock_filepath"]):
-            try:
-                os.remove(config["lock_filepath"])
-                logging.info(f"Removed lock file")
-            except Exception as e1:
-                logging.error(f"Failed to remove lock file {e1}")
+        # Signal the writer process to shut down and wait for it
+        if "results_queue" in locals():
+            results_queue.put("DONE")
+            writer_process.join()
         if "pool" in locals():
             logging.info("Closing and terminating the process pool...")
             pool.close()
