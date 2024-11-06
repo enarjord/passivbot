@@ -10,7 +10,9 @@ import pprint
 from copy import deepcopy
 import argparse
 from collections import defaultdict
-from typing import Union, Optional
+from collections.abc import Sized
+import sys
+from typing import Union, Optional, Set, Any
 from pathlib import Path
 
 try:
@@ -1500,6 +1502,74 @@ def read_external_coins_lists(filepath) -> dict:
         # Split by newline, comma, and/or space, and filter out empty strings
         items = [item.strip() for item in content.replace(",", " ").split() if item.strip()]
     return {"long": items, "short": items}
+
+
+def get_size(obj: Any, seen: Set = None) -> int:
+    """
+    Recursively calculate size of object and its contents in bytes.
+
+    Args:
+        obj: The object to calculate size for
+        seen: Set of object ids already seen (for handling circular references)
+
+    Returns:
+        Total size in bytes
+    """
+    # Initialize the set of seen objects if this is the top-level call
+    if seen is None:
+        seen = set()
+
+    # Get object id to handle circular references
+    obj_id = id(obj)
+
+    # If object has been seen, don't count it again
+    if obj_id in seen:
+        return 0
+
+    # Add this object to seen
+    seen.add(obj_id)
+
+    # Get basic size of object
+    size = sys.getsizeof(obj)
+
+    # Handle different types of containers
+    if isinstance(obj, (str, bytes, bytearray)):
+        pass  # Basic size already includes contents
+
+    elif isinstance(obj, (tuple, list, set, frozenset)):
+        size += sum(get_size(item, seen) for item in obj)
+
+    elif isinstance(obj, dict):
+        size += sum(get_size(k, seen) + get_size(v, seen) for k, v in obj.items())
+
+    elif hasattr(obj, "__dict__"):
+        # Add size of all attributes for custom objects
+        size += get_size(obj.__dict__, seen)
+
+    elif hasattr(obj, "__slots__"):
+        # Handle objects using __slots__
+        size += sum(
+            get_size(getattr(obj, attr), seen) for attr in obj.__slots__ if hasattr(obj, attr)
+        )
+
+    return size
+
+
+def format_size(size_bytes: int) -> str:
+    """
+    Format byte size into human readable string.
+
+    Args:
+        size_bytes: Size in bytes
+
+    Returns:
+        Formatted string like '1.23 MB'
+    """
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if size_bytes < 1024:
+            return f"{size_bytes:.2f} {unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.2f} PB"
 
 
 def main():
