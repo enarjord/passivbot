@@ -6,6 +6,8 @@ import argparse
 import sys
 import pprint
 import dictdiffer
+from tqdm import tqdm
+import traceback
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from pure_funcs import config_pretty_str
@@ -22,35 +24,56 @@ from pure_funcs import (
 )
 
 
-def data_generator(all_results_filename):
+def data_generator(all_results_filename, verbose=False):
     """
     Generator function that iterates over an all_results.txt file written with dictdiffer.
     It yields the full data at each step by reconstructing it using diffs.
+
     Args:
         all_results_filename (str): Path to the all_results.txt file.
+        verbose (bool): If True, disable all printing and progress tracking.
+
     Yields:
         dict: The full data dictionary at each step.
     """
     prev_data = None
+    # Get the total file size in bytes
+    file_size = os.path.getsize(all_results_filename)
+    # Disable progress bar and printing if verbose is True
     with open(all_results_filename, "r") as f:
-        for line in f:
-            try:
-                data = json.loads(line)
-                if "diff" not in data:
-                    # This is the first entry; full data is provided
-                    prev_data = data
-                    yield deepcopy(prev_data)
-                else:
-                    # Apply the diff to the previous data to get the current data
-                    diff = data["diff"]
-                    prev_data = dictdiffer.patch(diff, prev_data)
-                    yield deepcopy(prev_data)
-            except Exception as e:
-                print(f"Error in data_generator: {e} Filename: {all_results_filename} line: {line}")
-                yield {}
+        with tqdm(
+            total=file_size,
+            desc="Loading content",
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+            disable=not verbose,
+        ) as pbar:
+            for line in f:
+                if verbose:
+                    pbar.update(len(line.encode("utf-8")))
+                try:
+                    data = json.loads(line)
+                    if "diff" not in data:
+                        # This is the first entry; full data is provided
+                        prev_data = data
+                        yield deepcopy(prev_data)
+                    else:
+                        # Apply the diff to the previous data to get the current data
+                        diff = data["diff"]
+                        prev_data = dictdiffer.patch(diff, prev_data)
+                        yield deepcopy(prev_data)
+                except Exception as e:
+                    if verbose:
+                        print(
+                            f"Error in data_generator: {e} Filename: {all_results_filename} line: {line}"
+                        )
+                    yield {}
+            if not verbose:
+                pbar.close()
 
 
-# Function definitions
+# Function definitions remain unchanged
 def calc_dist(p0, p1):
     return ((p0[0] - p1[0]) ** 2 + (p0[1] - p1[1]) ** 2) ** 0.5
 
@@ -113,9 +136,10 @@ def process_single(file_location, verbose=False):
     except:
         pass
     xs = []
-    for x in data_generator(file_location):
+    for x in data_generator(file_location, verbose=verbose):
         if x:
             xs.append(x)
+    print_("Processing...")
     res = pd.DataFrame([flatten_dict(x) for x in xs])
 
     keys, higher_is_better = ["w_0", "w_1"], [False, False]
@@ -149,7 +173,7 @@ def process_single(file_location, verbose=False):
         res_to_print.columns = [x.replace("analysis_", "") for x in res_to_print.columns]
         print_(res_to_print)
 
-        # Processing the best result for configuration
+    # Processing the best result for configuration
     best_d = xs[best]
     best_d["analysis"]["n_iters"] = len(xs)
     best_d.update(deepcopy(best_d["config"]))
@@ -174,12 +198,14 @@ def main(args):
                 print(f"successfully processed {fpath}")
             except Exception as e:
                 print(f"error with {fpath} {e}")
+                traceback.print_exc()
     else:
         try:
             result = process_single(args.file_location, args.verbose)
             print(f"successfully processed {args.file_location}")
         except Exception as e:
             print(f"error with {args.file_location} {e}")
+            traceback.print_exc()
 
 
 if __name__ == "__main__":
@@ -189,7 +215,7 @@ if __name__ == "__main__":
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable verbosity",
+        help="Disable printing and progress tracking",
     )
     args = parser.parse_args()
 
