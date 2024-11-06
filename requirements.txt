@@ -21,3 +21,4 @@ hjson==3.0.2
 prettytable==3.0.0
 maturin==1.5.1
 sortedcontainers==2.4.0
+dictdiffer==0.9.0
