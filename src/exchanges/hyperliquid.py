@@ -334,48 +334,40 @@ class HyperliquidBot(Passivbot):
         return await self.execute_orders([order])
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        res = None
-        try:
-            if len(orders) == 0:
-                return []
-            to_execute = []
-            for order in orders:
-                to_execute.append(
-                    {
-                        "symbol": order["symbol"],
-                        "type": "limit",
-                        "side": order["side"],
-                        "amount": order["qty"],
-                        "price": order["price"],
-                        "params": {
-                            # "orderType": {"limit": {"tif": "Alo"}},
-                            # "cloid": order["custom_id"],
-                            "reduceOnly": order["reduce_only"],
-                            "timeInForce": (
-                                "Alo"
-                                if self.config["live"]["time_in_force"] == "post_only"
-                                else "Gtc"
-                            ),
-                        },
-                    }
-                )
-            res = await self.cca.create_orders(
-                to_execute,
-                params=(
-                    {"vaultAddress": self.user_info["wallet_address"]}
-                    if self.user_info["is_vault"]
-                    else {}
-                ),
+        if len(orders) == 0:
+            return []
+        to_execute = []
+        for order in orders:
+            to_execute.append(
+                {
+                    "symbol": order["symbol"],
+                    "type": "limit",
+                    "side": order["side"],
+                    "amount": order["qty"],
+                    "price": order["price"],
+                    "params": {
+                        # "orderType": {"limit": {"tif": "Alo"}},
+                        # "cloid": order["custom_id"],
+                        "reduceOnly": order["reduce_only"],
+                        "timeInForce": (
+                            "Alo" if self.config["live"]["time_in_force"] == "post_only" else "Gtc"
+                        ),
+                    },
+                }
             )
-            executed = []
-            for ex, order in zip(res, orders):
-                if "info" in ex and "filled" in ex["info"] or "resting" in ex["info"]:
-                    executed.append({**ex, **order})
-            return executed
-        except Exception as e:
-            logging.error(f"error executing orders {e} {orders}")
-            print_async_exception(res)
-            traceback.print_exc()
+        res = await self.cca.create_orders(
+            to_execute,
+            params=(
+                {"vaultAddress": self.user_info["wallet_address"]}
+                if self.user_info["is_vault"]
+                else {}
+            ),
+        )
+        executed = []
+        for ex, order in zip(res, orders):
+            if "info" in ex and "filled" in ex["info"] or "resting" in ex["info"]:
+                executed.append({**ex, **order})
+        return executed
 
     def symbol_is_eligible(self, symbol):
         try:

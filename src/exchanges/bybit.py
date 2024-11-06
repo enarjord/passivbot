@@ -15,6 +15,7 @@ from pure_funcs import (
     determine_pos_side_ccxt,
     symbol_to_coin,
     flatten,
+    hysteresis_rounding,
 )
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
 
@@ -120,7 +121,17 @@ class BybitBot(Passivbot):
             fetched_positions, fetched_balance = await asyncio.gather(
                 self.cca.fetch_positions(params={"limit": limit}), self.cca.fetch_balance()
             )
-            balance = fetched_balance[self.quote]["total"]
+            balinfo = fetched_balance["info"]["result"]["list"][0]
+            if balinfo["accountType"] == "UNIFIED":
+                balance = float(balinfo["totalWalletBalance"])
+                if not hasattr(self, "previous_rounded_balance"):
+                    self.previous_rounded_balance = balance
+                self.previous_rounded_balance = hysteresis_rounding(
+                    balance, self.previous_rounded_balance, 0.02, 0.5
+                )
+                balance = self.previous_rounded_balance
+            else:
+                balance = fetched_balance[self.quote]["total"]
             while True:
                 if all([elm["symbol"] + elm["side"] in positions for elm in fetched_positions]):
                     break
@@ -368,32 +379,25 @@ class BybitBot(Passivbot):
         )
 
     async def execute_order(self, order: dict) -> dict:
-        executed = None
-        try:
-            executed = await self.cca.create_limit_order(
-                symbol=order["symbol"],
-                side=order["side"],
-                amount=abs(order["qty"]),
-                price=order["price"],
-                params={
-                    "positionIdx": 1 if order["position_side"] == "long" else 2,
-                    "timeInForce": (
-                        "postOnly" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
-                    ),
-                    "orderLinkId": order["custom_id"],
-                },
-            )
-            if "symbol" not in executed or executed["symbol"] is None:
-                executed["symbol"] = order["symbol"]
-            for key in ["side", "position_side", "qty", "price"]:
-                if key not in executed or executed[key] is None:
-                    executed[key] = order[key]
-            return executed
-        except Exception as e:
-            logging.error(f"error executing order {order} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return {}
+        executed = await self.cca.create_limit_order(
+            symbol=order["symbol"],
+            side=order["side"],
+            amount=abs(order["qty"]),
+            price=order["price"],
+            params={
+                "positionIdx": 1 if order["position_side"] == "long" else 2,
+                "timeInForce": (
+                    "postOnly" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
+                ),
+                "orderLinkId": order["custom_id"],
+            },
+        )
+        if "symbol" not in executed or executed["symbol"] is None:
+            executed["symbol"] = order["symbol"]
+        for key in ["side", "position_side", "qty", "price"]:
+            if key not in executed or executed[key] is None:
+                executed[key] = order[key]
+        return executed
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(

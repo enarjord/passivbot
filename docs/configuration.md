@@ -5,6 +5,7 @@ Here follows an overview of the parameters found in `config/template.json`.
 ## Backtest Settings
 
 - `base_dir`: Location to save backtest results.
+- `compress_cache`: set to true to save disk space. Set to false to load faster.
 - `end_date`: End date of backtest, e.g., 2024-06-23. Set to 'now' to use today's date as end date.
 - `exchange`: Exchange from which to fetch 1m OHLCV data. Default is Binance.
 - `start_date`: Start date of backtest.
@@ -128,9 +129,14 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
 
 ## Live Trading Settings
 
-- `approved_coins`: List of coins approved for trading. If empty, all coins are approved.
+- `approved_coins`:
+	- List of coins approved for trading. If empty, all coins are approved.
+	- May be given as path to external file which is read by Passivbot continuously.
+	- May be split into long and short by giving a json on the form:
+		- `{"long": ["COIN1", "COIN2"], "short": ["COIN2", "COIN3"]}`
 - `auto_gs`: Automatically enable graceful stop for positions on disapproved coins.
   - Graceful stop means the bot will continue trading as normal, but not open a new position after the current position is fully closed.
+  - If auto_gs=false, positions on disapproved coins are put on manual mode.
 - `coin_flags`:
   - Specify flags for individual coins, overriding values from bot config.
   - For example, `coin_flags: {"ETH": "-sm n -lm gs", "XRP": "-lm p -lc path/to/other_config.json"}` will force short mode to normal and long mode to graceful stop for ETH; it will set long mode to panic and use other config for XRP.
@@ -143,12 +149,19 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
     - `-lw` or `-sw`: Long or short wallet exposure limit.
     - `-lev`: Leverage.
     - `-lc`: Path to live config. Load all of another config's bot parameters except `[n_positions, total_wallet_exposure_limit, unstuck_loss_allowance_pct, unstuck_close_pct]`.
+- empty_means_all_approved:
+	- If true, will interpret approved_coins=[] as all coins approved.
+	- If false, will interpret approved_coins=[] as no coins approved.
 - `execution_delay_seconds`: Wait x seconds after executing to exchange.
 - `filter_by_min_effective_cost`: If true, will disallow coins where `balance * WE_limit * initial_qty_pct < min_effective_cost`.
   - For example, if exchange's effective minimum cost for a coin is $5, but bot wants to make an order of $2, disallow that coin.
 - `forced_mode_long`, `forced_mode_short`: Force all long positions to a given mode.
   - Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
-- `ignored_coins`: List of coins bot will not make positions on. If there are positions on that coin, turn on graceful stop. May be given as a path to a json, hjson, or txt file with list of coins to be ignored. If txt, each coin is on its own line.
+- `ignored_coins`:
+	- List of coins bot will not make positions on. If there are positions on that coin, turn on graceful stop or manual mode.
+	- May be given as path to external file which is read by Passivbot continuously.
+	- May be split into long and short by giving a json on the form:
+		- `{"long": ["COIN1", "COIN2"], "short": ["COIN2", "COIN3"]}`
 - `leverage`: Leverage set on exchange. Default is 10.
 - `max_n_cancellations_per_batch`: Will cancel n open orders per execution.
 - `max_n_creations_per_batch`: Will create n new orders per execution.

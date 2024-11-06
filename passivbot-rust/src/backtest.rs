@@ -1100,7 +1100,7 @@ impl<'a> Backtest<'a> {
                         || self.open_orders.long[&idx].closes[0].qty == 0.0
                         || close_price < self.open_orders.long[&idx].closes[0].price
                     {
-                        let close_qty = -f64::min(
+                        let mut close_qty = -f64::min(
                             self.positions.long[&idx].size,
                             f64::max(
                                 calc_min_entry_qty(close_price, &self.exchange_params_list[idx]),
@@ -1117,6 +1117,18 @@ impl<'a> Backtest<'a> {
                             ),
                         );
                         if close_qty != 0.0 {
+                            let pnl_if_closed = calc_pnl_long(
+                                self.positions.long[&idx].price,
+                                close_price,
+                                close_qty,
+                                self.exchange_params_list[idx].c_mult,
+                            );
+                            let pnl_if_closed_abs = pnl_if_closed.abs();
+                            if pnl_if_closed < 0.0 && pnl_if_closed_abs > unstuck_allowances.0 {
+                                // means unstuck allowance would be exceeded
+                                // reduce qty
+                                close_qty *= (unstuck_allowances.0 / pnl_if_closed_abs);
+                            }
                             return (
                                 idx,
                                 LONG,
@@ -1142,7 +1154,7 @@ impl<'a> Backtest<'a> {
                         || self.open_orders.short[&idx].closes[0].qty == 0.0
                         || close_price > self.open_orders.short[&idx].closes[0].price
                     {
-                        let close_qty = f64::min(
+                        let mut close_qty = f64::min(
                             self.positions.short[&idx].size.abs(),
                             f64::max(
                                 calc_min_entry_qty(close_price, &self.exchange_params_list[idx]),
@@ -1159,6 +1171,18 @@ impl<'a> Backtest<'a> {
                             ),
                         );
                         if close_qty != 0.0 {
+                            let pnl_if_closed = calc_pnl_short(
+                                self.positions.short[&idx].price,
+                                close_price,
+                                close_qty,
+                                self.exchange_params_list[idx].c_mult,
+                            );
+                            let pnl_if_closed_abs = pnl_if_closed.abs();
+                            if pnl_if_closed < 0.0 && pnl_if_closed_abs > unstuck_allowances.1 {
+                                // means unstuck allowance would be exceeded
+                                // reduce qty
+                                close_qty *= (unstuck_allowances.1 / pnl_if_closed_abs);
+                            }
                             return (
                                 idx,
                                 SHORT,
@@ -1465,14 +1489,14 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
                 break;
             }
         }
-        bal_eq.push((equity, last_balance));
+        bal_eq.push((last_balance, equity));
     }
 
     let (equity_balance_diff_sum, equity_balance_diff_max) =
         bal_eq
             .iter()
-            .fold((0.0, 0.0), |(sum, max), &(equity, balance)| {
-                let diff = (balance - equity).abs() / ((equity + balance) / 2.0);
+            .fold((0.0, 0.0), |(sum, max), &(balance, equity)| {
+                let diff = (equity - balance).abs() / balance;
                 (sum + diff, f64::max(max, diff))
             });
     let equity_balance_diff_mean = equity_balance_diff_sum / bal_eq.len() as f64;

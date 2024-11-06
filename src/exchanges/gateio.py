@@ -304,39 +304,31 @@ class GateIOBot(Passivbot):
         return await self.execute_orders([order])
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        res = None
-        try:
-            if len(orders) == 0:
-                return []
-            to_execute = []
-            for order in orders[: self.max_n_creations_per_batch]:
-                to_execute.append(
-                    {
-                        "symbol": order["symbol"],
-                        "type": "limit",
-                        "side": order["side"],
-                        "amount": order["qty"],
-                        "price": order["price"],
-                        "params": {
-                            "reduce_only": order["reduce_only"],
-                            "timeInForce": (
-                                "poc"
-                                if self.config["live"]["time_in_force"] == "post_only"
-                                else "gtc"
-                            ),
-                        },
-                    }
-                )
-            res = await self.cca.create_orders(to_execute)
-            executed = []
-            for ex, order in zip(res, orders):
-                if "info" in ex and ex["status"] in ["closed", "open"]:
-                    executed.append({**ex, **order})
-            return executed
-        except Exception as e:
-            logging.error(f"error executing orders {e}")
-            print_async_exception(res)
-            traceback.print_exc()
+        if len(orders) == 0:
+            return []
+        to_execute = []
+        for order in orders[: self.max_n_creations_per_batch]:
+            to_execute.append(
+                {
+                    "symbol": order["symbol"],
+                    "type": "limit",
+                    "side": order["side"],
+                    "amount": order["qty"],
+                    "price": order["price"],
+                    "params": {
+                        "reduce_only": order["reduce_only"],
+                        "timeInForce": (
+                            "poc" if self.config["live"]["time_in_force"] == "post_only" else "gtc"
+                        ),
+                    },
+                }
+            )
+        res = await self.cca.create_orders(to_execute)
+        executed = []
+        for ex, order in zip(res, orders):
+            if "info" in ex and ex["status"] in ["closed", "open"]:
+                executed.append({**ex, **order})
+        return executed
 
     async def update_exchange_config_by_symbols(self, symbols):
         return

@@ -10,7 +10,8 @@ import pprint
 from copy import deepcopy
 import argparse
 from collections import defaultdict
-
+from typing import Union, Optional
+from pathlib import Path
 
 try:
     import hjson
@@ -39,10 +40,11 @@ from pure_funcs import (
     remove_OD,
     symbol_to_coin,
     str2bool,
+    flatten,
 )
 
 
-def format_config(config: dict, verbose=True) -> dict:
+def format_config(config: dict, verbose=True, live_only=False) -> dict:
     # attempts to format a config to v7 config
     template = get_template_live_config("v7")
     cmap = {
@@ -132,6 +134,12 @@ def format_config(config: dict, verbose=True) -> dict:
         [k in config["config"] for k in template]
     ):
         result = deepcopy(config["config"])
+    elif "bot" in config and "live" in config:
+        # live only config
+        result = deepcopy(config)
+        for key in ["optimize", "backtest"]:
+            if key not in result:
+                result[key] = deepcopy(template[key])
     else:
         raise Exception(f"failed to format config")
     for k0, v0, v1 in [
@@ -174,63 +182,62 @@ def format_config(config: dict, verbose=True) -> dict:
             if verbose:
                 print(f"renaming parameter {k0} {src}: {dst}")
             del result[k0][src]
-    for k0, k1, v in [
-        ("live", "time_in_force", "good_till_cancelled"),
-        ("live", "max_n_restarts_per_day", 10),
-        ("live", "ohlcvs_1m_rolling_window_days", 7.0),
-        ("live", "ohlcvs_1m_update_after_minutes", 10.0),
-        ("optimize", "scoring", ["mdg", "sharpe_ratio"]),
-    ]:
-        if k1 not in result[k0]:
-            result[k0][k1] = v
-            if verbose:
-                print(f"adding missing parameter {k0} {k1}: {v}")
-    for k_coins in ["approved_coins", "ignored_coins"]:
-        path = result["live"][k_coins]
-        if isinstance(path, list):
-            if len(path) == 1 and isinstance(path[0], str) and os.path.exists(path[0]):
-                if any([path[0].endswith(k) for k in [".txt", ".json", ".hjson"]]):
-                    path = path[0]
-        if isinstance(path, str):
-            if os.path.exists(path):
-                try:
-                    if path.endswith(".json") or path.endswith(".hjson"):
-                        result["live"][k_coins] = hjson.load(open(path))
-                        if verbose:
-                            print(f"set {k_coins} {result['live'][k_coins]}")
-                    elif path.endswith(".txt"):
-                        with open(path) as f:
-                            result["live"][k_coins] = [xx for x in f.readlines() if (xx := x.strip())]
+    for k0 in template:
+        for k1 in template[k0]:
+            if k0 not in result:
+                raise Exception(f"Fatal: {k0} missing from config")
+            if k1 not in result[k0]:
+                result[k0][k1] = template[k0][k1]
+                if verbose:
+                    print(f"adding missing parameter {k0}.{k1}: {template[k0][k1]}")
+    if not live_only:
+        for k_coins in ["approved_coins", "ignored_coins"]:
+            path = result["live"][k_coins]
+            if isinstance(path, list):
+                if len(path) == 1 and isinstance(path[0], str) and os.path.exists(path[0]):
+                    if any([path[0].endswith(k) for k in [".txt", ".json", ".hjson"]]):
+                        path = path[0]
+            if isinstance(path, str):
+                if os.path.exists(path):
+                    try:
+                        content = read_external_coins_lists(path)
+                        if content:
                             if verbose:
-                                print(f"set {k_coins} {result['live'][k_coins]}")
-                    else:
-                        print(f"failed to load {k_coins} from file {path}, unknown file format")
-                except Exception as e:
-                    print(f"failed to load {k_coins} from file {path} {e}")
-            else:
-                print(f"path to {k_coins} file does not exist {path}")
-                result["live"][k_coins] = []
-    if result["live"]["ignored_coins"]:
-        result["live"]["ignored_coins"] = coins_to_symbols(
-            result["live"]["ignored_coins"], exchange=result["backtest"]["exchange"], verbose=verbose
+                                if result["live"][k_coins] != content:
+                                    print(f"set {k_coins} {content}")
+                            result["live"][k_coins] = content
+                    except Exception as e:
+                        print(f"failed to load {k_coins} from file {path} {e}")
+                else:
+                    print(f"path to {k_coins} file does not exist {path}")
+                    result["live"][k_coins] = {"long": [], "short": []}
+            if isinstance(result["live"][k_coins], list):
+                result["live"][k_coins] = {
+                    "long": deepcopy(result["live"][k_coins]),
+                    "short": deepcopy(result["live"][k_coins]),
+                }
+        eligible_symbols = get_all_eligible_symbols(result["backtest"]["exchange"])
+        ignored_coins = coins_to_symbols(
+            set(flatten(result["live"]["ignored_coins"].values())), eligible_symbols=eligible_symbols
         )
-    if result["live"]["approved_coins"]:
-        result["live"]["approved_coins"] = [
-            x
-            for x in coins_to_symbols(
-                result["live"]["approved_coins"],
-                exchange=result["backtest"]["exchange"],
-                verbose=verbose,
-            )
-            if x not in result["live"]["ignored_coins"]
-        ]
-        result["backtest"]["symbols"] = result["live"]["approved_coins"]
-    else:
-        result["backtest"]["symbols"] = [
-            x
-            for x in get_all_eligible_symbols(result["backtest"]["exchange"])
-            if x not in result["live"]["ignored_coins"]
-        ]
+        approved_coins = coins_to_symbols(
+            set(flatten(result["live"]["approved_coins"].values())), eligible_symbols=eligible_symbols
+        )
+        if approved_coins:
+            result["backtest"]["symbols"] = [
+                x
+                for x in coins_to_symbols(
+                    sorted(approved_coins), exchange=result["backtest"]["exchange"], verbose=verbose
+                )
+                if x not in ignored_coins
+            ]
+        else:
+            result["backtest"]["symbols"] = [
+                s
+                for s in sorted(get_all_eligible_symbols(result["backtest"]["exchange"]))
+                if s not in ignored_coins
+            ]
+
     return result
 
 
@@ -250,8 +257,10 @@ def get_all_eligible_symbols(exchange="binance"):
     loaded_json = None
     try:
         loaded_json = json.load(open(filepath))
-        assert utc_ms() - get_file_mod_utc(filepath) < 1000 * 60 * 60 * 24
-        return loaded_json
+        if utc_ms() - get_file_mod_utc(filepath) > 1000 * 60 * 60 * 24:
+            print(f"Eligible_symbols cache more than 24h old. Fetching new.")
+        else:
+            return loaded_json
     except Exception as e:
         print(f"failed to load {filepath}. Fetching from {exchange}")
         pass
@@ -276,7 +285,59 @@ def get_all_eligible_symbols(exchange="binance"):
         raise Exception("unable to fetch or load from cache")
 
 
-def coin_to_symbol(coin: str, eligible_symbols=None, verbose=True):
+def coin_to_symbol(coin, eligible_symbols=None, coin_to_symbol_map={}, quote="USDT", verbose=True):
+    # side effect: coin_to_symbol_map might get mutated
+    if eligible_symbols is None:
+        eligible_symbols = get_all_eligible_symbols()
+    if coin in coin_to_symbol_map:
+        return coin_to_symbol_map[coin]
+
+    # first check if coin/quote:quote has a match
+    candidate_symbol = f"{coin}/{quote}:{quote}"
+    if candidate_symbol in eligible_symbols:
+        coin_to_symbol_map[coin] = candidate_symbol
+        return candidate_symbol
+
+    # next check if there is a single match
+    candidates = {s for s in eligible_symbols if coin in s}
+    if len(candidates) == 1:
+        coin_to_symbol_map[coin] = next(iter(candidates))
+        return coin_to_symbol_map[coin]
+
+    # next format coin (e.g. 1000SHIB -> SHIB, kPEPE -> PEPE, etc)
+    coinf = symbol_to_coin(coin)
+    if coin in coin_to_symbol_map:
+        coin_to_symbol_map[coin] = coin_to_symbol_map[coinf]
+        return coin_to_symbol_map[coin]
+
+    # first check if coinf/quote:quote has a match
+    candidate_symbol = f"{coinf}/{quote}:{quote}"
+    if candidate_symbol in eligible_symbols:
+        coin_to_symbol_map[coin] = candidate_symbol
+        return candidate_symbol
+
+    # next check if there is a single match
+    candidates = {s for s in eligible_symbols if coinf in s}
+    if len(candidates) == 1:
+        coin_to_symbol_map[coin] = next(iter(candidates))
+        return coin_to_symbol_map[coin]
+
+    # next check if multiple matches
+    if len(candidates) > 1:
+        for candidate in candidates:
+            candidate_coin = symbol_to_coin(candidate)
+            if candidate_coin == coinf:
+                coin_to_symbol_map[coin] = candidate
+                return candidate
+        if verbose:
+            print(f"coin_to_symbol {coinf}: ambiguous coin, multiple candidates {candidates}")
+    else:
+        if verbose:
+            print(f"coin_to_symbol no candidate symbol for {coinf}")
+    return ""
+
+
+def coin_to_symbol_old(coin: str, eligible_symbols=None, verbose=True):
     # formats coin to appropriate symbol
     if eligible_symbols is None:
         eligible_symbols = get_all_eligible_symbols()
@@ -299,16 +360,26 @@ def coin_to_symbol(coin: str, eligible_symbols=None, verbose=True):
 
 
 def coins_to_symbols(coins: [str], eligible_symbols=None, exchange=None, verbose=True):
-    eligible_symbols = get_all_eligible_symbols(exchange)
+    if eligible_symbols is None:
+        eligible_symbols = get_all_eligible_symbols(exchange)
     symbols = [coin_to_symbol(x, eligible_symbols, verbose=verbose) for x in coins]
     return sorted(set([x for x in symbols if x]))
 
 
-def load_config(filepath: str) -> dict:
+def format_end_date(end_date) -> str:
+    if end_date in ["today", "now", "", None]:
+        ms2day = 1000 * 60 * 60 * 24
+        end_date = ts_to_date_utc((utc_ms() - ms2day) // ms2day * ms2day)
+    else:
+        end_date = ts_to_date_utc(date_to_ts2(end_date))
+    return end_date[:10]
+
+
+def load_config(filepath: str, live_only=False) -> dict:
     # loads hjson or json v7 config
     try:
         config = load_hjson_config(filepath)
-        config = format_config(config)
+        config = format_config(config, live_only=live_only)
         return config
     except Exception as e:
         raise Exception(f"failed to load config {filepath}: {e}")
@@ -383,10 +454,7 @@ def prepare_backtest_config(args) -> dict:
     else:
         config["spot"] = args.market_type == "spot"
     config["start_date"] = ts_to_date_utc(date_to_ts2(config["start_date"]))[:10]
-    if config["end_date"] in ["today", "now", ""]:
-        config["end_date"] = ts_to_date_utc(utc_ms())[:10]
-    else:
-        config["end_date"] = ts_to_date_utc(date_to_ts2(config["end_date"]))[:10]
+    config["end_date"] = format_end_date(config["end_date"])
     config["exchange"] = load_exchange_key_secret_passphrase(config["user"])[0]
     config["session_name"] = (
         f"{config['start_date'].replace(' ', '').replace(':', '').replace('.', '')}_"
@@ -506,6 +574,53 @@ def add_market_specific_settings(config):
         except:
             raise Exception(f"failed to load cached market_specific_settings for symbol {symbol}")
     config.update(market_specific_settings)
+
+
+def ensure_parent_directory(
+    filepath: Union[str, Path], mode: int = 0o755, exist_ok: bool = True
+) -> Path:
+    """
+    Creates directory and subdirectories for a given filepath if they don't exist,
+    then returns the path as a Path object.
+
+    Args:
+        filepath: String or Path object representing the file or directory path
+        mode: Directory permissions (default: 0o755)
+        exist_ok: If False, raise FileExistsError if directory exists (default: True)
+
+    Returns:
+        Path object representing the input filepath
+
+    Raises:
+        TypeError: If filepath is neither str nor Path
+        PermissionError: If user lacks permission to create directory
+        FileExistsError: If directory exists and exist_ok is False
+    """
+    try:
+        # Convert to Path object
+        path = Path(filepath)
+
+        # Determine if the path points to a directory
+        # (either ends with separator or is explicitly a directory)
+        if str(path).endswith(os.path.sep) or (path.exists() and path.is_dir()):
+            dirpath = path
+        else:
+            dirpath = path.parent
+
+        # Create directory if it doesn't exist
+        if not dirpath.exists():
+            dirpath.mkdir(parents=True, mode=mode, exist_ok=exist_ok)
+        elif not exist_ok:
+            raise FileExistsError(f"Directory already exists: {dirpath}")
+
+        return path
+
+    except TypeError as e:
+        raise TypeError(f"filepath must be str or Path, not {type(filepath)}") from e
+    except PermissionError as e:
+        raise PermissionError(f"Permission denied creating directory: {dirpath}") from e
+    except Exception as e:
+        raise RuntimeError(f"Error processing filepath: {str(e)}") from e
 
 
 def make_get_filepath(filepath: str) -> str:
@@ -866,6 +981,78 @@ def print_async_exception(coro):
         print(f"returned: {coro}")
     except:
         pass
+
+
+async def get_first_ohlcv_timestamps_new(symbols=None, exchange="binance"):
+    supported_exchanges = {
+        "binance": "binanceusdm",
+        "binanceusdm": "binanceusdm",
+        "bybit": "bybit",
+        "bitget": "bitget",
+        "okx": "okx",
+        "hyperliquid": "hyperliquid",
+        "gateio": "gateio",
+    }
+    assert (
+        exchange in supported_exchanges
+    ), f"exchange {exchange} not in supported_exchanges {sorted(supported_exchanges)}"
+    cache_fname = f"caches/first_ohlcv_timestamps_{exchange}.json"
+    ftss = {}
+    try:
+        if os.path.exists(cache_fname):
+            ftss = json.load(open(cache_fname))
+    except Exception as e:
+        print(f"failed to load {cache_fname} {e}")
+    if isinstance(symbols, str):
+        if symbols in ftss:
+            return ftss[symbols]
+        else:
+            symbols = [symbols]
+    elif isinstance(symbols, list):
+        if all([s in ftss for s in symbols]):
+            return {k: v for k, v in ftss.items() if k in symbols}
+    import ccxt.async_support as ccxt
+
+    cc = getattr(ccxt, supported_exchanges[exchange])()
+    try:
+        markets = await cc.load_markets()
+        if symbols is None:
+            symbols = [x for x in markets if markets[x]["swap"]]
+        symbols.sort()
+        to_fetch = [s for s in symbols if s not in ftss]
+        if to_fetch:
+            fetched = []
+            since = int(date_to_ts2("2015-01-01"))
+            n_concurrent = 20
+            for i, symbol in enumerate(to_fetch):
+                if cc.id in ["bybit", "binanceusdm"]:
+                    coro = cc.fetch_ohlcv(symbol, timeframe="1d", since=since)
+                else:
+                    timeframe_ = "1w" if cc.id in ["hyperliquid", "gateio"] else "1M"
+                    coro = cc.fetch_ohlcv(symbol, timeframe=timeframe_)
+                fetched.append((symbol, asyncio.ensure_future(coro)))
+
+                if i + 1 == len(to_fetch) or (i + 1) % n_concurrent == 0:
+                    for sym, task in fetched:
+                        try:
+                            res = await task
+                            ftss[sym] = res[0][0]
+                        except Exception as e:
+                            print(f"Error fetching ohlcvs for {sym} {e}")
+                            if "The symbol has been removed" in str(e):
+                                ftss[sym] = 0
+                    try:
+                        make_get_filepath(cache_fname)
+                        json.dump(ftss, open(cache_fname, "w"), indent=4, sort_keys=True)
+                        syms = [x[0] for x in fetched]
+                        print(f"Dumped first ohlcv timestamp, {cc.id}: {','.join(syms)}")
+                    except Exception as e:
+                        print(f"Error dumping ohlcv first timestamps {cc.id} {e}")
+                    fetched = []
+                    await asyncio.sleep(1)
+    finally:
+        await cc.close()
+    return ftss
 
 
 async def get_first_ohlcv_timestamps(cc=None, symbols=None, cache=True):
@@ -1233,7 +1420,7 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
                 acronym = "c"
             elif "iters" in full_name:
                 acronym = "i"
-            elif any([x in full_name for x in ["auto_gs", "filter_by_min_effective_cost"]]):
+            elif type_ == bool:
                 type_ = str2bool
                 appendix = "[y/n]"
             parser.add_argument(
@@ -1272,6 +1459,47 @@ def update_config_with_args(config, args):
     for key, value in vars(args).items():
         if value is not None:
             recursive_config_update(config, key, value)
+
+
+def read_external_coins_lists(filepath) -> dict:
+    """
+    reads filepath and returns dict {'long': [str], 'short': [str]}
+    """
+    try:
+        content = hjson.load(open(filepath))
+        if isinstance(content, list) and all([isinstance(x, str) for x in content]):
+            return {"long": content, "short": content}
+        elif isinstance(content, dict):
+            if all(
+                [
+                    pside in content
+                    and isinstance(content[pside], list)
+                    and all([isinstance(x, str) for x in content[pside]])
+                    for pside in ["long", "short"]
+                ]
+            ):
+                return content
+    except:
+        pass
+    with open(filepath, "r") as file:
+        content = file.read().strip()
+    # Check if the content is in list format
+    if content.startswith("[") and content.endswith("]"):
+        # Remove brackets and split by comma
+        items = content[1:-1].split(",")
+        # Remove quotes and whitespace
+        items = [item.strip().strip("\"'") for item in items if item.strip()]
+    elif all(
+        line.strip().startswith('"') and line.strip().endswith('"')
+        for line in content.split("\n")
+        if line.strip()
+    ):
+        # Split by newline, remove quotes and whitespace
+        items = [line.strip().strip("\"'") for line in content.split("\n") if line.strip()]
+    else:
+        # Split by newline, comma, and/or space, and filter out empty strings
+        items = [item.strip() for item in content.replace(",", " ").split() if item.strip()]
+    return {"long": items, "short": items}
 
 
 def main():

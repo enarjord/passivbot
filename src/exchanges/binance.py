@@ -82,9 +82,9 @@ class BinanceBot(Passivbot):
         print(front_pad + "#" * (max_len + 2) + back_pad)
         print("\n\n")
 
-    async def init_markets_dict(self, verbose=True):
+    async def hourly_cycle(self, verbose=True):
         await self.print_new_user_suggestion()
-        await super().init_markets_dict(verbose=verbose)
+        await super().hourly_cycle(verbose=verbose)
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
@@ -97,13 +97,6 @@ class BinanceBot(Passivbot):
             self.price_steps[symbol] = elm["precision"]["price"]
             self.qty_steps[symbol] = elm["precision"]["amount"]
             self.c_mults[symbol] = elm["contractSize"]
-
-    async def get_active_symbols(self):
-        # get symbols with open orders and/or positions
-        positions, balance = await self.fetch_positions()
-        return sorted(set(elm["symbol"] for elm in positions))
-        # open_orders = await self.fetch_open_orders(all=True)
-        # return sorted(set([elm["symbol"] for elm in positions + open_orders]))
 
     async def watch_balance(self):
         while True:
@@ -145,13 +138,12 @@ class BinanceBot(Passivbot):
                 self.cca.options["warnOnFetchOpenOrdersWithoutSymbol"] = True
             else:
                 symbols_ = set()
+                symbols_.update([s for s in self.open_orders if self.open_orders[s]])
+                symbols_.update([s for s in self.get_symbols_with_pos()])
                 if hasattr(self, "active_symbols") and self.active_symbols:
                     symbols_.update(list(self.active_symbols))
-                if hasattr(self, "fetched_positions"):
-                    symbols_.update([x["symbol"] for x in self.fetched_positions])
-                symbols_ = sorted(set(symbols_))
                 fetched = await asyncio.gather(
-                    *[self.cca.fetch_open_orders(symbol=symbol) for symbol in symbols_]
+                    *[self.cca.fetch_open_orders(symbol=symbol) for symbol in sorted(symbols_)]
                 )
                 fetched = [x for sublist in fetched for x in sublist]
             for elm in fetched:
@@ -174,14 +166,15 @@ class BinanceBot(Passivbot):
             )
             positions = []
             for elm in fetched_positions:
-                positions.append(
-                    {
-                        "symbol": self.get_symbol_id_inv(elm["symbol"]),
-                        "position_side": elm["positionSide"].lower(),
-                        "size": float(elm["positionAmt"]),
-                        "price": float(elm["entryPrice"]),
-                    }
-                )
+                if float(elm["positionAmt"]) != 0.0:
+                    positions.append(
+                        {
+                            "symbol": self.get_symbol_id_inv(elm["symbol"]),
+                            "position_side": elm["positionSide"].lower(),
+                            "size": float(elm["positionAmt"]),
+                            "price": float(elm["entryPrice"]),
+                        }
+                    )
             balance = float(fetched_balance["info"]["totalCrossWalletBalance"])
             if not hasattr(self, "previous_rounded_balance"):
                 self.previous_rounded_balance = balance
@@ -298,7 +291,7 @@ class BinanceBot(Passivbot):
 
     async def fetch_fills_sub(self, symbol, start_time=None, end_time=None, limit=None):
         try:
-            if symbol not in self.markets_dict_all:
+            if symbol not in self.markets_dict:
                 return []
             # limit is max 1000
             if limit is None:
@@ -404,38 +397,27 @@ class BinanceBot(Passivbot):
         )
 
     async def execute_order(self, order: dict) -> dict:
-        executed = None
-        try:
-            executed = await self.cca.create_limit_order(
-                symbol=order["symbol"],
-                side=order["side"],
-                amount=abs(order["qty"]),
-                price=order["price"],
-                params={
-                    "positionSide": order["position_side"].upper(),
-                    "newClientOrderId": order["custom_id"],
-                    "timeInForce": (
-                        "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
-                    ),
-                },
-            )
-            if (
-                "info" in executed
-                and "code" in executed["info"]
-                and executed["info"]["code"] == "-5022"
-            ):
-                logging.info(f"{executed['info']['msg']}")
-                return {}
-            elif "status" in executed and executed["status"] in ["open", "closed"]:
-                executed["position_side"] = executed["info"]["positionSide"].lower()
-                executed["qty"] = executed["amount"]
-                executed["reduce_only"] = executed["reduceOnly"]
-                return executed
-        except Exception as e:
-            logging.error(f"error executing order {order} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
+        executed = await self.cca.create_limit_order(
+            symbol=order["symbol"],
+            side=order["side"],
+            amount=abs(order["qty"]),
+            price=order["price"],
+            params={
+                "positionSide": order["position_side"].upper(),
+                "newClientOrderId": order["custom_id"],
+                "timeInForce": (
+                    "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
+                ),
+            },
+        )
+        if "info" in executed and "code" in executed["info"] and executed["info"]["code"] == "-5022":
+            logging.info(f"{executed['info']['msg']}")
             return {}
+        elif "status" in executed and executed["status"] in ["open", "closed"]:
+            executed["position_side"] = executed["info"]["positionSide"].lower()
+            executed["qty"] = executed["amount"]
+            executed["reduce_only"] = executed["reduceOnly"]
+            return executed
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if len(orders) == 0:

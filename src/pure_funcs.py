@@ -5,6 +5,7 @@ from hashlib import sha256
 from copy import deepcopy
 
 import json
+import re
 import numpy as np
 import dateutil.parser
 from njit_funcs import calc_pnl_long, calc_pnl_short
@@ -21,6 +22,12 @@ except:
             self.DataFrame = None
 
     pd = PD()
+
+
+def safe_filename(symbol: str) -> str:
+    """Convert symbol to a safe filename by replacing invalid characters."""
+    # Replace / and : with underscores, and remove any other potentially problematic characters
+    return re.sub(r'[<>:"/\\|?*]', "_", symbol)
 
 
 def format_float(num):
@@ -499,6 +506,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
         return {
             "backtest": {
                 "base_dir": "backtests",
+                "compress_cache": True,
                 "end_date": "now",
                 "exchange": "binance",
                 "start_date": "2021-05-01",
@@ -561,14 +569,15 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 },
             },
             "live": {
-                "approved_coins": ["BCH", "BTC", "DOGE", "ETH", "LTC", "XLM", "XRP"],
+                "approved_coins": [],
                 "auto_gs": True,
                 "coin_flags": {},
+                "empty_means_all_approved": True,
                 "execution_delay_seconds": 2.0,
                 "filter_by_min_effective_cost": True,
                 "forced_mode_long": "",
                 "forced_mode_short": "",
-                "ignored_coins": ["COIN1", "COIN2"],
+                "ignored_coins": [],
                 "leverage": 10.0,
                 "max_n_cancellations_per_batch": 5,
                 "max_n_creations_per_batch": 3,
@@ -2386,7 +2395,10 @@ def determine_side_from_order_tuple(order_tuple):
 
 
 def symbol_to_coin(symbol: str) -> str:
-    coin = symbol
+    if "/" in symbol:
+        coin = symbol[: symbol.find("/")]
+    else:
+        coin = symbol
     for x in ["USDT", "USDC", "BUSD", "USD", "/:"]:
         coin = coin.replace(x, "")
     if "1000" in coin:
@@ -2481,15 +2493,15 @@ def dict_keysort(d: dict):
 
 
 def expand_PB_mode(mode: str) -> str:
-    if mode.lower() == "gs":
+    if mode.lower() in ["gs", "graceful_stop", "graceful-stop"]:
         return "graceful_stop"
-    elif mode.lower() == "m":
+    elif mode.lower() in ["m", "manual"]:
         return "manual"
-    elif mode.lower() == "n":
+    elif mode.lower() in ["n", "normal"]:
         return "normal"
-    elif mode.lower() == "p":
+    elif mode.lower() in ["p", "panic"]:
         return "panic"
-    elif mode.lower() in ["t", "tp"]:
+    elif mode.lower() in ["t", "tp", "tp_only", "tp-only"]:
         return "tp_only"
     else:
         raise Exception(f"unknown passivbot mode {mode}")
@@ -2568,3 +2580,55 @@ def hysteresis_rounding(balance, last_rounded_balance, percentage=0.02, h=0.5):
     else:
         rounded_balance = last_rounded_balance
     return pbr.round_dynamic(rounded_balance, 6)
+
+
+def log_dict_changes(d1, d2, parent_key=""):
+    """
+    Compare two nested dictionaries and log the changes between them.
+
+    Args:
+        dict1: The original dictionary
+        dict2: The new dictionary to compare against
+
+    Returns:
+        tuple: Lists of added items, removed items, and value changes
+    """
+
+    changes = {"added": [], "removed": [], "changed": []}
+
+    # Handle the case where either dictionary is empty
+    if not d1:
+        changes["added"].extend([f"{parent_key}{k}: {v}" for k, v in d2.items()])
+        return changes
+    if not d2:
+        changes["removed"].extend([f"{parent_key}{k}: {v}" for k, v in d1.items()])
+        return changes
+
+    # Compare items in both dictionaries
+    for key in set(d1.keys()) | set(d2.keys()):
+        new_parent = f"{parent_key}{key}." if parent_key else f"{key}."
+
+        # If key exists in both dictionaries
+        if key in d1 and key in d2:
+            if isinstance(d1[key], dict) and isinstance(d2[key], dict):
+                nested_changes = log_dict_changes(d1[key], d2[key], new_parent)
+                for change_type, items in nested_changes.items():
+                    changes[change_type].extend(items)
+            elif d1[key] != d2[key]:
+                changes["changed"].append(f"{parent_key}{key}: {d1[key]} -> {d2[key]}")
+        # If key only exists in dict2
+        elif key in d2:
+            if isinstance(d2[key], dict):
+                nested_changes = log_dict_changes({}, d2[key], new_parent)
+                changes["added"].extend(nested_changes["added"])
+            else:
+                changes["added"].append(f"{parent_key}{key}: {d2[key]}")
+        # If key only exists in dict1
+        else:
+            if isinstance(d1[key], dict):
+                nested_changes = log_dict_changes(d1[key], {}, new_parent)
+                changes["removed"].extend(nested_changes["removed"])
+            else:
+                changes["removed"].append(f"{parent_key}{key}: {d1[key]}")
+
+    return changes

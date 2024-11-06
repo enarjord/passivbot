@@ -8,6 +8,9 @@ import platform
 
 RUST_SOURCE_DIR = "passivbot-rust/"
 COMPILED_EXTENSION_NAME = "libpassivbot_rust"
+LOCK_FILE = os.path.join(RUST_SOURCE_DIR, ".compile.lock")
+LOCK_TIMEOUT = 300  # 5 minutes in seconds
+LOCK_CHECK_INTERVAL = 2  # Check every 2 seconds
 
 
 def get_compiled_extension_paths():
@@ -19,6 +22,50 @@ def get_compiled_extension_paths():
 
 
 COMPILED_EXTENSION_PATHS = get_compiled_extension_paths()
+
+
+def acquire_lock():
+    start_time = time.time()
+    while True:
+        try:
+            if os.path.exists(LOCK_FILE):
+                # Check if lock is stale
+                if time.time() - os.path.getmtime(LOCK_FILE) > LOCK_TIMEOUT:
+                    print("Found stale lock file. Removing and proceeding with compilation.")
+                    try:
+                        os.remove(LOCK_FILE)
+                    except OSError:
+                        pass
+                else:
+                    if time.time() - start_time > LOCK_TIMEOUT:
+                        print("Lock timeout reached. Assuming crashed compilation and proceeding.")
+                        try:
+                            os.remove(LOCK_FILE)
+                        except OSError:
+                            pass
+                        return True
+                    print(
+                        f"Another compilation in progress. Waiting... ({int(time.time() - start_time)}s)"
+                    )
+                    time.sleep(LOCK_CHECK_INTERVAL)
+                    continue
+
+            # Create lock file
+            with open(LOCK_FILE, "w") as f:
+                f.write(str(os.getpid()))
+            return True
+
+        except OSError as e:
+            print(f"Error managing lock file: {e}")
+            return False
+
+
+def release_lock():
+    try:
+        if os.path.exists(LOCK_FILE):
+            os.remove(LOCK_FILE)
+    except OSError as e:
+        print(f"Error removing lock file: {e}")
 
 
 def check_compilation_needed():
@@ -39,7 +86,6 @@ def check_compilation_needed():
                     if os.path.getmtime(file_path) > compiled_time:
                         print(f"Rust extension found, but out of date. Recompiling...")
                         return True  # A source file is newer, compilation needed
-
         return False  # No compilation needed
     except Exception as e:
         print(f"Error checking compilation status: {e}")
@@ -48,7 +94,6 @@ def check_compilation_needed():
 
 def prompt_user_for_recompilation():
     print("Rust code needs recompilation. Recompile now? [Y/n]")
-
     start_time = time.time()
     while time.time() - start_time < 10:
         rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
@@ -58,7 +103,6 @@ def prompt_user_for_recompilation():
                 return False
             else:
                 return True
-
     print("No input received within 10 seconds. Proceeding with recompilation.")
     return True
 
@@ -67,13 +111,10 @@ def recompile_rust():
     try:
         current_dir = os.getcwd()
         os.chdir(RUST_SOURCE_DIR)
-
         result = subprocess.run(
             ["maturin", "develop", "--release"], check=True, capture_output=True, text=True
         )
-
         os.chdir(current_dir)
-
         print("Compilation successful.")
         print(result.stdout)
         return True
@@ -88,10 +129,17 @@ def recompile_rust():
 
 def manage_rust_compilation():
     if check_compilation_needed():
-        if recompile_rust():
-            print("Rust extension successfully recompiled.")
+        if acquire_lock():
+            try:
+                if recompile_rust():
+                    print("Rust extension successfully recompiled.")
+                else:
+                    print("Failed to recompile Rust extension. Please compile manually.")
+                    sys.exit(1)
+            finally:
+                release_lock()
         else:
-            print("Failed to recompile Rust extension. Please compile manually.")
+            print("Failed to acquire lock for compilation. Please try again later.")
             sys.exit(1)
     else:
         print("Rust extension is up to date.")

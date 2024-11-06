@@ -289,35 +289,26 @@ class BitgetBot(Passivbot):
         )
 
     async def execute_order(self, order: dict) -> dict:
-        executed = None
-        try:
-            executed = await self.cca.private_mix_post_mix_v1_order_placeorder(
-                {
-                    "symbol": self.symbol_ids[order["symbol"]] + "_UMCBL",
-                    "marginCoin": "USDT",
-                    "size": str(order["qty"]),
-                    "price": str(order["price"]),
-                    "side": self.order_side_map[order["side"]][order["position_side"]],
-                    "orderType": "limit",
-                    "timeInForceValue": (
-                        "post_only"
-                        if self.config["live"]["time_in_force"] == "post_only"
-                        else "normal"
-                    ),
-                }
-            )
-            if "msg" in executed and executed["msg"] == "success":
-                for key in ["symbol", "side", "position_side", "qty", "price"]:
-                    executed[key] = order[key]
-                executed["timestamp"] = float(executed["requestTime"])
-                executed["id"] = executed["data"]["orderId"]
-                executed["custom_id"] = executed["data"]["clientOid"]
-            return executed
-        except Exception as e:
-            logging.error(f"error executing order {order} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return {}
+        executed = await self.cca.private_mix_post_mix_v1_order_placeorder(
+            {
+                "symbol": self.symbol_ids[order["symbol"]] + "_UMCBL",
+                "marginCoin": "USDT",
+                "size": str(order["qty"]),
+                "price": str(order["price"]),
+                "side": self.order_side_map[order["side"]][order["position_side"]],
+                "orderType": "limit",
+                "timeInForceValue": (
+                    "post_only" if self.config["live"]["time_in_force"] == "post_only" else "normal"
+                ),
+            }
+        )
+        if "msg" in executed and executed["msg"] == "success":
+            for key in ["symbol", "side", "position_side", "qty", "price"]:
+                executed[key] = order[key]
+            executed["timestamp"] = float(executed["requestTime"])
+            executed["id"] = executed["data"]["orderId"]
+            executed["custom_id"] = executed["data"]["clientOid"]
+        return executed
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(

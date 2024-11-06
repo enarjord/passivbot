@@ -168,10 +168,12 @@ pub fn interpolate(x: f64, xs: &[f64], ys: &[f64]) -> f64 {
     result
 }
 
+#[pyfunction]
 pub fn calc_pnl_long(entry_price: f64, close_price: f64, qty: f64, c_mult: f64) -> f64 {
     qty.abs() * c_mult * (close_price - entry_price)
 }
 
+#[pyfunction]
 pub fn calc_pnl_short(entry_price: f64, close_price: f64, qty: f64, c_mult: f64) -> f64 {
     qty.abs() * c_mult * (entry_price - close_price)
 }
@@ -198,13 +200,14 @@ pub fn calc_pprice_diff_int(pside: usize, pprice: f64, price: f64) -> f64 {
     }
 }
 
+#[pyfunction]
 pub fn calc_auto_unstuck_allowance(
     balance: f64,
     loss_allowance_pct: f64,
     pnl_cumsum_max: f64,
     pnl_cumsum_last: f64,
 ) -> f64 {
-    // allow up to 1% drop from balance peak for auto unstuck
+    // allow up to x% drop from balance peak for auto unstuck
 
     let balance_peak = balance + (pnl_cumsum_max - pnl_cumsum_last);
     let drop_since_peak_pct = balance / balance_peak - 1.0;
