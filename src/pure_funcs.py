@@ -572,7 +572,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 "approved_coins": [],
                 "auto_gs": True,
                 "coin_flags": {},
-                "empty_means_all_approved": True,
+                "empty_means_all_approved": False,
                 "execution_delay_seconds": 2.0,
                 "filter_by_min_effective_cost": True,
                 "forced_mode_long": "",
