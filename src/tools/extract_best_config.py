@@ -5,6 +5,7 @@ import pandas as pd
 import argparse
 import sys
 import pprint
+import dictdiffer
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from pure_funcs import config_pretty_str
@@ -19,6 +20,34 @@ from pure_funcs import (
     sort_dict_keys,
     config_pretty_str,
 )
+
+
+def data_generator(all_results_filename):
+    """
+    Generator function that iterates over an all_results.txt file written with dictdiffer.
+    It yields the full data at each step by reconstructing it using diffs.
+    Args:
+        all_results_filename (str): Path to the all_results.txt file.
+    Yields:
+        dict: The full data dictionary at each step.
+    """
+    prev_data = None
+    with open(all_results_filename, "r") as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+                if "diff" not in data:
+                    # This is the first entry; full data is provided
+                    prev_data = data
+                    yield deepcopy(prev_data)
+                else:
+                    # Apply the diff to the previous data to get the current data
+                    diff = data["diff"]
+                    prev_data = dictdiffer.patch(diff, prev_data)
+                    yield deepcopy(prev_data)
+            except Exception as e:
+                print(f"Error in data_generator: {e} Filename: {all_results_filename} line: {line}")
+                yield {}
 
 
 # Function definitions
@@ -83,16 +112,10 @@ def process_single(file_location, verbose=False):
         return result
     except:
         pass
-    with open(file_location) as f:
-        lines = [x.strip() for x in f.readlines()]
-    print_(f"n backtests: {len(lines)}")
     xs = []
-    for line in lines:
-        try:
-            if line:
-                xs.append(json.loads(line))
-        except Exception as e:
-            print(f"failed to read line in {file_location}: {line}")
+    for x in data_generator(file_location):
+        if x:
+            xs.append(x)
     res = pd.DataFrame([flatten_dict(x) for x in xs])
 
     keys, higher_is_better = ["w_0", "w_1"], [False, False]
@@ -100,6 +123,7 @@ def process_single(file_location, verbose=False):
     candidates = res[(res.analysis_w_0 <= 0.0) & (res.analysis_w_1 <= 0.0)][keys]
     if len(candidates) == 0:
         candidates = res[keys]
+    print_("n backtests", len(res))
     print_("n candidates", len(candidates))
     if len(candidates) == 1:
         best = candidates.iloc[0].name
@@ -127,7 +151,7 @@ def process_single(file_location, verbose=False):
 
         # Processing the best result for configuration
     best_d = xs[best]
-    best_d["analysis"]["n_iters"] = len(lines)
+    best_d["analysis"]["n_iters"] = len(xs)
     best_d.update(deepcopy(best_d["config"]))
     del best_d["config"]
     fjson = config_pretty_str(best_d)
