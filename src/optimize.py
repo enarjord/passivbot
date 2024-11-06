@@ -64,28 +64,28 @@ def results_writer_process(queue: Queue, results_filename: str):
     """
     Manager process that handles writing results to file.
     Runs in a separate process and receives results through a queue.
+    Applies diffing to the entire data dictionary.
     """
-    prev_config = None  # Initialize previous config as None
+    prev_data = None  # Initialize previous data as None
     try:
         while True:
             data = queue.get()
             if data == "DONE":  # Sentinel value to signal shutdown
                 break
             try:
-                config = data.get("config", {})
-                if prev_config is None:
-                    # First config, write full config
-                    prev_config = config
-                    data["config"] = config
+                if prev_data is None:
+                    # First data entry, write full data
+                    output_data = data
                 else:
-                    # Compute diff and write only changes
-                    diff = list(dictdiffer.diff(prev_config, config))
-                    diff = make_json_serializable(diff)
-                    data["config_diff"] = diff
-                    del data["config"]
-                    prev_config = config
+                    # Compute diff of the entire data dictionary
+                    diff = list(dictdiffer.diff(prev_data, data))
+                    output_data = {"diff": make_json_serializable(diff)}
+
+                prev_data = data
+
+                # Write to disk
                 with open(results_filename, "a") as f:
-                    json.dump(denumpyize(data), f)
+                    json.dump(denumpyize(output_data), f)
                     f.write("\n")
             except Exception as e:
                 logging.error(f"Error writing results: {e}")
