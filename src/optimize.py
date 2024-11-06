@@ -43,6 +43,21 @@ import tempfile
 import time
 import fcntl
 from tqdm import tqdm
+import dictdiffer  # Added import for dictdiffer
+
+
+def make_json_serializable(obj):
+    """
+    Recursively convert tuples in the object to lists to make it JSON serializable.
+    """
+    if isinstance(obj, dict):
+        return {k: make_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, tuple):
+        return [make_json_serializable(e) for e in obj]
+    elif isinstance(obj, list):
+        return [make_json_serializable(e) for e in obj]
+    else:
+        return obj
 
 
 def results_writer_process(queue: Queue, results_filename: str):
@@ -50,12 +65,25 @@ def results_writer_process(queue: Queue, results_filename: str):
     Manager process that handles writing results to file.
     Runs in a separate process and receives results through a queue.
     """
+    prev_config = None  # Initialize previous config as None
     try:
         while True:
             data = queue.get()
             if data == "DONE":  # Sentinel value to signal shutdown
                 break
             try:
+                config = data.get("config", {})
+                if prev_config is None:
+                    # First config, write full config
+                    prev_config = config
+                    data["config"] = config
+                else:
+                    # Compute diff and write only changes
+                    diff = list(dictdiffer.diff(prev_config, config))
+                    diff = make_json_serializable(diff)
+                    data["config_diff"] = diff
+                    del data["config"]
+                    prev_config = config
                 with open(results_filename, "a") as f:
                     json.dump(denumpyize(data), f)
                     f.write("\n")
