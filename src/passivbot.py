@@ -804,11 +804,11 @@ class Passivbot:
                 self.warn_on_high_effective_min_cost(pside)
             # filter coins by relative volume and noisiness
             clip_pct = self.config["bot"][pside]["filter_relative_volume_clip_pct"]
+            max_n_positions = self.get_max_n_positions(pside)
             if clip_pct > 0.0:
                 volumes = self.calc_volumes(pside, symbols=candidates)
                 # filter by relative volume
                 n_eligible = round(len(volumes) * (1 - clip_pct))
-                max_n_positions = self.get_max_n_positions(pside)
                 candidates = sorted(volumes, key=lambda x: volumes[x], reverse=True)
                 candidates = candidates[: int(max(n_eligible, max_n_positions))]
             # ideal symbols are high noise symbols
