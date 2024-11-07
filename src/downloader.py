@@ -51,12 +51,36 @@ from pure_funcs import (
     get_template_live_config,
     safe_filename,
 )
+from collections import deque
+from functools import wraps
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(message)s",
     level=logging.INFO,
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
+
+
+# Global request tracker
+_request_timestamps = deque(maxlen=1000)  # Store last 1000 timestamps
+_MAX_REQUESTS_PER_MINUTE = 120  # Adjust this value as needed
+
+
+async def check_rate_limit():
+    """Check if we can make a new request based on rate limit"""
+    current_time = utc_ms() / 1000
+    # Remove timestamps older than 1 minute
+    while _request_timestamps and current_time - _request_timestamps[0] > 60:
+        _request_timestamps.popleft()
+
+    # Check if we've made too many requests in the last minute
+    if len(_request_timestamps) >= _MAX_REQUESTS_PER_MINUTE:
+        sleep_time = 60 - (current_time - _request_timestamps[0])
+        if sleep_time > 0:
+            logging.info(f"Rate limit reached, sleeping for {sleep_time:.2f} seconds")
+            await asyncio.sleep(sleep_time)
+
+    _request_timestamps.append(current_time)
 
 
 async def fetch_zips(url):
@@ -191,6 +215,7 @@ async def get_bybit_trades(base_url: str, symbol: str, filenames: [str]):
     async with aiohttp.ClientSession() as session:
         tasks = {}
         for url in [f"{base_url}{symbol}/{filename}" for filename in filenames]:
+            await check_rate_limit()  # Add rate limiting check before each request
             tasks[url] = asyncio.ensure_future(get_csv_gz(session, url))
         responses = {}
         for url in tasks:
