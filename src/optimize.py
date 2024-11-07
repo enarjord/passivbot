@@ -336,12 +336,16 @@ def get_starting_configs(starting_configs: str):
         return []
     cfgs = []
     if os.path.isdir(starting_configs):
-        filenames = [os.path.join(starting_configs, f) for f in os.listdir(starting_configs)]
+        filenames = [
+            os.path.join(starting_configs, f)
+            for f in os.listdir(starting_configs)
+            if f.endswith("json") or f.endswith("hjson")
+        ]
     else:
         filenames = [starting_configs]
     for path in filenames:
         try:
-            cfgs.append(load_hjson_config(path))
+            cfgs.append(load_config(path, verbose=False))
         except Exception as e:
             logging.error(f"failed to load live config {path} {e}")
     return cfgs
