@@ -151,13 +151,13 @@ def process_single(file_location, verbose=False):
     print_("n candidates", len(candidates))
     if len(candidates) == 1:
         best = candidates.iloc[0].name
+        pareto = candidates
     else:
         pareto = candidates.loc[
             calc_pareto_front_d(
                 {i: x for i, x in zip(candidates.index, candidates.values)}, higher_is_better
             )
         ]
-
         cands_norm = (candidates - candidates.min()) / (candidates.max() - candidates.min())
         pareto_norm = (pareto - candidates.min()) / (candidates.max() - candidates.min())
         dists = [calc_dist(p, [float(x) for x in higher_is_better]) for p in pareto_norm.values]
@@ -185,6 +185,10 @@ def process_single(file_location, verbose=False):
     full_path = file_location.replace("_all_results.txt", "") + ".json"
     base_path = os.path.split(full_path)[0]
     full_path = make_get_filepath(full_path.replace(base_path, base_path + "_analysis/"))
+    pareto_to_dump = [x for i, x in enumerate(xs) if i in pareto.index]
+    with open(full_path.replace(".json", "_pareto.txt"), "w") as f:
+        for x in pareto_to_dump:
+            f.write(json.dumps(x) + "\n")
     dump_config(format_config(best_d), full_path)
     return best_d
 
