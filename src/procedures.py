@@ -220,10 +220,14 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                 }
         eligible_symbols = get_all_eligible_symbols(result["backtest"]["exchange"])
         ignored_coins = coins_to_symbols(
-            set(flatten(result["live"]["ignored_coins"].values())), eligible_symbols=eligible_symbols
+            set(flatten(result["live"]["ignored_coins"].values())),
+            eligible_symbols=eligible_symbols,
+            verbose=verbose,
         )
         approved_coins = coins_to_symbols(
-            set(flatten(result["live"]["approved_coins"].values())), eligible_symbols=eligible_symbols
+            set(flatten(result["live"]["approved_coins"].values())),
+            eligible_symbols=eligible_symbols,
+            verbose=verbose,
         )
         if approved_coins:
             result["backtest"]["symbols"] = [
@@ -377,11 +381,11 @@ def format_end_date(end_date) -> str:
     return end_date[:10]
 
 
-def load_config(filepath: str, live_only=False) -> dict:
+def load_config(filepath: str, live_only=False, verbose=True) -> dict:
     # loads hjson or json v7 config
     try:
         config = load_hjson_config(filepath)
-        config = format_config(config, live_only=live_only)
+        config = format_config(config, live_only=live_only, verbose=verbose)
         return config
     except Exception as e:
         raise Exception(f"failed to load config {filepath}: {e}")
