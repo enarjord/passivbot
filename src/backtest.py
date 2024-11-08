@@ -31,6 +31,7 @@ import matplotlib.pyplot as plt
 import logging
 from main import manage_rust_compilation
 import gzip
+import traceback
 
 import tempfile
 from contextlib import contextmanager
@@ -162,7 +163,7 @@ def load_symbols_hlcvs_from_cache(config):
             fname = cache_dir / "hlcvs.npy"
             logging.info(f"Attempting to load hlcvs data from cache {fname}...")
             hlcvs = np.load(fname)
-        return symbols, hlcvs
+        return cache_dir, symbols, hlcvs
 
 
 def save_symbols_hlcvs_to_cache(config, symbols, hlcvs):
@@ -197,6 +198,7 @@ def save_symbols_hlcvs_to_cache(config, symbols, hlcvs):
     )
 
     logging.info(f"Seconds to dump cache: {(utc_ms() - sts) / 1000:.4f}")
+    return cache_dir
 
 
 async def prepare_hlcvs_mss(config):
@@ -214,10 +216,10 @@ async def prepare_hlcvs_mss(config):
         result = load_symbols_hlcvs_from_cache(config)
         if result:
             logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
-            symbols, hlcvs = result
+            cache_dir, symbols, hlcvs = result
             mss = json.load(open(mss_path))
             logging.info(f"Successfully loaded hlcvs data from cache")
-            return symbols, hlcvs, mss, results_path
+            return symbols, hlcvs, mss, results_path, cache_dir
     except:
         logging.info(f"Unable to load hlcvs data from cache. Fetching...")
     try:
@@ -234,10 +236,12 @@ async def prepare_hlcvs_mss(config):
     symbols, timestamps, hlcvs = await prepare_hlcvs(config)
     logging.info(f"Finished preparing hlcvs data. Shape: {hlcvs.shape}")
     try:
-        save_symbols_hlcvs_to_cache(config, symbols, hlcvs)
+        cache_dir = save_symbols_hlcvs_to_cache(config, symbols, hlcvs)
     except Exception as e:
         logging.error(f"failed to save hlcvs to cache {e}")
-    return symbols, hlcvs, mss, results_path
+        traceback.print_exc()
+        cache_dir = ""
+    return symbols, hlcvs, mss, results_path, cache_dir
 
 
 def prep_backtest_args(config, mss, exchange_params=None, backtest_params=None):
@@ -359,8 +363,9 @@ async def main():
     update_config_with_args(config, args)
     config = format_config(config)
     config["disable_plotting"] = args.disable_plotting
-    symbols, hlcvs, mss, results_path = await prepare_hlcvs_mss(config)
+    symbols, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config)
     config["backtest"]["symbols"] = symbols
+    config["backtest"]["cache_dir"] = str(cache_dir)
     fills, equities, analysis = run_backtest(hlcvs, mss, config)
     post_process(config, hlcvs, fills, equities, analysis, results_path)
 
