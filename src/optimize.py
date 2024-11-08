@@ -403,8 +403,9 @@ async def main():
     old_config = deepcopy(config)
     update_config_with_args(config, args)
     config = format_config(config)
-    symbols, hlcvs, mss, results_path = await prepare_hlcvs_mss(config)
+    symbols, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config)
     config["backtest"]["symbols"] = symbols
+    config["backtest"]["cache_dir"] = str(cache_dir)
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
     coins = [symbol_to_coin(s) for s in config["backtest"]["symbols"]]
     coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
