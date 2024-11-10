@@ -61,6 +61,9 @@ def data_generator(all_results_filename, verbose=False):
                     else:
                         # Apply the diff to the previous data to get the current data
                         diff = data["diff"]
+                        for i in range(len(diff)):
+                            if len(diff[i]) == 2:
+                                diff[i] = ("change", diff[i][0], (0.0, diff[i][1]))
                         prev_data = dictdiffer.patch(diff, prev_data)
                         yield deepcopy(prev_data)
                 except Exception as e:
