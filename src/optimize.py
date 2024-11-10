@@ -79,6 +79,9 @@ def results_writer_process(queue: Queue, results_filename: str):
                 else:
                     # Compute diff of the entire data dictionary
                     diff = list(dictdiffer.diff(prev_data, data))
+                    for i in range(len(diff)):
+                        if diff[i][0] == "change":
+                            diff[i] = [diff[i][1], diff[i][2][1]]
                     output_data = {"diff": make_json_serializable(diff)}
 
                 prev_data = data
