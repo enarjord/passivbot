@@ -10,7 +10,7 @@ Here follows an overview of the parameters found in `config/template.json`.
 - `exchange`: Exchange from which to fetch 1m OHLCV data. Default is Binance.
 - `start_date`: Start date of backtest.
 - `starting_balance`: Starting balance in USD at the beginning of backtest.
-- `symbols`: Coins to backtest. If left empty, will use all exchange's coins.
+- `symbols`: Coins which were backtested. Note: coins for backtesting are live.approved_coins minus live.ignored_coins.
 
 ## Bot Settings
 
@@ -130,7 +130,8 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
 ## Live Trading Settings
 
 - `approved_coins`:
-	- List of coins approved for trading. If empty, all coins are approved.
+	- List of coins approved for trading. If empty, see live.empty_means_all_approved.
+		- Backtester and optimizer are live.approved_coins minus live.ignored_coins.
 	- May be given as path to external file which is read by Passivbot continuously.
 	- May be split into long and short by giving a json on the form:
 		- `{"long": ["COIN1", "COIN2"], "short": ["COIN2", "COIN3"]}`
