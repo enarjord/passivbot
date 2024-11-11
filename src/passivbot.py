@@ -2150,15 +2150,15 @@ class Passivbot:
             if isinstance(path, list) and len(path) == 1 and isinstance(path[0], str):
                 path = path[0]
             if isinstance(path, str):
-                if self.coin_to_symbol(path):
-                    self.add_to_coins_lists({"long": [path], "short": [path]}, k_coins)
-                elif os.path.exists(path):
+                if os.path.exists(path):
                     try:
                         content = read_external_coins_lists(path)
                         if content:
                             self.add_to_coins_lists(content, k_coins)
                     except Exception as e:
                         logging.error(f"Failed to read contents of {path} {e}")
+                elif self.coin_to_symbol(path):
+                    self.add_to_coins_lists({"long": [path], "short": [path]}, k_coins)
                 else:
                     logging.error(
                         f"error with refresh_approved_ignored_coins_lists: failed to load {path} {k_coins}"
