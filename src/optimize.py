@@ -445,6 +445,9 @@ async def main():
 
         # Define parameter bounds
         param_bounds = sort_dict_keys(config["optimize"]["bounds"])
+        for k, v in param_bounds.items():
+            if len(v) == 1:
+                param_bounds[k] = [v[0], v[0]]
 
         # Register attribute generators
         for i, (param_name, (low, high)) in enumerate(param_bounds.items()):
