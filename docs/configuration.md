@@ -183,6 +183,7 @@ When optimizing, parameter values are within the lower and upper bounds.
 
 ### Other Optimization Parameters
 
+- `compress_results_file`: If true, will compress optimize output results file to save space.
 - `crossover_probability`: The probability of performing crossover between two individuals in the genetic algorithm. It determines how often parents will exchange genetic information to create offspring.
 - `iters`: Number of backtests per optimize session.
 - `mutation_probability`: The probability of mutating an individual in the genetic algorithm. It determines how often random changes will be introduced to the population to maintain diversity.
