@@ -643,6 +643,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                     "short_unstuck_loss_allowance_pct": [0.001, 0.05],
                     "short_unstuck_threshold": [0.4, 0.95],
                 },
+                "compress_results_file": True,
                 "crossover_probability": 0.7,
                 "iters": 30000,
                 "limits": {
