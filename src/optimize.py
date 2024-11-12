@@ -60,7 +60,7 @@ def make_json_serializable(obj):
         return obj
 
 
-def results_writer_process(queue: Queue, results_filename: str):
+def results_writer_process(queue: Queue, results_filename: str, compress=True):
     """
     Manager process that handles writing results to file.
     Runs in a separate process and receives results through a queue.
@@ -73,8 +73,8 @@ def results_writer_process(queue: Queue, results_filename: str):
             if data == "DONE":  # Sentinel value to signal shutdown
                 break
             try:
-                if prev_data is None:
-                    # First data entry, write full data
+                if prev_data is None or not compress:
+                    # First data entry or compression disabled, write full data
                     output_data = data
                 else:
                     # Compute diff of the entire data dictionary
@@ -428,7 +428,9 @@ async def main():
         manager = multiprocessing.Manager()
         results_queue = manager.Queue()
         writer_process = Process(
-            target=results_writer_process, args=(results_queue, config["results_filename"])
+            target=results_writer_process,
+            args=(results_queue, config["results_filename"]),
+            kwargs={"compress": config["optimize"]["compress_results_file"]},
         )
         writer_process.start()
 
