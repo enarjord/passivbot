@@ -39,9 +39,9 @@ class BitgetBot(Passivbot):
             }
         )
         self.cca.options["defaultType"] = "swap"
-        self.order_side_map = {
-            "buy": {"long": "open_long", "short": "close_short"},
-            "sell": {"long": "close_long", "short": "open_short"},
+        self.position_side_map = {
+            "buy": {"open": "long", "close": "short"},
+            "sell": {"open": "short", "close": "long"},
         }
         self.custom_id_max_length = 64
 
@@ -201,59 +201,37 @@ class BitgetBot(Passivbot):
         end_time: int = None,
         limit=None,
     ):
-        if limit is None:
-            limit = 100
-        if start_time is None and end_time is None:
-            return await self.fetch_pnl(limit=limit)
         all_fetched = {}
+        params = {"productType": "USDT-FUTURES"}
+        if end_time:
+            params["endTime"] = str(int(end_time))
         while True:
-            fetched = await self.fetch_pnl(start_time=start_time, end_time=end_time)
+            fetched = await self.cca.private_mix_get_v2_mix_order_fill_history(params=params)
+            fetched = sorted(fetched["data"]["fillList"], key=lambda x: float(x["cTime"]))
             if fetched == []:
                 break
+            if all(x["orderId"] in all_fetched for x in fetched):
+                break
             for elm in fetched:
+                elm["symbol"] = self.get_symbol_id_inv(elm["symbol"])
+                elm["pnl"] = float(elm["profit"])
+                elm["position_side"] = self.position_side_map[elm["side"]][elm["tradeSide"]]
+                elm["qty"] = float(elm["baseVolume"])
+                elm["price"] = float(elm["price"])
+                elm["id"] = elm["orderId"]
+                elm["timestamp"] = float(elm["cTime"])
+                elm["datetime"] = ts_to_date_utc(elm["timestamp"])
                 all_fetched[elm["id"]] = elm
-            if len(fetched) < limit:
+            if start_time and fetched[0]["timestamp"] <= start_time:
                 break
-            if fetched[0]["timestamp"] <= start_time:
+            if start_time is None and end_time is None:
                 break
-            logging.info(f"debug fetching fills {ts_to_date_utc(fetched[-1]['timestamp'])}")
-            end_time = fetched[0]["timestamp"]
+            logging.info(
+                f"debug fetching fills {ts_to_date_utc(fetched[0]['timestamp'])} {ts_to_date_utc(fetched[-1]['timestamp'])} {len(fetched)}"
+            )
+            # params = {'idLessThan': fetched[0]['id']}
+            params["endTime"] = str(int(fetched[0]["timestamp"]))
         return sorted([x for x in all_fetched.values()], key=lambda x: x["timestamp"])
-
-    async def fetch_pnl(
-        self,
-        start_time: int = None,
-        end_time: int = None,
-        limit=None,
-    ):
-        fetched = None
-        # if there are more fills in timeframe than 100, it will fetch latest
-        try:
-            if end_time is None:
-                end_time = self.get_exchange_time() + 1000 * 60
-            if start_time is None:
-                start_time = 0
-            params = {"productType": "umcbl", "startTime": int(start_time), "endTime": int(end_time)}
-            fetched = await self.cca.private_mix_get_mix_v1_order_allfills(params=params)
-            pnls = []
-            for elm in fetched["data"]:
-                pnls.append(elm)
-                pnls[-1]["pnl"] = float(pnls[-1]["profit"])
-                pnls[-1]["timestamp"] = float(pnls[-1]["cTime"])
-                pnls[-1]["id"] = pnls[-1]["tradeId"]
-                pnls[-1]["symbol"] = self.get_symbol_id_inv(pnls[-1]["symbol"].replace("_UMCBL", ""))
-                if "long" in pnls[-1]["side"]:
-                    pnls[-1]["position_side"] = "long"
-                elif "short" in pnls[-1]["side"]:
-                    pnls[-1]["position_side"] = "short"
-                else:
-                    raise Exception(f"unknown position side in fill {pnls[-1]}")
-            return sorted(pnls, key=lambda x: x["timestamp"])
-        except Exception as e:
-            logging.error(f"error fetching fills {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
-            return False
 
     async def execute_cancellation(self, order: dict) -> dict:
         executed = None
@@ -289,19 +267,29 @@ class BitgetBot(Passivbot):
         )
 
     async def execute_order(self, order: dict) -> dict:
-        executed = await self.cca.private_mix_post_mix_v1_order_placeorder(
-            {
-                "symbol": self.symbol_ids[order["symbol"]] + "_UMCBL",
-                "marginCoin": "USDT",
-                "size": str(order["qty"]),
-                "price": str(order["price"]),
-                "side": self.order_side_map[order["side"]][order["position_side"]],
-                "orderType": "limit",
-                "timeInForceValue": (
-                    "post_only" if self.config["live"]["time_in_force"] == "post_only" else "normal"
-                ),
-            }
+        executed = await self.cca.create_order(
+            symbol=order["symbol"],
+            type="limit",
+            side=order["side"],
+            amount=abs(order["qty"]),
+            price=order["price"],
+            params={
+                "timeInForce": "PO" if self.config["live"]["time_in_force"] == "post_only" else "GTC",
+                "holdSide": order["position_side"],
+                "reduceOnly": order["reduce_only"],
+                "oneWayMode": False,
+            },
         )
+        if "info" in executed and "orderId" in executed["info"]:
+            for k in ["price", "id", "side", "position_side"]:
+                if k not in executed or executed[k] is None:
+                    executed[k] = order[k]
+            executed["qty"] = executed["amount"] if executed["amount"] else order["qty"]
+            executed["timestamp"] = (
+                executed["timestamp"] if executed["timestamp"] else self.get_exchange_time()
+            )
+            executed["custom_id"] = executed["clientOrderId"]
+        return executed
         if "msg" in executed and executed["msg"] == "success":
             for key in ["symbol", "side", "position_side", "qty", "price"]:
                 executed[key] = order[key]
