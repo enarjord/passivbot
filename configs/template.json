@@ -124,6 +124,7 @@
                          "short_unstuck_ema_dist": [-0.1, 0.01],
                          "short_unstuck_loss_allowance_pct": [0.0, 0.05],
                          "short_unstuck_threshold": [0.4, 0.95]},
+              "compress_results_file": true,
               "crossover_probability": 0.7,
               "iters": 30000,
               "limits": {"lower_bound_drawdown_worst": 0.25,
