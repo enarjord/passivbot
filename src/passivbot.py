@@ -1200,6 +1200,7 @@ class Passivbot:
         except Exception as e:
             logging.error(f"error with {get_function_name()} for {symbol}: {e}")
             traceback.print_exc()
+        logging.info(f"debug get_last_price {symbol} failed")
         return null_replace
 
     def log_position_changes(self, position_changes, positions_new, rd=6) -> str:
