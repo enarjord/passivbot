@@ -243,7 +243,7 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                 for s in sorted(get_all_eligible_symbols(result["backtest"]["exchange"]))
                 if s not in ignored_coins
             ]
-
+    result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
     return result
 
 
