@@ -1179,20 +1179,28 @@ class Passivbot:
         self.upd_timestamps["positions"] = utc_ms()
         return True
 
-    def get_last_price(self, symbol):
+    def get_last_price(self, symbol, null_replace=0.0):
         if not hasattr(self, "ohlcvs_1m") or symbol not in self.ohlcvs_1m:
             try:
                 if hasattr(self, "tickers") and symbol in self.tickers:
-                    return self.tickers[symbol]["last"]
+                    res = self.tickers[symbol]["last"]
+                    if res is None:
+                        logging.info(f"debug get_last_price {symbol} price from tickers is null")
+                        return null_replace
+                    return res
             except Exception as e:
                 logging.error(f"Error fetching last price from tickers")
         try:
             if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
-                return self.ohlcvs_1m[symbol].peekitem(-1)[1][4]
+                res = self.ohlcvs_1m[symbol].peekitem(-1)[1][4]
+                if res is None:
+                    logging.info(f"debug get_last_price {symbol} price from ohlcvs_1m is null")
+                    return null_replace
+                return res
         except Exception as e:
             logging.error(f"error with {get_function_name()} for {symbol}: {e}")
             traceback.print_exc()
-        return 0.0
+        return null_replace
 
     def log_position_changes(self, position_changes, positions_new, rd=6) -> str:
         if not position_changes:
