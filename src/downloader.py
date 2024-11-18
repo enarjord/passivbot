@@ -661,12 +661,16 @@ async def main():
     update_config_with_args(config, args)
     config = format_config(config)
     for symbol in config["backtest"]["symbols"]:
-        data = await load_hlcvs(
-            symbol,
-            config["backtest"]["start_date"],
-            config["backtest"]["end_date"],
-            exchange=config["backtest"]["exchange"],
-        )
+        try:
+            data = await load_hlcvs(
+                symbol,
+                config["backtest"]["start_date"],
+                config["backtest"]["end_date"],
+                exchange=config["backtest"]["exchange"],
+            )
+        except Exception as e:
+            logging.error(f"Error with {symbol} {e}")
+            traceback.print_exc()
 
 
 if __name__ == "__main__":
