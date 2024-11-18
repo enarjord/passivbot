@@ -158,7 +158,10 @@ class Passivbot:
         self.max_n_concurrent_ohlcvs_1m_updates = 3
         self.stop_signal_received = False
         self.ohlcvs_1m_update_timestamps_WS = {}
-        self.PB_mode_stop = "graceful_stop" if self.config["live"]["auto_gs"] else "manual"
+        self.PB_mode_stop = {
+            "long": "graceful_stop" if self.config["live"]["auto_gs"] else "manual",
+            "short": "graceful_stop" if self.config["live"]["auto_gs"] else "manual",
+        }
 
     async def start_bot(self, debug_mode=False):
         logging.info(f"Starting bot...")
@@ -240,29 +243,26 @@ class Passivbot:
         parser.add_argument("-sw", type=float, required=False, dest="WE_limit_short", default=None)
         parser.add_argument("-lev", type=float, required=False, dest="leverage", default=None)
         parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
-        self.forced_modes = {"long": {}, "short": {}}
+        self.forced_modes = {"long": "", "short": ""}
+        for pside in self.forced_modes:
+            if fmode := self.config["live"][f"forced_mode_{pside}"]:
+                try:
+                    self.forced_modes[pside] = expand_PB_mode(fmode)
+                    if self.forced_modes[pside] == "normal":
+                        self.forced_modes[pside] = ""
+                    else:
+                        logging.info(f"Set forced mode {pside} {self.forced_modes[pside]}")
+                        self.PB_mode_stop[pside] = self.forced_modes[pside]
+                except Exception as e:
+                    logging.info(f"Error setting {pside} forced mode {fmode} {e}")
+        self.flagged_modes = {"long": {}, "short": {}}
         for symbol in self.flags:
             self.flags[symbol] = parser.parse_args(self.flags[symbol].split())
             for pside in ["long", "short"]:
-                if (mode := getattr(self.flags[symbol], f"{pside}_mode")) is None:
-                    if self.config["live"][f"forced_mode_{pside}"]:
-                        try:
-                            setattr(
-                                self.flags[symbol],
-                                f"{pside}_mode",
-                                expand_PB_mode(self.config["live"][f"forced_mode_{pside}"]),
-                            )
-                            self.forced_modes[pside][symbol] = getattr(
-                                self.flags[symbol], f"{pside}_mode"
-                            )
-                        except Exception as e:
-                            logging.error(
-                                f"failed to set PB mode {self.config['live'][f'forced_mode_{pside}']} {e}"
-                            )
-                else:
-                    self.forced_modes[pside][symbol] = mode
-                if not self.markets_dict[symbol]["active"]:
-                    self.forced_modes[pside][symbol] = "tp_only"
+                if (mode := getattr(self.flags[symbol], f"{pside}_mode")) is not None:
+                    self.flagged_modes[pside][symbol] = mode
+                elif not self.markets_dict[symbol]["active"]:
+                    self.flagged_modes[pside][symbol] = "tp_only"
 
     async def update_first_timestamps(self, symbols=[]):
         if not hasattr(self, "first_timestamps"):
@@ -389,6 +389,8 @@ class Passivbot:
         if pside is None:
             return self.is_forager_mode("long") or self.is_forager_mode("short")
         if self.config["bot"][pside]["total_wallet_exposure_limit"] <= 0.0:
+            return False
+        if self.forced_modes[pside]:
             return False
         n_positions = self.get_max_n_positions(pside)
         if n_positions == 0:
@@ -723,8 +725,6 @@ class Passivbot:
         # determine coins with pos for normal or gs modes
         # determine coins from ideal coins for normal modes
 
-        # active_coins are coins currently actively traded. May be on normal or gs modes.
-
         self.update_effective_min_cost()
         self.refresh_approved_ignored_coins_lists()
         self.set_wallet_exposure_limits()
@@ -733,8 +733,8 @@ class Passivbot:
         for pside, other_pside in [("long", "short"), ("short", "long")]:
             if self.is_forager_mode(pside):
                 await self.update_first_timestamps()
-            for symbol in self.forced_modes[pside]:
-                self.PB_modes[pside][symbol] = self.forced_modes[pside][symbol]
+            for symbol in self.flagged_modes[pside]:
+                self.PB_modes[pside][symbol] = self.flagged_modes[pside][symbol]
             ideal_coins = self.get_filtered_coins(pside)
             slots_filled = {
                 k for k, v in self.PB_modes[pside].items() if v in ["normal", "graceful_stop"]
@@ -744,6 +744,8 @@ class Passivbot:
             for symbol in symbols_with_pos:
                 if symbol in self.PB_modes[pside]:
                     continue
+                elif self.forced_modes[pside]:
+                    self.PB_modes[pside][symbol] = self.forced_modes[pside]
                 else:
                     if symbol in self.ineligible_symbols:
                         if self.ineligible_symbols[symbol] == "not active":
@@ -751,11 +753,11 @@ class Passivbot:
                         else:
                             self.PB_modes[pside][symbol] = "manual"
                     elif len(symbols_with_pos) > max_n_positions:
-                        self.PB_modes[pside][symbol] = self.PB_mode_stop
+                        self.PB_modes[pside][symbol] = self.PB_mode_stop[pside]
                     elif symbol in ideal_coins:
                         self.PB_modes[pside][symbol] = "normal"
                     else:
-                        self.PB_modes[pside][symbol] = self.PB_mode_stop
+                        self.PB_modes[pside][symbol] = self.PB_mode_stop[pside]
                     slots_filled.add(symbol)
             for symbol in ideal_coins:
                 if len(slots_filled) >= max_n_positions:
@@ -769,14 +771,14 @@ class Passivbot:
             for symbol in self.open_orders:
                 if symbol in self.PB_modes[pside]:
                     continue
-                self.PB_modes[pside][symbol] = self.PB_mode_stop
+                self.PB_modes[pside][symbol] = self.PB_mode_stop[pside]
         self.active_symbols = sorted(
             {s for subdict in self.PB_modes.values() for s in subdict.keys()}
         )
         for symbol in self.active_symbols:
             for pside in self.PB_modes:
                 if symbol not in self.PB_modes[pside]:
-                    self.PB_modes[pside][symbol] = self.PB_mode_stop
+                    self.PB_modes[pside][symbol] = self.PB_mode_stop[pside]
             if symbol not in self.positions:
                 self.positions[symbol] = {
                     "long": {"size": 0.0, "price": 0.0},
@@ -796,8 +798,8 @@ class Passivbot:
         # filter coins by min effective cost
         # filter coins by relative volume
         # filter coins by noisiness
-        candidates = self.approved_coins_minus_ignored_coins[pside]
         if self.is_forager_mode(pside):
+            candidates = self.approved_coins_minus_ignored_coins[pside]
             candidates = [s for s in candidates if self.is_old_enough(pside, s)]
             candidates = [s for s in candidates if self.effective_min_cost_is_low_enough(pside, s)]
             if candidates == []:
@@ -815,6 +817,8 @@ class Passivbot:
             noisiness = self.calc_noisiness(pside, eligible_symbols=candidates)
             noisiness = {k: v for k, v in sorted(noisiness.items(), key=lambda x: x[1], reverse=True)}
             ideal_coins = [k for k in noisiness.keys()][:max_n_positions]
+        elif self.forced_modes[pside]:
+            return []
         else:
             # all approved coins are selected, no filtering
             ideal_coins = sorted(self.approved_coins_minus_ignored_coins[pside])
@@ -844,8 +848,8 @@ class Passivbot:
         n_positions = 0
         for symbol in self.positions:
             if self.positions[symbol][pside]["size"] != 0.0:
-                if symbol in self.forced_modes[pside]:
-                    if self.forced_modes[pside][symbol] in ["normal", "graceful_stop"]:
+                if symbol in self.flagged_modes[pside]:
+                    if self.flagged_modes[pside][symbol] in ["normal", "graceful_stop"]:
                         n_positions += 1
                 else:
                     n_positions += 1
@@ -1319,9 +1323,12 @@ class Passivbot:
                                 f"panic_close_{pside}",
                             )
                         )
-                elif self.PB_modes[pside][symbol] == "graceful_stop" and not self.has_position(
-                    pside, symbol
-                ):
+                elif self.PB_modes[pside][symbol] in [
+                    "graceful_stop",
+                    "tp_only",
+                ] and not self.has_position(pside, symbol):
+                    pass
+                elif self.PB_modes[pside][symbol] == "manual":
                     pass
                 else:
                     entries = getattr(pbr, f"calc_entries_{pside}_py")(
@@ -1629,9 +1636,27 @@ class Passivbot:
                     ]
             to_cancel += to_cancel_
             to_create += to_create_
-        return sorted(
-            to_cancel, key=lambda x: calc_diff(x["price"], self.get_last_price(x["symbol"]))
-        ), sorted(to_create, key=lambda x: calc_diff(x["price"], self.get_last_price(x["symbol"])))
+        to_create_with_pprice_diff = []
+        for x in to_create:
+            try:
+                to_create_with_pprice_diff.append(
+                    (calc_diff(x["price"], self.get_last_price(x["symbol"])), x)
+                )
+            except Exception as e:
+                logging.info(f"debug: price missing sort to_create by pprice_diff {x} {e}")
+                to_create_with_pprice_diff.append((0.0, x))
+        to_create_with_pprice_diff.sort(key=lambda x: x[0])
+        to_cancel_with_pprice_diff = []
+        for x in to_cancel:
+            try:
+                to_cancel_with_pprice_diff.append(
+                    (calc_diff(x["price"], self.get_last_price(x["symbol"])), x)
+                )
+            except Exception as e:
+                logging.info(f"debug: price missing sort to_cancel by pprice_diff {x} {e}")
+                to_cancel_with_pprice_diff.append((0.0, x))
+        to_cancel_with_pprice_diff.sort(key=lambda x: x[0])
+        return [x[1] for x in to_cancel_with_pprice_diff], [x[1] for x in to_create_with_pprice_diff]
 
     async def restart_bot_on_too_many_errors(self):
         if not hasattr(self, "error_counts"):
@@ -1754,7 +1779,7 @@ class Passivbot:
         return (
             self.approved_coins_minus_ignored_coins[pside]
             | self.get_symbols_with_pos(pside)
-            | {s for s in self.forced_modes[pside] if self.forced_modes[pside][s] == "normal"}
+            | {s for s in self.flagged_modes[pside] if self.flagged_modes[pside][s] == "normal"}
         )
 
     def get_ohlcvs_1m_file_mods(self, symbols=None):
