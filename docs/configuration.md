@@ -156,8 +156,8 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
 - `execution_delay_seconds`: Wait x seconds after executing to exchange.
 - `filter_by_min_effective_cost`: If true, will disallow coins where `balance * WE_limit * initial_qty_pct < min_effective_cost`.
   - For example, if exchange's effective minimum cost for a coin is $5, but bot wants to make an order of $2, disallow that coin.
-- `forced_mode_long`, `forced_mode_short`: Force all long positions to a given mode.
-  - Choices: [n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
+- `forced_mode_long`, `forced_mode_short`: Force all coins long/short to a given mode.
+  - Choices: [m (manual), gs (graceful_stop), p (panic), t (take_profit_only)].
 - `ignored_coins`:
 	- List of coins bot will not make positions on. If there are positions on that coin, turn on graceful stop or manual mode.
 	- May be given as path to external file which is read by Passivbot continuously.
