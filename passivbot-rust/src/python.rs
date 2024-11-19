@@ -87,6 +87,11 @@ pub fn run_backtest(
         py_analysis.set_item("adg", analysis.adg)?;
         py_analysis.set_item("mdg", analysis.mdg)?;
         py_analysis.set_item("sharpe_ratio", analysis.sharpe_ratio)?;
+        py_analysis.set_item("sortino_ratio", analysis.sortino_ratio)?;
+        py_analysis.set_item("omega_ratio", analysis.omega_ratio)?;
+        py_analysis.set_item("expected_shortfall", analysis.expected_shortfall)?;
+        py_analysis.set_item("calmar_ratio", analysis.calmar_ratio)?;
+        py_analysis.set_item("sterling_ratio", analysis.sterling_ratio)?;
         py_analysis.set_item("drawdown_worst", analysis.drawdown_worst)?;
         py_analysis.set_item(
             "equity_balance_diff_mean",
