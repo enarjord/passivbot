@@ -1816,7 +1816,7 @@ class Passivbot:
             try:
                 # update markets dict once every hour
                 if utc_ms() - self.init_markets_last_update_ms > 1000 * 60 * 60:
-                    await self.init_markets()
+                    await self.init_markets(verbose=False)
                 await asyncio.sleep(1)
             except Exception as e:
                 logging.error(f"error with {get_function_name()} {e}")
