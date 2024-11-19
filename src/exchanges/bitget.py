@@ -29,7 +29,7 @@ class BitgetBot(Passivbot):
         }
         self.custom_id_max_length = 64
 
-    def create_ccxt_sessions(self)
+    def create_ccxt_sessions(self):
         self.ccp = getattr(ccxt_pro, self.exchange)(
             {
                 "apiKey": self.user_info["key"],
