@@ -34,6 +34,14 @@ assert_correct_ccxt_version(ccxt=ccxt_async)
 class GateIOBot(Passivbot):
     def __init__(self, config: dict):
         super().__init__(config)
+        self.ohlcvs_1m_init_duration_seconds = (
+            120  # gateio has stricter rate limiting on fetching ohlcvs
+        )
+        self.hedge_mode = False
+        self.max_n_creations_per_batch = 10
+        self.max_n_cancellations_per_batch = 20
+
+    def create_ccxt_sessions(self):
         self.ccp = getattr(ccxt_pro, self.exchange)(
             {
                 "apiKey": self.user_info["key"],
@@ -50,12 +58,6 @@ class GateIOBot(Passivbot):
             }
         )
         self.cca.options["defaultType"] = "swap"
-        self.ohlcvs_1m_init_duration_seconds = (
-            120  # gateio has stricter rate limiting on fetching ohlcvs
-        )
-        self.hedge_mode = False
-        self.max_n_creations_per_batch = 10
-        self.max_n_cancellations_per_batch = 20
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()

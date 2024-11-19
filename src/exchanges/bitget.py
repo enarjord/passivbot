@@ -23,6 +23,13 @@ assert_correct_ccxt_version(ccxt=ccxt_async)
 class BitgetBot(Passivbot):
     def __init__(self, config: dict):
         super().__init__(config)
+        self.position_side_map = {
+            "buy": {"open": "long", "close": "short"},
+            "sell": {"open": "short", "close": "long"},
+        }
+        self.custom_id_max_length = 64
+
+    def create_ccxt_sessions(self)
         self.ccp = getattr(ccxt_pro, self.exchange)(
             {
                 "apiKey": self.user_info["key"],
@@ -39,11 +46,6 @@ class BitgetBot(Passivbot):
             }
         )
         self.cca.options["defaultType"] = "swap"
-        self.position_side_map = {
-            "buy": {"open": "long", "close": "short"},
-            "sell": {"open": "short", "close": "long"},
-        }
-        self.custom_id_max_length = 64
 
     async def determine_utc_offset(self, verbose=True):
         # returns millis to add to utc to get exchange timestamp

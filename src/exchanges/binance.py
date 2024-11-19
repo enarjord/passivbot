@@ -26,6 +26,9 @@ assert_correct_ccxt_version(ccxt=ccxt_async)
 class BinanceBot(Passivbot):
     def __init__(self, config: dict):
         super().__init__(config)
+        self.custom_id_max_length = 36
+
+    def create_ccxt_sessions(self):
         self.broker_code_spot = load_broker_code("binance_spot")
         for ccx, ccxt_module in [("cca", ccxt_async), ("ccp", ccxt_pro)]:
             exchange_class = getattr(ccxt_module, "binanceusdm")
@@ -47,7 +50,6 @@ class BinanceBot(Passivbot):
             if self.broker_code_spot:
                 for key in ["spot", "margin"]:
                     getattr(self, ccx).options["broker"][key] = "x-" + self.broker_code_spot
-        self.custom_id_max_length = 36
 
     async def print_new_user_suggestion(self):
         res = None
