@@ -165,20 +165,6 @@ class Passivbot:
         self.create_ccxt_sessions()
         self.debug_mode = False
 
-    async def clean_restart(self):
-        self.stop_signal_received = True
-        self.stop_data_maintainers(verbose=False)
-        await self.cca.close()
-        await self.ccp.close()
-        self.stop_signal_received = False
-        self.create_ccxt_sessions()
-        await self.init_markets(verbose=False)
-        await asyncio.sleep(1)
-        await self.start_data_maintainers()
-        await self.prepare_for_execution()
-        if not self.debug_mode:
-            await self.run_execution_loop()
-
     async def start_bot(self):
         logging.info(f"Starting bot...")
         await self.init_markets()
@@ -198,7 +184,7 @@ class Passivbot:
         # called at bot startup and once an hour thereafter
         self.init_markets_last_update_ms = utc_ms()
         await self.update_exchange_config()  # set hedge mode
-        self.markets_dict = {elm["symbol"]: elm for elm in (await self.cca.fetch_markets())}
+        self.markets_dict = await self.cca.load_markets(True)
         await self.determine_utc_offset(verbose)
         # ineligible symbols cannot open new positions
         self.ineligible_symbols = {}
@@ -1830,7 +1816,7 @@ class Passivbot:
             try:
                 # update markets dict once every hour
                 if utc_ms() - self.init_markets_last_update_ms > 1000 * 60 * 60:
-                    await self.clean_restart()
+                    await self.init_markets()
                 await asyncio.sleep(1)
             except Exception as e:
                 logging.error(f"error with {get_function_name()} {e}")
