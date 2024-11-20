@@ -1450,22 +1450,20 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     // Calculate daily equities
     let mut daily_eqs = Vec::new();
     let mut current_day = 0;
-    let mut sum = 0.0;
-    let mut count = 0;
+    let mut current_min = equities[0];
+
     for (i, &equity) in equities.iter().enumerate() {
         let day = i / 1440;
         if day > current_day {
-            daily_eqs.push(sum / count as f64);
+            daily_eqs.push(current_min);
             current_day = day;
-            sum = equity;
-            count = 1;
+            current_min = equity;
         } else {
-            sum += equity;
-            count += 1;
+            current_min = current_min.min(equity);
         }
     }
-    if count > 0 {
-        daily_eqs.push(sum / count as f64);
+    if current_min != f64::INFINITY {
+        daily_eqs.push(current_min);
     }
 
     // Calculate daily percentage changes
@@ -1538,22 +1536,34 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         sorted_returns.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
         let cutoff_index = (daily_eqs_pct_change.len() as f64 * 0.01) as usize;
         if cutoff_index > 0 {
-            sorted_returns[..cutoff_index].iter().sum::<f64>() / cutoff_index as f64
+            sorted_returns[..cutoff_index]
+                .iter()
+                .map(|x| x.abs())
+                .sum::<f64>()
+                / cutoff_index as f64
         } else {
-            sorted_returns[0]
+            sorted_returns[0].abs()
         }
     };
 
     // Calculate drawdowns
-    let drawdowns = calc_drawdowns(&equities);
+    let drawdowns = calc_drawdowns(&daily_eqs);
+    let drawdown_worst_mean_10 = {
+        let mut sorted_drawdowns = drawdowns.clone();
+        sorted_drawdowns.sort_by(|a, b| b.abs().partial_cmp(&a.abs()).unwrap_or(Ordering::Equal));
+        let worst_n = std::cmp::min(10, sorted_drawdowns.len());
+        sorted_drawdowns[..worst_n]
+            .iter()
+            .map(|x| x.abs())
+            .sum::<f64>()
+            / worst_n as f64
+    };
     let drawdown_worst = drawdowns
         .iter()
         .fold(f64::NEG_INFINITY, |a, &b| f64::max(a, b.abs()));
 
-    // Calculate Calmar Ratio (annualized return / maximum drawdown)
-    let annualized_return = adg * 252.0; // Assuming 252 trading days
     let calmar_ratio = if drawdown_worst != 0.0 {
-        annualized_return / drawdown_worst
+        adg / drawdown_worst
     } else {
         0.0
     };
@@ -1561,11 +1571,15 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     // Calculate Sterling Ratio (using average of worst N drawdowns)
     let sterling_ratio = {
         let mut sorted_drawdowns = drawdowns.clone();
-        sorted_drawdowns.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
-        let worst_n = std::cmp::min(10, sorted_drawdowns.len()); // Using worst 10 drawdowns
-        let avg_worst_drawdowns = sorted_drawdowns[..worst_n].iter().sum::<f64>() / worst_n as f64;
+        sorted_drawdowns.sort_by(|a, b| b.abs().partial_cmp(&a.abs()).unwrap_or(Ordering::Equal));
+        let worst_n = std::cmp::min(10, sorted_drawdowns.len());
+        let avg_worst_drawdowns = sorted_drawdowns[..worst_n]
+            .iter()
+            .map(|x| x.abs())
+            .sum::<f64>()
+            / worst_n as f64;
         if avg_worst_drawdowns != 0.0 {
-            annualized_return / avg_worst_drawdowns.abs()
+            adg / avg_worst_drawdowns // Using raw daily gain instead of annualized
         } else {
             0.0
         }
@@ -1621,6 +1635,7 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         calmar_ratio,
         sterling_ratio,
         drawdown_worst,
+        drawdown_worst_mean_10,
         equity_balance_diff_mean,
         equity_balance_diff_max,
         loss_profit_ratio,
