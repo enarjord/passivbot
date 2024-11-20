@@ -344,6 +344,16 @@ def get_starting_configs(starting_configs: str):
             for f in os.listdir(starting_configs)
             if f.endswith("json") or f.endswith("hjson")
         ]
+    elif starting_configs.endswith('_pareto.txt') and os.path.exists(starting_configs):
+        with open(starting_configs) as f:
+            for line in f.readlines():
+                try:
+                    cfg = json.loads(line)
+                    cfgs.append(format_config(cfg))
+                except Exception as e:
+                    logging.error(f"Failed to load starting config {line} {e}")
+        logging.info(f"Loaded starting_configs {starting_configs}")
+        return cfgs
     else:
         filenames = [starting_configs]
     for path in filenames:
