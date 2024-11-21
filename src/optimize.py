@@ -344,7 +344,7 @@ def get_starting_configs(starting_configs: str):
             for f in os.listdir(starting_configs)
             if f.endswith("json") or f.endswith("hjson")
         ]
-    elif starting_configs.endswith('_pareto.txt') and os.path.exists(starting_configs):
+    elif starting_configs.endswith("_pareto.txt") and os.path.exists(starting_configs):
         with open(starting_configs) as f:
             for line in f.readlines():
                 try:
