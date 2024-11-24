@@ -647,7 +647,8 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 "crossover_probability": 0.7,
                 "iters": 30000,
                 "limits": {
-                    "lower_bound_drawdown_worst": 0.5,
+                    "lower_bound_drawdown_worst": 0.25,
+                    "lower_bound_drawdown_worst_mean_1pct": 0.1,
                     "lower_bound_equity_balance_diff_mean": 0.03,
                     "lower_bound_loss_profit_ratio": 0.75,
                 },
