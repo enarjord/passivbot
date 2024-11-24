@@ -296,7 +296,8 @@ class Evaluator:
     def calc_fitness(self, analysis):
         modifier = 0.0
         for i, key in [
-            (4, "drawdown_worst"),
+            (5, "drawdown_worst"),
+            (4, "drawdown_worst_mean_1pct"),
             (3, "equity_balance_diff_mean"),
             (2, "loss_profit_ratio"),
         ]:
