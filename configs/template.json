@@ -133,4 +133,4 @@
               "mutation_probability": 0.2,
               "n_cpus": 5,
               "population_size": 500,
-              "scoring": ["mdg", "sharpe_ratio"]}}
+              "scoring": ["mdg", "sortino_ratio"]}}
