@@ -1531,7 +1531,7 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     };
 
     // Calculate Expected Shortfall (99%)
-    let expected_shortfall = {
+    let expected_shortfall_1pct = {
         let mut sorted_returns = daily_eqs_pct_change.clone();
         sorted_returns.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
         let cutoff_index = (daily_eqs_pct_change.len() as f64 * 0.01) as usize;
@@ -1548,10 +1548,11 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
 
     // Calculate drawdowns
     let drawdowns = calc_drawdowns(&daily_eqs);
-    let drawdown_worst_mean_10 = {
+    let drawdown_worst_mean_1pct = {
         let mut sorted_drawdowns = drawdowns.clone();
         sorted_drawdowns.sort_by(|a, b| b.abs().partial_cmp(&a.abs()).unwrap_or(Ordering::Equal));
-        let worst_n = std::cmp::min(10, sorted_drawdowns.len());
+        let cutoff_index = std::cmp::max(1, (sorted_drawdowns.len() as f64 * 0.01) as usize);
+        let worst_n = std::cmp::min(cutoff_index, sorted_drawdowns.len());
         sorted_drawdowns[..worst_n]
             .iter()
             .map(|x| x.abs())
@@ -1631,11 +1632,11 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         sharpe_ratio,
         sortino_ratio,
         omega_ratio,
-        expected_shortfall,
+        expected_shortfall_1pct,
         calmar_ratio,
         sterling_ratio,
         drawdown_worst,
-        drawdown_worst_mean_10,
+        drawdown_worst_mean_1pct,
         equity_balance_diff_mean,
         equity_balance_diff_max,
         loss_profit_ratio,
