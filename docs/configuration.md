@@ -195,6 +195,8 @@ When optimizing, parameter values are within the lower and upper bounds.
   - Default values are median daily gain and Sharpe ratio.
   - The script uses the NSGA-II algorithm (Non-dominated Sorting Genetic Algorithm II) for multi-objective optimization.
   - The fitness function is set up to minimize both objectives (converted to negative values internally).
+  - Options: adg, mdg, sharpe_ratio, sortino_ratio, omega_ratio, calmar_ratio, sterling_ratio
+  - Examples: ["mdg", "sharpe_ratio"], ["adg", "sortino_ratio"], ["sortino_ratio", "omega_ratio"]
 
 ### Optimization Limits
 
