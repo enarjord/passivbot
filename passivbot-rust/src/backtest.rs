@@ -1450,53 +1450,141 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     // Calculate daily equities
     let mut daily_eqs = Vec::new();
     let mut current_day = 0;
-    let mut sum = 0.0;
-    let mut count = 0;
+    let mut current_min = equities[0];
+
     for (i, &equity) in equities.iter().enumerate() {
         let day = i / 1440;
         if day > current_day {
-            daily_eqs.push(sum / count as f64);
+            daily_eqs.push(current_min);
             current_day = day;
-            sum = equity;
-            count = 1;
+            current_min = equity;
         } else {
-            sum += equity;
-            count += 1;
+            current_min = current_min.min(equity);
         }
     }
-    if count > 0 {
-        daily_eqs.push(sum / count as f64);
+    if current_min != f64::INFINITY {
+        daily_eqs.push(current_min);
     }
 
     // Calculate daily percentage changes
     let daily_eqs_pct_change: Vec<f64> =
         daily_eqs.windows(2).map(|w| (w[1] - w[0]) / w[0]).collect();
 
-    // Calculate ADG and Sharpe ratio
+    // Calculate ADG and standard metrics
     let adg = daily_eqs_pct_change.iter().sum::<f64>() / daily_eqs_pct_change.len() as f64;
-    // Calculate MDG
-    let mut sorted_pct_change = daily_eqs_pct_change.clone();
-    sorted_pct_change.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-    let mdg = if sorted_pct_change.len() % 2 == 0 {
-        (sorted_pct_change[sorted_pct_change.len() / 2 - 1]
-            + sorted_pct_change[sorted_pct_change.len() / 2])
-            / 2.0
-    } else {
-        sorted_pct_change[sorted_pct_change.len() / 2]
+    let mdg = {
+        let mut sorted_pct_change = daily_eqs_pct_change.clone();
+        sorted_pct_change.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+        if sorted_pct_change.len() % 2 == 0 {
+            (sorted_pct_change[sorted_pct_change.len() / 2 - 1]
+                + sorted_pct_change[sorted_pct_change.len() / 2])
+                / 2.0
+        } else {
+            sorted_pct_change[sorted_pct_change.len() / 2]
+        }
     };
-    // Calculate Sharpe Ratio
+
+    // Calculate variance and standard deviation
     let variance = daily_eqs_pct_change
         .iter()
         .map(|&x| (x - adg).powi(2))
         .sum::<f64>()
         / daily_eqs_pct_change.len() as f64;
-    let sharpe_ratio = adg / variance.sqrt();
+    let std_dev = variance.sqrt();
+
+    // Calculate Sharpe Ratio
+    let sharpe_ratio = if std_dev != 0.0 { adg / std_dev } else { 0.0 };
+
+    // Calculate Sortino Ratio (using downside deviation)
+    let downside_returns: Vec<f64> = daily_eqs_pct_change
+        .iter()
+        .filter(|&&x| x < 0.0)
+        .cloned()
+        .collect();
+    let downside_deviation = if !downside_returns.is_empty() {
+        (downside_returns.iter().map(|x| x.powi(2)).sum::<f64>() / downside_returns.len() as f64)
+            .sqrt()
+    } else {
+        0.0
+    };
+    let sortino_ratio = if downside_deviation != 0.0 {
+        adg / downside_deviation
+    } else {
+        0.0
+    };
+
+    // Calculate Omega Ratio (threshold = 0)
+    let (gains_sum, losses_sum) =
+        daily_eqs_pct_change
+            .iter()
+            .fold((0.0, 0.0), |(gains, losses), &ret| {
+                if ret >= 0.0 {
+                    (gains + ret, losses)
+                } else {
+                    (gains, losses + ret.abs())
+                }
+            });
+    let omega_ratio = if losses_sum != 0.0 {
+        gains_sum / losses_sum
+    } else {
+        f64::INFINITY
+    };
+
+    // Calculate Expected Shortfall (99%)
+    let expected_shortfall_1pct = {
+        let mut sorted_returns = daily_eqs_pct_change.clone();
+        sorted_returns.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+        let cutoff_index = (daily_eqs_pct_change.len() as f64 * 0.01) as usize;
+        if cutoff_index > 0 {
+            sorted_returns[..cutoff_index]
+                .iter()
+                .map(|x| x.abs())
+                .sum::<f64>()
+                / cutoff_index as f64
+        } else {
+            sorted_returns[0].abs()
+        }
+    };
 
     // Calculate drawdowns
-    let drawdowns = calc_drawdowns(&equities);
+    let drawdowns = calc_drawdowns(&daily_eqs);
+    let drawdown_worst_mean_1pct = {
+        let mut sorted_drawdowns = drawdowns.clone();
+        sorted_drawdowns.sort_by(|a, b| b.abs().partial_cmp(&a.abs()).unwrap_or(Ordering::Equal));
+        let cutoff_index = std::cmp::max(1, (sorted_drawdowns.len() as f64 * 0.01) as usize);
+        let worst_n = std::cmp::min(cutoff_index, sorted_drawdowns.len());
+        sorted_drawdowns[..worst_n]
+            .iter()
+            .map(|x| x.abs())
+            .sum::<f64>()
+            / worst_n as f64
+    };
     let drawdown_worst = drawdowns
         .iter()
         .fold(f64::NEG_INFINITY, |a, &b| f64::max(a, b.abs()));
+
+    let calmar_ratio = if drawdown_worst != 0.0 {
+        adg / drawdown_worst
+    } else {
+        0.0
+    };
+
+    // Calculate Sterling Ratio (using average of worst N drawdowns)
+    let sterling_ratio = {
+        let mut sorted_drawdowns = drawdowns.clone();
+        sorted_drawdowns.sort_by(|a, b| b.abs().partial_cmp(&a.abs()).unwrap_or(Ordering::Equal));
+        let worst_n = std::cmp::min(10, sorted_drawdowns.len());
+        let avg_worst_drawdowns = sorted_drawdowns[..worst_n]
+            .iter()
+            .map(|x| x.abs())
+            .sum::<f64>()
+            / worst_n as f64;
+        if avg_worst_drawdowns != 0.0 {
+            adg / avg_worst_drawdowns // Using raw daily gain instead of annualized
+        } else {
+            0.0
+        }
+    };
 
     // Calculate equity-balance differences
     let mut bal_eq = Vec::with_capacity(equities.len());
@@ -1542,7 +1630,13 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         adg,
         mdg,
         sharpe_ratio,
+        sortino_ratio,
+        omega_ratio,
+        expected_shortfall_1pct,
+        calmar_ratio,
+        sterling_ratio,
         drawdown_worst,
+        drawdown_worst_mean_1pct,
         equity_balance_diff_mean,
         equity_balance_diff_max,
         loss_profit_ratio,

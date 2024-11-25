@@ -34,6 +34,17 @@ assert_correct_ccxt_version(ccxt=ccxt_async)
 class HyperliquidBot(Passivbot):
     def __init__(self, config: dict):
         super().__init__(config)
+        self.quote = "USDC"
+        self.hedge_mode = False
+        self.significant_digits = {}
+        if "is_vault" not in self.user_info or self.user_info["is_vault"] == "":
+            logging.info(
+                f"parameter 'is_vault' missing from api-keys.json for user {self.user}. Setting to false"
+            )
+            self.user_info["is_vault"] = False
+        self.max_n_concurrent_ohlcvs_1m_updates = 2
+
+    def create_ccxt_sessions(self):
         self.ccp = getattr(ccxt_pro, self.exchange)(
             {
                 "walletAddress": self.user_info["wallet_address"],
@@ -48,15 +59,6 @@ class HyperliquidBot(Passivbot):
             }
         )
         self.cca.options["defaultType"] = "swap"
-        self.quote = "USDC"
-        self.hedge_mode = False
-        self.significant_digits = {}
-        if "is_vault" not in self.user_info or self.user_info["is_vault"] == "":
-            logging.info(
-                f"parameter 'is_vault' missing from api-keys.json for user {self.user}. Setting to false"
-            )
-            self.user_info["is_vault"] = False
-        self.max_n_concurrent_ohlcvs_1m_updates = 2
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()

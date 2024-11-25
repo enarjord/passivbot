@@ -25,6 +25,8 @@ assert_correct_ccxt_version(ccxt=ccxt_async)
 class BybitBot(Passivbot):
     def __init__(self, config: dict):
         super().__init__(config)
+
+    def create_ccxt_sessions(self):
         self.ccp = getattr(ccxt_pro, self.exchange)(
             {
                 "apiKey": self.user_info["key"],

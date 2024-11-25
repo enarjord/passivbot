@@ -19,6 +19,7 @@ from pure_funcs import (
     denumpyize,
     sort_dict_keys,
     calc_hash,
+    flatten,
 )
 from procedures import (
     make_get_filepath,
@@ -226,11 +227,18 @@ def individual_to_config(individual, template=None):
     return config
 
 
-def config_to_individual(config):
+def config_to_individual(config, param_bounds):
     individual = []
     for pside in ["long", "short"]:
-        individual += [v for k, v in sorted(config["bot"][pside].items())]
-    return individual
+        is_enabled = (
+            param_bounds[f"{pside}_n_positions"][1] > 0.0
+            and param_bounds[f"{pside}_total_wallet_exposure_limit"][1] > 0.0
+        )
+        individual += [(v if is_enabled else 0.0) for k, v in sorted(config["bot"][pside].items())]
+    # adjust to bounds
+    bounds = [(low, high) for low, high in param_bounds.values()]
+    adjusted = [max(min(x, bounds[z][1]), bounds[z][0]) for z, x in enumerate(individual)]
+    return adjusted
 
 
 @contextmanager
@@ -288,7 +296,8 @@ class Evaluator:
     def calc_fitness(self, analysis):
         modifier = 0.0
         for i, key in [
-            (4, "drawdown_worst"),
+            (5, "drawdown_worst"),
+            (4, "drawdown_worst_mean_1pct"),
             (3, "equity_balance_diff_mean"),
             (2, "loss_profit_ratio"),
         ]:
@@ -334,38 +343,55 @@ def add_extra_options(parser):
     )
 
 
-def get_starting_configs(starting_configs: str):
-    if starting_configs is None:
-        return []
+def extract_configs(path):
+    print("debug extract_configs", path)
     cfgs = []
-    if os.path.isdir(starting_configs):
-        filenames = [
-            os.path.join(starting_configs, f)
-            for f in os.listdir(starting_configs)
-            if f.endswith("json") or f.endswith("hjson")
-        ]
-    else:
-        filenames = [starting_configs]
-    for path in filenames:
-        try:
-            cfgs.append(load_config(path, verbose=False))
-        except Exception as e:
-            logging.error(f"failed to load live config {path} {e}")
+    if os.path.exists(path):
+        if path.endswith("_all_results.txt"):
+            logging.info(f"Skipping {path}")
+            return []
+        if path.endswith(".json"):
+            try:
+                cfgs.append(load_config(path, verbose=False))
+                return cfgs
+            except:
+                return []
+        if path.endswith("_pareto.txt"):
+            with open(path) as f:
+                for line in f.readlines():
+                    try:
+                        cfg = json.loads(line)
+                        cfgs.append(format_config(cfg, verbose=False))
+                    except Exception as e:
+                        logging.error(f"Failed to load starting config {line} {e}")
     return cfgs
 
 
-def configs_to_individuals(cfgs):
+def get_starting_configs(starting_configs: str):
+    if starting_configs is None:
+        return []
+    if os.path.isdir(starting_configs):
+        return flatten(
+            [
+                get_starting_configs(os.path.join(starting_configs, f))
+                for f in os.listdir(starting_configs)
+            ]
+        )
+    return extract_configs(starting_configs)
+
+
+def configs_to_individuals(cfgs, param_bounds):
     inds = {}
     for cfg in cfgs:
         try:
             fcfg = format_config(cfg, verbose=False)
-            individual = config_to_individual(fcfg)
+            individual = config_to_individual(fcfg, param_bounds)
             inds[calc_hash(individual)] = individual
             # add duplicate of config, but with lowered total wallet exposure limit
             fcfg2 = deepcopy(fcfg)
             for pside in ["long", "short"]:
                 fcfg2["bot"][pside]["total_wallet_exposure_limit"] *= 0.75
-            individual2 = config_to_individual(fcfg2)
+            individual2 = config_to_individual(fcfg2, param_bounds)
             inds[calc_hash(individual2)] = individual2
         except Exception as e:
             logging.error(f"error loading starting config: {e}")
@@ -493,12 +519,14 @@ async def main():
         # Create initial population
         logging.info(f"Creating initial population...")
 
-        starting_individuals = configs_to_individuals(get_starting_configs(args.starting_configs))
-        if len(starting_individuals) > config["optimize"]["population_size"]:
-            logging.info(
-                f"increasing population size: {config['optimize']['population_size']} -> {len(starting_individuals)}"
-            )
-            config["optimize"]["population_size"] = len(starting_individuals)
+        bounds = [(low, high) for low, high in param_bounds.values()]
+        starting_individuals = configs_to_individuals(
+            get_starting_configs(args.starting_configs), param_bounds
+        )
+        if (nstart := len(starting_individuals)) > (popsize := config["optimize"]["population_size"]):
+            logging.info(f"Number of starting configs greater than population size.")
+            logging.info(f"Increasing population size: {popsize} -> {nstart}")
+            config["optimize"]["population_size"] = nstart
 
         population = toolbox.population(n=config["optimize"]["population_size"])
         if starting_individuals:

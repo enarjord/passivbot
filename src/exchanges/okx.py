@@ -24,6 +24,13 @@ assert_correct_ccxt_version(ccxt=ccxt_async)
 class OKXBot(Passivbot):
     def __init__(self, config: dict):
         super().__init__(config)
+        self.order_side_map = {
+            "buy": {"long": "open_long", "short": "close_short"},
+            "sell": {"long": "close_long", "short": "open_short"},
+        }
+        self.custom_id_max_length = 32
+
+    def create_ccxt_sessions(self):
         self.ccp = getattr(ccxt_pro, self.exchange)(
             {
                 "apiKey": self.user_info["key"],
@@ -40,11 +47,6 @@ class OKXBot(Passivbot):
             }
         )
         self.cca.options["defaultType"] = "swap"
-        self.order_side_map = {
-            "buy": {"long": "open_long", "short": "close_short"},
-            "sell": {"long": "close_long", "short": "open_short"},
-        }
-        self.custom_id_max_length = 32
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()

@@ -13,6 +13,7 @@ from pure_funcs import (
     calc_hash,
     determine_pos_side_ccxt,
     shorten_custom_id,
+    hysteresis_rounding,
 )
 from njit_funcs import calc_diff
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
@@ -23,6 +24,13 @@ assert_correct_ccxt_version(ccxt=ccxt_async)
 class BitgetBot(Passivbot):
     def __init__(self, config: dict):
         super().__init__(config)
+        self.position_side_map = {
+            "buy": {"open": "long", "close": "short"},
+            "sell": {"open": "short", "close": "long"},
+        }
+        self.custom_id_max_length = 64
+
+    def create_ccxt_sessions(self):
         self.ccp = getattr(ccxt_pro, self.exchange)(
             {
                 "apiKey": self.user_info["key"],
@@ -39,11 +47,6 @@ class BitgetBot(Passivbot):
             }
         )
         self.cca.options["defaultType"] = "swap"
-        self.position_side_map = {
-            "buy": {"open": "long", "close": "short"},
-            "sell": {"open": "short", "close": "long"},
-        }
-        self.custom_id_max_length = 64
 
     async def determine_utc_offset(self, verbose=True):
         # returns millis to add to utc to get exchange timestamp
@@ -69,24 +72,6 @@ class BitgetBot(Passivbot):
             self.qty_steps[symbol] = elm["precision"]["amount"]
             self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
-
-    async def watch_balance(self):
-        # bitget ccxt watch balance doesn't return required info.
-        # relying instead on periodic REST updates
-        while True:
-            try:
-                if self.stop_websocket:
-                    break
-                res = await self.cca.fetch_balance()
-                res["USDT"]["total"] = float(
-                    [x for x in res["info"] if x["marginCoin"] == self.quote][0]["available"]
-                )
-                self.handle_balance_update(res)
-                await asyncio.sleep(10)
-            except Exception as e:
-                print(f"exception watch_balance", e)
-                traceback.print_exc()
-                await asyncio.sleep(1)
 
     async def watch_orders(self):
         while True:
@@ -144,9 +129,21 @@ class BitgetBot(Passivbot):
                 self.cca.fetch_positions(),
                 self.cca.fetch_balance(),
             )
-            balance = float(
-                [x for x in fetched_balance["info"] if x["marginCoin"] == self.quote][0]["available"]
-            )
+            balance_info = [x for x in fetched_balance["info"] if x["marginCoin"] == self.quote][0]
+            if (
+                "assetMode" in balance_info
+                and "unionTotalMargin" in balance_info
+                and balance_info["assetMode"] == "union"
+            ):
+                balance = float(balance_info["unionTotalMargin"])
+                if not hasattr(self, "previous_rounded_balance"):
+                    self.previous_rounded_balance = balance
+                self.previous_rounded_balance = hysteresis_rounding(
+                    balance, self.previous_rounded_balance, 0.02, 0.5
+                )
+                balance = self.previous_rounded_balance
+            else:
+                balance = float(balance_info["available"])
             for i in range(len(fetched_positions)):
                 fetched_positions[i]["position_side"] = fetched_positions[i]["side"]
                 fetched_positions[i]["size"] = fetched_positions[i]["contracts"]

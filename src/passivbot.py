@@ -162,10 +162,12 @@ class Passivbot:
             "long": "graceful_stop" if self.config["live"]["auto_gs"] else "manual",
             "short": "graceful_stop" if self.config["live"]["auto_gs"] else "manual",
         }
+        self.create_ccxt_sessions()
+        self.debug_mode = False
 
-    async def start_bot(self, debug_mode=False):
+    async def start_bot(self):
         logging.info(f"Starting bot...")
-        await self.hourly_cycle()
+        await self.init_markets()
         await asyncio.sleep(1)
         logging.info(f"Starting data maintainers...")
         await self.start_data_maintainers()
@@ -175,14 +177,14 @@ class Passivbot:
         await self.prepare_for_execution()
 
         logging.info(f"starting execution loop...")
-        if not debug_mode:
+        if not self.debug_mode:
             await self.run_execution_loop()
 
-    async def hourly_cycle(self, verbose=True):
+    async def init_markets(self, verbose=True):
         # called at bot startup and once an hour thereafter
+        self.init_markets_last_update_ms = utc_ms()
         await self.update_exchange_config()  # set hedge mode
-        self.hourly_cycle_last_update_ms = utc_ms()
-        self.markets_dict = {elm["symbol"]: elm for elm in (await self.cca.fetch_markets())}
+        self.markets_dict = await self.cca.load_markets(True)
         await self.determine_utc_offset(verbose)
         # ineligible symbols cannot open new positions
         self.ineligible_symbols = {}
@@ -328,7 +330,7 @@ class Passivbot:
         )
         await self.update_ohlcvs_1m_for_actives()
 
-    async def execute_to_exchange(self, debug_mode=False):
+    async def execute_to_exchange(self):
         await self.execution_cycle()
         await self.update_EMAs()
         await self.update_exchange_configs()
@@ -351,7 +353,7 @@ class Passivbot:
 
         # format custom_id
         to_create = self.format_custom_ids(to_create)
-        if debug_mode:
+        if self.debug_mode:
             if to_cancel:
                 print("would cancel:")
             for x in to_cancel[: self.config["live"]["max_n_cancellations_per_batch"]]:
@@ -363,7 +365,7 @@ class Passivbot:
             if res:
                 for elm in res:
                     self.remove_cancelled_order(elm, source="POST")
-        if debug_mode:
+        if self.debug_mode:
             if to_create:
                 print("would create:")
             for x in to_create[: self.config["live"]["max_n_creations_per_batch"]]:
@@ -439,7 +441,7 @@ class Passivbot:
     def pad_sym(self, symbol):
         return f"{symbol: <{self.sym_padding}}"
 
-    def stop_data_maintainers(self):
+    def stop_data_maintainers(self, verbose=True):
         if not hasattr(self, "maintainers"):
             return
         res = {}
@@ -457,8 +459,10 @@ class Passivbot:
                 except Exception as e:
                     logging.error(f"error stopping WS_ohlcvs_1m_tasks {key} {e}")
             if res0s:
-                logging.info(f"stopped ohlcvs watcher tasks {res0s}")
-        logging.info(f"stopped data maintainers: {res}")
+                if verbose:
+                    logging.info(f"stopped ohlcvs watcher tasks {res0s}")
+        if verbose:
+            logging.info(f"stopped data maintainers: {res}")
         return res
 
     def has_position(self, pside=None, symbol=None):
@@ -1067,20 +1071,6 @@ class Passivbot:
         self.upd_timestamps["pnls"] = utc_ms()
         return True
 
-    async def check_for_inactive_markets(self):
-        self.ineligible_symbols_with_pos = [
-            elm["symbol"]
-            for elm in self.fetched_positions + self.fetched_open_orders
-            if elm["symbol"] not in self.markets_dict
-        ]
-        update = False
-        if self.ineligible_symbols_with_pos:
-            logging.info(
-                f"Caught symbol with pos for ineligible market: {self.ineligible_symbols_with_pos}"
-            )
-            update = True
-            await self.init_markets_dict()
-
     async def update_open_orders(self):
         if not hasattr(self, "open_orders"):
             self.open_orders = {}
@@ -1090,7 +1080,6 @@ class Passivbot:
             if res in [None, False]:
                 return False
             self.fetched_open_orders = res
-            await self.check_for_inactive_markets()
             open_orders = res
             oo_ids_old = {elm["id"] for sublist in self.open_orders.values() for elm in sublist}
             created_prints, cancelled_prints = [], []
@@ -1826,21 +1815,8 @@ class Passivbot:
         while not self.stop_signal_received:
             try:
                 # update markets dict once every hour
-                if utc_ms() - self.hourly_cycle_last_update_ms > 1000 * 60 * 60:
-                    await self.hourly_cycle(verbose=False)
-                await asyncio.sleep(1)
-            except Exception as e:
-                logging.error(f"error with {get_function_name()} {e}")
-                traceback.print_exc()
-                await asyncio.sleep(5)
-
-    async def maintain_markets_info(self):
-        logging.info(f"starting maintain_markets_info")
-        while not self.stop_signal_received:
-            try:
-                # update markets dict once every hour
                 if utc_ms() - self.init_markets_last_update_ms > 1000 * 60 * 60:
-                    await self.init_markets_dict(verbose=False)
+                    await self.init_markets(verbose=False)
                 await asyncio.sleep(1)
             except Exception as e:
                 logging.error(f"error with {get_function_name()} {e}")
@@ -1848,7 +1824,7 @@ class Passivbot:
                 await asyncio.sleep(5)
 
     async def start_data_maintainers(self):
-        # maintains REST init_markets_dict and ohlcv_1m
+        # maintains REST hourly_cycle and ohlcv_1m
         if hasattr(self, "maintainers"):
             self.stop_data_maintainers()
         self.maintainers = {
