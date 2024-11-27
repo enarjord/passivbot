@@ -344,7 +344,6 @@ def add_extra_options(parser):
 
 
 def extract_configs(path):
-    print("debug extract_configs", path)
     cfgs = []
     if os.path.exists(path):
         if path.endswith("_all_results.txt"):
