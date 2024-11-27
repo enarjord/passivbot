@@ -4,7 +4,7 @@
 
 :warning: **Used at one's own risk** :warning:
 
-v7.2.8
+v7.2.9
 
 
 ## Overview
@@ -50,8 +50,8 @@ cd passivbot
 Passivbot uses Rust for some of its components. Install Rust by following these steps:
 
 Visit https://www.rust-lang.org/tools/install
-Follow the instructions for your operating system to install Rustup, the Rust installer and version management tool.
-After installation, restart your terminal or command prompt.
+Follow the instructions to install Rustup, the Rust installer and version management tool.
+After installation, restart the terminal or command prompt.
 
 ### Step 3: Create and Activate a Virtual Environment
 
@@ -132,7 +132,7 @@ See also https://pbconfigdb.scud.dedyn.io/
 
 ## Documentation:
 
-For more detailed information about Passivbot, see documentation files here: [docs/](docs/) or on www.passivbot.com
+For more detailed information about Passivbot, see documentation files here: [docs/](docs/)
 
 ## Support
 
