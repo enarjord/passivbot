@@ -1563,27 +1563,19 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         .iter()
         .fold(f64::NEG_INFINITY, |a, &b| f64::max(a, b.abs()));
 
+    // Calculate Sterling Ratio (using average of worst 1% drawdowns)
+    let sterling_ratio = {
+        if drawdown_worst_mean_1pct != 0.0 {
+            adg / drawdown_worst_mean_1pct
+        } else {
+            0.0
+        }
+    };
+
     let calmar_ratio = if drawdown_worst != 0.0 {
         adg / drawdown_worst
     } else {
         0.0
-    };
-
-    // Calculate Sterling Ratio (using average of worst N drawdowns)
-    let sterling_ratio = {
-        let mut sorted_drawdowns = drawdowns.clone();
-        sorted_drawdowns.sort_by(|a, b| b.abs().partial_cmp(&a.abs()).unwrap_or(Ordering::Equal));
-        let worst_n = std::cmp::min(10, sorted_drawdowns.len());
-        let avg_worst_drawdowns = sorted_drawdowns[..worst_n]
-            .iter()
-            .map(|x| x.abs())
-            .sum::<f64>()
-            / worst_n as f64;
-        if avg_worst_drawdowns != 0.0 {
-            adg / avg_worst_drawdowns // Using raw daily gain instead of annualized
-        } else {
-            0.0
-        }
     };
 
     // Calculate equity-balance differences
