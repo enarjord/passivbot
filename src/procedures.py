@@ -1421,7 +1421,7 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             elif "optimize_scoring" in full_name:
                 type_ = comma_separated_values
                 acronym = "os"
-                appendix = "Options: adg,sharpe_ratio or mdg,sharpe_ratio"
+                appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
             elif "cpus" in full_name:
                 acronym = "c"
             elif "iters" in full_name:
