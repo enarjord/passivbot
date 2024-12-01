@@ -101,6 +101,7 @@ def create_shared_memory_file(hlcvs):
     temp_file = tempfile.NamedTemporaryFile(delete=False)
     logging.info(f"Creating shared memory file: {temp_file.name}...")
     shared_memory_file = temp_file.name
+    temp_file.close()
 
     try:
         total_size = hlcvs.nbytes
