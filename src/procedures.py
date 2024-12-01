@@ -132,9 +132,7 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
         result = template
     elif all([k in config for k in template]):
         result = deepcopy(config)
-    elif all([k in config for k in ["analysis", "config"]]) and all(
-        [k in config["config"] for k in template]
-    ):
+    elif "config" in config and all([k in config["config"] for k in template]):
         result = deepcopy(config["config"])
     elif "bot" in config and "live" in config:
         # live only config
@@ -231,18 +229,23 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
             ignored_coins = coins_to_symbols(
                 set(flatten(result["live"]["ignored_coins"].values())),
                 eligible_symbols=eligible_symbols,
+                exchange=exchange,
                 verbose=verbose,
             )
             approved_coins = coins_to_symbols(
                 set(flatten(result["live"]["approved_coins"].values())),
                 eligible_symbols=eligible_symbols,
+                exchange=exchange,
                 verbose=verbose,
             )
             if approved_coins:
                 result["backtest"]["symbols"][exchange] = [
                     x
                     for x in coins_to_symbols(
-                        sorted(approved_coins), exchange=exchange, verbose=verbose
+                        sorted(approved_coins),
+                        eligible_symbols=eligible_symbols,
+                        exchange=exchange,
+                        verbose=verbose,
                     )
                     if x not in ignored_coins
                 ]
@@ -298,49 +301,26 @@ def get_all_eligible_symbols(exchange="binance"):
         raise Exception("unable to fetch or load from cache")
 
 
-def coin_to_symbol(coin, eligible_symbols=None, coin_to_symbol_map={}, quote="USDT", verbose=True):
-    # side effect: coin_to_symbol_map might get mutated
+def coin_to_symbol(coin, eligible_symbols=None, quote="USDT", verbose=True):
     if eligible_symbols is None:
         eligible_symbols = get_all_eligible_symbols()
-    if coin in coin_to_symbol_map:
-        return coin_to_symbol_map[coin]
-
-    # first check if coin/quote:quote has a match
-    candidate_symbol = f"{coin}/{quote}:{quote}"
-    if candidate_symbol in eligible_symbols:
-        coin_to_symbol_map[coin] = candidate_symbol
-        return candidate_symbol
-
-    # next check if there is a single match
+    # first check if there is a single match
     candidates = {s for s in eligible_symbols if coin in s}
     if len(candidates) == 1:
-        coin_to_symbol_map[coin] = next(iter(candidates))
-        return coin_to_symbol_map[coin]
+        return next(iter(candidates))
+
+    # next check if coin/quote:quote has a match
+    candidate_symbol = f"{coin}/{quote}:{quote}"
+    if candidate_symbol in eligible_symbols:
+        return candidate_symbol
 
     # next format coin (e.g. 1000SHIB -> SHIB, kPEPE -> PEPE, etc)
     coinf = symbol_to_coin(coin)
-    if coin in coin_to_symbol_map:
-        coin_to_symbol_map[coin] = coin_to_symbol_map[coinf]
-        return coin_to_symbol_map[coin]
-
-    # first check if coinf/quote:quote has a match
-    candidate_symbol = f"{coinf}/{quote}:{quote}"
-    if candidate_symbol in eligible_symbols:
-        coin_to_symbol_map[coin] = candidate_symbol
-        return candidate_symbol
-
-    # next check if there is a single match
-    candidates = {s for s in eligible_symbols if coinf in s}
-    if len(candidates) == 1:
-        coin_to_symbol_map[coin] = next(iter(candidates))
-        return coin_to_symbol_map[coin]
-
     # next check if multiple matches
     if len(candidates) > 1:
         for candidate in candidates:
             candidate_coin = symbol_to_coin(candidate)
             if candidate_coin == coinf:
-                coin_to_symbol_map[coin] = candidate
                 return candidate
         if verbose:
             print(f"coin_to_symbol {coinf}: ambiguous coin, multiple candidates {candidates}")
@@ -350,32 +330,10 @@ def coin_to_symbol(coin, eligible_symbols=None, coin_to_symbol_map={}, quote="US
     return ""
 
 
-def coin_to_symbol_old(coin: str, eligible_symbols=None, verbose=True):
-    # formats coin to appropriate symbol
-    if eligible_symbols is None:
-        eligible_symbols = get_all_eligible_symbols()
-    coin = symbol_to_coin(coin)
-    candidates = [x for x in eligible_symbols if coin in x]
-    if len(candidates) == 1:
-        return candidates[0]
-    if len(candidates) == 0:
-        if verbose:
-            print(f"no candidate symbol found for {coin}")
-        return None
-    for x in candidates:
-        if x.replace("USDT", "") == coin:
-            return x
-    if coin == "":
-        return None
-    if verbose:
-        print(f"ambiguous coin: {coin}, candidates: {candidates}")
-    return None
-
-
 def coins_to_symbols(coins: [str], eligible_symbols=None, exchange=None, verbose=True):
     if eligible_symbols is None:
         eligible_symbols = get_all_eligible_symbols(exchange)
-    symbols = [coin_to_symbol(x, eligible_symbols, verbose=verbose) for x in coins]
+    symbols = [coin_to_symbol(x, eligible_symbols=eligible_symbols, verbose=verbose) for x in coins]
     return sorted(set([x for x in symbols if x]))
 
 
