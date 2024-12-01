@@ -258,11 +258,12 @@ def managed_mmap(filename, dtype, shape):
 
 
 class Evaluator:
-    def __init__(self, shared_memory_files, hlcvs_shapes, hlcvs_dtypes, config, mss, results_queue):
+    def __init__(self, shared_memory_files, hlcvs_shapes, hlcvs_dtypes, config, msss, results_queue):
         logging.info("Initializing Evaluator...")
         self.shared_memory_files = shared_memory_files
         self.hlcvs_shapes = hlcvs_shapes
         self.hlcvs_dtypes = hlcvs_dtypes
+        self.msss = msss
         self.exchanges = list(shared_memory_files.keys())
 
         self.mmap_contexts = {}
@@ -278,7 +279,7 @@ class Evaluator:
             )
             self.shared_hlcvs_np[exchange] = self.mmap_contexts[exchange].__enter__()
             _, self.exchange_params[exchange], self.backtest_params[exchange] = prep_backtest_args(
-                config, mss, exchange
+                config, self.msss[exchange], exchange
             )
             logging.info(f"mmap_context entered successfully for {exchange}.")
 
@@ -312,9 +313,11 @@ class Evaluator:
         analyses_combined.update({"w_0": w_0, "w_1": w_1})
 
         data = {
-            "analyses_combined": analyses_combined,
-            "analyses": analyses,
-            "config": config,
+            **config,
+            **{
+                "analyses_combined": analyses_combined,
+                "analyses": analyses,
+            },
         }
         self.results_queue.put(data)
         return w_0, w_1
@@ -501,11 +504,13 @@ async def main():
         shared_memory_files = {}
         hlcvs_shapes = {}
         hlcvs_dtypes = {}
+        msss = {}
         for exchange in exchanges:
             symbols, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
             hlcvs_dict[exchange] = hlcvs
             hlcvs_shapes[exchange] = hlcvs.shape
             hlcvs_dtypes[exchange] = hlcvs.dtype
+            msss[exchange] = mss
             required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
             check_disk_space(tempfile.gettempdir(), required_space)
             logging.info(f"Starting to create shared memory file for {exchange}...")
@@ -525,7 +530,7 @@ async def main():
 
         # Initialize evaluator with results queue
         evaluator = Evaluator(
-            shared_memory_files, hlcvs_shapes, hlcvs_dtypes, config, mss, results_queue
+            shared_memory_files, hlcvs_shapes, hlcvs_dtypes, config, msss, results_queue
         )
 
         logging.info(f"Finished initializing evaluator...")
