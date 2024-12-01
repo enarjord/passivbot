@@ -142,14 +142,30 @@ def process_single(file_location, verbose=False):
     for x in data_generator(file_location, verbose=verbose):
         if x:
             xs.append(x)
+    if not xs:
+        print_(f"No valid data found in {file_location}")
+        return None
     print_("Processing...")
     res = pd.DataFrame([flatten_dict(x) for x in xs])
 
+    # Determine the prefix based on the data
+    if 'analyses_combined' in xs[0]:
+        analysis_prefix = 'analyses_combined_'
+        analysis_key = 'analyses_combined'
+    elif 'analysis' in xs[0]:
+        analysis_prefix = 'analysis_'
+        analysis_key = 'analysis'
+    else:
+        raise Exception("Neither 'analyses_combined' nor 'analysis' found in data")
+
     keys, higher_is_better = ["w_0", "w_1"], [False, False]
-    keys = ["analyses_combined_" + key for key in keys]
+    keys = [analysis_prefix + key for key in keys]
     print_("n backtests", len(res))
-    print_("debug", res.iloc[0])
-    candidates = res[(res.analyses_combined_w_0 <= 0.0) & (res.analyses_combined_w_1 <= 0.0)][keys]
+
+    # Adjust the filtering condition based on the prefix
+    res_keys_w_0 = res[analysis_prefix + 'w_0']
+    res_keys_w_1 = res[analysis_prefix + 'w_1']
+    candidates = res[(res_keys_w_0 <= 0.0) & (res_keys_w_1 <= 0.0)][keys]
     if len(candidates) == 0:
         candidates = res[keys]
     print_("n candidates", len(candidates))
@@ -173,15 +189,16 @@ def process_single(file_location, verbose=False):
         print_("best")
         print_(candidates.loc[best])
         print_("pareto front:")
-        res_to_print = res[[x for x in res.columns if "analyses_combined" in x]].loc[
+        res_to_print = res[[x for x in res.columns if analysis_prefix[:-1] in x]].loc[
             closest_to_ideal.index
         ]
-        res_to_print.columns = [x.replace("analyses_combined_", "") for x in res_to_print.columns]
+        res_to_print.columns = [x.replace(analysis_prefix, "") for x in res_to_print.columns]
         print_(res_to_print)
 
     # Processing the best result for configuration
     best_d = xs[best]
-    best_d["analyses_combined"]["n_iters"] = len(xs)
+    # Adjust for 'analysis' or 'analyses_combined'
+    best_d[analysis_key]["n_iters"] = len(xs)
     best_d.update(deepcopy(best_d["config"]))
     del best_d["config"]
     fjson = config_pretty_str(best_d)
