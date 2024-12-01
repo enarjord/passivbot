@@ -184,6 +184,13 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
             if verbose:
                 print(f"renaming parameter {k0} {src}: {dst}")
             del result[k0][src]
+    if "exchange" in result["backtest"] and isinstance(result["backtest"]["exchange"], str):
+        result["backtest"]["exchanges"] = [result["backtest"]["exchange"]]
+        if verbose:
+            print(
+                f"changed backtest.exchange: {result['backtest']['exchange']} -> backtest.exchanges: [{result['backtest']['exchange']}]"
+            )
+        del result["backtest"]["exchange"]
     for k0 in template:
         for k1 in template[k0]:
             if k0 not in result:
@@ -218,31 +225,31 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                     "long": deepcopy(result["live"][k_coins]),
                     "short": deepcopy(result["live"][k_coins]),
                 }
-        eligible_symbols = get_all_eligible_symbols(result["backtest"]["exchange"])
-        ignored_coins = coins_to_symbols(
-            set(flatten(result["live"]["ignored_coins"].values())),
-            eligible_symbols=eligible_symbols,
-            verbose=verbose,
-        )
-        approved_coins = coins_to_symbols(
-            set(flatten(result["live"]["approved_coins"].values())),
-            eligible_symbols=eligible_symbols,
-            verbose=verbose,
-        )
-        if approved_coins:
-            result["backtest"]["symbols"] = [
-                x
-                for x in coins_to_symbols(
-                    sorted(approved_coins), exchange=result["backtest"]["exchange"], verbose=verbose
-                )
-                if x not in ignored_coins
-            ]
-        else:
-            result["backtest"]["symbols"] = [
-                s
-                for s in sorted(get_all_eligible_symbols(result["backtest"]["exchange"]))
-                if s not in ignored_coins
-            ]
+        result["backtest"]["symbols"] = {}
+        for exchange in result["backtest"]["exchanges"]:
+            eligible_symbols = get_all_eligible_symbols(exchange)
+            ignored_coins = coins_to_symbols(
+                set(flatten(result["live"]["ignored_coins"].values())),
+                eligible_symbols=eligible_symbols,
+                verbose=verbose,
+            )
+            approved_coins = coins_to_symbols(
+                set(flatten(result["live"]["approved_coins"].values())),
+                eligible_symbols=eligible_symbols,
+                verbose=verbose,
+            )
+            if approved_coins:
+                result["backtest"]["symbols"][exchange] = [
+                    x
+                    for x in coins_to_symbols(
+                        sorted(approved_coins), exchange=exchange, verbose=verbose
+                    )
+                    if x not in ignored_coins
+                ]
+            else:
+                result["backtest"]["symbols"][exchange] = [
+                    s for s in sorted(get_all_eligible_symbols(exchange)) if s not in ignored_coins
+                ]
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
     return result
 
@@ -388,6 +395,7 @@ def load_config(filepath: str, live_only=False, verbose=True) -> dict:
         config = format_config(config, live_only=live_only, verbose=verbose)
         return config
     except Exception as e:
+        traceback.print_exc()
         raise Exception(f"failed to load config {filepath}: {e}")
 
 
@@ -1416,8 +1424,9 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             elif "approved_coins" in full_name:
                 acronym = "s"
                 type_ = comma_separated_values
-            elif "ignored_coins" in full_name:
+            elif any([x in full_name for x in ["ignored_coins", "exchanges"]]):
                 type_ = comma_separated_values
+                appendix = "item1,item2,item3,..."
             elif "optimize_scoring" in full_name:
                 type_ = comma_separated_values
                 acronym = "os"
