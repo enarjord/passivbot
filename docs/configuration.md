@@ -7,10 +7,10 @@ Here follows an overview of the parameters found in `config/template.json`.
 - `base_dir`: Location to save backtest results.
 - `compress_cache`: set to true to save disk space. Set to false to load faster.
 - `end_date`: End date of backtest, e.g., 2024-06-23. Set to 'now' to use today's date as end date.
-- `exchange`: Exchange from which to fetch 1m OHLCV data. Default is Binance.
+- `exchanges`: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing.
 - `start_date`: Start date of backtest.
 - `starting_balance`: Starting balance in USD at the beginning of backtest.
-- `symbols`: Coins which were backtested. Note: coins for backtesting are live.approved_coins minus live.ignored_coins.
+- `symbols`: Coins which were backtested for each exchange. Note: coins for backtesting are live.approved_coins minus live.ignored_coins.
 
 ## Bot Settings
 
@@ -200,7 +200,7 @@ When optimizing, parameter values are within the lower and upper bounds.
 
 ### Optimization Limits
 
-The optimizer will penalize backtests whose metrics exceed the given values.
+The optimizer will penalize backtests whose metrics exceed the given values. If multiple exchanges are optimized, it will select the worst of them.
 
 - `lower_bound_drawdown_worst`: Lowest drawdown during backtest.
 - `lower_bound_equity_balance_diff_mean`: Mean of the difference between equity and balance.
