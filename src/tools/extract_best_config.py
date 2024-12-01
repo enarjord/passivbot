@@ -146,11 +146,12 @@ def process_single(file_location, verbose=False):
     res = pd.DataFrame([flatten_dict(x) for x in xs])
 
     keys, higher_is_better = ["w_0", "w_1"], [False, False]
-    keys = ["analysis_" + key for key in keys]
-    candidates = res[(res.analysis_w_0 <= 0.0) & (res.analysis_w_1 <= 0.0)][keys]
+    keys = ["analyses_combined_" + key for key in keys]
+    print_("n backtests", len(res))
+    print_("debug", res.iloc[0])
+    candidates = res[(res.analyses_combined_w_0 <= 0.0) & (res.analyses_combined_w_1 <= 0.0)][keys]
     if len(candidates) == 0:
         candidates = res[keys]
-    print_("n backtests", len(res))
     print_("n candidates", len(candidates))
     if len(candidates) == 1:
         best = candidates.iloc[0].name
@@ -172,13 +173,15 @@ def process_single(file_location, verbose=False):
         print_("best")
         print_(candidates.loc[best])
         print_("pareto front:")
-        res_to_print = res[[x for x in res.columns if "analysis" in x]].loc[closest_to_ideal.index]
-        res_to_print.columns = [x.replace("analysis_", "") for x in res_to_print.columns]
+        res_to_print = res[[x for x in res.columns if "analyses_combined" in x]].loc[
+            closest_to_ideal.index
+        ]
+        res_to_print.columns = [x.replace("analyses_combined_", "") for x in res_to_print.columns]
         print_(res_to_print)
 
     # Processing the best result for configuration
     best_d = xs[best]
-    best_d["analysis"]["n_iters"] = len(xs)
+    best_d["analyses_combined"]["n_iters"] = len(xs)
     best_d.update(deepcopy(best_d["config"]))
     del best_d["config"]
     fjson = config_pretty_str(best_d)
