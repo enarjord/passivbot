@@ -492,11 +492,13 @@ async def main():
     config = format_config(config)
     exchanges = config["backtest"]["exchanges"]
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
-    coins = [symbol_to_coin(s) for s in config["backtest"]["symbols"]]
+    coins = sorted(
+        set([symbol_to_coin(x) for y in config["backtest"]["symbols"].values() for x in y])
+    )
     coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
     hash_snippet = uuid4().hex[:8]
     config["results_filename"] = make_get_filepath(
-        f"optimize_results/{date_fname}_{coins_fname}_{hash_snippet}_all_results.txt"
+        f"optimize_results/{date_fname}_{'.'.join(exchanges)}_{coins_fname}_{hash_snippet}_all_results.txt"
     )
 
     try:
