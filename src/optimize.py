@@ -498,7 +498,7 @@ async def main():
     coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
     hash_snippet = uuid4().hex[:8]
     config["results_filename"] = make_get_filepath(
-        f"optimize_results/{date_fname}_{'.'.join(exchanges)}_{coins_fname}_{hash_snippet}_all_results.txt"
+        f"optimize_results/{date_fname}_{'_'.join(exchanges)}_{coins_fname}_{hash_snippet}_all_results.txt"
     )
 
     try:
