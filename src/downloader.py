@@ -423,12 +423,11 @@ async def load_hlcvs(symbol, start_date, end_date, exchange="binance"):
     return df[["timestamp", "high", "low", "close", "volume"]].values
 
 
-async def prepare_hlcvs(config: dict):
-    symbols = sorted(set(config["backtest"]["symbols"]))
+async def prepare_hlcvs(config: dict, exchange: str):
+    symbols = sorted(set(config["backtest"]["symbols"][exchange]))
     start_date = config["backtest"]["start_date"]
     end_date = format_end_date(config["backtest"]["end_date"])
     end_ts = date_to_ts2(end_date)
-    exchange = config["backtest"]["exchange"]
     minimum_coin_age_days = config["live"]["minimum_coin_age_days"]
     interval_ms = 60000
 
@@ -660,17 +659,18 @@ async def main():
         config = load_config(args.config_path)
     update_config_with_args(config, args)
     config = format_config(config)
-    for symbol in config["backtest"]["symbols"]:
-        try:
-            data = await load_hlcvs(
-                symbol,
-                config["backtest"]["start_date"],
-                config["backtest"]["end_date"],
-                exchange=config["backtest"]["exchange"],
-            )
-        except Exception as e:
-            logging.error(f"Error with {symbol} {e}")
-            traceback.print_exc()
+    for exchange in config["backtest"]["exchanges"]:
+        for symbol in config["backtest"]["symbols"][exchange]:
+            try:
+                data = await load_hlcvs(
+                    symbol,
+                    config["backtest"]["start_date"],
+                    config["backtest"]["end_date"],
+                    exchange=exchange,
+                )
+            except Exception as e:
+                logging.error(f"Error with {symbol} {e}")
+                traceback.print_exc()
 
 
 if __name__ == "__main__":

@@ -296,14 +296,16 @@ class Passivbot:
             self.coin_to_symbol_map = {}
         if coin in self.coin_to_symbol_map:
             return self.coin_to_symbol_map[coin]
+        coinf = symbol_to_coin(coin)
+        if coinf in self.coin_to_symbol_map:
+            self.coin_to_symbol_map[coin] = self.coin_to_symbol_map[coinf]
+            return self.coin_to_symbol_map[coinf]
         result = coin_to_symbol(
             coin,
             eligible_symbols=self.eligible_symbols,
-            coin_to_symbol_map=self.coin_to_symbol_map,
             quote=self.quote,
         )
-        if result == "":
-            self.coin_to_symbol_map[coin] = ""
+        self.coin_to_symbol_map[coin] = result
         return result
 
     async def run_execution_loop(self):

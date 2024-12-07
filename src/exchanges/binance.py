@@ -84,9 +84,9 @@ class BinanceBot(Passivbot):
         print(front_pad + "#" * (max_len + 2) + back_pad)
         print("\n\n")
 
-    async def hourly_cycle(self, verbose=True):
+    async def init_markets(self, verbose=True):
         await self.print_new_user_suggestion()
-        await super().hourly_cycle(verbose=verbose)
+        await super().init_markets(verbose=verbose)
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()

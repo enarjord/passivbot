@@ -508,7 +508,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 "base_dir": "backtests",
                 "compress_cache": True,
                 "end_date": "now",
-                "exchange": "binance",
+                "exchanges": ["binance", "bybit"],
                 "start_date": "2021-05-01",
                 "starting_balance": 100000.0,
             },

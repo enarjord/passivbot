@@ -101,6 +101,7 @@ def create_shared_memory_file(hlcvs):
     temp_file = tempfile.NamedTemporaryFile(delete=False)
     logging.info(f"Creating shared memory file: {temp_file.name}...")
     shared_memory_file = temp_file.name
+    temp_file.close()
 
     try:
         total_size = hlcvs.nbytes
@@ -176,7 +177,7 @@ def mutPolynomialBoundedWrapper(individual, eta, low, up, indpb):
 def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up):
     """
     A wrapper around DEAP's cxSimulatedBinaryBounded function to pre-process
-    bounds and handle the case where lower and upper bounds are equal.
+    bounds and handle the case where lower and upper bounds may be equal.
 
     Args:
         ind1: The first individual participating in the crossover.
@@ -258,42 +259,82 @@ def managed_mmap(filename, dtype, shape):
 
 
 class Evaluator:
-    def __init__(self, shared_memory_file, hlcvs_shape, hlcvs_dtype, config, mss, results_queue):
+    def __init__(self, shared_memory_files, hlcvs_shapes, hlcvs_dtypes, config, msss, results_queue):
         logging.info("Initializing Evaluator...")
-        self.shared_memory_file = shared_memory_file
-        self.hlcvs_shape = hlcvs_shape
-        self.hlcvs_dtype = hlcvs_dtype
+        self.shared_memory_files = shared_memory_files
+        self.hlcvs_shapes = hlcvs_shapes
+        self.hlcvs_dtypes = hlcvs_dtypes
+        self.msss = msss
+        self.exchanges = list(shared_memory_files.keys())
 
-        logging.info("Setting up managed_mmap...")
-        self.mmap_context = managed_mmap(self.shared_memory_file, self.hlcvs_dtype, self.hlcvs_shape)
-        logging.info("Entering mmap_context...")
-        self.shared_hlcvs_np = self.mmap_context.__enter__()
-        logging.info("mmap_context entered successfully.")
+        self.mmap_contexts = {}
+        self.shared_hlcvs_np = {}
+        self.exchange_params = {}
+        self.backtest_params = {}
+        for exchange in self.exchanges:
+            logging.info(f"Setting up managed_mmap for {exchange}...")
+            self.mmap_contexts[exchange] = managed_mmap(
+                self.shared_memory_files[exchange],
+                self.hlcvs_dtypes[exchange],
+                self.hlcvs_shapes[exchange],
+            )
+            self.shared_hlcvs_np[exchange] = self.mmap_contexts[exchange].__enter__()
+            _, self.exchange_params[exchange], self.backtest_params[exchange] = prep_backtest_args(
+                config, self.msss[exchange], exchange
+            )
+            logging.info(f"mmap_context entered successfully for {exchange}.")
 
         self.config = config
-        _, self.exchange_params, self.backtest_params = prep_backtest_args(config, mss)
         logging.info("Evaluator initialization complete.")
         self.results_queue = results_queue
 
     def evaluate(self, individual):
         config = individual_to_config(individual, template=self.config)
-        bot_params, _, _ = prep_backtest_args(
-            config, [], exchange_params=self.exchange_params, backtest_params=self.backtest_params
-        )
-        fills, equities, analysis = pbr.run_backtest(
-            self.shared_memory_file,
-            self.shared_hlcvs_np.shape,
-            self.shared_hlcvs_np.dtype.str,
-            bot_params,
-            self.exchange_params,
-            self.backtest_params,
-        )
-        w_0, w_1 = self.calc_fitness(analysis)
-        analysis.update({"w_0": w_0, "w_1": w_1})
-        self.results_queue.put({"analysis": analysis, "config": config})
+        analyses = {}
+        for exchange in self.exchanges:
+            bot_params, _, _ = prep_backtest_args(
+                config,
+                [],
+                exchange,
+                exchange_params=self.exchange_params[exchange],
+                backtest_params=self.backtest_params[exchange],
+            )
+            fills, equities, analysis = pbr.run_backtest(
+                self.shared_memory_files[exchange],
+                self.shared_hlcvs_np[exchange].shape,
+                self.shared_hlcvs_np[exchange].dtype.str,
+                bot_params,
+                self.exchange_params[exchange],
+                self.backtest_params[exchange],
+            )
+            analyses[exchange] = analysis
+
+        analyses_combined = self.combine_analyses(analyses)
+        w_0, w_1 = self.calc_fitness(analyses_combined)
+        analyses_combined.update({"w_0": w_0, "w_1": w_1})
+
+        data = {
+            **config,
+            **{
+                "analyses_combined": analyses_combined,
+                "analyses": analyses,
+            },
+        }
+        self.results_queue.put(data)
         return w_0, w_1
 
-    def calc_fitness(self, analysis):
+    def combine_analyses(self, analyses):
+        analyses_combined = {}
+        keys = analyses[next(iter(analyses))].keys()
+        for key in keys:
+            values = [analysis[key] for analysis in analyses.values()]
+            analyses_combined[f"{key}_mean"] = np.mean(values)
+            analyses_combined[f"{key}_min"] = np.min(values)
+            analyses_combined[f"{key}_max"] = np.max(values)
+            analyses_combined[f"{key}_std"] = np.std(values)
+        return analyses_combined
+
+    def calc_fitness(self, analyses_combined):
         modifier = 0.0
         for i, key in [
             (5, "drawdown_worst"),
@@ -302,33 +343,51 @@ class Evaluator:
             (2, "loss_profit_ratio"),
         ]:
             modifier += (
-                max(self.config["optimize"]["limits"][f"lower_bound_{key}"], analysis[key])
+                max(
+                    self.config["optimize"]["limits"][f"lower_bound_{key}"],
+                    analyses_combined[f"{key}_max"],
+                )
                 - self.config["optimize"]["limits"][f"lower_bound_{key}"]
             ) * 10**i
-        if analysis["drawdown_worst"] >= 1.0 or analysis["equity_balance_diff_max"] < 0.1:
+        if (
+            analyses_combined["drawdown_worst_max"] >= 1.0
+            or analyses_combined["equity_balance_diff_max_max"] >= 1.0
+        ):
             w_0 = w_1 = modifier
         else:
-            w_0 = modifier - analysis[self.config["optimize"]["scoring"][0]]
-            w_1 = modifier - analysis[self.config["optimize"]["scoring"][1]]
+            scoring_key_0 = f"{self.config['optimize']['scoring'][0]}_mean"
+            scoring_key_1 = f"{self.config['optimize']['scoring'][1]}_mean"
+            w_0 = modifier - analyses_combined[scoring_key_0]
+            w_1 = modifier - analyses_combined[scoring_key_1]
         return w_0, w_1
 
     def __del__(self):
-        if hasattr(self, "mmap_context"):
-            self.mmap_context.__exit__(None, None, None)
+        if hasattr(self, "mmap_contexts"):
+            for mmap_context in self.mmap_contexts.values():
+                mmap_context.__exit__(None, None, None)
 
     def __getstate__(self):
-        # This method is called when pickling. We exclude mmap_context and shared_hlcvs_np
+        # This method is called when pickling. We exclude mmap_contexts and shared_hlcvs_np
         state = self.__dict__.copy()
-        del state["mmap_context"]
+        del state["mmap_contexts"]
         del state["shared_hlcvs_np"]
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-        self.mmap_context = managed_mmap(self.shared_memory_file, self.hlcvs_dtype, self.hlcvs_shape)
-        self.shared_hlcvs_np = self.mmap_context.__enter__()
-        if self.shared_hlcvs_np is None:
-            print("Warning: Unable to recreate shared memory mapping during unpickling.")
+        self.mmap_contexts = {}
+        self.shared_hlcvs_np = {}
+        for exchange in self.exchanges:
+            self.mmap_contexts[exchange] = managed_mmap(
+                self.shared_memory_files[exchange],
+                self.hlcvs_dtypes[exchange],
+                self.hlcvs_shapes[exchange],
+            )
+            self.shared_hlcvs_np[exchange] = self.mmap_contexts[exchange].__enter__()
+            if self.shared_hlcvs_np[exchange] is None:
+                print(
+                    f"Warning: Unable to recreate shared memory mapping during unpickling for {exchange}."
+                )
 
 
 def add_extra_options(parser):
@@ -431,23 +490,36 @@ async def main():
     old_config = deepcopy(config)
     update_config_with_args(config, args)
     config = format_config(config)
-    symbols, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config)
-    config["backtest"]["symbols"] = symbols
-    config["backtest"]["cache_dir"] = str(cache_dir)
+    exchanges = config["backtest"]["exchanges"]
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
-    coins = [symbol_to_coin(s) for s in config["backtest"]["symbols"]]
+    coins = sorted(
+        set([symbol_to_coin(x) for y in config["backtest"]["symbols"].values() for x in y])
+    )
     coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
     hash_snippet = uuid4().hex[:8]
     config["results_filename"] = make_get_filepath(
-        f"optimize_results/{date_fname}_{coins_fname}_{hash_snippet}_all_results.txt"
+        f"optimize_results/{date_fname}_{'_'.join(exchanges)}_{coins_fname}_{hash_snippet}_all_results.txt"
     )
 
     try:
-        required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
-        check_disk_space(tempfile.gettempdir(), required_space)
-        logging.info(f"Starting to create shared memory file...")
-        shared_memory_file = create_shared_memory_file(hlcvs)
-        logging.info(f"Finished creating shared memory file: {shared_memory_file}")
+        # Prepare data for each exchange
+        hlcvs_dict = {}
+        shared_memory_files = {}
+        hlcvs_shapes = {}
+        hlcvs_dtypes = {}
+        msss = {}
+        for exchange in exchanges:
+            symbols, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
+            hlcvs_dict[exchange] = hlcvs
+            hlcvs_shapes[exchange] = hlcvs.shape
+            hlcvs_dtypes[exchange] = hlcvs.dtype
+            msss[exchange] = mss
+            required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
+            check_disk_space(tempfile.gettempdir(), required_space)
+            logging.info(f"Starting to create shared memory file for {exchange}...")
+            shared_memory_file = create_shared_memory_file(hlcvs)
+            shared_memory_files[exchange] = shared_memory_file
+            logging.info(f"Finished creating shared memory file for {exchange}: {shared_memory_file}")
 
         # Create results queue and start manager process
         manager = multiprocessing.Manager()
@@ -461,7 +533,7 @@ async def main():
 
         # Initialize evaluator with results queue
         evaluator = Evaluator(
-            shared_memory_file, hlcvs.shape, hlcvs.dtype, config, mss, results_queue
+            shared_memory_files, hlcvs_shapes, hlcvs_dtypes, config, msss, results_queue
         )
 
         logging.info(f"Finished initializing evaluator...")
@@ -596,12 +668,14 @@ async def main():
             pool.terminate()
             pool.join()
 
-        if shared_memory_file and os.path.exists(shared_memory_file):
-            logging.info(f"Removing shared memory file: {shared_memory_file}")
-            try:
-                os.unlink(shared_memory_file)
-            except Exception as e:
-                logging.error(f"Error removing shared memory file: {e}")
+        # Remove shared memory files
+        for shared_memory_file in shared_memory_files.values():
+            if shared_memory_file and os.path.exists(shared_memory_file):
+                logging.info(f"Removing shared memory file: {shared_memory_file}")
+                try:
+                    os.unlink(shared_memory_file)
+                except Exception as e:
+                    logging.error(f"Error removing shared memory file: {e}")
 
         logging.info("Cleanup complete. Exiting.")
         sys.exit(0)

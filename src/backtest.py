@@ -142,15 +142,19 @@ def check_keys(dict0, dict1):
     return check_nested(dict0, dict1)
 
 
-def get_cache_hash(config):
-    to_hash = {k: config["backtest"][k] for k in ["end_date", "exchange", "start_date", "symbols"]}
-    to_hash["end_date"] = format_end_date(to_hash["end_date"])
+def get_cache_hash(config, exchange):
+    to_hash = {
+        "symbols": config["backtest"]["symbols"][exchange],
+        "end_date": format_end_date(config["backtest"]["end_date"]),
+        "start_date": config["backtest"]["start_date"],
+        "exchange": exchange,
+    }
     to_hash["minimum_coin_age_days"] = config["live"]["minimum_coin_age_days"]
     return calc_hash(to_hash)
 
 
-def load_symbols_hlcvs_from_cache(config):
-    cache_hash = get_cache_hash(config)
+def load_symbols_hlcvs_from_cache(config, exchange):
+    cache_hash = get_cache_hash(config, exchange)
     cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
     if os.path.exists(cache_dir):
         symbols = json.load(open(cache_dir / "symbols.json"))
@@ -166,8 +170,8 @@ def load_symbols_hlcvs_from_cache(config):
         return cache_dir, symbols, hlcvs
 
 
-def save_symbols_hlcvs_to_cache(config, symbols, hlcvs):
-    cache_hash = get_cache_hash(config)
+def save_symbols_hlcvs_to_cache(config, symbols, hlcvs, exchange):
+    cache_hash = get_cache_hash(config, exchange)
     cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
     cache_dir.mkdir(parents=True, exist_ok=True)
     if all([os.path.exists(cache_dir / x) for x in ["symbols.json", "hlcvs.npy"]]):
@@ -201,10 +205,10 @@ def save_symbols_hlcvs_to_cache(config, symbols, hlcvs):
     return cache_dir
 
 
-async def prepare_hlcvs_mss(config):
+async def prepare_hlcvs_mss(config, exchange):
     results_path = oj(
         config["backtest"]["base_dir"],
-        config["backtest"]["exchange"],
+        exchange,
         "",
     )
     mss_path = oj(
@@ -213,7 +217,7 @@ async def prepare_hlcvs_mss(config):
     )
     try:
         sts = utc_ms()
-        result = load_symbols_hlcvs_from_cache(config)
+        result = load_symbols_hlcvs_from_cache(config, exchange)
         if result:
             logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
             cache_dir, symbols, hlcvs = result
@@ -223,7 +227,7 @@ async def prepare_hlcvs_mss(config):
     except:
         logging.info(f"Unable to load hlcvs data from cache. Fetching...")
     try:
-        mss = fetch_market_specific_settings_multi(exchange=config["backtest"]["exchange"])
+        mss = fetch_market_specific_settings_multi(exchange=exchange)
         json.dump(mss, open(make_get_filepath(mss_path), "w"))
     except Exception as e:
         logging.error(f"failed to fetch market specific settings {e}")
@@ -233,10 +237,10 @@ async def prepare_hlcvs_mss(config):
         except:
             raise Exception("failed to load market specific settings from cache")
 
-    symbols, timestamps, hlcvs = await prepare_hlcvs(config)
+    symbols, timestamps, hlcvs = await prepare_hlcvs(config, exchange)
     logging.info(f"Finished preparing hlcvs data. Shape: {hlcvs.shape}")
     try:
-        cache_dir = save_symbols_hlcvs_to_cache(config, symbols, hlcvs)
+        cache_dir = save_symbols_hlcvs_to_cache(config, symbols, hlcvs, exchange)
     except Exception as e:
         logging.error(f"failed to save hlcvs to cache {e}")
         traceback.print_exc()
@@ -244,8 +248,8 @@ async def prepare_hlcvs_mss(config):
     return symbols, hlcvs, mss, results_path, cache_dir
 
 
-def prep_backtest_args(config, mss, exchange_params=None, backtest_params=None):
-    symbols = sorted(set(config["backtest"]["symbols"]))  # sort for consistency
+def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_params=None):
+    symbols = sorted(set(config["backtest"]["symbols"][exchange]))  # sort for consistency
     bot_params = {k: config["bot"][k].copy() for k in ["long", "short"]}
     for pside in bot_params:
         bot_params[pside]["wallet_exposure_limit"] = (
@@ -267,8 +271,8 @@ def prep_backtest_args(config, mss, exchange_params=None, backtest_params=None):
     return bot_params, exchange_params, backtest_params
 
 
-def run_backtest(hlcvs, mss, config: dict):
-    bot_params, exchange_params, backtest_params = prep_backtest_args(config, mss)
+def run_backtest(hlcvs, mss, config: dict, exchange: str):
+    bot_params, exchange_params, backtest_params = prep_backtest_args(config, mss, exchange)
     logging.info(f"Backtesting...")
     sts = utc_ms()
 
@@ -286,11 +290,13 @@ def run_backtest(hlcvs, mss, config: dict):
     return fills, equities, analysis
 
 
-def post_process(config, hlcvs, fills, equities, analysis, results_path):
+def post_process(config, hlcvs, fills, equities, analysis, results_path, exchange):
     sts = utc_ms()
     fdf = process_forager_fills(fills)
     equities = pd.Series(equities)
-    analysis_py, bal_eq = analyze_fills_forager(config["backtest"]["symbols"], hlcvs, fdf, equities)
+    analysis_py, bal_eq = analyze_fills_forager(
+        config["backtest"]["symbols"][exchange], hlcvs, fdf, equities
+    )
     for k in analysis_py:
         if k not in analysis:
             analysis[k] = analysis_py[k]
@@ -305,7 +311,7 @@ def post_process(config, hlcvs, fills, equities, analysis, results_path):
     fdf.to_csv(f"{results_path}fills.csv")
     bal_eq.to_csv(oj(results_path, "balance_and_equity.csv"))
     if not config["disable_plotting"]:
-        plot_forager(results_path, config["backtest"]["symbols"], fdf, bal_eq, hlcvs)
+        plot_forager(results_path, config["backtest"]["symbols"][exchange], fdf, bal_eq, hlcvs)
 
 
 def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcvs):
@@ -363,11 +369,13 @@ async def main():
     update_config_with_args(config, args)
     config = format_config(config)
     config["disable_plotting"] = args.disable_plotting
-    symbols, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config)
-    config["backtest"]["symbols"] = symbols
-    config["backtest"]["cache_dir"] = str(cache_dir)
-    fills, equities, analysis = run_backtest(hlcvs, mss, config)
-    post_process(config, hlcvs, fills, equities, analysis, results_path)
+    config["backtest"]["cache_dir"] = {}
+    for exchange in config["backtest"]["exchanges"]:
+        symbols, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
+        config["backtest"]["symbols"][exchange] = symbols
+        config["backtest"]["cache_dir"][exchange] = str(cache_dir)
+        fills, equities, analysis = run_backtest(hlcvs, mss, config, exchange)
+        post_process(config, hlcvs, fills, equities, analysis, results_path, exchange)
 
 
 if __name__ == "__main__":

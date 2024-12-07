@@ -142,15 +142,32 @@ def process_single(file_location, verbose=False):
     for x in data_generator(file_location, verbose=verbose):
         if x:
             xs.append(x)
+    if not xs:
+        print_(f"No valid data found in {file_location}")
+        return None
     print_("Processing...")
     res = pd.DataFrame([flatten_dict(x) for x in xs])
 
+    # Determine the prefix based on the data
+    if "analyses_combined" in xs[0]:
+        analysis_prefix = "analyses_combined_"
+        analysis_key = "analyses_combined"
+    elif "analysis" in xs[0]:
+        analysis_prefix = "analysis_"
+        analysis_key = "analysis"
+    else:
+        raise Exception("Neither 'analyses_combined' nor 'analysis' found in data")
+
     keys, higher_is_better = ["w_0", "w_1"], [False, False]
-    keys = ["analysis_" + key for key in keys]
-    candidates = res[(res.analysis_w_0 <= 0.0) & (res.analysis_w_1 <= 0.0)][keys]
+    keys = [analysis_prefix + key for key in keys]
+    print_("n backtests", len(res))
+
+    # Adjust the filtering condition based on the prefix
+    res_keys_w_0 = res[analysis_prefix + "w_0"]
+    res_keys_w_1 = res[analysis_prefix + "w_1"]
+    candidates = res[(res_keys_w_0 <= 0.0) & (res_keys_w_1 <= 0.0)][keys]
     if len(candidates) == 0:
         candidates = res[keys]
-    print_("n backtests", len(res))
     print_("n candidates", len(candidates))
     if len(candidates) == 1:
         best = candidates.iloc[0].name
@@ -172,15 +189,19 @@ def process_single(file_location, verbose=False):
         print_("best")
         print_(candidates.loc[best])
         print_("pareto front:")
-        res_to_print = res[[x for x in res.columns if "analysis" in x]].loc[closest_to_ideal.index]
-        res_to_print.columns = [x.replace("analysis_", "") for x in res_to_print.columns]
+        res_to_print = res[[x for x in res.columns if analysis_prefix[:-1] in x]].loc[
+            closest_to_ideal.index
+        ]
+        res_to_print.columns = [x.replace(analysis_prefix, "") for x in res_to_print.columns]
         print_(res_to_print)
 
     # Processing the best result for configuration
     best_d = xs[best]
-    best_d["analysis"]["n_iters"] = len(xs)
-    best_d.update(deepcopy(best_d["config"]))
-    del best_d["config"]
+    # Adjust for 'analysis' or 'analyses_combined'
+    best_d[analysis_key]["n_iters"] = len(xs)
+    if "config" in best_d:
+        best_d.update(deepcopy(best_d["config"]))
+        del best_d["config"]
     fjson = config_pretty_str(best_d)
     print_(fjson)
     coins = [s.replace("USDT", "") for s in best_d["backtest"]["symbols"]]
@@ -189,6 +210,10 @@ def process_single(file_location, verbose=False):
     base_path = os.path.split(full_path)[0]
     full_path = make_get_filepath(full_path.replace(base_path, base_path + "_analysis/"))
     pareto_to_dump = [x for i, x in enumerate(xs) if i in pareto.index]
+    for i in range(len(pareto_to_dump)):
+        if "config" in pareto_to_dump[i]:
+            pareto_to_dump[i].update(deepcopy(pareto_to_dump[i]["config"]))
+            del pareto_to_dump[i]["config"]
     with open(full_path.replace(".json", "_pareto.txt"), "w") as f:
         for x in pareto_to_dump:
             f.write(json.dumps(x) + "\n")

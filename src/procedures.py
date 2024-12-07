@@ -132,9 +132,7 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
         result = template
     elif all([k in config for k in template]):
         result = deepcopy(config)
-    elif all([k in config for k in ["analysis", "config"]]) and all(
-        [k in config["config"] for k in template]
-    ):
+    elif "config" in config and all([k in config["config"] for k in template]):
         result = deepcopy(config["config"])
     elif "bot" in config and "live" in config:
         # live only config
@@ -184,6 +182,13 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
             if verbose:
                 print(f"renaming parameter {k0} {src}: {dst}")
             del result[k0][src]
+    if "exchange" in result["backtest"] and isinstance(result["backtest"]["exchange"], str):
+        result["backtest"]["exchanges"] = [result["backtest"]["exchange"]]
+        if verbose:
+            print(
+                f"changed backtest.exchange: {result['backtest']['exchange']} -> backtest.exchanges: [{result['backtest']['exchange']}]"
+            )
+        del result["backtest"]["exchange"]
     for k0 in template:
         for k1 in template[k0]:
             if k0 not in result:
@@ -218,31 +223,36 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                     "long": deepcopy(result["live"][k_coins]),
                     "short": deepcopy(result["live"][k_coins]),
                 }
-        eligible_symbols = get_all_eligible_symbols(result["backtest"]["exchange"])
-        ignored_coins = coins_to_symbols(
-            set(flatten(result["live"]["ignored_coins"].values())),
-            eligible_symbols=eligible_symbols,
-            verbose=verbose,
-        )
-        approved_coins = coins_to_symbols(
-            set(flatten(result["live"]["approved_coins"].values())),
-            eligible_symbols=eligible_symbols,
-            verbose=verbose,
-        )
-        if approved_coins:
-            result["backtest"]["symbols"] = [
-                x
-                for x in coins_to_symbols(
-                    sorted(approved_coins), exchange=result["backtest"]["exchange"], verbose=verbose
-                )
-                if x not in ignored_coins
-            ]
-        else:
-            result["backtest"]["symbols"] = [
-                s
-                for s in sorted(get_all_eligible_symbols(result["backtest"]["exchange"]))
-                if s not in ignored_coins
-            ]
+        result["backtest"]["symbols"] = {}
+        for exchange in result["backtest"]["exchanges"]:
+            eligible_symbols = get_all_eligible_symbols(exchange)
+            ignored_coins = coins_to_symbols(
+                set(flatten(result["live"]["ignored_coins"].values())),
+                eligible_symbols=eligible_symbols,
+                exchange=exchange,
+                verbose=verbose,
+            )
+            approved_coins = coins_to_symbols(
+                set(flatten(result["live"]["approved_coins"].values())),
+                eligible_symbols=eligible_symbols,
+                exchange=exchange,
+                verbose=verbose,
+            )
+            if approved_coins:
+                result["backtest"]["symbols"][exchange] = [
+                    x
+                    for x in coins_to_symbols(
+                        sorted(approved_coins),
+                        eligible_symbols=eligible_symbols,
+                        exchange=exchange,
+                        verbose=verbose,
+                    )
+                    if x not in ignored_coins
+                ]
+            else:
+                result["backtest"]["symbols"][exchange] = [
+                    s for s in sorted(get_all_eligible_symbols(exchange)) if s not in ignored_coins
+                ]
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
     return result
 
@@ -291,49 +301,26 @@ def get_all_eligible_symbols(exchange="binance"):
         raise Exception("unable to fetch or load from cache")
 
 
-def coin_to_symbol(coin, eligible_symbols=None, coin_to_symbol_map={}, quote="USDT", verbose=True):
-    # side effect: coin_to_symbol_map might get mutated
+def coin_to_symbol(coin, eligible_symbols=None, quote="USDT", verbose=True):
     if eligible_symbols is None:
         eligible_symbols = get_all_eligible_symbols()
-    if coin in coin_to_symbol_map:
-        return coin_to_symbol_map[coin]
-
-    # first check if coin/quote:quote has a match
-    candidate_symbol = f"{coin}/{quote}:{quote}"
-    if candidate_symbol in eligible_symbols:
-        coin_to_symbol_map[coin] = candidate_symbol
-        return candidate_symbol
-
-    # next check if there is a single match
+    # first check if there is a single match
     candidates = {s for s in eligible_symbols if coin in s}
     if len(candidates) == 1:
-        coin_to_symbol_map[coin] = next(iter(candidates))
-        return coin_to_symbol_map[coin]
+        return next(iter(candidates))
+
+    # next check if coin/quote:quote has a match
+    candidate_symbol = f"{coin}/{quote}:{quote}"
+    if candidate_symbol in eligible_symbols:
+        return candidate_symbol
 
     # next format coin (e.g. 1000SHIB -> SHIB, kPEPE -> PEPE, etc)
     coinf = symbol_to_coin(coin)
-    if coin in coin_to_symbol_map:
-        coin_to_symbol_map[coin] = coin_to_symbol_map[coinf]
-        return coin_to_symbol_map[coin]
-
-    # first check if coinf/quote:quote has a match
-    candidate_symbol = f"{coinf}/{quote}:{quote}"
-    if candidate_symbol in eligible_symbols:
-        coin_to_symbol_map[coin] = candidate_symbol
-        return candidate_symbol
-
-    # next check if there is a single match
-    candidates = {s for s in eligible_symbols if coinf in s}
-    if len(candidates) == 1:
-        coin_to_symbol_map[coin] = next(iter(candidates))
-        return coin_to_symbol_map[coin]
-
     # next check if multiple matches
     if len(candidates) > 1:
         for candidate in candidates:
             candidate_coin = symbol_to_coin(candidate)
             if candidate_coin == coinf:
-                coin_to_symbol_map[coin] = candidate
                 return candidate
         if verbose:
             print(f"coin_to_symbol {coinf}: ambiguous coin, multiple candidates {candidates}")
@@ -343,32 +330,10 @@ def coin_to_symbol(coin, eligible_symbols=None, coin_to_symbol_map={}, quote="US
     return ""
 
 
-def coin_to_symbol_old(coin: str, eligible_symbols=None, verbose=True):
-    # formats coin to appropriate symbol
-    if eligible_symbols is None:
-        eligible_symbols = get_all_eligible_symbols()
-    coin = symbol_to_coin(coin)
-    candidates = [x for x in eligible_symbols if coin in x]
-    if len(candidates) == 1:
-        return candidates[0]
-    if len(candidates) == 0:
-        if verbose:
-            print(f"no candidate symbol found for {coin}")
-        return None
-    for x in candidates:
-        if x.replace("USDT", "") == coin:
-            return x
-    if coin == "":
-        return None
-    if verbose:
-        print(f"ambiguous coin: {coin}, candidates: {candidates}")
-    return None
-
-
 def coins_to_symbols(coins: [str], eligible_symbols=None, exchange=None, verbose=True):
     if eligible_symbols is None:
         eligible_symbols = get_all_eligible_symbols(exchange)
-    symbols = [coin_to_symbol(x, eligible_symbols, verbose=verbose) for x in coins]
+    symbols = [coin_to_symbol(x, eligible_symbols=eligible_symbols, verbose=verbose) for x in coins]
     return sorted(set([x for x in symbols if x]))
 
 
@@ -388,6 +353,7 @@ def load_config(filepath: str, live_only=False, verbose=True) -> dict:
         config = format_config(config, live_only=live_only, verbose=verbose)
         return config
     except Exception as e:
+        traceback.print_exc()
         raise Exception(f"failed to load config {filepath}: {e}")
 
 
@@ -1416,8 +1382,9 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             elif "approved_coins" in full_name:
                 acronym = "s"
                 type_ = comma_separated_values
-            elif "ignored_coins" in full_name:
+            elif any([x in full_name for x in ["ignored_coins", "exchanges"]]):
                 type_ = comma_separated_values
+                appendix = "item1,item2,item3,..."
             elif "optimize_scoring" in full_name:
                 type_ = comma_separated_values
                 acronym = "os"
