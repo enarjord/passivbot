@@ -316,6 +316,7 @@ def coin_to_symbol(coin, eligible_symbols=None, quote="USDT", verbose=True):
 
     # next format coin (e.g. 1000SHIB -> SHIB, kPEPE -> PEPE, etc)
     coinf = symbol_to_coin(coin)
+    candidates = {s for s in eligible_symbols if coinf in s}
     # next check if multiple matches
     if len(candidates) > 1:
         for candidate in candidates:
@@ -323,10 +324,10 @@ def coin_to_symbol(coin, eligible_symbols=None, quote="USDT", verbose=True):
             if candidate_coin == coinf:
                 return candidate
         if verbose:
-            print(f"coin_to_symbol {coinf}: ambiguous coin, multiple candidates {candidates}")
+            print(f"coin_to_symbol {coin} {coinf}: ambiguous coin, multiple candidates {candidates}")
     else:
         if verbose:
-            print(f"coin_to_symbol no candidate symbol for {coinf}")
+            print(f"coin_to_symbol no candidate symbol for {coin} {coinf}")
     return ""
 
 
