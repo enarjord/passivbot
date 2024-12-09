@@ -317,6 +317,8 @@ def coin_to_symbol(coin, eligible_symbols=None, quote="USDT", verbose=True):
     # next format coin (e.g. 1000SHIB -> SHIB, kPEPE -> PEPE, etc)
     coinf = symbol_to_coin(coin)
     candidates = {s for s in eligible_symbols if coinf in s}
+    if len(candidates) == 1:
+        return next(iter(candidates))
     # next check if multiple matches
     if len(candidates) > 1:
         for candidate in candidates:
