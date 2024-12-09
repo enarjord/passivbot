@@ -57,7 +57,7 @@
  "live": {"approved_coins": [],
           "auto_gs": true,
           "coin_flags": {},
-          "empty_means_all_approved": false,
+          "empty_means_all_approved": true,
           "execution_delay_seconds": 2.0,
           "filter_by_min_effective_cost": true,
           "forced_mode_long": "",
