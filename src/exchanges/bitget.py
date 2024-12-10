@@ -136,6 +136,11 @@ class BitgetBot(Passivbot):
                 and balance_info["assetMode"] == "union"
             ):
                 balance = float(balance_info["unionTotalMargin"])
+                balance = float(balance_info["available"])
+                for elm in balance_info["assetList"]:
+                    balance += float(elm["balance"]) * self.get_last_price(
+                        self.coin_to_symbol(elm["coin"])
+                    )
                 if not hasattr(self, "previous_rounded_balance"):
                     self.previous_rounded_balance = balance
                 self.previous_rounded_balance = hysteresis_rounding(
