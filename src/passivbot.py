@@ -276,14 +276,14 @@ class Passivbot:
             symbols=symbols, exchange=self.exchange
         )
         self.first_timestamps.update(first_timestamps)
-        for s in sorted(self.first_timestamps):
-            sf = self.coin_to_symbol(s)
-            if sf not in self.first_timestamps:
-                self.first_timestamps[sf] = self.first_timestamps[s]
-        for s in symbols:
-            if s not in self.first_timestamps:
+        for symbol in sorted(self.first_timestamps):
+            symbolf = self.coin_to_symbol(symbol)
+            if symbolf not in self.first_timestamps:
+                self.first_timestamps[symbolf] = self.first_timestamps[symbol]
+        for symbol in symbols:
+            if symbol not in self.first_timestamps:
                 logging.info(f"warning: unable to get first timestamp for {symbol}. Setting to zero.")
-                self.first_timestamps[s] = 0.0
+                self.first_timestamps[symbol] = 0.0
 
     def get_first_timestamp(self, symbol):
         if symbol not in self.first_timestamps:
@@ -1382,14 +1382,17 @@ class Passivbot:
                 (calc_diff(x[1], self.get_last_price(symbol)), x) for x in ideal_orders[symbol]
             ]
             seen = set()
+            any_partial = any(["partial" in order[2] for _, order in with_pprice_diff])
             for pprice_diff, order in sorted(with_pprice_diff):
                 position_side = "long" if "long" in order[2] else "short"
                 if order[0] == 0.0:
                     continue
                 if pprice_diff > self.config["live"]["price_distance_threshold"]:
-                    if not self.has_position(position_side, symbol):
+                    if any_partial and "entry" in order[2]:
                         continue
                     if any([x in order[2] for x in ["initial", "unstuck"]]):
+                        continue
+                    if not self.has_position(position_side, symbol):
                         continue
                 seen_key = str(abs(order[0])) + str(order[1]) + order[2]
                 if seen_key in seen:
