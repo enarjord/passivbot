@@ -86,6 +86,7 @@ pub fn run_backtest(
         let py_analysis = PyDict::new(py);
         py_analysis.set_item("adg", analysis.adg)?;
         py_analysis.set_item("mdg", analysis.mdg)?;
+        py_analysis.set_item("gain", analysis.gain)?;
         py_analysis.set_item("sharpe_ratio", analysis.sharpe_ratio)?;
         py_analysis.set_item("sortino_ratio", analysis.sortino_ratio)?;
         py_analysis.set_item("omega_ratio", analysis.omega_ratio)?;

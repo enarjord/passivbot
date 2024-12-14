@@ -216,6 +216,7 @@ pub struct Fill {
 pub struct Analysis {
     pub adg: f64,
     pub mdg: f64,
+    pub gain: f64,
     pub sharpe_ratio: f64,
     pub sortino_ratio: f64,
     pub omega_ratio: f64,
@@ -234,6 +235,7 @@ impl Default for Analysis {
         Analysis {
             adg: 0.0,
             mdg: 0.0,
+            gain: 0.0,
             sharpe_ratio: 0.0,
             sortino_ratio: 0.0,
             omega_ratio: 0.0,

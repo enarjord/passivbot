@@ -1447,6 +1447,9 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
 }
 
 pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
+    if fills.len() <= 1 {
+        return Analysis::default();
+    }
     // Calculate daily equities
     let mut daily_eqs = Vec::new();
     let mut current_day = 0;
@@ -1603,6 +1606,7 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
                 (sum + diff, f64::max(max, diff))
             });
     let equity_balance_diff_mean = equity_balance_diff_sum / bal_eq.len() as f64;
+    let gain = fills[fills.len() - 1].balance / fills[0].balance;
 
     // Calculate profit factor
     let (total_profit, total_loss) = fills.iter().fold((0.0, 0.0), |(profit, loss), fill| {
@@ -1621,6 +1625,7 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     Analysis {
         adg,
         mdg,
+        gain,
         sharpe_ratio,
         sortino_ratio,
         omega_ratio,
