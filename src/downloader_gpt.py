@@ -73,8 +73,8 @@ def load_ohlcv_data(filepath: str) -> pd.DataFrame:
 
 def get_days_in_between(start_day, end_day):
     date_format = "%Y-%m-%d"
-    start_date = datetime.datetime.strptime(start_day, date_format)
-    end_date = datetime.datetime.strptime(end_day, date_format)
+    start_date = datetime.datetime.strptime(start_day[:10], date_format)
+    end_date = datetime.datetime.strptime(end_day[:10], date_format)
     days = []
     current_date = start_date
     while current_date <= end_date:
@@ -188,18 +188,20 @@ class BinanceDownloader(BaseDownloader):
         end_date = format_end_date(end_date)
         start_ts = date_to_ts2(start_date)
         end_ts = date_to_ts2(end_date)
-        days = [
-            ts_to_date_utc(x)[:10] for x in range(int(start_ts), int(end_ts), 1000 * 60 * 60 * 24)
-        ]
+        days = get_days_in_between(start_date, end_date)
         months = sorted({x[:7] for x in days})
         base_url = "https://data.binance.vision/data/futures/um/"
         # Download monthly
+        tasks = []
         for month in months:
             fpath = os.path.join(dirpath, month + ".npy")
             if not os.path.exists(fpath):
                 url = base_url + f"monthly/klines/{symbol}/1m/{symbol}-1m-{month}.zip"
                 logging.info(f"Downloading Binance monthly data for {symbol}: {month}")
-                await self.download_single(url, fpath)
+                await check_rate_limit()
+                tasks.append(asyncio.create_task(self.download_single(url, fpath)))
+        for task in tasks:
+            await task
 
         # Download daily for any gap months
         fnames = os.listdir(dirpath)
@@ -208,12 +210,15 @@ class BinanceDownloader(BaseDownloader):
             day: os.path.join(dirpath, day + ".npy") for day in days if (day[:7] not in months_done)
         }
 
+        tasks = []
         for day, fpath in missing_days.items():
             if not os.path.exists(fpath):
                 url = base_url + f"daily/klines/{symbol}/1m/{symbol}-1m-{day}.zip"
                 logging.info(f"Downloading Binance daily data for {symbol}: {day}")
-
-                await self.download_single(url, fpath)
+                await check_rate_limit()
+                tasks.append(asyncio.create_task(self.download_single(url, fpath)))
+        for task in tasks:
+            await task
 
         # Cleanup days contained in months
         fnames = os.listdir(dirpath)
@@ -262,10 +267,13 @@ class BitgetDownloader(BaseDownloader):
             url = f"{base_url}{symbol}/{symbol}_UMCBL_1min_{day.replace('-', '')}.zip"
             logging.info(f"Downloading Bitget daily data for {symbol}: {day}")
             await check_rate_limit()
-            tasks.append((symbol, day, asyncio.create_task(get_zip_bitget(url))))
-        for symbol, day, task in tasks:
-            res = await task
-            dump_ohlcv_data(ensure_millis(res), os.path.join(dirpath, day + '.npy'))
+            tasks.append(asyncio.create_task(self.download_single(url, os.path.join(dirpath, day + '.npy'))))
+        for task in tasks:
+            try:
+                await task
+            except Exception as e:
+                logging.error(f"Error with Bitget downloader for {symbol} {e}")
+                #traceback.print_exc()
 
         # Load all data
         all_files = [f for f in os.listdir(dirpath) if f.endswith(".npy")]
@@ -279,6 +287,10 @@ class BitgetDownloader(BaseDownloader):
         df = df.set_index("timestamp").reindex(nindex).ffill().reset_index()
         df = df.rename(columns={"index": "timestamp"})
         return self.filter_date_range(df, start_date, end_date)
+
+    async def download_single(self, url, fpath):
+        res = await get_zip_bitget(url)
+        dump_ohlcv_data(ensure_millis(res), fpath)
 
 
 class BybitDownloader(BaseDownloader):
@@ -448,15 +460,53 @@ class GateioDownloader(BaseDownloader):
         return self.filter_date_range(df, start_date, end_date)
 
 
-# ========================= ENTRY POINTS =========================
+async def main2():
+    parser = argparse.ArgumentParser(prog="downloader", description="download hlcv data")
+    parser.add_argument(
+        "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
+    )
+    template_config = get_template_live_config("v7")
+    del template_config["optimize"]
+    del template_config["bot"]
+    keep_live_keys = {
+        "approved_coins",
+        "minimum_coin_age_days",
+    }
+    del template_config["backtest"]["base_dir"]
+    for key in sorted(template_config["live"]):
+        if key not in keep_live_keys:
+            del template_config["live"][key]
+    add_arguments_recursively(parser, template_config)
+    args = parser.parse_args()
+    if args.config_path is None:
+        logging.info(f"loading default template config configs/template.json")
+        config = load_config("configs/template.json")
+    else:
+        logging.info(f"loading config {args.config_path}")
+        config = load_config(args.config_path)
+    update_config_with_args(config, args)
+    config = format_config(config)
+    config['backtest']['exchanges'] = ['binance', 'bybit', 'gateio', 'bitget']
+    for exchange in config["backtest"]["exchanges"]:
+        for symbol in config["backtest"]["symbols"][exchange]:
+            try:
+                data = await load_hlcvs(
+                    symbol,
+                    config["backtest"]["start_date"],
+                    config["backtest"]["end_date"],
+                    exchange=exchange,
+                )
+            except Exception as e:
+                logging.error(f"Error with {symbol} {e}")
+                traceback.print_exc()
 
 
 async def main():
     parser = argparse.ArgumentParser(description="Download OHLCV data")
     parser.add_argument("--exchange", type=str, default="binance")
     parser.add_argument("--symbol", type=str, default="BTC/USDT:USDT")
-    parser.add_argument("--start_date", type=str, default="2021-01-01")
-    parser.add_argument("--end_date", type=str, default="2021-03-01")
+    parser.add_argument("--start_date", type=str, default="2022-01-01")
+    parser.add_argument("--end_date", type=str, default="2022-03-01")
     args = parser.parse_args()
 
     # tests
