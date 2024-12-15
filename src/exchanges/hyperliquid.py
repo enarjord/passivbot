@@ -69,13 +69,13 @@ class HyperliquidBot(Passivbot):
                 10.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
             )
             self.min_costs[symbol] *= 1.1
-            self.qty_steps[symbol] = round_(10 ** -elm["precision"]["amount"], 0.0000000001)
+            self.qty_steps[symbol] = elm["precision"]["amount"]
             self.min_qtys[symbol] = (
                 self.qty_steps[symbol]
                 if elm["limits"]["amount"]["min"] is None
                 else elm["limits"]["amount"]["min"]
             )
-            self.price_steps[symbol] = round_(10 ** -elm["precision"]["price"], 0.0000000001)
+            self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
             self.max_leverage[symbol] = (
                 int(elm["info"]["maxLeverage"]) if "maxLeverage" in elm["info"] else 0
