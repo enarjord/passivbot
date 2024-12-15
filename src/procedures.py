@@ -329,7 +329,7 @@ def coin_to_symbol(coin, eligible_symbols=None, quote="USDT", verbose=True):
             print(f"coin_to_symbol {coin} {coinf}: ambiguous coin, multiple candidates {candidates}")
     else:
         if verbose:
-            print(f"coin_to_symbol no candidate symbol for {coin} {coinf}")
+            print(f"coin_to_symbol no candidate symbol for {coin}, {coinf}")
     return ""
 
 
