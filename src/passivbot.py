@@ -358,7 +358,7 @@ class Passivbot:
         if self.debug_mode:
             if to_cancel:
                 print("would cancel:")
-            for x in to_cancel[: self.config["live"]["max_n_cancellations_per_batch"]]:
+            for x in to_cancel:
                 pprint.pprint(x)
         else:
             res = await self.execute_cancellations(
@@ -370,7 +370,7 @@ class Passivbot:
         if self.debug_mode:
             if to_create:
                 print("would create:")
-            for x in to_create[: self.config["live"]["max_n_creations_per_batch"]]:
+            for x in to_create:
                 pprint.pprint(x)
         else:
             res = None
