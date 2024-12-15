@@ -136,6 +136,7 @@ async def get_zip_binance(url):
     dfc = pd.concat(dfs).sort_values("timestamp").reset_index(drop=True)
     return dfc[dfc.timestamp != "open_time"].astype(float)
 
+
 async def get_zip_bitget(url):
     col_names = ["timestamp", "open", "high", "low", "close", "volume"]
     zips = await fetch_zips(url)
@@ -151,15 +152,16 @@ async def get_zip_bitget(url):
 
 
 def ensure_millis(df):
-    if 'timestamp' not in df.columns:
+    if "timestamp" not in df.columns:
         return df
-    if df.timestamp.iloc[0] > 1e14: # is microseconds
+    if df.timestamp.iloc[0] > 1e14:  # is microseconds
         df.timestamp /= 1000
-    elif df.timestamp.iloc[0] > 1e11: # is milliseconds
+    elif df.timestamp.iloc[0] > 1e11:  # is milliseconds
         pass
-    else: # is seconds
+    else:  # is seconds
         df.timestamp *= 1000
     return df
+
 
 # ========================= BASE CLASS & EXCHANGE CLASSES =========================
 
@@ -263,17 +265,19 @@ class BitgetDownloader(BaseDownloader):
         missing_days = {d for d in days if d not in days_done}
         tasks = []
         for day in sorted(missing_days):
-            fpath = day + '.npy'
+            fpath = day + ".npy"
             url = f"{base_url}{symbol}/{symbol}_UMCBL_1min_{day.replace('-', '')}.zip"
             logging.info(f"Downloading Bitget daily data for {symbol}: {day}")
             await check_rate_limit()
-            tasks.append(asyncio.create_task(self.download_single(url, os.path.join(dirpath, day + '.npy'))))
+            tasks.append(
+                asyncio.create_task(self.download_single(url, os.path.join(dirpath, day + ".npy")))
+            )
         for task in tasks:
             try:
                 await task
             except Exception as e:
                 logging.error(f"Error with Bitget downloader for {symbol} {e}")
-                #traceback.print_exc()
+                # traceback.print_exc()
 
         # Load all data
         all_files = [f for f in os.listdir(dirpath) if f.endswith(".npy")]
@@ -292,11 +296,55 @@ class BitgetDownloader(BaseDownloader):
         res = await get_zip_bitget(url)
         dump_ohlcv_data(ensure_millis(res), fpath)
 
+    async def find_first_day(self, symbol: str, start_year=2020):
+        """Find first day where data is available for a given symbol"""
+        symbol = symbol.replace("/USDT:", "")
+        base_url = f"https://img.bitgetimg.com/online/kline/{symbol}/{symbol}_UMCBL_1min_"
+
+        start = datetime.datetime(start_year, 1, 1)
+        end = datetime.datetime.now()
+        earliest = None
+
+        while start <= end:
+            mid = start + (end - start) // 2
+            date_str = mid.strftime("%Y%m%d")
+            url = f"{base_url}{date_str}.zip"
+
+            try:
+                await check_rate_limit()
+                async with aiohttp.ClientSession() as session:
+                    async with session.head(url) as response:
+                        print(f"Bitget, searching for first day of data for {symbol} {str(mid)[:10]}")
+                        if response.status == 200:
+                            earliest = mid
+                            end = mid - datetime.timedelta(days=1)
+                        else:
+                            start = mid + datetime.timedelta(days=1)
+            except Exception as e:
+                start = mid + datetime.timedelta(days=1)
+
+        if earliest:
+            # Verify by checking the previous day
+            prev_day = earliest - datetime.timedelta(days=1)
+            prev_url = f"{base_url}{prev_day.strftime('%Y%m%d')}.zip"
+            try:
+                await check_rate_limit()
+                async with aiohttp.ClientSession() as session:
+                    async with session.head(prev_url) as response:
+                        print(f"Bitget, found first day for {symbol}, verifying {prev_day}...")
+                        if response.status == 200:
+                            earliest = prev_day
+            except Exception:
+                pass
+
+            return earliest.strftime("%Y-%m-%d")
+        return None
+
 
 class BybitDownloader(BaseDownloader):
     # Bybit has public data archives
     async def download_ohlcv(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
-        symbol_u = symbol.replace('/USDT:', '')
+        symbol_u = symbol.replace("/USDT:", "")
         start_date = start_date[:10]
         end_date = end_date[:10]
         dirpath = make_get_filepath(f"historical_data/ohlcvs_bybit/{safe_filename(symbol_u)}/")
@@ -486,7 +534,7 @@ async def main2():
         config = load_config(args.config_path)
     update_config_with_args(config, args)
     config = format_config(config)
-    config['backtest']['exchanges'] = ['binance', 'bybit', 'gateio', 'bitget']
+    config["backtest"]["exchanges"] = ["binance", "bybit", "gateio", "bitget"]
     for exchange in config["backtest"]["exchanges"]:
         for symbol in config["backtest"]["symbols"][exchange]:
             try:
