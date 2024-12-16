@@ -5,7 +5,7 @@ import sys
 import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from pure_funcs import calc_hash
+from pure_funcs import calc_hash, symbol_to_coin
 
 
 def is_stablecoin(elm):
@@ -19,10 +19,10 @@ def is_stablecoin(elm):
     return False
 
 
-def get_top_market_caps(n_coins, minimum_market_cap_millions):
+def get_top_market_caps(n_coins, minimum_market_cap_millions, exchange=None):
     # Fetch the top N coins by market cap
     markets_url = "https://api.coingecko.com/api/v3/coins/markets"
-    per_page = 100
+    per_page = 150
     page = 1
     params = {
         "vs_currency": "usd",
@@ -34,6 +34,32 @@ def get_top_market_caps(n_coins, minimum_market_cap_millions):
     minimum_market_cap = minimum_market_cap_millions * 1e6
     approved_coins = {}
     prev_hash = None
+    exchange_approved_coins = None
+    if exchange is not None:
+        try:
+            import ccxt
+
+            exchange_map = {
+                "bybit": ("bybit", "USDT"),
+                "binance": ("binanceusdm", "USDT"),
+                "bitget": ("bitget", "USDT"),
+                "hyperliquid": ("hyperliquid", "USDC"),
+                "gateio": ("gateio", "USDT"),
+                "okx": ("okx", "USDT"),
+            }
+            cc = getattr(ccxt, exchange_map[exchange][0])()
+            cc.options["defaultType"] = "swap"
+            markets = cc.fetch_markets()
+            exchange_approved_coins = set()
+            for elm in markets:
+                if (
+                    elm["swap"]
+                    and elm["active"]
+                    and elm["symbol"].endswith(f":{exchange_map[exchange][1]}")
+                ):
+                    exchange_approved_coins.add(symbol_to_coin(elm["symbol"]))
+        except Exception as e:
+            print(f"error loading ccxt for {exchange} {e}")
     while len(approved_coins) < n_coins:
         response = requests.get(markets_url, params=params)
         if response.status_code != 200:
@@ -45,22 +71,36 @@ def get_top_market_caps(n_coins, minimum_market_cap_millions):
             break
         prev_hash = new_hash
         added = []
+        disapproved = {}
         for elm in market_data:
+            coin = elm["symbol"].upper()
             if len(approved_coins) >= n_coins:
                 print(f"N coins == {n_coins}")
                 if added:
-                    print(f"added approved coins {','.join(added)}")
+                    print(f"Added approved coins {','.join(added)}")
                 return approved_coins
             if elm["market_cap"] < minimum_market_cap:
-                print("Lowest market cap", elm)
-                break
+                print("Lowest market cap", coin)
+                if added:
+                    print(f"Added approved coins {','.join(added)}")
+                return approved_coins
             if is_stablecoin(elm):
-                print("is_stablecoin", elm["symbol"].upper())
+                disapproved[coin] = "stablecoin"
                 continue
-            if (coin := elm["symbol"].upper()) not in approved_coins:
+            if exchange_approved_coins is not None and coin not in exchange_approved_coins:
+                disapproved[coin] = "not_active"
+                continue
+            if coin not in approved_coins:
                 approved_coins[coin] = elm
                 added.append(coin)
         print(f"added approved coins {','.join(added)}")
+        if disapproved:
+            for key in set(disapproved.values()):
+                to_print = [
+                    c for s in disapproved if disapproved[s] == key and (c := symbol_to_coin(s))
+                ]
+                print(f"disapproved {key} {','.join(to_print)}")
+        disapproved = {}
         if len(approved_coins) >= n_coins:
             break
         params["page"] += 1
@@ -76,7 +116,7 @@ if __name__ == "__main__":
         dest="n_coins",
         required=False,
         default=100,
-        help=f"Maxiumum number of top market cap coins",
+        help=f"Maxiumum number of top market cap coins. Default=100",
     )
     parser.add_argument(
         f"--minimum_market_cap_dollars",
@@ -85,9 +125,18 @@ if __name__ == "__main__":
         dest="minimum_market_cap_millions",
         required=False,
         default=300.0,
-        help=f"Minimum market cap in millions of USD",
+        help=f"Minimum market cap in millions of USD. Default=300.0",
+    )
+    parser.add_argument(
+        f"--exchange",
+        f"-e",
+        type=str,
+        dest="exchange",
+        required=False,
+        default=None,
+        help=f"Optional: filter by coins available on exchange. Default=None",
     )
     args = parser.parse_args()
 
-    market_caps = get_top_market_caps(args.n_coins, args.minimum_market_cap_millions)
+    market_caps = get_top_market_caps(args.n_coins, args.minimum_market_cap_millions, args.exchange)
     json.dump(list(market_caps), open("configs/approved_coins.json", "w"))
