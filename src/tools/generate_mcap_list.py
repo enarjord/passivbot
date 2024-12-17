@@ -9,7 +9,7 @@ from pure_funcs import calc_hash, symbol_to_coin
 
 
 def is_stablecoin(elm):
-    if elm["symbol"] in ["tether", "usdb", "usdy", "tusd"]:
+    if elm["symbol"] in ["tether", "usdb", "usdy", "tusd", "usd0"]:
         return True
     if (
         all([abs(elm[k] - 1.0) < 0.01 for k in ["high_24h", "low_24h", "current_price"]])
@@ -96,9 +96,7 @@ def get_top_market_caps(n_coins, minimum_market_cap_millions, exchange=None):
         print(f"added approved coins {','.join(added)}")
         if disapproved:
             for key in set(disapproved.values()):
-                to_print = [
-                    c for s in disapproved if disapproved[s] == key and (c := symbol_to_coin(s))
-                ]
+                to_print = [c for c in disapproved if disapproved[c] == key]
                 print(f"disapproved {key} {','.join(to_print)}")
         disapproved = {}
         if len(approved_coins) >= n_coins:
