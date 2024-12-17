@@ -426,10 +426,21 @@ class Passivbot:
             self.live_configs[symbol]["leverage"] = self.config["live"]["leverage"]
             if symbol in self.flags and self.flags[symbol].live_config_path is not None:
                 try:
-                    loaded = load_config(self.flags[symbol].live_config_path)
-                    logging.info(
-                        f"successfully loaded {self.flags[symbol].live_config_path} for {symbol}"
-                    )
+                    if os.path.exists(self.flags[symbol].live_config_path):
+                        loaded = load_config(self.flags[symbol].live_config_path, verbose=False)
+                        logging.info(
+                            f"successfully loaded {self.flags[symbol].live_config_path} for {symbol}"
+                        )
+                    else:
+                        path2 = os.path.join(
+                            os.path.dirname(self.config["live"]["base_config_path"]),
+                            self.flags[symbol].live_config_path,
+                        )
+                        if os.path.exists(path2):
+                            loaded = load_config(path2, verbose=False)
+                            logging.info(f"successfully loaded {path2} for {symbol}")
+                        else:
+                            raise
                     for pside in loaded["bot"]:
                         for k, v in loaded["bot"][pside].items():
                             if k not in skip:
@@ -2242,7 +2253,11 @@ async def shutdown_bot(bot):
 async def main():
     parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
     parser.add_argument(
-        "config_path", type=str, nargs="?", default=None, help="path to hjson passivbot config"
+        "config_path",
+        type=str,
+        nargs="?",
+        default="configs/template.json",
+        help="path to hjson passivbot config",
     )
 
     template_config = get_template_live_config("v7")
@@ -2250,11 +2265,10 @@ async def main():
     del template_config["backtest"]
     add_arguments_recursively(parser, template_config)
     args = parser.parse_args()
-    config = load_config(
-        "configs/template.json" if args.config_path is None else args.config_path, live_only=True
-    )
+    config = load_config(args.config_path, live_only=True)
     update_config_with_args(config, args)
     config = format_config(config, live_only=True)
+    config["live"]["base_config_path"] = args.config_path
     cooldown_secs = 60
     restarts = []
     while True:
