@@ -310,29 +310,29 @@ def post_process(config, hlcvs, fills, equities, analysis, results_path, exchang
     dump_config(config, f"{results_path}config.json")
     fdf.to_csv(f"{results_path}fills.csv")
     bal_eq.to_csv(oj(results_path, "balance_and_equity.csv"))
-    if not config["disable_plotting"]:
-        plot_forager(results_path, config["backtest"]["symbols"][exchange], fdf, bal_eq, hlcvs)
+    plot_forager(results_path, config["backtest"]["symbols"][exchange], fdf, bal_eq, hlcvs, config["disable_plotting"])
 
 
-def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcvs):
+def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcvs, disable_plotting: bool = False):
     plots_dir = make_get_filepath(oj(results_path, "fills_plots", ""))
     plt.clf()
     bal_eq.plot()
     plt.savefig(oj(results_path, "balance_and_equity.png"))
 
-    for i, symbol in enumerate(symbols):
-        try:
-            logging.info(f"Plotting fills for {symbol}")
-            hlcvs_df = pd.DataFrame(hlcvs[:, i, :3], columns=["high", "low", "close"])
-            fdfc = fdf[fdf.symbol == symbol]
-            plt.clf()
-            plot_fills_forager(fdfc, hlcvs_df)
-            plt.title(f"Fills {symbol}")
-            plt.xlabel = "time"
-            plt.ylabel = "price"
-            plt.savefig(oj(plots_dir, f"{symbol}.png"))
-        except Exception as e:
-            logging.info(f"Error plotting {symbol} {e}")
+    if not disable_plotting:
+        for i, symbol in enumerate(symbols):
+            try:
+                logging.info(f"Plotting fills for {symbol}")
+                hlcvs_df = pd.DataFrame(hlcvs[:, i, :3], columns=["high", "low", "close"])
+                fdfc = fdf[fdf.symbol == symbol]
+                plt.clf()
+                plot_fills_forager(fdfc, hlcvs_df)
+                plt.title(f"Fills {symbol}")
+                plt.xlabel = "time"
+                plt.ylabel = "price"
+                plt.savefig(oj(plots_dir, f"{symbol}.png"))
+            except Exception as e:
+                logging.info(f"Error plotting {symbol} {e}")
 
 
 async def main():
