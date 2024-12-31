@@ -5,11 +5,12 @@ import sys
 import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from pure_funcs import calc_hash, symbol_to_coin
+from pure_funcs import calc_hash, symbol_to_coin, ts_to_date_utc
+from procedures import utc_ms
 
 
 def is_stablecoin(elm):
-    if elm["symbol"] in ["tether", "usdb", "usdy", "tusd", "usd0"]:
+    if elm["symbol"] in ["tether", "usdb", "usdy", "tusd", "usd0", "usde"]:
         return True
     if (
         all([abs(elm[k] - 1.0) < 0.01 for k in ["high_24h", "low_24h", "current_price"]])
@@ -134,7 +135,22 @@ if __name__ == "__main__":
         default=None,
         help=f"Optional: filter by coins available on exchange. Default=None",
     )
+    parser.add_argument(
+        f"--output",
+        f"-o",
+        type=str,
+        dest="output",
+        required=False,
+        default=None,
+        help="Optional: Output path. Default=configs/approved_coins_{n_coins}_{min_mcap}.json",
+    )
     args = parser.parse_args()
 
     market_caps = get_top_market_caps(args.n_coins, args.minimum_market_cap_millions, args.exchange)
-    json.dump(list(market_caps), open("configs/approved_coins.json", "w"))
+    if args.output is None:
+        fname = f"configs/approved_coins_{ts_to_date_utc(utc_ms())[:10]}"
+        fname += f"_{args.n_coins}_coins_{int(args.minimum_market_cap_millions)}_min_mcap.json"
+    else:
+        fname = args.output
+    print(f"Dumping output to {fname}")
+    json.dump(list(market_caps), open(fname, "w"))
