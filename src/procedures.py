@@ -958,6 +958,101 @@ def print_async_exception(coro):
         pass
 
 
+async def get_first_timestamps_unified(coins: [str]):
+    # returns earliest timestamp coin was found on any exchange
+    # exchanges to check: binance, bybit, okx, hyperliquid, gateio
+    async def get_first_timestamps_single(exchange, symbol, cc):
+        if exchange in ["binanceusdm"]:
+            result = await cc.fetch_ohlcv(symbol, since=1, timeframe="1d")
+        elif exchange in ["bybit", "gateio"]:
+            result = await cc.fetch_ohlcv(
+                symbol, since=int(date2ts_utc("2018-01-01")), timeframe="1d"
+            )
+        elif exchange in ["okx"]:
+            result = await cc.fetch_ohlcv(
+                symbol, since=int(date2ts_utc("2018-01-01")), timeframe="1M"
+            )
+        elif exchange in ["bitget"]:
+            result = await cc.fetch_ohlcv(
+                symbol, since=int(date2ts_utc("2018-01-01")), timeframe="1w"
+            )
+        else:
+            result = await cc.fetch_ohlcv(
+                symbol, since=int(date2ts_utc("2021-01-01")), timeframe="1w"
+            )
+        return result
+
+    cache_fpath = "caches/first_ohlcv_timestamps_unified.json"
+    ftss = {}
+    if os.path.exists(cache_fpath):
+        try:
+            ftss = json.load(open("caches/first_ohlcv_timestamps_unified.json"))
+            print(f"loaded from cache {cache_fpath}")
+        except Exception as e:
+            print(f"Error reading {cache_fpath}")
+    if all([coin in ftss for coin in coins]):
+        return ftss
+    missing = {c for c in coins if c not in ftss}
+    print("missing", missing)
+    import ccxt.async_support as ccxt
+
+    ccxts = {}
+    exchanges = {
+        "okx": "USDT",
+        "binanceusdm": "USDT",
+        "bybit": "USDT",
+        "gateio": "USDT",
+        "bitget": "USDT",
+        "hyperliquid": "USDC",
+    }
+    for exchange in exchanges:
+        ccxts[exchange] = getattr(ccxt, exchange)()
+        ccxts[exchange].options["defaultType"] = "swap"
+
+    print("loading markets...")
+    await asyncio.gather(*[ccxts[e].load_markets() for e in ccxts])
+    tasks = {}
+    for coin in missing:
+        tasks[coin] = {}
+        for exchange in exchanges:
+            print("b", exchange, coin)
+            eligible_symbols = [
+                s for s in ccxts[exchange].markets if ccxts[exchange].markets[s]["swap"]
+            ]
+            symbol = coin_to_symbol(
+                coin, eligible_symbols=eligible_symbols, quote=exchanges[exchange]
+            )
+            if symbol:
+                tasks[coin][exchange] = asyncio.create_task(
+                    get_first_timestamps_single(exchange, symbol, ccxts[exchange])
+                )
+    results = {}
+    for coin in missing:
+        results[coin] = {}
+        for exchange in exchanges:
+            if coin in tasks and exchange in tasks[coin]:
+                try:
+                    results[coin][exchange] = await tasks[coin][exchange]
+                    print(
+                        "c",
+                        exchange,
+                        coin,
+                        results[coin][exchange][0] if results[coin][exchange] else "",
+                    )
+                except Exception as e:
+                    print(f"error {exchange} {coin} {e}")
+        if results[coin]:
+            ftss[coin] = min(
+                [fts for v in results[coin].values() if v and (fts := v[0][0]) > 1262304000000.0]
+            )
+        else:
+            print(f"no first timestamp for {coin}")
+            ftss[coin] = 0.0
+    json.dump(ftss, open(cache_fpath, "w"))
+    await asyncio.gather(*[ccxts[e].close() for e in ccxts])
+    return ftss
+
+
 async def get_first_ohlcv_timestamps_new(symbols=None, exchange="binance"):
     supported_exchanges = {
         "binance": "binanceusdm",
