@@ -310,10 +310,19 @@ def post_process(config, hlcvs, fills, equities, analysis, results_path, exchang
     dump_config(config, f"{results_path}config.json")
     fdf.to_csv(f"{results_path}fills.csv")
     bal_eq.to_csv(oj(results_path, "balance_and_equity.csv"))
-    plot_forager(results_path, config["backtest"]["symbols"][exchange], fdf, bal_eq, hlcvs, config["disable_plotting"])
+    plot_forager(
+        results_path,
+        config["backtest"]["symbols"][exchange],
+        fdf,
+        bal_eq,
+        hlcvs,
+        config["disable_plotting"],
+    )
 
 
-def plot_forager(results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcvs, disable_plotting: bool = False):
+def plot_forager(
+    results_path, symbols: [str], fdf: pd.DataFrame, bal_eq, hlcvs, disable_plotting: bool = False
+):
     plots_dir = make_get_filepath(oj(results_path, "fills_plots", ""))
     plt.clf()
     bal_eq.plot()
