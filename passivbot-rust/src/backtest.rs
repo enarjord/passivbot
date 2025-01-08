@@ -266,10 +266,11 @@ impl<'a> Backtest<'a> {
         // Update rolling volume sums
         if k > window && k - *prev_k < window {
             // Rolling calculation
+            let safe_start = (*prev_k).saturating_sub(window);
             for idx in 0..self.n_coins {
                 rolling_volume_sum[idx] -= self
                     .hlcvs
-                    .slice(s![*prev_k - window..start_k, idx, VOLUME])
+                    .slice(s![safe_start..start_k, idx, VOLUME])
                     .sum();
                 rolling_volume_sum[idx] += self.hlcvs.slice(s![*prev_k..k, idx, VOLUME]).sum();
                 volume_indices[idx] = (rolling_volume_sum[idx], idx);
