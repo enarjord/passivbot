@@ -37,30 +37,33 @@ def get_top_market_caps(n_coins, minimum_market_cap_millions, exchange=None):
     prev_hash = None
     exchange_approved_coins = None
     if exchange is not None:
-        try:
-            import ccxt
+        exchanges = exchange.split(",")
+        import ccxt
 
-            exchange_map = {
-                "bybit": ("bybit", "USDT"),
-                "binance": ("binanceusdm", "USDT"),
-                "bitget": ("bitget", "USDT"),
-                "hyperliquid": ("hyperliquid", "USDC"),
-                "gateio": ("gateio", "USDT"),
-                "okx": ("okx", "USDT"),
-            }
-            cc = getattr(ccxt, exchange_map[exchange][0])()
-            cc.options["defaultType"] = "swap"
-            markets = cc.fetch_markets()
-            exchange_approved_coins = set()
-            for elm in markets:
-                if (
-                    elm["swap"]
-                    and elm["active"]
-                    and elm["symbol"].endswith(f":{exchange_map[exchange][1]}")
-                ):
-                    exchange_approved_coins.add(symbol_to_coin(elm["symbol"]))
-        except Exception as e:
-            print(f"error loading ccxt for {exchange} {e}")
+        exchange_map = {
+            "bybit": ("bybit", "USDT"),
+            "binance": ("binanceusdm", "USDT"),
+            "bitget": ("bitget", "USDT"),
+            "hyperliquid": ("hyperliquid", "USDC"),
+            "gateio": ("gateio", "USDT"),
+            "okx": ("okx", "USDT"),
+        }
+        exchange_approved_coins = set()
+        for exchange in exchanges:
+            try:
+                cc = getattr(ccxt, exchange_map[exchange][0])()
+                cc.options["defaultType"] = "swap"
+                markets = cc.fetch_markets()
+                for elm in markets:
+                    if (
+                        elm["swap"]
+                        and elm["active"]
+                        and elm["symbol"].endswith(f":{exchange_map[exchange][1]}")
+                    ):
+                        exchange_approved_coins.add(symbol_to_coin(elm["symbol"]))
+                print(f"Added coin filter for {exchange}")
+            except Exception as e:
+                print(f"error loading ccxt for {exchange} {e}")
     while len(approved_coins) < n_coins:
         response = requests.get(markets_url, params=params)
         if response.status_code != 200:
@@ -133,7 +136,7 @@ if __name__ == "__main__":
         dest="exchange",
         required=False,
         default=None,
-        help=f"Optional: filter by coins available on exchange. Default=None",
+        help=f"Optional: filter by coins available on exchange. Comma separated values. Default=None",
     )
     parser.add_argument(
         f"--output",
@@ -149,7 +152,10 @@ if __name__ == "__main__":
     market_caps = get_top_market_caps(args.n_coins, args.minimum_market_cap_millions, args.exchange)
     if args.output is None:
         fname = f"configs/approved_coins_{ts_to_date_utc(utc_ms())[:10]}"
-        fname += f"_{args.n_coins}_coins_{int(args.minimum_market_cap_millions)}_min_mcap.json"
+        fname += f"_{args.n_coins}_coins_{int(args.minimum_market_cap_millions)}_min_mcap"
+        if args.exchange is not None:
+            fname += "_" + "_".join(args.exchange.split(","))
+        fname += ".json"
     else:
         fname = args.output
     print(f"Dumping output to {fname}")
