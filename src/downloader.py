@@ -51,6 +51,7 @@ from pure_funcs import (
     numpyize,
     get_template_live_config,
     safe_filename,
+    symbol_to_coin,
 )
 from collections import deque
 from functools import wraps
@@ -290,8 +291,9 @@ async def download_ohlcvs_binance(
     base_url = "https://data.binance.vision/data/"
     base_url += "spot/" if spot else f"futures/{'cm' if inverse else 'um'}/"
     col_names = ["timestamp", "open", "high", "low", "close", "volume"]
-    if start_tss is not None and symbol in start_tss:
-        start_ts = start_tss[symbol]
+    coin = symbol_to_coin(symbol)
+    if start_tss is not None and coin in start_tss:
+        start_ts = start_tss[coin]
     elif spot:
         start_ts = get_first_ohlcv_ts(symbol, spot=spot)
     else:
@@ -451,22 +453,23 @@ async def prepare_hlcvs(config: dict, exchange: str):
 
     # First pass: Download and save data, collect metadata
     for symbol in symbols:
+        coin = symbol_to_coin(symbol)
         adjusted_start_ts = date_to_ts2(start_date)
 
         if minimum_coin_age_days > 0.0:
             min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
-            if symbol not in start_tss:
-                logging.info(f"coin {symbol} missing from first timestamps, skipping")
+            if coin not in start_tss:
+                logging.info(f"coin {coin} missing from first timestamps, skipping")
                 continue
-            new_start_ts = start_tss[symbol] + min_coin_age_ms
+            new_start_ts = start_tss[coin] + min_coin_age_ms
             if new_start_ts >= end_ts:
                 logging.info(
-                    f"Coin {symbol} too young, start date {ts_to_date_utc(start_tss[symbol])}, skipping"
+                    f"Coin {coin} too young, start date {ts_to_date_utc(start_tss[coin])}, skipping"
                 )
                 continue
             if new_start_ts > adjusted_start_ts:
                 logging.info(
-                    f"First date for {symbol} was {ts_to_date_utc(start_tss[symbol])}. Adjusting start date to {ts_to_date_utc(new_start_ts)}"
+                    f"First date for {coin} was {ts_to_date_utc(start_tss[coin])}. Adjusting start date to {ts_to_date_utc(new_start_ts)}"
                 )
                 adjusted_start_ts = new_start_ts
         try:
