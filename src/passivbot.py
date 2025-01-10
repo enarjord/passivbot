@@ -27,8 +27,7 @@ from procedures import (
     utc_ms,
     make_get_filepath,
     get_file_mod_utc,
-    get_first_ohlcv_timestamps,
-    get_first_ohlcv_timestamps_new,
+    get_first_timestamps_unified,
     load_config,
     add_arguments_recursively,
     update_config_with_args,
@@ -272,9 +271,7 @@ class Passivbot:
         symbols = sorted(set(symbols + flatten(self.approved_coins_minus_ignored_coins.values())))
         if all([s in self.first_timestamps for s in symbols]):
             return
-        first_timestamps = await get_first_ohlcv_timestamps_new(
-            symbols=symbols, exchange=self.exchange
-        )
+        first_timestamps = await get_first_timestamps_unified(symbols)
         self.first_timestamps.update(first_timestamps)
         for symbol in sorted(self.first_timestamps):
             symbolf = self.coin_to_symbol(symbol)
@@ -288,7 +285,7 @@ class Passivbot:
     def get_first_timestamp(self, symbol):
         if symbol not in self.first_timestamps:
             logging.info(f"warning: {symbol} missing from first_timestamps. Setting to zero.")
-            return 0.0
+            self.first_timestamps[symbol] = 0.0
         return self.first_timestamps[symbol]
 
     def coin_to_symbol(self, coin):
