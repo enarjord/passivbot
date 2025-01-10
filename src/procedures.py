@@ -12,8 +12,9 @@ import argparse
 from collections import defaultdict
 from collections.abc import Sized
 import sys
-from typing import Union, Optional, Set, Any
+from typing import Union, Optional, Set, Any, List
 from pathlib import Path
+import ccxt.async_support as ccxta
 
 try:
     import hjson
@@ -958,10 +959,20 @@ def print_async_exception(coro):
         pass
 
 
-async def get_first_timestamps_unified(coins: [str]):
-    # returns earliest timestamp coin was found on any exchange
-    # exchanges to check: binance, bybit, okx, hyperliquid, gateio
+async def get_first_timestamps_unified(coins: List[str]):
+    """
+    Returns earliest timestamp each coin was found on any exchange.
+    Exchanges to check: binanceusdm, bybit, okx, hyperliquid, gateio, bitget.
+    
+    This version fetches coins in batches of 10 and dumps the ftss
+    dictionary to disk after each successful batch is processed.
+    """
+
     async def get_first_timestamps_single(exchange, symbol, cc):
+        """
+        Fetch OHLCV data starting from a specific date, depending on the exchange.
+        Return the OHLCV array.
+        """
         if exchange in ["binanceusdm"]:
             result = await cc.fetch_ohlcv(symbol, since=1, timeframe="1d")
         elif exchange in ["bybit", "gateio"]:
@@ -976,7 +987,7 @@ async def get_first_timestamps_unified(coins: [str]):
             result = await cc.fetch_ohlcv(
                 symbol, since=int(date2ts_utc("2018-01-01")), timeframe="1w"
             )
-        else:
+        else:  # e.g., hyperliquid
             result = await cc.fetch_ohlcv(
                 symbol, since=int(date2ts_utc("2021-01-01")), timeframe="1w"
             )
@@ -984,19 +995,24 @@ async def get_first_timestamps_unified(coins: [str]):
 
     cache_fpath = "caches/first_ohlcv_timestamps_unified.json"
     ftss = {}
+
+    # Load existing cache if it exists
     if os.path.exists(cache_fpath):
         try:
-            ftss = json.load(open("caches/first_ohlcv_timestamps_unified.json"))
+            ftss = json.load(open(cache_fpath))
             print(f"loaded from cache {cache_fpath}")
         except Exception as e:
-            print(f"Error reading {cache_fpath}")
+            print(f"Error reading {cache_fpath}: {e}")
+
+    # If all coins are already in ftss, return immediately
     if all([coin in ftss for coin in coins]):
         return ftss
+
+    # Determine which coins are missing from ftss
     missing = {c for c in coins if c not in ftss}
     print("missing", missing)
-    import ccxt.async_support as ccxt
 
-    ccxts = {}
+    # Define exchanges and their corresponding quotes
     exchanges = {
         "okx": "USDT",
         "binanceusdm": "USDT",
@@ -1005,51 +1021,91 @@ async def get_first_timestamps_unified(coins: [str]):
         "bitget": "USDT",
         "hyperliquid": "USDC",
     }
+
+    # Initialize ccxt clients once
+    ccxts = {}
     for exchange in exchanges:
-        ccxts[exchange] = getattr(ccxt, exchange)()
+        ccxts[exchange] = getattr(ccxta, exchange)()
         ccxts[exchange].options["defaultType"] = "swap"
 
     print("loading markets...")
+    # Load markets in parallel
     await asyncio.gather(*[ccxts[e].load_markets() for e in ccxts])
-    tasks = {}
-    for coin in missing:
-        tasks[coin] = {}
-        for exchange in exchanges:
-            print("b", exchange, coin)
-            eligible_symbols = [
-                s for s in ccxts[exchange].markets if ccxts[exchange].markets[s]["swap"]
-            ]
-            symbol = coin_to_symbol(
-                coin, eligible_symbols=eligible_symbols, quote=exchanges[exchange]
-            )
-            if symbol:
-                tasks[coin][exchange] = asyncio.create_task(
-                    get_first_timestamps_single(exchange, symbol, ccxts[exchange])
+
+    # Sort missing coins to have consistent batch order
+    missing_coins = sorted(missing)
+    BATCH_SIZE = 10
+
+    # Process coins in batches
+    for i in range(0, len(missing_coins), BATCH_SIZE):
+        batch = missing_coins[i : i + BATCH_SIZE]
+        print(f"\nProcessing batch: {batch}")
+
+        # Create tasks for all coins in the batch
+        tasks = {}
+        for coin in batch:
+            tasks[coin] = {}
+            for exchange in exchanges:
+                # Build list of eligible symbols (swap markets only)
+                eligible_symbols = [
+                    s for s in ccxts[exchange].markets if ccxts[exchange].markets[s]["swap"]
+                ]
+                symbol = coin_to_symbol(
+                    coin, eligible_symbols=eligible_symbols, quote=exchanges[exchange]
                 )
-    results = {}
-    for coin in missing:
-        results[coin] = {}
-        for exchange in exchanges:
-            if coin in tasks and exchange in tasks[coin]:
-                try:
-                    results[coin][exchange] = await tasks[coin][exchange]
-                    print(
-                        "c",
-                        exchange,
-                        coin,
-                        results[coin][exchange][0] if results[coin][exchange] else "",
+                if symbol:
+                    tasks[coin][exchange] = asyncio.create_task(
+                        get_first_timestamps_single(exchange, symbol, ccxts[exchange])
                     )
-                except Exception as e:
-                    print(f"error {exchange} {coin} {e}")
-        if results[coin]:
-            ftss[coin] = min(
-                [fts for v in results[coin].values() if v and (fts := v[0][0]) > 1262304000000.0]
-            )
-        else:
-            print(f"no first timestamp for {coin}")
-            ftss[coin] = 0.0
-    json.dump(ftss, open(cache_fpath, "w"))
+
+        # Gather results for this batch
+        results = {}
+        for coin in batch:
+            results[coin] = {}
+            for exchange in exchanges:
+                if exchange in tasks[coin]:
+                    try:
+                        data = await tasks[coin][exchange]
+                        if data:
+                            results[coin][exchange] = data
+                            print(
+                                "fetched",
+                                exchange,
+                                coin,
+                                data[0] if len(data) > 0 else "",
+                            )
+                    except Exception as e:
+                        print(f"error {exchange} {coin}: {e}")
+
+        # Determine earliest timestamps in this batch
+        for coin in batch:
+            ex_data = results.get(coin, {})
+            if ex_data:
+                # Find earliest valid timestamp
+                earliest_candidates = []
+                for ex, arr in ex_data.items():
+                    if arr and len(arr) > 0:
+                        # arr[0][0] is the timestamp in ms
+                        # Check if it's a "reasonable" timestamp, e.g. after 2010
+                        if arr[0][0] > 1262304000000.0:  
+                            earliest_candidates.append(arr[0][0])
+                
+                if earliest_candidates:
+                    ftss[coin] = min(earliest_candidates)
+                else:
+                    ftss[coin] = 0.0
+            else:
+                print(f"no first timestamp for {coin}")
+                ftss[coin] = 0.0
+
+        # Immediately dump updated ftss to disk after each batch
+        with open(cache_fpath, "w") as f:
+            json.dump(ftss, f, indent=4, sort_keys=True)
+        print(f"Batch {batch} processed and cached to disk.")
+
+    # Close ccxt sessions after processing all batches
     await asyncio.gather(*[ccxts[e].close() for e in ccxts])
+
     return ftss
 
 
