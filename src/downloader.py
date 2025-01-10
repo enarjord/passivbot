@@ -35,6 +35,7 @@ from procedures import (
     add_argparse_args,
     utc_ms,
     get_first_ohlcv_timestamps,
+    get_first_timestamps_unified,
     add_arguments_recursively,
     load_config,
     update_config_with_args,
@@ -294,6 +295,7 @@ async def download_ohlcvs_binance(
     elif spot:
         start_ts = get_first_ohlcv_ts(symbol, spot=spot)
     else:
+        print("\n\nattention needed get_first_ohlcv_timestamps binance\n\n")
         start_ts = (await get_first_ohlcv_timestamps(symbols=[symbol]))[symbol]
     start_ts = int(max(start_ts, date_to_ts2(start_date)))
     end_date = format_end_date(end_date)
@@ -439,9 +441,9 @@ async def prepare_hlcvs(config: dict, exchange: str):
     symbol_metadata = {}
     start_tss = None
     if exchange == "binance":
-        start_tss = await get_first_ohlcv_timestamps(cc=ccxt.binanceusdm(), symbols=symbols)
+        start_tss = await get_first_timestamps_unified(coins=symbols, exchange="binanceusdm")
     elif exchange == "bybit":
-        start_tss = await get_first_ohlcv_timestamps(cc=ccxt.bybit(), symbols=symbols)
+        start_tss = await get_first_timestamps_unified(coins=symbols, exchange="bybit")
 
     valid_symbols = {}
     global_start_time = float("inf")
