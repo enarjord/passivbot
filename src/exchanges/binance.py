@@ -52,6 +52,12 @@ class BinanceBot(Passivbot):
                     getattr(self, ccx).options["broker"][key] = "x-" + self.broker_code_spot
 
     async def print_new_user_suggestion(self):
+        between_print_wait_ms = 1000 * 60 * 60 * 4
+        if hasattr(self, "previous_user_suggestion_print_ts"):
+            if utc_ms() - self.previous_user_suggestion_print_ts < between_print_wait_ms:
+                return
+        self.previous_user_suggestion_print_ts = utc_ms()
+
         res = None
         try:
             res = await self.cca.fapiprivate_get_apireferral_ifnewuser(
@@ -84,9 +90,9 @@ class BinanceBot(Passivbot):
         print(front_pad + "#" * (max_len + 2) + back_pad)
         print("\n\n")
 
-    async def init_markets(self, verbose=True):
+    async def execute_to_exchange(self):
+        await super().execute_to_exchange()
         await self.print_new_user_suggestion()
-        await super().init_markets(verbose=verbose)
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
