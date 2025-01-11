@@ -410,11 +410,13 @@ def attempt_gap_fix_hlcvs(df, symbol=None):
     return new_df[["timestamp", "open", "high", "low", "close", "volume"]]
 
 
-async def load_hlcvs(symbol, start_date, end_date, exchange="binance"):
+async def load_hlcvs(symbol, start_date, end_date, exchange="binance", start_tss=None):
     end_date = format_end_date(end_date)
     # returns matrix [[timestamp, high, low, close, volume]]
     if exchange == "binance":
-        df = await download_ohlcvs_binance(symbol, False, start_date, end_date, False)
+        df = await download_ohlcvs_binance(
+            symbol, False, start_date, end_date, False, start_tss=start_tss
+        )
     elif exchange == "bybit":
         df = await download_ohlcvs_bybit(symbol, start_date, end_date)
         df = attempt_gap_fix_hlcvs(df, symbol=symbol)
@@ -478,6 +480,7 @@ async def prepare_hlcvs(config: dict, exchange: str):
                 ts_to_date_utc(adjusted_start_ts)[:10],
                 end_date,
                 exchange,
+                start_tss=start_tss,
             )
         except Exception as e:
             logging.error(f"error with load_hlcvs for {symbol} {e}. Skipping")
