@@ -385,6 +385,8 @@ class Passivbot:
                 await self.restart_bot_on_too_many_errors()
         if to_cancel or to_create:
             self.previous_REST_update_ts = 0
+        if self.debug_mode:
+            return to_cancel, to_create
 
     def is_forager_mode(self, pside=None):
         if pside is None:
