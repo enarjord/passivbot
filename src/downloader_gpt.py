@@ -941,11 +941,7 @@ class OHLCVManager:
         symbol = self.get_symbol(coin)
         tasks = []
         for day in missing_days:
-            # with 1440 minutes per day and 1000 candles per fetch, there will be 2 calls per day fetched
-            await self.check_rate_limit()
-            await self.check_rate_limit()
-
-            tasks.append(self.fetch_and_save_day_gateio(symbol, day, dirpath))
+            tasks.append(asyncio.create_task(self.fetch_and_save_day_gateio(symbol, day, dirpath)))
         for task in tasks:
             await task
 
@@ -954,11 +950,12 @@ class OHLCVManager:
         start_ts_day = date_to_ts2(day)
         end_ts_day = start_ts_day + 24 * 60 * 60 * 1000
         interval = "1m"
-        limit = 1000
+        limit = 800
 
         dfs_day = []
         since = start_ts_day
         while True:
+            await self.check_rate_limit()
             if self.verbose:
                 logging.info(f"Downloading GateIO ohlcvs data for {symbol} {ts_to_date_utc(since)}")
             ohlcvs = await self.cc.fetch_ohlcv(symbol, timeframe=interval, since=since, limit=limit)
