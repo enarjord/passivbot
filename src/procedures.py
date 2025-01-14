@@ -368,7 +368,7 @@ def dump_config(config: dict, filepath: str):
 def dump_pretty_json(data: dict, filepath: str):
     try:
         with open(filepath, "w") as f:
-            f.write(config_pretty_str(sort_dict_keys(data)) + '\n')
+            f.write(config_pretty_str(sort_dict_keys(data)) + "\n")
     except Exception as e:
         raise Exception(f"failed to dump data {filepath}: {e}")
 
