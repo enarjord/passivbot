@@ -36,13 +36,8 @@ from procedures import (
     coin_to_symbol,
     read_external_coins_lists,
 )
-from njit_funcs_recursive_grid import calc_recursive_entries_long, calc_recursive_entries_short
 from njit_funcs import (
-    calc_samples,
-    calc_emas_last,
     calc_ema,
-    calc_close_grid_long,
-    calc_close_grid_short,
     calc_diff,
     calc_min_entry_qty,
     round_,
