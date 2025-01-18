@@ -146,7 +146,8 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
       - Normal mode: passivbot manages the position as normal.
       - Manual mode: passivbot ignores the position.
       - Graceful stop: if there is a position, passivbot will manage it; otherwise, passivbot will not make new positions.
-      - Take profit only: passivbot will only manage closing orders.
+      - Take profit only mode: passivbot will only manage closing orders.
+      - Panic mode: passivbot will close the position immediately.
     - `-lw` or `-sw`: Long or short wallet exposure limit.
     - `-lev`: Leverage.
     - `-lc`: Path to live config. Load all of another config's bot parameters except `[n_positions, total_wallet_exposure_limit, unstuck_loss_allowance_pct, unstuck_close_pct]`.
