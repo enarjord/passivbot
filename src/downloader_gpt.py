@@ -169,6 +169,7 @@ class OHLCVManager:
 
     def __init__(self, exchange, start_date, end_date, cc=None):
         self.exchange = "binanceusdm" if exchange == "binance" else exchange
+        self.quote = "USDC" if exchange == "hyperliquid" else "USDT"
         self.start_date = start_date
         self.end_date = format_end_date(end_date)
         self.start_ts = date_to_ts(self.start_date)
@@ -176,7 +177,7 @@ class OHLCVManager:
         self.cc = cc
         self.cache_filepaths = {
             "markets": os.path.join("caches", self.exchange, "markets.json"),
-            "ohlcvs": os.path.join("ohlcvs", self.exchange),
+            "ohlcvs": os.path.join("historical_data", f"ohlcvs_{self.exchange}"),
             "first_timestamps": os.path.join("caches", self.exchange, "first_timestamps.json"),
         }
         self.markets = None
@@ -206,7 +207,10 @@ class OHLCVManager:
     def get_symbol(self, coin):
         assert self.markets, "needs to call self.load_markets() first"
         return coin_to_symbol(
-            coin, eligible_symbols={k for k in self.markets if self.markets[k]["swap"]}
+            coin,
+            eligible_symbols={
+                k for k in self.markets if self.markets[k]["swap"] and k.endswith(f":{self.quote}")
+            },
         )
 
     def filter_date_range(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -405,7 +409,7 @@ class OHLCVManager:
                 url = f"{base_url}monthly/klines/{symbolf}/1m/{symbolf}-1m-{month}.zip"
                 await self.check_rate_limit()
                 if self.verbose:
-                    logging.info(f"Downloading Binance monthly data for {coin}: {month}")
+                    logging.info(f"Downloading Binance monthly data {url}")
                 tasks.append(asyncio.create_task(self.download_single_binance(url, fpath)))
         for task in tasks:
             await task
@@ -417,7 +421,7 @@ class OHLCVManager:
             if not os.path.exists(fpath):
                 url = base_url + f"daily/klines/{symbolf}/1m/{symbolf}-1m-{day}.zip"
                 if self.verbose:
-                    logging.info(f"Downloading Binance daily data for {coin}: {day}")
+                    logging.info(f"Downloading Binance daily data {url}")
                 await self.check_rate_limit()
                 tasks.append(asyncio.create_task(self.download_single_binance(url, fpath)))
         for task in tasks:
@@ -539,7 +543,7 @@ class OHLCVManager:
     async def download_single_bitget(self, base_url, symbolf, day, fpath):
         url = self.get_url_bitget(base_url, symbolf, day)
         if self.verbose:
-            logging.info(f"Downloading Bitget daily data {url}")
+            logging.info(f"Downloading Bitget {url}")
         res = await get_zip_bitget(url)
         dump_ohlcv_data(ensure_millis(res), fpath)
         if self.verbose:
@@ -698,8 +702,19 @@ async def prepare_hlcvs(config: dict, exchange: str):
     coins = sorted(
         set(config["live"]["approved_coins"]["long"]) | set(config["live"]["approved_coins"]["short"])
     )
+    if exchange == "binance":
+        exchange = "binanceusdm"
     start_date = config["backtest"]["start_date"]
     end_date = format_end_date(config["backtest"]["end_date"])
+    om = OHLCVManager(exchange, start_date, end_date)
+    try:
+        return await prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, om)
+    finally:
+        if om.cc:
+            await om.cc.close()
+
+
+async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, om):
     end_ts = date_to_ts(end_date)
     minimum_coin_age_days = config["live"]["minimum_coin_age_days"]
     interval_ms = 60000
@@ -712,14 +727,10 @@ async def prepare_hlcvs(config: dict, exchange: str):
 
     # First pass: Download data and store metadata
     coin_metadata = {}
-    start_tss = None
-    if exchange == "binance":
-        exchange = "binanceusdm"
 
     valid_coins = {}
     global_start_time = float("inf")
     global_end_time = float("-inf")
-    om = OHLCVManager(exchange, start_date, end_date)
     await om.load_markets()
     min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
 
