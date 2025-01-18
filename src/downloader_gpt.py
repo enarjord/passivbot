@@ -31,6 +31,7 @@ from procedures import (
     coin_to_symbol,
     utc_ms,
     get_file_mod_utc,
+    get_first_timestamps_unified,
 )
 
 # ========================= CONFIGURABLES & GLOBALS =========================
@@ -183,6 +184,25 @@ class OHLCVManager:
         self.max_requests_per_minute = {"": 120, "gateio": 60}
         self.request_timestamps = deque(maxlen=1000)  # for rate-limiting checks
 
+    def update_date_range(self, new_start_date=None, new_end_date=None):
+        if new_start_date:
+            if isinstance(new_start_date, (float, int)):
+                self.start_date = ts_to_date_utc(new_start_date)
+            elif isinstance(new_start_date, str):
+                self.start_date = new_start_date
+            else:
+                raise Exception(f"invalid start date {new_start_date}")
+            self.start_ts = date_to_ts(self.start_date)
+        if new_end_date:
+            if isinstance(new_end_date, (float, int)):
+                self.end_date = ts_to_date_utc(new_end_date)
+            elif isinstance(new_end_date, str):
+                self.end_date = new_end_date
+            else:
+                raise Exception(f"invalid end date {new_end_date}")
+            self.end_date = format_end_date(new_end_date)
+            self.end_ts = date_to_ts(self.end_date)
+
     def get_symbol(self, coin):
         assert self.markets, "needs to call self.load_markets() first"
         return coin_to_symbol(
@@ -283,14 +303,11 @@ class OHLCVManager:
         Get first timestamp of available ohlcv data for given exchange & coin
         """
         if (fts := self.load_first_timestamp(coin)) is not None:
-            print("a")
             return fts
         if not self.markets:
-            print("b")
             self.load_cc()
             await self.load_markets()
         if not self.has_coin(coin):
-            print("c")
             self.dump_first_timestamp(coin, 0.0)
             return 0.0
         if self.exchange == "binanceusdm":
@@ -317,10 +334,10 @@ class OHLCVManager:
             self.cc.options["defaultType"] = "swap"
 
     async def load_markets(self):
+        self.load_cc()
         self.markets = self.load_markets_from_cache()
         if self.markets:
             return
-        self.load_cc()
         self.markets = await self.cc.load_markets()
         self.dump_markets_to_cache()
 
@@ -417,6 +434,8 @@ class OHLCVManager:
         try:
             csv = await get_zip_binance(url)
             if not csv.empty:
+                if self.verbose:
+                    logging.info(f"Dumping Binance data {fpath}")
                 dump_ohlcv_data(ensure_millis(csv), fpath)
         except Exception as e:
             logging.error(f"Failed to download {url}: {e}")
@@ -551,7 +570,10 @@ class OHLCVManager:
                 await self.check_rate_limit()
                 async with aiohttp.ClientSession() as session:
                     async with session.head(url) as response:
-                        print(f"Bitget, searching for first day of data for {symbol} {str(mid)[:10]}")
+                        if self.verbose:
+                            logging.info(
+                                f"Bitget, searching for first day of data for {symbol} {str(mid)[:10]}"
+                            )
                         if response.status == 200:
                             earliest = mid
                             end = mid - datetime.timedelta(days=1)
@@ -568,11 +590,12 @@ class OHLCVManager:
                 await check_rate_limit()
                 async with aiohttp.ClientSession() as session:
                     async with session.head(prev_url) as response:
-                        print(f"Bitget, found first day for {symbol}, verifying {prev_day}...")
                         if response.status == 200:
                             earliest = prev_day
             except Exception:
                 pass
+            if self.verbose:
+                logging.info(f"Bitget, found first day for {symbol}: {earliest.strftime('%Y-%m-%d')}")
             # dump cache
             fts = date_to_ts(earliest.strftime("%Y-%m-%d"))
             self.dump_first_timestamp(coin, fts)
@@ -669,6 +692,143 @@ class OHLCVManager:
                 logging.info(f"Dumped {fpath}")
         except Exception as e:
             logging.error(f"Error with {get_function_name()} {e}")
+
+
+async def prepare_hlcvs(config: dict, exchange: str):
+    coins = sorted(
+        set(config["live"]["approved_coins"]["long"]) | set(config["live"]["approved_coins"]["short"])
+    )
+    start_date = config["backtest"]["start_date"]
+    end_date = format_end_date(config["backtest"]["end_date"])
+    end_ts = date_to_ts(end_date)
+    minimum_coin_age_days = config["live"]["minimum_coin_age_days"]
+    interval_ms = 60000
+
+    first_timestamps_unified = await get_first_timestamps_unified(coins)
+
+    # Create cache directory if it doesn't exist
+    cache_dir = Path(f"./cache/hlcv_data/{uuid4().hex[:16]}")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # First pass: Download data and store metadata
+    coin_metadata = {}
+    start_tss = None
+    if exchange == "binance":
+        exchange = "binanceusdm"
+
+    valid_coins = {}
+    global_start_time = float("inf")
+    global_end_time = float("-inf")
+    om = OHLCVManager(exchange, start_date, end_date)
+    await om.load_markets()
+    min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
+
+    # First pass: Download and save data, collect metadata
+    for coin in coins:
+        adjusted_start_ts = date_to_ts(start_date)
+        if not om.has_coin(coin):
+            logging.info(f"coin {coin} missing from {exchange}, skipping")
+            continue
+        if coin not in first_timestamps_unified:
+            logging.info(f"coin {coin} missing from first_timestamps_unified, skipping")
+            continue
+        if minimum_coin_age_days > 0.0:
+            first_ts = await om.get_first_timestamp(coin)
+            if first_ts >= end_ts:
+                logging.info(
+                    f"Coin {coin} too young for {exchange}, start date {ts_to_date_utc(first_ts)}. Skipping"
+                )
+                continue
+            first_ts_plus_min_coin_age = first_timestamps_unified[coin] + min_coin_age_ms
+            if first_ts_plus_min_coin_age >= end_ts:
+                logging.info(
+                    f"Coin {coin}: Not traded due to min_coin_age {int(minimum_coin_age_days)} days"
+                    f"{ts_to_date_utc(first_ts_plus_min_coin_age)}. Skipping"
+                )
+                continue
+            new_adjusted_start_ts = max(first_timestamps_unified[coin] + min_coin_age_ms, first_ts)
+            if new_adjusted_start_ts > adjusted_start_ts:
+                logging.info(
+                    f"Coin {coin}: Adjusting start date from {start_date} "
+                    f"to {ts_to_date_utc(new_adjusted_start_ts)}"
+                )
+                adjusted_start_ts = new_adjusted_start_ts
+        try:
+            om.update_date_range(adjusted_start_ts)
+            df = await om.get_ohlcvs(coin)
+            data = df[["timestamp", "high", "low", "close", "volume"]].values
+        except Exception as e:
+            logging.error(f"error with get_ohlcvs for {coin} {e}. Skipping")
+            traceback.print_exc()
+            continue
+        if len(data) == 0:
+            continue
+
+        assert (np.diff(data[:, 0]) == interval_ms).all(), f"gaps in hlcv data {coin}"
+
+        # Save data to disk
+        file_path = cache_dir / f"{coin}.npy"
+        np.save(file_path, data)
+
+        # Update metadata
+        coin_metadata[coin] = {
+            "start_time": int(data[0, 0]),
+            "end_time": int(data[-1, 0]),
+            "length": len(data),
+        }
+
+        valid_coins[coin] = file_path
+        global_start_time = min(global_start_time, data[0, 0])
+        global_end_time = max(global_end_time, data[-1, 0])
+
+    if not valid_coins:
+        raise ValueError("No valid coins found with data")
+
+    # Calculate dimensions for the unified array
+    n_timesteps = int((global_end_time - global_start_time) / interval_ms) + 1
+    n_coins = len(valid_coins)
+
+    # Create the timestamp array
+    timestamps = np.arange(global_start_time, global_end_time + interval_ms, interval_ms)
+
+    # Pre-allocate the unified array
+    unified_array = np.zeros((n_timesteps, n_coins, 4))
+
+    # Second pass: Load data from disk and populate the unified array
+    logging.info(f"Unifying data for {len(valid_coins)} coins into single numpy array...")
+    for i, coin in enumerate(tqdm(valid_coins, desc="Processing coins", unit="coin")):
+        file_path = valid_coins[coin]
+        ohlcv = np.load(file_path)
+
+        # Calculate indices
+        start_idx = int((ohlcv[0, 0] - global_start_time) / interval_ms)
+        end_idx = start_idx + len(ohlcv)
+
+        # Extract and process data
+        coin_data = ohlcv[:, 1:]
+        coin_data[:, 3] = coin_data[:, 2] * coin_data[:, 3]  # Use quote volume
+
+        # Place the data in the unified array
+        unified_array[start_idx:end_idx, i, :] = coin_data
+
+        # Front-fill
+        if start_idx > 0:
+            unified_array[:start_idx, i, :3] = coin_data[0, 2]
+
+        # Back-fill
+        if end_idx < n_timesteps:
+            unified_array[end_idx:, i, :3] = coin_data[-1, 2]
+
+        # Clean up temporary file
+        os.remove(file_path)
+
+    # Clean up cache directory if empty
+    try:
+        os.rmdir(cache_dir)
+    except OSError:
+        pass
+
+    return list(valid_coins), timestamps, unified_array
 
 
 async def main():
