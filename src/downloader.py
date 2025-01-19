@@ -438,7 +438,7 @@ async def prepare_hlcvs(config: dict, exchange: str):
     interval_ms = 60000
 
     # Create cache directory if it doesn't exist
-    cache_dir = Path(f"./cache/hlcv_data/{uuid4().hex[:16]}")
+    cache_dir = Path(f"./caches/hlcvs_data/{uuid4().hex[:16]}")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # First pass: Download data and store metadata
