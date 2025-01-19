@@ -26,7 +26,7 @@ impl Default for ExchangeParams {
 pub struct BacktestParams {
     pub starting_balance: f64,
     pub maker_fee: f64,
-    pub symbols: Vec<String>,
+    pub coins: Vec<String>,
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -201,7 +201,7 @@ impl fmt::Display for OrderType {
 #[derive(Debug, Clone)]
 pub struct Fill {
     pub index: usize,
-    pub symbol: String,
+    pub coin: String,
     pub pnl: f64,
     pub fee_paid: f64,
     pub balance: f64,

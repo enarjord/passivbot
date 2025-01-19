@@ -588,7 +588,7 @@ impl<'a> Backtest<'a> {
         let mut adjusted_close_qty = close_fill.qty;
         if new_psize < 0.0 {
             println!("warning: close qty greater than psize long");
-            println!("symbol: {}", self.backtest_params.symbols[idx]);
+            println!("coin: {}", self.backtest_params.coins[idx]);
             println!("new_psize: {}", new_psize);
             println!("close order: {:?}", close_fill);
             new_psize = 0.0;
@@ -617,7 +617,7 @@ impl<'a> Backtest<'a> {
         }
         self.fills.push(Fill {
             index: k,                                          // index minute
-            symbol: self.backtest_params.symbols[idx].clone(), // symbol
+            coin: self.backtest_params.coins[idx].clone(), // coin
             pnl,                                               // realized pnl
             fee_paid,                                          // fee paid
             balance: self.balance,                             // balance after fill
@@ -637,7 +637,7 @@ impl<'a> Backtest<'a> {
         let mut adjusted_close_qty = order.qty;
         if new_psize > 0.0 {
             println!("warning: close qty greater than psize short");
-            println!("symbol: {}", self.backtest_params.symbols[idx]);
+            println!("coin: {}", self.backtest_params.coins[idx]);
             println!("new_psize: {}", new_psize);
             println!("close order: {:?}", order);
             new_psize = 0.0;
@@ -666,7 +666,7 @@ impl<'a> Backtest<'a> {
         }
         self.fills.push(Fill {
             index: k,                                          // index minute
-            symbol: self.backtest_params.symbols[idx].clone(), // symbol
+            coin: self.backtest_params.coins[idx].clone(), // coin
             pnl,                                               // realized pnl
             fee_paid,                                          // fee paid
             balance: self.balance,                             // balance after fill
@@ -702,7 +702,7 @@ impl<'a> Backtest<'a> {
         self.positions.long.get_mut(&idx).unwrap().price = new_pprice;
         self.fills.push(Fill {
             index: k,                                          // index minute
-            symbol: self.backtest_params.symbols[idx].clone(), // symbol
+            coin: self.backtest_params.coins[idx].clone(), // coin
             pnl: 0.0,                                          // realized pnl
             fee_paid,                                          // fee paid
             balance: self.balance,                             // balance after fill
@@ -738,7 +738,7 @@ impl<'a> Backtest<'a> {
         self.positions.short.get_mut(&idx).unwrap().price = new_pprice;
         self.fills.push(Fill {
             index: k,                                          // index minute
-            symbol: self.backtest_params.symbols[idx].clone(), // symbol
+            coin: self.backtest_params.coins[idx].clone(), // coin
             pnl: 0.0,                                          // realized pnl
             fee_paid,                                          // fee paid
             balance: self.balance,                             // balance after fill
@@ -1293,8 +1293,8 @@ impl<'a> Backtest<'a> {
         // Update selectively:
         // - actives if len(positions) < n_positions
         // - unstuck close if any stuck
-        // - entries for symbols with open trailing entries
-        // - closes for symbols with open trailing closes
+        // - entries for coins with open trailing entries
+        // - closes for coins with open trailing closes
         if self.trading_enabled.long {
             let positions_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
             if self.trailing_enabled.long {

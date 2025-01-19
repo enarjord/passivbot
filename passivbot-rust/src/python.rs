@@ -109,7 +109,7 @@ pub fn run_backtest(
         let mut py_fills = Array2::from_elem((fills.len(), 10), py.None());
         for (i, fill) in fills.iter().enumerate() {
             py_fills[(i, 0)] = fill.index.into_py(py);
-            py_fills[(i, 1)] = <String as Clone>::clone(&fill.symbol).into_py(py);
+            py_fills[(i, 1)] = <String as Clone>::clone(&fill.coin).into_py(py);
             py_fills[(i, 2)] = fill.pnl.into_py(py);
             py_fills[(i, 3)] = fill.fee_paid.into_py(py);
             py_fills[(i, 4)] = fill.balance.into_py(py);
@@ -135,7 +135,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
     Ok(BacktestParams {
         starting_balance: extract_value(dict, "starting_balance").unwrap_or_default(),
         maker_fee: extract_value(dict, "maker_fee").unwrap_or_default(),
-        symbols: extract_value(dict, "symbols").unwrap_or_default(),
+        coins: extract_value(dict, "coins").unwrap_or_default(),
     })
 }
 
