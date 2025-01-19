@@ -211,7 +211,35 @@ class OHLCVManager:
             eligible_symbols={
                 k for k in self.markets if self.markets[k]["swap"] and k.endswith(f":{self.quote}")
             },
+            verbose=self.verbose,
         )
+
+    def get_market_specific_settings(self, coin):
+        mss = self.markets[self.get_symbol(coin)]
+        mss["hedge_mode"] = True
+        mss["maker_fee"] = mss["maker"]
+        mss["taker_fee"] = mss["taker"]
+        mss["c_mult"] = mss["contractSize"]
+        mss["min_cost"] = mc if (mc := mss["limits"]["cost"]["min"]) is not None else 0.01
+        mss["price_step"] = mss["precision"]["price"]
+        mss["min_qty"] = max(
+            lm if (lm := mss["limits"]["amount"]["min"]) is not None else 0.0,
+            pm if (pm := mss["precision"]["amount"]) is not None else 0.0,
+        )
+        mss["qty_step"] = mss["precision"]["amount"]
+        if self.exchange == "binanceusdm":
+            pass
+        elif self.exchange == "bybit":
+            # ccxt reports incorrect fees for bybit perps
+            mss["maker"] = mss["maker_fee"] = 0.0002
+            mss["taker"] = mss["taker_fee"] = 0.00055
+        elif self.exchange == "bitget":
+            pass
+        elif self.exchange == "gateio":
+            # ccxt reports incorrect fees for gateio perps. Assume VIP0
+            mss["maker"] = mss["maker_fee"] = 0.0002
+            mss["taker"] = mss["taker_fee"] = 0.0005
+        return mss
 
     def filter_date_range(self, df: pd.DataFrame) -> pd.DataFrame:
         """Filter dataframe to include only data within start_date and end_date (inclusive)"""
@@ -408,8 +436,6 @@ class OHLCVManager:
             if not os.path.exists(fpath):
                 url = f"{base_url}monthly/klines/{symbolf}/1m/{symbolf}-1m-{month}.zip"
                 await self.check_rate_limit()
-                if self.verbose:
-                    logging.info(f"Downloading Binance monthly data {url}")
                 tasks.append(asyncio.create_task(self.download_single_binance(url, fpath)))
         for task in tasks:
             await task
@@ -420,8 +446,6 @@ class OHLCVManager:
             fpath = os.path.join(dirpath, day + ".npy")
             if not os.path.exists(fpath):
                 url = base_url + f"daily/klines/{symbolf}/1m/{symbolf}-1m-{day}.zip"
-                if self.verbose:
-                    logging.info(f"Downloading Binance daily data {url}")
                 await self.check_rate_limit()
                 tasks.append(asyncio.create_task(self.download_single_binance(url, fpath)))
         for task in tasks:
@@ -466,8 +490,6 @@ class OHLCVManager:
             for fn in filenames:
                 url = f"{base_url}{symbolf}/{fn}"
                 day = fn[-17:-7]
-                if self.verbose:
-                    logging.info(f"Downloading Bybit {url}")
                 await self.check_rate_limit()
                 tasks.append(
                     asyncio.create_task(self.download_single_bybit(session, url, dirpath, day))
@@ -492,9 +514,12 @@ class OHLCVManager:
                 }
             )
             ohlcvs["timestamp"] = ohlcvs.index
+            fpath = os.path.join(dirpath, day + ".npy")
+            if self.verbose:
+                logging.info(f"Dumping Bybit {fpath}")
             dump_ohlcv_data(
                 ensure_millis(ohlcvs[["timestamp", "open", "high", "low", "close", "volume"]]),
-                os.path.join(dirpath, day + ".npy"),
+                fpath,
             )
         except Exception as e:
             logging.error(f"Bybit error {url}: {e}")
@@ -542,9 +567,9 @@ class OHLCVManager:
 
     async def download_single_bitget(self, base_url, symbolf, day, fpath):
         url = self.get_url_bitget(base_url, symbolf, day)
-        if self.verbose:
-            logging.info(f"Downloading Bitget {url}")
         res = await get_zip_bitget(url)
+        if self.verbose:
+            logging.info(f"Dumping Bitget {fpath}")
         dump_ohlcv_data(ensure_millis(res), fpath)
         if self.verbose:
             logging.info(f"Dumped Bitget daily data {fpath}")
@@ -638,10 +663,6 @@ class OHLCVManager:
 
         # GateIO typically allows up to 1440+ limit for 1m timeframe in one call
         limit = 1500
-
-        if self.verbose:
-            logging.info(f"Downloading GateIO ohlcvs data for {symbol} {day}")
-
         ohlcvs = await self.cc.fetch_ohlcv(
             symbol, timeframe=interval, since=start_ts_day, limit=limit
         )
@@ -665,9 +686,9 @@ class OHLCVManager:
 
         # Dump final day data only if is a full day
         if len(df_day) == 1440:
-            dump_ohlcv_data(ensure_millis(df_day), fpath)
             if self.verbose:
-                logging.info(f"Dumped GateIO daily OHLCV data for {symbol} to {fpath}")
+                logging.info(f"Dumping GateIO daily OHLCV data for {symbol} to {fpath}")
+            dump_ohlcv_data(ensure_millis(df_day), fpath)
 
     def load_first_timestamp(self, coin):
         if os.path.exists(self.cache_filepaths["first_timestamps"]):
@@ -722,7 +743,7 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
     first_timestamps_unified = await get_first_timestamps_unified(coins)
 
     # Create cache directory if it doesn't exist
-    cache_dir = Path(f"./cache/hlcv_data/{uuid4().hex[:16]}")
+    cache_dir = Path(f"./caches/hlcvs_data/{uuid4().hex[:16]}")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # First pass: Download data and store metadata
@@ -838,8 +859,8 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
         os.rmdir(cache_dir)
     except OSError:
         pass
-
-    return list(valid_coins), timestamps, unified_array
+    mss = {coin: om.get_market_specific_settings(coin) for coin in sorted(valid_coins)}
+    return mss, timestamps, unified_array
 
 
 async def main():
