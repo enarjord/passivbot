@@ -224,36 +224,6 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                     "long": deepcopy(result["live"][k_coins]),
                     "short": deepcopy(result["live"][k_coins]),
                 }
-        result["backtest"]["symbols"] = {}
-        for exchange in result["backtest"]["exchanges"]:
-            eligible_symbols = get_all_eligible_symbols(exchange)
-            ignored_coins = coins_to_symbols(
-                set(flatten(result["live"]["ignored_coins"].values())),
-                eligible_symbols=eligible_symbols,
-                exchange=exchange,
-                verbose=verbose,
-            )
-            approved_coins = coins_to_symbols(
-                set(flatten(result["live"]["approved_coins"].values())),
-                eligible_symbols=eligible_symbols,
-                exchange=exchange,
-                verbose=verbose,
-            )
-            if approved_coins:
-                result["backtest"]["symbols"][exchange] = [
-                    x
-                    for x in coins_to_symbols(
-                        sorted(approved_coins),
-                        eligible_symbols=eligible_symbols,
-                        exchange=exchange,
-                        verbose=verbose,
-                    )
-                    if x not in ignored_coins
-                ]
-            else:
-                result["backtest"]["symbols"][exchange] = [
-                    s for s in sorted(get_all_eligible_symbols(exchange)) if s not in ignored_coins
-                ]
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
     return result
 
