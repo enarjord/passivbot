@@ -20,6 +20,7 @@ from pure_funcs import (
     sort_dict_keys,
     calc_hash,
     flatten,
+    date_to_ts,
 )
 from procedures import (
     make_get_filepath,
@@ -483,22 +484,31 @@ async def main():
     )
     if args.config_path is None:
         logging.info(f"loading default template config configs/template.json")
-        config = load_config("configs/template.json")
+        config = load_config("configs/template.json", verbose=False)
     else:
         logging.info(f"loading config {args.config_path}")
-        config = load_config(args.config_path)
+        config = load_config(args.config_path, verbose=False)
     old_config = deepcopy(config)
     update_config_with_args(config, args)
-    config = format_config(config)
+    config = format_config(config, verbose=False)
     exchanges = config["backtest"]["exchanges"]
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
     coins = sorted(
-        set([symbol_to_coin(x) for y in config["backtest"]["symbols"].values() for x in y])
+        set([symbol_to_coin(x) for y in config["live"]["approved_coins"].values() for x in y])
     )
     coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
     hash_snippet = uuid4().hex[:8]
+    n_days = int(
+        round(
+            (
+                date_to_ts(config["backtest"]["end_date"])
+                - date_to_ts(config["backtest"]["start_date"])
+            )
+            / (1000 * 60 * 60 * 24)
+        )
+    )
     config["results_filename"] = make_get_filepath(
-        f"optimize_results/{date_fname}_{'_'.join(exchanges)}_{coins_fname}_{hash_snippet}_all_results.txt"
+        f"optimize_results/{date_fname}_{'_'.join(exchanges)}_{n_days}days_{coins_fname}_{hash_snippet}_all_results.txt"
     )
 
     try:
@@ -508,8 +518,10 @@ async def main():
         hlcvs_shapes = {}
         hlcvs_dtypes = {}
         msss = {}
+        config["backtest"]["coins"] = {}
         for exchange in exchanges:
-            symbols, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
+            coins, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
+            config["backtest"]["coins"][exchange] = coins
             hlcvs_dict[exchange] = hlcvs
             hlcvs_shapes[exchange] = hlcvs.shape
             hlcvs_dtypes[exchange] = hlcvs.dtype
