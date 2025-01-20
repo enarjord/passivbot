@@ -218,14 +218,13 @@ async def prepare_hlcvs_mss(config, exchange):
         if result:
             logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
             cache_dir, coins, hlcvs = result
-            mss = json.load(open(mss_path))
             logging.info(f"Successfully loaded hlcvs data from cache")
             return coins, hlcvs, mss, results_path, cache_dir
     except:
         logging.info(f"Unable to load hlcvs data from cache. Fetching...")
     mss, timestamps, hlcvs = await prepare_hlcvs(config, exchange)
     coins = sorted(mss)
-    logging.info(f"Finished preparing hlcvs data. Shape: {hlcvs.shape}")
+    logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")
     try:
         cache_dir = save_coins_hlcvs_to_cache(config, coins, hlcvs, exchange)
     except Exception as e:
