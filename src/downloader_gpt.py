@@ -686,7 +686,7 @@ class OHLCVManager:
         if len(df_day) == 1440:
             dump_ohlcv_data(ensure_millis(df_day), fpath)
             if self.verbose:
-                logging.info(f"Dumped GateIO daily OHLCV data for {symbol} to {fpath}")
+                logging.info(f"gateio Dumped daily OHLCV data for {symbol} to {fpath}")
 
     def load_first_timestamp(self, coin):
         if os.path.exists(self.cache_filepaths["first_timestamps"]):
@@ -712,7 +712,7 @@ class OHLCVManager:
             ftss[coin] = fts
             json.dump(ftss, open(fpath, "w"), indent=True, sort_keys=True)
             if self.verbose:
-                logging.info(f"Dumped {fpath}")
+                logging.info(f"{self.exchange} Dumped {fpath}")
         except Exception as e:
             logging.error(f"Error with {get_function_name()} {e}")
 
@@ -864,6 +864,29 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
 
 async def prepare_hlcvs_combined(config):
     """
+    Public function that sets up any needed resources,
+    calls the internal implementation, and ensures
+    ccxt connections are closed in a finally block.
+    """
+    # Create or load the OHLCVManager dict
+    exchanges_to_consider = config.get("exchanges", ["binanceusdm", "bybit", "bitget", "gateio"])
+    om_dict = {}
+    for ex in exchanges_to_consider:
+        om = OHLCVManager(ex, config["backtest"]["start_date"], config["backtest"]["end_date"])
+        # await om.load_markets()  # if you want to do this up front
+        om_dict[ex] = om
+
+    try:
+        return await _prepare_hlcvs_combined_impl(config, om_dict)
+    finally:
+        # Cleanly close all ccxt sessions
+        for om in om_dict.values():
+            if om.cc:
+                await om.cc.close()
+
+
+async def _prepare_hlcvs_combined_impl(config, om_dict):
+    """
     Amalgamates data from different exchanges for each coin in config, then unifies them into a single
     numpy array with shape (n_timestamps, n_coins, 4). The final data per coin is chosen using:
 
@@ -903,15 +926,8 @@ async def prepare_hlcvs_combined(config):
     # (some procedures rely on e.g. get_first_timestamps_unified())
     first_timestamps_unified = await get_first_timestamps_unified(coins)
 
-    # ---------------------------------------------------------------
-    # 1) Initialize OHLCVManagers (one per exchange)
-    # ---------------------------------------------------------------
-    om_dict = {}
     for ex in exchanges_to_consider:
-        # "binance" => "binanceusdm" name difference is handled by OHLCVManager internally
-        om = OHLCVManager(ex, start_date, end_date)
-        await om.load_markets()
-        om_dict[ex] = om
+        await om_dict[ex].load_markets()
 
     # ---------------------------------------------------------------
     # 2) For each coin, gather 1m data from all exchanges, filter/choose best
@@ -971,6 +987,7 @@ async def prepare_hlcvs_combined(config):
         else:
             # Sort by coverage desc, gap_count asc, volume desc
             exchange_candidates.sort(key=lambda x: (x[2], -x[3], x[4]), reverse=True)
+            print(coin, [x[0] for x in exchange_candidates])
             best_exchange, best_df, best_cov, best_gaps, best_vol = exchange_candidates[0]
 
         # Attempt small gap fix if desired
@@ -978,6 +995,7 @@ async def prepare_hlcvs_combined(config):
 
         chosen_data_per_coin[coin] = best_df
         chosen_mss_per_coin[coin] = om_dict[best_exchange].get_market_specific_settings(coin)
+        chosen_mss_per_coin[coin]["exchange"] = best_exchange
     # ---------------------------------------------------------------
     # If no coins survived, raise error
     # ---------------------------------------------------------------
@@ -1058,7 +1076,7 @@ async def fetch_data_for_coin_and_exchange(
     coverage_count = len(df)
     intervals = np.diff(df.timestamp.values)
     gap_count = np.count_nonzero(intervals != 60000)
-    total_volume = df["volume"].sum()
+    total_volume = (df["close"] * df["volume"]).sum()  # use base volume
 
     # Return tuple so the caller can decide how to handle partial coverage
     return (ex, df, coverage_count, gap_count, total_volume)
