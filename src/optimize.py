@@ -519,8 +519,11 @@ async def main():
         hlcvs_dtypes = {}
         msss = {}
         config["backtest"]["coins"] = {}
+        tasks = {}
         for exchange in exchanges:
-            coins, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
+            tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
+        for exchange in exchanges:
+            coins, hlcvs, mss, results_path, cache_dir = await tasks[exchange]
             config["backtest"]["coins"][exchange] = coins
             hlcvs_dict[exchange] = hlcvs
             hlcvs_shapes[exchange] = hlcvs.shape
