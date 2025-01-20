@@ -25,7 +25,7 @@ from pure_funcs import (
 )
 import pprint
 from copy import deepcopy
-from downloader_gpt import prepare_hlcvs
+from downloader_gpt import prepare_hlcvs, prepare_hlcvs_combined
 from pathlib import Path
 from plotting import plot_fills_forager
 import matplotlib.pyplot as plt
@@ -222,7 +222,10 @@ async def prepare_hlcvs_mss(config, exchange):
             return coins, hlcvs, mss, results_path, cache_dir
     except:
         logging.info(f"Unable to load hlcvs data from cache. Fetching...")
-    mss, timestamps, hlcvs = await prepare_hlcvs(config, exchange)
+    if exchange == "combined":
+        mss, timestamps, hlcvs = await prepare_hlcvs_combined(config)
+    else:
+        mss, timestamps, hlcvs = await prepare_hlcvs(config, exchange)
     coins = sorted(mss)
     logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")
     try:
@@ -343,6 +346,13 @@ async def main():
         action="store_true",
         help="disable plotting",
     )
+    parser.add_argument(
+        "--combine_ohlcvs",
+        "-co",
+        dest="combine_ohlcvs",
+        action="store_true",
+        help="combine ohlcvs from multiple exchanges",
+    )
     template_config = get_template_live_config("v7")
     del template_config["optimize"]
     keep_live_keys = {
@@ -364,18 +374,29 @@ async def main():
     update_config_with_args(config, args)
     config = format_config(config, verbose=False)
     config["disable_plotting"] = args.disable_plotting
+    config["combine_ohlcvs"] = args.combine_ohlcvs
     config["backtest"]["cache_dir"] = {}
     config["backtest"]["coins"] = {}
-    configs = {exchange: deepcopy(config) for exchange in config["backtest"]["exchanges"]}
-    tasks = {}
-    for exchange in config["backtest"]["exchanges"]:
-        tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(configs[exchange], exchange))
-    for exchange in tasks:
-        coins, hlcvs, mss, results_path, cache_dir = await tasks[exchange]
-        configs[exchange]["backtest"]["coins"][exchange] = coins
-        configs[exchange]["backtest"]["cache_dir"][exchange] = str(cache_dir)
-        fills, equities, analysis = run_backtest(hlcvs, mss, configs[exchange], exchange)
-        post_process(configs[exchange], hlcvs, fills, equities, analysis, results_path, exchange)
+    if config["combine_ohlcvs"]:
+        exchange = "combined"
+        coins, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
+        for coin in coins:
+            logging.info(f"chose {mss[coin]['exchange']} for {coin}")
+        config["backtest"]["coins"][exchange] = coins
+        config["backtest"]["cache_dir"][exchange] = str(cache_dir)
+        fills, equities, analysis = run_backtest(hlcvs, mss, config, exchange)
+        post_process(config, hlcvs, fills, equities, analysis, results_path, exchange)
+    else:
+        configs = {exchange: deepcopy(config) for exchange in config["backtest"]["exchanges"]}
+        tasks = {}
+        for exchange in config["backtest"]["exchanges"]:
+            tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(configs[exchange], exchange))
+        for exchange in tasks:
+            coins, hlcvs, mss, results_path, cache_dir = await tasks[exchange]
+            configs[exchange]["backtest"]["coins"][exchange] = coins
+            configs[exchange]["backtest"]["cache_dir"][exchange] = str(cache_dir)
+            fills, equities, analysis = run_backtest(hlcvs, mss, configs[exchange], exchange)
+            post_process(configs[exchange], hlcvs, fills, equities, analysis, results_path, exchange)
 
 
 if __name__ == "__main__":
