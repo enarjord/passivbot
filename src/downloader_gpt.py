@@ -987,7 +987,7 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
         else:
             # Sort by coverage desc, gap_count asc, volume desc
             exchange_candidates.sort(key=lambda x: (x[2], -x[3], x[4]), reverse=True)
-            print(coin, [x[0] for x in exchange_candidates])
+            logging.info(f"{coin} exchange preference: {[x[0] for x in exchange_candidates]}")
             best_exchange, best_df, best_cov, best_gaps, best_vol = exchange_candidates[0]
 
         # Attempt small gap fix if desired
