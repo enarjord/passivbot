@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 from tqdm import tqdm
-from pure_funcs import date_to_ts, ts_to_date_utc, safe_filename
+from pure_funcs import date_to_ts, ts_to_date_utc, safe_filename, symbol_to_coin
 from procedures import (
     make_get_filepath,
     format_end_date,
@@ -568,8 +568,6 @@ class OHLCVManager:
     async def download_single_bitget(self, base_url, symbolf, day, fpath):
         url = self.get_url_bitget(base_url, symbolf, day)
         res = await get_zip_bitget(url)
-        if self.verbose:
-            logging.info(f"Dumping Bitget {fpath}")
         dump_ohlcv_data(ensure_millis(res), fpath)
         if self.verbose:
             logging.info(f"Dumped Bitget daily data {fpath}")
@@ -721,7 +719,8 @@ class OHLCVManager:
 
 async def prepare_hlcvs(config: dict, exchange: str):
     coins = sorted(
-        set(config["live"]["approved_coins"]["long"]) | set(config["live"]["approved_coins"]["short"])
+        set([symbol_to_coin(c) for c in config["live"]["approved_coins"]["long"]])
+        | set([symbol_to_coin(c) for c in config["live"]["approved_coins"]["short"]])
     )
     if exchange == "binance":
         exchange = "binanceusdm"
