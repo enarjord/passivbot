@@ -401,6 +401,13 @@ def add_extra_options(parser):
         default=None,
         help="Start with given live configs. Single json file or dir with multiple json files",
     )
+    parser.add_argument(
+        "--combine_ohlcvs",
+        "-co",
+        dest="combine_ohlcvs",
+        action="store_true",
+        help="combine ohlcvs from multiple exchanges",
+    )
 
 
 def extract_configs(path):
@@ -492,6 +499,7 @@ async def main():
     update_config_with_args(config, args)
     config = format_config(config, verbose=False)
     exchanges = config["backtest"]["exchanges"]
+    exchanges_fname = "combined" if args.combine_ohlcvs else "_".join(exchanges)
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
     coins = sorted(
         set([symbol_to_coin(x) for y in config["live"]["approved_coins"].values() for x in y])
@@ -508,7 +516,7 @@ async def main():
         )
     )
     config["results_filename"] = make_get_filepath(
-        f"optimize_results/{date_fname}_{'_'.join(exchanges)}_{n_days}days_{coins_fname}_{hash_snippet}_all_results.txt"
+        f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}_all_results.txt"
     )
 
     try:
@@ -519,11 +527,9 @@ async def main():
         hlcvs_dtypes = {}
         msss = {}
         config["backtest"]["coins"] = {}
-        tasks = {}
-        for exchange in exchanges:
-            tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
-        for exchange in exchanges:
-            coins, hlcvs, mss, results_path, cache_dir = await tasks[exchange]
+        if args.combine_ohlcvs:
+            exchange = "combined"
+            coins, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
             config["backtest"]["coins"][exchange] = coins
             hlcvs_dict[exchange] = hlcvs
             hlcvs_shapes[exchange] = hlcvs.shape
@@ -535,6 +541,25 @@ async def main():
             shared_memory_file = create_shared_memory_file(hlcvs)
             shared_memory_files[exchange] = shared_memory_file
             logging.info(f"Finished creating shared memory file for {exchange}: {shared_memory_file}")
+        else:
+            tasks = {}
+            for exchange in exchanges:
+                tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
+            for exchange in exchanges:
+                coins, hlcvs, mss, results_path, cache_dir = await tasks[exchange]
+                config["backtest"]["coins"][exchange] = coins
+                hlcvs_dict[exchange] = hlcvs
+                hlcvs_shapes[exchange] = hlcvs.shape
+                hlcvs_dtypes[exchange] = hlcvs.dtype
+                msss[exchange] = mss
+                required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
+                check_disk_space(tempfile.gettempdir(), required_space)
+                logging.info(f"Starting to create shared memory file for {exchange}...")
+                shared_memory_file = create_shared_memory_file(hlcvs)
+                shared_memory_files[exchange] = shared_memory_file
+                logging.info(
+                    f"Finished creating shared memory file for {exchange}: {shared_memory_file}"
+                )
 
         # Create results queue and start manager process
         manager = multiprocessing.Manager()
