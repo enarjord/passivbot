@@ -159,6 +159,7 @@ def load_coins_hlcvs_from_cache(config, exchange):
     cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
     if os.path.exists(cache_dir):
         coins = json.load(open(cache_dir / "coins.json"))
+        mss = json.load(open(cache_dir / "market_specific_settings.json"))
         if config["backtest"]["compress_cache"]:
             fname = cache_dir / "hlcvs.npy.gz"
             logging.info(f"Attempting to load hlcvs data from cache {fname}...")
@@ -168,10 +169,10 @@ def load_coins_hlcvs_from_cache(config, exchange):
             fname = cache_dir / "hlcvs.npy"
             logging.info(f"Attempting to load hlcvs data from cache {fname}...")
             hlcvs = np.load(fname)
-        return cache_dir, coins, hlcvs
+        return cache_dir, coins, hlcvs, mss
 
 
-def save_coins_hlcvs_to_cache(config, coins, hlcvs, exchange):
+def save_coins_hlcvs_to_cache(config, coins, hlcvs, exchange, mss):
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -179,6 +180,7 @@ def save_coins_hlcvs_to_cache(config, coins, hlcvs, exchange):
         return
     logging.info(f"Dumping cache...")
     json.dump(coins, open(cache_dir / "coins.json", "w"))
+    json.dump(mss, open(cache_dir / "market_specific_settings.json", "w"))
     uncompressed_size = hlcvs.nbytes
     sts = utc_ms()
     if config["backtest"]["compress_cache"]:
@@ -217,7 +219,7 @@ async def prepare_hlcvs_mss(config, exchange):
         result = load_coins_hlcvs_from_cache(config, exchange)
         if result:
             logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
-            cache_dir, coins, hlcvs = result
+            cache_dir, coins, hlcvs, mss = result
             logging.info(f"Successfully loaded hlcvs data from cache")
             return coins, hlcvs, mss, results_path, cache_dir
     except:
@@ -229,7 +231,7 @@ async def prepare_hlcvs_mss(config, exchange):
     coins = sorted(mss)
     logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")
     try:
-        cache_dir = save_coins_hlcvs_to_cache(config, coins, hlcvs, exchange)
+        cache_dir = save_coins_hlcvs_to_cache(config, coins, hlcvs, exchange, mss)
     except Exception as e:
         logging.error(f"failed to save hlcvs to cache {e}")
         traceback.print_exc()
