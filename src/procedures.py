@@ -974,7 +974,7 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
     coins = sorted(set(symbol_to_coin(coin) for coin in coins))
 
     # Paths to the cache files
-    cache_fpath = "caches/first_ohlcv_timestamps_unified.json"
+    cache_fpath = make_get_filepath("caches/first_ohlcv_timestamps_unified.json")
     cache_fpath_exchange_specific = "caches/first_ohlcv_timestamps_unified_exchange_specific.json"
 
     # In-memory dictionaries for storing timestamps
