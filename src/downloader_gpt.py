@@ -14,11 +14,13 @@ from functools import wraps
 from io import BytesIO
 from pathlib import Path
 from time import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from uuid import uuid4
 from urllib.request import urlopen
+from collections import defaultdict
 
 import aiohttp
+import pprint
 import ccxt.async_support as ccxt
 import numpy as np
 import pandas as pd
@@ -1017,6 +1019,32 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
     n_timesteps = len(timestamps)
     valid_coins = sorted(chosen_data_per_coin.keys())
     n_coins = len(valid_coins)
+    global_start_date = ts_to_date_utc(global_start_time)
+    global_end_date = ts_to_date_utc(global_end_time)
+
+    exchanges_with_data = sorted(set([chosen_mss_per_coin[coin]["exchange"] for coin in valid_coins]))
+    exchange_volume_ratios = await compute_exchange_volume_ratios(
+        exchanges_with_data,
+        valid_coins,
+        global_start_date,
+        global_end_date,
+        {ex: om_dict[ex] for ex in exchanges_with_data},
+    )
+    exchanges_counts = defaultdict(int)
+    for coin in chosen_mss_per_coin:
+        exchanges_counts[chosen_mss_per_coin[coin]["exchange"]] += 1
+    reference_exchange = sorted(exchanges_counts.items(), key=lambda x: x[1])[-1][0]
+    exchange_volume_ratios_mapped = defaultdict(dict)
+    if len(exchanges_counts) == 1:
+        exchange_volume_ratios_mapped[reference_exchange][reference_exchange] = 1.0
+    else:
+        for ex0, ex1 in exchange_volume_ratios:
+            exchange_volume_ratios_mapped[ex0][ex1] = 1 / exchange_volume_ratios[(ex0, ex1)]
+            exchange_volume_ratios_mapped[ex1][ex0] = exchange_volume_ratios[(ex0, ex1)]
+            exchange_volume_ratios_mapped[ex1][ex1] = 1.0
+            exchange_volume_ratios_mapped[ex0][ex0] = 1.0
+
+    pprint.pprint(exchange_volume_ratios_mapped)
 
     # We'll store [high, low, close, volume] in the last dimension
     unified_array = np.zeros((n_timesteps, n_coins, 4), dtype=np.float64)
@@ -1031,7 +1059,9 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
         # For any timestamps prior to df's first real bar, you might want bfill:
         # (If the coin started mid-range, fill those bars with the first known price.)
         df[["high", "low", "close"]] = df[["high", "low", "close"]].fillna(method="bfill")
-        df["volume"] = df["volume"].fillna(0.0)
+        exchange_for_this_coin = chosen_mss_per_coin[coin]["exchange"]
+        scaling_factor = exchange_volume_ratios_mapped[exchange_for_this_coin][reference_exchange]
+        df["volume"] = df["volume"].fillna(0.0) * scaling_factor
 
         # Now extract columns in correct order
         coin_data = df[["high", "low", "close", "volume"]].values
@@ -1084,6 +1114,143 @@ async def fetch_data_for_coin_and_exchange(
 
     # Return tuple so the caller can decide how to handle partial coverage
     return (ex, df, coverage_count, gap_count, total_volume)
+
+
+async def compute_exchange_volume_ratios(
+    exchanges: List[str],
+    coins: List[str],
+    start_date: str,
+    end_date: str,
+    om_dict: Dict[str, "OHLCVManager"] = None,
+) -> Dict[Tuple[str, str], float]:
+    """
+    Gathers daily quote-volume (close * volume) for each coin on each exchange,
+    filters out incomplete days (days missing from any exchange),
+    and then computes pairwise volume ratios (ex0, ex1) = sumVol(ex0) / sumVol(ex1).
+    Finally, it averages those ratios across all coins.
+
+    :param exchanges: list of exchange names (e.g. ["binanceusdm", "bybit"]).
+    :param coins:     list of coins (e.g. ["BTC", "ETH"]).
+    :param start_date: "YYYY-MM-DD" inclusive
+    :param end_date:   "YYYY-MM-DD" inclusive
+    :param om_dict:   dict of {exchange_name -> OHLCVManager}, already initialized
+    :return: dict {(ex0, ex1): average_ratio}, where ex0 < ex1 in alphabetical order, for example
+    """
+    # -------------------------------------------------------
+    # 1) Build all pairs of exchanges
+    # -------------------------------------------------------
+    if om_dict is None:
+        om_dict = {ex: OHLCVManager(ex, start_date, end_date) for ex in exchanges}
+        await asyncio.gather(*[om_dict[ex].load_markets() for ex in om_dict])
+    assert all([ex in om_dict for ex in exchanges])
+    exchange_pairs = []
+    for i, ex0 in enumerate(sorted(exchanges)):
+        for ex1 in exchanges[i + 1 :]:
+            # (Optional) sort them or keep them as-is
+            # We'll just keep them in the (ex0, ex1) order for clarity
+            exchange_pairs.append((ex0, ex1))
+
+    # -------------------------------------------------------
+    # 2) For each coin, gather data from all exchanges
+    # -------------------------------------------------------
+    # We'll store: all_data[coin][(ex0, ex1)] = ratio_of_volumes_for_that_coin
+    all_data = {}
+
+    for coin in coins:
+        # If coin does not exist on ALL exchanges, skip
+        if not all(om_dict[ex].has_coin(coin) for ex in exchanges):
+            continue
+
+        # Gather concurrent tasks => each exchange's DF for that coin
+        tasks = []
+        for ex in exchanges:
+            om = om_dict[ex]
+            om.update_date_range(start_date, end_date)
+            tasks.append(
+                om.get_ohlcvs(coin)
+            )  # returns a DataFrame: [timestamp, open, high, low, close, volume]
+
+        dfs = await asyncio.gather(*tasks, return_exceptions=True)
+        # Filter out any exceptions or empty data
+        # We'll keep them in the same order as `exchanges`
+        for i, df in enumerate(dfs):
+            if isinstance(df, Exception) or df is None or df.empty:
+                dfs[i] = pd.DataFrame()  # mark as empty
+
+        # If any are empty, skip coin
+        if any(df.empty for df in dfs):
+            continue
+
+        # -------------------------------------------------------
+        # 3) Convert each DF to daily volume.
+        #    We'll produce: daily_df[day_str or day_int] = quote_volume
+        # -------------------------------------------------------
+        # Approach: group by day (UTC). E.g. day_key = df.timestamp // 86400000
+        # Then sum up (df["close"] * df["volume"]) for each day.
+
+        daily_volumes = []  # daily_volumes[i] will be a dict day->quote_volume for exchange i
+        for df in dfs:
+            df["day"] = df["timestamp"] // 86400000  # integer day
+            # compute daily sum of close*volume
+            df["quote_vol"] = df["close"] * df["volume"]
+            grouped = df.groupby("day", as_index=False)["quote_vol"].sum()
+            # build dict {day: quote_vol}
+            daily_dict = dict(zip(grouped["day"], grouped["quote_vol"]))
+            daily_volumes.append(daily_dict)
+
+        # Now we want to find the set of "common days" that appear in all daily_volumes
+        # E.g. intersection of day keys across all exchanges
+        sets_of_days = [set(dv.keys()) for dv in daily_volumes]
+        common_days = set.intersection(*sets_of_days)
+        if not common_days:
+            continue
+
+        # Filter out days that have no volume on some exchange
+        # (Already done by intersection, but you might want to check if the volume is zero and exclude, etc.)
+
+        # -------------------------------------------------------
+        # 4) For each pair of exchanges, compute ratio over the *full* range of common days
+        # -------------------------------------------------------
+        # i.e. ratio = (sum of daily volumes on ex0) / (sum of daily volumes on ex1)
+        coin_data = {}  # coin_data[(ex0, ex1)] = ratio for this coin
+        for ex0, ex1 in exchange_pairs:
+            i0 = exchanges.index(ex0)
+            i1 = exchanges.index(ex1)
+            sum0 = sum(daily_volumes[i0][day] for day in common_days)
+            sum1 = sum(daily_volumes[i1][day] for day in common_days)
+            ratio = (sum0 / sum1) if sum1 > 0 else 0.0
+            coin_data[(ex0, ex1)] = ratio
+
+        if coin_data:
+            all_data[coin] = coin_data
+
+    # -------------------------------------------------------
+    # 5) Compute average ratio per (ex0, ex1) across all coins
+    # -------------------------------------------------------
+    # all_data is: { coin: {(ex0, ex1): ratio, (exA, exB): ratio, ...}, ... }
+    # We'll gather lists of ratios per exchange pair, then compute the mean.
+    averages = {}
+    if not all_data:
+        return averages  # empty if no coin data
+
+    # Build a list of all pairs we actually used:
+    used_pairs = set()
+    for coin in all_data:
+        for pair in all_data[coin]:
+            used_pairs.add(pair)
+
+    for pair in used_pairs:
+        # collect all coin-specific ratios for that pair
+        ratios_for_pair = []
+        for coin in all_data:
+            if pair in all_data[coin]:
+                ratios_for_pair.append(all_data[coin][pair])
+        if ratios_for_pair:
+            averages[pair] = float(np.mean(ratios_for_pair))
+        else:
+            averages[pair] = 0.0
+
+    return averages
 
 
 async def main():
