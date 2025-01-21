@@ -869,7 +869,9 @@ async def prepare_hlcvs_combined(config):
     ccxt connections are closed in a finally block.
     """
     # Create or load the OHLCVManager dict
-    exchanges_to_consider = config.get("exchanges", ["binanceusdm", "bybit", "bitget", "gateio"])
+    exchanges_to_consider = [
+        "binanceusdm" if e == "binance" else e for e in config["backtest"]["exchanges"]
+    ]
     om_dict = {}
     for ex in exchanges_to_consider:
         om = OHLCVManager(ex, config["backtest"]["start_date"], config["backtest"]["end_date"])
@@ -916,7 +918,9 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
     )
 
     # If your config includes a list of exchanges, grab it; else pick a default set:
-    exchanges_to_consider = config.get("exchanges", ["binanceusdm", "bybit", "bitget", "gateio"])
+    exchanges_to_consider = [
+        "binanceusdm" if e == "binance" else e for e in config["backtest"]["exchanges"]
+    ]
 
     # Minimum coin age handling (same approach as prepare_hlcvs)
     min_coin_age_days = config["live"].get("minimum_coin_age_days", 0.0)
