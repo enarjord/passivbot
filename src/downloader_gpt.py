@@ -1044,8 +1044,6 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
             exchange_volume_ratios_mapped[ex1][ex1] = 1.0
             exchange_volume_ratios_mapped[ex0][ex0] = 1.0
 
-    pprint.pprint(exchange_volume_ratios_mapped)
-
     # We'll store [high, low, close, volume] in the last dimension
     unified_array = np.zeros((n_timesteps, n_coins, 4), dtype=np.float64)
 
