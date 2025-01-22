@@ -28,6 +28,7 @@ from copy import deepcopy
 from downloader_gpt import prepare_hlcvs, prepare_hlcvs_combined
 from pathlib import Path
 from plotting import plot_fills_forager
+from collections import defaultdict
 import matplotlib.pyplot as plt
 import logging
 from main import manage_rust_compilation
@@ -382,8 +383,11 @@ async def main():
     if config["combine_ohlcvs"]:
         exchange = "combined"
         coins, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
+        exchange_preference = defaultdict(list)
         for coin in coins:
-            logging.info(f"chose {mss[coin]['exchange']} for {coin}")
+            exchange_preference[mss[coin]["exchange"]].append(coin)
+        for ex in exchange_preference:
+            logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
         config["backtest"]["coins"][exchange] = coins
         config["backtest"]["cache_dir"][exchange] = str(cache_dir)
         fills, equities, analysis = run_backtest(hlcvs, mss, config, exchange)
