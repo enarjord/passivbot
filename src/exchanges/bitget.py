@@ -204,12 +204,19 @@ class BitgetBot(Passivbot):
         params = {"productType": "USDT-FUTURES"}
         if end_time:
             params["endTime"] = str(int(end_time))
+        if not hasattr(self, "pnls_ids_existing"):
+            self.pnls_ids_existing = set()
         while True:
             fetched = await self.cca.private_mix_get_v2_mix_order_fill_history(params=params)
-            fetched = sorted(fetched["data"]["fillList"], key=lambda x: float(x["cTime"]))
+            if "data" in fetched and "fillList" in fetched["data"] and fetched["data"]["fillList"]:
+                fetched = sorted(fetched["data"]["fillList"], key=lambda x: float(x["cTime"]))
+            else:
+                fetched = []
             if fetched == []:
                 break
             if all(x["orderId"] in all_fetched for x in fetched):
+                break
+            if all(x["orderId"] in self.pnls_ids_existing for x in fetched):
                 break
             for elm in fetched:
                 elm["symbol"] = self.get_symbol_id_inv(elm["symbol"])
@@ -221,6 +228,7 @@ class BitgetBot(Passivbot):
                 elm["timestamp"] = float(elm["cTime"])
                 elm["datetime"] = ts_to_date_utc(elm["timestamp"])
                 all_fetched[elm["id"]] = elm
+                self.pnls_ids_existing.add(elm["id"])
             if start_time and fetched[0]["timestamp"] <= start_time:
                 break
             if start_time is None and end_time is None:
