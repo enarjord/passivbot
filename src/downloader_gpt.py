@@ -296,7 +296,7 @@ class OHLCVManager:
                 await self.load_markets()
             await self.download_ohlcvs(coin)
         ohlcvs = self.load_ohlcvs_from_cache(coin)
-        ohlcvs.volume = ohlcvs.volume * ohlcvs.close # use quote volume
+        ohlcvs.volume = ohlcvs.volume * ohlcvs.close  # use quote volume
         return ohlcvs
 
     async def get_start_date_modified(self, coin):
@@ -1047,6 +1047,8 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
             exchange_volume_ratios_mapped[ex1][ex1] = 1.0
             exchange_volume_ratios_mapped[ex0][ex0] = 1.0
 
+    pprint.pprint(dict(exchange_volume_ratios_mapped))
+
     # We'll store [high, low, close, volume] in the last dimension
     unified_array = np.zeros((n_timesteps, n_coins, 4), dtype=np.float64)
 
@@ -1055,11 +1057,14 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
         df = chosen_data_per_coin[coin].copy()
 
         # Ensure we have columns: timestamp, high, low, close, volume
-        df = df.set_index("timestamp").reindex(timestamps, method="ffill")
+        df = df.set_index("timestamp").reindex(timestamps)
+        df.close.ffill(inplace=True)
+        df.close.bfill(inplace=True)
+        df.open.fillna(df.close, inplace=True)
+        df.high.fillna(df.close, inplace=True)
+        df.low.fillna(df.close, inplace=True)
+        df.volume.fillna(0.0, inplace=True)
 
-        # For any timestamps prior to df's first real bar, you might want bfill:
-        # (If the coin started mid-range, fill those bars with the first known price.)
-        df[["high", "low", "close"]] = df[["high", "low", "close"]].fillna(method="bfill")
         exchange_for_this_coin = chosen_mss_per_coin[coin]["exchange"]
         scaling_factor = exchange_volume_ratios_mapped[exchange_for_this_coin][reference_exchange]
         df["volume"] = df["volume"].fillna(0.0) * scaling_factor
