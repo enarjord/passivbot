@@ -1056,18 +1056,22 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
     for i, coin in enumerate(valid_coins):
         df = chosen_data_per_coin[coin].copy()
 
-        # Ensure we have columns: timestamp, high, low, close, volume
+        # Reindex on the global minute timestamps
         df = df.set_index("timestamp").reindex(timestamps)
-        df.close.ffill(inplace=True)
-        df.close.bfill(inplace=True)
-        df.open.fillna(df.close, inplace=True)
-        df.high.fillna(df.close, inplace=True)
-        df.low.fillna(df.close, inplace=True)
-        df.volume.fillna(0.0, inplace=True)
 
+        # Forward fill 'close' for all missing rows, then backward fill any leading edge
+        df["close"] = df["close"].ffill().bfill()
+
+        # For O/H/L, fill with whatever the 'close' ended up being
+        df["open"] = df["open"].fillna(df["close"])
+        df["high"] = df["high"].fillna(df["close"])
+        df["low"] = df["low"].fillna(df["close"])
+
+        # Fill volume with 0.0 for missing bars, then apply scaling factor
+        df["volume"] = df["volume"].fillna(0.0)
         exchange_for_this_coin = chosen_mss_per_coin[coin]["exchange"]
         scaling_factor = exchange_volume_ratios_mapped[exchange_for_this_coin][reference_exchange]
-        df["volume"] = df["volume"].fillna(0.0) * scaling_factor
+        df["volume"] *= scaling_factor
 
         # Now extract columns in correct order
         coin_data = df[["high", "low", "close", "volume"]].values
