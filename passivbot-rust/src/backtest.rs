@@ -268,10 +268,8 @@ impl<'a> Backtest<'a> {
             // Rolling calculation
             let safe_start = (*prev_k).saturating_sub(window);
             for idx in 0..self.n_coins {
-                rolling_volume_sum[idx] -= self
-                    .hlcvs
-                    .slice(s![safe_start..start_k, idx, VOLUME])
-                    .sum();
+                rolling_volume_sum[idx] -=
+                    self.hlcvs.slice(s![safe_start..start_k, idx, VOLUME]).sum();
                 rolling_volume_sum[idx] += self.hlcvs.slice(s![*prev_k..k, idx, VOLUME]).sum();
                 volume_indices[idx] = (rolling_volume_sum[idx], idx);
             }
@@ -616,16 +614,16 @@ impl<'a> Backtest<'a> {
             self.positions.long.get_mut(&idx).unwrap().size = new_psize;
         }
         self.fills.push(Fill {
-            index: k,                                          // index minute
+            index: k,                                      // index minute
             coin: self.backtest_params.coins[idx].clone(), // coin
-            pnl,                                               // realized pnl
-            fee_paid,                                          // fee paid
-            balance: self.balance,                             // balance after fill
-            fill_qty: adjusted_close_qty,                      // fill qty
-            fill_price: close_fill.price,                      // fill price
-            position_size: new_psize,                          // psize after fill
-            position_price: current_pprice,                    // pprice after fill
-            order_type: close_fill.order_type.clone(),         // fill type
+            pnl,                                           // realized pnl
+            fee_paid,                                      // fee paid
+            balance: self.balance,                         // balance after fill
+            fill_qty: adjusted_close_qty,                  // fill qty
+            fill_price: close_fill.price,                  // fill price
+            position_size: new_psize,                      // psize after fill
+            position_price: current_pprice,                // pprice after fill
+            order_type: close_fill.order_type.clone(),     // fill type
         });
     }
 
@@ -665,16 +663,16 @@ impl<'a> Backtest<'a> {
             self.positions.short.get_mut(&idx).unwrap().size = new_psize;
         }
         self.fills.push(Fill {
-            index: k,                                          // index minute
+            index: k,                                      // index minute
             coin: self.backtest_params.coins[idx].clone(), // coin
-            pnl,                                               // realized pnl
-            fee_paid,                                          // fee paid
-            balance: self.balance,                             // balance after fill
-            fill_qty: adjusted_close_qty,                      // fill qty
-            fill_price: order.price,                           // fill price
-            position_size: new_psize,                          // psize after fill
-            position_price: current_pprice,                    // pprice after fill
-            order_type: order.order_type.clone(),              // fill type
+            pnl,                                           // realized pnl
+            fee_paid,                                      // fee paid
+            balance: self.balance,                         // balance after fill
+            fill_qty: adjusted_close_qty,                  // fill qty
+            fill_price: order.price,                       // fill price
+            position_size: new_psize,                      // psize after fill
+            position_price: current_pprice,                // pprice after fill
+            order_type: order.order_type.clone(),          // fill type
         });
     }
 
@@ -701,16 +699,16 @@ impl<'a> Backtest<'a> {
         self.positions.long.get_mut(&idx).unwrap().size = new_psize;
         self.positions.long.get_mut(&idx).unwrap().price = new_pprice;
         self.fills.push(Fill {
-            index: k,                                          // index minute
-            coin: self.backtest_params.coins[idx].clone(), // coin
-            pnl: 0.0,                                          // realized pnl
-            fee_paid,                                          // fee paid
-            balance: self.balance,                             // balance after fill
-            fill_qty: order.qty,                               // fill qty
-            fill_price: order.price,                           // fill price
-            position_size: self.positions.long[&idx].size,     // psize after fill
-            position_price: self.positions.long[&idx].price,   // pprice after fill
-            order_type: order.order_type.clone(),              // fill type
+            index: k,                                        // index minute
+            coin: self.backtest_params.coins[idx].clone(),   // coin
+            pnl: 0.0,                                        // realized pnl
+            fee_paid,                                        // fee paid
+            balance: self.balance,                           // balance after fill
+            fill_qty: order.qty,                             // fill qty
+            fill_price: order.price,                         // fill price
+            position_size: self.positions.long[&idx].size,   // psize after fill
+            position_price: self.positions.long[&idx].price, // pprice after fill
+            order_type: order.order_type.clone(),            // fill type
         });
     }
 
@@ -737,16 +735,16 @@ impl<'a> Backtest<'a> {
         self.positions.short.get_mut(&idx).unwrap().size = new_psize;
         self.positions.short.get_mut(&idx).unwrap().price = new_pprice;
         self.fills.push(Fill {
-            index: k,                                          // index minute
-            coin: self.backtest_params.coins[idx].clone(), // coin
-            pnl: 0.0,                                          // realized pnl
-            fee_paid,                                          // fee paid
-            balance: self.balance,                             // balance after fill
-            fill_qty: order.qty,                               // fill qty
-            fill_price: order.price,                           // fill price
-            position_size: self.positions.short[&idx].size,    // psize after fill
-            position_price: self.positions.short[&idx].price,  // pprice after fill
-            order_type: order.order_type.clone(),              // fill type
+            index: k,                                         // index minute
+            coin: self.backtest_params.coins[idx].clone(),    // coin
+            pnl: 0.0,                                         // realized pnl
+            fee_paid,                                         // fee paid
+            balance: self.balance,                            // balance after fill
+            fill_qty: order.qty,                              // fill qty
+            fill_price: order.price,                          // fill price
+            position_size: self.positions.short[&idx].size,   // psize after fill
+            position_price: self.positions.short[&idx].price, // pprice after fill
+            order_type: order.order_type.clone(),             // fill type
         });
     }
 
