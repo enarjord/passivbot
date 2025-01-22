@@ -169,11 +169,11 @@ class OHLCVManager:
     Manages OHLCVs for multiple exchanges.
     """
 
-    def __init__(self, exchange, start_date, end_date, cc=None):
+    def __init__(self, exchange, start_date=None, end_date=None, cc=None):
         self.exchange = "binanceusdm" if exchange == "binance" else exchange
         self.quote = "USDC" if exchange == "hyperliquid" else "USDT"
-        self.start_date = start_date
-        self.end_date = format_end_date(end_date)
+        self.start_date = "2020-01-01" if start_date is None else start_date
+        self.end_date = format_end_date("now" if end_date is None else end_date)
         self.start_ts = date_to_ts(self.start_date)
         self.end_ts = date_to_ts(self.end_date)
         self.cc = cc
@@ -277,7 +277,7 @@ class OHLCVManager:
 
         self.request_timestamps.append(current_time)
 
-    async def get_ohlcvs(self, coin):
+    async def get_ohlcvs(self, coin, start_date=None, end_date=None):
         """
         - Attempts to get ohlcvs for coin from cache.
         - If any data is missing, checks if it exists to download
@@ -288,12 +288,16 @@ class OHLCVManager:
         or date range for coin not existing on exchange,
         return empty dataframe
         """
+        if start_date or end_date:
+            self.update_date_range(new_start_date=start_date, new_end_date=end_date)
         missing_days = await self.get_missing_days_ohlcvs(coin)
         if missing_days:
             if not self.markets:
                 await self.load_markets()
             await self.download_ohlcvs(coin)
-        return self.load_ohlcvs_from_cache(coin)
+        ohlcvs = self.load_ohlcvs_from_cache(coin)
+        ohlcvs.volume = ohlcvs.volume * ohlcvs.close # use quote volume
+        return ohlcvs
 
     async def get_start_date_modified(self, coin):
         fts = await self.get_first_timestamp(coin)
@@ -839,7 +843,6 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
 
         # Extract and process data
         coin_data = ohlcv[:, 1:]
-        coin_data[:, 3] = coin_data[:, 2] * coin_data[:, 3]  # Use quote volume
 
         # Place the data in the unified array
         unified_array[start_idx:end_idx, i, :] = coin_data
@@ -993,8 +996,8 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
         else:
             # Sort by coverage desc, gap_count asc, volume desc
             exchange_candidates.sort(key=lambda x: (x[2], -x[3], x[4]), reverse=True)
-            logging.info(f"{coin} exchange preference: {[x[0] for x in exchange_candidates]}")
             best_exchange, best_df, best_cov, best_gaps, best_vol = exchange_candidates[0]
+        logging.info(f"{coin} exchange preference: {[x[0] for x in exchange_candidates]}")
 
         # Attempt small gap fix if desired
         best_df = attempt_gap_fix_ohlcvs(best_df, symbol=coin)
@@ -1108,7 +1111,7 @@ async def fetch_data_for_coin_and_exchange(
     coverage_count = len(df)
     intervals = np.diff(df.timestamp.values)
     gap_count = np.count_nonzero(intervals != 60000)
-    total_volume = (df["close"] * df["volume"]).sum()  # use base volume
+    total_volume = df["volume"].sum()
 
     # Return tuple so the caller can decide how to handle partial coverage
     return (ex, df, coverage_count, gap_count, total_volume)
@@ -1122,7 +1125,7 @@ async def compute_exchange_volume_ratios(
     om_dict: Dict[str, "OHLCVManager"] = None,
 ) -> Dict[Tuple[str, str], float]:
     """
-    Gathers daily quote-volume (close * volume) for each coin on each exchange,
+    Gathers daily volume for each coin on each exchange,
     filters out incomplete days (days missing from any exchange),
     and then computes pairwise volume ratios (ex0, ex1) = sumVol(ex0) / sumVol(ex1).
     Finally, it averages those ratios across all coins.
@@ -1181,19 +1184,17 @@ async def compute_exchange_volume_ratios(
 
         # -------------------------------------------------------
         # 3) Convert each DF to daily volume.
-        #    We'll produce: daily_df[day_str or day_int] = quote_volume
+        #    We'll produce: daily_df[day_str or day_int] = volume
         # -------------------------------------------------------
         # Approach: group by day (UTC). E.g. day_key = df.timestamp // 86400000
-        # Then sum up (df["close"] * df["volume"]) for each day.
+        # Then sum up df["volume"] for each day.
 
-        daily_volumes = []  # daily_volumes[i] will be a dict day->quote_volume for exchange i
+        daily_volumes = []  # daily_volumes[i] will be a dict day->volume for exchange i
         for df in dfs:
             df["day"] = df["timestamp"] // 86400000  # integer day
-            # compute daily sum of close*volume
-            df["quote_vol"] = df["close"] * df["volume"]
-            grouped = df.groupby("day", as_index=False)["quote_vol"].sum()
-            # build dict {day: quote_vol}
-            daily_dict = dict(zip(grouped["day"], grouped["quote_vol"]))
+            grouped = df.groupby("day", as_index=False)["volume"].sum()
+            # build dict {day: volume}
+            daily_dict = dict(zip(grouped["day"], grouped["volume"]))
             daily_volumes.append(daily_dict)
 
         # Now we want to find the set of "common days" that appear in all daily_volumes
