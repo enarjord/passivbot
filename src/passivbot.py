@@ -349,9 +349,9 @@ class Passivbot:
         to_create = self.format_custom_ids(to_create)
         if self.debug_mode:
             if to_cancel:
-                print("would cancel:")
-            for x in to_cancel:
-                pprint.pprint(x)
+                print(f"would cancel {len(to_cancel)} orders")
+            # for x in to_cancel:
+            #    pprint.pprint(x)
         else:
             res = await self.execute_cancellations(
                 to_cancel[: self.config["live"]["max_n_cancellations_per_batch"]]
@@ -361,9 +361,9 @@ class Passivbot:
                     self.remove_cancelled_order(elm, source="POST")
         if self.debug_mode:
             if to_create:
-                print("would create:")
-            for x in to_create:
-                pprint.pprint(x)
+                print(f"would create {len(to_create)} orders")
+            # for x in to_create:
+            #    pprint.pprint(x)
         else:
             res = None
             try:
@@ -1405,8 +1405,8 @@ class Passivbot:
                 order_side = determine_side_from_order_tuple(order)
                 order_type = "limit"
                 if (
-                    ("grid" in order[2] and mprice_diff < 0.001)
-                    or ("trailing" in order[2] and mprice_diff < 0.002)
+                    ("grid" in order[2] and mprice_diff < 0.0001)
+                    or ("trailing" in order[2] and mprice_diff < 0.001)
                     or (order_side == "buy" and order[1] >= last_mprice)
                     or (order_side == "sell" and order[1] <= last_mprice)
                 ):
