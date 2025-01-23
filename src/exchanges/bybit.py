@@ -381,7 +381,8 @@ class BybitBot(Passivbot):
         )
 
     async def execute_order(self, order: dict) -> dict:
-        executed = await self.cca.create_limit_order(
+        executed = await self.cca.create_order(
+            type=order["type"] if "type" in order else "limit",
             symbol=order["symbol"],
             side=order["side"],
             amount=abs(order["qty"]),
