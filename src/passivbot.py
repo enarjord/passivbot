@@ -1406,7 +1406,7 @@ class Passivbot:
                 order_type = "limit"
                 if (
                     ("grid" in order[2] and mprice_diff < 0.001)
-                    or ("trailing" in order[2] and mprice_diff < 0.009)
+                    or ("trailing" in order[2] and mprice_diff < 0.002)
                     or (order_side == "buy" and order[1] >= last_mprice)
                     or (order_side == "sell" and order[1] <= last_mprice)
                 ):
