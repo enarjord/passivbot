@@ -1383,16 +1383,15 @@ class Passivbot:
         ideal_orders_f = {}
         for symbol in ideal_orders:
             ideal_orders_f[symbol] = []
-            with_pprice_diff = [
-                (calc_diff(x[1], self.get_last_price(symbol)), x) for x in ideal_orders[symbol]
-            ]
+            last_mprice = self.get_last_price(symbol)
+            with_mprice_diff = [(calc_diff(x[1], last_mprice), x) for x in ideal_orders[symbol]]
             seen = set()
-            any_partial = any(["partial" in order[2] for _, order in with_pprice_diff])
-            for pprice_diff, order in sorted(with_pprice_diff):
+            any_partial = any(["partial" in order[2] for _, order in with_mprice_diff])
+            for mprice_diff, order in sorted(with_mprice_diff):
                 position_side = "long" if "long" in order[2] else "short"
                 if order[0] == 0.0:
                     continue
-                if pprice_diff > self.config["live"]["price_distance_threshold"]:
+                if mprice_diff > self.config["live"]["price_distance_threshold"]:
                     if any_partial and "entry" in order[2]:
                         continue
                     if any([x in order[2] for x in ["initial", "unstuck"]]):
@@ -1403,15 +1402,25 @@ class Passivbot:
                 if seen_key in seen:
                     logging.info(f"debug duplicate ideal order {symbol} {order}")
                     continue
+                order_side = determine_side_from_order_tuple(order)
+                order_type = "limit"
+                if (
+                    ("grid" in order[2] and mprice_diff < 0.001)
+                    or ("trailing" in order[2] and mprice_diff < 0.009)
+                    or (order_side == "buy" and order[1] >= last_mprice)
+                    or (order_side == "sell" and order[1] <= last_mprice)
+                ):
+                    order_type = "market"
                 ideal_orders_f[symbol].append(
                     {
                         "symbol": symbol,
-                        "side": determine_side_from_order_tuple(order),
+                        "side": order_side,
                         "position_side": position_side,
                         "qty": abs(order[0]),
                         "price": order[1],
                         "reduce_only": "close" in order[2],
                         "custom_id": order[2],
+                        "type": order_type,
                     }
                 )
                 seen.add(seen_key)
@@ -1635,27 +1644,27 @@ class Passivbot:
                     ]
             to_cancel += to_cancel_
             to_create += to_create_
-        to_create_with_pprice_diff = []
+        to_create_with_mprice_diff = []
         for x in to_create:
             try:
-                to_create_with_pprice_diff.append(
+                to_create_with_mprice_diff.append(
                     (calc_diff(x["price"], self.get_last_price(x["symbol"])), x)
                 )
             except Exception as e:
-                logging.info(f"debug: price missing sort to_create by pprice_diff {x} {e}")
-                to_create_with_pprice_diff.append((0.0, x))
-        to_create_with_pprice_diff.sort(key=lambda x: x[0])
-        to_cancel_with_pprice_diff = []
+                logging.info(f"debug: price missing sort to_create by mprice_diff {x} {e}")
+                to_create_with_mprice_diff.append((0.0, x))
+        to_create_with_mprice_diff.sort(key=lambda x: x[0])
+        to_cancel_with_mprice_diff = []
         for x in to_cancel:
             try:
-                to_cancel_with_pprice_diff.append(
+                to_cancel_with_mprice_diff.append(
                     (calc_diff(x["price"], self.get_last_price(x["symbol"])), x)
                 )
             except Exception as e:
-                logging.info(f"debug: price missing sort to_cancel by pprice_diff {x} {e}")
-                to_cancel_with_pprice_diff.append((0.0, x))
-        to_cancel_with_pprice_diff.sort(key=lambda x: x[0])
-        return [x[1] for x in to_cancel_with_pprice_diff], [x[1] for x in to_create_with_pprice_diff]
+                logging.info(f"debug: price missing sort to_cancel by mprice_diff {x} {e}")
+                to_cancel_with_mprice_diff.append((0.0, x))
+        to_cancel_with_mprice_diff.sort(key=lambda x: x[0])
+        return [x[1] for x in to_cancel_with_mprice_diff], [x[1] for x in to_create_with_mprice_diff]
 
     async def restart_bot_on_too_many_errors(self):
         if not hasattr(self, "error_counts"):
