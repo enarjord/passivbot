@@ -91,8 +91,9 @@ class BinanceBot(Passivbot):
         print("\n\n")
 
     async def execute_to_exchange(self):
-        await super().execute_to_exchange()
+        res = await super().execute_to_exchange()
         await self.print_new_user_suggestion()
+        return res
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
@@ -405,18 +406,22 @@ class BinanceBot(Passivbot):
         )
 
     async def execute_order(self, order: dict) -> dict:
-        executed = await self.cca.create_limit_order(
+        order_type = order["type"] if "type" in order else "limit"
+        params = {
+            "positionSide": order["position_side"].upper(),
+            "newClientOrderId": order["custom_id"],
+        }
+        if order_type == "limit":
+            params["timeInForce"] = (
+                ("GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"),
+            )
+        executed = await self.cca.create_order(
+            type=order_type,
             symbol=order["symbol"],
             side=order["side"],
             amount=abs(order["qty"]),
             price=order["price"],
-            params={
-                "positionSide": order["position_side"].upper(),
-                "newClientOrderId": order["custom_id"],
-                "timeInForce": (
-                    "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
-                ),
-            },
+            params=params,
         )
         if "info" in executed and "code" in executed["info"] and executed["info"]["code"] == "-5022":
             logging.info(f"{executed['info']['msg']}")
