@@ -344,7 +344,7 @@ class HyperliquidBot(Passivbot):
             to_execute.append(
                 {
                     "symbol": order["symbol"],
-                    "type": "limit",
+                    "type": order["type"] if "type" in order else "limit",
                     "side": order["side"],
                     "amount": order["qty"],
                     "price": order["price"],
