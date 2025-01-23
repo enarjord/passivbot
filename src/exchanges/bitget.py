@@ -274,9 +274,10 @@ class BitgetBot(Passivbot):
         )
 
     async def execute_order(self, order: dict) -> dict:
+        order_type = order["type"] if "type" in order else "limit"
         executed = await self.cca.create_order(
             symbol=order["symbol"],
-            type="limit",
+            type=order_type,
             side=order["side"],
             amount=abs(order["qty"]),
             price=order["price"],
