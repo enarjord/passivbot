@@ -316,7 +316,7 @@ class GateIOBot(Passivbot):
             }
             if order_type == "limit":
                 params["timeInForce"] = (
-                    ("poc" if self.config["live"]["time_in_force"] == "post_only" else "gtc"),
+                    "poc" if self.config["live"]["time_in_force"] == "post_only" else "gtc"
                 )
             to_execute.append(
                 {
