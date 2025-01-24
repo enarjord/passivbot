@@ -349,13 +349,6 @@ async def main():
         action="store_true",
         help="disable plotting",
     )
-    parser.add_argument(
-        "--combine_ohlcvs",
-        "-co",
-        dest="combine_ohlcvs",
-        action="store_true",
-        help="combine ohlcvs from multiple exchanges",
-    )
     template_config = get_template_live_config("v7")
     del template_config["optimize"]
     keep_live_keys = {
@@ -377,10 +370,9 @@ async def main():
     update_config_with_args(config, args)
     config = format_config(config, verbose=False)
     config["disable_plotting"] = args.disable_plotting
-    config["combine_ohlcvs"] = args.combine_ohlcvs
     config["backtest"]["cache_dir"] = {}
     config["backtest"]["coins"] = {}
-    if config["combine_ohlcvs"]:
+    if config["backtest"]["combine_ohlcvs"]:
         exchange = "combined"
         coins, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
         exchange_preference = defaultdict(list)
