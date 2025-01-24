@@ -9,6 +9,7 @@ import numpy as np
 import pprint
 from copy import deepcopy
 import argparse
+import re
 from collections import defaultdict
 from collections.abc import Sized
 import sys
@@ -1511,20 +1512,23 @@ def create_acronym(full_name, acronyms=set()):
         i += 1
         if i > 100:
             raise Exception(f"too many acronym duplicates {acronym}")
-            break
         shortened_name = full_name
         for k in [
-            "backtest_",
-            "live_",
-            "optimize_bounds_",
-            "optimize_limits_lower_bound_",
-            "optimize_",
-            "bot_",
+            "backtest.",
+            "live.",
+            "optimize_bounds.",
+            "optimize_limits_lower_bound.",
+            "optimize.",
+            "bot.",
         ]:
-            if full_name.startswith(k):
-                shortened_name = full_name.replace(k, "")
+            if shortened_name.startswith(k):
+                shortened_name = shortened_name.replace(k, "")
                 break
-        acronym = "".join(word[0] for word in shortened_name.split("_"))
+
+        # Split on both '_' and '.' using regex
+        splitted = re.split(r"[._]+", shortened_name)
+        acronym = "".join(word[0] for word in splitted if word)  # skip any empty splits
+
         if acronym not in acronyms:
             break
         acronym += str(i)
@@ -1547,7 +1551,7 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
         full_name = f"{prefix}{key}"
 
         if isinstance(value, dict):
-            add_arguments_recursively(parser, value, f"{full_name}_", acronyms=acronyms)
+            add_arguments_recursively(parser, value, f"{full_name}.", acronyms=acronyms)
         else:
             acronym = create_acronym(full_name, acronyms)
             appendix = ""
@@ -1571,6 +1575,11 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             elif type_ == bool:
                 type_ = str2bool
                 appendix = "[y/n]"
+            if "combine_ohlcvs" in full_name:
+                appendix = (
+                    "If true, combine ohlcvs data from all exchanges into single numpy array, otherwise backtest each exchange separately. "
+                    + appendix
+                )
             parser.add_argument(
                 f"--{full_name}",
                 f"-{acronym}",
@@ -1595,7 +1604,7 @@ def recursive_config_update(config, key, value, path=None):
             config[key] = value
         return True
 
-    key_split = key.split("_")
+    key_split = key.split(".")
     if key_split[0] in config:
         new_path = path + [key_split[0]]
         return recursive_config_update(config[key_split[0]], "_".join(key_split[1:]), value, new_path)
