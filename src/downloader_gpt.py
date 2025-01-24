@@ -1022,15 +1022,18 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
     n_timesteps = len(timestamps)
     valid_coins = sorted(chosen_data_per_coin.keys())
     n_coins = len(valid_coins)
-    global_start_date = ts_to_date_utc(global_start_time)
-    global_end_date = ts_to_date_utc(global_end_time)
+    # use at most last 60 days of date range to compute volume ratios
+    start_date_for_volume_ratios = ts_to_date_utc(
+        max(global_start_time, global_end_time - 1000 * 60 * 60 * 24 * 60)
+    )
+    end_date_for_volume_ratios = ts_to_date_utc(global_end_time)
 
     exchanges_with_data = sorted(set([chosen_mss_per_coin[coin]["exchange"] for coin in valid_coins]))
     exchange_volume_ratios = await compute_exchange_volume_ratios(
         exchanges_with_data,
         valid_coins,
-        global_start_date,
-        global_end_date,
+        start_date_for_volume_ratios,
+        end_date_for_volume_ratios,
         {ex: om_dict[ex] for ex in exchanges_with_data},
     )
     exchanges_counts = defaultdict(int)
