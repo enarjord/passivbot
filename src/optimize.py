@@ -401,13 +401,6 @@ def add_extra_options(parser):
         default=None,
         help="Start with given live configs. Single json file or dir with multiple json files",
     )
-    parser.add_argument(
-        "--combine_ohlcvs",
-        "-co",
-        dest="combine_ohlcvs",
-        action="store_true",
-        help="combine ohlcvs from multiple exchanges",
-    )
 
 
 def extract_configs(path):
@@ -499,7 +492,7 @@ async def main():
     update_config_with_args(config, args)
     config = format_config(config, verbose=False)
     exchanges = config["backtest"]["exchanges"]
-    exchanges_fname = "combined" if args.combine_ohlcvs else "_".join(exchanges)
+    exchanges_fname = "combined" if config["backtest"]["combine_ohlcvs"] else "_".join(exchanges)
     date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
     coins = sorted(
         set([symbol_to_coin(x) for y in config["live"]["approved_coins"].values() for x in y])
@@ -527,7 +520,7 @@ async def main():
         hlcvs_dtypes = {}
         msss = {}
         config["backtest"]["coins"] = {}
-        if args.combine_ohlcvs:
+        if config["backtest"]["combine_ohlcvs"]:
             exchange = "combined"
             coins, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
             config["backtest"]["coins"][exchange] = coins
