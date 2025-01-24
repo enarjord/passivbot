@@ -1607,7 +1607,7 @@ def recursive_config_update(config, key, value, path=None):
     key_split = key.split(".")
     if key_split[0] in config:
         new_path = path + [key_split[0]]
-        return recursive_config_update(config[key_split[0]], "_".join(key_split[1:]), value, new_path)
+        return recursive_config_update(config[key_split[0]], ".".join(key_split[1:]), value, new_path)
 
     return False
 
