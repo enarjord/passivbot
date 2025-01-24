@@ -501,11 +501,12 @@ def flatten(lst: list) -> list:
     return [y for x in lst for y in x]
 
 
-def get_template_live_config(passivbot_mode="neat_grid"):
+def get_template_live_config(passivbot_mode="v7"):
     if passivbot_mode == "v7":
         return {
             "backtest": {
                 "base_dir": "backtests",
+                "combine_ohlcvs": True,
                 "compress_cache": True,
                 "end_date": "now",
                 "exchanges": ["binance", "bybit", "gateio", "bitget"],
