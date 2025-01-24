@@ -1582,6 +1582,7 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
                 )
             parser.add_argument(
                 f"--{full_name}",
+                f"--{full_name.replace('.', '_')}",
                 f"-{acronym}",
                 type=type_,
                 dest=full_name,
