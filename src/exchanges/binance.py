@@ -9,6 +9,7 @@ import traceback
 import numpy as np
 import json
 import passivbot_rust as pbr
+from copy import deepcopy
 from pure_funcs import (
     floatify,
     ts_to_date_utc,
@@ -439,6 +440,14 @@ class BinanceBot(Passivbot):
             return [await self.execute_order(orders[0])]
         to_execute = []
         for order in orders[: self.config["live"]["max_n_creations_per_batch"]]:
+            params = {
+                "positionSide": order["position_side"].upper(),
+                "newClientOrderId": order["custom_id"],
+            }
+            if order["type"] == "limit":
+                params["timeInForce"] = (
+                    "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
+                )
             to_execute.append(
                 {
                     "type": "limit",
@@ -446,13 +455,7 @@ class BinanceBot(Passivbot):
                     "side": order["side"],
                     "amount": abs(order["qty"]),
                     "price": order["price"],
-                    "params": {
-                        "positionSide": order["position_side"].upper(),
-                        "newClientOrderId": order["custom_id"],
-                        "timeInForce": (
-                            "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
-                        ),
-                    },
+                    "params": deepcopy(params),
                 }
             )
         executed = None
