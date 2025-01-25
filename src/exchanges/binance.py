@@ -414,7 +414,7 @@ class BinanceBot(Passivbot):
         }
         if order_type == "limit":
             params["timeInForce"] = (
-                ("GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"),
+                "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
             )
         executed = await self.cca.create_order(
             type=order_type,
