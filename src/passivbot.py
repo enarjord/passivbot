@@ -1404,7 +1404,7 @@ class Passivbot:
                     continue
                 order_side = determine_side_from_order_tuple(order)
                 order_type = "limit"
-                if (
+                if self.config["live"]["market_orders_allowed"] and (
                     ("grid" in order[2] and mprice_diff < 0.0001)
                     or ("trailing" in order[2] and mprice_diff < 0.001)
                     or (order_side == "buy" and order[1] >= last_mprice)

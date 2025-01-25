@@ -165,6 +165,7 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
 	- May be split into long and short by giving a json on the form:
 		- `{"long": ["COIN1", "COIN2"], "short": ["COIN2", "COIN3"]}`
 - `leverage`: Leverage set on exchange. Default is 10.
+- `market_orders_allowed`: If true, allow Passivbot to place market orders when order price is very close to current market price. If false, will only place limit orders. Default is true.
 - `max_n_cancellations_per_batch`: Will cancel n open orders per execution.
 - `max_n_creations_per_batch`: Will create n new orders per execution.
 - `max_n_restarts_per_day`: If the bot crashes for any reason, restart the bot up to n times per day before stopping completely.

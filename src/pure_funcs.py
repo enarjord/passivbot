@@ -580,6 +580,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 "forced_mode_short": "",
                 "ignored_coins": [],
                 "leverage": 10.0,
+                "market_orders_allowed": True,
                 "max_n_cancellations_per_batch": 5,
                 "max_n_creations_per_batch": 3,
                 "max_n_restarts_per_day": 10,
