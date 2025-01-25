@@ -1516,8 +1516,8 @@ def create_acronym(full_name, acronyms=set()):
         for k in [
             "backtest.",
             "live.",
-            "optimize_bounds.",
-            "optimize_limits_lower_bound.",
+            "optimize.bounds.",
+            "optimize.limits.lower_bound",
             "optimize.",
             "bot.",
         ]:
@@ -1564,7 +1564,7 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             elif any([x in full_name for x in ["ignored_coins", "exchanges"]]):
                 type_ = comma_separated_values
                 appendix = "item1,item2,item3,..."
-            elif "optimize_scoring" in full_name:
+            elif "scoring" in full_name:
                 type_ = comma_separated_values
                 acronym = "os"
                 appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
