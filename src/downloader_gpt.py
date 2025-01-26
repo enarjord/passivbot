@@ -340,7 +340,7 @@ class OHLCVManager:
         """
         Get first timestamp of available ohlcv data for given exchange & coin
         """
-        if (fts := self.load_first_timestamp(coin)) is not None:
+        if (fts := self.load_first_timestamp(coin)) not in [None, 0.0]:
             return fts
         if not self.markets:
             self.load_cc()
@@ -356,6 +356,10 @@ class OHLCVManager:
             ohlcvs = await self.cc.fetch_ohlcv(
                 self.get_symbol(coin), since=int(date_to_ts("2018-01-01")), timeframe="1d"
             )
+            if not ohlcvs:
+                ohlcvs = await self.cc.fetch_ohlcv(
+                    self.get_symbol(coin), since=int(date_to_ts("2020-01-01")), timeframe="1d"
+                )
         elif self.exchange == "bitget":
             fts = await self.find_first_day_bitget(coin)
             return fts
