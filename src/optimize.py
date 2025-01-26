@@ -338,13 +338,17 @@ class Evaluator:
 
     def calc_fitness(self, analyses_combined):
         modifier = 0.0
-        for i, key in [
-            (6, "drawdown_worst"),
-            (5, "drawdown_worst_mean_1pct"),
-            (4, "equity_balance_diff_max"),
-            (3, "equity_balance_diff_mean"),
-            (2, "loss_profit_ratio"),
-        ]:
+        keys = [
+            "drawdown_worst",
+            "drawdown_worst_mean_1pct",
+            "equity_balance_diff_neg_max",
+            "equity_balance_diff_neg_mean",
+            "equity_balance_diff_pos_max",
+            "equity_balance_diff_pos_mean",
+            "loss_profit_ratio",
+        ]
+        i = len(keys) + 1
+        for key in keys:
             modifier += (
                 max(
                     self.config["optimize"]["limits"][f"lower_bound_{key}"],
@@ -352,9 +356,10 @@ class Evaluator:
                 )
                 - self.config["optimize"]["limits"][f"lower_bound_{key}"]
             ) * 10**i
+            i -= 1
         if (
             analyses_combined["drawdown_worst_max"] >= 1.0
-            or analyses_combined["equity_balance_diff_max_max"] >= 1.0
+            or analyses_combined["equity_balance_diff_neg_max_max"] >= 1.0
         ):
             w_0 = w_1 = modifier
         else:

@@ -1597,14 +1597,33 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         bal_eq.push((last_balance, equity));
     }
 
-    let (equity_balance_diff_sum, equity_balance_diff_max) =
-        bal_eq
-            .iter()
-            .fold((0.0, 0.0), |(sum, max), &(balance, equity)| {
-                let diff = (equity - balance).abs() / balance;
-                (sum + diff, f64::max(max, diff))
-            });
-    let equity_balance_diff_mean = equity_balance_diff_sum / bal_eq.len() as f64;
+    // Calculate equity-balance differences with separate positive and negative tracking
+    let mut ebds_pos = Vec::new();
+    let mut ebds_neg = Vec::new();
+
+    for &(balance, equity) in bal_eq.iter() {
+        let ebd = (equity - balance) / balance;
+        if ebd > 0.0 {
+            ebds_pos.push(ebd);
+        } else if ebd < 0.0 {
+            ebds_neg.push(ebd);
+        }
+    }
+
+    let equity_balance_diff_pos_max = ebds_pos.iter().fold(0.0, |max, &x| f64::max(max, x));
+    let equity_balance_diff_pos_mean = if !ebds_pos.is_empty() {
+        ebds_pos.iter().sum::<f64>() / ebds_pos.len() as f64
+    } else {
+        0.0
+    };
+
+    let equity_balance_diff_neg_max = ebds_neg.iter().fold(0.0, |max, &x| f64::max(max, x.abs()));
+    let equity_balance_diff_neg_mean = if !ebds_neg.is_empty() {
+        ebds_neg.iter().map(|x| x.abs()).sum::<f64>() / ebds_neg.len() as f64
+    } else {
+        0.0
+    };
+
     let gain = fills[fills.len() - 1].balance / fills[0].balance;
 
     // Calculate profit factor
@@ -1633,8 +1652,10 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         sterling_ratio,
         drawdown_worst,
         drawdown_worst_mean_1pct,
-        equity_balance_diff_mean,
-        equity_balance_diff_max,
+        equity_balance_diff_neg_max,
+        equity_balance_diff_neg_mean,
+        equity_balance_diff_pos_max,
+        equity_balance_diff_pos_mean,
         loss_profit_ratio,
     }
 }

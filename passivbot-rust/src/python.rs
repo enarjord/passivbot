@@ -99,10 +99,21 @@ pub fn run_backtest(
             analysis.drawdown_worst_mean_1pct,
         )?;
         py_analysis.set_item(
-            "equity_balance_diff_mean",
-            analysis.equity_balance_diff_mean,
+            "equity_balance_diff_neg_max",
+            analysis.equity_balance_diff_neg_max,
         )?;
-        py_analysis.set_item("equity_balance_diff_max", analysis.equity_balance_diff_max)?;
+        py_analysis.set_item(
+            "equity_balance_diff_neg_mean",
+            analysis.equity_balance_diff_neg_mean,
+        )?;
+        py_analysis.set_item(
+            "equity_balance_diff_pos_max",
+            analysis.equity_balance_diff_pos_max,
+        )?;
+        py_analysis.set_item(
+            "equity_balance_diff_pos_mean",
+            analysis.equity_balance_diff_pos_mean,
+        )?;
         py_analysis.set_item("loss_profit_ratio", analysis.loss_profit_ratio)?;
 
         // Convert fills to a 2D array with mixed types

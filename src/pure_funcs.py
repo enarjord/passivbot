@@ -651,8 +651,10 @@ def get_template_live_config(passivbot_mode="v7"):
                 "limits": {
                     "lower_bound_drawdown_worst": 0.25,
                     "lower_bound_drawdown_worst_mean_1pct": 0.15,
-                    "lower_bound_equity_balance_diff_max": 0.35,
-                    "lower_bound_equity_balance_diff_mean": 0.005,
+                    "lower_bound_equity_balance_diff_neg_max": 0.35,
+                    "lower_bound_equity_balance_diff_neg_mean": 0.005,
+                    "lower_bound_equity_balance_diff_pos_max": 0.5,
+                    "lower_bound_equity_balance_diff_pos_mean": 0.01,
                     "lower_bound_loss_profit_ratio": 0.6,
                 },
                 "mutation_probability": 0.2,
