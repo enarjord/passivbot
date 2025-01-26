@@ -163,12 +163,12 @@ def load_coins_hlcvs_from_cache(config, exchange):
         mss = json.load(open(cache_dir / "market_specific_settings.json"))
         if config["backtest"]["compress_cache"]:
             fname = cache_dir / "hlcvs.npy.gz"
-            logging.info(f"Attempting to load hlcvs data from cache {fname}...")
+            logging.info(f"{exchange} Attempting to load hlcvs data from cache {fname}...")
             with gzip.open(fname, "rb") as f:
                 hlcvs = np.load(f)
         else:
             fname = cache_dir / "hlcvs.npy"
-            logging.info(f"Attempting to load hlcvs data from cache {fname}...")
+            logging.info(f"{exchange} Attempting to load hlcvs data from cache {fname}...")
             hlcvs = np.load(fname)
         return cache_dir, coins, hlcvs, mss
 
