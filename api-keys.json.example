@@ -3,7 +3,8 @@
         "bybit": "https://partner.bybit.com/b/passivbot",
         "bitget": "https://partner.bitget.com/bg/Y8FU1W",
         "okx": "https://www.okx.com/join/PASSIVBOT",
-        "binance": "Via the Binance Link Program, Passivbot is paid commissions only if the user's Binance account was created after 2024-09-21 and without any referral link. Therefore, to support continued Passivbot development, please consider using Passivbot on a new, non-referred account."
+        "binance": "https://accounts.binance.com/register?ref=TII4B07C",
+        "gateio": "https://www.gate.io/signup/AQCRUVTE"
     },
     "binance_01" : {
         "exchange": "binance",
