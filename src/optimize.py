@@ -8,6 +8,7 @@ import multiprocessing
 import subprocess
 import mmap
 from multiprocessing import Queue, Process
+from collections import defaultdict
 from backtest import (
     prepare_hlcvs_mss,
     prep_backtest_args,
@@ -338,8 +339,9 @@ class Evaluator:
     def calc_fitness(self, analyses_combined):
         modifier = 0.0
         for i, key in [
-            (5, "drawdown_worst"),
-            (4, "drawdown_worst_mean_1pct"),
+            (6, "drawdown_worst"),
+            (5, "drawdown_worst_mean_1pct"),
+            (4, "equity_balance_diff_max"),
             (3, "equity_balance_diff_mean"),
             (2, "loss_profit_ratio"),
         ]:
@@ -523,6 +525,11 @@ async def main():
         if config["backtest"]["combine_ohlcvs"]:
             exchange = "combined"
             coins, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
+            exchange_preference = defaultdict(list)
+            for coin in coins:
+                exchange_preference[mss[coin]["exchange"]].append(coin)
+            for ex in exchange_preference:
+                logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
             config["backtest"]["coins"][exchange] = coins
             hlcvs_dict[exchange] = hlcvs
             hlcvs_shapes[exchange] = hlcvs.shape
