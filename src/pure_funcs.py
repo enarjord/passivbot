@@ -650,9 +650,10 @@ def get_template_live_config(passivbot_mode="v7"):
                 "iters": 30000,
                 "limits": {
                     "lower_bound_drawdown_worst": 0.25,
-                    "lower_bound_drawdown_worst_mean_1pct": 0.1,
-                    "lower_bound_equity_balance_diff_mean": 0.03,
-                    "lower_bound_loss_profit_ratio": 0.75,
+                    "lower_bound_drawdown_worst_mean_1pct": 0.15,
+                    "lower_bound_equity_balance_diff_max": 0.35,
+                    "lower_bound_equity_balance_diff_mean": 0.005,
+                    "lower_bound_loss_profit_ratio": 0.6,
                 },
                 "mutation_probability": 0.2,
                 "n_cpus": 5,
