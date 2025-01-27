@@ -1429,12 +1429,15 @@ class Passivbot:
     def calc_unstucking_close(self, ideal_orders):
         stuck_positions = []
         pnls_cumsum = np.array([x["pnl"] for x in self.pnls]).cumsum()
+        pnls_cumsum_max, pnls_cumsum_last = (
+            (pnls_cumsum.max(), pnls_cumsum[-1]) if len(pnls_cumsum) > 0 else (0.0, 0.0)
+        )
         unstuck_allowances = {"long": 0.0, "short": 0.0}
         for symbol in self.positions:
             for pside in ["long", "short"]:
                 if (
                     self.has_position(pside, symbol)
-                    and self.live_configs[symbol][pside]["unstuck_loss_allowance_pct"] > 0.0
+                    and self.config["bot"][pside]["unstuck_loss_allowance_pct"] > 0.0
                 ):
                     wallet_exposure = pbr.calc_wallet_exposure(
                         self.c_mults[symbol],
@@ -1452,8 +1455,8 @@ class Passivbot:
                                 self.balance,
                                 self.config["bot"][pside]["unstuck_loss_allowance_pct"]
                                 * self.config["bot"][pside]["total_wallet_exposure_limit"],
-                                pnls_cumsum.max(),
-                                pnls_cumsum[-1],
+                                pnls_cumsum_max,
+                                pnls_cumsum_last,
                             )
                             if len(pnls_cumsum) > 0
                             else 0.0
