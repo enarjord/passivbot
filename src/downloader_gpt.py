@@ -180,7 +180,9 @@ class OHLCVManager:
     Manages OHLCVs for multiple exchanges.
     """
 
-    def __init__(self, exchange, start_date=None, end_date=None, cc=None):
+    def __init__(
+        self, exchange, start_date=None, end_date=None, cc=None, gap_tolerance_ohlcvs_minutes=20.0
+    ):
         self.exchange = "binanceusdm" if exchange == "binance" else exchange
         self.quote = "USDC" if exchange == "hyperliquid" else "USDT"
         self.start_date = "2020-01-01" if start_date is None else start_date
@@ -197,6 +199,7 @@ class OHLCVManager:
         self.verbose = True
         self.max_requests_per_minute = {"": 120, "gateio": 60}
         self.request_timestamps = deque(maxlen=1000)  # for rate-limiting checks
+        self.gap_tolerance_ohlcvs_minutes = gap_tolerance_ohlcvs_minutes
 
     def update_date_range(self, new_start_date=None, new_end_date=None):
         if new_start_date:
@@ -416,7 +419,7 @@ class OHLCVManager:
             except Exception as e:
                 logging.error(f"Error with {get_function_name()} {e}")
 
-    def load_ohlcvs_from_cache(self, coin, gap_tolerance_minutes=20):
+    def load_ohlcvs_from_cache(self, coin):
         """
         Loads any cached ohlcv data for exchange, coin and date range from cache
         and *strictly* enforces no gaps. If any gap is found, return empty.
@@ -467,7 +470,7 @@ class OHLCVManager:
         # If any interval is not exactly 60000, we have a gap.
         if (intervals != 60000).any():
             greatest_gap = int(intervals.max() / 60000.0)
-            if greatest_gap > gap_tolerance_minutes:
+            if greatest_gap > self.gap_tolerance_ohlcvs_minutes:
                 logging.warning(
                     f"[{self.exchange}] Gaps detected in {coin} OHLCV data. Greatest gap: {greatest_gap} minutes. Returning empty DataFrame."
                 )
@@ -781,7 +784,12 @@ async def prepare_hlcvs(config: dict, exchange: str):
         exchange = "binanceusdm"
     start_date = config["backtest"]["start_date"]
     end_date = format_end_date(config["backtest"]["end_date"])
-    om = OHLCVManager(exchange, start_date, end_date)
+    om = OHLCVManager(
+        exchange,
+        start_date,
+        end_date,
+        gap_tolerance_ohlcvs_minutes=config["backtest"]["gap_tolerance_ohlcvs_minutes"],
+    )
     try:
         return await prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, om)
     finally:
@@ -928,7 +936,12 @@ async def prepare_hlcvs_combined(config):
     ]
     om_dict = {}
     for ex in exchanges_to_consider:
-        om = OHLCVManager(ex, config["backtest"]["start_date"], config["backtest"]["end_date"])
+        om = OHLCVManager(
+            ex,
+            config["backtest"]["start_date"],
+            config["backtest"]["end_date"],
+            gap_tolerance_ohlcvs_minutes=config["backtest"]["gap_tolerance_ohlcvs_minutes"],
+        )
         # await om.load_markets()  # if you want to do this up front
         om_dict[ex] = om
 

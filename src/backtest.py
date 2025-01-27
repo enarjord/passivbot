@@ -150,8 +150,9 @@ def get_cache_hash(config, exchange):
         "end_date": format_end_date(config["backtest"]["end_date"]),
         "start_date": config["backtest"]["start_date"],
         "exchange": config["backtest"]["exchanges"] if exchange == "combined" else exchange,
+        "minimum_coin_age_days": config["live"]["minimum_coin_age_days"],
+        "gap_tolerance_ohlcvs_minutes": config["backtest"]["gap_tolerance_ohlcvs_minutes"],
     }
-    to_hash["minimum_coin_age_days"] = config["live"]["minimum_coin_age_days"]
     return calc_hash(to_hash)
 
 
