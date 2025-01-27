@@ -83,6 +83,17 @@ def get_days_in_between(start_day, end_day):
     return days
 
 
+def fill_gaps_in_ohlcvs(df):
+    interval = 60000
+    new_timestamps = np.arange(df["timestamp"].iloc[0], df["timestamp"].iloc[-1] + interval, interval)
+    new_df = df.set_index("timestamp").reindex(new_timestamps)
+    new_df.close = new_df.close.ffill()
+    for col in ["open", "high", "low"]:
+        new_df[col] = new_df[col].fillna(new_df.close)
+    new_df["volume"] = new_df["volume"].fillna(0.0)
+    return new_df.reset_index().rename(columns={"index": "timestamp"})
+
+
 def attempt_gap_fix_ohlcvs(df, symbol=None):
     interval = 60_000
     max_hours = 12
@@ -405,31 +416,65 @@ class OHLCVManager:
             except Exception as e:
                 logging.error(f"Error with {get_function_name()} {e}")
 
-    def load_ohlcvs_from_cache(self, coin):
+    def load_ohlcvs_from_cache(self, coin, gap_tolerance_minutes=20):
         """
         Loads any cached ohlcv data for exchange, coin and date range from cache
+        and *strictly* enforces no gaps. If any gap is found, return empty.
         """
         dirpath = os.path.join(self.cache_filepaths["ohlcvs"], coin, "")
         if not os.path.exists(dirpath):
             return pd.DataFrame()
+
         all_files = sorted([f for f in os.listdir(dirpath) if f.endswith(".npy")])
         all_days = get_days_in_between(self.start_date, self.end_date)
         all_months = sorted(set([x[:7] for x in all_days]))
+
+        # Load month files first
         files_to_load = [x for x in all_files if x.replace(".npy", "") in all_months]
+        # Add day files (exclude if they were loaded already as a month)
         files_to_load += [
             x for x in all_files if x.replace(".npy", "") in all_days and x not in files_to_load
         ]
-        dfs = [load_ohlcv_data(os.path.join(dirpath, f)) for f in files_to_load]
+
+        dfs = []
+        for f in files_to_load:
+            try:
+                filepath = os.path.join(dirpath, f)
+                df_part = load_ohlcv_data(filepath)
+                dfs.append(df_part)
+            except Exception as e:
+                logging.error(f"Error loading file {f}: {e}")
+
         if not dfs:
             return pd.DataFrame()
-        df = pd.concat(dfs).drop_duplicates("timestamp").sort_values("timestamp")
-        # fill gaps
-        interval = 60000
-        nindex = np.arange(df.timestamp.iloc[0], df.timestamp.iloc[-1] + interval, interval)
-        df = df.set_index("timestamp").reindex(nindex).ffill().reset_index()
-        df = df.rename(columns={"index": "timestamp"})
+
+        # Concatenate, drop duplicates, sort by timestamp
+        df = (
+            pd.concat(dfs)
+            .drop_duplicates("timestamp")
+            .sort_values("timestamp")
+            .reset_index(drop=True)
+        )
+        # ----------------------------------------------------------------------
+        # 1) Clip to [start_ts, end_ts] and return
+        # ----------------------------------------------------------------------
         df = self.filter_date_range(df)
-        return attempt_gap_fix_ohlcvs(df, symbol=coin)
+
+        # ----------------------------------------------------------------------
+        # 2) Gap check with tolerance: if intervals != 60000 for any bar, return empty.
+        # ----------------------------------------------------------------------
+        intervals = np.diff(df["timestamp"].values)
+        # If any interval is not exactly 60000, we have a gap.
+        if (intervals != 60000).any():
+            greatest_gap = int(intervals.max() / 60000.0)
+            if greatest_gap > gap_tolerance_minutes:
+                logging.warning(
+                    f"[{self.exchange}] Gaps detected in {coin} OHLCV data. Greatest gap: {greatest_gap} minutes. Returning empty DataFrame."
+                )
+                return pd.DataFrame(columns=df.columns)
+            else:
+                df = fill_gaps_in_ohlcvs(df)
+        return df
 
     async def download_ohlcvs_binance(self, coin: str):
         # Uses Binance's data archives via binance.vision
@@ -1104,14 +1149,24 @@ async def fetch_data_for_coin_and_exchange(
     coin: str, ex: str, om: OHLCVManager, effective_start_ts: int, end_ts: int
 ):
     """
-    Fetch data for (coin, ex) in [effective_start_ts, end_ts], returning
-    either (ex, df, coverage_count, gap_count, total_volume) or None.
+    Fetch data for (coin, ex) between [effective_start_ts, end_ts].
+    Returns (ex, df, coverage_count, gap_count, total_volume), where:
+        - ex:                the exchange name
+        - df:                the OHLCV dataframe
+        - coverage_count:    total number of rows in df
+        - gap_count:         sum of missing minutes across all gaps
+        - total_volume:      sum of 'volume' column (within the timeframe)
     """
+
+    # Check if coin is listed on this exchange
     if not om.has_coin(coin):
         return None
 
+    # Adjust the manager's date range to [effective_start_ts, end_ts]
     om.update_date_range(effective_start_ts, end_ts)
+
     try:
+        # Get the DataFrame of 1m OHLCVs
         df = await om.get_ohlcvs(coin)
     except Exception as e:
         logging.warning(f"Error retrieving {coin} from {ex}: {e}")
@@ -1120,16 +1175,30 @@ async def fetch_data_for_coin_and_exchange(
     if df.empty:
         return None
 
+    # Filter strictly to [effective_start_ts, end_ts]
     df = df[(df.timestamp >= effective_start_ts) & (df.timestamp <= end_ts)].reset_index(drop=True)
     if df.empty:
         return None
 
+    # coverage_count = total number of 1m bars in df
     coverage_count = len(df)
-    intervals = np.diff(df.timestamp.values)
-    gap_count = np.count_nonzero(intervals != 60000)
+
+    # ------------------------------------------------------------------
+    # 1) Compute sum of all missing minutes (gap_count)
+    # ------------------------------------------------------------------
+    # For each consecutive pair, the difference in timestamps should be 60000 ms.
+    # If it's bigger, we measure how many 1-minute bars are missing.
+    intervals = np.diff(df["timestamp"].values)
+
+    gap_count = sum(
+        (gap // 60000) - 1  # e.g. if gap is 5 minutes => 5 - 1 = 4 missing bars
+        for gap in intervals
+        if gap > 60000
+    )
+
+    # total_volume = sum of volume column
     total_volume = df["volume"].sum()
 
-    # Return tuple so the caller can decide how to handle partial coverage
     return (ex, df, coverage_count, gap_count, total_volume)
 
 
