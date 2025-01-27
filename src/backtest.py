@@ -263,6 +263,10 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
     return bot_params, exchange_params, backtest_params
 
 
+def expand_analysis(analysis, fills, config):
+    return analysis
+
+
 def run_backtest(hlcvs, mss, config: dict, exchange: str):
     bot_params, exchange_params, backtest_params = prep_backtest_args(config, mss, exchange)
     logging.info(f"Backtesting {exchange}...")
@@ -279,7 +283,7 @@ def run_backtest(hlcvs, mss, config: dict, exchange: str):
         )
 
     logging.info(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
-    return fills, equities, analysis
+    return fills, equities, expand_analysis(analysis, fills, config)
 
 
 def post_process(config, hlcvs, fills, equities, analysis, results_path, exchange):
