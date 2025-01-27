@@ -371,8 +371,13 @@ impl<'a> Backtest<'a> {
 
     fn update_equities(&mut self, k: usize) {
         let mut equity = self.balance;
-        // Calculate unrealized PnL for long positions
-        for (&idx, position) in &self.positions.long {
+
+        // Sort long keys
+        let mut long_keys: Vec<usize> = self.positions.long.keys().cloned().collect();
+        long_keys.sort();
+        // Calculate unrealized PnL for each long position in sorted order
+        for idx in long_keys {
+            let position = &self.positions.long[&idx];
             let current_price = self.hlcvs[[k, idx, CLOSE]];
             let upnl = calc_pnl_long(
                 position.price,
@@ -382,8 +387,13 @@ impl<'a> Backtest<'a> {
             );
             equity += upnl;
         }
-        // Calculate unrealized PnL for short positions
-        for (&idx, position) in &self.positions.short {
+
+        // Sort short keys
+        let mut short_keys: Vec<usize> = self.positions.short.keys().cloned().collect();
+        short_keys.sort();
+        // Calculate unrealized PnL for each short position in sorted order
+        for idx in short_keys {
+            let position = &self.positions.short[&idx];
             let current_price = self.hlcvs[[k, idx, CLOSE]];
             let upnl = calc_pnl_short(
                 position.price,
@@ -393,6 +403,7 @@ impl<'a> Backtest<'a> {
             );
             equity += upnl;
         }
+
         self.equities.push(equity);
     }
 
@@ -407,7 +418,9 @@ impl<'a> Backtest<'a> {
             _ => panic!("Invalid pside"),
         };
 
-        let current_positions: Vec<usize> = positions.keys().cloned().collect();
+        // Sort positions to ensure stable iteration
+        let mut current_positions: Vec<usize> = positions.keys().cloned().collect();
+        current_positions.sort();
         let mut preferred_coins = Vec::new();
 
         // Only calculate preferred coins if there are open slots
@@ -1031,7 +1044,11 @@ impl<'a> Backtest<'a> {
             );
             if unstuck_allowances.0 > 0.0 {
                 // Check long positions
-                for (&idx, position) in &self.positions.long {
+                // Sort the keys for long
+                let mut long_keys: Vec<usize> = self.positions.long.keys().cloned().collect();
+                long_keys.sort();
+                for idx in long_keys {
+                    let position = &self.positions.long[&idx];
                     let wallet_exposure = calc_wallet_exposure(
                         self.exchange_params_list[idx].c_mult,
                         self.balance,
@@ -1059,7 +1076,12 @@ impl<'a> Backtest<'a> {
             );
             if unstuck_allowances.1 > 0.0 {
                 // Check short positions
-                for (&idx, position) in &self.positions.short {
+                // Sort the keys for short
+                let mut short_keys: Vec<usize> = self.positions.short.keys().cloned().collect();
+                short_keys.sort();
+
+                for idx in short_keys {
+                    let position = &self.positions.short[&idx];
                     let wallet_exposure = calc_wallet_exposure(
                         self.exchange_params_list[idx].c_mult,
                         self.balance,
@@ -1082,8 +1104,13 @@ impl<'a> Backtest<'a> {
         if stuck_positions.is_empty() {
             return (NO_POS, NO_POS, Order::default());
         }
-        // Sort stuck positions by pprice_diff
-        stuck_positions.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(Ordering::Equal));
+        // Sort with tie-breaker: first by diff, then by idx
+        stuck_positions.sort_by(|(i1, side1, d1), (i2, side2, d2)| {
+            match d1.partial_cmp(d2).unwrap_or(std::cmp::Ordering::Equal) {
+                std::cmp::Ordering::Equal => i1.cmp(i2),
+                other => other,
+            }
+        });
         for (idx, pside, _) in stuck_positions {
             match pside {
                 LONG => {
@@ -1227,8 +1254,9 @@ impl<'a> Backtest<'a> {
     fn update_open_orders_any_fill(&mut self, k: usize) {
         if self.trading_enabled.long {
             if self.trailing_enabled.long {
-                let positions_long_indices: Vec<usize> =
+                let mut positions_long_indices: Vec<usize> =
                     self.positions.long.keys().cloned().collect();
+                positions_long_indices.sort();
                 for idx in &positions_long_indices {
                     if !self.did_fill_long.contains(&idx) {
                         self.update_trailing_prices(k, *idx, LONG);
@@ -1239,7 +1267,8 @@ impl<'a> Backtest<'a> {
             self.open_orders
                 .long
                 .retain(|&idx, _| self.actives.long.contains(&idx));
-            let active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
+            let mut active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
+            active_long_indices.sort(); // Ensure deterministic order
             for &idx in &active_long_indices {
                 self.update_stuck_status(idx, LONG);
                 self.update_open_orders_long_single(k, idx);
@@ -1247,8 +1276,9 @@ impl<'a> Backtest<'a> {
         }
         if self.trading_enabled.short {
             if self.trailing_enabled.short {
-                let positions_short_indices: Vec<usize> =
+                let mut positions_short_indices: Vec<usize> =
                     self.positions.short.keys().cloned().collect();
+                positions_short_indices.sort();
                 for idx in &positions_short_indices {
                     if !self.did_fill_short.contains(&idx) {
                         self.update_trailing_prices(k, *idx, SHORT);
@@ -1259,7 +1289,8 @@ impl<'a> Backtest<'a> {
             self.open_orders
                 .short
                 .retain(|&idx, _| self.actives.short.contains(&idx));
-            let active_short_indices: Vec<usize> = self.actives.short.iter().cloned().collect();
+            let mut active_short_indices: Vec<usize> = self.actives.short.iter().cloned().collect();
+            active_short_indices.sort(); // Ensure deterministic order
             for &idx in &active_short_indices {
                 self.update_stuck_status(idx, SHORT);
                 self.update_open_orders_short_single(k, idx);
@@ -1294,7 +1325,9 @@ impl<'a> Backtest<'a> {
         // - entries for coins with open trailing entries
         // - closes for coins with open trailing closes
         if self.trading_enabled.long {
-            let positions_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
+            let mut positions_long_indices: Vec<usize> =
+                self.positions.long.keys().cloned().collect();
+            positions_long_indices.sort();
             if self.trailing_enabled.long {
                 for idx in &positions_long_indices {
                     if !self.did_fill_long.contains(idx) {
@@ -1309,7 +1342,8 @@ impl<'a> Backtest<'a> {
                     .long
                     .retain(|&idx, _| self.actives.long.contains(&idx));
             }
-            let active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
+            let mut active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
+            active_long_indices.sort();
 
             for idx in active_long_indices {
                 if actives_without_pos.contains(&idx)
@@ -1329,8 +1363,9 @@ impl<'a> Backtest<'a> {
         }
 
         if self.trading_enabled.short {
-            let positions_short_indices: Vec<usize> =
+            let mut positions_short_indices: Vec<usize> =
                 self.positions.short.keys().cloned().collect();
+            positions_short_indices.sort();
             if self.trailing_enabled.short {
                 for idx in &positions_short_indices {
                     if !self.did_fill_short.contains(idx) {
@@ -1345,7 +1380,8 @@ impl<'a> Backtest<'a> {
                     .short
                     .retain(|&idx, _| self.actives.short.contains(&idx));
             }
-            let active_short_indices: Vec<usize> = self.actives.short.iter().cloned().collect();
+            let mut active_short_indices: Vec<usize> = self.actives.short.iter().cloned().collect();
+            active_short_indices.sort();
             for idx in active_short_indices {
                 if actives_without_pos.contains(&idx)
                     || self.open_orders.short.get(&idx).map_or(false, |orders| {
