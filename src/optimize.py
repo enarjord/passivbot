@@ -12,6 +12,7 @@ from collections import defaultdict
 from backtest import (
     prepare_hlcvs_mss,
     prep_backtest_args,
+    expand_analysis,
 )
 from pure_funcs import (
     get_template_live_config,
@@ -309,7 +310,7 @@ class Evaluator:
                 self.exchange_params[exchange],
                 self.backtest_params[exchange],
             )
-            analyses[exchange] = analysis
+            analyses[exchange] = expand_analysis(analysis, fills, config)
 
         analyses_combined = self.combine_analyses(analyses)
         w_0, w_1 = self.calc_fitness(analyses_combined)
