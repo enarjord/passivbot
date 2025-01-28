@@ -510,7 +510,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 "compress_cache": True,
                 "end_date": "now",
                 "exchanges": ["binance", "bybit", "gateio", "bitget"],
-                "gap_tolerance_ohlcvs_minutes": 20.0,
+                "gap_tolerance_ohlcvs_minutes": 120.0,
                 "start_date": "2021-04-01",
                 "starting_balance": 100000.0,
             },
