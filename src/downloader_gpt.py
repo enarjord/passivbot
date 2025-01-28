@@ -26,7 +26,13 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 from tqdm import tqdm
-from pure_funcs import date_to_ts, ts_to_date_utc, safe_filename, symbol_to_coin
+from pure_funcs import (
+    date_to_ts,
+    ts_to_date_utc,
+    safe_filename,
+    symbol_to_coin,
+    get_template_live_config,
+)
 from procedures import (
     make_get_filepath,
     format_end_date,
@@ -34,6 +40,8 @@ from procedures import (
     utc_ms,
     get_file_mod_utc,
     get_first_timestamps_unified,
+    add_arguments_recursively,
+    load_config,
 )
 
 # ========================= CONFIGURABLES & GLOBALS =========================
@@ -302,6 +310,8 @@ class OHLCVManager:
         or date range for coin not existing on exchange,
         return empty dataframe
         """
+        if not self.has_coin(coin):
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
         if start_date or end_date:
             self.update_date_range(new_start_date=start_date, new_end_date=end_date)
         missing_days = await self.get_missing_days_ohlcvs(coin)
@@ -1351,7 +1361,66 @@ async def compute_exchange_volume_ratios(
 
 
 async def main():
-    pass
+    parser = argparse.ArgumentParser(prog="downloader", description="download ohlcv data")
+    parser.add_argument(
+        "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
+    )
+    template_config = get_template_live_config("v7")
+    del template_config["optimize"]
+    del template_config["bot"]
+    template_config["live"] = {
+        k: v
+        for k, v in template_config["live"].items()
+        if k
+        in {
+            "approved_coins",
+            "ignored_coins",
+        }
+    }
+    template_config["backtest"] = {
+        k: v
+        for k, v in template_config["backtest"].items()
+        if k
+        in {
+            "combine_ohlcvs",
+            "end_date",
+            "start_date",
+            "exchanges",
+        }
+    }
+    add_arguments_recursively(parser, template_config)
+    args = parser.parse_args()
+    if args.config_path is None:
+        logging.info(f"loading default template config configs/template.json")
+        config = load_config("configs/template.json", verbose=False)
+    else:
+        logging.info(f"loading config {args.config_path}")
+        config = load_config(args.config_path)
+    oms = {}
+    try:
+        for ex in config["backtest"]["exchanges"]:
+            oms[ex] = OHLCVManager(
+                ex, config["backtest"]["start_date"], config["backtest"]["end_date"]
+            )
+        logging.info("loading markets for {config['backtest']['exchanges']}")
+        await asyncio.gather(*[oms[ex].load_markets() for ex in oms])
+        coins = [x for y in config["live"]["approved_coins"].values() for x in y]
+        for coin in sorted(set(coins)):
+            tasks = {}
+            for ex in oms:
+                try:
+                    tasks[ex] = asyncio.create_task(oms[ex].get_ohlcvs(coin))
+                except Exception as e:
+                    logging.error(f"{ex} {coin} error a with get_ohlcvs() {e}")
+            for ex in tasks:
+                try:
+                    await tasks[ex]
+                except Exception as e:
+                    logging.error(f"{ex} {coin} error b with get_ohlcvs() {e}")
+    finally:
+        for om in oms.values():
+            if om.cc:
+                await om.cc.close()
 
 
 if __name__ == "__main__":
