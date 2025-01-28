@@ -499,26 +499,6 @@ async def main():
     old_config = deepcopy(config)
     update_config_with_args(config, args)
     config = format_config(config, verbose=False)
-    exchanges = config["backtest"]["exchanges"]
-    exchanges_fname = "combined" if config["backtest"]["combine_ohlcvs"] else "_".join(exchanges)
-    date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
-    coins = sorted(
-        set([symbol_to_coin(x) for y in config["live"]["approved_coins"].values() for x in y])
-    )
-    coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
-    hash_snippet = uuid4().hex[:8]
-    n_days = int(
-        round(
-            (
-                date_to_ts(config["backtest"]["end_date"])
-                - date_to_ts(config["backtest"]["start_date"])
-            )
-            / (1000 * 60 * 60 * 24)
-        )
-    )
-    config["results_filename"] = make_get_filepath(
-        f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}_all_results.txt"
-    )
 
     try:
         # Prepare data for each exchange
@@ -549,9 +529,9 @@ async def main():
             logging.info(f"Finished creating shared memory file for {exchange}: {shared_memory_file}")
         else:
             tasks = {}
-            for exchange in exchanges:
+            for exchange in config["backtest"]["exchanges"]:
                 tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
-            for exchange in exchanges:
+            for exchange in config["backtest"]["exchanges"]:
                 coins, hlcvs, mss, results_path, cache_dir = await tasks[exchange]
                 config["backtest"]["coins"][exchange] = coins
                 hlcvs_dict[exchange] = hlcvs
@@ -567,6 +547,24 @@ async def main():
                     f"Finished creating shared memory file for {exchange}: {shared_memory_file}"
                 )
 
+        exchanges = config["backtest"]["exchanges"]
+        exchanges_fname = "combined" if config["backtest"]["combine_ohlcvs"] else "_".join(exchanges)
+        date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
+        coins = sorted(set([x for y in config["backtest"]["coins"].values() for x in y]))
+        coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
+        hash_snippet = uuid4().hex[:8]
+        n_days = int(
+            round(
+                (
+                    date_to_ts(config["backtest"]["end_date"])
+                    - date_to_ts(config["backtest"]["start_date"])
+                )
+                / (1000 * 60 * 60 * 24)
+            )
+        )
+        config["results_filename"] = make_get_filepath(
+            f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}_all_results.txt"
+        )
         # Create results queue and start manager process
         manager = multiprocessing.Manager()
         results_queue = manager.Queue()
