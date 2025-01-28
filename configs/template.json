@@ -3,7 +3,7 @@
               "compress_cache": true,
               "end_date": "now",
               "exchanges": ["binance", "bybit", "gateio", "bitget"],
-              "gap_tolerance_ohlcvs_minutes": 20.0,
+              "gap_tolerance_ohlcvs_minutes": 120.0,
               "start_date": "2021-04-01",
               "starting_balance": 100000},
  "bot": {"long": {"close_grid_markup_range": 0.025537,
