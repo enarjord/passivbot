@@ -4,7 +4,7 @@ import asyncio
 import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from downloader_gpt import OHLCVManager
+from downloader import OHLCVManager
 from pure_funcs import symbol_to_coin
 from procedures import make_get_filepath
 
