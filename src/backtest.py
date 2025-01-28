@@ -25,7 +25,7 @@ from pure_funcs import (
 )
 import pprint
 from copy import deepcopy
-from downloader_gpt import prepare_hlcvs, prepare_hlcvs_combined
+from downloader import prepare_hlcvs, prepare_hlcvs_combined
 from pathlib import Path
 from plotting import plot_fills_forager
 from collections import defaultdict
