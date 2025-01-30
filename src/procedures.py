@@ -315,7 +315,7 @@ def coins_to_symbols(coins: [str], eligible_symbols=None, exchange=None, verbose
 def format_end_date(end_date) -> str:
     if end_date in ["today", "now", "", None]:
         ms2day = 1000 * 60 * 60 * 24
-        end_date = ts_to_date_utc((utc_ms() - ms2day) // ms2day * ms2day)
+        end_date = ts_to_date_utc((utc_ms() - ms2day * 2) // ms2day * ms2day)
     else:
         end_date = ts_to_date_utc(date_to_ts2(end_date))
     return end_date[:10]
