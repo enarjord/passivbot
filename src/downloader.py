@@ -58,6 +58,14 @@ REQUEST_TIMESTAMPS = deque(maxlen=1000)  # for rate-limiting checks
 # ========================= HELPER FUNCTIONS =========================
 
 
+def is_valid_date(date):
+    try:
+        ts = date_to_ts(date)
+        return True
+    except:
+        return False
+
+
 def get_function_name():
     return inspect.currentframe().f_back.f_code.co_name
 
@@ -189,7 +197,7 @@ class OHLCVManager:
     """
 
     def __init__(
-        self, exchange, start_date=None, end_date=None, cc=None, gap_tolerance_ohlcvs_minutes=20.0
+        self, exchange, start_date=None, end_date=None, cc=None, gap_tolerance_ohlcvs_minutes=120.0
     ):
         self.exchange = "binanceusdm" if exchange == "binance" else exchange
         self.quote = "USDC" if exchange == "hyperliquid" else "USDT"
@@ -319,7 +327,7 @@ class OHLCVManager:
             if not self.markets:
                 await self.load_markets()
             await self.download_ohlcvs(coin)
-        ohlcvs = self.load_ohlcvs_from_cache(coin)
+        ohlcvs = await self.load_ohlcvs_from_cache(coin)
         ohlcvs.volume = ohlcvs.volume * ohlcvs.close  # use quote volume
         return ohlcvs
 
@@ -334,9 +342,7 @@ class OHLCVManager:
         if not os.path.exists(dirpath):
             return days
         all_files = os.listdir(dirpath)
-        return sorted(
-            [x for x in days if (x + ".npy" not in all_files and x[:7] + ".npy" not in all_files)]
-        )
+        return sorted([x for x in days if x + ".npy" not in all_files])
 
     async def download_ohlcvs(self, coin):
         if not self.markets:
@@ -375,7 +381,10 @@ class OHLCVManager:
         if self.exchange == "binanceusdm":
             # Fetches first by default
             ohlcvs = await self.cc.fetch_ohlcv(self.get_symbol(coin), since=1, timeframe="1d")
-        elif self.exchange in ["bybit", "gateio"]:
+        elif self.exchange == "bybit":
+            fts = await self.find_first_day_bybit(coin)
+            return fts
+        elif self.exchange == "gateio":
             # Data since 2018
             ohlcvs = await self.cc.fetch_ohlcv(
                 self.get_symbol(coin), since=int(date_to_ts("2018-01-01")), timeframe="1d"
@@ -429,7 +438,7 @@ class OHLCVManager:
             except Exception as e:
                 logging.error(f"Error with {get_function_name()} {e}")
 
-    def load_ohlcvs_from_cache(self, coin):
+    async def load_ohlcvs_from_cache(self, coin):
         """
         Loads any cached ohlcv data for exchange, coin and date range from cache
         and *strictly* enforces no gaps. If any gap is found, return empty.
@@ -495,19 +504,33 @@ class OHLCVManager:
         dirpath = make_get_filepath(os.path.join(self.cache_filepaths["ohlcvs"], coin, ""))
         base_url = "https://data.binance.vision/data/futures/um/"
 
-        missing_days = await self.get_missing_days_ohlcvs(coin)
-        month_now = ts_to_date_utc(utc_ms())[:7]
-        missing_months = sorted({x[:7] for x in missing_days if x[:7] != month_now})
-        tasks = []
-        for month in missing_months:
-            fpath = os.path.join(dirpath, month + ".npy")
-            if not os.path.exists(fpath):
-                url = f"{base_url}monthly/klines/{symbolf}/1m/{symbolf}-1m-{month}.zip"
-                await self.check_rate_limit()
-                tasks.append(asyncio.create_task(self.download_single_binance(url, fpath)))
-        for task in tasks:
-            await task
-        # Download daily for any gap months
+        # Convert any pre existing monthly data to daily data
+        for f in os.listdir(dirpath):
+            if len(f) == 11:
+                df = load_ohlcv_data(os.path.join(dirpath, f))
+
+                df.loc[:, "datetime"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+                df.set_index("datetime", inplace=True)
+
+                daily_groups = df.groupby(df.index.date)
+                n_days_dumped = 0
+                for date, daily_data in daily_groups:
+                    if len(daily_data) == 1440:
+                        fpath = str(date) + ".npy"
+                        d_fpath = os.path.join(dirpath, fpath)
+                        if not os.path.exists(d_fpath):
+                            n_days_dumped += 1
+                            dump_ohlcv_data(daily_data, d_fpath)
+                    else:
+                        logging.info(
+                            f"binanceusdm incomplete daily data for {coin} {date} {len(daily_data)}"
+                        )
+                if n_days_dumped:
+                    logging.info(f"binanceusdm dumped {n_days_dumped} daily files for {f}")
+                m_fpath = os.path.join(dirpath, f)
+                logging.info(f"binanceusdm removing {m_fpath}")
+                os.remove(m_fpath)
+        # Download daily
         missing_days = await self.get_missing_days_ohlcvs(coin)
         tasks = []
         for day in missing_days:
@@ -518,13 +541,6 @@ class OHLCVManager:
                 tasks.append(asyncio.create_task(self.download_single_binance(url, fpath)))
         for task in tasks:
             await task
-
-        # Cleanup days contained in months
-        fnames = os.listdir(dirpath)
-        for fname in fnames:
-            if fname.endswith(".npy") and len(fname) == 14:
-                if fname[:7] + ".npy" in fnames:
-                    os.remove(os.path.join(dirpath, fname))
 
     async def download_single_binance(self, url: str, fpath: str):
         try:
@@ -563,6 +579,17 @@ class OHLCVManager:
                     asyncio.create_task(self.download_single_bybit(session, url, dirpath, day))
                 )
             results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def find_first_day_bybit(self, coin: str, webpage=None) -> float:
+        symbolf = self.get_symbol(coin).replace("/USDT:", "")
+        # Bybit public data: "https://public.bybit.com/trading/"
+        base_url = "https://public.bybit.com/trading/"
+        if webpage is None:
+            webpage = urlopen(f"{base_url}{symbolf}/").read().decode()
+        dates = [date for x in webpage.split(".csv.gz") if is_valid_date((date := x[-10:]))]
+        first_ts = date_to_ts(sorted(dates)[0])
+        self.dump_first_timestamp(coin, first_ts)
+        return first_ts
 
     async def download_single_bybit(self, session, url: str, dirpath: str, day: str) -> pd.DataFrame:
         try:
