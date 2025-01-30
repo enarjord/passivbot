@@ -6,6 +6,7 @@ import json
 import logging
 import inspect
 import os
+import shutil
 import sys
 import traceback
 import zipfile
@@ -498,14 +499,44 @@ class OHLCVManager:
                 df = fill_gaps_in_ohlcvs(df)
         return df
 
+    def copy_ohlcvs_from_old_dir(self, new_dirpath, old_dirpath, missing_days, coin):
+        symbolf = self.get_symbol(coin).replace("/USDT:", "")
+        files_copied = 0
+        if os.path.exists(old_dirpath):
+            for d0 in os.listdir(old_dirpath):
+                if d0.endswith(".npy") and d0[:10] in missing_days:
+                    src = os.path.join(old_dirpath, d0)
+                    dst = os.path.join(new_dirpath, d0)
+                    if os.path.exists(dst):
+                        continue
+                    try:
+                        shutil.copy(src, dst)
+                        files_copied += 1
+                    except Exception as e:
+                        logging.error(f"{self.exchange} error copying {src} -> {dst} {e}")
+        if files_copied:
+            logging.info(
+                f"{self.exchange} copied {files_copied} files from {old_dirpath} to {new_dirpath}"
+            )
+            return True
+        else:
+            return False
+
     async def download_ohlcvs_binance(self, coin: str):
         # Uses Binance's data archives via binance.vision
         symbolf = self.get_symbol(coin).replace("/USDT:", "")
         dirpath = make_get_filepath(os.path.join(self.cache_filepaths["ohlcvs"], coin, ""))
         base_url = "https://data.binance.vision/data/futures/um/"
+        missing_days = await self.get_missing_days_ohlcvs(coin)
+
+        # Copy from old directory first
+        old_dirpath = f"historical_data/ohlcvs_futures/{symbolf}/"
+        if self.copy_ohlcvs_from_old_dir(dirpath, old_dirpath, missing_days, coin):
+            missing_days = await self.get_missing_days_ohlcvs(coin)
+            if not missing_days:
+                return
 
         # Download monthy first (there may be gaps)
-        missing_days = await self.get_missing_days_ohlcvs(coin)
         month_now = ts_to_date_utc(utc_ms())[:7]
         missing_months = sorted({x[:7] for x in missing_days if x[:7] != month_now})
         tasks = []
@@ -575,6 +606,13 @@ class OHLCVManager:
             return
         symbolf = self.get_symbol(coin).replace("/USDT:", "")
         dirpath = make_get_filepath(os.path.join(self.cache_filepaths["ohlcvs"], coin, ""))
+
+        # Copy from old directory first
+        old_dirpath = f"historical_data/ohlcvs_bybit/{symbolf}/"
+        if self.copy_ohlcvs_from_old_dir(dirpath, old_dirpath, missing_days, coin):
+            missing_days = await self.get_missing_days_ohlcvs(coin)
+            if not missing_days:
+                return
 
         # Bybit public data: "https://public.bybit.com/trading/"
         base_url = "https://public.bybit.com/trading/"
