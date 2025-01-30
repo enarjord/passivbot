@@ -194,7 +194,75 @@ class BitgetBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_pnls(
+    async def fetch_pnls(self, start_time=None, end_time=None, limit=None):
+        wait_between_fetches_minimum_seconds = 0.5
+        if not hasattr(self, "pnls_ids_existing"):
+            self.pnls_ids_existing = set()
+        all_res = {}
+        until = int(end_time) if end_time else None
+        since = int(start_time) if start_time else None
+        retry_count = 0
+        first_fetch = True
+        while True:
+            if since and until and since >= until:
+                print("debug fetch_pnls g")
+                break
+            sts = utc_ms()
+            res = await (
+                self.cca.fetch_closed_orders(since=since)
+                if until is None
+                else self.cca.fetch_closed_orders(since=since, params={"until": until})
+            )
+            if first_fetch:
+                if not res:
+                    print("debug fetch_pnls e")
+                    break
+                if all(x["id"] in self.pnls_ids_existing for x in res):
+                    break
+                first_fetch = False
+            if not res:
+                print("debug fetch_pnls a retry_count:", retry_count)
+                if retry_count >= 10:
+                    break
+                retry_count += 1
+                until = int(until - 1000 * 60 * 60 * 4)
+                continue
+            resd = {elm["id"]: elm for elm in res}
+            if len(resd) != len(res):
+                print("debug fetch_pnls b", len(resd), len(res))
+            if all(id_ in all_res for id_ in resd):
+                print("debug fetch_pnls c retry_count:", retry_count)
+                if retry_count >= 10:
+                    break
+                retry_count += 1
+                until = int(until - 1000 * 60 * 60 * 4)
+                continue
+            retry_count = 0
+            for k, v in resd.items():
+                all_res[k] = v
+                all_res[k]["pnl"] = float(v["info"]["totalProfits"])
+                all_res[k]["position_side"] = v["info"]["posSide"]
+            if since and res[0]["timestamp"] <= since:
+                print("debug fetch_pnls e")
+                break
+            until = int(res[0]["timestamp"])
+            print(
+                "debug fetch_pnls d len(res):",
+                len(res),
+                res[0]["datetime"],
+                res[-1]["datetime"],
+                (res[-1]["timestamp"] - res[0]["timestamp"]) / (1000 * 60 * 60),
+            )
+            wait_time_seconds = max(
+                0.0, wait_between_fetches_minimum_seconds - (utc_ms() - sts) / 1000
+            )
+            await asyncio.sleep(wait_time_seconds)
+        all_res_list = sorted(all_res.values(), key=lambda x: x["timestamp"])
+        for x in all_res_list:
+            self.pnls_ids_existing.add(x["id"])
+        return all_res_list
+
+    async def fetch_pnls_old(
         self,
         start_time: int = None,
         end_time: int = None,
