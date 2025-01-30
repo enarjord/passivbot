@@ -1151,9 +1151,6 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
             best_exchange, best_df, best_cov, best_gaps, best_vol = exchange_candidates[0]
         logging.info(f"{coin} exchange preference: {[x[0] for x in exchange_candidates]}")
 
-        # Attempt small gap fix if desired
-        best_df = attempt_gap_fix_ohlcvs(best_df, symbol=coin)
-
         chosen_data_per_coin[coin] = best_df
         chosen_mss_per_coin[coin] = om_dict[best_exchange].get_market_specific_settings(coin)
         chosen_mss_per_coin[coin]["exchange"] = best_exchange
