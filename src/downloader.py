@@ -504,7 +504,21 @@ class OHLCVManager:
         dirpath = make_get_filepath(os.path.join(self.cache_filepaths["ohlcvs"], coin, ""))
         base_url = "https://data.binance.vision/data/futures/um/"
 
-        # Convert any pre existing monthly data to daily data
+        # Download monthy first (there may be gaps)
+        missing_days = await self.get_missing_days_ohlcvs(coin)
+        month_now = ts_to_date_utc(utc_ms())[:7]
+        missing_months = sorted({x[:7] for x in missing_days if x[:7] != month_now})
+        tasks = []
+        for month in missing_months:
+            fpath = os.path.join(dirpath, month + ".npy")
+            if not os.path.exists(fpath):
+                url = f"{base_url}monthly/klines/{symbolf}/1m/{symbolf}-1m-{month}.zip"
+                await self.check_rate_limit()
+                tasks.append(asyncio.create_task(self.download_single_binance(url, fpath)))
+        for task in tasks:
+            await task
+
+        # Convert any monthly data to daily data
         for f in os.listdir(dirpath):
             if len(f) == 11:
                 df = load_ohlcv_data(os.path.join(dirpath, f))
@@ -526,11 +540,12 @@ class OHLCVManager:
                             f"binanceusdm incomplete daily data for {coin} {date} {len(daily_data)}"
                         )
                 if n_days_dumped:
-                    logging.info(f"binanceusdm dumped {n_days_dumped} daily files for {f}")
+                    logging.info(f"binanceusdm dumped {n_days_dumped} daily files for {coin} {f}")
                 m_fpath = os.path.join(dirpath, f)
                 logging.info(f"binanceusdm removing {m_fpath}")
                 os.remove(m_fpath)
-        # Download daily
+
+        # Download missing daily
         missing_days = await self.get_missing_days_ohlcvs(coin)
         tasks = []
         for day in missing_days:
