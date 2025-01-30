@@ -160,7 +160,7 @@ class Passivbot:
         self.debug_mode = False
 
     async def start_bot(self):
-        logging.info(f"Starting bot...")
+        logging.info(f"Starting bot {self.exchange}...")
         await self.init_markets()
         await asyncio.sleep(1)
         logging.info(f"Starting data maintainers...")
@@ -1040,6 +1040,11 @@ class Passivbot:
                 )
         else:
             pnls_cache = await self.fetch_pnls(start_time=age_limit)
+            if pnls_cache:
+                try:
+                    json.dump(pnls_cache, open(self.pnls_cache_filepath, "w"))
+                except Exception as e:
+                    logging.error(f"error dumping pnls to {self.pnls_cache_filepath} {e}")
         self.pnls = pnls_cache
 
     async def update_pnls(self):
