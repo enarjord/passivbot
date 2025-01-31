@@ -212,7 +212,7 @@ pub struct Fill {
     pub order_type: OrderType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Analysis {
     pub adg: f64,
     pub mdg: f64,
@@ -230,6 +230,16 @@ pub struct Analysis {
     pub equity_balance_diff_pos_max: f64,
     pub equity_balance_diff_pos_mean: f64,
     pub loss_profit_ratio: f64,
+
+    pub adg_w: f64,
+    pub mdg_w: f64,
+    pub gain_w: f64,
+    pub sharpe_ratio_w: f64,
+    pub sortino_ratio_w: f64,
+    pub omega_ratio_w: f64,
+    pub calmar_ratio_w: f64,
+    pub sterling_ratio_w: f64,
+    pub loss_profit_ratio_w: f64,
 }
 
 impl Default for Analysis {
@@ -251,6 +261,16 @@ impl Default for Analysis {
             equity_balance_diff_pos_max: 1.0,
             equity_balance_diff_pos_mean: 1.0,
             loss_profit_ratio: 1.0,
+
+            adg_w: 0.0,
+            mdg_w: 0.0,
+            gain_w: 0.0,
+            sharpe_ratio_w: 0.0,
+            sortino_ratio_w: 0.0,
+            omega_ratio_w: 0.0,
+            calmar_ratio_w: 0.0,
+            sterling_ratio_w: 0.0,
+            loss_profit_ratio_w: 1.0,
         }
     }
 }

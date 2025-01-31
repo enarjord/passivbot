@@ -1481,7 +1481,7 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
     }
 }
 
-pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
+fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     if fills.len() <= 1 {
         return Analysis::default();
     }
@@ -1676,24 +1676,89 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         total_loss / total_profit
     };
 
-    Analysis {
-        adg,
-        mdg,
-        gain,
-        sharpe_ratio,
-        sortino_ratio,
-        omega_ratio,
-        expected_shortfall_1pct,
-        calmar_ratio,
-        sterling_ratio,
-        drawdown_worst,
-        drawdown_worst_mean_1pct,
-        equity_balance_diff_neg_max,
-        equity_balance_diff_neg_mean,
-        equity_balance_diff_pos_max,
-        equity_balance_diff_pos_mean,
-        loss_profit_ratio,
+    let mut analysis = Analysis::default();
+    analysis.adg = adg;
+    analysis.mdg = mdg;
+    analysis.gain = gain;
+    analysis.sharpe_ratio = sharpe_ratio;
+    analysis.sortino_ratio = sortino_ratio;
+    analysis.omega_ratio = omega_ratio;
+    analysis.expected_shortfall_1pct = expected_shortfall_1pct;
+    analysis.calmar_ratio = calmar_ratio;
+    analysis.sterling_ratio = sterling_ratio;
+    analysis.drawdown_worst = drawdown_worst;
+    analysis.drawdown_worst_mean_1pct = drawdown_worst_mean_1pct;
+    analysis.equity_balance_diff_neg_max = equity_balance_diff_neg_max;
+    analysis.equity_balance_diff_neg_mean = equity_balance_diff_neg_mean;
+    analysis.equity_balance_diff_pos_max = equity_balance_diff_pos_max;
+    analysis.equity_balance_diff_pos_mean = equity_balance_diff_pos_mean;
+    analysis.loss_profit_ratio = loss_profit_ratio;
+
+    analysis
+}
+
+pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
+    let mut analysis = analyze_backtest_basic(fills, equities);
+
+    if fills.len() <= 1 {
+        return analysis;
     }
+
+    let n = equities.len();
+    let mut subset_analyses = Vec::with_capacity(10);
+    subset_analyses.push(analysis.clone());
+
+    for i in 1..10 {
+        // fraction of the data we want to keep:
+        //  i=1 => fraction = 0.5       => last half
+        //  i=2 => fraction = 0.3333    => last third
+        //  i=3 => fraction = 0.25      => last quarter
+        //  etc.
+        let fraction = 1.0 / (1.0 + i as f64);
+
+        // start index for slicing the 'last' fraction
+        let start_idx = (n as f64 - fraction * (n as f64)).round() as usize;
+
+        // slice from start_idx to the end
+        let subset_equities = &equities[start_idx..];
+        if subset_equities.len() == 0 {
+            break;
+        }
+
+        // filter fills that happened after or at start_idx
+        let subset_fills: Vec<Fill> = fills
+            .iter()
+            .filter(|fill| fill.index >= start_idx)
+            .cloned()
+            .collect();
+        if subset_fills.len() == 0 {
+            break;
+        }
+
+        let subset_analysis = analyze_backtest_basic(&subset_fills, &subset_equities.to_vec());
+        subset_analyses.push(subset_analysis);
+    }
+
+    // Compute weighted metrics as the mean of subset analyses
+    analysis.adg_w = subset_analyses.iter().map(|a| a.adg).sum::<f64>() / 10.0;
+    analysis.mdg_w = subset_analyses.iter().map(|a| a.mdg).sum::<f64>() / 10.0;
+    analysis.gain_w = subset_analyses.iter().map(|a| a.gain).sum::<f64>() / 10.0;
+    analysis.sharpe_ratio_w = subset_analyses.iter().map(|a| a.sharpe_ratio).sum::<f64>() / 10.0;
+    analysis.sortino_ratio_w = subset_analyses.iter().map(|a| a.sortino_ratio).sum::<f64>() / 10.0;
+    analysis.omega_ratio_w = subset_analyses.iter().map(|a| a.omega_ratio).sum::<f64>() / 10.0;
+    analysis.calmar_ratio_w = subset_analyses.iter().map(|a| a.calmar_ratio).sum::<f64>() / 10.0;
+    analysis.sterling_ratio_w = subset_analyses
+        .iter()
+        .map(|a| a.sterling_ratio)
+        .sum::<f64>()
+        / 10.0;
+    analysis.loss_profit_ratio_w = subset_analyses
+        .iter()
+        .map(|a| a.loss_profit_ratio)
+        .sum::<f64>()
+        / 10.0;
+
+    analysis
 }
 
 fn calc_drawdowns(equity_series: &[f64]) -> Vec<f64> {

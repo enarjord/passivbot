@@ -116,6 +116,16 @@ pub fn run_backtest(
         )?;
         py_analysis.set_item("loss_profit_ratio", analysis.loss_profit_ratio)?;
 
+        py_analysis.set_item("adg_w", analysis.adg_w)?;
+        py_analysis.set_item("mdg_w", analysis.mdg_w)?;
+        py_analysis.set_item("gain_w", analysis.gain_w)?;
+        py_analysis.set_item("sharpe_ratio_w", analysis.sharpe_ratio_w)?;
+        py_analysis.set_item("sortino_ratio_w", analysis.sortino_ratio_w)?;
+        py_analysis.set_item("omega_ratio_w", analysis.omega_ratio_w)?;
+        py_analysis.set_item("calmar_ratio_w", analysis.calmar_ratio_w)?;
+        py_analysis.set_item("sterling_ratio_w", analysis.sterling_ratio_w)?;
+        py_analysis.set_item("loss_profit_ratio_w", analysis.loss_profit_ratio_w)?;
+
         // Convert fills to a 2D array with mixed types
         let mut py_fills = Array2::from_elem((fills.len(), 10), py.None());
         for (i, fill) in fills.iter().enumerate() {
