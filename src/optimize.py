@@ -228,6 +228,16 @@ def individual_to_config(individual, template=None):
         for key in keys:
             config["bot"][pside][key] = individual[i]
             i += 1
+        is_enabled = (
+            config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
+            and config["bot"][pside]["n_positions"] > 0.0
+        )
+        if not is_enabled:
+            for key in config["bot"][pside]:
+                bounds = config["optimize"]["bounds"][f"{pside}_{key}"]
+                if len(bounds) == 1:
+                    bounds = [bounds[0], bounds[0]]
+                config["bot"][pside][key] = min(max(bounds[0], 0.0), bounds[1])
     return config
 
 
