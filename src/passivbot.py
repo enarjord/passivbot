@@ -1413,6 +1413,7 @@ class Passivbot:
                 if self.config["live"]["market_orders_allowed"] and (
                     ("grid" in order[2] and mprice_diff < 0.0001)
                     or ("trailing" in order[2] and mprice_diff < 0.001)
+                    or ("auto_reduce" in order[2] and mprice_diff < 0.001)
                     or (order_side == "buy" and order[1] >= last_mprice)
                     or (order_side == "sell" and order[1] <= last_mprice)
                 ):
