@@ -32,6 +32,9 @@ Here follows an overview of the parameters found in `config/template.json`.
   - For example, `total_wallet_exposure_limit = 1.6` means 160% of (unleveraged) wallet balance is used.
   - Each position is given equal share of total exposure limit, i.e., `wallet_exposure_limit = total_wallet_exposure_limit / n_positions`.
   - See more: `docs/risk_management.md`.
+- `enforce_exposure_limit`: If true, will enforce exposure limits for each position.
+  - E.g. if for any reason a position's exposure exceeds 1% of the limit, reduce the position at market price to exposure limit.
+  - Useful for risk management if, for example, user withdraws balance or changes settings.
 
 ### Grid Entry Parameters
 
