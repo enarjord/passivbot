@@ -177,6 +177,21 @@ fn bot_params_pair_from_dict(dict: &PyDict) -> PyResult<BotParamsPair> {
     })
 }
 
+fn extract_bool_value(dict: &PyDict, key: &str) -> PyResult<bool> {
+    if let Ok(val) = extract_value::<bool>(dict, key) {
+        Ok(val)
+    } else if let Ok(val) = extract_value::<i64>(dict, key) {
+        Ok(val != 0)
+    } else if let Ok(val) = extract_value::<usize>(dict, key) {
+        Ok(val != 0)
+    } else if let Ok(val) = extract_value::<f64>(dict, key) {
+        Ok(val != 0.0)
+    } else {
+        // If none of the above types match, try to get the value as a bool
+        extract_value::<bool>(dict, key)
+    }
+}
+
 fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
     Ok(BotParams {
         close_grid_markup_range: extract_value(dict, "close_grid_markup_range")?,
@@ -186,6 +201,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         close_trailing_grid_ratio: extract_value(dict, "close_trailing_grid_ratio")?,
         close_trailing_qty_pct: extract_value(dict, "close_trailing_qty_pct")?,
         close_trailing_threshold_pct: extract_value(dict, "close_trailing_threshold_pct")?,
+        enforce_exposure_limit: extract_bool_value(dict, "enforce_exposure_limit")?,
         entry_grid_double_down_factor: extract_value(dict, "entry_grid_double_down_factor")?,
         entry_grid_spacing_weight: extract_value(dict, "entry_grid_spacing_weight")?,
         entry_grid_spacing_pct: extract_value(dict, "entry_grid_spacing_pct")?,
@@ -525,6 +541,7 @@ pub fn calc_next_close_long_py(
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
+    enforce_exposure_limit: bool,
     wallet_exposure_limit: f64,
     balance: f64,
     position_size: f64,
@@ -556,6 +573,7 @@ pub fn calc_next_close_long_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        enforce_exposure_limit,
         wallet_exposure_limit,
         ..Default::default()
     };
@@ -675,6 +693,7 @@ pub fn calc_next_close_short_py(
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
+    enforce_exposure_limit: bool,
     wallet_exposure_limit: f64,
     balance: f64,
     position_size: f64,
@@ -706,6 +725,7 @@ pub fn calc_next_close_short_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        enforce_exposure_limit,
         wallet_exposure_limit,
         ..Default::default()
     };
@@ -910,6 +930,7 @@ pub fn calc_closes_long_py(
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
+    enforce_exposure_limit: bool,
     wallet_exposure_limit: f64,
     balance: f64,
     position_size: f64,
@@ -943,6 +964,7 @@ pub fn calc_closes_long_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        enforce_exposure_limit,
         wallet_exposure_limit,
         ..Default::default()
     };
@@ -985,6 +1007,7 @@ pub fn calc_closes_short_py(
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
+    enforce_exposure_limit: bool,
     wallet_exposure_limit: f64,
     balance: f64,
     position_size: f64,
@@ -1018,6 +1041,7 @@ pub fn calc_closes_short_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        enforce_exposure_limit,
         wallet_exposure_limit,
         ..Default::default()
     };
