@@ -1368,6 +1368,7 @@ class Passivbot:
                         self.live_configs[symbol][pside]["close_trailing_qty_pct"],
                         self.live_configs[symbol][pside]["close_trailing_retracement_pct"],
                         self.live_configs[symbol][pside]["close_trailing_threshold_pct"],
+                        self.live_configs[symbol][pside]["enforce_exposure_limit"],
                         self.live_configs[symbol][pside]["wallet_exposure_limit"],
                         self.balance,
                         self.positions[symbol][pside]["size"],
