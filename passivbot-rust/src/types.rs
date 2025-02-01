@@ -102,6 +102,7 @@ pub struct BotParams {
     pub close_trailing_grid_ratio: f64,
     pub close_trailing_qty_pct: f64,
     pub close_trailing_threshold_pct: f64,
+    pub enforce_exposure_limit: bool,
     pub entry_grid_double_down_factor: f64,
     pub entry_grid_spacing_weight: f64,
     pub entry_grid_spacing_pct: f64,
@@ -154,6 +155,7 @@ pub enum OrderType {
     CloseGridLong,
     CloseTrailingLong,
     CloseUnstuckLong,
+    CloseAutoReduceLong,
 
     EntryInitialNormalShort,
     EntryInitialPartialShort,
@@ -166,6 +168,7 @@ pub enum OrderType {
     CloseGridShort,
     CloseTrailingShort,
     CloseUnstuckShort,
+    CloseAutoReduceShort,
 
     Empty,
 }
@@ -183,6 +186,7 @@ impl fmt::Display for OrderType {
             OrderType::CloseGridLong => write!(f, "close_grid_long"),
             OrderType::CloseTrailingLong => write!(f, "close_trailing_long"),
             OrderType::CloseUnstuckLong => write!(f, "close_unstuck_long"),
+            OrderType::CloseAutoReduceLong => write!(f, "close_auto_reduce_long"),
             OrderType::EntryInitialNormalShort => write!(f, "entry_initial_normal_short"),
             OrderType::EntryInitialPartialShort => write!(f, "entry_initial_partial_short"),
             OrderType::EntryTrailingNormalShort => write!(f, "entry_trailing_normal_short"),
@@ -193,6 +197,7 @@ impl fmt::Display for OrderType {
             OrderType::CloseGridShort => write!(f, "close_grid_short"),
             OrderType::CloseTrailingShort => write!(f, "close_trailing_short"),
             OrderType::CloseUnstuckShort => write!(f, "close_unstuck_short"),
+            OrderType::CloseAutoReduceShort => write!(f, "close_auto_reduce_short"),
             OrderType::Empty => write!(f, "empty"),
         }
     }
