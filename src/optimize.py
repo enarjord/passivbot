@@ -221,8 +221,9 @@ def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up):
 def individual_to_config(individual, template=None):
     if template is None:
         template = get_template_live_config("v7")
+    keys_ignored = ["enforce_exposure_limit"]
     config = deepcopy(template)
-    keys = sorted(config["bot"]["long"])
+    keys = [k for k in sorted(config["bot"]["long"]) if k not in keys_ignored]
     i = 0
     for pside in ["long", "short"]:
         for key in keys:
@@ -243,12 +244,17 @@ def individual_to_config(individual, template=None):
 
 def config_to_individual(config, param_bounds):
     individual = []
+    keys_ignored = ["enforce_exposure_limit"]
     for pside in ["long", "short"]:
         is_enabled = (
             param_bounds[f"{pside}_n_positions"][1] > 0.0
             and param_bounds[f"{pside}_total_wallet_exposure_limit"][1] > 0.0
         )
-        individual += [(v if is_enabled else 0.0) for k, v in sorted(config["bot"][pside].items())]
+        individual += [
+            (v if is_enabled else 0.0)
+            for k, v in sorted(config["bot"][pside].items())
+            if k not in keys_ignored
+        ]
     # adjust to bounds
     bounds = [(low, high) for low, high in param_bounds.values()]
     adjusted = [max(min(x, bounds[z][1]), bounds[z][0]) for z, x in enumerate(individual)]
