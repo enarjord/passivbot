@@ -48,7 +48,7 @@ import tempfile
 import time
 import fcntl
 from tqdm import tqdm
-import dictdiffer  # Added import for dictdiffer
+import dictdiffer
 
 
 def make_json_serializable(obj):
@@ -350,10 +350,23 @@ class Evaluator:
         keys = analyses[next(iter(analyses))].keys()
         for key in keys:
             values = [analysis[key] for analysis in analyses.values()]
-            analyses_combined[f"{key}_mean"] = np.mean(values) if values else 0.0
-            analyses_combined[f"{key}_min"] = np.min(values) if values else 0.0
-            analyses_combined[f"{key}_max"] = np.max(values) if values else 0.0
-            analyses_combined[f"{key}_std"] = np.std(values) if values else 0.0
+            if not values or any([x == np.inf for x in values]):
+                analyses_combined[f"{key}_mean"] = 0.0
+                analyses_combined[f"{key}_min"] = 0.0
+                analyses_combined[f"{key}_max"] = 0.0
+                analyses_combined[f"{key}_std"] = 0.0
+            else:
+                try:
+                    analyses_combined[f"{key}_mean"] = np.mean(values)
+                    analyses_combined[f"{key}_min"] = np.min(values)
+                    analyses_combined[f"{key}_max"] = np.max(values)
+                    analyses_combined[f"{key}_std"] = np.std(values)
+                except Exception as e:
+                    print("\n\n debug\n\n")
+                    print("values", values)
+                    print(e)
+                    traceback.print_exc()
+                    raise
         return analyses_combined
 
     def calc_fitness(self, analyses_combined):
