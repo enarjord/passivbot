@@ -191,14 +191,7 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                 f"changed backtest.exchange: {result['backtest']['exchange']} -> backtest.exchanges: [{result['backtest']['exchange']}]"
             )
         del result["backtest"]["exchange"]
-    for k0 in template:
-        for k1 in template[k0]:
-            if k0 not in result:
-                raise Exception(f"Fatal: {k0} missing from config")
-            if k1 not in result[k0]:
-                result[k0][k1] = template[k0][k1]
-                if verbose:
-                    print(f"adding missing parameter {k0}.{k1}: {template[k0][k1]}")
+    add_missing_keys_recursively(template, result, verbose=verbose)
     if not live_only:
         for k_coins in ["approved_coins", "ignored_coins"]:
             path = result["live"][k_coins]
@@ -227,6 +220,20 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                 }
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
     return result
+
+
+def add_missing_keys_recursively(src, dst, parent=[], verbose=True):
+    for k in src:
+        if isinstance(src[k], dict):
+            if k not in dst:
+                raise Exception(f"Fatal: {k} missing from config")
+            else:
+                add_missing_keys_recursively(src[k], dst[k], parent + [k])
+        else:
+            if k not in dst:
+                if verbose:
+                    print(f"Adding missing key -> val {'.'.join(parent + [k])} -> {src[k]} to config")
+                dst[k] = src[k]
 
 
 def get_all_eligible_symbols(exchange="binance"):
