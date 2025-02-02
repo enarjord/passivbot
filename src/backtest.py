@@ -25,7 +25,7 @@ from pure_funcs import (
 )
 import pprint
 from copy import deepcopy
-from downloader import prepare_hlcvs, prepare_hlcvs_combined
+from downloader import prepare_hlcvs, prepare_hlcvs_combined, add_all_eligible_coins_to_config
 from pathlib import Path
 from plotting import plot_fills_forager
 from collections import defaultdict
@@ -374,6 +374,7 @@ async def main():
         config = load_config(args.config_path)
     update_config_with_args(config, args)
     config = format_config(config, verbose=False)
+    await add_all_eligible_coins_to_config(config)
     config["disable_plotting"] = args.disable_plotting
     config["backtest"]["cache_dir"] = {}
     config["backtest"]["coins"] = {}
