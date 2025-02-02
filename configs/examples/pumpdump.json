@@ -58,7 +58,7 @@
                    "unstuck_ema_dist": 0.0,
                    "unstuck_loss_allowance_pct": 0.001,
                    "unstuck_threshold": 0.4}},
- "live": {"approved_coins": "configs/shitcoins.json",
+ "live": {"approved_coins": "",
           "auto_gs": true,
           "coin_flags": {},
           "empty_means_all_approved": true,
