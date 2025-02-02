@@ -235,6 +235,8 @@ def individual_to_config(individual, template=None):
         )
         if not is_enabled:
             for key in config["bot"][pside]:
+                if key in keys_ignored:
+                    continue
                 bounds = config["optimize"]["bounds"][f"{pside}_{key}"]
                 if len(bounds) == 1:
                     bounds = [bounds[0], bounds[0]]
