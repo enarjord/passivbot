@@ -198,7 +198,13 @@ class OHLCVManager:
     """
 
     def __init__(
-        self, exchange, start_date=None, end_date=None, cc=None, gap_tolerance_ohlcvs_minutes=120.0
+        self,
+        exchange,
+        start_date=None,
+        end_date=None,
+        cc=None,
+        gap_tolerance_ohlcvs_minutes=120.0,
+        verbose=True,
     ):
         self.exchange = "binanceusdm" if exchange == "binance" else exchange
         self.quote = "USDC" if exchange == "hyperliquid" else "USDT"
@@ -213,7 +219,7 @@ class OHLCVManager:
             "first_timestamps": os.path.join("caches", self.exchange, "first_timestamps.json"),
         }
         self.markets = None
-        self.verbose = True
+        self.verbose = verbose
         self.max_requests_per_minute = {"": 120, "gateio": 60}
         self.request_timestamps = deque(maxlen=1000)  # for rate-limiting checks
         self.gap_tolerance_ohlcvs_minutes = gap_tolerance_ohlcvs_minutes
@@ -1435,6 +1441,37 @@ async def compute_exchange_volume_ratios(
             averages[pair] = 0.0
 
     return averages
+
+
+async def add_all_eligible_coins_to_config(config):
+    path = config["live"]["approved_coins"]
+    if config["live"]["empty_means_all_approved"] and path in [
+        [""],
+        [],
+        None,
+        "",
+        0,
+        0.0,
+        {"long": [], "short": []},
+        {"long": [""], "short": [""]},
+    ]:
+        approved_coins = await get_all_eligible_coins(config["backtest"]["exchanges"])
+        config["live"]["approved_coins"] = {"long": approved_coins, "short": approved_coins}
+
+
+async def get_all_eligible_coins(exchanges):
+    oms = {}
+    for ex in exchanges:
+        oms[ex] = OHLCVManager(ex, verbose=False)
+    await asyncio.gather(*[oms[ex].load_markets() for ex in oms])
+    approved_coins = set()
+    for ex in oms:
+        for s in oms[ex].markets:
+            if oms[ex].has_coin(s):
+                coin = symbol_to_coin(s)
+                if coin:
+                    approved_coins.add(symbol_to_coin(s))
+    return sorted(approved_coins)
 
 
 async def main():
