@@ -33,6 +33,7 @@ from procedures import (
     add_arguments_recursively,
     update_config_with_args,
 )
+from downloader import add_all_eligible_coins_to_config
 from copy import deepcopy
 from main import manage_rust_compilation
 import numpy as np
@@ -517,6 +518,7 @@ async def main():
     old_config = deepcopy(config)
     update_config_with_args(config, args)
     config = format_config(config, verbose=False)
+    await add_all_eligible_coins_to_config(config)
 
     try:
         # Prepare data for each exchange
