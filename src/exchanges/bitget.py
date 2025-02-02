@@ -196,8 +196,6 @@ class BitgetBot(Passivbot):
 
     async def fetch_pnls(self, start_time=None, end_time=None, limit=None):
         wait_between_fetches_minimum_seconds = 0.5
-        if not hasattr(self, "pnls_ids_existing"):
-            self.pnls_ids_existing = set()
         all_res = {}
         until = int(end_time) if end_time else None
         since = int(start_time) if start_time else None
@@ -216,8 +214,6 @@ class BitgetBot(Passivbot):
             if first_fetch:
                 if not res:
                     print("debug fetch_pnls e")
-                    break
-                if all(x["id"] in self.pnls_ids_existing for x in res):
                     break
                 first_fetch = False
             if not res:
@@ -242,6 +238,8 @@ class BitgetBot(Passivbot):
                 all_res[k] = v
                 all_res[k]["pnl"] = float(v["info"]["totalProfits"])
                 all_res[k]["position_side"] = v["info"]["posSide"]
+            if start_time is None and end_time is None:
+                break
             if since and res[0]["timestamp"] <= since:
                 print("debug fetch_pnls e")
                 break
@@ -258,8 +256,6 @@ class BitgetBot(Passivbot):
             )
             await asyncio.sleep(wait_time_seconds)
         all_res_list = sorted(all_res.values(), key=lambda x: x["timestamp"])
-        for x in all_res_list:
-            self.pnls_ids_existing.add(x["id"])
         return all_res_list
 
     async def fetch_pnls_old(
