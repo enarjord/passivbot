@@ -350,10 +350,10 @@ class Evaluator:
         keys = analyses[next(iter(analyses))].keys()
         for key in keys:
             values = [analysis[key] for analysis in analyses.values()]
-            analyses_combined[f"{key}_mean"] = np.mean(values)
-            analyses_combined[f"{key}_min"] = np.min(values)
-            analyses_combined[f"{key}_max"] = np.max(values)
-            analyses_combined[f"{key}_std"] = np.std(values)
+            analyses_combined[f"{key}_mean"] = np.mean(values) if values else 0.0
+            analyses_combined[f"{key}_min"] = np.min(values) if values else 0.0
+            analyses_combined[f"{key}_max"] = np.max(values) if values else 0.0
+            analyses_combined[f"{key}_std"] = np.std(values) if values else 0.0
         return analyses_combined
 
     def calc_fitness(self, analyses_combined):
