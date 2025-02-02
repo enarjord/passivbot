@@ -203,7 +203,7 @@ class BitgetBot(Passivbot):
         first_fetch = True
         while True:
             if since and until and since >= until:
-                print("debug fetch_pnls g")
+                # print("debug fetch_pnls g")
                 break
             sts = utc_ms()
             res = await (
@@ -213,21 +213,21 @@ class BitgetBot(Passivbot):
             )
             if first_fetch:
                 if not res:
-                    print("debug fetch_pnls e")
+                    # print("debug fetch_pnls e")
                     break
                 first_fetch = False
             if not res:
-                print("debug fetch_pnls a retry_count:", retry_count)
+                # print("debug fetch_pnls a retry_count:", retry_count)
                 if retry_count >= 10:
                     break
                 retry_count += 1
                 until = int(until - 1000 * 60 * 60 * 4)
                 continue
             resd = {elm["id"]: elm for elm in res}
-            if len(resd) != len(res):
-                print("debug fetch_pnls b", len(resd), len(res))
+            # if len(resd) != len(res):
+            #    print("debug fetch_pnls b", len(resd), len(res))
             if all(id_ in all_res for id_ in resd):
-                print("debug fetch_pnls c retry_count:", retry_count)
+                # print("debug fetch_pnls c retry_count:", retry_count)
                 if retry_count >= 10:
                     break
                 retry_count += 1
@@ -241,68 +241,22 @@ class BitgetBot(Passivbot):
             if start_time is None and end_time is None:
                 break
             if since and res[0]["timestamp"] <= since:
-                print("debug fetch_pnls e")
+                # print("debug fetch_pnls e")
                 break
             until = int(res[0]["timestamp"])
-            print(
-                "debug fetch_pnls d len(res):",
-                len(res),
-                res[0]["datetime"],
-                res[-1]["datetime"],
-                (res[-1]["timestamp"] - res[0]["timestamp"]) / (1000 * 60 * 60),
-            )
+            # print(
+            #    "debug fetch_pnls d len(res):",
+            #    len(res),
+            #    res[0]["datetime"],
+            #    res[-1]["datetime"],
+            #    (res[-1]["timestamp"] - res[0]["timestamp"]) / (1000 * 60 * 60),
+            # )
             wait_time_seconds = max(
                 0.0, wait_between_fetches_minimum_seconds - (utc_ms() - sts) / 1000
             )
             await asyncio.sleep(wait_time_seconds)
         all_res_list = sorted(all_res.values(), key=lambda x: x["timestamp"])
         return all_res_list
-
-    async def fetch_pnls_old(
-        self,
-        start_time: int = None,
-        end_time: int = None,
-        limit=None,
-    ):
-        all_fetched = {}
-        params = {"productType": "USDT-FUTURES"}
-        if end_time:
-            params["endTime"] = str(int(end_time))
-        if not hasattr(self, "pnls_ids_existing"):
-            self.pnls_ids_existing = set()
-        while True:
-            fetched = await self.cca.private_mix_get_v2_mix_order_fill_history(params=params)
-            if "data" in fetched and "fillList" in fetched["data"] and fetched["data"]["fillList"]:
-                fetched = sorted(fetched["data"]["fillList"], key=lambda x: float(x["cTime"]))
-            else:
-                fetched = []
-            if fetched == []:
-                break
-            if all(x["orderId"] in all_fetched for x in fetched):
-                break
-            if all(x["orderId"] in self.pnls_ids_existing for x in fetched):
-                break
-            for elm in fetched:
-                elm["symbol"] = self.get_symbol_id_inv(elm["symbol"])
-                elm["pnl"] = float(elm["profit"])
-                elm["position_side"] = self.position_side_map[elm["side"]][elm["tradeSide"]]
-                elm["qty"] = float(elm["baseVolume"])
-                elm["price"] = float(elm["price"])
-                elm["id"] = elm["orderId"]
-                elm["timestamp"] = float(elm["cTime"])
-                elm["datetime"] = ts_to_date_utc(elm["timestamp"])
-                all_fetched[elm["id"]] = elm
-                self.pnls_ids_existing.add(elm["id"])
-            if start_time and fetched[0]["timestamp"] <= start_time:
-                break
-            if start_time is None and end_time is None:
-                break
-            logging.info(
-                f"debug fetching fills {ts_to_date_utc(fetched[0]['timestamp'])} {ts_to_date_utc(fetched[-1]['timestamp'])} {len(fetched)}"
-            )
-            # params = {'idLessThan': fetched[0]['id']}
-            params["endTime"] = str(int(fetched[0]["timestamp"]))
-        return sorted([x for x in all_fetched.values()], key=lambda x: x["timestamp"])
 
     async def execute_cancellation(self, order: dict) -> dict:
         executed = None
