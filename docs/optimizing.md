@@ -1,31 +1,52 @@
 # Optimizing
 
-Passivbot's config parameters may be automatically optimized by iterating many backtests and extracting the optimal config.
+Passivbot's configuration can be automatically optimized through iterative backtesting to find optimal parameters.
 
 ## Usage
 
 ```shell
-python3 src/optimize.py
+python3 src/optimize.py [path/to/config.json]
 ```
-Or
-```shell
-python3 src/optimize.py path/to/config.json
-```
-If no config is specified, it will default to `configs/template.json`
+Defaults to `configs/template.json` if no config specified.
 
-## Optimizing Results
+## Results Storage
 
-All backtest results produced by the optimizer are stored in `optimize_results/`. The results file is generated during optimization with a filename constructed using the date, number of coins being optimized, and a unique identifier.
-Each evaluation result is appended to the `.txt` file as a raw single line JSON string, including the analysis and the corresponding configuration.
+Optimization results are stored in `optimize_results/`` with filenames containing date, exchanges, number of coins, and unique identifier. Each result is appended as a single-line JSON string containing analysis and configuration.
 
-## Analyzing Results
+## Analysis
+The script automatically runs `src/tools/extract_best_config.py` after optimization to identify the best performing configuration, saving the best candidate and the pareto front to `optimize_results_analysis/`.
 
-After optimization is complete, the script `src/tools/extract_best_config.py` will be run, analyzing all the backtest results and dumping the best one to `optimize_results_analysis/`
 
-To manually analyze results, run:
+Manual analysis:
 
 ```shell
 python3 src/tools/extract_best_config.py path/to/results_file.txt
 ```
 
-This script will extract the configuration that performed best according to the optimization criteria.
+## Performance Metrics
+
+Based on daily equity changes: `daily_eqs = equity.groupby(day).pct_change()`
+
+### Key Metrics:
+
+- adg: Average daily gain (`daily_eqs.mean()`)
+- mdg: Median daily gain
+- gain: Final gain (`balance[-1] / balance[0]`)
+- drawdown_worst: Maximum peak-to-trough equity decline
+- drawdown_worst_mean_1pct: Mean of the 1% worst drawdowns on daily equity samples
+- expected_shortfall_1pct: Average of worst 1% losses (CVaR)
+
+### Risk Ratios:
+
+- sharpe_ratio: Risk-adjusted return (`adg / daily_eqs.std()`)
+- sortino_ratio: Downside risk-adjusted return (`adg / downside_eqs.std()`)
+- calmar_ratio: Return to max drawdown ratio (`adg / drawdown_worst`)
+- sterling_ratio: Return to average worst 1% drawdowns ratio (`adg / drawdown_worst_mean_1pct`)
+- omega_ratio: Ratio of gains to losses
+- loss_profit_ratio: Absolute loss sum to profit sum ratio
+- equity_balance_diff_neg_max: greatest distance between balance and equity when equity is less than balance
+- equity_balance_diff_neg_mean: mean distance between balance and equity when equity is less than balance
+- equity_balance_diff_pos_max: greatest distance between balance and equity when equity is greater than balance
+- equity_balance_diff_pos_mean: mean distance between balance and equity when equity is greater than balance
+
+Suffix `_w` indicates weighted mean across 10 temporal subsets (whole, last_half, last_third, ... last_tenth).
