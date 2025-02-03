@@ -8,9 +8,11 @@ import multiprocessing
 import subprocess
 import mmap
 from multiprocessing import Queue, Process
+from collections import defaultdict
 from backtest import (
     prepare_hlcvs_mss,
     prep_backtest_args,
+    expand_analysis,
 )
 from pure_funcs import (
     get_template_live_config,
@@ -20,6 +22,7 @@ from pure_funcs import (
     sort_dict_keys,
     calc_hash,
     flatten,
+    date_to_ts,
 )
 from procedures import (
     make_get_filepath,
@@ -30,6 +33,7 @@ from procedures import (
     add_arguments_recursively,
     update_config_with_args,
 )
+from downloader import add_all_eligible_coins_to_config
 from copy import deepcopy
 from main import manage_rust_compilation
 import numpy as np
@@ -44,7 +48,7 @@ import tempfile
 import time
 import fcntl
 from tqdm import tqdm
-import dictdiffer  # Added import for dictdiffer
+import dictdiffer
 
 
 def make_json_serializable(obj):
@@ -218,24 +222,42 @@ def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up):
 def individual_to_config(individual, template=None):
     if template is None:
         template = get_template_live_config("v7")
+    keys_ignored = ["enforce_exposure_limit"]
     config = deepcopy(template)
-    keys = sorted(config["bot"]["long"])
+    keys = [k for k in sorted(config["bot"]["long"]) if k not in keys_ignored]
     i = 0
     for pside in ["long", "short"]:
         for key in keys:
             config["bot"][pside][key] = individual[i]
             i += 1
+        is_enabled = (
+            config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
+            and config["bot"][pside]["n_positions"] > 0.0
+        )
+        if not is_enabled:
+            for key in config["bot"][pside]:
+                if key in keys_ignored:
+                    continue
+                bounds = config["optimize"]["bounds"][f"{pside}_{key}"]
+                if len(bounds) == 1:
+                    bounds = [bounds[0], bounds[0]]
+                config["bot"][pside][key] = min(max(bounds[0], 0.0), bounds[1])
     return config
 
 
 def config_to_individual(config, param_bounds):
     individual = []
+    keys_ignored = ["enforce_exposure_limit"]
     for pside in ["long", "short"]:
         is_enabled = (
             param_bounds[f"{pside}_n_positions"][1] > 0.0
             and param_bounds[f"{pside}_total_wallet_exposure_limit"][1] > 0.0
         )
-        individual += [(v if is_enabled else 0.0) for k, v in sorted(config["bot"][pside].items())]
+        individual += [
+            (v if is_enabled else 0.0)
+            for k, v in sorted(config["bot"][pside].items())
+            if k not in keys_ignored
+        ]
     # adjust to bounds
     bounds = [(low, high) for low, high in param_bounds.values()]
     adjusted = [max(min(x, bounds[z][1]), bounds[z][0]) for z, x in enumerate(individual)]
@@ -307,7 +329,7 @@ class Evaluator:
                 self.exchange_params[exchange],
                 self.backtest_params[exchange],
             )
-            analyses[exchange] = analysis
+            analyses[exchange] = expand_analysis(analysis, fills, config)
 
         analyses_combined = self.combine_analyses(analyses)
         w_0, w_1 = self.calc_fitness(analyses_combined)
@@ -328,20 +350,38 @@ class Evaluator:
         keys = analyses[next(iter(analyses))].keys()
         for key in keys:
             values = [analysis[key] for analysis in analyses.values()]
-            analyses_combined[f"{key}_mean"] = np.mean(values)
-            analyses_combined[f"{key}_min"] = np.min(values)
-            analyses_combined[f"{key}_max"] = np.max(values)
-            analyses_combined[f"{key}_std"] = np.std(values)
+            if not values or any([x == np.inf for x in values]):
+                analyses_combined[f"{key}_mean"] = 0.0
+                analyses_combined[f"{key}_min"] = 0.0
+                analyses_combined[f"{key}_max"] = 0.0
+                analyses_combined[f"{key}_std"] = 0.0
+            else:
+                try:
+                    analyses_combined[f"{key}_mean"] = np.mean(values)
+                    analyses_combined[f"{key}_min"] = np.min(values)
+                    analyses_combined[f"{key}_max"] = np.max(values)
+                    analyses_combined[f"{key}_std"] = np.std(values)
+                except Exception as e:
+                    print("\n\n debug\n\n")
+                    print("values", values)
+                    print(e)
+                    traceback.print_exc()
+                    raise
         return analyses_combined
 
     def calc_fitness(self, analyses_combined):
         modifier = 0.0
-        for i, key in [
-            (5, "drawdown_worst"),
-            (4, "drawdown_worst_mean_1pct"),
-            (3, "equity_balance_diff_mean"),
-            (2, "loss_profit_ratio"),
-        ]:
+        keys = [
+            "drawdown_worst",
+            "drawdown_worst_mean_1pct",
+            "equity_balance_diff_neg_max",
+            "equity_balance_diff_neg_mean",
+            "equity_balance_diff_pos_max",
+            "equity_balance_diff_pos_mean",
+            "loss_profit_ratio",
+        ]
+        i = len(keys) + 1
+        for key in keys:
             modifier += (
                 max(
                     self.config["optimize"]["limits"][f"lower_bound_{key}"],
@@ -349,9 +389,10 @@ class Evaluator:
                 )
                 - self.config["optimize"]["limits"][f"lower_bound_{key}"]
             ) * 10**i
+            i -= 1
         if (
             analyses_combined["drawdown_worst_max"] >= 1.0
-            or analyses_combined["equity_balance_diff_max_max"] >= 1.0
+            or analyses_combined["equity_balance_diff_neg_max_max"] >= 1.0
         ):
             w_0 = w_1 = modifier
         else:
@@ -483,23 +524,14 @@ async def main():
     )
     if args.config_path is None:
         logging.info(f"loading default template config configs/template.json")
-        config = load_config("configs/template.json")
+        config = load_config("configs/template.json", verbose=False)
     else:
         logging.info(f"loading config {args.config_path}")
-        config = load_config(args.config_path)
+        config = load_config(args.config_path, verbose=False)
     old_config = deepcopy(config)
     update_config_with_args(config, args)
-    config = format_config(config)
-    exchanges = config["backtest"]["exchanges"]
-    date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
-    coins = sorted(
-        set([symbol_to_coin(x) for y in config["backtest"]["symbols"].values() for x in y])
-    )
-    coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
-    hash_snippet = uuid4().hex[:8]
-    config["results_filename"] = make_get_filepath(
-        f"optimize_results/{date_fname}_{'_'.join(exchanges)}_{coins_fname}_{hash_snippet}_all_results.txt"
-    )
+    config = format_config(config, verbose=False)
+    await add_all_eligible_coins_to_config(config)
 
     try:
         # Prepare data for each exchange
@@ -508,8 +540,16 @@ async def main():
         hlcvs_shapes = {}
         hlcvs_dtypes = {}
         msss = {}
-        for exchange in exchanges:
-            symbols, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
+        config["backtest"]["coins"] = {}
+        if config["backtest"]["combine_ohlcvs"]:
+            exchange = "combined"
+            coins, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
+            exchange_preference = defaultdict(list)
+            for coin in coins:
+                exchange_preference[mss[coin]["exchange"]].append(coin)
+            for ex in exchange_preference:
+                logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
+            config["backtest"]["coins"][exchange] = coins
             hlcvs_dict[exchange] = hlcvs
             hlcvs_shapes[exchange] = hlcvs.shape
             hlcvs_dtypes[exchange] = hlcvs.dtype
@@ -520,7 +560,44 @@ async def main():
             shared_memory_file = create_shared_memory_file(hlcvs)
             shared_memory_files[exchange] = shared_memory_file
             logging.info(f"Finished creating shared memory file for {exchange}: {shared_memory_file}")
+        else:
+            tasks = {}
+            for exchange in config["backtest"]["exchanges"]:
+                tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
+            for exchange in config["backtest"]["exchanges"]:
+                coins, hlcvs, mss, results_path, cache_dir = await tasks[exchange]
+                config["backtest"]["coins"][exchange] = coins
+                hlcvs_dict[exchange] = hlcvs
+                hlcvs_shapes[exchange] = hlcvs.shape
+                hlcvs_dtypes[exchange] = hlcvs.dtype
+                msss[exchange] = mss
+                required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
+                check_disk_space(tempfile.gettempdir(), required_space)
+                logging.info(f"Starting to create shared memory file for {exchange}...")
+                shared_memory_file = create_shared_memory_file(hlcvs)
+                shared_memory_files[exchange] = shared_memory_file
+                logging.info(
+                    f"Finished creating shared memory file for {exchange}: {shared_memory_file}"
+                )
 
+        exchanges = config["backtest"]["exchanges"]
+        exchanges_fname = "combined" if config["backtest"]["combine_ohlcvs"] else "_".join(exchanges)
+        date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
+        coins = sorted(set([x for y in config["backtest"]["coins"].values() for x in y]))
+        coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
+        hash_snippet = uuid4().hex[:8]
+        n_days = int(
+            round(
+                (
+                    date_to_ts(config["backtest"]["end_date"])
+                    - date_to_ts(config["backtest"]["start_date"])
+                )
+                / (1000 * 60 * 60 * 24)
+            )
+        )
+        config["results_filename"] = make_get_filepath(
+            f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}_all_results.txt"
+        )
         # Create results queue and start manager process
         manager = multiprocessing.Manager()
         results_queue = manager.Queue()

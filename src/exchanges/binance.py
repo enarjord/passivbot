@@ -9,6 +9,7 @@ import traceback
 import numpy as np
 import json
 import passivbot_rust as pbr
+from copy import deepcopy
 from pure_funcs import (
     floatify,
     ts_to_date_utc,
@@ -52,6 +53,12 @@ class BinanceBot(Passivbot):
                     getattr(self, ccx).options["broker"][key] = "x-" + self.broker_code_spot
 
     async def print_new_user_suggestion(self):
+        between_print_wait_ms = 1000 * 60 * 60 * 4
+        if hasattr(self, "previous_user_suggestion_print_ts"):
+            if utc_ms() - self.previous_user_suggestion_print_ts < between_print_wait_ms:
+                return
+        self.previous_user_suggestion_print_ts = utc_ms()
+
         res = None
         try:
             res = await self.cca.fapiprivate_get_apireferral_ifnewuser(
@@ -84,9 +91,10 @@ class BinanceBot(Passivbot):
         print(front_pad + "#" * (max_len + 2) + back_pad)
         print("\n\n")
 
-    async def init_markets(self, verbose=True):
+    async def execute_to_exchange(self):
+        res = await super().execute_to_exchange()
         await self.print_new_user_suggestion()
-        await super().init_markets(verbose=verbose)
+        return res
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
@@ -399,18 +407,22 @@ class BinanceBot(Passivbot):
         )
 
     async def execute_order(self, order: dict) -> dict:
-        executed = await self.cca.create_limit_order(
+        order_type = order["type"] if "type" in order else "limit"
+        params = {
+            "positionSide": order["position_side"].upper(),
+            "newClientOrderId": order["custom_id"],
+        }
+        if order_type == "limit":
+            params["timeInForce"] = (
+                "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
+            )
+        executed = await self.cca.create_order(
+            type=order_type,
             symbol=order["symbol"],
             side=order["side"],
             amount=abs(order["qty"]),
             price=order["price"],
-            params={
-                "positionSide": order["position_side"].upper(),
-                "newClientOrderId": order["custom_id"],
-                "timeInForce": (
-                    "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
-                ),
-            },
+            params=params,
         )
         if "info" in executed and "code" in executed["info"] and executed["info"]["code"] == "-5022":
             logging.info(f"{executed['info']['msg']}")
@@ -428,6 +440,14 @@ class BinanceBot(Passivbot):
             return [await self.execute_order(orders[0])]
         to_execute = []
         for order in orders[: self.config["live"]["max_n_creations_per_batch"]]:
+            params = {
+                "positionSide": order["position_side"].upper(),
+                "newClientOrderId": order["custom_id"],
+            }
+            if order["type"] == "limit":
+                params["timeInForce"] = (
+                    "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
+                )
             to_execute.append(
                 {
                     "type": "limit",
@@ -435,13 +455,7 @@ class BinanceBot(Passivbot):
                     "side": order["side"],
                     "amount": abs(order["qty"]),
                     "price": order["price"],
-                    "params": {
-                        "positionSide": order["position_side"].upper(),
-                        "newClientOrderId": order["custom_id"],
-                        "timeInForce": (
-                            "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
-                        ),
-                    },
+                    "params": deepcopy(params),
                 }
             )
         executed = None

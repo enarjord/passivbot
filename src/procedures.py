@@ -9,11 +9,13 @@ import numpy as np
 import pprint
 from copy import deepcopy
 import argparse
+import re
 from collections import defaultdict
 from collections.abc import Sized
 import sys
-from typing import Union, Optional, Set, Any
+from typing import Union, Optional, Set, Any, List
 from pathlib import Path
+import ccxt.async_support as ccxta
 
 try:
     import hjson
@@ -189,14 +191,7 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                 f"changed backtest.exchange: {result['backtest']['exchange']} -> backtest.exchanges: [{result['backtest']['exchange']}]"
             )
         del result["backtest"]["exchange"]
-    for k0 in template:
-        for k1 in template[k0]:
-            if k0 not in result:
-                raise Exception(f"Fatal: {k0} missing from config")
-            if k1 not in result[k0]:
-                result[k0][k1] = template[k0][k1]
-                if verbose:
-                    print(f"adding missing parameter {k0}.{k1}: {template[k0][k1]}")
+    add_missing_keys_recursively(template, result, verbose=verbose)
     if not live_only:
         for k_coins in ["approved_coins", "ignored_coins"]:
             path = result["live"][k_coins]
@@ -223,38 +218,22 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                     "long": deepcopy(result["live"][k_coins]),
                     "short": deepcopy(result["live"][k_coins]),
                 }
-        result["backtest"]["symbols"] = {}
-        for exchange in result["backtest"]["exchanges"]:
-            eligible_symbols = get_all_eligible_symbols(exchange)
-            ignored_coins = coins_to_symbols(
-                set(flatten(result["live"]["ignored_coins"].values())),
-                eligible_symbols=eligible_symbols,
-                exchange=exchange,
-                verbose=verbose,
-            )
-            approved_coins = coins_to_symbols(
-                set(flatten(result["live"]["approved_coins"].values())),
-                eligible_symbols=eligible_symbols,
-                exchange=exchange,
-                verbose=verbose,
-            )
-            if approved_coins:
-                result["backtest"]["symbols"][exchange] = [
-                    x
-                    for x in coins_to_symbols(
-                        sorted(approved_coins),
-                        eligible_symbols=eligible_symbols,
-                        exchange=exchange,
-                        verbose=verbose,
-                    )
-                    if x not in ignored_coins
-                ]
-            else:
-                result["backtest"]["symbols"][exchange] = [
-                    s for s in sorted(get_all_eligible_symbols(exchange)) if s not in ignored_coins
-                ]
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
     return result
+
+
+def add_missing_keys_recursively(src, dst, parent=[], verbose=True):
+    for k in src:
+        if isinstance(src[k], dict):
+            if k not in dst:
+                raise Exception(f"Fatal: {k} missing from config")
+            else:
+                add_missing_keys_recursively(src[k], dst[k], parent + [k])
+        else:
+            if k not in dst:
+                if verbose:
+                    print(f"Adding missing key -> val {'.'.join(parent + [k])} -> {src[k]} to config")
+                dst[k] = src[k]
 
 
 def get_all_eligible_symbols(exchange="binance"):
@@ -329,7 +308,7 @@ def coin_to_symbol(coin, eligible_symbols=None, quote="USDT", verbose=True):
             print(f"coin_to_symbol {coin} {coinf}: ambiguous coin, multiple candidates {candidates}")
     else:
         if verbose:
-            print(f"coin_to_symbol no candidate symbol for {coin} {coinf}")
+            print(f"coin_to_symbol no candidate symbol for {coin}, {coinf}")
     return ""
 
 
@@ -343,7 +322,7 @@ def coins_to_symbols(coins: [str], eligible_symbols=None, exchange=None, verbose
 def format_end_date(end_date) -> str:
     if end_date in ["today", "now", "", None]:
         ms2day = 1000 * 60 * 60 * 24
-        end_date = ts_to_date_utc((utc_ms() - ms2day) // ms2day * ms2day)
+        end_date = ts_to_date_utc((utc_ms() - ms2day * 2) // ms2day * ms2day)
     else:
         end_date = ts_to_date_utc(date_to_ts2(end_date))
     return end_date[:10]
@@ -367,7 +346,7 @@ def dump_config(config: dict, filepath: str):
 def dump_pretty_json(data: dict, filepath: str):
     try:
         with open(filepath, "w") as f:
-            f.write(config_pretty_str(sort_dict_keys(data)))
+            f.write(config_pretty_str(sort_dict_keys(data)) + "\n")
     except Exception as e:
         raise Exception(f"failed to dump data {filepath}: {e}")
 
@@ -958,6 +937,207 @@ def print_async_exception(coro):
         pass
 
 
+async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
+    """
+    Returns earliest timestamp each coin was found on any exchange by default.
+    If 'exchange' is specified, returns earliest timestamps specifically for that exchange.
+
+    Batches requests in groups of 10 coins at a time, and dumps results to disk
+    immediately after each batch is processed.
+
+    :param coins: List of coin symbols to retrieve first-timestamp data for.
+    :param exchange: Optional string specifying a single exchange (e.g., 'binanceusdm').
+                     If set, tries to return first timestamps for only that exchange.
+    :return: Dictionary of coin -> earliest timestamp (ms). If `exchange` is provided,
+             only entries for the specified exchange are returned.
+    """
+
+    async def fetch_ohlcv_with_start(exchange_name, symbol, cc):
+        """
+        Fetch OHLCV data for `symbol` on `exchange_name`, starting from a
+        specific date range based on the exchange’s known data availability.
+        Returns a list of candle data.
+        """
+        if exchange_name == "binanceusdm":
+            # Data starts practically 'forever' in this example
+            return await cc.fetch_ohlcv(symbol, since=1, timeframe="1d")
+
+        elif exchange_name in ["bybit", "gateio"]:
+            # Data since 2018
+            return await cc.fetch_ohlcv(symbol, since=int(date2ts_utc("2018-01-01")), timeframe="1d")
+
+        elif exchange_name == "okx":
+            # Monthly timeframe; data since 2018
+            return await cc.fetch_ohlcv(symbol, since=int(date2ts_utc("2018-01-01")), timeframe="1M")
+
+        elif exchange_name == "bitget":
+            # Weekly timeframe; data since 2018
+            return await cc.fetch_ohlcv(symbol, since=int(date2ts_utc("2018-01-01")), timeframe="1w")
+
+        else:  # e.g., 'hyperliquid'
+            # Weekly timeframe; data since 2021
+            return await cc.fetch_ohlcv(symbol, since=int(date2ts_utc("2021-01-01")), timeframe="1w")
+
+    # Remove duplicates and sort the input coins for consistency
+    coins = sorted(set(symbol_to_coin(coin) for coin in coins))
+
+    # Paths to the cache files
+    cache_fpath = make_get_filepath("caches/first_ohlcv_timestamps_unified.json")
+    cache_fpath_exchange_specific = "caches/first_ohlcv_timestamps_unified_exchange_specific.json"
+
+    # In-memory dictionaries for storing timestamps
+    ftss = {}  # coin -> earliest timestamp across all exchanges
+    ftss_exchange_specific = {}  # coin -> {exchange -> earliest timestamp}
+
+    # Load main cache if it exists
+    if os.path.exists(cache_fpath):
+        try:
+            with open(cache_fpath, "r") as f:
+                ftss = json.load(f)
+            print(f"Loaded from main cache: {cache_fpath}")
+        except Exception as e:
+            print(f"Error reading {cache_fpath}: {e}")
+
+    # Load exchange-specific cache if it exists
+    if os.path.exists(cache_fpath_exchange_specific):
+        try:
+            with open(cache_fpath_exchange_specific, "r") as f:
+                ftss_exchange_specific = json.load(f)
+            print(f"Loaded from exchange-specific cache: {cache_fpath_exchange_specific}")
+        except Exception as e:
+            print(f"Error reading {cache_fpath_exchange_specific}: {e}")
+
+    # If an exchange is specified, handle "binance" alias
+    if exchange == "binance":
+        exchange = "binanceusdm"
+
+    # 1) If no exchange is specified and all coins are in ftss, just return ftss
+    if exchange is None:
+        if all(coin in ftss for coin in coins):
+            return ftss
+
+    # 2) If a specific exchange is requested:
+    else:
+        # If all coins exist in the exchange-specific cache for that exchange, return them
+        if all(coin in ftss_exchange_specific for coin in coins):
+            if all(exchange in ftss_exchange_specific[coin] for coin in coins):
+                # Return a simplified dict coin->timestamp
+                return {c: ftss_exchange_specific[c][exchange] for c in coins}
+
+    # Figure out which coins are missing from the main dictionary
+    missing_coins = {c for c in coins if c not in ftss}
+    if not missing_coins:
+        # No missing coins => all already in ftss
+        return ftss
+
+    print("Missing coins:", sorted(missing_coins))
+
+    # Map of exchange -> quote currency
+    exchange_map = {
+        "okx": "USDT",
+        "binanceusdm": "USDT",
+        "bybit": "USDT",
+        "gateio": "USDT",
+        "bitget": "USDT",
+        "hyperliquid": "USDC",
+    }
+
+    # Initialize ccxt clients for each exchange
+    ccxt_clients = {}
+    for ex_name in exchange_map:
+        ccxt_clients[ex_name] = getattr(ccxta, ex_name)()
+        ccxt_clients[ex_name].options["defaultType"] = "swap"
+    try:
+        print("Loading markets for each exchange...")
+        await asyncio.gather(*(ccxt_clients[e].load_markets() for e in ccxt_clients))
+
+        # We'll fetch missing coins in batches of 10 to avoid overloading
+        BATCH_SIZE = 10
+        missing_coins = sorted(missing_coins)
+
+        for i in range(0, len(missing_coins), BATCH_SIZE):
+            batch = missing_coins[i : i + BATCH_SIZE]
+            print(f"\nProcessing batch: {batch}")
+
+            # Create tasks for every coin/exchange pair in this batch
+            tasks = {}
+            for coin in batch:
+                tasks[coin] = {}
+                for ex_name, quote in exchange_map.items():
+                    # Build list of eligible swap symbols on this exchange
+                    eligible_symbols = [
+                        s
+                        for s in ccxt_clients[ex_name].markets
+                        if ccxt_clients[ex_name].markets[s]["swap"]
+                    ]
+                    # Convert coin to a symbol recognized by the exchange, e.g. "BTC/USDT"
+                    symbol = coin_to_symbol(coin, eligible_symbols, quote=quote, verbose=False)
+                    if symbol:
+                        tasks[coin][ex_name] = asyncio.create_task(
+                            fetch_ohlcv_with_start(ex_name, symbol, ccxt_clients[ex_name])
+                        )
+
+            # Gather all results for this batch
+            batch_results = {}
+            for coin in batch:
+                batch_results[coin] = {}
+                for ex_name in exchange_map:
+                    if ex_name in tasks[coin]:
+                        try:
+                            data = await tasks[coin][ex_name]
+                            if data:
+                                batch_results[coin][ex_name] = data
+                                print(
+                                    f"Fetched {ex_name} {coin} => first candle: {data[0] if data else 'no data'}"
+                                )
+                        except Exception as e:
+                            print(f"Error fetching {ex_name} {coin}: {e}")
+
+            # Process results for each coin in this batch
+            for coin in batch:
+                exchange_data = batch_results.get(coin, {})
+                fts_for_this_coin = {ex: 0.0 for ex in exchange_map}  # default 0.0 for all
+                earliest_candidates = []
+
+                for ex_name, arr in exchange_data.items():
+                    if arr and len(arr) > 0:
+                        # arr[0][0] is the timestamp in ms
+                        # Only consider "reasonable" timestamps after 2010
+                        if arr[0][0] > 1262304000000.0:
+                            earliest_candidates.append(arr[0][0])
+                            fts_for_this_coin[ex_name] = arr[0][0]
+
+                # If any valid timestamps found, keep the earliest
+                if earliest_candidates:
+                    ftss[coin] = min(earliest_candidates)
+                else:
+                    print(f"No valid first timestamp for coin {coin}")
+                    ftss[coin] = 0.0
+
+                # Update the exchange-specific dictionary
+                ftss_exchange_specific[coin] = fts_for_this_coin
+
+            # Immediately dump updated dictionaries to disk after each batch
+            with open(cache_fpath, "w") as f:
+                json.dump(ftss, f, indent=4, sort_keys=True)
+
+            with open(cache_fpath_exchange_specific, "w") as f:
+                json.dump(ftss_exchange_specific, f, indent=4, sort_keys=True)
+
+            print(f"Finished batch {batch}. Caches updated.")
+
+        # Close all ccxt client sessions
+
+        # If a single exchange was requested, return only those exchange-specific timestamps.
+        if exchange is not None:
+            return {coin: ftss_exchange_specific.get(coin, {}).get(exchange, 0.0) for coin in coins}
+
+        # Otherwise, return earliest cross-exchange timestamps
+        return ftss
+    finally:
+        await asyncio.gather(*(ccxt_clients[e].close() for e in ccxt_clients))
+
+
 async def get_first_ohlcv_timestamps_new(symbols=None, exchange="binance"):
     supported_exchanges = {
         "binance": "binanceusdm",
@@ -1339,20 +1519,23 @@ def create_acronym(full_name, acronyms=set()):
         i += 1
         if i > 100:
             raise Exception(f"too many acronym duplicates {acronym}")
-            break
         shortened_name = full_name
         for k in [
-            "backtest_",
-            "live_",
-            "optimize_bounds_",
-            "optimize_limits_lower_bound_",
-            "optimize_",
-            "bot_",
+            "backtest.",
+            "live.",
+            "optimize.bounds.",
+            "optimize.limits.lower_bound",
+            "optimize.",
+            "bot.",
         ]:
-            if full_name.startswith(k):
-                shortened_name = full_name.replace(k, "")
+            if shortened_name.startswith(k):
+                shortened_name = shortened_name.replace(k, "")
                 break
-        acronym = "".join(word[0] for word in shortened_name.split("_"))
+
+        # Split on both '_' and '.' using regex
+        splitted = re.split(r"[._]+", shortened_name)
+        acronym = "".join(word[0] for word in splitted if word)  # skip any empty splits
+
         if acronym not in acronyms:
             break
         acronym += str(i)
@@ -1375,7 +1558,7 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
         full_name = f"{prefix}{key}"
 
         if isinstance(value, dict):
-            add_arguments_recursively(parser, value, f"{full_name}_", acronyms=acronyms)
+            add_arguments_recursively(parser, value, f"{full_name}.", acronyms=acronyms)
         else:
             acronym = create_acronym(full_name, acronyms)
             appendix = ""
@@ -1388,7 +1571,7 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             elif any([x in full_name for x in ["ignored_coins", "exchanges"]]):
                 type_ = comma_separated_values
                 appendix = "item1,item2,item3,..."
-            elif "optimize_scoring" in full_name:
+            elif "scoring" in full_name:
                 type_ = comma_separated_values
                 acronym = "os"
                 appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
@@ -1399,8 +1582,14 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             elif type_ == bool:
                 type_ = str2bool
                 appendix = "[y/n]"
+            if "combine_ohlcvs" in full_name:
+                appendix = (
+                    "If true, combine ohlcvs data from all exchanges into single numpy array, otherwise backtest each exchange separately. "
+                    + appendix
+                )
             parser.add_argument(
                 f"--{full_name}",
+                f"--{full_name.replace('.', '_')}",
                 f"-{acronym}",
                 type=type_,
                 dest=full_name,
@@ -1423,10 +1612,10 @@ def recursive_config_update(config, key, value, path=None):
             config[key] = value
         return True
 
-    key_split = key.split("_")
+    key_split = key.split(".")
     if key_split[0] in config:
         new_path = path + [key_split[0]]
-        return recursive_config_update(config[key_split[0]], "_".join(key_split[1:]), value, new_path)
+        return recursive_config_update(config[key_split[0]], ".".join(key_split[1:]), value, new_path)
 
     return False
 

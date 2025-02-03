@@ -7,6 +7,7 @@ import asyncio
 import traceback
 import json
 import numpy as np
+import passivbot_rust as pbr
 from pure_funcs import (
     multi_replace,
     floatify,
@@ -66,16 +67,16 @@ class HyperliquidBot(Passivbot):
             elm = self.markets_dict[symbol]
             self.symbol_ids[symbol] = elm["id"]
             self.min_costs[symbol] = (
-                10.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
+                10.0 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
             )
-            self.min_costs[symbol] *= 1.1
-            self.qty_steps[symbol] = round_(10 ** -elm["precision"]["amount"], 0.0000000001)
+            self.min_costs[symbol] = pbr.round_(self.min_costs[symbol] * 1.01, 0.01)
+            self.qty_steps[symbol] = elm["precision"]["amount"]
             self.min_qtys[symbol] = (
                 self.qty_steps[symbol]
                 if elm["limits"]["amount"]["min"] is None
                 else elm["limits"]["amount"]["min"]
             )
-            self.price_steps[symbol] = round_(10 ** -elm["precision"]["price"], 0.0000000001)
+            self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
             self.max_leverage[symbol] = (
                 int(elm["info"]["maxLeverage"]) if "maxLeverage" in elm["info"] else 0
@@ -343,7 +344,7 @@ class HyperliquidBot(Passivbot):
             to_execute.append(
                 {
                     "symbol": order["symbol"],
-                    "type": "limit",
+                    "type": order["type"] if "type" in order else "limit",
                     "side": order["side"],
                     "amount": order["qty"],
                     "price": order["price"],
@@ -357,19 +358,55 @@ class HyperliquidBot(Passivbot):
                     },
                 }
             )
-        res = await self.cca.create_orders(
-            to_execute,
-            params=(
-                {"vaultAddress": self.user_info["wallet_address"]}
-                if self.user_info["is_vault"]
-                else {}
-            ),
-        )
+        try:
+            res = await self.cca.create_orders(
+                to_execute,
+                params=(
+                    {"vaultAddress": self.user_info["wallet_address"]}
+                    if self.user_info["is_vault"]
+                    else {}
+                ),
+            )
+        except Exception as e:
+            if self.adjust_min_cost_on_error(e):
+                return []
+            else:
+                raise
         executed = []
         for ex, order in zip(res, orders):
             if "info" in ex and "filled" in ex["info"] or "resting" in ex["info"]:
                 executed.append({**ex, **order})
         return executed
+
+    def adjust_min_cost_on_error(self, error):
+        any_adjusted = False
+        successful_orders = []
+        str_e = error.args[0]
+        error_json = json.loads(str_e[str_e.find("{") :])
+        if (
+            "response" in error_json
+            and "data" in error_json["response"]
+            and "statuses" in error_json["response"]["data"]
+        ):
+            for elm in error_json["response"]["data"]["statuses"]:
+                if "error" in elm:
+                    if "Order must have minimum value of $10" in elm["error"]:
+                        asset_id = int(elm["error"][elm["error"].find("asset=") + 6 :])
+                        for symbol in self.markets_dict:
+                            if (
+                                "baseId" in self.markets_dict[symbol]["info"]
+                                and self.markets_dict[symbol]["info"]["baseId"] == asset_id
+                            ):
+                                break
+                        else:
+                            raise Exception(f"No symbol match for asset_id={asset_id}")
+                        new_min_cost = pbr.round_(self.min_costs[symbol] * 1.1, 0.1)
+                        logging.info(
+                            f"caught {elm['error']} {symbol}. Upping min_cost from {self.min_costs[symbol]} to {new_min_cost}"
+                        )
+                        self.min_costs[symbol] = new_min_cost
+                        any_adjusted = True
+        return any_adjusted
 
     def symbol_is_eligible(self, symbol):
         try:

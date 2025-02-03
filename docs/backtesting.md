@@ -16,3 +16,14 @@ If no config is specified, it will default to `configs/template.json`
 ## Backtest Results
 
 Metrics and plots are dumped to `backtests/{exchange}/`.
+
+## Backtest CLI args
+
+- `-dp` to disable individual coin plotting.
+- `-co` to combine the ohlcv data from multiple exchanges into a single array. Otherwise, backtest for each exchange individually.
+
+For a comprehensive list of CLI args:
+```shell
+python3 src/backtest.py -h
+```
+

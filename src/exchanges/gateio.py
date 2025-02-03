@@ -310,19 +310,22 @@ class GateIOBot(Passivbot):
             return []
         to_execute = []
         for order in orders[: self.max_n_creations_per_batch]:
+            order_type = order["type"] if "type" in order else "limit"
+            params = {
+                "reduce_only": order["reduce_only"],
+            }
+            if order_type == "limit":
+                params["timeInForce"] = (
+                    "poc" if self.config["live"]["time_in_force"] == "post_only" else "gtc"
+                )
             to_execute.append(
                 {
                     "symbol": order["symbol"],
-                    "type": "limit",
+                    "type": order_type,
                     "side": order["side"],
                     "amount": order["qty"],
                     "price": order["price"],
-                    "params": {
-                        "reduce_only": order["reduce_only"],
-                        "timeInForce": (
-                            "poc" if self.config["live"]["time_in_force"] == "post_only" else "gtc"
-                        ),
-                    },
+                    "params": params,
                 }
             )
         res = await self.cca.create_orders(to_execute)

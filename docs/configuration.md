@@ -32,6 +32,9 @@ Here follows an overview of the parameters found in `config/template.json`.
   - For example, `total_wallet_exposure_limit = 1.6` means 160% of (unleveraged) wallet balance is used.
   - Each position is given equal share of total exposure limit, i.e., `wallet_exposure_limit = total_wallet_exposure_limit / n_positions`.
   - See more: `docs/risk_management.md`.
+- `enforce_exposure_limit`: If true, will enforce exposure limits for each position.
+  - E.g. if for any reason a position's exposure exceeds 1% of the limit, reduce the position at market price to exposure limit.
+  - Useful for risk management if, for example, user withdraws balance or changes settings.
 
 ### Grid Entry Parameters
 
@@ -146,7 +149,8 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
       - Normal mode: passivbot manages the position as normal.
       - Manual mode: passivbot ignores the position.
       - Graceful stop: if there is a position, passivbot will manage it; otherwise, passivbot will not make new positions.
-      - Take profit only: passivbot will only manage closing orders.
+      - Take profit only mode: passivbot will only manage closing orders.
+      - Panic mode: passivbot will close the position immediately.
     - `-lw` or `-sw`: Long or short wallet exposure limit.
     - `-lev`: Leverage.
     - `-lc`: Path to live config. Load all of another config's bot parameters except `[n_positions, total_wallet_exposure_limit, unstuck_loss_allowance_pct, unstuck_close_pct]`.
@@ -164,6 +168,7 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
 	- May be split into long and short by giving a json on the form:
 		- `{"long": ["COIN1", "COIN2"], "short": ["COIN2", "COIN3"]}`
 - `leverage`: Leverage set on exchange. Default is 10.
+- `market_orders_allowed`: If true, allow Passivbot to place market orders when order price is very close to current market price. If false, will only place limit orders. Default is true.
 - `max_n_cancellations_per_batch`: Will cancel n open orders per execution.
 - `max_n_creations_per_batch`: Will create n new orders per execution.
 - `max_n_restarts_per_day`: If the bot crashes for any reason, restart the bot up to n times per day before stopping completely.

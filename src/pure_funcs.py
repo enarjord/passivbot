@@ -501,15 +501,17 @@ def flatten(lst: list) -> list:
     return [y for x in lst for y in x]
 
 
-def get_template_live_config(passivbot_mode="neat_grid"):
+def get_template_live_config(passivbot_mode="v7"):
     if passivbot_mode == "v7":
         return {
             "backtest": {
                 "base_dir": "backtests",
+                "combine_ohlcvs": True,
                 "compress_cache": True,
                 "end_date": "now",
-                "exchanges": ["binance", "bybit"],
-                "start_date": "2021-05-01",
+                "exchanges": ["binance", "bybit", "gateio", "bitget"],
+                "gap_tolerance_ohlcvs_minutes": 120.0,
+                "start_date": "2021-04-01",
                 "starting_balance": 100000.0,
             },
             "bot": {
@@ -523,6 +525,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                     "close_trailing_threshold_pct": 0.008,
                     "ema_span_0": 1318.0,
                     "ema_span_1": 1435.0,
+                    "enforce_exposure_limit": True,
                     "entry_grid_double_down_factor": 0.894,
                     "entry_grid_spacing_pct": 0.04,
                     "entry_grid_spacing_weight": 0.697,
@@ -550,6 +553,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                     "close_trailing_threshold_pct": 0.008,
                     "ema_span_0": 1318.0,
                     "ema_span_1": 1435.0,
+                    "enforce_exposure_limit": True,
                     "entry_grid_double_down_factor": 0.894,
                     "entry_grid_spacing_pct": 0.04,
                     "entry_grid_spacing_weight": 0.697,
@@ -579,6 +583,7 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 "forced_mode_short": "",
                 "ignored_coins": [],
                 "leverage": 10.0,
+                "market_orders_allowed": True,
                 "max_n_cancellations_per_batch": 5,
                 "max_n_creations_per_batch": 3,
                 "max_n_restarts_per_day": 10,
@@ -648,9 +653,12 @@ def get_template_live_config(passivbot_mode="neat_grid"):
                 "iters": 30000,
                 "limits": {
                     "lower_bound_drawdown_worst": 0.25,
-                    "lower_bound_drawdown_worst_mean_1pct": 0.1,
-                    "lower_bound_equity_balance_diff_mean": 0.03,
-                    "lower_bound_loss_profit_ratio": 0.75,
+                    "lower_bound_drawdown_worst_mean_1pct": 0.15,
+                    "lower_bound_equity_balance_diff_neg_max": 0.35,
+                    "lower_bound_equity_balance_diff_neg_mean": 0.005,
+                    "lower_bound_equity_balance_diff_pos_max": 0.5,
+                    "lower_bound_equity_balance_diff_pos_mean": 0.01,
+                    "lower_bound_loss_profit_ratio": 0.6,
                 },
                 "mutation_probability": 0.2,
                 "n_cpus": 5,

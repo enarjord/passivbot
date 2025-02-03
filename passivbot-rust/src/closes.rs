@@ -4,7 +4,8 @@ use crate::types::{
     StateParams, TrailingPriceBundle,
 };
 use crate::utils::{
-    calc_pprice_diff_int, calc_wallet_exposure, cost_to_qty, round_, round_dn, round_up,
+    calc_pprice_diff_int, calc_wallet_exposure, cost_to_qty, interpolate, round_, round_dn,
+    round_up,
 };
 use ndarray::{Array1, Array2};
 use std::collections::HashMap;
@@ -230,6 +231,46 @@ pub fn calc_next_close_long(
         // no position
         return Order::default();
     }
+    let wallet_exposure = calc_wallet_exposure(
+        exchange_params.c_mult,
+        state_params.balance,
+        position.size,
+        position.price,
+    );
+    let wallet_exposure_ratio = if bot_params.wallet_exposure_limit <= 0.0 {
+        10.0
+    } else {
+        wallet_exposure / bot_params.wallet_exposure_limit
+    };
+    if bot_params.enforce_exposure_limit && wallet_exposure_ratio > 1.01 {
+        let position_size_lowered = position.size * 0.9;
+        let wallet_exposure_lowered = calc_wallet_exposure(
+            exchange_params.c_mult,
+            state_params.balance,
+            position_size_lowered,
+            position.price,
+        );
+        let ideal_psize = interpolate(
+            bot_params.wallet_exposure_limit * 1.01,
+            &[wallet_exposure, wallet_exposure_lowered],
+            &[position.size, position_size_lowered],
+        );
+        let auto_reduce_qty = position.size - ideal_psize;
+        if auto_reduce_qty > 0.0 {
+            let close_qty = f64::min(
+                round_(position.size, exchange_params.qty_step),
+                f64::max(
+                    calc_min_entry_qty(state_params.order_book.ask, &exchange_params),
+                    round_(auto_reduce_qty, exchange_params.qty_step),
+                ),
+            );
+            return Order {
+                price: state_params.order_book.ask,
+                qty: -close_qty,
+                order_type: OrderType::CloseAutoReduceLong,
+            };
+        }
+    }
     if bot_params.close_trailing_grid_ratio >= 1.0 || bot_params.close_trailing_grid_ratio <= -1.0 {
         // return trailing only
         return calc_trailing_close_long(
@@ -244,12 +285,6 @@ pub fn calc_next_close_long(
         // return grid only
         return calc_grid_close_long(&exchange_params, &state_params, &bot_params, &position);
     }
-    let wallet_exposure_ratio = calc_wallet_exposure(
-        exchange_params.c_mult,
-        state_params.balance,
-        position.size,
-        position.price,
-    ) / bot_params.wallet_exposure_limit;
     if bot_params.close_trailing_grid_ratio > 0.0 {
         // trailing first
         if wallet_exposure_ratio < bot_params.close_trailing_grid_ratio {
@@ -505,6 +540,46 @@ pub fn calc_next_close_short(
     if position_size_abs == 0.0 {
         // no position
         return Order::default();
+    }
+    let wallet_exposure = calc_wallet_exposure(
+        exchange_params.c_mult,
+        state_params.balance,
+        position_size_abs,
+        position.price,
+    );
+    let wallet_exposure_ratio = if bot_params.wallet_exposure_limit <= 0.0 {
+        10.0
+    } else {
+        wallet_exposure / bot_params.wallet_exposure_limit
+    };
+    if bot_params.enforce_exposure_limit && wallet_exposure_ratio > 1.01 {
+        let position_size_lowered = position_size_abs * 0.9;
+        let wallet_exposure_lowered = calc_wallet_exposure(
+            exchange_params.c_mult,
+            state_params.balance,
+            position_size_lowered,
+            position.price,
+        );
+        let ideal_psize = interpolate(
+            bot_params.wallet_exposure_limit * 1.01,
+            &[wallet_exposure, wallet_exposure_lowered],
+            &[position_size_abs, position_size_lowered],
+        );
+        let auto_reduce_qty = position_size_abs - ideal_psize;
+        if auto_reduce_qty > 0.0 {
+            let close_qty = f64::min(
+                round_(position_size_abs, exchange_params.qty_step),
+                f64::max(
+                    calc_min_entry_qty(state_params.order_book.bid, &exchange_params),
+                    round_(auto_reduce_qty, exchange_params.qty_step),
+                ),
+            );
+            return Order {
+                price: state_params.order_book.bid,
+                qty: close_qty,
+                order_type: OrderType::CloseAutoReduceShort,
+            };
+        }
     }
     if bot_params.close_trailing_grid_ratio >= 1.0 || bot_params.close_trailing_grid_ratio <= -1.0 {
         // return trailing only

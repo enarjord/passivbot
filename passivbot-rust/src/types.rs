@@ -26,7 +26,7 @@ impl Default for ExchangeParams {
 pub struct BacktestParams {
     pub starting_balance: f64,
     pub maker_fee: f64,
-    pub symbols: Vec<String>,
+    pub coins: Vec<String>,
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -102,6 +102,7 @@ pub struct BotParams {
     pub close_trailing_grid_ratio: f64,
     pub close_trailing_qty_pct: f64,
     pub close_trailing_threshold_pct: f64,
+    pub enforce_exposure_limit: bool,
     pub entry_grid_double_down_factor: f64,
     pub entry_grid_spacing_weight: f64,
     pub entry_grid_spacing_pct: f64,
@@ -154,6 +155,7 @@ pub enum OrderType {
     CloseGridLong,
     CloseTrailingLong,
     CloseUnstuckLong,
+    CloseAutoReduceLong,
 
     EntryInitialNormalShort,
     EntryInitialPartialShort,
@@ -166,6 +168,7 @@ pub enum OrderType {
     CloseGridShort,
     CloseTrailingShort,
     CloseUnstuckShort,
+    CloseAutoReduceShort,
 
     Empty,
 }
@@ -183,6 +186,7 @@ impl fmt::Display for OrderType {
             OrderType::CloseGridLong => write!(f, "close_grid_long"),
             OrderType::CloseTrailingLong => write!(f, "close_trailing_long"),
             OrderType::CloseUnstuckLong => write!(f, "close_unstuck_long"),
+            OrderType::CloseAutoReduceLong => write!(f, "close_auto_reduce_long"),
             OrderType::EntryInitialNormalShort => write!(f, "entry_initial_normal_short"),
             OrderType::EntryInitialPartialShort => write!(f, "entry_initial_partial_short"),
             OrderType::EntryTrailingNormalShort => write!(f, "entry_trailing_normal_short"),
@@ -193,6 +197,7 @@ impl fmt::Display for OrderType {
             OrderType::CloseGridShort => write!(f, "close_grid_short"),
             OrderType::CloseTrailingShort => write!(f, "close_trailing_short"),
             OrderType::CloseUnstuckShort => write!(f, "close_unstuck_short"),
+            OrderType::CloseAutoReduceShort => write!(f, "close_auto_reduce_short"),
             OrderType::Empty => write!(f, "empty"),
         }
     }
@@ -201,7 +206,7 @@ impl fmt::Display for OrderType {
 #[derive(Debug, Clone)]
 pub struct Fill {
     pub index: usize,
-    pub symbol: String,
+    pub coin: String,
     pub pnl: f64,
     pub fee_paid: f64,
     pub balance: f64,
@@ -212,10 +217,11 @@ pub struct Fill {
     pub order_type: OrderType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Analysis {
     pub adg: f64,
     pub mdg: f64,
+    pub gain: f64,
     pub sharpe_ratio: f64,
     pub sortino_ratio: f64,
     pub omega_ratio: f64,
@@ -224,9 +230,21 @@ pub struct Analysis {
     pub sterling_ratio: f64,
     pub drawdown_worst: f64,
     pub drawdown_worst_mean_1pct: f64,
-    pub equity_balance_diff_mean: f64,
-    pub equity_balance_diff_max: f64,
+    pub equity_balance_diff_neg_max: f64,
+    pub equity_balance_diff_neg_mean: f64,
+    pub equity_balance_diff_pos_max: f64,
+    pub equity_balance_diff_pos_mean: f64,
     pub loss_profit_ratio: f64,
+
+    pub adg_w: f64,
+    pub mdg_w: f64,
+    pub gain_w: f64,
+    pub sharpe_ratio_w: f64,
+    pub sortino_ratio_w: f64,
+    pub omega_ratio_w: f64,
+    pub calmar_ratio_w: f64,
+    pub sterling_ratio_w: f64,
+    pub loss_profit_ratio_w: f64,
 }
 
 impl Default for Analysis {
@@ -234,6 +252,7 @@ impl Default for Analysis {
         Analysis {
             adg: 0.0,
             mdg: 0.0,
+            gain: 0.0,
             sharpe_ratio: 0.0,
             sortino_ratio: 0.0,
             omega_ratio: 0.0,
@@ -242,9 +261,21 @@ impl Default for Analysis {
             sterling_ratio: 0.0,
             drawdown_worst: 1.0,
             drawdown_worst_mean_1pct: 1.0,
-            equity_balance_diff_mean: 1.0,
-            equity_balance_diff_max: 1.0,
+            equity_balance_diff_neg_max: 1.0,
+            equity_balance_diff_neg_mean: 1.0,
+            equity_balance_diff_pos_max: 1.0,
+            equity_balance_diff_pos_mean: 1.0,
             loss_profit_ratio: 1.0,
+
+            adg_w: 0.0,
+            mdg_w: 0.0,
+            gain_w: 0.0,
+            sharpe_ratio_w: 0.0,
+            sortino_ratio_w: 0.0,
+            omega_ratio_w: 0.0,
+            calmar_ratio_w: 0.0,
+            sterling_ratio_w: 0.0,
+            loss_profit_ratio_w: 1.0,
         }
     }
 }

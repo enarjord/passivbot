@@ -204,7 +204,6 @@ def process_single(file_location, verbose=False):
         del best_d["config"]
     fjson = config_pretty_str(best_d)
     print_(fjson)
-    coins = [s.replace("USDT", "") for s in best_d["backtest"]["symbols"]]
     print_(file_location)
     full_path = file_location.replace("_all_results.txt", "") + ".json"
     base_path = os.path.split(full_path)[0]

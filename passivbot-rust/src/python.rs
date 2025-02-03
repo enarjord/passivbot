@@ -86,6 +86,7 @@ pub fn run_backtest(
         let py_analysis = PyDict::new(py);
         py_analysis.set_item("adg", analysis.adg)?;
         py_analysis.set_item("mdg", analysis.mdg)?;
+        py_analysis.set_item("gain", analysis.gain)?;
         py_analysis.set_item("sharpe_ratio", analysis.sharpe_ratio)?;
         py_analysis.set_item("sortino_ratio", analysis.sortino_ratio)?;
         py_analysis.set_item("omega_ratio", analysis.omega_ratio)?;
@@ -98,17 +99,38 @@ pub fn run_backtest(
             analysis.drawdown_worst_mean_1pct,
         )?;
         py_analysis.set_item(
-            "equity_balance_diff_mean",
-            analysis.equity_balance_diff_mean,
+            "equity_balance_diff_neg_max",
+            analysis.equity_balance_diff_neg_max,
         )?;
-        py_analysis.set_item("equity_balance_diff_max", analysis.equity_balance_diff_max)?;
+        py_analysis.set_item(
+            "equity_balance_diff_neg_mean",
+            analysis.equity_balance_diff_neg_mean,
+        )?;
+        py_analysis.set_item(
+            "equity_balance_diff_pos_max",
+            analysis.equity_balance_diff_pos_max,
+        )?;
+        py_analysis.set_item(
+            "equity_balance_diff_pos_mean",
+            analysis.equity_balance_diff_pos_mean,
+        )?;
         py_analysis.set_item("loss_profit_ratio", analysis.loss_profit_ratio)?;
+
+        py_analysis.set_item("adg_w", analysis.adg_w)?;
+        py_analysis.set_item("mdg_w", analysis.mdg_w)?;
+        py_analysis.set_item("gain_w", analysis.gain_w)?;
+        py_analysis.set_item("sharpe_ratio_w", analysis.sharpe_ratio_w)?;
+        py_analysis.set_item("sortino_ratio_w", analysis.sortino_ratio_w)?;
+        py_analysis.set_item("omega_ratio_w", analysis.omega_ratio_w)?;
+        py_analysis.set_item("calmar_ratio_w", analysis.calmar_ratio_w)?;
+        py_analysis.set_item("sterling_ratio_w", analysis.sterling_ratio_w)?;
+        py_analysis.set_item("loss_profit_ratio_w", analysis.loss_profit_ratio_w)?;
 
         // Convert fills to a 2D array with mixed types
         let mut py_fills = Array2::from_elem((fills.len(), 10), py.None());
         for (i, fill) in fills.iter().enumerate() {
             py_fills[(i, 0)] = fill.index.into_py(py);
-            py_fills[(i, 1)] = <String as Clone>::clone(&fill.symbol).into_py(py);
+            py_fills[(i, 1)] = <String as Clone>::clone(&fill.coin).into_py(py);
             py_fills[(i, 2)] = fill.pnl.into_py(py);
             py_fills[(i, 3)] = fill.fee_paid.into_py(py);
             py_fills[(i, 4)] = fill.balance.into_py(py);
@@ -134,7 +156,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
     Ok(BacktestParams {
         starting_balance: extract_value(dict, "starting_balance").unwrap_or_default(),
         maker_fee: extract_value(dict, "maker_fee").unwrap_or_default(),
-        symbols: extract_value(dict, "symbols").unwrap_or_default(),
+        coins: extract_value(dict, "coins").unwrap_or_default(),
     })
 }
 
@@ -155,6 +177,21 @@ fn bot_params_pair_from_dict(dict: &PyDict) -> PyResult<BotParamsPair> {
     })
 }
 
+fn extract_bool_value(dict: &PyDict, key: &str) -> PyResult<bool> {
+    if let Ok(val) = extract_value::<bool>(dict, key) {
+        Ok(val)
+    } else if let Ok(val) = extract_value::<i64>(dict, key) {
+        Ok(val != 0)
+    } else if let Ok(val) = extract_value::<usize>(dict, key) {
+        Ok(val != 0)
+    } else if let Ok(val) = extract_value::<f64>(dict, key) {
+        Ok(val != 0.0)
+    } else {
+        // If none of the above types match, try to get the value as a bool
+        extract_value::<bool>(dict, key)
+    }
+}
+
 fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
     Ok(BotParams {
         close_grid_markup_range: extract_value(dict, "close_grid_markup_range")?,
@@ -164,6 +201,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         close_trailing_grid_ratio: extract_value(dict, "close_trailing_grid_ratio")?,
         close_trailing_qty_pct: extract_value(dict, "close_trailing_qty_pct")?,
         close_trailing_threshold_pct: extract_value(dict, "close_trailing_threshold_pct")?,
+        enforce_exposure_limit: extract_bool_value(dict, "enforce_exposure_limit")?,
         entry_grid_double_down_factor: extract_value(dict, "entry_grid_double_down_factor")?,
         entry_grid_spacing_weight: extract_value(dict, "entry_grid_spacing_weight")?,
         entry_grid_spacing_pct: extract_value(dict, "entry_grid_spacing_pct")?,
@@ -503,6 +541,7 @@ pub fn calc_next_close_long_py(
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
+    enforce_exposure_limit: bool,
     wallet_exposure_limit: f64,
     balance: f64,
     position_size: f64,
@@ -534,6 +573,7 @@ pub fn calc_next_close_long_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        enforce_exposure_limit,
         wallet_exposure_limit,
         ..Default::default()
     };
@@ -653,6 +693,7 @@ pub fn calc_next_close_short_py(
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
+    enforce_exposure_limit: bool,
     wallet_exposure_limit: f64,
     balance: f64,
     position_size: f64,
@@ -684,6 +725,7 @@ pub fn calc_next_close_short_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        enforce_exposure_limit,
         wallet_exposure_limit,
         ..Default::default()
     };
@@ -888,6 +930,7 @@ pub fn calc_closes_long_py(
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
+    enforce_exposure_limit: bool,
     wallet_exposure_limit: f64,
     balance: f64,
     position_size: f64,
@@ -921,6 +964,7 @@ pub fn calc_closes_long_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        enforce_exposure_limit,
         wallet_exposure_limit,
         ..Default::default()
     };
@@ -963,6 +1007,7 @@ pub fn calc_closes_short_py(
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
+    enforce_exposure_limit: bool,
     wallet_exposure_limit: f64,
     balance: f64,
     position_size: f64,
@@ -996,6 +1041,7 @@ pub fn calc_closes_short_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
+        enforce_exposure_limit,
         wallet_exposure_limit,
         ..Default::default()
     };

@@ -27,8 +27,7 @@ from procedures import (
     utc_ms,
     make_get_filepath,
     get_file_mod_utc,
-    get_first_ohlcv_timestamps,
-    get_first_ohlcv_timestamps_new,
+    get_first_timestamps_unified,
     load_config,
     add_arguments_recursively,
     update_config_with_args,
@@ -37,13 +36,8 @@ from procedures import (
     coin_to_symbol,
     read_external_coins_lists,
 )
-from njit_funcs_recursive_grid import calc_recursive_entries_long, calc_recursive_entries_short
 from njit_funcs import (
-    calc_samples,
-    calc_emas_last,
     calc_ema,
-    calc_close_grid_long,
-    calc_close_grid_short,
     calc_diff,
     calc_min_entry_qty,
     round_,
@@ -166,7 +160,7 @@ class Passivbot:
         self.debug_mode = False
 
     async def start_bot(self):
-        logging.info(f"Starting bot...")
+        logging.info(f"Starting bot {self.exchange}...")
         await self.init_markets()
         await asyncio.sleep(1)
         logging.info(f"Starting data maintainers...")
@@ -272,9 +266,7 @@ class Passivbot:
         symbols = sorted(set(symbols + flatten(self.approved_coins_minus_ignored_coins.values())))
         if all([s in self.first_timestamps for s in symbols]):
             return
-        first_timestamps = await get_first_ohlcv_timestamps_new(
-            symbols=symbols, exchange=self.exchange
-        )
+        first_timestamps = await get_first_timestamps_unified(symbols)
         self.first_timestamps.update(first_timestamps)
         for symbol in sorted(self.first_timestamps):
             symbolf = self.coin_to_symbol(symbol)
@@ -288,7 +280,7 @@ class Passivbot:
     def get_first_timestamp(self, symbol):
         if symbol not in self.first_timestamps:
             logging.info(f"warning: {symbol} missing from first_timestamps. Setting to zero.")
-            return 0.0
+            self.first_timestamps[symbol] = 0.0
         return self.first_timestamps[symbol]
 
     def coin_to_symbol(self, coin):
@@ -357,9 +349,9 @@ class Passivbot:
         to_create = self.format_custom_ids(to_create)
         if self.debug_mode:
             if to_cancel:
-                print("would cancel:")
-            for x in to_cancel[: self.config["live"]["max_n_cancellations_per_batch"]]:
-                pprint.pprint(x)
+                print(f"would cancel {len(to_cancel)} orders")
+            # for x in to_cancel:
+            #    pprint.pprint(x)
         else:
             res = await self.execute_cancellations(
                 to_cancel[: self.config["live"]["max_n_cancellations_per_batch"]]
@@ -369,9 +361,9 @@ class Passivbot:
                     self.remove_cancelled_order(elm, source="POST")
         if self.debug_mode:
             if to_create:
-                print("would create:")
-            for x in to_create[: self.config["live"]["max_n_creations_per_batch"]]:
-                pprint.pprint(x)
+                print(f"would create {len(to_create)} orders")
+            # for x in to_create:
+            #    pprint.pprint(x)
         else:
             res = None
             try:
@@ -388,6 +380,8 @@ class Passivbot:
                 await self.restart_bot_on_too_many_errors()
         if to_cancel or to_create:
             self.previous_REST_update_ts = 0
+        if self.debug_mode:
+            return to_cancel, to_create
 
     def is_forager_mode(self, pside=None):
         if pside is None:
@@ -426,10 +420,21 @@ class Passivbot:
             self.live_configs[symbol]["leverage"] = self.config["live"]["leverage"]
             if symbol in self.flags and self.flags[symbol].live_config_path is not None:
                 try:
-                    loaded = load_config(self.flags[symbol].live_config_path)
-                    logging.info(
-                        f"successfully loaded {self.flags[symbol].live_config_path} for {symbol}"
-                    )
+                    if os.path.exists(self.flags[symbol].live_config_path):
+                        loaded = load_config(self.flags[symbol].live_config_path, verbose=False)
+                        logging.info(
+                            f"successfully loaded {self.flags[symbol].live_config_path} for {symbol}"
+                        )
+                    else:
+                        path2 = os.path.join(
+                            os.path.dirname(self.config["live"]["base_config_path"]),
+                            self.flags[symbol].live_config_path,
+                        )
+                        if os.path.exists(path2):
+                            loaded = load_config(path2, verbose=False)
+                            logging.info(f"successfully loaded {path2} for {symbol}")
+                        else:
+                            raise
                     for pside in loaded["bot"]:
                         for k, v in loaded["bot"][pside].items():
                             if k not in skip:
@@ -1035,6 +1040,11 @@ class Passivbot:
                 )
         else:
             pnls_cache = await self.fetch_pnls(start_time=age_limit)
+            if pnls_cache:
+                try:
+                    json.dump(pnls_cache, open(self.pnls_cache_filepath, "w"))
+                except Exception as e:
+                    logging.error(f"error dumping pnls to {self.pnls_cache_filepath} {e}")
         self.pnls = pnls_cache
 
     async def update_pnls(self):
@@ -1358,6 +1368,7 @@ class Passivbot:
                         self.live_configs[symbol][pside]["close_trailing_qty_pct"],
                         self.live_configs[symbol][pside]["close_trailing_retracement_pct"],
                         self.live_configs[symbol][pside]["close_trailing_threshold_pct"],
+                        bool(self.live_configs[symbol][pside]["enforce_exposure_limit"]),
                         self.live_configs[symbol][pside]["wallet_exposure_limit"],
                         self.balance,
                         self.positions[symbol][pside]["size"],
@@ -1378,16 +1389,15 @@ class Passivbot:
         ideal_orders_f = {}
         for symbol in ideal_orders:
             ideal_orders_f[symbol] = []
-            with_pprice_diff = [
-                (calc_diff(x[1], self.get_last_price(symbol)), x) for x in ideal_orders[symbol]
-            ]
+            last_mprice = self.get_last_price(symbol)
+            with_mprice_diff = [(calc_diff(x[1], last_mprice), x) for x in ideal_orders[symbol]]
             seen = set()
-            any_partial = any(["partial" in order[2] for _, order in with_pprice_diff])
-            for pprice_diff, order in sorted(with_pprice_diff):
+            any_partial = any(["partial" in order[2] for _, order in with_mprice_diff])
+            for mprice_diff, order in sorted(with_mprice_diff):
                 position_side = "long" if "long" in order[2] else "short"
                 if order[0] == 0.0:
                     continue
-                if pprice_diff > self.config["live"]["price_distance_threshold"]:
+                if mprice_diff > self.config["live"]["price_distance_threshold"]:
                     if any_partial and "entry" in order[2]:
                         continue
                     if any([x in order[2] for x in ["initial", "unstuck"]]):
@@ -1398,15 +1408,26 @@ class Passivbot:
                 if seen_key in seen:
                     logging.info(f"debug duplicate ideal order {symbol} {order}")
                     continue
+                order_side = determine_side_from_order_tuple(order)
+                order_type = "limit"
+                if self.config["live"]["market_orders_allowed"] and (
+                    ("grid" in order[2] and mprice_diff < 0.0001)
+                    or ("trailing" in order[2] and mprice_diff < 0.001)
+                    or ("auto_reduce" in order[2] and mprice_diff < 0.001)
+                    or (order_side == "buy" and order[1] >= last_mprice)
+                    or (order_side == "sell" and order[1] <= last_mprice)
+                ):
+                    order_type = "market"
                 ideal_orders_f[symbol].append(
                     {
                         "symbol": symbol,
-                        "side": determine_side_from_order_tuple(order),
+                        "side": order_side,
                         "position_side": position_side,
                         "qty": abs(order[0]),
                         "price": order[1],
                         "reduce_only": "close" in order[2],
                         "custom_id": order[2],
+                        "type": order_type,
                     }
                 )
                 seen.add(seen_key)
@@ -1415,12 +1436,15 @@ class Passivbot:
     def calc_unstucking_close(self, ideal_orders):
         stuck_positions = []
         pnls_cumsum = np.array([x["pnl"] for x in self.pnls]).cumsum()
+        pnls_cumsum_max, pnls_cumsum_last = (
+            (pnls_cumsum.max(), pnls_cumsum[-1]) if len(pnls_cumsum) > 0 else (0.0, 0.0)
+        )
         unstuck_allowances = {"long": 0.0, "short": 0.0}
         for symbol in self.positions:
             for pside in ["long", "short"]:
                 if (
                     self.has_position(pside, symbol)
-                    and self.live_configs[symbol][pside]["unstuck_loss_allowance_pct"] > 0.0
+                    and self.config["bot"][pside]["unstuck_loss_allowance_pct"] > 0.0
                 ):
                     wallet_exposure = pbr.calc_wallet_exposure(
                         self.c_mults[symbol],
@@ -1438,8 +1462,8 @@ class Passivbot:
                                 self.balance,
                                 self.config["bot"][pside]["unstuck_loss_allowance_pct"]
                                 * self.config["bot"][pside]["total_wallet_exposure_limit"],
-                                pnls_cumsum.max(),
-                                pnls_cumsum[-1],
+                                pnls_cumsum_max,
+                                pnls_cumsum_last,
                             )
                             if len(pnls_cumsum) > 0
                             else 0.0
@@ -1630,27 +1654,27 @@ class Passivbot:
                     ]
             to_cancel += to_cancel_
             to_create += to_create_
-        to_create_with_pprice_diff = []
+        to_create_with_mprice_diff = []
         for x in to_create:
             try:
-                to_create_with_pprice_diff.append(
+                to_create_with_mprice_diff.append(
                     (calc_diff(x["price"], self.get_last_price(x["symbol"])), x)
                 )
             except Exception as e:
-                logging.info(f"debug: price missing sort to_create by pprice_diff {x} {e}")
-                to_create_with_pprice_diff.append((0.0, x))
-        to_create_with_pprice_diff.sort(key=lambda x: x[0])
-        to_cancel_with_pprice_diff = []
+                logging.info(f"debug: price missing sort to_create by mprice_diff {x} {e}")
+                to_create_with_mprice_diff.append((0.0, x))
+        to_create_with_mprice_diff.sort(key=lambda x: x[0])
+        to_cancel_with_mprice_diff = []
         for x in to_cancel:
             try:
-                to_cancel_with_pprice_diff.append(
+                to_cancel_with_mprice_diff.append(
                     (calc_diff(x["price"], self.get_last_price(x["symbol"])), x)
                 )
             except Exception as e:
-                logging.info(f"debug: price missing sort to_cancel by pprice_diff {x} {e}")
-                to_cancel_with_pprice_diff.append((0.0, x))
-        to_cancel_with_pprice_diff.sort(key=lambda x: x[0])
-        return [x[1] for x in to_cancel_with_pprice_diff], [x[1] for x in to_create_with_pprice_diff]
+                logging.info(f"debug: price missing sort to_cancel by mprice_diff {x} {e}")
+                to_cancel_with_mprice_diff.append((0.0, x))
+        to_cancel_with_mprice_diff.sort(key=lambda x: x[0])
+        return [x[1] for x in to_cancel_with_mprice_diff], [x[1] for x in to_create_with_mprice_diff]
 
     async def restart_bot_on_too_many_errors(self):
         if not hasattr(self, "error_counts"):
@@ -2242,7 +2266,11 @@ async def shutdown_bot(bot):
 async def main():
     parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
     parser.add_argument(
-        "config_path", type=str, nargs="?", default=None, help="path to hjson passivbot config"
+        "config_path",
+        type=str,
+        nargs="?",
+        default="configs/template.json",
+        help="path to hjson passivbot config",
     )
 
     template_config = get_template_live_config("v7")
@@ -2250,11 +2278,10 @@ async def main():
     del template_config["backtest"]
     add_arguments_recursively(parser, template_config)
     args = parser.parse_args()
-    config = load_config(
-        "configs/template.json" if args.config_path is None else args.config_path, live_only=True
-    )
+    config = load_config(args.config_path, live_only=True)
     update_config_with_args(config, args)
     config = format_config(config, live_only=True)
+    config["live"]["base_config_path"] = args.config_path
     cooldown_secs = 60
     restarts = []
     while True:

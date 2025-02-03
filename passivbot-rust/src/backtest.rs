@@ -268,10 +268,8 @@ impl<'a> Backtest<'a> {
             // Rolling calculation
             let safe_start = (*prev_k).saturating_sub(window);
             for idx in 0..self.n_coins {
-                rolling_volume_sum[idx] -= self
-                    .hlcvs
-                    .slice(s![safe_start..start_k, idx, VOLUME])
-                    .sum();
+                rolling_volume_sum[idx] -=
+                    self.hlcvs.slice(s![safe_start..start_k, idx, VOLUME]).sum();
                 rolling_volume_sum[idx] += self.hlcvs.slice(s![*prev_k..k, idx, VOLUME]).sum();
                 volume_indices[idx] = (rolling_volume_sum[idx], idx);
             }
@@ -373,8 +371,13 @@ impl<'a> Backtest<'a> {
 
     fn update_equities(&mut self, k: usize) {
         let mut equity = self.balance;
-        // Calculate unrealized PnL for long positions
-        for (&idx, position) in &self.positions.long {
+
+        // Sort long keys
+        let mut long_keys: Vec<usize> = self.positions.long.keys().cloned().collect();
+        long_keys.sort();
+        // Calculate unrealized PnL for each long position in sorted order
+        for idx in long_keys {
+            let position = &self.positions.long[&idx];
             let current_price = self.hlcvs[[k, idx, CLOSE]];
             let upnl = calc_pnl_long(
                 position.price,
@@ -384,8 +387,13 @@ impl<'a> Backtest<'a> {
             );
             equity += upnl;
         }
-        // Calculate unrealized PnL for short positions
-        for (&idx, position) in &self.positions.short {
+
+        // Sort short keys
+        let mut short_keys: Vec<usize> = self.positions.short.keys().cloned().collect();
+        short_keys.sort();
+        // Calculate unrealized PnL for each short position in sorted order
+        for idx in short_keys {
+            let position = &self.positions.short[&idx];
             let current_price = self.hlcvs[[k, idx, CLOSE]];
             let upnl = calc_pnl_short(
                 position.price,
@@ -395,6 +403,7 @@ impl<'a> Backtest<'a> {
             );
             equity += upnl;
         }
+
         self.equities.push(equity);
     }
 
@@ -409,7 +418,9 @@ impl<'a> Backtest<'a> {
             _ => panic!("Invalid pside"),
         };
 
-        let current_positions: Vec<usize> = positions.keys().cloned().collect();
+        // Sort positions to ensure stable iteration
+        let mut current_positions: Vec<usize> = positions.keys().cloned().collect();
+        current_positions.sort();
         let mut preferred_coins = Vec::new();
 
         // Only calculate preferred coins if there are open slots
@@ -588,7 +599,7 @@ impl<'a> Backtest<'a> {
         let mut adjusted_close_qty = close_fill.qty;
         if new_psize < 0.0 {
             println!("warning: close qty greater than psize long");
-            println!("symbol: {}", self.backtest_params.symbols[idx]);
+            println!("coin: {}", self.backtest_params.coins[idx]);
             println!("new_psize: {}", new_psize);
             println!("close order: {:?}", close_fill);
             new_psize = 0.0;
@@ -616,16 +627,16 @@ impl<'a> Backtest<'a> {
             self.positions.long.get_mut(&idx).unwrap().size = new_psize;
         }
         self.fills.push(Fill {
-            index: k,                                          // index minute
-            symbol: self.backtest_params.symbols[idx].clone(), // symbol
-            pnl,                                               // realized pnl
-            fee_paid,                                          // fee paid
-            balance: self.balance,                             // balance after fill
-            fill_qty: adjusted_close_qty,                      // fill qty
-            fill_price: close_fill.price,                      // fill price
-            position_size: new_psize,                          // psize after fill
-            position_price: current_pprice,                    // pprice after fill
-            order_type: close_fill.order_type.clone(),         // fill type
+            index: k,                                      // index minute
+            coin: self.backtest_params.coins[idx].clone(), // coin
+            pnl,                                           // realized pnl
+            fee_paid,                                      // fee paid
+            balance: self.balance,                         // balance after fill
+            fill_qty: adjusted_close_qty,                  // fill qty
+            fill_price: close_fill.price,                  // fill price
+            position_size: new_psize,                      // psize after fill
+            position_price: current_pprice,                // pprice after fill
+            order_type: close_fill.order_type.clone(),     // fill type
         });
     }
 
@@ -637,7 +648,7 @@ impl<'a> Backtest<'a> {
         let mut adjusted_close_qty = order.qty;
         if new_psize > 0.0 {
             println!("warning: close qty greater than psize short");
-            println!("symbol: {}", self.backtest_params.symbols[idx]);
+            println!("coin: {}", self.backtest_params.coins[idx]);
             println!("new_psize: {}", new_psize);
             println!("close order: {:?}", order);
             new_psize = 0.0;
@@ -665,16 +676,16 @@ impl<'a> Backtest<'a> {
             self.positions.short.get_mut(&idx).unwrap().size = new_psize;
         }
         self.fills.push(Fill {
-            index: k,                                          // index minute
-            symbol: self.backtest_params.symbols[idx].clone(), // symbol
-            pnl,                                               // realized pnl
-            fee_paid,                                          // fee paid
-            balance: self.balance,                             // balance after fill
-            fill_qty: adjusted_close_qty,                      // fill qty
-            fill_price: order.price,                           // fill price
-            position_size: new_psize,                          // psize after fill
-            position_price: current_pprice,                    // pprice after fill
-            order_type: order.order_type.clone(),              // fill type
+            index: k,                                      // index minute
+            coin: self.backtest_params.coins[idx].clone(), // coin
+            pnl,                                           // realized pnl
+            fee_paid,                                      // fee paid
+            balance: self.balance,                         // balance after fill
+            fill_qty: adjusted_close_qty,                  // fill qty
+            fill_price: order.price,                       // fill price
+            position_size: new_psize,                      // psize after fill
+            position_price: current_pprice,                // pprice after fill
+            order_type: order.order_type.clone(),          // fill type
         });
     }
 
@@ -701,16 +712,16 @@ impl<'a> Backtest<'a> {
         self.positions.long.get_mut(&idx).unwrap().size = new_psize;
         self.positions.long.get_mut(&idx).unwrap().price = new_pprice;
         self.fills.push(Fill {
-            index: k,                                          // index minute
-            symbol: self.backtest_params.symbols[idx].clone(), // symbol
-            pnl: 0.0,                                          // realized pnl
-            fee_paid,                                          // fee paid
-            balance: self.balance,                             // balance after fill
-            fill_qty: order.qty,                               // fill qty
-            fill_price: order.price,                           // fill price
-            position_size: self.positions.long[&idx].size,     // psize after fill
-            position_price: self.positions.long[&idx].price,   // pprice after fill
-            order_type: order.order_type.clone(),              // fill type
+            index: k,                                        // index minute
+            coin: self.backtest_params.coins[idx].clone(),   // coin
+            pnl: 0.0,                                        // realized pnl
+            fee_paid,                                        // fee paid
+            balance: self.balance,                           // balance after fill
+            fill_qty: order.qty,                             // fill qty
+            fill_price: order.price,                         // fill price
+            position_size: self.positions.long[&idx].size,   // psize after fill
+            position_price: self.positions.long[&idx].price, // pprice after fill
+            order_type: order.order_type.clone(),            // fill type
         });
     }
 
@@ -737,16 +748,16 @@ impl<'a> Backtest<'a> {
         self.positions.short.get_mut(&idx).unwrap().size = new_psize;
         self.positions.short.get_mut(&idx).unwrap().price = new_pprice;
         self.fills.push(Fill {
-            index: k,                                          // index minute
-            symbol: self.backtest_params.symbols[idx].clone(), // symbol
-            pnl: 0.0,                                          // realized pnl
-            fee_paid,                                          // fee paid
-            balance: self.balance,                             // balance after fill
-            fill_qty: order.qty,                               // fill qty
-            fill_price: order.price,                           // fill price
-            position_size: self.positions.short[&idx].size,    // psize after fill
-            position_price: self.positions.short[&idx].price,  // pprice after fill
-            order_type: order.order_type.clone(),              // fill type
+            index: k,                                         // index minute
+            coin: self.backtest_params.coins[idx].clone(),    // coin
+            pnl: 0.0,                                         // realized pnl
+            fee_paid,                                         // fee paid
+            balance: self.balance,                            // balance after fill
+            fill_qty: order.qty,                              // fill qty
+            fill_price: order.price,                          // fill price
+            position_size: self.positions.short[&idx].size,   // psize after fill
+            position_price: self.positions.short[&idx].price, // pprice after fill
+            order_type: order.order_type.clone(),             // fill type
         });
     }
 
@@ -1033,7 +1044,11 @@ impl<'a> Backtest<'a> {
             );
             if unstuck_allowances.0 > 0.0 {
                 // Check long positions
-                for (&idx, position) in &self.positions.long {
+                // Sort the keys for long
+                let mut long_keys: Vec<usize> = self.positions.long.keys().cloned().collect();
+                long_keys.sort();
+                for idx in long_keys {
+                    let position = &self.positions.long[&idx];
                     let wallet_exposure = calc_wallet_exposure(
                         self.exchange_params_list[idx].c_mult,
                         self.balance,
@@ -1061,7 +1076,12 @@ impl<'a> Backtest<'a> {
             );
             if unstuck_allowances.1 > 0.0 {
                 // Check short positions
-                for (&idx, position) in &self.positions.short {
+                // Sort the keys for short
+                let mut short_keys: Vec<usize> = self.positions.short.keys().cloned().collect();
+                short_keys.sort();
+
+                for idx in short_keys {
+                    let position = &self.positions.short[&idx];
                     let wallet_exposure = calc_wallet_exposure(
                         self.exchange_params_list[idx].c_mult,
                         self.balance,
@@ -1084,8 +1104,13 @@ impl<'a> Backtest<'a> {
         if stuck_positions.is_empty() {
             return (NO_POS, NO_POS, Order::default());
         }
-        // Sort stuck positions by pprice_diff
-        stuck_positions.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(Ordering::Equal));
+        // Sort with tie-breaker: first by diff, then by idx
+        stuck_positions.sort_by(|(i1, side1, d1), (i2, side2, d2)| {
+            match d1.partial_cmp(d2).unwrap_or(std::cmp::Ordering::Equal) {
+                std::cmp::Ordering::Equal => i1.cmp(i2),
+                other => other,
+            }
+        });
         for (idx, pside, _) in stuck_positions {
             match pside {
                 LONG => {
@@ -1229,8 +1254,9 @@ impl<'a> Backtest<'a> {
     fn update_open_orders_any_fill(&mut self, k: usize) {
         if self.trading_enabled.long {
             if self.trailing_enabled.long {
-                let positions_long_indices: Vec<usize> =
+                let mut positions_long_indices: Vec<usize> =
                     self.positions.long.keys().cloned().collect();
+                positions_long_indices.sort();
                 for idx in &positions_long_indices {
                     if !self.did_fill_long.contains(&idx) {
                         self.update_trailing_prices(k, *idx, LONG);
@@ -1241,7 +1267,8 @@ impl<'a> Backtest<'a> {
             self.open_orders
                 .long
                 .retain(|&idx, _| self.actives.long.contains(&idx));
-            let active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
+            let mut active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
+            active_long_indices.sort(); // Ensure deterministic order
             for &idx in &active_long_indices {
                 self.update_stuck_status(idx, LONG);
                 self.update_open_orders_long_single(k, idx);
@@ -1249,8 +1276,9 @@ impl<'a> Backtest<'a> {
         }
         if self.trading_enabled.short {
             if self.trailing_enabled.short {
-                let positions_short_indices: Vec<usize> =
+                let mut positions_short_indices: Vec<usize> =
                     self.positions.short.keys().cloned().collect();
+                positions_short_indices.sort();
                 for idx in &positions_short_indices {
                     if !self.did_fill_short.contains(&idx) {
                         self.update_trailing_prices(k, *idx, SHORT);
@@ -1261,7 +1289,8 @@ impl<'a> Backtest<'a> {
             self.open_orders
                 .short
                 .retain(|&idx, _| self.actives.short.contains(&idx));
-            let active_short_indices: Vec<usize> = self.actives.short.iter().cloned().collect();
+            let mut active_short_indices: Vec<usize> = self.actives.short.iter().cloned().collect();
+            active_short_indices.sort(); // Ensure deterministic order
             for &idx in &active_short_indices {
                 self.update_stuck_status(idx, SHORT);
                 self.update_open_orders_short_single(k, idx);
@@ -1293,10 +1322,12 @@ impl<'a> Backtest<'a> {
         // Update selectively:
         // - actives if len(positions) < n_positions
         // - unstuck close if any stuck
-        // - entries for symbols with open trailing entries
-        // - closes for symbols with open trailing closes
+        // - entries for coins with open trailing entries
+        // - closes for coins with open trailing closes
         if self.trading_enabled.long {
-            let positions_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
+            let mut positions_long_indices: Vec<usize> =
+                self.positions.long.keys().cloned().collect();
+            positions_long_indices.sort();
             if self.trailing_enabled.long {
                 for idx in &positions_long_indices {
                     if !self.did_fill_long.contains(idx) {
@@ -1311,7 +1342,8 @@ impl<'a> Backtest<'a> {
                     .long
                     .retain(|&idx, _| self.actives.long.contains(&idx));
             }
-            let active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
+            let mut active_long_indices: Vec<usize> = self.actives.long.iter().cloned().collect();
+            active_long_indices.sort();
 
             for idx in active_long_indices {
                 if actives_without_pos.contains(&idx)
@@ -1331,8 +1363,9 @@ impl<'a> Backtest<'a> {
         }
 
         if self.trading_enabled.short {
-            let positions_short_indices: Vec<usize> =
+            let mut positions_short_indices: Vec<usize> =
                 self.positions.short.keys().cloned().collect();
+            positions_short_indices.sort();
             if self.trailing_enabled.short {
                 for idx in &positions_short_indices {
                     if !self.did_fill_short.contains(idx) {
@@ -1347,7 +1380,8 @@ impl<'a> Backtest<'a> {
                     .short
                     .retain(|&idx, _| self.actives.short.contains(&idx));
             }
-            let active_short_indices: Vec<usize> = self.actives.short.iter().cloned().collect();
+            let mut active_short_indices: Vec<usize> = self.actives.short.iter().cloned().collect();
+            active_short_indices.sort();
             for idx in active_short_indices {
                 if actives_without_pos.contains(&idx)
                     || self.open_orders.short.get(&idx).map_or(false, |orders| {
@@ -1447,7 +1481,10 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
     }
 }
 
-pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
+fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
+    if fills.len() <= 1 {
+        return Analysis::default();
+    }
     // Calculate daily equities
     let mut daily_eqs = Vec::new();
     let mut current_day = 0;
@@ -1596,14 +1633,34 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         bal_eq.push((last_balance, equity));
     }
 
-    let (equity_balance_diff_sum, equity_balance_diff_max) =
-        bal_eq
-            .iter()
-            .fold((0.0, 0.0), |(sum, max), &(balance, equity)| {
-                let diff = (equity - balance).abs() / balance;
-                (sum + diff, f64::max(max, diff))
-            });
-    let equity_balance_diff_mean = equity_balance_diff_sum / bal_eq.len() as f64;
+    // Calculate equity-balance differences with separate positive and negative tracking
+    let mut ebds_pos = Vec::new();
+    let mut ebds_neg = Vec::new();
+
+    for &(balance, equity) in bal_eq.iter() {
+        let ebd = (equity - balance) / balance;
+        if ebd > 0.0 {
+            ebds_pos.push(ebd);
+        } else if ebd < 0.0 {
+            ebds_neg.push(ebd);
+        }
+    }
+
+    let equity_balance_diff_pos_max = ebds_pos.iter().fold(0.0, |max, &x| f64::max(max, x));
+    let equity_balance_diff_pos_mean = if !ebds_pos.is_empty() {
+        ebds_pos.iter().sum::<f64>() / ebds_pos.len() as f64
+    } else {
+        0.0
+    };
+
+    let equity_balance_diff_neg_max = ebds_neg.iter().fold(0.0, |max, &x| f64::max(max, x.abs()));
+    let equity_balance_diff_neg_mean = if !ebds_neg.is_empty() {
+        ebds_neg.iter().map(|x| x.abs()).sum::<f64>() / ebds_neg.len() as f64
+    } else {
+        0.0
+    };
+
+    let gain = fills[fills.len() - 1].balance / fills[0].balance;
 
     // Calculate profit factor
     let (total_profit, total_loss) = fills.iter().fold((0.0, 0.0), |(profit, loss), fill| {
@@ -1619,21 +1676,89 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         total_loss / total_profit
     };
 
-    Analysis {
-        adg,
-        mdg,
-        sharpe_ratio,
-        sortino_ratio,
-        omega_ratio,
-        expected_shortfall_1pct,
-        calmar_ratio,
-        sterling_ratio,
-        drawdown_worst,
-        drawdown_worst_mean_1pct,
-        equity_balance_diff_mean,
-        equity_balance_diff_max,
-        loss_profit_ratio,
+    let mut analysis = Analysis::default();
+    analysis.adg = adg;
+    analysis.mdg = mdg;
+    analysis.gain = gain;
+    analysis.sharpe_ratio = sharpe_ratio;
+    analysis.sortino_ratio = sortino_ratio;
+    analysis.omega_ratio = omega_ratio;
+    analysis.expected_shortfall_1pct = expected_shortfall_1pct;
+    analysis.calmar_ratio = calmar_ratio;
+    analysis.sterling_ratio = sterling_ratio;
+    analysis.drawdown_worst = drawdown_worst;
+    analysis.drawdown_worst_mean_1pct = drawdown_worst_mean_1pct;
+    analysis.equity_balance_diff_neg_max = equity_balance_diff_neg_max;
+    analysis.equity_balance_diff_neg_mean = equity_balance_diff_neg_mean;
+    analysis.equity_balance_diff_pos_max = equity_balance_diff_pos_max;
+    analysis.equity_balance_diff_pos_mean = equity_balance_diff_pos_mean;
+    analysis.loss_profit_ratio = loss_profit_ratio;
+
+    analysis
+}
+
+pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
+    let mut analysis = analyze_backtest_basic(fills, equities);
+
+    if fills.len() <= 1 {
+        return analysis;
     }
+
+    let n = equities.len();
+    let mut subset_analyses = Vec::with_capacity(10);
+    subset_analyses.push(analysis.clone());
+
+    for i in 1..10 {
+        // fraction of the data we want to keep:
+        //  i=1 => fraction = 0.5       => last half
+        //  i=2 => fraction = 0.3333    => last third
+        //  i=3 => fraction = 0.25      => last quarter
+        //  etc.
+        let fraction = 1.0 / (1.0 + i as f64);
+
+        // start index for slicing the 'last' fraction
+        let start_idx = (n as f64 - fraction * (n as f64)).round() as usize;
+
+        // slice from start_idx to the end
+        let subset_equities = &equities[start_idx..];
+        if subset_equities.len() == 0 {
+            break;
+        }
+
+        // filter fills that happened after or at start_idx
+        let subset_fills: Vec<Fill> = fills
+            .iter()
+            .filter(|fill| fill.index >= start_idx)
+            .cloned()
+            .collect();
+        if subset_fills.len() == 0 {
+            break;
+        }
+
+        let subset_analysis = analyze_backtest_basic(&subset_fills, &subset_equities.to_vec());
+        subset_analyses.push(subset_analysis);
+    }
+
+    // Compute weighted metrics as the mean of subset analyses
+    analysis.adg_w = subset_analyses.iter().map(|a| a.adg).sum::<f64>() / 10.0;
+    analysis.mdg_w = subset_analyses.iter().map(|a| a.mdg).sum::<f64>() / 10.0;
+    analysis.gain_w = subset_analyses.iter().map(|a| a.gain).sum::<f64>() / 10.0;
+    analysis.sharpe_ratio_w = subset_analyses.iter().map(|a| a.sharpe_ratio).sum::<f64>() / 10.0;
+    analysis.sortino_ratio_w = subset_analyses.iter().map(|a| a.sortino_ratio).sum::<f64>() / 10.0;
+    analysis.omega_ratio_w = subset_analyses.iter().map(|a| a.omega_ratio).sum::<f64>() / 10.0;
+    analysis.calmar_ratio_w = subset_analyses.iter().map(|a| a.calmar_ratio).sum::<f64>() / 10.0;
+    analysis.sterling_ratio_w = subset_analyses
+        .iter()
+        .map(|a| a.sterling_ratio)
+        .sum::<f64>()
+        / 10.0;
+    analysis.loss_profit_ratio_w = subset_analyses
+        .iter()
+        .map(|a| a.loss_profit_ratio)
+        .sum::<f64>()
+        / 10.0;
+
+    analysis
 }
 
 fn calc_drawdowns(equity_series: &[f64]) -> Vec<f64> {
