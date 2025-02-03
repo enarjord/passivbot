@@ -53,7 +53,7 @@
                    "filter_relative_volume_clip_pct": 0.47639,
                    "filter_rolling_window": 250.52,
                    "n_positions": 6.5119,
-                   "total_wallet_exposure_limit": 0.0093032,
+                   "total_wallet_exposure_limit": 0.0,
                    "unstuck_close_pct": 0.089334,
                    "unstuck_ema_dist": 0.0041673,
                    "unstuck_loss_allowance_pct": 0.041208,
