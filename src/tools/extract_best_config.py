@@ -31,7 +31,7 @@ def data_generator(all_results_filename, verbose=False):
 
     Args:
         all_results_filename (str): Path to the all_results.txt file.
-        verbose (bool): If True, disable all printing and progress tracking.
+        verbose (bool): If True, enable all printing and progress tracking.
 
     Yields:
         dict: The full data dictionary at each step.
@@ -39,7 +39,7 @@ def data_generator(all_results_filename, verbose=False):
     prev_data = None
     # Get the total file size in bytes
     file_size = os.path.getsize(all_results_filename)
-    # Disable progress bar and printing if verbose is True
+    # Disable progress bar and printing if verbose is False
     with open(all_results_filename, "r") as f:
         with tqdm(
             total=file_size,
