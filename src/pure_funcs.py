@@ -2405,6 +2405,8 @@ def determine_side_from_order_tuple(order_tuple):
 
 
 def symbol_to_coin(symbol: str) -> str:
+    if symbol == "":
+        return ""
     if "/" in symbol:
         coin = symbol[: symbol.find("/")]
     else:
