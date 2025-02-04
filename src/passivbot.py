@@ -269,7 +269,9 @@ class Passivbot:
         first_timestamps = await get_first_timestamps_unified(symbols)
         self.first_timestamps.update(first_timestamps)
         for symbol in sorted(self.first_timestamps):
-            symbolf = self.coin_to_symbol(symbol)
+            symbolf = self.coin_to_symbol(symbol, verbose=False)
+            if symbolf not in self.markets_dict:
+                continue
             if symbolf not in self.first_timestamps:
                 self.first_timestamps[symbolf] = self.first_timestamps[symbol]
         for symbol in symbols:
@@ -283,7 +285,9 @@ class Passivbot:
             self.first_timestamps[symbol] = 0.0
         return self.first_timestamps[symbol]
 
-    def coin_to_symbol(self, coin):
+    def coin_to_symbol(self, coin, verbose=True):
+        if coin == "":
+            return ""
         if not hasattr(self, "coin_to_symbol_map"):
             self.coin_to_symbol_map = {}
         if coin in self.coin_to_symbol_map:
@@ -296,6 +300,7 @@ class Passivbot:
             coin,
             eligible_symbols=self.eligible_symbols,
             quote=self.quote,
+            verbose=verbose,
         )
         self.coin_to_symbol_map[coin] = result
         return result
@@ -1434,18 +1439,28 @@ class Passivbot:
         return ideal_orders_f
 
     def calc_unstucking_close(self, ideal_orders):
+        if len(self.pnls) == 0:
+            return "", (0.0, 0.0, "")
         stuck_positions = []
         pnls_cumsum = np.array([x["pnl"] for x in self.pnls]).cumsum()
-        pnls_cumsum_max, pnls_cumsum_last = (
-            (pnls_cumsum.max(), pnls_cumsum[-1]) if len(pnls_cumsum) > 0 else (0.0, 0.0)
-        )
-        unstuck_allowances = {"long": 0.0, "short": 0.0}
-        for symbol in self.positions:
-            for pside in ["long", "short"]:
-                if (
-                    self.has_position(pside, symbol)
-                    and self.config["bot"][pside]["unstuck_loss_allowance_pct"] > 0.0
-                ):
+        pnls_cumsum_max, pnls_cumsum_last = (pnls_cumsum.max(), pnls_cumsum[-1])
+        unstuck_allowances = {}
+        for pside in ["long", "short"]:
+            unstuck_allowances[pside] = (
+                pbr.calc_auto_unstuck_allowance(
+                    self.balance,
+                    self.config["bot"][pside]["unstuck_loss_allowance_pct"]
+                    * self.config["bot"][pside]["total_wallet_exposure_limit"],
+                    pnls_cumsum_max,
+                    pnls_cumsum_last,
+                )
+                if self.config["bot"][pside]["unstuck_loss_allowance_pct"] > 0.0
+                else 0.0
+            )
+            if unstuck_allowances[pside] <= 0.0:
+                continue
+            for symbol in self.positions:
+                if self.has_position(pside, symbol):
                     wallet_exposure = pbr.calc_wallet_exposure(
                         self.c_mults[symbol],
                         self.balance,
@@ -1457,25 +1472,12 @@ class Passivbot:
                         or wallet_exposure / self.live_configs[symbol][pside]["wallet_exposure_limit"]
                         > self.live_configs[symbol][pside]["unstuck_threshold"]
                     ):
-                        unstuck_allowance = (
-                            pbr.calc_auto_unstuck_allowance(
-                                self.balance,
-                                self.config["bot"][pside]["unstuck_loss_allowance_pct"]
-                                * self.config["bot"][pside]["total_wallet_exposure_limit"],
-                                pnls_cumsum_max,
-                                pnls_cumsum_last,
-                            )
-                            if len(pnls_cumsum) > 0
-                            else 0.0
+                        pprice_diff = calc_pprice_diff(
+                            pside,
+                            self.positions[symbol][pside]["price"],
+                            self.get_last_price(symbol),
                         )
-                        unstuck_allowances[pside] = unstuck_allowance
-                        if unstuck_allowance > 0.0:
-                            pprice_diff = calc_pprice_diff(
-                                pside,
-                                self.positions[symbol][pside]["price"],
-                                self.get_last_price(symbol),
-                            )
-                            stuck_positions.append((symbol, pside, pprice_diff))
+                        stuck_positions.append((symbol, pside, pprice_diff))
         if not stuck_positions:
             return "", (0.0, 0.0, "")
         stuck_positions.sort(key=lambda x: x[2])
@@ -1495,6 +1497,7 @@ class Passivbot:
                     else []
                 )
                 if ideal_closes and close_price >= ideal_closes[0][1]:
+                    # means there already is a long close order whose price is lower than unstuck close price
                     continue
                 min_entry_qty = calc_min_entry_qty(
                     close_price,
@@ -2189,6 +2192,8 @@ class Passivbot:
             if isinstance(path, list) and len(path) == 1 and isinstance(path[0], str):
                 path = path[0]
             if isinstance(path, str):
+                if path == "":
+                    continue
                 if os.path.exists(path):
                     try:
                         content = read_external_coins_lists(path)
