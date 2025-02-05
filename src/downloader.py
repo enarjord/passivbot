@@ -1510,6 +1510,7 @@ async def main():
     else:
         logging.info(f"loading config {args.config_path}")
         config = load_config(args.config_path)
+    await add_all_eligible_coins_to_config(config)
     oms = {}
     try:
         for ex in config["backtest"]["exchanges"]:
