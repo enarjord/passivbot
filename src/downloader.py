@@ -74,18 +74,49 @@ def get_function_name():
 def dump_ohlcv_data(data, filepath):
     columns = ["timestamp", "open", "high", "low", "close", "volume"]
     if isinstance(data, pd.DataFrame):
-        data = data[columns].astype(float).values
+        data = ensure_millis(data[columns]).astype(float).values
     elif isinstance(data, np.ndarray):
         pass
     else:
         raise Exception(f"Unknown data format for {filepath}")
-    np.save(filepath, data)
+    np.save(filepath, deduplicate_rows(data))
+
+
+def deduplicate_rows(arr):
+    """
+    Remove duplicate rows from a 2D NumPy array while preserving order.
+
+    Parameters:
+    arr (numpy.ndarray): Input 2D array of shape (x, y)
+
+    Returns:
+    numpy.ndarray: Array with duplicate rows removed, maintaining original order
+    """
+    # Convert rows to tuples for hashing
+    rows_as_tuples = map(tuple, arr)
+
+    # Keep track of seen rows while preserving order
+    seen = set()
+    unique_indices = [
+        i
+        for i, row_tuple in enumerate(rows_as_tuples)
+        if not (row_tuple in seen or seen.add(row_tuple))
+    ]
+
+    # Return array with only unique rows
+    return arr[unique_indices]
 
 
 def load_ohlcv_data(filepath: str) -> pd.DataFrame:
     arr = np.load(filepath, allow_pickle=True)
     columns = ["timestamp", "open", "high", "low", "close", "volume"]
-    return ensure_millis(pd.DataFrame(arr, columns=columns))
+    arr_deduplicated = deduplicate_rows(arr)
+    if len(arr) != len(arr_deduplicated):
+        dump_ohlcv_data(arr_deduplicated, filepath)
+        print(
+            f"Caught .npy file with duplicate rows: {filepath} Overwrote with deduplicated version."
+        )
+    return ensure_millis(pd.DataFrame(arr_deduplicated, columns=columns))
 
 
 def get_days_in_between(start_day, end_day):
@@ -325,14 +356,14 @@ class OHLCVManager:
         or date range for coin not existing on exchange,
         return empty dataframe
         """
+        if not self.markets:
+            await self.load_markets()
         if not self.has_coin(coin):
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
         if start_date or end_date:
             self.update_date_range(new_start_date=start_date, new_end_date=end_date)
         missing_days = await self.get_missing_days_ohlcvs(coin)
         if missing_days:
-            if not self.markets:
-                await self.load_markets()
             await self.download_ohlcvs(coin)
         ohlcvs = await self.load_ohlcvs_from_cache(coin)
         ohlcvs.volume = ohlcvs.volume * ohlcvs.close  # use quote volume
@@ -958,7 +989,7 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
 
         # Save data to disk
         file_path = cache_dir / f"{coin}.npy"
-        np.save(file_path, data)
+        dump_ohlcv_data(data, file_path)
 
         # Update metadata
         coin_metadata[coin] = {
