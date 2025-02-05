@@ -200,7 +200,9 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                     if any([path[0].endswith(k) for k in [".txt", ".json", ".hjson"]]):
                         path = path[0]
             if isinstance(path, str):
-                if os.path.exists(path):
+                if path == "":
+                    result["live"][k_coins] = {"long": [], "short": []}
+                elif os.path.exists(path):
                     try:
                         content = read_external_coins_lists(path)
                         if content:
@@ -211,7 +213,8 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                     except Exception as e:
                         print(f"failed to load {k_coins} from file {path} {e}")
                 else:
-                    print(f"path to {k_coins} file does not exist {path}")
+                    if verbose:
+                        print(f"path to {k_coins} file does not exist {path}")
                     result["live"][k_coins] = {"long": [], "short": []}
             if isinstance(result["live"][k_coins], list):
                 result["live"][k_coins] = {
