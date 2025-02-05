@@ -210,3 +210,7 @@ The optimizer will penalize backtests whose metrics exceed the given values. If 
 - `lower_bound_drawdown_worst`: Lowest drawdown during backtest.
 - `lower_bound_equity_balance_diff_mean`: Mean of the difference between equity and balance.
 - `lower_bound_loss_profit_ratio`: `abs(sum(losses)) / sum(profit)`
+- `equity_balance_diff_neg_max`: greatest distance between balance and equity when equity is less than balance
+- `equity_balance_diff_neg_mean`: mean distance between balance and equity when equity is less than balance
+- `equity_balance_diff_pos_max`: greatest distance between balance and equity when equity is greater than balance
+- `equity_balance_diff_pos_mean`: mean distance between balance and equity when equity is greater than balance
