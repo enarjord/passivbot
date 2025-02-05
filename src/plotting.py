@@ -459,7 +459,7 @@ def plot_fills_forager(fdf: pd.DataFrame, hlcvs_df: pd.DataFrame, start_pct=0.0,
         pprices_long = pprices_long[pprices_long.psize != 0.0].pprice
         longs[longs.type.str.contains("entry")].price.plot(style="b.")
         longs[longs.type.str.contains("close")].price.plot(style="r.")
-        pprices_long.plot(style="b--")
+        pprices_long.plot(style="b|")
         legend.extend(
             [
                 "entries_long",
@@ -473,7 +473,7 @@ def plot_fills_forager(fdf: pd.DataFrame, hlcvs_df: pd.DataFrame, start_pct=0.0,
         pprices_short = pprices_short[pprices_short.psize != 0.0].pprice
         shorts[shorts.type.str.contains("entry")].price.plot(style="mx")
         shorts[shorts.type.str.contains("close")].price.plot(style="cx")
-        pprices_short.plot(style="r--")
+        pprices_short.plot(style="r|")
         legend.extend(
             [
                 "entries_short",
