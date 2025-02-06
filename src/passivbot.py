@@ -363,7 +363,7 @@ class Passivbot:
             )
             if res:
                 for elm in res:
-                    self.remove_cancelled_order(elm, source="POST")
+                    self.remove_order(elm, source="POST")
         if self.debug_mode:
             if to_create:
                 print(f"would create {len(to_create)} orders")
@@ -923,21 +923,24 @@ class Passivbot:
             traceback.print_exc()
             return False
 
-    def remove_cancelled_order(self, order: dict, source="WS"):
+    def remove_order(self, order: dict, source="WS", reason="cancelled"):
         try:
             if not order or "id" not in order:
+                logging.info(f"debug remove_order, missing 'id' {order}")
                 return False
             if "symbol" not in order or order["symbol"] is None:
-                logging.info(f"{order}")
+                logging.info(f"debug remove_order, missing 'symbol' {order}")
                 return False
             if order["symbol"] not in self.open_orders:
+                logging.info(f"debug remove_order, 'symbol' not in self.open_orders {order}")
                 self.open_orders[order["symbol"]] = []
+                return False
             if order["id"] in {x["id"] for x in self.open_orders[order["symbol"]]}:
                 self.open_orders[order["symbol"]] = [
                     x for x in self.open_orders[order["symbol"]] if x["id"] != order["id"]
                 ]
                 logging.info(
-                    f"cancelled {self.pad_sym(order['symbol'])} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
+                    f"{reason} {self.pad_sym(order['symbol'])} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
                 )
                 return True
         except Exception as e:
@@ -952,14 +955,14 @@ class Passivbot:
                     "filled" in upd and upd["filled"] is not None and upd["filled"] > 0.0
                 ):
                     # There was a fill, partial or full. Schedule update of open orders, pnls, position.
-                    logging.info(
-                        f"   filled {self.pad_sym(upd['symbol'])} {upd['side']} {upd['qty']} {upd['position_side']} @ {upd['price']} source: WS"
-                    )
                     self.recent_fill = True
                     self.previous_REST_update_ts = 0
-                elif upd["status"] in ["canceled", "expired", "rejected"]:
+                    self.remove_order(upd, source="WS", reason="   filled")
+                elif upd["status"] in ["canceled", "cancelled", "expired", "rejected"]:
                     # remove order from open_orders
-                    self.remove_cancelled_order(upd, source="WS")
+                    self.remove_order(
+                        upd, source="WS", reason=upd["status"].replace("canceled", "cancelled")
+                    )
                 elif upd["status"] == "open":
                     # add order to open_orders
                     self.add_new_order(upd, source="WS")
