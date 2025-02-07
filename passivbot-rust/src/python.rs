@@ -115,10 +115,22 @@ pub fn run_backtest(
             analysis.equity_balance_diff_pos_mean,
         )?;
         py_analysis.set_item("loss_profit_ratio", analysis.loss_profit_ratio)?;
+        py_analysis.set_item("positions_held_per_day", analysis.positions_held_per_day)?;
+        py_analysis.set_item(
+            "positions_held_hours_mean",
+            analysis.positions_held_hours_mean,
+        )?;
+        py_analysis.set_item(
+            "positions_held_hours_max",
+            analysis.positions_held_hours_max,
+        )?;
+        py_analysis.set_item(
+            "positions_held_hours_median",
+            analysis.positions_held_hours_median,
+        )?;
 
         py_analysis.set_item("adg_w", analysis.adg_w)?;
         py_analysis.set_item("mdg_w", analysis.mdg_w)?;
-        py_analysis.set_item("gain_w", analysis.gain_w)?;
         py_analysis.set_item("sharpe_ratio_w", analysis.sharpe_ratio_w)?;
         py_analysis.set_item("sortino_ratio_w", analysis.sortino_ratio_w)?;
         py_analysis.set_item("omega_ratio_w", analysis.omega_ratio_w)?;

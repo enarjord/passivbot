@@ -1676,6 +1676,68 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         total_loss / total_profit
     };
 
+    // Calculate position durations
+    let mut positions_opened: HashMap<String, usize> = HashMap::new();
+    let mut durations: Vec<usize> = Vec::new();
+
+    for fill in fills {
+        let key = format!(
+            "{}_{}",
+            fill.coin,
+            if fill.order_type.to_string().contains("long") {
+                "long"
+            } else {
+                "short"
+            }
+        );
+
+        if !positions_opened.contains_key(&key) {
+            positions_opened.insert(key.clone(), fill.index);
+        }
+
+        if fill.position_size == 0.0 {
+            if let Some(&start_idx) = positions_opened.get(&key) {
+                durations.push(fill.index - start_idx);
+                positions_opened.remove(&key);
+            }
+        }
+    }
+
+    // Add remaining open positions
+    let last_index = fills.last().map_or(0, |f| f.index);
+    for (_key, &start_idx) in positions_opened.iter() {
+        durations.push(last_index - start_idx);
+    }
+
+    // Calculate duration statistics
+    let n_days = (equities.len() as f64) / 1440.0; // Convert minutes to days
+    let positions_held_per_day = durations.len() as f64 / n_days;
+
+    let positions_held_hours_mean = if !durations.is_empty() {
+        durations.iter().sum::<usize>() as f64 / (durations.len() as f64 * 60.0)
+    } else {
+        0.0
+    };
+
+    let positions_held_hours_max = if !durations.is_empty() {
+        *durations.iter().max().unwrap() as f64 / 60.0
+    } else {
+        0.0
+    };
+
+    let positions_held_hours_median = if !durations.is_empty() {
+        let mut sorted_durations = durations.clone();
+        sorted_durations.sort_unstable();
+        let mid = sorted_durations.len() / 2;
+        if sorted_durations.len() % 2 == 0 {
+            (sorted_durations[mid - 1] + sorted_durations[mid]) as f64 / (2.0 * 60.0)
+        } else {
+            sorted_durations[mid] as f64 / 60.0
+        }
+    } else {
+        0.0
+    };
+
     let mut analysis = Analysis::default();
     analysis.adg = adg;
     analysis.mdg = mdg;
@@ -1693,6 +1755,10 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     analysis.equity_balance_diff_pos_max = equity_balance_diff_pos_max;
     analysis.equity_balance_diff_pos_mean = equity_balance_diff_pos_mean;
     analysis.loss_profit_ratio = loss_profit_ratio;
+    analysis.positions_held_per_day = positions_held_per_day;
+    analysis.positions_held_hours_mean = positions_held_hours_mean;
+    analysis.positions_held_hours_max = positions_held_hours_max;
+    analysis.positions_held_hours_median = positions_held_hours_median;
 
     analysis
 }
@@ -1742,7 +1808,6 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     // Compute weighted metrics as the mean of subset analyses
     analysis.adg_w = subset_analyses.iter().map(|a| a.adg).sum::<f64>() / 10.0;
     analysis.mdg_w = subset_analyses.iter().map(|a| a.mdg).sum::<f64>() / 10.0;
-    analysis.gain_w = subset_analyses.iter().map(|a| a.gain).sum::<f64>() / 10.0;
     analysis.sharpe_ratio_w = subset_analyses.iter().map(|a| a.sharpe_ratio).sum::<f64>() / 10.0;
     analysis.sortino_ratio_w = subset_analyses.iter().map(|a| a.sortino_ratio).sum::<f64>() / 10.0;
     analysis.omega_ratio_w = subset_analyses.iter().map(|a| a.omega_ratio).sum::<f64>() / 10.0;
