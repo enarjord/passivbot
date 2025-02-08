@@ -117,16 +117,13 @@ pub fn run_backtest(
         py_analysis.set_item("loss_profit_ratio", analysis.loss_profit_ratio)?;
         py_analysis.set_item("positions_held_per_day", analysis.positions_held_per_day)?;
         py_analysis.set_item(
-            "positions_held_hours_mean",
-            analysis.positions_held_hours_mean,
+            "position_held_hours_mean",
+            analysis.position_held_hours_mean,
         )?;
+        py_analysis.set_item("position_held_hours_max", analysis.position_held_hours_max)?;
         py_analysis.set_item(
-            "positions_held_hours_max",
-            analysis.positions_held_hours_max,
-        )?;
-        py_analysis.set_item(
-            "positions_held_hours_median",
-            analysis.positions_held_hours_median,
+            "position_held_hours_median",
+            analysis.position_held_hours_median,
         )?;
 
         py_analysis.set_item("adg_w", analysis.adg_w)?;

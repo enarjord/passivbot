@@ -237,9 +237,9 @@ pub struct Analysis {
     pub loss_profit_ratio: f64,
 
     pub positions_held_per_day: f64,
-    pub positions_held_hours_mean: f64,
-    pub positions_held_hours_max: f64,
-    pub positions_held_hours_median: f64,
+    pub position_held_hours_mean: f64,
+    pub position_held_hours_max: f64,
+    pub position_held_hours_median: f64,
 
     pub adg_w: f64,
     pub mdg_w: f64,
@@ -271,9 +271,9 @@ impl Default for Analysis {
             equity_balance_diff_pos_mean: 1.0,
             loss_profit_ratio: 1.0,
             positions_held_per_day: 0.0,
-            positions_held_hours_mean: 0.0,
-            positions_held_hours_max: 0.0,
-            positions_held_hours_median: 0.0,
+            position_held_hours_mean: 0.0,
+            position_held_hours_max: 0.0,
+            position_held_hours_median: 0.0,
 
             adg_w: 0.0,
             mdg_w: 0.0,

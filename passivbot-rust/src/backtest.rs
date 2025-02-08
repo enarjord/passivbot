@@ -1713,19 +1713,19 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     let n_days = (equities.len() as f64) / 1440.0; // Convert minutes to days
     let positions_held_per_day = durations.len() as f64 / n_days;
 
-    let positions_held_hours_mean = if !durations.is_empty() {
+    let position_held_hours_mean = if !durations.is_empty() {
         durations.iter().sum::<usize>() as f64 / (durations.len() as f64 * 60.0)
     } else {
         0.0
     };
 
-    let positions_held_hours_max = if !durations.is_empty() {
+    let position_held_hours_max = if !durations.is_empty() {
         *durations.iter().max().unwrap() as f64 / 60.0
     } else {
         0.0
     };
 
-    let positions_held_hours_median = if !durations.is_empty() {
+    let position_held_hours_median = if !durations.is_empty() {
         let mut sorted_durations = durations.clone();
         sorted_durations.sort_unstable();
         let mid = sorted_durations.len() / 2;
@@ -1756,9 +1756,9 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     analysis.equity_balance_diff_pos_mean = equity_balance_diff_pos_mean;
     analysis.loss_profit_ratio = loss_profit_ratio;
     analysis.positions_held_per_day = positions_held_per_day;
-    analysis.positions_held_hours_mean = positions_held_hours_mean;
-    analysis.positions_held_hours_max = positions_held_hours_max;
-    analysis.positions_held_hours_median = positions_held_hours_median;
+    analysis.position_held_hours_mean = position_held_hours_mean;
+    analysis.position_held_hours_max = position_held_hours_max;
+    analysis.position_held_hours_median = position_held_hours_median;
 
     analysis
 }
