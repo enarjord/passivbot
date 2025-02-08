@@ -379,6 +379,7 @@ class Evaluator:
             "equity_balance_diff_pos_max",
             "equity_balance_diff_pos_mean",
             "loss_profit_ratio",
+            "position_held_hours_max",
         ]
         i = len(keys) + 1
         for key in keys:
