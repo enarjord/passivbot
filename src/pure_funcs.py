@@ -659,6 +659,7 @@ def get_template_live_config(passivbot_mode="v7"):
                     "lower_bound_equity_balance_diff_pos_max": 0.5,
                     "lower_bound_equity_balance_diff_pos_mean": 0.01,
                     "lower_bound_loss_profit_ratio": 0.6,
+                    "lower_bound_position_held_hours_max": 336.0,
                 },
                 "mutation_probability": 0.2,
                 "n_cpus": 5,
