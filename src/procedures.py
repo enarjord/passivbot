@@ -343,7 +343,12 @@ def load_config(filepath: str, live_only=False, verbose=True) -> dict:
 
 
 def dump_config(config: dict, filepath: str):
-    dump_pretty_json(config, filepath)
+    config_ = deepcopy(config)
+    for pside in config_["bot"]:
+        config_["bot"][pside]["enforce_exposure_limit"] = bool(
+            config_["bot"][pside]["enforce_exposure_limit"]
+        )
+    dump_pretty_json(config_, filepath)
 
 
 def dump_pretty_json(data: dict, filepath: str):
