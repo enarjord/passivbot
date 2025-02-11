@@ -687,6 +687,12 @@ async def main():
                 ]
                 population[i] = creator.Individual(adjusted)
 
+            for i in range(len(starting_individuals), len(population)):
+                parent_choice = np.choice(range(len(starting_individuals)))
+                mutant = deepcopy(population[parent_choice])
+                toolbox.mutate(mutant)
+                population[i] = mutant
+
         logging.info(f"Initial population size: {len(population)}")
 
         # Set up statistics and hall of fame
