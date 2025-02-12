@@ -687,9 +687,8 @@ async def main():
                 ]
                 population[i] = creator.Individual(adjusted)
 
-            for i in range(len(starting_individuals), len(population)):
-                parent_choice = np.random.choice(range(len(starting_individuals)))
-                mutant = deepcopy(population[parent_choice])
+            for i in range(len(starting_individuals), len(population) // 2):
+                mutant = deepcopy(population[np.random.choice(range(len(starting_individuals)))])
                 toolbox.mutate(mutant)
                 population[i] = mutant
 
