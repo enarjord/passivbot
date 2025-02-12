@@ -74,8 +74,11 @@ The same logic applies to both trailing entries and trailing closes.
   - There are two conditions to trigger a trailing order: 1) threshold and 2) retracement.
   - If `trailing_threshold_pct <= 0.0`, threshold condition is always triggered.
   - Otherwise, the logic is as follows, considering long positions:
-    - `if highest price since position open > position price * (1 + trailing_threshold_pct)`, the first condition is met.
-    - And `if lowest price since highest price < highest price since position open * (1 - trailing_retracement_pct)`, the second condition is met. Place order.
+    - `if highest price since position change > position price * (1 + trailing_threshold_pct)`, the first condition is met.
+    - And `if lowest price since highest price < highest price since position change * (1 - trailing_retracement_pct)`, the second condition is met. Place order.
+  - Passivbot tracks its own trailing prices, and does not use any special trailing order type from the exchange.
+  - Whenever the position changes (add to or partially close), the trailing price tracker is reset.
+  - The trailing price tracking is based on 1m OHLCVS, which update on each new whole minute.
 
 ### Grid Close Parameters
 
