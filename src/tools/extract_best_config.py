@@ -1,45 +1,37 @@
 import os
 import json
-import hjson
-import pandas as pd
-import argparse
 import sys
-import pprint
-import dictdiffer
-from tqdm import tqdm
+import argparse
 import traceback
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from pure_funcs import config_pretty_str
 from copy import deepcopy
 
+import pandas as pd
+import dictdiffer
+from tqdm import tqdm
+
+# Ensure modules from the parent directory are discoverable
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from procedures import utc_ms, make_get_filepath, dump_config, format_config
+
+# Project-specific imports
 from pure_funcs import (
-    flatten_dict,
-    ts_to_date_utc,
-    backtested_multiconfig2live_multiconfig,
-    sort_dict_keys,
     config_pretty_str,
+    flatten_dict,
 )
+from procedures import make_get_filepath, dump_config, format_config
 
 
-def data_generator(all_results_filename, verbose=False):
+def data_generator(all_results_filename: str, verbose: bool = False):
     """
-    Generator function that iterates over an all_results.txt file written with dictdiffer.
-    It yields the full data at each step by reconstructing it using diffs.
+    Generate data entries from a file line-by-line. If a line contains a 'diff',
+    apply it (via dictdiffer.patch) to the previously yielded data.
 
-    Args:
-        all_results_filename (str): Path to the all_results.txt file.
-        verbose (bool): If True, enable all printing and progress tracking.
-
-    Yields:
-        dict: The full data dictionary at each step.
+    :param all_results_filename: Path to the file containing results data.
+    :param verbose: Whether to show tqdm progress and error prints.
+    :yield: A dictionary representing the cumulative state after each line.
     """
     prev_data = None
-    # Get the total file size in bytes
     file_size = os.path.getsize(all_results_filename)
-    # Disable progress bar and printing if verbose is False
+
     with open(all_results_filename, "r") as f:
         with tqdm(
             total=file_size,
@@ -54,13 +46,14 @@ def data_generator(all_results_filename, verbose=False):
                     pbar.update(len(line.encode("utf-8")))
                 try:
                     data = json.loads(line)
+                    # If there's no diff, just yield the data as is
                     if "diff" not in data:
-                        # This is the first entry; full data is provided
                         prev_data = data
                         yield deepcopy(prev_data)
                     else:
-                        # Apply the diff to the previous data to get the current data
+                        # Apply the diff to the previous state
                         diff = data["diff"]
+                        # Ensure the 'change' tuple for dictdiffer
                         for i in range(len(diff)):
                             if len(diff[i]) == 2:
                                 diff[i] = ("change", diff[i][0], (0.0, diff[i][1]))
@@ -76,13 +69,29 @@ def data_generator(all_results_filename, verbose=False):
                 pbar.close()
 
 
-# Function definitions remain unchanged
-def calc_dist(p0, p1):
+def calc_dist(p0: tuple, p1: tuple) -> float:
+    """
+    Calculate the Euclidean distance between two 2D points.
+
+    :param p0: The first point (x0, y0).
+    :param p1: The second point (x1, y1).
+    :return: The Euclidean distance between p0 and p1.
+    """
     return ((p0[0] - p1[0]) ** 2 + (p0[1] - p1[1]) ** 2) ** 0.5
 
 
-def dominates_d(x, y, higher_is_better):
-    """Check if point x dominates point y."""
+def dominates_d(x: tuple, y: tuple, higher_is_better: list) -> bool:
+    """
+    Determine if x dominates y in a Pareto sense, given a list indicating
+    whether higher or lower is better for each objective.
+
+    :param x: Tuple of objective values (e.g. (w0, w1)) for candidate x.
+    :param y: Tuple of objective values (e.g. (w0, w1)) for candidate y.
+    :param higher_is_better: List of booleans. If True at index i, a higher value
+                             of x[i] is better. If False, a lower value is better.
+    :return: True if x strictly dominates y in at least one objective and is not
+             worse in any objective.
+    """
     better_in_one = False
     for xi, yi, hib in zip(x, y, higher_is_better):
         if hib:
@@ -98,130 +107,269 @@ def dominates_d(x, y, higher_is_better):
     return better_in_one
 
 
-def calc_pareto_front_d(objectives: dict, higher_is_better: [bool]):
-    sorted_keys = sorted(
-        objectives,
-        key=lambda k: [
-            -objectives[k][i] if higher_is_better[i] else objectives[k][i]
-            for i in range(len(higher_is_better))
-        ],
-    )
-    pareto_front = []
-    for kcandidate in sorted_keys:
-        is_dominated = False
-        for kmember in pareto_front:
-            if dominates_d(objectives[kmember], objectives[kcandidate], higher_is_better):
-                is_dominated = True
-                break
-        if not is_dominated:
-            pareto_front = [
-                kmember
-                for kmember in pareto_front
-                if not dominates_d(objectives[kcandidate], objectives[kmember], higher_is_better)
-            ]
-            pareto_front.append(kcandidate)
-    return pareto_front
+def update_pareto_front(
+    new_index: int, new_obj: tuple, current_front: list, objectives_dict: dict, higher_is_better: list
+) -> list:
+    """
+    Given a new candidate with certain objective values, update the current Pareto
+    front indices accordingly.
+
+    :param new_index: Index of the new candidate.
+    :param new_obj: Tuple of objective values for the new candidate.
+    :param current_front: List of indices representing the current Pareto front.
+    :param objectives_dict: Dictionary mapping index -> (objective tuple).
+    :param higher_is_better: List of booleans indicating if higher is better.
+    :return: The updated Pareto front list of indices.
+    """
+    # If the new candidate is dominated by any on the front, return as is
+    for idx in current_front:
+        existing_obj = objectives_dict[idx]
+        if dominates_d(existing_obj, new_obj, higher_is_better):
+            return current_front
+
+    # Otherwise, remove those that are dominated by the new candidate
+    new_front = []
+    for idx in current_front:
+        existing_obj = objectives_dict[idx]
+        if not dominates_d(new_obj, existing_obj, higher_is_better):
+            new_front.append(idx)
+    new_front.append(new_index)
+    return new_front
 
 
-def gprint(verbose):
-    if verbose:
-        return print
-    else:
-        return lambda *args, **kwargs: None
+def gprint(verbose: bool):
+    """
+    Provide a 'conditional' print function based on verbosity.
+
+    :param verbose: If True, return the built-in print. Else, return a no-op.
+    :return: A function that prints only if verbose is True.
+    """
+    return print if verbose else (lambda *args, **kwargs: None)
 
 
-def process_single(file_location, verbose=False):
+def process_single(file_location: str, verbose: bool = False):
+    """
+    Process a single file of results. Collect and track Pareto-optimal objectives,
+    then select the 'best' entry by minimizing Euclidean distance to (0,0) in
+    normalized objective space.
+
+    :param file_location: Path to a single results file.
+    :param verbose: Whether to print additional info for debugging.
+    :return: The best candidate dictionary (or None if no candidates found).
+    """
     print_ = gprint(verbose)
-    try:
-        result = json.load(open(file_location))
-        print_(config_pretty_str(sort_dict_keys(result)))
-        return result
-    except:
-        pass
-    xs = []
+    analysis_prefix = None
+    analysis_key = None
+
+    # Dictionaries keyed by incremental index: index -> (w0, w1)
+    all_objectives = {}
+    filtered_objectives = {}
+
+    # Indices of the current Pareto front
+    all_pareto = []
+    filtered_pareto = []
+
+    # Map from index -> full entry for retrieval
+    index_to_entry = {}
+    index = 0
+
+    # Track min/max across w0, w1 for normalization
+    all_min_w0 = all_max_w0 = None
+    all_min_w1 = all_max_w1 = None
+    filtered_min_w0 = filtered_max_w0 = None
+    filtered_min_w1 = filtered_max_w1 = None
+
+    higher_is_better = [False, False]  # We want to minimize w0, w1
+
+    # Read the file line-by-line (with incremental diffs if present)
     for x in data_generator(file_location, verbose=verbose):
-        if x:
-            xs.append(x)
-    if not xs:
-        print_(f"No valid data found in {file_location}")
-        return None
-    print_("Processing...")
-    res = pd.DataFrame([flatten_dict(x) for x in xs])
+        if not x:
+            continue
 
-    # Determine the prefix based on the data
-    if "analyses_combined" in xs[0]:
-        analysis_prefix = "analyses_combined_"
-        analysis_key = "analyses_combined"
-    elif "analysis" in xs[0]:
-        analysis_prefix = "analysis_"
-        analysis_key = "analysis"
-    else:
-        raise Exception("Neither 'analyses_combined' nor 'analysis' found in data")
+        # Determine the analysis key/prefix if not yet known
+        if analysis_prefix is None:
+            if "analyses_combined" in x:
+                analysis_prefix = "analyses_combined_"
+                analysis_key = "analyses_combined"
+            elif "analysis" in x:
+                analysis_prefix = "analysis_"
+                analysis_key = "analysis"
+            else:
+                # No recognized analysis data found
+                continue
 
-    keys, higher_is_better = ["w_0", "w_1"], [False, False]
-    keys = [analysis_prefix + key for key in keys]
-    print_("n backtests", len(res))
+        flat_x = flatten_dict(x)
+        w0_key = analysis_prefix + "w_0"
+        w1_key = analysis_prefix + "w_1"
 
-    # Adjust the filtering condition based on the prefix
-    res_keys_w_0 = res[analysis_prefix + "w_0"]
-    res_keys_w_1 = res[analysis_prefix + "w_1"]
-    candidates = res[(res_keys_w_0 <= 0.0) & (res_keys_w_1 <= 0.0)][keys]
-    if len(candidates) == 0:
-        candidates = res[keys]
-    print_("n candidates", len(candidates))
-    if len(candidates) == 1:
-        best = candidates.iloc[0].name
-        pareto = candidates
-    else:
-        pareto = candidates.loc[
-            calc_pareto_front_d(
-                {i: x for i, x in zip(candidates.index, candidates.values)}, higher_is_better
-            )
-        ]
-        cands_norm = (candidates - candidates.min()) / (candidates.max() - candidates.min())
-        pareto_norm = (pareto - candidates.min()) / (candidates.max() - candidates.min())
-        dists = [calc_dist(p, [float(x) for x in higher_is_better]) for p in pareto_norm.values]
-        pareto_w_dists = pareto_norm.join(
-            pd.Series(dists, name="dist_to_ideal", index=pareto_norm.index)
+        # Skip if we don't find the w0/w1 keys
+        if w0_key not in flat_x or w1_key not in flat_x:
+            continue
+
+        # Convert to float, skip entry if it fails
+        try:
+            w0 = float(flat_x[w0_key])
+            w1 = float(flat_x[w1_key])
+        except:
+            continue
+
+        # Update overall min/max
+        if all_min_w0 is None or w0 < all_min_w0:
+            all_min_w0 = w0
+        if all_max_w0 is None or w0 > all_max_w0:
+            all_max_w0 = w0
+        if all_min_w1 is None or w1 < all_min_w1:
+            all_min_w1 = w1
+        if all_max_w1 is None or w1 > all_max_w1:
+            all_max_w1 = w1
+
+        # Determine if it meets the "filtered" condition (both <= 0)
+        is_filtered = w0 <= 0.0 and w1 <= 0.0
+        if is_filtered:
+            # Update filtered min/max
+            if filtered_min_w0 is None or w0 < filtered_min_w0:
+                filtered_min_w0 = w0
+            if filtered_max_w0 is None or w0 > filtered_max_w0:
+                filtered_max_w0 = w0
+            if filtered_min_w1 is None or w1 < filtered_min_w1:
+                filtered_min_w1 = w1
+            if filtered_max_w1 is None or w1 > filtered_max_w1:
+                filtered_max_w1 = w1
+
+        # Update all_objectives and Pareto front
+        all_objectives[index] = (w0, w1)
+        old_all_pareto = all_pareto.copy()
+        all_pareto = update_pareto_front(
+            index, (w0, w1), all_pareto, all_objectives, higher_is_better
         )
-        closest_to_ideal = pareto_w_dists.sort_values("dist_to_ideal")
-        best = closest_to_ideal.dist_to_ideal.idxmin()
-        print_("best")
-        print_(candidates.loc[best])
-        print_("pareto front:")
-        res_to_print = res[[x for x in res.columns if analysis_prefix[:-1] in x]].loc[
-            closest_to_ideal.index
-        ]
-        res_to_print.columns = [x.replace(analysis_prefix, "") for x in res_to_print.columns]
-        print_(res_to_print)
+        # If it's newly added to the Pareto front, store a deep copy
+        if index not in old_all_pareto and index in all_pareto:
+            index_to_entry[index] = deepcopy(x)
 
-    # Processing the best result for configuration
-    best_d = xs[best]
-    # Adjust for 'analysis' or 'analyses_combined'
-    best_d[analysis_key]["n_iters"] = len(xs)
+        # Update filtered_objectives and filtered Pareto front
+        if is_filtered:
+            filtered_objectives[index] = (w0, w1)
+            old_filtered_pareto = filtered_pareto.copy()
+            filtered_pareto = update_pareto_front(
+                index, (w0, w1), filtered_pareto, filtered_objectives, higher_is_better
+            )
+            if index not in old_filtered_pareto and index in filtered_pareto:
+                index_to_entry[index] = deepcopy(x)
+
+        index += 1
+
+    print_("Processing...")
+
+    # Decide which Pareto front to pick from
+    if len(filtered_pareto) > 0:
+        candidates_indices = filtered_pareto
+        min_w0, max_w0 = filtered_min_w0, filtered_max_w0
+        min_w1, max_w1 = filtered_min_w1, filtered_max_w1
+        candidates_objectives = filtered_objectives
+    else:
+        candidates_indices = all_pareto
+        min_w0, max_w0 = all_min_w0, all_max_w0
+        min_w1, max_w1 = all_min_w1, all_max_w1
+        candidates_objectives = all_objectives
+
+    if not candidates_indices:
+        print_("No candidates found.")
+        return None
+
+    # Normalize distances and find the point closest to (0, 0)
+    range_w0 = max_w0 - min_w0 if max_w0 != min_w0 else 1.0
+    range_w1 = max_w1 - min_w1 if max_w1 != min_w1 else 1.0
+
+    distances = []
+    for idx in candidates_indices:
+        w0, w1 = candidates_objectives[idx]
+        norm_w0 = (w0 - min_w0) / range_w0
+        norm_w1 = (w1 - min_w1) / range_w1
+        dist = calc_dist((norm_w0, norm_w1), (0.0, 0.0))
+        distances.append((idx, dist))
+
+    # Sort by distance ascending
+    distances.sort(key=lambda x: x[1])
+    best_idx = distances[0][0]
+
+    # Retrieve the best entry from index_to_entry
+    best_entry = index_to_entry.get(best_idx)
+    if best_entry is None:
+        print_("Best entry not found.")
+        return None
+
+    # Build a list of Pareto entries sorted by distance
+    pareto_entries = [index_to_entry.get(idx[0]) for idx in distances]
+    pareto_entries = [e for e in pareto_entries if e is not None]
+
+    # Create a DataFrame to show relevant 'analyses_combined' columns
+    pdf = pd.DataFrame([x["analyses_combined"] for x in pareto_entries])
+    selected_columns = [x for x in pdf.columns if x.endswith("_mean")]
+    pdf = pdf[selected_columns]
+    pdf.columns = [
+        x[:-5].replace("equity_balance", "eqbal").replace("position", "pos") for x in selected_columns
+    ]
+
+    n_cols = 10
+    print_("n pareto members", len(pdf))
+    # Print the DataFrame in chunks for readability
+    for i in range(0, len(pdf.columns), n_cols):
+        print(pdf[pdf.columns[i : i + n_cols]])
+        print()
+
+    # Set the best entry's "n_iters" for clarity
+    best_d = best_entry
+    best_d[analysis_key]["n_iters"] = index
+
+    # If there's a "config" key, flatten it into the main dictionary
     if "config" in best_d:
         best_d.update(deepcopy(best_d["config"]))
         del best_d["config"]
-    fjson = config_pretty_str(best_d)
+
+    # Print selected candidate info
+    fjson = config_pretty_str(
+        {
+            "analysis": {k: best_d["analyses_combined"][k] for k in selected_columns},
+            "backtest": {k: best_d["backtest"][k] for k in best_d["backtest"] if k != "coins"},
+            "bot": best_d["bot"],
+        }
+    )
+    print_("selected candidate:")
     print_(fjson)
     print_(file_location)
+
+    # Determine output paths
     full_path = file_location.replace("_all_results.txt", "") + ".json"
     base_path = os.path.split(full_path)[0]
     full_path = make_get_filepath(full_path.replace(base_path, base_path + "_analysis/"))
-    pareto_to_dump = [x for i, x in enumerate(xs) if i in pareto.index]
-    for i in range(len(pareto_to_dump)):
-        if "config" in pareto_to_dump[i]:
-            pareto_to_dump[i].update(deepcopy(pareto_to_dump[i]["config"]))
-            del pareto_to_dump[i]["config"]
+
+    # Flatten out "config" in each Pareto entry if present
+    for entry in pareto_entries:
+        if "config" in entry:
+            entry.update(deepcopy(entry["config"]))
+            del entry["config"]
+
+    # Write all Pareto entries to a file
     with open(full_path.replace(".json", "_pareto.txt"), "w") as f:
-        for x in pareto_to_dump:
+        for x in pareto_entries:
             f.write(json.dumps(x) + "\n")
+
+    # Dump the best config to disk
     dump_config(format_config(best_d), full_path)
     return best_d
 
 
 def main(args):
+    """
+    Main entry point of the script. Processes either a single file or
+    an entire directory of files.
+
+    :param args: Parsed command-line arguments containing:
+        - file_location: Path to file or directory.
+        - verbose: Boolean indicating verbosity.
+    """
     if os.path.isdir(args.file_location):
+        # Process every file in the directory in reverse-sorted order
         for fname in sorted(os.listdir(args.file_location), reverse=True):
             fpath = os.path.join(args.file_location, fname)
             try:
@@ -231,6 +379,7 @@ def main(args):
                 print(f"error with {fpath} {e}")
                 traceback.print_exc()
     else:
+        # Process a single file
         try:
             result = process_single(args.file_location, args.verbose)
             print(f"successfully processed {args.file_location}")
@@ -242,12 +391,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process results.")
     parser.add_argument("file_location", type=str, help="Location of the results file or directory")
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Disable printing and progress tracking",
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
     args = parser.parse_args()
 
     main(args)
