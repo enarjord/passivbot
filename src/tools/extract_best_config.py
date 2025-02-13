@@ -314,8 +314,8 @@ def process_single(file_location: str, verbose: bool = False):
     print_("n pareto members", len(pdf))
     # Print the DataFrame in chunks for readability
     for i in range(0, len(pdf.columns), n_cols):
-        print(pdf[pdf.columns[i : i + n_cols]])
-        print()
+        print_(pdf[pdf.columns[i : i + n_cols]])
+        print_()
 
     # Set the best entry's "n_iters" for clarity
     best_d = best_entry
