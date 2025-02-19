@@ -7,7 +7,7 @@ Here follows an overview of the parameters found in `config/template.json`.
 - `base_dir`: Location to save backtest results.
 - `compress_cache`: set to true to save disk space. Set to false to load faster.
 - `end_date`: End date of backtest, e.g., 2024-06-23. Set to 'now' to use today's date as end date.
-- `exchanges`: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing.
+- `exchanges`: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. Options: [binance, bybit, gateio, bitget]
 - `start_date`: Start date of backtest.
 - `starting_balance`: Starting balance in USD at the beginning of backtest.
 - `symbols`: Coins which were backtested for each exchange. Note: coins for backtesting are live.approved_coins minus live.ignored_coins.
