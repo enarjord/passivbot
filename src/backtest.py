@@ -245,10 +245,9 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
     coins = sorted(set(config["backtest"]["coins"][exchange]))  # sort for consistency
     bot_params = {k: config["bot"][k].copy() for k in ["long", "short"]}
     for pside in bot_params:
+        n_positions = max(0, min(bot_params[pside]["n_positions"], len(coins)))
         bot_params[pside]["wallet_exposure_limit"] = (
-            bot_params[pside]["total_wallet_exposure_limit"] / bot_params[pside]["n_positions"]
-            if bot_params[pside]["n_positions"] > 0
-            else 0.0
+            bot_params[pside]["total_wallet_exposure_limit"] / n_positions if n_positions > 0 else 0.0
         )
     if exchange_params is None:
         exchange_params = [
