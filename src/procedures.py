@@ -195,10 +195,44 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
     if not live_only:
         for k_coins in ["approved_coins", "ignored_coins"]:
             path = result["live"][k_coins]
+
+            # --- 1) If it's already a dict {"long": [...], "short": [...]}, handle each side ---
+            sides = ["long", "short"]
+            if isinstance(path, dict) and all(side in path for side in sides):
+                for side in sides:
+                    side_val = path.get(side, [])
+                    if isinstance(side_val, list):
+                        expanded = []
+                        for item in side_val:
+                            # Expand comma‐delimited strings like "ADAUSDT,DOGEUSDT"
+                            if isinstance(item, str) and "," in item:
+                                expanded.extend(x.strip() for x in item.split(","))
+                            else:
+                                expanded.append(item)
+                        path[side] = expanded
+                # Reassign the modified dict back
+                result["live"][k_coins] = path
+                # Skip the rest of the loop because the original snippet only did further logic if
+                # path was a list or string in "approved_coins"/"ignored_coins"
+                continue
+
+            # --- 2) If it's a list, first check if single item is a file path, else expand commas ---
             if isinstance(path, list):
+                # Check for single‐item list referencing an external file
                 if len(path) == 1 and isinstance(path[0], str) and os.path.exists(path[0]):
-                    if any([path[0].endswith(k) for k in [".txt", ".json", ".hjson"]]):
-                        path = path[0]
+                    if any(path[0].endswith(k) for k in [".txt", ".json", ".hjson"]):
+                        path = path[0]  # e.g. "coins.json"
+                else:
+                    # Expand comma‐delimited strings, e.g. ["ADAUSDT,DOGEUSDT"] => ["ADAUSDT","DOGEUSDT"]
+                    expanded = []
+                    for item in path:
+                        if isinstance(item, str) and "," in item:
+                            expanded.extend(x.strip() for x in item.split(","))
+                        else:
+                            expanded.append(item)
+                    path = expanded
+
+            # --- 3) If it's now a string, apply the original file/empty logic ---
             if isinstance(path, str):
                 if path == "":
                     result["live"][k_coins] = {"long": [], "short": []}
@@ -206,9 +240,8 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                     try:
                         content = read_external_coins_lists(path)
                         if content:
-                            if verbose:
-                                if result["live"][k_coins] != content:
-                                    print(f"set {k_coins} {content}")
+                            if verbose and result["live"][k_coins] != content:
+                                print(f"set {k_coins} {content}")
                             result["live"][k_coins] = content
                     except Exception as e:
                         print(f"failed to load {k_coins} from file {path} {e}")
@@ -216,11 +249,15 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                     if verbose:
                         print(f"path to {k_coins} file does not exist {path}")
                     result["live"][k_coins] = {"long": [], "short": []}
-            if isinstance(result["live"][k_coins], list):
+
+            # --- 4) Finally, if it's still a list, convert it into {"long":[...],"short":[...]} ---
+            elif isinstance(path, list):
                 result["live"][k_coins] = {
-                    "long": deepcopy(result["live"][k_coins]),
-                    "short": deepcopy(result["live"][k_coins]),
+                    "long": deepcopy(path),
+                    "short": deepcopy(path),
                 }
+            # If it’s something else (not dict/list/str), we do nothing special,
+            # preserving original behavior.
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
     return result
 
