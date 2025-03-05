@@ -158,6 +158,7 @@ class Passivbot:
         }
         self.create_ccxt_sessions()
         self.debug_mode = False
+        self.balance_threshold = 1.0  # don't create orders if balance is less than threshold
 
     async def start_bot(self):
         logging.info(f"Starting bot {self.exchange}...")
@@ -369,6 +370,8 @@ class Passivbot:
                 print(f"would create {len(to_create)} orders")
             # for x in to_create:
             #    pprint.pprint(x)
+        elif self.balance < self.balance_threshold:
+            logging.info(f"Balance too low: {self.balance} {self.quote}. Not creating any orders.")
         else:
             res = None
             try:
@@ -2170,7 +2173,21 @@ class Passivbot:
         psides_equal = content["long"] == content["short"]
         for pside in content:
             if not psides_equal or symbols is None:
-                symbols = [self.coin_to_symbol(coin) for coin in content[pside]]
+                coins = content[pside]
+                # Check if coins is a single string that needs to be split
+                if isinstance(coins, str):
+                    coins = coins.split(",")
+                # Handle case where list contains comma-separated values in its elements
+                elif isinstance(coins, (list, tuple)):
+                    expanded_coins = []
+                    for item in coins:
+                        if isinstance(item, str) and "," in item:
+                            expanded_coins.extend(item.split(","))
+                        else:
+                            expanded_coins.append(item)
+                    coins = expanded_coins
+
+                symbols = [self.coin_to_symbol(coin) for coin in coins]
                 symbols = set([s for s in symbols if s])
             symbols_already = getattr(self, k_coins)[pside]
             if symbols and symbols_already != symbols:
