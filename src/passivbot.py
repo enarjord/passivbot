@@ -158,6 +158,7 @@ class Passivbot:
         }
         self.create_ccxt_sessions()
         self.debug_mode = False
+        self.balance_threshold = 1.0  # don't create orders if balance is less than threshold
 
     async def start_bot(self):
         logging.info(f"Starting bot {self.exchange}...")
@@ -369,6 +370,8 @@ class Passivbot:
                 print(f"would create {len(to_create)} orders")
             # for x in to_create:
             #    pprint.pprint(x)
+        elif self.balance < self.balance_threshold:
+            logging.info(f"Balance too low: {self.balance} {self.quote}. Not creating any orders.")
         else:
             res = None
             try:
