@@ -1442,6 +1442,19 @@ class Passivbot:
                     }
                 )
                 seen.add(seen_key)
+        # ensure close qtys don't exceed pos sizes
+        for symbol in ideal_orders_f:
+            for i in range(len(ideal_orders_f[symbol])):
+                order = ideal_orders_f[symbol][i]
+                if order["reduce_only"]:
+                    pos_size_abs = abs(
+                        self.positions[order["symbol"]][order["position_side"]]["size"]
+                    )
+                    if abs(order["qty"]) > pos_size_abs:
+                        logging.info(
+                            f"debug: reduce only order size greater than pos size. Order: {order} Position: {self.positions[order['symbol']]}"
+                        )
+                        order["qty"] = pos_size_abs
         return ideal_orders_f
 
     def calc_unstucking_close(self, ideal_orders):
