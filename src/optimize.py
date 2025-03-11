@@ -281,11 +281,24 @@ def managed_mmap(filename, dtype, shape):
 
 
 class Evaluator:
-    def __init__(self, shared_memory_files, hlcvs_shapes, hlcvs_dtypes, config, msss, results_queue):
+    def __init__(
+        self,
+        shared_memory_files,
+        hlcvs_shapes,
+        hlcvs_dtypes,
+        btc_usd_shared_memory_file,
+        btc_usd_data,
+        config,
+        msss,
+        results_queue,
+    ):
         logging.info("Initializing Evaluator...")
         self.shared_memory_files = shared_memory_files
         self.hlcvs_shapes = hlcvs_shapes
         self.hlcvs_dtypes = hlcvs_dtypes
+        self.btc_usd_shared_memory_file = btc_usd_shared_memory_file
+        self.btc_usd_data = btc_usd_data  # NumPy array of BTC/USD prices
+        self.btc_usd_dtype = btc_usd_data.dtype
         self.msss = msss
         self.exchanges = list(shared_memory_files.keys())
 
@@ -323,8 +336,10 @@ class Evaluator:
             )
             fills, equities, analysis = pbr.run_backtest(
                 self.shared_memory_files[exchange],
-                self.shared_hlcvs_np[exchange].shape,
-                self.shared_hlcvs_np[exchange].dtype.str,
+                self.hlcvs_shapes[exchange],
+                self.hlcvs_dtypes[exchange].str,
+                self.btc_usd_shared_memory_file,  # Pass BTC/USD shared memory file
+                self.btc_usd_dtype.str,  # Pass BTC/USD dtype
                 bot_params,
                 self.exchange_params[exchange],
                 self.backtest_params[exchange],
@@ -533,7 +548,6 @@ async def main():
     update_config_with_args(config, args)
     config = format_config(config, verbose=False)
     await add_all_eligible_coins_to_config(config)
-
     try:
         # Prepare data for each exchange
         hlcvs_dict = {}
@@ -544,7 +558,9 @@ async def main():
         config["backtest"]["coins"] = {}
         if config["backtest"]["combine_ohlcvs"]:
             exchange = "combined"
-            coins, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
+            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await prepare_hlcvs_mss(
+                config, exchange
+            )
             exchange_preference = defaultdict(list)
             for coin in coins:
                 exchange_preference[mss[coin]["exchange"]].append(coin)
@@ -566,7 +582,7 @@ async def main():
             for exchange in config["backtest"]["exchanges"]:
                 tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
             for exchange in config["backtest"]["exchanges"]:
-                coins, hlcvs, mss, results_path, cache_dir = await tasks[exchange]
+                coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await tasks[exchange]
                 config["backtest"]["coins"][exchange] = coins
                 hlcvs_dict[exchange] = hlcvs
                 hlcvs_shapes[exchange] = hlcvs.shape
@@ -580,7 +596,6 @@ async def main():
                 logging.info(
                     f"Finished creating shared memory file for {exchange}: {shared_memory_file}"
                 )
-
         exchanges = config["backtest"]["exchanges"]
         exchanges_fname = "combined" if config["backtest"]["combine_ohlcvs"] else "_".join(exchanges)
         date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
@@ -609,9 +624,28 @@ async def main():
         )
         writer_process.start()
 
-        # Initialize evaluator with results queue
+        # Prepare BTC/USD data
+        # For optimization, use the BTC/USD prices from the first exchange (or combined)
+        # Since all exchanges should align in timesteps, this should be consistent
+        btc_usd_data = btc_usd_prices  # Use the fetched btc_usd_prices from prepare_hlcvs_mss
+        if config["backtest"].get("use_btc_collateral", False):
+            logging.info("Using fetched BTC/USD prices for collateral")
+        else:
+            logging.info("Using default BTC/USD prices (all 1.0s) as use_btc_collateral is False")
+            btc_usd_data = np.ones(hlcvs_dict[next(iter(hlcvs_dict))].shape[0], dtype=np.float64)
+
+        btc_usd_shared_memory_file = create_shared_memory_file(btc_usd_data)
+
+        # Initialize evaluator with results queue and BTC/USD shared memory
         evaluator = Evaluator(
-            shared_memory_files, hlcvs_shapes, hlcvs_dtypes, config, msss, results_queue
+            shared_memory_files,
+            hlcvs_shapes,
+            hlcvs_dtypes,
+            btc_usd_shared_memory_file,
+            btc_usd_data,
+            config,
+            msss,
+            results_queue,
         )
 
         logging.info(f"Finished initializing evaluator...")
@@ -751,14 +785,22 @@ async def main():
             pool.terminate()
             pool.join()
 
-        # Remove shared memory files
-        for shared_memory_file in shared_memory_files.values():
-            if shared_memory_file and os.path.exists(shared_memory_file):
-                logging.info(f"Removing shared memory file: {shared_memory_file}")
+        # Remove shared memory files (including BTC/USD)
+        if "shared_memory_files" in locals():
+            for shared_memory_file in shared_memory_files.values():
+                if shared_memory_file and os.path.exists(shared_memory_file):
+                    logging.info(f"Removing shared memory file: {shared_memory_file}")
+                    try:
+                        os.unlink(shared_memory_file)
+                    except Exception as e:
+                        logging.error(f"Error removing shared memory file: {e}")
+        if "btc_usd_shared_memory_file" in locals():
+            if btc_usd_shared_memory_file and os.path.exists(btc_usd_shared_memory_file):
+                logging.info(f"Removing BTC/USD shared memory file: {btc_usd_shared_memory_file}")
                 try:
-                    os.unlink(shared_memory_file)
+                    os.unlink(btc_usd_shared_memory_file)
                 except Exception as e:
-                    logging.error(f"Error removing shared memory file: {e}")
+                    logging.error(f"Error removing BTC/USD shared memory file: {e}")
 
         logging.info("Cleanup complete. Exiting.")
         sys.exit(0)
