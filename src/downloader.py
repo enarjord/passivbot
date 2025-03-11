@@ -121,8 +121,8 @@ def load_ohlcv_data(filepath: str) -> pd.DataFrame:
 
 def get_days_in_between(start_day, end_day):
     date_format = "%Y-%m-%d"
-    start_date = datetime.datetime.strptime(start_day[:10], date_format)
-    end_date = datetime.datetime.strptime(end_day[:10], date_format)
+    start_date = datetime.datetime.strptime(format_end_date(start_day), date_format)
+    end_date = datetime.datetime.strptime(format_end_date(end_day), date_format)
     days = []
     current_date = start_date
     while current_date <= end_date:
@@ -239,7 +239,7 @@ class OHLCVManager:
     ):
         self.exchange = "binanceusdm" if exchange == "binance" else exchange
         self.quote = "USDC" if exchange == "hyperliquid" else "USDT"
-        self.start_date = "2020-01-01" if start_date is None else start_date
+        self.start_date = "2020-01-01" if start_date is None else format_end_date(start_date)
         self.end_date = format_end_date("now" if end_date is None else end_date)
         self.start_ts = date_to_ts(self.start_date)
         self.end_ts = date_to_ts(self.end_date)
@@ -911,17 +911,43 @@ async def prepare_hlcvs(config: dict, exchange: str):
         exchange = "binanceusdm"
     start_date = config["backtest"]["start_date"]
     end_date = format_end_date(config["backtest"]["end_date"])
+
+    # Initialize OHLCVManager for the exchange
     om = OHLCVManager(
         exchange,
         start_date,
         end_date,
         gap_tolerance_ohlcvs_minutes=config["backtest"]["gap_tolerance_ohlcvs_minutes"],
     )
+    btc_om = None
+
     try:
-        return await prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, om)
+        # Prepare HLCV data
+        mss, timestamps, hlcvs = await prepare_hlcvs_internal(
+            config, coins, exchange, start_date, end_date, om
+        )
+
+        # Always fetch BTC/USD prices
+        btc_om = OHLCVManager(
+            "binanceusdm",  # Use Binance for BTC/USD prices
+            start_date,
+            end_date,
+            gap_tolerance_ohlcvs_minutes=config["backtest"]["gap_tolerance_ohlcvs_minutes"],
+        )
+        btc_df = await btc_om.get_ohlcvs("BTC")
+        if btc_df.empty:
+            raise ValueError("Failed to fetch BTC/USD prices from Binance")
+
+        # Ensure BTC/USD timestamps align with HLCV timestamps
+        btc_df = btc_df.set_index("timestamp").reindex(timestamps, method="ffill").reset_index()
+        btc_usd_prices = btc_df["close"].values  # Extract 1D array of closing prices
+
+        return mss, timestamps, hlcvs, btc_usd_prices
     finally:
         if om.cc:
             await om.cc.close()
+        if btc_om and btc_om.cc:
+            await btc_om.cc.close()
 
 
 async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, om):
@@ -1052,33 +1078,44 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
 
 
 async def prepare_hlcvs_combined(config):
-    """
-    Public function that sets up any needed resources,
-    calls the internal implementation, and ensures
-    ccxt connections are closed in a finally block.
-    """
-    # Create or load the OHLCVManager dict
     exchanges_to_consider = [
         "binanceusdm" if e == "binance" else e for e in config["backtest"]["exchanges"]
     ]
     om_dict = {}
     for ex in exchanges_to_consider:
-        om = OHLCVManager(
+        om_dict[ex] = OHLCVManager(
             ex,
             config["backtest"]["start_date"],
             config["backtest"]["end_date"],
             gap_tolerance_ohlcvs_minutes=config["backtest"]["gap_tolerance_ohlcvs_minutes"],
         )
-        # await om.load_markets()  # if you want to do this up front
-        om_dict[ex] = om
+    btc_om = None
 
     try:
-        return await _prepare_hlcvs_combined_impl(config, om_dict)
+        mss, timestamps, unified_array = await _prepare_hlcvs_combined_impl(config, om_dict)
+
+        # Always fetch BTC/USD prices
+        btc_om = OHLCVManager(
+            "binanceusdm",
+            config["backtest"]["start_date"],
+            config["backtest"]["end_date"],
+            gap_tolerance_ohlcvs_minutes=config["backtest"]["gap_tolerance_ohlcvs_minutes"],
+        )
+        btc_df = await btc_om.get_ohlcvs("BTC")
+        if btc_df.empty:
+            raise ValueError("Failed to fetch BTC/USD prices from Binance")
+
+        # Align BTC/USD timestamps with unified timestamps
+        btc_df = btc_df.set_index("timestamp").reindex(timestamps, method="ffill").reset_index()
+        btc_usd_prices = btc_df["close"].values
+
+        return mss, timestamps, unified_array, btc_usd_prices
     finally:
-        # Cleanly close all ccxt sessions
         for om in om_dict.values():
             if om.cc:
                 await om.cc.close()
+        if btc_om and btc_om.cc:
+            await btc_om.cc.close()
 
 
 async def _prepare_hlcvs_combined_impl(config, om_dict):
