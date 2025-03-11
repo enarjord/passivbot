@@ -1,4 +1,4 @@
-use crate::backtest::{analyze_backtest, Backtest};
+use crate::backtest::{analyze_backtest_pair, Backtest};
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_grid_close_long, calc_next_close_long,
     calc_next_close_short, calc_trailing_close_long,
@@ -8,8 +8,8 @@ use crate::entries::{
     calc_next_entry_short, calc_trailing_entry_long,
 };
 use crate::types::{
-    Analysis, BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, Order, OrderBook,
-    Position, StateParams, TrailingPriceBundle,
+    Analysis, BacktestParams, BotParams, BotParamsPair, EMABands, Equities, ExchangeParams, Order,
+    OrderBook, Position, StateParams, TrailingPriceBundle,
 };
 use memmap::MmapOptions;
 use ndarray::{Array1, Array2, Array3, Array4, ArrayBase, ArrayD, ArrayView, ShapeBuilder};
@@ -21,27 +21,34 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use pyo3::wrap_pyfunction;
+use serde::Serialize;
 use std::{fs::File, slice};
 
 #[pyfunction]
 pub fn run_backtest(
-    shared_memory_file: &str,
-    hlcvs_shape: (usize, usize, usize),
-    hlcvs_dtype: &str,
-    bot_params_pair_dict: &PyDict,
-    exchange_params_list: &PyAny,
-    backtest_params_dict: &PyDict,
-) -> PyResult<(Py<PyArray2<PyObject>>, Py<PyArray1<f64>>, Py<PyDict>)> {
-    // Open the memory-mapped file
+    shared_memory_file: &str,           // Existing HLCV shared memory file
+    hlcvs_shape: (usize, usize, usize), // Shape of HLCV data
+    hlcvs_dtype: &str,                  // Dtype of HLCV data
+    btc_usd_shared_memory_file: &str,   // New BTC/USD shared memory file
+    btc_usd_dtype: &str,                // Dtype of BTC/USD data
+    bot_params_pair_dict: &PyDict,      // Bot parameters
+    exchange_params_list: &PyAny,       // Exchange parameters
+    backtest_params_dict: &PyDict,      // Backtest parameters
+) -> PyResult<(
+    Py<PyArray2<PyObject>>,
+    Py<PyArray1<f64>>,
+    Py<PyArray1<f64>>,
+    Py<PyDict>,
+    Py<PyDict>,
+)> {
+    // Open and map the HLCV shared memory file
     let file = File::open(shared_memory_file)
         .map_err(|e| PyValueError::new_err(format!("Unable to open shared memory file: {}", e)))?;
-
     let mmap = unsafe {
         MmapOptions::new()
             .map(&file)
-            .map_err(|e| PyValueError::new_err(format!("Unable to map file: {}", e)))?
+            .map_err(|e| PyValueError::new_err(format!("Unable to map HLCV file: {}", e)))?
     };
-
     let hlcvs_rust = unsafe {
         match hlcvs_dtype {
             "<f8" => ArrayView::from_shape_ptr(hlcvs_shape, mmap.as_ptr() as *const f64),
@@ -49,6 +56,33 @@ pub fn run_backtest(
         }
     };
 
+    // Open and map the BTC/USD shared memory file
+    let btc_usd_file = File::open(btc_usd_shared_memory_file).map_err(|e| {
+        PyValueError::new_err(format!("Unable to open BTC/USD shared memory file: {}", e))
+    })?;
+    let btc_usd_mmap = unsafe {
+        MmapOptions::new()
+            .map(&btc_usd_file)
+            .map_err(|e| PyValueError::new_err(format!("Unable to map BTC/USD file: {}", e)))?
+    };
+    let n_timesteps = hlcvs_shape.0; // Number of timesteps from HLCV shape
+    let btc_usd_rust = unsafe {
+        match btc_usd_dtype {
+            "<f8" => ArrayView::from_shape_ptr((n_timesteps,), btc_usd_mmap.as_ptr() as *const f64),
+            _ => return Err(PyValueError::new_err("Unsupported dtype for BTC/USD data")),
+        }
+    };
+
+    // Ensure BTC/USD data length matches HLCV timesteps
+    if btc_usd_rust.len() != n_timesteps {
+        return Err(PyValueError::new_err(format!(
+            "BTC/USD data length ({}) does not match HLCV timesteps ({})",
+            btc_usd_rust.len(),
+            n_timesteps
+        )));
+    }
+
+    // Prepare bot, exchange, and backtest parameters
     let bot_params_pair = bot_params_pair_from_dict(bot_params_pair_dict)?;
     let exchange_params = {
         let mut params_vec = Vec::new();
@@ -74,90 +108,66 @@ pub fn run_backtest(
     let backtest_params = backtest_params_from_dict(backtest_params_dict)?;
     let mut backtest = Backtest::new(
         &hlcvs_rust,
+        &btc_usd_rust,
         bot_params_pair,
         exchange_params,
         &backtest_params,
     );
 
-    // Run the backtest and get fills and equities
+    // Run the backtest and process results
     Python::with_gil(|py| {
         let (fills, equities) = backtest.run();
-        let analysis = analyze_backtest(&fills, &equities);
-        let py_analysis = PyDict::new(py);
-        py_analysis.set_item("adg", analysis.adg)?;
-        py_analysis.set_item("mdg", analysis.mdg)?;
-        py_analysis.set_item("gain", analysis.gain)?;
-        py_analysis.set_item("sharpe_ratio", analysis.sharpe_ratio)?;
-        py_analysis.set_item("sortino_ratio", analysis.sortino_ratio)?;
-        py_analysis.set_item("omega_ratio", analysis.omega_ratio)?;
-        py_analysis.set_item("expected_shortfall_1pct", analysis.expected_shortfall_1pct)?;
-        py_analysis.set_item("calmar_ratio", analysis.calmar_ratio)?;
-        py_analysis.set_item("sterling_ratio", analysis.sterling_ratio)?;
-        py_analysis.set_item("drawdown_worst", analysis.drawdown_worst)?;
-        py_analysis.set_item(
-            "drawdown_worst_mean_1pct",
-            analysis.drawdown_worst_mean_1pct,
-        )?;
-        py_analysis.set_item(
-            "equity_balance_diff_neg_max",
-            analysis.equity_balance_diff_neg_max,
-        )?;
-        py_analysis.set_item(
-            "equity_balance_diff_neg_mean",
-            analysis.equity_balance_diff_neg_mean,
-        )?;
-        py_analysis.set_item(
-            "equity_balance_diff_pos_max",
-            analysis.equity_balance_diff_pos_max,
-        )?;
-        py_analysis.set_item(
-            "equity_balance_diff_pos_mean",
-            analysis.equity_balance_diff_pos_mean,
-        )?;
-        py_analysis.set_item("loss_profit_ratio", analysis.loss_profit_ratio)?;
-        py_analysis.set_item("positions_held_per_day", analysis.positions_held_per_day)?;
-        py_analysis.set_item(
-            "position_held_hours_mean",
-            analysis.position_held_hours_mean,
-        )?;
-        py_analysis.set_item("position_held_hours_max", analysis.position_held_hours_max)?;
-        py_analysis.set_item(
-            "position_held_hours_median",
-            analysis.position_held_hours_median,
-        )?;
+        let (analysis_usd, analysis_btc) =
+            analyze_backtest_pair(&fills, &equities, backtest.balance.use_btc_collateral);
 
-        py_analysis.set_item("adg_w", analysis.adg_w)?;
-        py_analysis.set_item("mdg_w", analysis.mdg_w)?;
-        py_analysis.set_item("sharpe_ratio_w", analysis.sharpe_ratio_w)?;
-        py_analysis.set_item("sortino_ratio_w", analysis.sortino_ratio_w)?;
-        py_analysis.set_item("omega_ratio_w", analysis.omega_ratio_w)?;
-        py_analysis.set_item("calmar_ratio_w", analysis.calmar_ratio_w)?;
-        py_analysis.set_item("sterling_ratio_w", analysis.sterling_ratio_w)?;
-        py_analysis.set_item("loss_profit_ratio_w", analysis.loss_profit_ratio_w)?;
-
-        // Convert fills to a 2D array with mixed types
-        let mut py_fills = Array2::from_elem((fills.len(), 10), py.None());
+        // Create a dictionary to store analysis results using a more concise approach
+        let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
+        let py_analysis_btc = struct_to_py_dict(py, &analysis_btc)?;
+        let mut py_fills = Array2::from_elem((fills.len(), 13), py.None());
         for (i, fill) in fills.iter().enumerate() {
             py_fills[(i, 0)] = fill.index.into_py(py);
             py_fills[(i, 1)] = <String as Clone>::clone(&fill.coin).into_py(py);
             py_fills[(i, 2)] = fill.pnl.into_py(py);
             py_fills[(i, 3)] = fill.fee_paid.into_py(py);
-            py_fills[(i, 4)] = fill.balance.into_py(py);
-            py_fills[(i, 5)] = fill.fill_qty.into_py(py);
-            py_fills[(i, 6)] = fill.fill_price.into_py(py);
-            py_fills[(i, 7)] = fill.position_size.into_py(py);
-            py_fills[(i, 8)] = fill.position_price.into_py(py);
-            py_fills[(i, 9)] = fill.order_type.to_string().into_py(py);
+            py_fills[(i, 4)] = fill.balance_usd_total.into_py(py);
+            py_fills[(i, 5)] = fill.balance_btc.into_py(py);
+            py_fills[(i, 6)] = fill.balance_usd.into_py(py);
+            py_fills[(i, 7)] = fill.btc_price.into_py(py);
+            py_fills[(i, 8)] = fill.fill_qty.into_py(py);
+            py_fills[(i, 9)] = fill.fill_price.into_py(py);
+            py_fills[(i, 10)] = fill.position_size.into_py(py);
+            py_fills[(i, 11)] = fill.position_price.into_py(py);
+            py_fills[(i, 12)] = fill.order_type.to_string().into_py(py);
         }
 
-        // Convert equities to a 1D array
-        let py_equities = Array1::from_vec(equities);
-
+        let py_equities_usd = Array1::from_vec(equities.usd).into_pyarray(py).to_owned();
+        let py_equities_btc = Array1::from_vec(equities.btc).into_pyarray(py).to_owned();
         Ok((
             py_fills.into_pyarray(py).to_owned(),
-            py_equities.into_pyarray(py).to_owned(),
-            py_analysis.into(),
+            py_equities_usd,
+            py_equities_btc,
+            py_analysis_usd.into(),
+            py_analysis_btc.into(),
         ))
+    })
+}
+
+fn struct_to_py_dict<'py, T: Serialize + ?Sized>(
+    py: Python<'py>,
+    obj: &T,
+) -> PyResult<&'py PyDict> {
+    // Convert struct to JSON string
+    let json_str = serde_json::to_string(obj).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("JSON serialization error: {}", e))
+    })?;
+
+    // Use Python's json module to convert to a Python dict
+    let json = py.import("json")?;
+    let py_obj = json.call_method1("loads", (json_str,))?;
+
+    // Convert to PyDict
+    py_obj.downcast::<PyDict>().map_err(|_| {
+        PyErr::new::<pyo3::exceptions::PyTypeError, _>("Failed to convert to Python dict")
     })
 }
 
