@@ -334,7 +334,7 @@ class Evaluator:
                 exchange_params=self.exchange_params[exchange],
                 backtest_params=self.backtest_params[exchange],
             )
-            fills, equities, analysis = pbr.run_backtest(
+            fills, equities_usd, equities_btc, analysis_usd, analysis_btc = pbr.run_backtest(
                 self.shared_memory_files[exchange],
                 self.hlcvs_shapes[exchange],
                 self.hlcvs_dtypes[exchange].str,
@@ -344,7 +344,7 @@ class Evaluator:
                 self.exchange_params[exchange],
                 self.backtest_params[exchange],
             )
-            analyses[exchange] = expand_analysis(analysis, fills, config)
+            analyses[exchange] = expand_analysis(analysis_usd, analysis_btc, fills, config)
 
         analyses_combined = self.combine_analyses(analyses)
         w_0, w_1 = self.calc_fitness(analyses_combined)
@@ -386,36 +386,37 @@ class Evaluator:
 
     def calc_fitness(self, analyses_combined):
         modifier = 0.0
-        keys = [
-            "drawdown_worst",
-            "drawdown_worst_mean_1pct",
-            "equity_balance_diff_neg_max",
-            "equity_balance_diff_neg_mean",
-            "equity_balance_diff_pos_max",
-            "equity_balance_diff_pos_mean",
-            "loss_profit_ratio",
-            "position_held_hours_max",
-        ]
+        keys = sorted(self.config["optimize"]["limits"])
         i = len(keys) + 1
+        prefix = "btc_" if self.config["backtest"]["use_btc_collateral"] else "usd_"
         for key in keys:
+            keym = key.replace("lower_bound_", "") + "_max"
+            if keym not in analyses_combined:
+                keym = prefix + keym
+                assert keym in analyses_combined, f"malformed key {keym}"
             modifier += (
-                max(
-                    self.config["optimize"]["limits"][f"lower_bound_{key}"],
-                    analyses_combined[f"{key}_max"],
-                )
-                - self.config["optimize"]["limits"][f"lower_bound_{key}"]
+                max(self.config["optimize"]["limits"][key], analyses_combined[keym])
+                - self.config["optimize"]["limits"][key]
             ) * 10**i
             i -= 1
         if (
-            analyses_combined["drawdown_worst_max"] >= 1.0
-            or analyses_combined["equity_balance_diff_neg_max_max"] >= 1.0
+            analyses_combined[f"{prefix}drawdown_worst_max"] >= 1.0
+            or analyses_combined[f"{prefix}equity_balance_diff_neg_max_max"] >= 1.0
         ):
             w_0 = w_1 = modifier
         else:
-            scoring_key_0 = f"{self.config['optimize']['scoring'][0]}_mean"
-            scoring_key_1 = f"{self.config['optimize']['scoring'][1]}_mean"
-            w_0 = modifier - analyses_combined[scoring_key_0]
-            w_1 = modifier - analyses_combined[scoring_key_1]
+            assert (
+                len(self.config["optimize"]["scoring"]) == 2
+            ), f"there needs to be two fitness scoring keys {self.config['optimize']['scoring']}"
+            scores = []
+            for sk in self.config["optimize"]["scoring"]:
+                skm = f"{sk}_mean"
+                if skm not in analyses_combined:
+                    skm = prefix + skm
+                    if skm not in analyses_combined:
+                        raise Exception(f"invalid scoring key {sk}")
+                scores.append(modifier - analyses_combined[skm])
+            return scores[0], scores[1]
         return w_0, w_1
 
     def __del__(self):
