@@ -300,15 +300,15 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
 
 def expand_analysis(analysis_usd, analysis_btc, fills, config):
     return {
-        **{f"usd_{k}": v for k, v in analysis_usd.items() if 'position' not in k},
-        **{f"btc_{k}": v for k, v in analysis_btc.items() if 'position' not in k},
-        **{k: v for k, v in analysis_usd.items() if 'position' in k},
+        **{f"usd_{k}": v for k, v in analysis_usd.items() if "position" not in k},
+        **{f"btc_{k}": v for k, v in analysis_btc.items() if "position" not in k},
+        **{k: v for k, v in analysis_usd.items() if "position" in k},
     }
 
 
 def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices):
     bot_params, exchange_params, backtest_params = prep_backtest_args(config, mss, exchange)
-    if not config['backtest']['use_btc_collateral']:
+    if not config["backtest"]["use_btc_collateral"]:
         btc_usd_prices = np.ones(len(btc_usd_prices))
     logging.info(f"Backtesting {exchange}...")
     sts = utc_ms()
@@ -351,8 +351,8 @@ def post_process(
     sts = utc_ms()
     equities = pd.Series(equities)
     equities_btc = pd.Series(equities_btc)
-    fdf, analysis_py, bal_eq = process_forager_fills(fills,
-        config["backtest"]["coins"][exchange], hlcvs, equities, equities_btc
+    fdf, analysis_py, bal_eq = process_forager_fills(
+        fills, config["backtest"]["coins"][exchange], hlcvs, equities, equities_btc
     )
     for k in analysis_py:
         if k not in analysis:
