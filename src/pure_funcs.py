@@ -8,7 +8,6 @@ import json
 import re
 import numpy as np
 import dateutil.parser
-from njit_funcs import calc_pnl_long, calc_pnl_short
 import passivbot_rust as pbr
 
 try:
@@ -2087,7 +2086,7 @@ def stats_multi_to_df(stats, symbols, c_mults):
             d[f"{symbols[i]}_price"] = x[3][i]
 
             d[f"{symbols[i]}_upnl_pct_l"] = (
-                calc_pnl_long(
+                pbr.calc_pnl_long(
                     d[f"{symbols[i]}_pprice_l"],
                     d[f"{symbols[i]}_price"],
                     d[f"{symbols[i]}_psize_l"],
@@ -2097,7 +2096,7 @@ def stats_multi_to_df(stats, symbols, c_mults):
                 / d["balance"]
             )
             d[f"{symbols[i]}_upnl_pct_s"] = (
-                calc_pnl_short(
+                pbr.calc_pnl_short(
                     d[f"{symbols[i]}_pprice_s"],
                     d[f"{symbols[i]}_price"],
                     d[f"{symbols[i]}_psize_s"],
@@ -2122,8 +2121,8 @@ def calc_upnl(row, c_mults_d):
     if row.psize == 0.0:
         return 0.0
     if row.psize < 0.0:
-        return calc_pnl_short(row.pprice, row.price, row.psize, False, c_mults_d[row.symbol])
-    return calc_pnl_long(row.pprice, row.price, row.psize, False, c_mults_d[row.symbol])
+        return pbr.calc_pnl_short(row.pprice, row.price, row.psize, False, c_mults_d[row.symbol])
+    return pbr.calc_pnl_long(row.pprice, row.price, row.psize, False, c_mults_d[row.symbol])
 
 
 def fills_multi_to_df(fills, symbols, c_mults):
