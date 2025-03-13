@@ -268,7 +268,7 @@ def add_missing_keys_recursively(src, dst, parent=[], verbose=True):
             if k not in dst:
                 raise Exception(f"Fatal: {k} missing from config")
             else:
-                add_missing_keys_recursively(src[k], dst[k], parent + [k])
+                add_missing_keys_recursively(src[k], dst[k], parent + [k], verbose=verbose)
         else:
             if k not in dst:
                 if verbose:
