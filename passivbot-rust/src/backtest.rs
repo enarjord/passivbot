@@ -1603,7 +1603,17 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     let adg = daily_eqs_pct_change.iter().sum::<f64>() / daily_eqs_pct_change.len() as f64;
     let mdg = {
         let mut sorted_pct_change = daily_eqs_pct_change.clone();
-        sorted_pct_change.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+        sorted_pct_change.sort_by(|a, b| {
+            a.partial_cmp(b).unwrap_or_else(|| {
+                if a.is_nan() && b.is_nan() {
+                    Ordering::Equal
+                } else if a.is_nan() {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
+            })
+        });
         if sorted_pct_change.len() % 2 == 0 {
             (sorted_pct_change[sorted_pct_change.len() / 2 - 1]
                 + sorted_pct_change[sorted_pct_change.len() / 2])
@@ -1662,7 +1672,17 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     // Calculate Expected Shortfall (99%)
     let expected_shortfall_1pct = {
         let mut sorted_returns = daily_eqs_pct_change.clone();
-        sorted_returns.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+        sorted_returns.sort_by(|a, b| {
+            a.partial_cmp(b).unwrap_or_else(|| {
+                if a.is_nan() && b.is_nan() {
+                    Ordering::Equal
+                } else if a.is_nan() {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
+            })
+        });
         let cutoff_index = (daily_eqs_pct_change.len() as f64 * 0.01) as usize;
         if cutoff_index > 0 {
             sorted_returns[..cutoff_index]
@@ -1679,7 +1699,17 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     let drawdowns = calc_drawdowns(&daily_eqs);
     let drawdown_worst_mean_1pct = {
         let mut sorted_drawdowns = drawdowns.clone();
-        sorted_drawdowns.sort_by(|a, b| b.abs().partial_cmp(&a.abs()).unwrap_or(Ordering::Equal));
+        sorted_drawdowns.sort_by(|a, b| {
+            a.partial_cmp(b).unwrap_or_else(|| {
+                if a.is_nan() && b.is_nan() {
+                    Ordering::Equal
+                } else if a.is_nan() {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
+            })
+        });
         let cutoff_index = std::cmp::max(1, (sorted_drawdowns.len() as f64 * 0.01) as usize);
         let worst_n = std::cmp::min(cutoff_index, sorted_drawdowns.len());
         sorted_drawdowns[..worst_n]
