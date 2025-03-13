@@ -280,6 +280,13 @@ def managed_mmap(filename, dtype, shape):
             del mmap
 
 
+def validate_array(arr, name):
+    if np.any(np.isnan(arr)):
+        raise ValueError(f"{name} contains NaN values")
+    if np.any(np.isinf(arr)):
+        raise ValueError(f"{name} contains inf values")
+
+
 class Evaluator:
     def __init__(
         self,
@@ -365,7 +372,7 @@ class Evaluator:
         keys = analyses[next(iter(analyses))].keys()
         for key in keys:
             values = [analysis[key] for analysis in analyses.values()]
-            if not values or any([x == np.inf for x in values]):
+            if not values or any([x == np.inf for x in values]) or any([x is None for x in values]):
                 analyses_combined[f"{key}_mean"] = 0.0
                 analyses_combined[f"{key}_min"] = 0.0
                 analyses_combined[f"{key}_max"] = 0.0
@@ -378,7 +385,7 @@ class Evaluator:
                     analyses_combined[f"{key}_std"] = np.std(values)
                 except Exception as e:
                     print("\n\n debug\n\n")
-                    print("values", values)
+                    print("key, values", key, values)
                     print(e)
                     traceback.print_exc()
                     raise
@@ -575,6 +582,7 @@ async def main():
             required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
             check_disk_space(tempfile.gettempdir(), required_space)
             logging.info(f"Starting to create shared memory file for {exchange}...")
+            validate_array(hlcvs, "hlcvs")
             shared_memory_file = create_shared_memory_file(hlcvs)
             shared_memory_files[exchange] = shared_memory_file
             logging.info(f"Finished creating shared memory file for {exchange}: {shared_memory_file}")
@@ -592,6 +600,7 @@ async def main():
                 required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
                 check_disk_space(tempfile.gettempdir(), required_space)
                 logging.info(f"Starting to create shared memory file for {exchange}...")
+                validate_array(hlcvs, "hlcvs")
                 shared_memory_file = create_shared_memory_file(hlcvs)
                 shared_memory_files[exchange] = shared_memory_file
                 logging.info(
@@ -635,6 +644,7 @@ async def main():
             logging.info("Using default BTC/USD prices (all 1.0s) as use_btc_collateral is False")
             btc_usd_data = np.ones(hlcvs_dict[next(iter(hlcvs_dict))].shape[0], dtype=np.float64)
 
+        validate_array(btc_usd_data, "btc_usd_data")
         btc_usd_shared_memory_file = create_shared_memory_file(btc_usd_data)
 
         # Initialize evaluator with results queue and BTC/USD shared memory
