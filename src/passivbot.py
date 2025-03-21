@@ -297,7 +297,7 @@ class Passivbot:
         if coinf in self.coin_to_symbol_map:
             self.coin_to_symbol_map[coin] = self.coin_to_symbol_map[coinf]
             return self.coin_to_symbol_map[coinf]
-        result = coin_to_symbol(coin, eligible_symbols, quote)
+        result = coin_to_symbol(coin, self.eligible_symbols, quote)
         self.coin_to_symbol_map[coin] = result
         return result
 
