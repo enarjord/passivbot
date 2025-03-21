@@ -33,11 +33,11 @@ from pure_funcs import (
     safe_filename,
     symbol_to_coin,
     get_template_live_config,
+    coin_to_symbol,
 )
 from procedures import (
     make_get_filepath,
     format_end_date,
-    coin_to_symbol,
     utc_ms,
     get_file_mod_utc,
     get_first_timestamps_unified,
@@ -278,10 +278,8 @@ class OHLCVManager:
         assert self.markets, "needs to call self.load_markets() first"
         return coin_to_symbol(
             coin,
-            eligible_symbols={
-                k for k in self.markets if self.markets[k]["swap"] and k.endswith(f":{self.quote}")
-            },
-            verbose=self.verbose,
+            {k for k in self.markets if self.markets[k]["swap"] and k.endswith(f":{self.quote}")},
+            self.quote,
         )
 
     def get_market_specific_settings(self, coin):
