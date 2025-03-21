@@ -11,7 +11,6 @@ from procedures import (
     fetch_market_specific_settings_multi,
     load_config,
     dump_config,
-    coin_to_symbol,
     add_arguments_recursively,
     update_config_with_args,
     format_config,
