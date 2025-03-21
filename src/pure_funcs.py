@@ -2405,6 +2405,14 @@ def determine_side_from_order_tuple(order_tuple):
         raise Exception(f"malformed order tuple {order_tuple}")
 
 
+def coin_to_symbol(coin, eligible_symbols, quote):
+    coinf = symbol_to_coin(coin)
+    for candidate in eligible_symbols:
+        if coinf == symbol_to_coin(candidate):
+            return candidate
+    return None
+
+
 def symbol_to_coin(symbol: str) -> str:
     if symbol == "":
         return ""
