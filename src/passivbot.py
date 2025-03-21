@@ -33,7 +33,6 @@ from procedures import (
     update_config_with_args,
     format_config,
     print_async_exception,
-    coin_to_symbol,
     read_external_coins_lists,
 )
 from njit_funcs import (
@@ -64,6 +63,7 @@ from pure_funcs import (
     get_template_live_config,
     flatten,
     log_dict_changes,
+    coin_to_symbol,
 )
 
 
@@ -297,12 +297,7 @@ class Passivbot:
         if coinf in self.coin_to_symbol_map:
             self.coin_to_symbol_map[coin] = self.coin_to_symbol_map[coinf]
             return self.coin_to_symbol_map[coinf]
-        result = coin_to_symbol(
-            coin,
-            eligible_symbols=self.eligible_symbols,
-            quote=self.quote,
-            verbose=verbose,
-        )
+        result = coin_to_symbol(coin, eligible_symbols, quote)
         self.coin_to_symbol_map[coin] = result
         return result
 
