@@ -242,6 +242,10 @@ def individual_to_config(individual, template=None):
                 if len(bounds) == 1:
                     bounds = [bounds[0], bounds[0]]
                 config["bot"][pside][key] = min(max(bounds[0], 0.0), bounds[1])
+        # config["bot"][pside]["close_trailing_threshold_pct"] = max(
+        #    config["bot"][pside]["close_trailing_threshold_pct"],
+        #    config["bot"][pside]["close_trailing_retracement_pct"],
+        # )
     return config
 
 
