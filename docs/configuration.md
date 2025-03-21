@@ -10,7 +10,8 @@ Here follows an overview of the parameters found in `config/template.json`.
 - `exchanges`: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. Options: [binance, bybit, gateio, bitget]
 - `start_date`: Start date of backtest.
 - `starting_balance`: Starting balance in USD at the beginning of backtest.
-- `symbols`: Coins which were backtested for each exchange. Note: coins for backtesting are live.approved_coins minus live.ignored_coins.
+- `use_btc_collateral`: true/false. Set to true to backtest with BTC as collateral, simulating buying BTC with all USD profits, but not selling BTC when taking losses.
+  - e.g. given BTC/USD price of $100,000, if BTC balance is 1.0 and backtester makes 10 USD profit, BTC balance becomes 1.0001 and USD balance is 0. If backtester loses 20 USD, BTC balance remains 1.0001 and USD balance becomes -20. If backtester then makes 15 USD profit, USD debt is paid off first: BTC balance remains 1.0001, USD balance becomes -5. If the backtester then makes 10 USD profit: BTC balance becomes 1.00015, USD balance is 0.
 
 ## Bot Settings
 
