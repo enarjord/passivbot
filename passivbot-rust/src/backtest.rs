@@ -1797,37 +1797,51 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         total_loss / total_profit
     };
 
-    // Calculate position durations
-    let mut positions_opened: HashMap<String, usize> = HashMap::new();
-    let mut durations: Vec<usize> = Vec::new();
+    // Calculate position durations and position_unchanged_hours_max
+    let mut positions_opened: HashMap<String, usize> = HashMap::new(); // Tracks position open time
+    let mut durations: Vec<usize> = Vec::new(); // Total position durations
+    let mut last_fill_time: HashMap<String, usize> = HashMap::new(); // Last fill time per position
+    let mut unchanged_durations: Vec<usize> = Vec::new(); // Durations of unchanged periods
 
     for fill in fills {
-        let key = format!(
-            "{}_{}",
-            fill.coin,
-            if fill.order_type.to_string().contains("long") {
-                "long"
-            } else {
-                "short"
-            }
-        );
+        let side = if fill.order_type.to_string().contains("long") {
+            "long"
+        } else {
+            "short"
+        };
+        let key = format!("{}_{}", fill.coin, side);
 
+        // Record the opening time if the position is new
         if !positions_opened.contains_key(&key) {
             positions_opened.insert(key.clone(), fill.index);
+            last_fill_time.insert(key.clone(), fill.index); // Initialize last fill time
         }
 
+        // Calculate unchanged duration since the last fill
+        if let Some(&last_time) = last_fill_time.get(&key) {
+            let unchanged_duration = fill.index - last_time;
+            unchanged_durations.push(unchanged_duration);
+        }
+        // Update the last fill time
+        last_fill_time.insert(key.clone(), fill.index);
+
+        // If the position is fully closed, calculate total duration and reset
         if fill.position_size == 0.0 {
             if let Some(&start_idx) = positions_opened.get(&key) {
                 durations.push(fill.index - start_idx);
                 positions_opened.remove(&key);
+                last_fill_time.remove(&key); // Reset tracking
             }
         }
     }
 
-    // Add remaining open positions
+    // Add unchanged durations and total durations for remaining open positions
     let last_index = fills.last().map_or(0, |f| f.index);
-    for (_key, &start_idx) in positions_opened.iter() {
-        durations.push(last_index - start_idx);
+    for (key, &start_idx) in positions_opened.iter() {
+        durations.push(last_index - start_idx); // Total duration for open positions
+        if let Some(&last_time) = last_fill_time.get(key) {
+            unchanged_durations.push(last_index - last_time); // Unchanged duration till end
+        }
     }
 
     // Calculate duration statistics
@@ -1859,6 +1873,12 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         0.0
     };
 
+    let position_unchanged_hours_max = if !unchanged_durations.is_empty() {
+        *unchanged_durations.iter().max().unwrap() as f64 / 60.0
+    } else {
+        0.0
+    };
+
     let mut analysis = Analysis::default();
     analysis.adg = adg;
     analysis.mdg = mdg;
@@ -1880,6 +1900,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     analysis.position_held_hours_mean = position_held_hours_mean;
     analysis.position_held_hours_max = position_held_hours_max;
     analysis.position_held_hours_median = position_held_hours_median;
+    analysis.position_unchanged_hours_max = position_unchanged_hours_max;
 
     analysis
 }
