@@ -261,6 +261,7 @@ pub struct Analysis {
     pub position_held_hours_mean: f64,
     pub position_held_hours_max: f64,
     pub position_held_hours_median: f64,
+    pub position_unchanged_hours_max: f64,
 
     pub adg_w: f64,
     pub mdg_w: f64,
@@ -295,6 +296,7 @@ impl Default for Analysis {
             position_held_hours_mean: 0.0,
             position_held_hours_max: 0.0,
             position_held_hours_median: 0.0,
+            position_unchanged_hours_max: 0.0,
 
             adg_w: 0.0,
             mdg_w: 0.0,
