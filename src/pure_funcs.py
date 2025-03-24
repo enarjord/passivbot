@@ -329,7 +329,7 @@ def get_utc_now_timestamp() -> int:
 
 def config_pretty_str(config: dict):
     pretty_str = pprint.pformat(config)
-    for r in [("'", '"'), ("True", "true"), ("False", "false")]:
+    for r in [("'", '"'), ("True", "true"), ("False", "false"), ("None", "null")]:
         pretty_str = pretty_str.replace(*r)
     return pretty_str
 
