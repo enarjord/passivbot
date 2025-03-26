@@ -23,7 +23,7 @@ impl Default for ExchangeParams {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BacktestParams {
     pub starting_balance: f64,
     pub maker_fee: f64,
