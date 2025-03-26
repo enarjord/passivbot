@@ -98,11 +98,14 @@ def process_forager_fills(fills, coins, hlcvs, equities, equities_btc):
     div_by = 60  # save some disk space. Set to 1 to dump uncropped
     analysis_appendix["pnl_ratio_long_short"] = pnls["long"] / (pnls["long"] + pnls["short"])
     bdf = fdf.groupby((fdf.minute // div_by) * div_by).balance.last()
+    bbdf = fdf.groupby((fdf.minute // div_by) * div_by).balance_btc.last()
     edf = pd.Series(equities).iloc[::div_by]
     ebdf = pd.Series(equities_btc).iloc[::div_by]
     nidx = np.arange(min(bdf.index[0], edf.index[0]), max(bdf.index[-1], edf.index[-1]), div_by)
     bal_eq = (
-        pd.DataFrame({"balance": bdf, "equity": edf, "equity_btc": ebdf}, index=nidx)
+        pd.DataFrame(
+            {"balance": bdf, "equity": edf, "balance_btc": bbdf, "equity_btc": ebdf}, index=nidx
+        )
         .astype(float)
         .ffill()
         .bfill()
@@ -384,8 +387,8 @@ def plot_forager(
     bal_eq[["balance", "equity"]].plot()
     plt.savefig(oj(results_path, "balance_and_equity.png"))
     plt.clf()
-    bal_eq[["equity_btc"]].plot()
-    plt.savefig(oj(results_path, "equity_btc.png"))
+    bal_eq[["balance_btc", "equity_btc"]].plot()
+    plt.savefig(oj(results_path, "balance_and_equity_btc.png"))
 
     if not disable_plotting:
         for i, coin in enumerate(coins):
