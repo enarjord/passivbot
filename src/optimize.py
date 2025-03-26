@@ -297,19 +297,18 @@ class Evaluator:
         shared_memory_files,
         hlcvs_shapes,
         hlcvs_dtypes,
-        btc_usd_shared_memory_file,
-        btc_usd_data,
-        config,
+        btc_usd_shared_memory_files,
+        btc_usd_dtypes,
         msss,
+        config,
         results_queue,
     ):
         logging.info("Initializing Evaluator...")
         self.shared_memory_files = shared_memory_files
         self.hlcvs_shapes = hlcvs_shapes
         self.hlcvs_dtypes = hlcvs_dtypes
-        self.btc_usd_shared_memory_file = btc_usd_shared_memory_file
-        self.btc_usd_data = btc_usd_data  # NumPy array of BTC/USD prices
-        self.btc_usd_dtype = btc_usd_data.dtype
+        self.btc_usd_shared_memory_files = btc_usd_shared_memory_files
+        self.btc_usd_dtypes = btc_usd_dtypes
         self.msss = msss
         self.exchanges = list(shared_memory_files.keys())
 
@@ -349,8 +348,8 @@ class Evaluator:
                 self.shared_memory_files[exchange],
                 self.hlcvs_shapes[exchange],
                 self.hlcvs_dtypes[exchange].str,
-                self.btc_usd_shared_memory_file,  # Pass BTC/USD shared memory file
-                self.btc_usd_dtype.str,  # Pass BTC/USD dtype
+                self.btc_usd_shared_memory_files[exchange],  # Pass BTC/USD shared memory file
+                self.btc_usd_dtypes[exchange].str,  # Pass BTC/USD dtype
                 bot_params,
                 self.exchange_params[exchange],
                 self.backtest_params[exchange],
@@ -567,6 +566,13 @@ async def main():
         hlcvs_shapes = {}
         hlcvs_dtypes = {}
         msss = {}
+
+        # NEW: Store per-exchange BTC arrays in a dict,
+        # and store their shared-memory file names in another dict.
+        btc_usd_data_dict = {}
+        btc_usd_shared_memory_files = {}
+        btc_usd_dtypes = {}
+
         config["backtest"]["coins"] = {}
         if config["backtest"]["combine_ohlcvs"]:
             exchange = "combined"
@@ -589,6 +595,17 @@ async def main():
             validate_array(hlcvs, "hlcvs")
             shared_memory_file = create_shared_memory_file(hlcvs)
             shared_memory_files[exchange] = shared_memory_file
+            if config["backtest"].get("use_btc_collateral", False):
+                # Use the fetched array
+                btc_usd_data_dict[exchange] = btc_usd_prices
+            else:
+                # Fall back to all ones
+                btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
+            validate_array(btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}")
+            btc_usd_shared_memory_files[exchange] = create_shared_memory_file(
+                btc_usd_data_dict[exchange]
+            )
+            btc_usd_dtypes[exchange] = btc_usd_data_dict[exchange].dtype
             logging.info(f"Finished creating shared memory file for {exchange}: {shared_memory_file}")
         else:
             tasks = {}
@@ -607,6 +624,17 @@ async def main():
                 validate_array(hlcvs, "hlcvs")
                 shared_memory_file = create_shared_memory_file(hlcvs)
                 shared_memory_files[exchange] = shared_memory_file
+                # Create the BTC array for this exchange
+                if config["backtest"].get("use_btc_collateral", False):
+                    btc_usd_data_dict[exchange] = btc_usd_prices
+                else:
+                    btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
+
+                validate_array(btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}")
+                btc_usd_shared_memory_files[exchange] = create_shared_memory_file(
+                    btc_usd_data_dict[exchange]
+                )
+                btc_usd_dtypes[exchange] = btc_usd_data_dict[exchange].dtype
                 logging.info(
                     f"Finished creating shared memory file for {exchange}: {shared_memory_file}"
                 )
@@ -653,14 +681,15 @@ async def main():
 
         # Initialize evaluator with results queue and BTC/USD shared memory
         evaluator = Evaluator(
-            shared_memory_files,
-            hlcvs_shapes,
-            hlcvs_dtypes,
-            btc_usd_shared_memory_file,
-            btc_usd_data,
-            config,
-            msss,
-            results_queue,
+            shared_memory_files=shared_memory_files,
+            hlcvs_shapes=hlcvs_shapes,
+            hlcvs_dtypes=hlcvs_dtypes,
+            # Instead of a single file/dtype, pass dictionaries
+            btc_usd_shared_memory_files=btc_usd_shared_memory_files,
+            btc_usd_dtypes=btc_usd_dtypes,
+            msss=msss,
+            config=config,
+            results_queue=results_queue,
         )
 
         logging.info(f"Finished initializing evaluator...")
