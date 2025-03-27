@@ -398,7 +398,7 @@ class Evaluator:
         modifier = 0.0
         keys = sorted(self.config["optimize"]["limits"])
         i = len(keys) + 1
-        prefix = "btc_" if self.config["backtest"]["use_btc_collateral"] else "usd_"
+        prefix = "btc_" if self.config["backtest"]["use_btc_collateral"] else ""
         for key in keys:
             keym = key.replace("lower_bound_", "") + "_max"
             if keym not in analyses_combined:
