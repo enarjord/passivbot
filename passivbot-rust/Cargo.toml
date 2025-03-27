@@ -12,3 +12,5 @@ pyo3 = { version = "0.21.2", features = ["extension-module"] }
 ndarray = "0.15.6"
 numpy = "0.21.0"
 memmap = "0.7.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

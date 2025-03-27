@@ -45,6 +45,7 @@ from pure_funcs import (
     symbol_to_coin,
     str2bool,
     flatten,
+    coin_to_symbol,
 )
 
 
@@ -268,7 +269,7 @@ def add_missing_keys_recursively(src, dst, parent=[], verbose=True):
             if k not in dst:
                 raise Exception(f"Fatal: {k} missing from config")
             else:
-                add_missing_keys_recursively(src[k], dst[k], parent + [k])
+                add_missing_keys_recursively(src[k], dst[k], parent + [k], verbose=verbose)
         else:
             if k not in dst:
                 if verbose:
@@ -318,45 +319,6 @@ def get_all_eligible_symbols(exchange="binance"):
             print(f"using cached data")
             return loaded_json
         raise Exception("unable to fetch or load from cache")
-
-
-def coin_to_symbol(coin, eligible_symbols=None, quote="USDT", verbose=True):
-    if eligible_symbols is None:
-        eligible_symbols = get_all_eligible_symbols()
-    # first check if there is a single match
-    candidates = {s for s in eligible_symbols if coin in s}
-    if len(candidates) == 1:
-        return next(iter(candidates))
-
-    # next check if coin/quote:quote has a match
-    candidate_symbol = f"{coin}/{quote}:{quote}"
-    if candidate_symbol in eligible_symbols:
-        return candidate_symbol
-
-    # next format coin (e.g. 1000SHIB -> SHIB, kPEPE -> PEPE, etc)
-    coinf = symbol_to_coin(coin)
-    candidates = {s for s in eligible_symbols if coinf in s}
-    if len(candidates) == 1:
-        return next(iter(candidates))
-    # next check if multiple matches
-    if len(candidates) > 1:
-        for candidate in candidates:
-            candidate_coin = symbol_to_coin(candidate)
-            if candidate_coin == coinf:
-                return candidate
-        if verbose:
-            print(f"coin_to_symbol {coin} {coinf}: ambiguous coin, multiple candidates {candidates}")
-    else:
-        if verbose:
-            print(f"coin_to_symbol no candidate symbol for {coin}, {coinf}")
-    return ""
-
-
-def coins_to_symbols(coins: [str], eligible_symbols=None, exchange=None, verbose=True):
-    if eligible_symbols is None:
-        eligible_symbols = get_all_eligible_symbols(exchange)
-    symbols = [coin_to_symbol(x, eligible_symbols=eligible_symbols, verbose=verbose) for x in coins]
-    return sorted(set([x for x in symbols if x]))
 
 
 def format_end_date(end_date) -> str:
@@ -1115,8 +1077,8 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
                         for s in ccxt_clients[ex_name].markets
                         if ccxt_clients[ex_name].markets[s]["swap"]
                     ]
-                    # Convert coin to a symbol recognized by the exchange, e.g. "BTC/USDT"
-                    symbol = coin_to_symbol(coin, eligible_symbols, quote=quote, verbose=False)
+                    # Convert coin to a symbol recognized by the exchange, e.g. "BTC/USDT:USDT"
+                    symbol = coin_to_symbol(coin, eligible_symbols, quote)
                     if symbol:
                         tasks[coin][ex_name] = asyncio.create_task(
                             fetch_ohlcv_with_start(ex_name, symbol, ccxt_clients[ex_name])

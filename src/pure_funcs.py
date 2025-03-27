@@ -8,7 +8,6 @@ import json
 import re
 import numpy as np
 import dateutil.parser
-from njit_funcs import calc_pnl_long, calc_pnl_short
 import passivbot_rust as pbr
 
 try:
@@ -330,7 +329,7 @@ def get_utc_now_timestamp() -> int:
 
 def config_pretty_str(config: dict):
     pretty_str = pprint.pformat(config)
-    for r in [("'", '"'), ("True", "true"), ("False", "false")]:
+    for r in [("'", '"'), ("True", "true"), ("False", "false"), ("None", "null")]:
         pretty_str = pretty_str.replace(*r)
     return pretty_str
 
@@ -513,6 +512,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 "gap_tolerance_ohlcvs_minutes": 120.0,
                 "start_date": "2021-04-01",
                 "starting_balance": 100000.0,
+                "use_btc_collateral": False,
             },
             "bot": {
                 "long": {
@@ -2087,7 +2087,7 @@ def stats_multi_to_df(stats, symbols, c_mults):
             d[f"{symbols[i]}_price"] = x[3][i]
 
             d[f"{symbols[i]}_upnl_pct_l"] = (
-                calc_pnl_long(
+                pbr.calc_pnl_long(
                     d[f"{symbols[i]}_pprice_l"],
                     d[f"{symbols[i]}_price"],
                     d[f"{symbols[i]}_psize_l"],
@@ -2097,7 +2097,7 @@ def stats_multi_to_df(stats, symbols, c_mults):
                 / d["balance"]
             )
             d[f"{symbols[i]}_upnl_pct_s"] = (
-                calc_pnl_short(
+                pbr.calc_pnl_short(
                     d[f"{symbols[i]}_pprice_s"],
                     d[f"{symbols[i]}_price"],
                     d[f"{symbols[i]}_psize_s"],
@@ -2122,8 +2122,8 @@ def calc_upnl(row, c_mults_d):
     if row.psize == 0.0:
         return 0.0
     if row.psize < 0.0:
-        return calc_pnl_short(row.pprice, row.price, row.psize, False, c_mults_d[row.symbol])
-    return calc_pnl_long(row.pprice, row.price, row.psize, False, c_mults_d[row.symbol])
+        return pbr.calc_pnl_short(row.pprice, row.price, row.psize, False, c_mults_d[row.symbol])
+    return pbr.calc_pnl_long(row.pprice, row.price, row.psize, False, c_mults_d[row.symbol])
 
 
 def fills_multi_to_df(fills, symbols, c_mults):
@@ -2404,6 +2404,14 @@ def determine_side_from_order_tuple(order_tuple):
             raise Exception(f"malformed order tuple {order_tuple}")
     else:
         raise Exception(f"malformed order tuple {order_tuple}")
+
+
+def coin_to_symbol(coin, eligible_symbols, quote):
+    coinf = symbol_to_coin(coin)
+    for candidate in eligible_symbols:
+        if coinf == symbol_to_coin(candidate):
+            return candidate
+    return None
 
 
 def symbol_to_coin(symbol: str) -> str:

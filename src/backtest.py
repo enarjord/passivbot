@@ -11,7 +11,6 @@ from procedures import (
     fetch_market_specific_settings_multi,
     load_config,
     dump_config,
-    coin_to_symbol,
     add_arguments_recursively,
     update_config_with_args,
     format_config,
@@ -64,7 +63,7 @@ def oj(*x):
     return os.path.join(*x)
 
 
-def process_forager_fills(fills):
+def process_forager_fills(fills, coins, hlcvs, equities, equities_btc):
     fdf = pd.DataFrame(
         fills,
         columns=[
@@ -73,6 +72,9 @@ def process_forager_fills(fills):
             "pnl",
             "fee_paid",
             "balance",
+            "balance_btc",
+            "balance_usd",
+            "btc_price",
             "qty",
             "price",
             "psize",
@@ -80,11 +82,7 @@ def process_forager_fills(fills):
             "type",
         ],
     )
-    return fdf
-
-
-def analyze_fills_forager(coins, hlcvs, fdf, equities):
-    analysis = {}
+    analysis_appendix = {}
     pnls = {}
     for pside in ["long", "short"]:
         fdfc = fdf[fdf.type.str.contains(pside)]
@@ -92,18 +90,27 @@ def analyze_fills_forager(coins, hlcvs, fdf, equities):
         loss = fdfc[fdfc.pnl < 0.0].pnl.sum()
         if len(fdfc) == 0:
             pnls[pside] = 0.0
-            analysis[f"loss_profit_ratio_{pside}"] = 1.0
+            analysis_appendix[f"loss_profit_ratio_{pside}"] = 1.0
             continue
         pnls[pside] = profit + loss
-        analysis[f"loss_profit_ratio_{pside}"] = abs(loss / profit)
+        analysis_appendix[f"loss_profit_ratio_{pside}"] = abs(loss / profit)
 
     div_by = 60  # save some disk space. Set to 1 to dump uncropped
-    analysis["pnl_ratio_long_short"] = pnls["long"] / (pnls["long"] + pnls["short"])
+    analysis_appendix["pnl_ratio_long_short"] = pnls["long"] / (pnls["long"] + pnls["short"])
     bdf = fdf.groupby((fdf.minute // div_by) * div_by).balance.last()
-    edf = equities.iloc[::div_by]
+    bbdf = fdf.groupby((fdf.minute // div_by) * div_by).balance_btc.last()
+    edf = pd.Series(equities).iloc[::div_by]
+    ebdf = pd.Series(equities_btc).iloc[::div_by]
     nidx = np.arange(min(bdf.index[0], edf.index[0]), max(bdf.index[-1], edf.index[-1]), div_by)
-    bal_eq = pd.DataFrame({"balance": bdf, "equity": edf}, index=nidx).astype(float).ffill().bfill()
-    return sort_dict_keys(analysis), bal_eq
+    bal_eq = (
+        pd.DataFrame(
+            {"balance": bdf, "equity": edf, "balance_btc": bbdf, "equity_btc": ebdf}, index=nidx
+        )
+        .astype(float)
+        .ffill()
+        .bfill()
+    )
+    return fdf, sort_dict_keys(analysis_appendix), bal_eq
 
 
 def compare_dicts(dict1, dict2, path=""):
@@ -167,18 +174,43 @@ def load_coins_hlcvs_from_cache(config, exchange):
             logging.info(f"{exchange} Attempting to load hlcvs data from cache {fname}...")
             with gzip.open(fname, "rb") as f:
                 hlcvs = np.load(f)
+            btc_fname = cache_dir / "btc_usd_prices.npy.gz"
+            if os.path.exists(btc_fname):
+                logging.info(
+                    f"{exchange} Attempting to load BTC/USD prices from cache {btc_fname}..."
+                )
+                with gzip.open(btc_fname, "rb") as f:
+                    btc_usd_prices = np.load(f)
+            else:
+                # Backward compatibility: default to 1.0s if not cached
+                logging.info(f"{exchange} No BTC/USD prices in cache, using default array of 1.0s")
+                btc_usd_prices = np.ones(hlcvs.shape[0], dtype=np.float64)
         else:
             fname = cache_dir / "hlcvs.npy"
             logging.info(f"{exchange} Attempting to load hlcvs data from cache {fname}...")
             hlcvs = np.load(fname)
-        return cache_dir, coins, hlcvs, mss
+            btc_fname = cache_dir / "btc_usd_prices.npy"
+            if os.path.exists(btc_fname):
+                logging.info(
+                    f"{exchange} Attempting to load BTC/USD prices from cache {btc_fname}..."
+                )
+                btc_usd_prices = np.load(btc_fname)
+            else:
+                # Backward compatibility: default to 1.0s if not cached
+                logging.info(f"{exchange} No BTC/USD prices in cache, using default array of 1.0s")
+                btc_usd_prices = np.ones(hlcvs.shape[0], dtype=np.float64)
+        results_path = oj(config["backtest"]["base_dir"], exchange, "")
+        return cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices
+    return None
 
 
-def save_coins_hlcvs_to_cache(config, coins, hlcvs, exchange, mss):
+def save_coins_hlcvs_to_cache(config, coins, hlcvs, exchange, mss, btc_usd_prices):
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
     cache_dir.mkdir(parents=True, exist_ok=True)
-    if all([os.path.exists(cache_dir / x) for x in ["coins.json", "hlcvs.npy"]]):
+    if all(
+        [os.path.exists(cache_dir / x) for x in ["coins.json", "hlcvs.npy", "btc_usd_prices.npy"]]
+    ):
         return
     logging.info(f"Dumping cache...")
     json.dump(coins, open(cache_dir / "coins.json", "w"))
@@ -190,59 +222,63 @@ def save_coins_hlcvs_to_cache(config, coins, hlcvs, exchange, mss):
         logging.info(f"Attempting to save hlcvs data to cache {fpath}...")
         with gzip.open(fpath, "wb", compresslevel=1) as f:
             np.save(f, hlcvs)
+        btc_fpath = cache_dir / "btc_usd_prices.npy.gz"
+        logging.info(f"Attempting to save BTC/USD prices to cache {btc_fpath}...")
+        with gzip.open(btc_fpath, "wb", compresslevel=1) as f:
+            np.save(f, btc_usd_prices)
         compressed_size = (cache_dir / "hlcvs.npy.gz").stat().st_size
+        btc_compressed_size = (cache_dir / "btc_usd_prices.npy.gz").stat().st_size
         line = (
-            f"{compressed_size/(1024**3):.2f} GB compressed "
-            f"({compressed_size/uncompressed_size*100:.1f}%)"
+            f"{compressed_size/(1024**3):.2f} GB compressed HLCVs "
+            f"({compressed_size/uncompressed_size*100:.1f}%), "
+            f"{btc_compressed_size/(1024**3):.2f} GB compressed BTC/USD prices"
         )
     else:
         fpath = cache_dir / "hlcvs.npy"
         logging.info(f"Attempting to save hlcvs data to cache {fpath}...")
         np.save(fpath, hlcvs)
+        btc_fpath = cache_dir / "btc_usd_prices.npy"
+        logging.info(f"Attempting to save BTC/USD prices to cache {btc_fpath}...")
+        np.save(btc_fpath, btc_usd_prices)
         line = ""
     logging.info(
         f"Successfully dumped hlcvs cache {fpath}: "
         f"{uncompressed_size/(1024**3):.2f} GB uncompressed, "
         f"{line}"
     )
-
     logging.info(f"Seconds to dump cache: {(utc_ms() - sts) / 1000:.4f}")
     return cache_dir
 
 
 async def prepare_hlcvs_mss(config, exchange):
-    results_path = oj(
-        config["backtest"]["base_dir"],
-        exchange,
-        "",
-    )
+    results_path = oj(config["backtest"]["base_dir"], exchange, "")
     try:
         sts = utc_ms()
         result = load_coins_hlcvs_from_cache(config, exchange)
         if result:
             logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
-            cache_dir, coins, hlcvs, mss = result
+            cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices = result
             logging.info(f"Successfully loaded hlcvs data from cache")
-            return coins, hlcvs, mss, results_path, cache_dir
-    except:
-        logging.info(f"Unable to load hlcvs data from cache. Fetching...")
+            return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices
+    except Exception as e:
+        logging.info(f"Unable to load hlcvs data from cache: {e}. Fetching...")
     if exchange == "combined":
-        mss, timestamps, hlcvs = await prepare_hlcvs_combined(config)
+        mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs_combined(config)
     else:
-        mss, timestamps, hlcvs = await prepare_hlcvs(config, exchange)
+        mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(config, exchange)
     coins = sorted(mss)
     logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")
     try:
-        cache_dir = save_coins_hlcvs_to_cache(config, coins, hlcvs, exchange, mss)
+        cache_dir = save_coins_hlcvs_to_cache(config, coins, hlcvs, exchange, mss, btc_usd_prices)
     except Exception as e:
-        logging.error(f"failed to save hlcvs to cache {e}")
+        logging.error(f"Failed to save hlcvs to cache: {e}")
         traceback.print_exc()
         cache_dir = ""
-    return coins, hlcvs, mss, results_path, cache_dir
+    return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices
 
 
 def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_params=None):
-    coins = sorted(set(config["backtest"]["coins"][exchange]))  # sort for consistency
+    coins = sorted(set(config["backtest"]["coins"][exchange]))
     bot_params = {k: config["bot"][k].copy() for k in ["long", "short"]}
     for pside in bot_params:
         n_positions = max(0, min(bot_params[pside]["n_positions"], len(coins)))
@@ -259,39 +295,67 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "starting_balance": config["backtest"]["starting_balance"],
             "maker_fee": mss[coins[0]]["maker"],
             "coins": coins,
+            "use_btc_collateral": config["backtest"].get("use_btc_collateral", False),
         }
     return bot_params, exchange_params, backtest_params
 
 
-def expand_analysis(analysis, fills, config):
-    return analysis
+def expand_analysis(analysis_usd, analysis_btc, fills, config):
+    if not config["backtest"]["use_btc_collateral"]:
+        return analysis_usd
+    return {
+        **{f"btc_{k}": v for k, v in analysis_btc.items() if "position" not in k},
+        **analysis_usd,
+    }
 
 
-def run_backtest(hlcvs, mss, config: dict, exchange: str):
+def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices):
     bot_params, exchange_params, backtest_params = prep_backtest_args(config, mss, exchange)
+    if not config["backtest"]["use_btc_collateral"]:
+        btc_usd_prices = np.ones(len(btc_usd_prices))
     logging.info(f"Backtesting {exchange}...")
     sts = utc_ms()
 
-    with create_shared_memory_file(hlcvs) as shared_memory_file:
-        fills, equities, analysis = pbr.run_backtest(
+    # Use context managers for both HLCV and BTC/USD shared memory files
+    with create_shared_memory_file(hlcvs) as shared_memory_file, create_shared_memory_file(
+        btc_usd_prices
+    ) as btc_usd_shared_memory_file:
+        fills, equities_usd, equities_btc, analysis_usd, analysis_btc = pbr.run_backtest(
             shared_memory_file,
             hlcvs.shape,
             hlcvs.dtype.str,
+            btc_usd_shared_memory_file,
+            btc_usd_prices.dtype.str,
             bot_params,
             exchange_params,
             backtest_params,
         )
 
     logging.info(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
-    return fills, equities, expand_analysis(analysis, fills, config)
+    return (
+        fills,
+        equities_usd,
+        equities_btc,
+        expand_analysis(analysis_usd, analysis_btc, fills, config),
+    )
 
 
-def post_process(config, hlcvs, fills, equities, analysis, results_path, exchange):
+def post_process(
+    config,
+    hlcvs,
+    fills,
+    equities,
+    equities_btc,
+    btc_usd_prices,
+    analysis,
+    results_path,
+    exchange,
+):
     sts = utc_ms()
-    fdf = process_forager_fills(fills)
     equities = pd.Series(equities)
-    analysis_py, bal_eq = analyze_fills_forager(
-        config["backtest"]["coins"][exchange], hlcvs, fdf, equities
+    equities_btc = pd.Series(equities_btc)
+    fdf, analysis_py, bal_eq = process_forager_fills(
+        fills, config["backtest"]["coins"][exchange], hlcvs, equities, equities_btc
     )
     for k in analysis_py:
         if k not in analysis:
@@ -308,24 +372,33 @@ def post_process(config, hlcvs, fills, equities, analysis, results_path, exchang
     bal_eq.to_csv(oj(results_path, "balance_and_equity.csv"))
     plot_forager(
         results_path,
-        config["backtest"]["coins"][exchange],
+        config,
+        exchange,
         fdf,
         bal_eq,
         hlcvs,
-        config["disable_plotting"],
     )
 
 
 def plot_forager(
-    results_path, coins: [str], fdf: pd.DataFrame, bal_eq, hlcvs, disable_plotting: bool = False
+    results_path,
+    config: dict,
+    exchange: str,
+    fdf: pd.DataFrame,
+    bal_eq,
+    hlcvs,
 ):
     plots_dir = make_get_filepath(oj(results_path, "fills_plots", ""))
     plt.clf()
-    bal_eq.plot()
+    bal_eq[["balance", "equity"]].plot()
     plt.savefig(oj(results_path, "balance_and_equity.png"))
+    if config["backtest"]["use_btc_collateral"]:
+        plt.clf()
+        bal_eq[["balance_btc", "equity_btc"]].plot()
+        plt.savefig(oj(results_path, "balance_and_equity_btc.png"))
 
-    if not disable_plotting:
-        for i, coin in enumerate(coins):
+    if not config["disable_plotting"]:
+        for i, coin in enumerate(config["backtest"]["coins"][exchange]):
             try:
                 logging.info(f"Plotting fills for {coin}")
                 hlcvs_df = pd.DataFrame(hlcvs[:, i, :3], columns=["high", "low", "close"])
@@ -379,7 +452,9 @@ async def main():
     config["backtest"]["coins"] = {}
     if config["backtest"]["combine_ohlcvs"]:
         exchange = "combined"
-        coins, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
+        coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await prepare_hlcvs_mss(
+            config, exchange
+        )
         exchange_preference = defaultdict(list)
         for coin in coins:
             exchange_preference[mss[coin]["exchange"]].append(coin)
@@ -387,19 +462,43 @@ async def main():
             logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
         config["backtest"]["coins"][exchange] = coins
         config["backtest"]["cache_dir"][exchange] = str(cache_dir)
-        fills, equities, analysis = run_backtest(hlcvs, mss, config, exchange)
-        post_process(config, hlcvs, fills, equities, analysis, results_path, exchange)
+        fills, equities, equities_btc, analysis = run_backtest(
+            hlcvs, mss, config, exchange, btc_usd_prices
+        )
+        post_process(
+            config,
+            hlcvs,
+            fills,
+            equities,
+            equities_btc,
+            btc_usd_prices,
+            analysis,
+            results_path,
+            exchange,
+        )
     else:
         configs = {exchange: deepcopy(config) for exchange in config["backtest"]["exchanges"]}
         tasks = {}
         for exchange in config["backtest"]["exchanges"]:
             tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(configs[exchange], exchange))
         for exchange in tasks:
-            coins, hlcvs, mss, results_path, cache_dir = await tasks[exchange]
+            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await tasks[exchange]
             configs[exchange]["backtest"]["coins"][exchange] = coins
             configs[exchange]["backtest"]["cache_dir"][exchange] = str(cache_dir)
-            fills, equities, analysis = run_backtest(hlcvs, mss, configs[exchange], exchange)
-            post_process(configs[exchange], hlcvs, fills, equities, analysis, results_path, exchange)
+            fills, equities, equities_btc, analysis = run_backtest(
+                hlcvs, mss, configs[exchange], exchange, btc_usd_prices
+            )
+            post_process(
+                configs[exchange],
+                hlcvs,
+                fills,
+                equities,
+                equities_btc,
+                btc_usd_prices,
+                analysis,
+                results_path,
+                exchange,
+            )
 
 
 if __name__ == "__main__":

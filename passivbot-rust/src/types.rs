@@ -1,3 +1,4 @@
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -22,7 +23,7 @@ impl Default for ExchangeParams {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BacktestParams {
     pub starting_balance: f64,
     pub maker_fee: f64,
@@ -203,13 +204,33 @@ impl fmt::Display for OrderType {
     }
 }
 
+#[derive(Default)]
+pub struct Balance {
+    pub usd: f64,                    // usd balance
+    pub usd_total: f64,              // total in usd
+    pub usd_total_rounded: f64,      // total in usd rounded for calculations
+    pub usd_total_rounded_last: f64, // last usd total rounded for hysterisis
+    pub btc: f64,                    // btc balance
+    pub btc_total: f64,              // total in btc
+    pub use_btc_collateral: bool,    // whether to use btc as collateral
+}
+
+#[derive(Default, Clone)]
+pub struct Equities {
+    pub usd: Vec<f64>,
+    pub btc: Vec<f64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Fill {
     pub index: usize,
     pub coin: String,
     pub pnl: f64,
     pub fee_paid: f64,
-    pub balance: f64,
+    pub balance_usd_total: f64,
+    pub balance_btc: f64, // Added: BTC balance after fill
+    pub balance_usd: f64, // Added: USD balance after fill
+    pub btc_price: f64,   // Added: BTC/USD price at time of fill
     pub fill_qty: f64,
     pub fill_price: f64,
     pub position_size: f64,
@@ -217,7 +238,7 @@ pub struct Fill {
     pub order_type: OrderType,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Analysis {
     pub adg: f64,
     pub mdg: f64,
@@ -240,6 +261,7 @@ pub struct Analysis {
     pub position_held_hours_mean: f64,
     pub position_held_hours_max: f64,
     pub position_held_hours_median: f64,
+    pub position_unchanged_hours_max: f64,
 
     pub adg_w: f64,
     pub mdg_w: f64,
@@ -274,6 +296,7 @@ impl Default for Analysis {
             position_held_hours_mean: 0.0,
             position_held_hours_max: 0.0,
             position_held_hours_median: 0.0,
+            position_unchanged_hours_max: 0.0,
 
             adg_w: 0.0,
             mdg_w: 0.0,

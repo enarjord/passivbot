@@ -219,6 +219,7 @@ def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up):
 
     return ind1, ind2
 
+
 def individual_to_config(individual, optimizer_overrides, overrides_list, template=None):
     if template is None:
         template = get_template_live_config("v7")
@@ -242,10 +243,8 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
                 if len(bounds) == 1:
                     bounds = [bounds[0], bounds[0]]
                 config["bot"][pside][key] = min(max(bounds[0], 0.0), bounds[1])
-
         # Call the optimizer overrides
         config = optimizer_overrides(overrides_list, config, pside)
-
     return config
 
 
@@ -284,12 +283,31 @@ def managed_mmap(filename, dtype, shape):
             del mmap
 
 
+def validate_array(arr, name):
+    if np.any(np.isnan(arr)):
+        raise ValueError(f"{name} contains NaN values")
+    if np.any(np.isinf(arr)):
+        raise ValueError(f"{name} contains inf values")
+
+
 class Evaluator:
-    def __init__(self, shared_memory_files, hlcvs_shapes, hlcvs_dtypes, config, msss, results_queue):
+    def __init__(
+        self,
+        shared_memory_files,
+        hlcvs_shapes,
+        hlcvs_dtypes,
+        btc_usd_shared_memory_files,
+        btc_usd_dtypes,
+        msss,
+        config,
+        results_queue,
+    ):
         logging.info("Initializing Evaluator...")
         self.shared_memory_files = shared_memory_files
         self.hlcvs_shapes = hlcvs_shapes
         self.hlcvs_dtypes = hlcvs_dtypes
+        self.btc_usd_shared_memory_files = btc_usd_shared_memory_files
+        self.btc_usd_dtypes = btc_usd_dtypes
         self.msss = msss
         self.exchanges = list(shared_memory_files.keys())
 
@@ -315,7 +333,9 @@ class Evaluator:
         self.results_queue = results_queue
 
     def evaluate(self, individual, overrides_list):
-        config = individual_to_config(individual, optimizer_overrides, overrides_list, template=self.config)
+        config = individual_to_config(
+            individual, optimizer_overrides, overrides_list, template=self.config
+        )
         analyses = {}
         for exchange in self.exchanges:
             bot_params, _, _ = prep_backtest_args(
@@ -325,15 +345,17 @@ class Evaluator:
                 exchange_params=self.exchange_params[exchange],
                 backtest_params=self.backtest_params[exchange],
             )
-            fills, equities, analysis = pbr.run_backtest(
+            fills, equities_usd, equities_btc, analysis_usd, analysis_btc = pbr.run_backtest(
                 self.shared_memory_files[exchange],
-                self.shared_hlcvs_np[exchange].shape,
-                self.shared_hlcvs_np[exchange].dtype.str,
+                self.hlcvs_shapes[exchange],
+                self.hlcvs_dtypes[exchange].str,
+                self.btc_usd_shared_memory_files[exchange],  # Pass BTC/USD shared memory file
+                self.btc_usd_dtypes[exchange].str,  # Pass BTC/USD dtype
                 bot_params,
                 self.exchange_params[exchange],
                 self.backtest_params[exchange],
             )
-            analyses[exchange] = expand_analysis(analysis, fills, config)
+            analyses[exchange] = expand_analysis(analysis_usd, analysis_btc, fills, config)
 
         analyses_combined = self.combine_analyses(analyses)
         w_0, w_1 = self.calc_fitness(analyses_combined)
@@ -354,7 +376,7 @@ class Evaluator:
         keys = analyses[next(iter(analyses))].keys()
         for key in keys:
             values = [analysis[key] for analysis in analyses.values()]
-            if not values or any([x == np.inf for x in values]):
+            if not values or any([x == np.inf for x in values]) or any([x is None for x in values]):
                 analyses_combined[f"{key}_mean"] = 0.0
                 analyses_combined[f"{key}_min"] = 0.0
                 analyses_combined[f"{key}_max"] = 0.0
@@ -367,7 +389,7 @@ class Evaluator:
                     analyses_combined[f"{key}_std"] = np.std(values)
                 except Exception as e:
                     print("\n\n debug\n\n")
-                    print("values", values)
+                    print("key, values", key, values)
                     print(e)
                     traceback.print_exc()
                     raise
@@ -375,36 +397,37 @@ class Evaluator:
 
     def calc_fitness(self, analyses_combined):
         modifier = 0.0
-        keys = [
-            "drawdown_worst",
-            "drawdown_worst_mean_1pct",
-            "equity_balance_diff_neg_max",
-            "equity_balance_diff_neg_mean",
-            "equity_balance_diff_pos_max",
-            "equity_balance_diff_pos_mean",
-            "loss_profit_ratio",
-            "position_held_hours_max",
-        ]
+        keys = sorted(self.config["optimize"]["limits"])
         i = len(keys) + 1
+        prefix = "btc_" if self.config["backtest"]["use_btc_collateral"] else ""
         for key in keys:
+            keym = key.replace("lower_bound_", "") + "_max"
+            if keym not in analyses_combined:
+                keym = prefix + keym
+                assert keym in analyses_combined, f"malformed key {keym}"
             modifier += (
-                max(
-                    self.config["optimize"]["limits"][f"lower_bound_{key}"],
-                    analyses_combined[f"{key}_max"],
-                )
-                - self.config["optimize"]["limits"][f"lower_bound_{key}"]
+                max(self.config["optimize"]["limits"][key], analyses_combined[keym])
+                - self.config["optimize"]["limits"][key]
             ) * 10**i
             i -= 1
         if (
-            analyses_combined["drawdown_worst_max"] >= 1.0
-            or analyses_combined["equity_balance_diff_neg_max_max"] >= 1.0
+            analyses_combined[f"{prefix}drawdown_worst_max"] >= 1.0
+            or analyses_combined[f"{prefix}equity_balance_diff_neg_max_max"] >= 1.0
         ):
             w_0 = w_1 = modifier
         else:
-            scoring_key_0 = f"{self.config['optimize']['scoring'][0]}_mean"
-            scoring_key_1 = f"{self.config['optimize']['scoring'][1]}_mean"
-            w_0 = modifier - analyses_combined[scoring_key_0]
-            w_1 = modifier - analyses_combined[scoring_key_1]
+            assert (
+                len(self.config["optimize"]["scoring"]) == 2
+            ), f"there needs to be two fitness scoring keys {self.config['optimize']['scoring']}"
+            scores = []
+            for sk in self.config["optimize"]["scoring"]:
+                skm = f"{sk}_mean"
+                if skm not in analyses_combined:
+                    skm = prefix + skm
+                    if skm not in analyses_combined:
+                        raise Exception(f"invalid scoring key {sk}")
+                scores.append(modifier - analyses_combined[skm])
+            return scores[0], scores[1]
         return w_0, w_1
 
     def __del__(self):
@@ -537,7 +560,6 @@ async def main():
     update_config_with_args(config, args)
     config = format_config(config, verbose=False)
     await add_all_eligible_coins_to_config(config)
-
     try:
         # Prepare data for each exchange
         hlcvs_dict = {}
@@ -545,10 +567,19 @@ async def main():
         hlcvs_shapes = {}
         hlcvs_dtypes = {}
         msss = {}
+
+        # NEW: Store per-exchange BTC arrays in a dict,
+        # and store their shared-memory file names in another dict.
+        btc_usd_data_dict = {}
+        btc_usd_shared_memory_files = {}
+        btc_usd_dtypes = {}
+
         config["backtest"]["coins"] = {}
         if config["backtest"]["combine_ohlcvs"]:
             exchange = "combined"
-            coins, hlcvs, mss, results_path, cache_dir = await prepare_hlcvs_mss(config, exchange)
+            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await prepare_hlcvs_mss(
+                config, exchange
+            )
             exchange_preference = defaultdict(list)
             for coin in coins:
                 exchange_preference[mss[coin]["exchange"]].append(coin)
@@ -562,15 +593,27 @@ async def main():
             required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
             check_disk_space(tempfile.gettempdir(), required_space)
             logging.info(f"Starting to create shared memory file for {exchange}...")
+            validate_array(hlcvs, "hlcvs")
             shared_memory_file = create_shared_memory_file(hlcvs)
             shared_memory_files[exchange] = shared_memory_file
+            if config["backtest"].get("use_btc_collateral", False):
+                # Use the fetched array
+                btc_usd_data_dict[exchange] = btc_usd_prices
+            else:
+                # Fall back to all ones
+                btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
+            validate_array(btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}")
+            btc_usd_shared_memory_files[exchange] = create_shared_memory_file(
+                btc_usd_data_dict[exchange]
+            )
+            btc_usd_dtypes[exchange] = btc_usd_data_dict[exchange].dtype
             logging.info(f"Finished creating shared memory file for {exchange}: {shared_memory_file}")
         else:
             tasks = {}
             for exchange in config["backtest"]["exchanges"]:
                 tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
             for exchange in config["backtest"]["exchanges"]:
-                coins, hlcvs, mss, results_path, cache_dir = await tasks[exchange]
+                coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await tasks[exchange]
                 config["backtest"]["coins"][exchange] = coins
                 hlcvs_dict[exchange] = hlcvs
                 hlcvs_shapes[exchange] = hlcvs.shape
@@ -579,12 +622,23 @@ async def main():
                 required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
                 check_disk_space(tempfile.gettempdir(), required_space)
                 logging.info(f"Starting to create shared memory file for {exchange}...")
+                validate_array(hlcvs, "hlcvs")
                 shared_memory_file = create_shared_memory_file(hlcvs)
                 shared_memory_files[exchange] = shared_memory_file
+                # Create the BTC array for this exchange
+                if config["backtest"].get("use_btc_collateral", False):
+                    btc_usd_data_dict[exchange] = btc_usd_prices
+                else:
+                    btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
+
+                validate_array(btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}")
+                btc_usd_shared_memory_files[exchange] = create_shared_memory_file(
+                    btc_usd_data_dict[exchange]
+                )
+                btc_usd_dtypes[exchange] = btc_usd_data_dict[exchange].dtype
                 logging.info(
                     f"Finished creating shared memory file for {exchange}: {shared_memory_file}"
                 )
-
         exchanges = config["backtest"]["exchanges"]
         exchanges_fname = "combined" if config["backtest"]["combine_ohlcvs"] else "_".join(exchanges)
         date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
@@ -615,9 +669,30 @@ async def main():
         )
         writer_process.start()
 
-        # Initialize evaluator with results queue
+        # Prepare BTC/USD data
+        # For optimization, use the BTC/USD prices from the first exchange (or combined)
+        # Since all exchanges should align in timesteps, this should be consistent
+        btc_usd_data = btc_usd_prices  # Use the fetched btc_usd_prices from prepare_hlcvs_mss
+        if config["backtest"].get("use_btc_collateral", False):
+            logging.info("Using fetched BTC/USD prices for collateral")
+        else:
+            logging.info("Using default BTC/USD prices (all 1.0s) as use_btc_collateral is False")
+            btc_usd_data = np.ones(hlcvs_dict[next(iter(hlcvs_dict))].shape[0], dtype=np.float64)
+
+        validate_array(btc_usd_data, "btc_usd_data")
+        btc_usd_shared_memory_file = create_shared_memory_file(btc_usd_data)
+
+        # Initialize evaluator with results queue and BTC/USD shared memory
         evaluator = Evaluator(
-            shared_memory_files, hlcvs_shapes, hlcvs_dtypes, config, msss, results_queue
+            shared_memory_files=shared_memory_files,
+            hlcvs_shapes=hlcvs_shapes,
+            hlcvs_dtypes=hlcvs_dtypes,
+            # Instead of a single file/dtype, pass dictionaries
+            btc_usd_shared_memory_files=btc_usd_shared_memory_files,
+            btc_usd_dtypes=btc_usd_dtypes,
+            msss=msss,
+            config=config,
+            results_queue=results_queue,
         )
 
         logging.info(f"Finished initializing evaluator...")
@@ -757,14 +832,22 @@ async def main():
             pool.terminate()
             pool.join()
 
-        # Remove shared memory files
-        for shared_memory_file in shared_memory_files.values():
-            if shared_memory_file and os.path.exists(shared_memory_file):
-                logging.info(f"Removing shared memory file: {shared_memory_file}")
+        # Remove shared memory files (including BTC/USD)
+        if "shared_memory_files" in locals():
+            for shared_memory_file in shared_memory_files.values():
+                if shared_memory_file and os.path.exists(shared_memory_file):
+                    logging.info(f"Removing shared memory file: {shared_memory_file}")
+                    try:
+                        os.unlink(shared_memory_file)
+                    except Exception as e:
+                        logging.error(f"Error removing shared memory file: {e}")
+        if "btc_usd_shared_memory_file" in locals():
+            if btc_usd_shared_memory_file and os.path.exists(btc_usd_shared_memory_file):
+                logging.info(f"Removing BTC/USD shared memory file: {btc_usd_shared_memory_file}")
                 try:
-                    os.unlink(shared_memory_file)
+                    os.unlink(btc_usd_shared_memory_file)
                 except Exception as e:
-                    logging.error(f"Error removing shared memory file: {e}")
+                    logging.error(f"Error removing BTC/USD shared memory file: {e}")
 
         logging.info("Cleanup complete. Exiting.")
         sys.exit(0)
