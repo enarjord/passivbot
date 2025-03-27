@@ -650,6 +650,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 },
                 "compress_results_file": True,
                 "crossover_probability": 0.7,
+                "enable_overrides": [],
                 "iters": 30000,
                 "limits": {
                     "lower_bound_drawdown_worst": 0.25,

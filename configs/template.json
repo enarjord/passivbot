@@ -131,6 +131,7 @@
                          "short_unstuck_loss_allowance_pct": [0.001, 0.05],
                          "short_unstuck_threshold": [0.4, 0.95]},
               "compress_results_file": true,
+              "enable_overrides": [],
               "crossover_probability": 0.7,
               "iters": 300000,
               "limits": {"lower_bound_drawdown_worst": 0.333,

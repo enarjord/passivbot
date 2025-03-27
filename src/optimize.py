@@ -49,6 +49,7 @@ import time
 import fcntl
 from tqdm import tqdm
 import dictdiffer
+from optimizer_overrides import optimizer_overrides
 
 
 def make_json_serializable(obj):
@@ -218,8 +219,7 @@ def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up):
 
     return ind1, ind2
 
-
-def individual_to_config(individual, template=None):
+def individual_to_config(individual, optimizer_overrides, overrides_list, template=None):
     if template is None:
         template = get_template_live_config("v7")
     keys_ignored = ["enforce_exposure_limit"]
@@ -242,10 +242,8 @@ def individual_to_config(individual, template=None):
                 if len(bounds) == 1:
                     bounds = [bounds[0], bounds[0]]
                 config["bot"][pside][key] = min(max(bounds[0], 0.0), bounds[1])
-        # config["bot"][pside]["close_trailing_threshold_pct"] = max(
-        #    config["bot"][pside]["close_trailing_threshold_pct"],
-        #    config["bot"][pside]["close_trailing_retracement_pct"],
-        # )
+        # Call the optimizer overrides
+        config = optimizer_overrides(overrides_list, config, pside)
     return config
 
 
@@ -333,8 +331,8 @@ class Evaluator:
         logging.info("Evaluator initialization complete.")
         self.results_queue = results_queue
 
-    def evaluate(self, individual):
-        config = individual_to_config(individual, template=self.config)
+    def evaluate(self, individual, overrides_list):
+        config = individual_to_config(individual, optimizer_overrides, overrides_list, template=self.config)
         analyses = {}
         for exchange in self.exchanges:
             bot_params, _, _ = prep_backtest_args(
@@ -656,6 +654,8 @@ async def main():
         config["results_filename"] = make_get_filepath(
             f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}_all_results.txt"
         )
+        overrides_list = config.get("optimize", {}).get("enable_overrides", [])
+
         # Create results queue and start manager process
         manager = multiprocessing.Manager()
         results_queue = manager.Queue()
@@ -717,7 +717,7 @@ async def main():
         toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
         # Register the evaluation function
-        toolbox.register("evaluate", evaluator.evaluate)
+        toolbox.register("evaluate", evaluator.evaluate, overrides_list=overrides_list)
 
         # Register genetic operators
         toolbox.register(
