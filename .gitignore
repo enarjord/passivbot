@@ -353,4 +353,3 @@ live_configs/*
 configs/live/multigrid.json
 # Reports
 reports/*
-.qodo
