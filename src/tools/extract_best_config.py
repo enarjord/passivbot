@@ -258,6 +258,7 @@ def process_single(file_location: str, verbose: bool = False):
 
         index += 1
 
+    print_(f"n backtests: {index}")
     print_("Processing...")
 
     # Decide which Pareto front to pick from
@@ -329,9 +330,10 @@ def process_single(file_location: str, verbose: bool = False):
     # Print selected candidate info
     fjson = config_pretty_str(
         {
-            "analysis": {k: best_d["analyses_combined"][k] for k in selected_columns},
+            "analyses": best_d["analyses"],
             "backtest": {k: best_d["backtest"][k] for k in best_d["backtest"] if k != "coins"},
             "bot": best_d["bot"],
+            "optimize": best_d["optimize"],
         }
     )
     print_("selected candidate:")
