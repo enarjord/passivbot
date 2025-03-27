@@ -301,10 +301,11 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
 
 
 def expand_analysis(analysis_usd, analysis_btc, fills, config):
+    if not config["backtest"]["use_btc_collateral"]:
+        return analysis_usd
     return {
-        **{f"usd_{k}": v for k, v in analysis_usd.items() if "position" not in k},
         **{f"btc_{k}": v for k, v in analysis_btc.items() if "position" not in k},
-        **{k: v for k, v in analysis_usd.items() if "position" in k},
+        **analysis_usd,
     }
 
 
@@ -371,27 +372,33 @@ def post_process(
     bal_eq.to_csv(oj(results_path, "balance_and_equity.csv"))
     plot_forager(
         results_path,
-        config["backtest"]["coins"][exchange],
+        config,
+        exchange,
         fdf,
         bal_eq,
         hlcvs,
-        config["disable_plotting"],
     )
 
 
 def plot_forager(
-    results_path, coins: [str], fdf: pd.DataFrame, bal_eq, hlcvs, disable_plotting: bool = False
+    results_path,
+    config: dict,
+    exchange: str,
+    fdf: pd.DataFrame,
+    bal_eq,
+    hlcvs,
 ):
     plots_dir = make_get_filepath(oj(results_path, "fills_plots", ""))
     plt.clf()
     bal_eq[["balance", "equity"]].plot()
     plt.savefig(oj(results_path, "balance_and_equity.png"))
-    plt.clf()
-    bal_eq[["balance_btc", "equity_btc"]].plot()
-    plt.savefig(oj(results_path, "balance_and_equity_btc.png"))
+    if config["backtest"]["use_btc_collateral"]:
+        plt.clf()
+        bal_eq[["balance_btc", "equity_btc"]].plot()
+        plt.savefig(oj(results_path, "balance_and_equity_btc.png"))
 
-    if not disable_plotting:
-        for i, coin in enumerate(coins):
+    if not config["disable_plotting"]:
+        for i, coin in enumerate(config["backtest"]["coins"][exchange]):
             try:
                 logging.info(f"Plotting fills for {coin}")
                 hlcvs_df = pd.DataFrame(hlcvs[:, i, :3], columns=["high", "low", "close"])
