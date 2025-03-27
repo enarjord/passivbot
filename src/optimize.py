@@ -219,6 +219,7 @@ def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up):
 
     return ind1, ind2
 
+
 def individual_to_config(individual, optimizer_overrides, overrides_list, template=None):
     if template is None:
         template = get_template_live_config("v7")
@@ -332,7 +333,9 @@ class Evaluator:
         self.results_queue = results_queue
 
     def evaluate(self, individual, overrides_list):
-        config = individual_to_config(individual, optimizer_overrides, overrides_list, template=self.config)
+        config = individual_to_config(
+            individual, optimizer_overrides, overrides_list, template=self.config
+        )
         analyses = {}
         for exchange in self.exchanges:
             bot_params, _, _ = prep_backtest_args(
