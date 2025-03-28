@@ -917,7 +917,6 @@ async def prepare_hlcvs(config: dict, exchange: str):
         end_date,
         gap_tolerance_ohlcvs_minutes=config["backtest"]["gap_tolerance_ohlcvs_minutes"],
     )
-    btc_om = None
 
     try:
         # Prepare HLCV data
@@ -925,6 +924,7 @@ async def prepare_hlcvs(config: dict, exchange: str):
             config, coins, exchange, start_date, end_date, om
         )
 
+        om.update_date_range(timestamps[0], timestamps[-1])
         btc_df = await om.get_ohlcvs("BTC")
         if btc_df.empty:
             raise ValueError(f"Failed to fetch BTC/USD prices from {exchange}")
@@ -937,8 +937,6 @@ async def prepare_hlcvs(config: dict, exchange: str):
     finally:
         if om.cc:
             await om.cc.close()
-        if btc_om and btc_om.cc:
-            await btc_om.cc.close()
 
 
 async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, om):
