@@ -46,56 +46,125 @@ from deap import base, creator, tools, algorithms
 from contextlib import contextmanager
 import tempfile
 import time
+import math
 import fcntl
 from tqdm import tqdm
 import dictdiffer
 from optimizer_overrides import optimizer_overrides
+from opt_utils import make_json_serializable, dominates
 
 
-def make_json_serializable(obj):
-    """
-    Recursively convert tuples in the object to lists to make it JSON serializable.
-    """
-    if isinstance(obj, dict):
-        return {k: make_json_serializable(v) for k, v in obj.items()}
-    elif isinstance(obj, tuple):
-        return [make_json_serializable(e) for e in obj]
-    elif isinstance(obj, list):
-        return [make_json_serializable(e) for e in obj]
-    else:
-        return obj
+def extract_configs_from_pareto_bin(path):
+    cfgs = []
+    try:
+        with open(path, "rb") as f:
+            for line in f:
+                try:
+                    data = json.loads(line.decode("utf-8"))
+                    cfg = format_config(data, verbose=False)
+                    cfgs.append(cfg)
+                except Exception as e:
+                    logging.error(f"Failed to load entry from _pareto.jsonl: {e}")
+    except Exception as e:
+        logging.error(f"Failed to open _pareto.jsonl file: {e}")
+    return cfgs
+
+
+def is_dominated(candidate, others):
+    for other in others:
+        if all(o <= c for o, c in zip(other, candidate)) and any(
+            o < c for o, c in zip(other, candidate)
+        ):
+            return True
+    return False
 
 
 def results_writer_process(queue: Queue, results_filename: str, compress=True):
-    """
-    Manager process that handles writing results to file.
-    Runs in a separate process and receives results through a queue.
-    Applies diffing to the entire data dictionary.
-    """
-    prev_data = None  # Initialize previous data as None
+    import heapq
+
+    prev_data = None
+    pareto_front = []
+    objectives_dict = {}
+    index_to_entry = {}
+    iteration = 0
+
+    last_update_time = time.time()
+    last_update_iter = 0
+    total_updates = 0
+
     try:
         while True:
             data = queue.get()
-            if data == "DONE":  # Sentinel value to signal shutdown
+            if data == "DONE":
                 break
             try:
+                # Write raw results (diffed if compress enabled)
                 if prev_data is None or not compress:
-                    # First data entry or compression disabled, write full data
                     output_data = data
                 else:
-                    # Compute diff of the entire data dictionary
                     diff = list(dictdiffer.diff(prev_data, data))
                     for i in range(len(diff)):
                         if diff[i][0] == "change":
                             diff[i] = [diff[i][1], diff[i][2][1]]
                     output_data = {"diff": make_json_serializable(diff)}
-
                 prev_data = data
-
-                # Write to disk
                 with open(results_filename, "a") as f:
                     json.dump(denumpyize(output_data), f)
                     f.write("\n")
+
+                # Check if it has fitness
+                if "analyses_combined" not in data:
+                    continue
+                w0 = data["analyses_combined"].get("w_0")
+                w1 = data["analyses_combined"].get("w_1")
+                if w0 is None or w1 is None:
+                    continue
+                w0, w1 = float(w0), float(w1)
+
+                # Update stats
+                iteration += 1
+                index = iteration
+                objectives_dict[index] = (w0, w1)
+                index_to_entry[index] = data  # always store entry
+
+                # Pareto front update
+                is_dominated = any(dominates(objectives_dict[idx], (w0, w1)) for idx in pareto_front)
+
+                if not is_dominated:
+                    pareto_front = [
+                        idx for idx in pareto_front if not dominates((w0, w1), objectives_dict[idx])
+                    ]
+                    pareto_front.append(index)
+
+                    # Write updated Pareto front
+                    pareto_path = results_filename.replace("_all_results.txt", "_pareto.jsonl")
+                    with open(pareto_path, "wb") as f:
+                        for idx in pareto_front:
+                            f.write((json.dumps(index_to_entry[idx]) + "\n").encode("utf-8"))
+
+                    # Compute improvement metrics
+                    pareto_w0 = [objectives_dict[idx][0] for idx in pareto_front]
+                    pareto_w1 = [objectives_dict[idx][1] for idx in pareto_front]
+                    w0_min = min(pareto_w0)
+                    w0_max = max(pareto_w0)
+                    w1_min = min(pareto_w1)
+                    w1_max = max(pareto_w1)
+
+                    now = time.time()
+                    delta_time = now - last_update_time
+                    delta_iters = iteration - last_update_iter
+                    total_updates += 1
+                    avg_time = (now - last_update_time) / total_updates if total_updates > 1 else 0.0
+
+                    # Log
+                    logging.info(
+                        f"Updated Pareto front | Iter: {iteration} | Members: {len(pareto_front)} | "
+                        f"w_0: [{w0_min:.5f}, {w0_max:.5f}] | w_1: [{w1_min:.5f}, {w1_max:.5f}] | "
+                        f"Δt: {delta_time:.1f}s | Δiters: {delta_iters} | Avg Δt: {avg_time:.1f}s"
+                    )
+                    last_update_time = now
+                    last_update_iter = iteration
+
             except Exception as e:
                 logging.error(f"Error writing results: {e}")
     except Exception as e:
@@ -401,9 +470,9 @@ class Evaluator:
         i = len(keys) + 1
         prefix = "btc_" if self.config["backtest"]["use_btc_collateral"] else ""
         for key in keys:
-            keym = key.replace("lower_bound_", "") + "_max"
+            keym = prefix + key.replace("lower_bound_", "") + "_max"
             if keym not in analyses_combined:
-                keym = prefix + keym
+                keym = key.replace("lower_bound_", "") + "_max"
                 assert keym in analyses_combined, f"malformed key {keym}"
             modifier += (
                 max(self.config["optimize"]["limits"][key], analyses_combined[keym])
@@ -504,6 +573,8 @@ def get_starting_configs(starting_configs: str):
                 for f in os.listdir(starting_configs)
             ]
         )
+    if starting_configs.endswith("_pareto.jsonl"):
+        return extract_configs_from_pareto_bin(starting_configs)
     return extract_configs(starting_configs)
 
 
@@ -777,13 +848,14 @@ async def main():
 
         # Set up statistics and hall of fame
         stats = tools.Statistics(lambda ind: ind.fitness.values)
-        stats.register("avg", np.mean, axis=0)
-        stats.register("std", np.std, axis=0)
+        # stats.register("avg", np.mean, axis=0)
+        # stats.register("std", np.std, axis=0)
         stats.register("min", np.min, axis=0)
         stats.register("max", np.max, axis=0)
 
         logbook = tools.Logbook()
-        logbook.header = "gen", "evals", "std", "min", "avg", "max"
+        # logbook.header = "gen", "evals", "std", "min", "avg", "max"
+        logbook.header = "gen", "evals", "min", "max"
 
         hof = tools.ParetoFront()
 
@@ -799,7 +871,7 @@ async def main():
             ngen=max(1, int(config["optimize"]["iters"] / len(population))),
             stats=stats,
             halloffame=hof,
-            verbose=True,
+            verbose=False,
         )
 
         # Print statistics
