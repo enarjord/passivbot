@@ -3,7 +3,7 @@ import json
 import hashlib
 from typing import Any, Dict
 import glob
-from opt_utils import calc_dist
+import math
 
 
 def round_floats(obj: Any, sig_digits: int = 6) -> Any:
@@ -20,6 +20,10 @@ def round_floats(obj: Any, sig_digits: int = 6) -> Any:
 def hash_entry(entry: Dict) -> str:
     entry_str = json.dumps(entry, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(entry_str.encode("utf-8")).hexdigest()[:16]
+
+
+def calc_dist(p0, p1):
+    return math.sqrt((p0[0] - p1[0]) ** 2 + (p0[1] - p1[1]) ** 2)
 
 
 class ParetoStore:
@@ -54,16 +58,8 @@ class ParetoStore:
         if h in self.hashes:
             return False  # already exists
 
-        w0 = rounded.get("analyses_combined", {}).get("w_0")
-        w1 = rounded.get("analyses_combined", {}).get("w_1")
-        if w0 is None or w1 is None:
-            dist_prefix = "9999.9999"
-        else:
-            ideal = self.compute_ideal_point()
-            dist = calc_dist((w0, w1), ideal) if ideal else 9999.9999
-            dist_prefix = f"{dist:08.4f}"
-
-        filename = f"{dist_prefix}_{h}.json"
+        # Save entry without distance prefix
+        filename = f"{h}.json"
         filepath = os.path.join(self.directory, "pareto", filename)
         tmp_path = filepath + ".tmp"
         try:
@@ -72,6 +68,9 @@ class ParetoStore:
             os.replace(tmp_path, filepath)
             self.hashes.add(h)
             self._save_index()
+
+            # Recompute distances and rename all
+            self.rename_entries_with_distance()
             return True
         except Exception as e:
             print(f"Failed to write Pareto entry {h}: {e}")
@@ -98,6 +97,9 @@ class ParetoStore:
     def load_entry(self, hash_str: str) -> Dict:
         pattern = os.path.join(self.directory, "pareto", f"*_{hash_str}.json")
         matches = glob.glob(pattern)
+        if not matches:
+            pattern_alt = os.path.join(self.directory, "pareto", f"{hash_str}.json")
+            matches = glob.glob(pattern_alt)
         if not matches:
             raise FileNotFoundError(f"No entry found for hash {hash_str}")
         with open(matches[0], "r") as f:
@@ -138,12 +140,17 @@ class ParetoStore:
                 w0 = entry.get("analyses_combined", {}).get("w_0")
                 w1 = entry.get("analyses_combined", {}).get("w_1")
                 if w0 is None or w1 is None:
+                    dist_prefix = "9999.9999"
+                else:
+                    dist = calc_dist((w0, w1), ideal)
+                    dist_prefix = f"{dist:08.4f}"
+
+                old_path_pattern = os.path.join(self.directory, "pareto", f"*{h}.json")
+                old_matches = glob.glob(old_path_pattern)
+                if not old_matches:
                     continue
-                dist = calc_dist((w0, w1), ideal)
-                dist_prefix = f"{dist:08.4f}"
-                old_path = os.path.join(self.directory, "pareto", f"{h}.json")
+                old_path = old_matches[0]
                 new_path = os.path.join(self.directory, "pareto", f"{dist_prefix}_{h}.json")
-                if os.path.exists(old_path):
-                    os.rename(old_path, new_path)
+                os.rename(old_path, new_path)
             except Exception as e:
                 print(f"Failed to rename entry {h}: {e}")
