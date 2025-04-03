@@ -49,25 +49,10 @@ import time
 import math
 import fcntl
 from tqdm import tqdm
-import dictdiffer
 from optimizer_overrides import optimizer_overrides
-from opt_utils import make_json_serializable, dominates
-
-
-def extract_configs_from_pareto_bin(path):
-    cfgs = []
-    try:
-        with open(path, "rb") as f:
-            for line in f:
-                try:
-                    data = json.loads(line.decode("utf-8"))
-                    cfg = format_config(data, verbose=False)
-                    cfgs.append(cfg)
-                except Exception as e:
-                    logging.error(f"Failed to load entry from _pareto.jsonl: {e}")
-    except Exception as e:
-        logging.error(f"Failed to open _pareto.jsonl file: {e}")
-    return cfgs
+from opt_utils import make_json_serializable, dominates, generate_incremental_diff
+from pareto_store import ParetoStore, round_floats
+import msgpack
 
 
 def is_dominated(candidate, others):
@@ -79,94 +64,116 @@ def is_dominated(candidate, others):
     return False
 
 
-def results_writer_process(queue: Queue, results_filename: str, compress=True):
-    import heapq
+def results_writer_process(queue, results_dir, compress=True):
+    import time
+    import logging
+    import json
+    from opt_utils import make_json_serializable, dominates
+    import os
 
     prev_data = None
     pareto_front = []
     objectives_dict = {}
     index_to_entry = {}
     iteration = 0
+    counter = 0
 
     last_update_time = time.time()
     last_update_iter = 0
     total_updates = 0
 
+    store = ParetoStore(results_dir)
+    results_filename = os.path.join(results_dir, "all_results.bin")
+
     try:
-        while True:
-            data = queue.get()
-            if data == "DONE":
-                break
-            try:
-                # Write raw results (diffed if compress enabled)
-                if prev_data is None or not compress:
-                    output_data = data
-                else:
-                    diff = list(dictdiffer.diff(prev_data, data))
-                    for i in range(len(diff)):
-                        if diff[i][0] == "change":
-                            diff[i] = [diff[i][1], diff[i][2][1]]
-                    output_data = {"diff": make_json_serializable(diff)}
-                prev_data = data
-                with open(results_filename, "a") as f:
-                    json.dump(denumpyize(output_data), f)
-                    f.write("\n")
+        with open(results_filename, "ab") as f:
+            packer = msgpack.Packer(use_bin_type=True)
+            while True:
+                data = queue.get()
+                if data == "DONE":
+                    break
+                try:
+                    # Write raw results (diffed if compress enabled)
+                    if compress:
+                        if prev_data is None or counter % 100 == 0:
+                            output_data = make_json_serializable(data)
+                        else:
+                            diff = generate_incremental_diff(prev_data, data)
+                            output_data = make_json_serializable(diff)
+                        counter += 1
+                        prev_data = data
+                    else:
+                        output_data = data
 
-                # Check if it has fitness
-                if "analyses_combined" not in data:
-                    continue
-                w0 = data["analyses_combined"].get("w_0")
-                w1 = data["analyses_combined"].get("w_1")
-                if w0 is None or w1 is None:
-                    continue
-                w0, w1 = float(w0), float(w1)
+                    # --- Write to all_results.bin ---
+                    f.write(packer.pack(output_data))
+                    f.flush()
 
-                # Update stats
-                iteration += 1
-                index = iteration
-                objectives_dict[index] = (w0, w1)
-                index_to_entry[index] = data  # always store entry
+                    # --- Pareto front update ---
+                    if "analyses_combined" not in data:
+                        continue
+                    w0 = data["analyses_combined"].get("w_0")
+                    w1 = data["analyses_combined"].get("w_1")
+                    if w0 is None or w1 is None:
+                        continue
+                    w0, w1 = float(w0), float(w1)
 
-                # Pareto front update
-                is_dominated = any(dominates(objectives_dict[idx], (w0, w1)) for idx in pareto_front)
+                    iteration += 1
+                    index = iteration
+                    objectives_dict[index] = (w0, w1)
+                    index_to_entry[index] = data
 
-                if not is_dominated:
-                    pareto_front = [
-                        idx for idx in pareto_front if not dominates((w0, w1), objectives_dict[idx])
-                    ]
-                    pareto_front.append(index)
-
-                    # Write updated Pareto front
-                    pareto_path = results_filename.replace("_all_results.txt", "_pareto.jsonl")
-                    with open(pareto_path, "wb") as f:
-                        for idx in pareto_front:
-                            f.write((json.dumps(index_to_entry[idx]) + "\n").encode("utf-8"))
-
-                    # Compute improvement metrics
-                    pareto_w0 = [objectives_dict[idx][0] for idx in pareto_front]
-                    pareto_w1 = [objectives_dict[idx][1] for idx in pareto_front]
-                    w0_min = min(pareto_w0)
-                    w0_max = max(pareto_w0)
-                    w1_min = min(pareto_w1)
-                    w1_max = max(pareto_w1)
-
-                    now = time.time()
-                    delta_time = now - last_update_time
-                    delta_iters = iteration - last_update_iter
-                    total_updates += 1
-                    avg_time = (now - last_update_time) / total_updates if total_updates > 1 else 0.0
-
-                    # Log
-                    logging.info(
-                        f"Updated Pareto front | Iter: {iteration} | Members: {len(pareto_front)} | "
-                        f"w_0: [{w0_min:.5f}, {w0_max:.5f}] | w_1: [{w1_min:.5f}, {w1_max:.5f}] | "
-                        f"Δt: {delta_time:.1f}s | Δiters: {delta_iters} | Avg Δt: {avg_time:.1f}s"
+                    is_dominated = any(
+                        dominates(objectives_dict[idx], (w0, w1)) for idx in pareto_front
                     )
-                    last_update_time = now
-                    last_update_iter = iteration
+                    if not is_dominated:
+                        # Remove dominated
+                        dominated = [
+                            idx for idx in pareto_front if dominates((w0, w1), objectives_dict[idx])
+                        ]
+                        for idx in dominated:
+                            old_entry = index_to_entry[idx]
+                            store.remove_entry(
+                                store.hash_entry(round_floats(old_entry, sig_digits=store.sig_digits))
+                            )
 
-            except Exception as e:
-                logging.error(f"Error writing results: {e}")
+                        pareto_front = [
+                            idx
+                            for idx in pareto_front
+                            if not dominates((w0, w1), objectives_dict[idx])
+                        ]
+                        pareto_front.append(index)
+
+                        # Write new Pareto member
+                        store.add_entry(data)
+
+                        # Log
+                        pareto_w0 = [objectives_dict[idx][0] for idx in pareto_front]
+                        pareto_w1 = [objectives_dict[idx][1] for idx in pareto_front]
+                        w0_min = min(pareto_w0)
+                        w0_max = max(pareto_w0)
+                        w1_min = min(pareto_w1)
+                        w1_max = max(pareto_w1)
+
+                        now = time.time()
+                        delta_time = now - last_update_time
+                        delta_iters = iteration - last_update_iter
+                        total_updates += 1
+                        avg_time = (
+                            (now - last_update_time) / total_updates if total_updates > 1 else 0.0
+                        )
+
+                        logging.info(
+                            f"Updated Pareto front | Iter: {iteration} | Members: {len(pareto_front)} | "
+                            f"w_0: [{w0_min:.5f}, {w0_max:.5f}] | w_1: [{w1_min:.5f}, {w1_max:.5f}] | "
+                            f"Δt: {delta_time:.1f}s | Δiters: {delta_iters} | Avg Δt: {avg_time:.1f}s"
+                        )
+                        last_update_time = now
+                        last_update_iter = iteration
+
+                except Exception as e:
+                    logging.error(f"Error writing results: {e}")
+
     except Exception as e:
         logging.error(f"Results writer process error: {e}")
 
@@ -543,7 +550,7 @@ def add_extra_options(parser):
 def extract_configs(path):
     cfgs = []
     if os.path.exists(path):
-        if path.endswith("_all_results.txt"):
+        if path.endswith("_all_results.bin"):
             logging.info(f"Skipping {path}")
             return []
         if path.endswith(".json"):
@@ -573,8 +580,6 @@ def get_starting_configs(starting_configs: str):
                 for f in os.listdir(starting_configs)
             ]
         )
-    if starting_configs.endswith("_pareto.jsonl"):
-        return extract_configs_from_pareto_bin(starting_configs)
     return extract_configs(starting_configs)
 
 
@@ -725,9 +730,13 @@ async def main():
                 / (1000 * 60 * 60 * 24)
             )
         )
-        config["results_filename"] = make_get_filepath(
-            f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}_all_results.txt"
+        results_dir = make_get_filepath(
+            f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}/"
         )
+        os.makedirs(results_dir, exist_ok=True)
+        config["results_dir"] = results_dir
+        results_filename = os.path.join(results_dir, "all_results.bin")
+        config["results_filename"] = results_filename
         overrides_list = config.get("optimize", {}).get("enable_overrides", [])
 
         # Create results queue and start manager process
@@ -735,7 +744,7 @@ async def main():
         results_queue = manager.Queue()
         writer_process = Process(
             target=results_writer_process,
-            args=(results_queue, config["results_filename"]),
+            args=(results_queue, results_dir),
             kwargs={"compress": config["optimize"]["compress_results_file"]},
         )
         writer_process.start()
@@ -879,17 +888,6 @@ async def main():
 
         logging.info(f"Optimization complete.")
 
-        try:
-            logging.info(f"Extracting best config...")
-            result = subprocess.run(
-                ["python3", "src/tools/extract_best_config.py", config["results_filename"], "-v"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            print(result.stdout)
-        except Exception as e:
-            logging.error(f"failed to extract best config {e}")
     except Exception as e:
         logging.error(f"An error occurred: {e}")
         traceback.print_exc()
