@@ -4,6 +4,7 @@ import hashlib
 from typing import Any, Dict
 import glob
 import math
+from opt_utils import calc_normalized_dist
 
 
 def round_floats(obj: Any, sig_digits: int = 6) -> Any:
@@ -134,6 +135,18 @@ class ParetoStore:
         if ideal is None:
             print("No valid entries to compute ideal point.")
             return
+        # compute normalization ranges
+        w0s, w1s = [], []
+        for h in self.hashes:
+            entry = self.load_entry(h)
+            w0 = entry.get("analyses_combined", {}).get("w_0")
+            w1 = entry.get("analyses_combined", {}).get("w_1")
+            if w0 is not None and w1 is not None:
+                w0s.append(w0)
+                w1s.append(w1)
+        w0_min, w0_max = min(w0s), max(w0s)
+        w1_min, w1_max = min(w1s), max(w1s)
+
         for h in sorted(self.hashes):
             try:
                 entry = self.load_entry(h)
@@ -142,9 +155,8 @@ class ParetoStore:
                 if w0 is None or w1 is None:
                     dist_prefix = "9999.9999"
                 else:
-                    dist = calc_dist((w0, w1), ideal)
+                    dist = calc_normalized_dist((w0, w1), ideal, w0_min, w0_max, w1_min, w1_max)
                     dist_prefix = f"{dist:08.4f}"
-
                 old_path_pattern = os.path.join(self.directory, "pareto", f"*{h}.json")
                 old_matches = glob.glob(old_path_pattern)
                 if not old_matches:
@@ -154,3 +166,78 @@ class ParetoStore:
                 os.rename(old_path, new_path)
             except Exception as e:
                 print(f"Failed to rename entry {h}: {e}")
+
+
+def main():
+    import argparse
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import json
+
+    parser = argparse.ArgumentParser(description="Analyze and plot Pareto front")
+    parser.add_argument("pareto_dir", type=str, help="Path to pareto/ directory")
+    parser.add_argument("--json", action="store_true", help="Output summary as JSON")
+    args = parser.parse_args()
+
+    store = ParetoStore(os.path.dirname(args.pareto_dir.rstrip("/")))
+    print(f"Found {len(store.hashes)} Pareto members.")
+
+    points = []
+    for h in store.hashes:
+        try:
+            entry = store.load_entry(h)
+            w0 = entry.get("analyses_combined", {}).get("w_0")
+            w1 = entry.get("analyses_combined", {}).get("w_1")
+            if w0 is not None and w1 is not None:
+                points.append((w0, w1, h))
+        except Exception as e:
+            print(f"Error loading {h}: {e}")
+
+    if not points:
+        print("No valid Pareto points found.")
+        exit(0)
+
+    w0s, w1s, hashes = zip(*points)
+    ideal = (min(w0s), min(w1s))
+
+    # Normalized distance calculation
+    w0_arr = np.array(w0s)
+    w1_arr = np.array(w1s)
+    w0_min, w0_max = min(w0_arr), max(w0_arr)
+    w1_min, w1_max = min(w1_arr), max(w1_arr)
+    norm_w0 = (w0_arr - w0_min) / (w0_max - w0_min) if w0_max > w0_min else w0_arr
+    norm_w1 = (w1_arr - w1_min) / (w1_max - w1_min) if w1_max > w1_min else w1_arr
+    ideal_norm = ((ideal[0] - w0_min) / (w0_max - w0_min), (ideal[1] - w1_min) / (w1_max - w1_min))
+    dists = np.sqrt((norm_w0 - ideal_norm[0]) ** 2 + (norm_w1 - ideal_norm[1]) ** 2)
+    closest_idx = int(np.argmin(dists))
+
+    print(f"Ideal point: w_0={ideal[0]:.5f}, w_1={ideal[1]:.5f}")
+    print(f"Closest to ideal: {hashes[closest_idx]} | norm_dist={dists[closest_idx]:.5f}")
+    print(f"w_0={w0s[closest_idx]:.5f}, w_1={w1s[closest_idx]:.5f}")
+
+    if args.json:
+        summary = {
+            "n_members": len(hashes),
+            "ideal": {"w_0": ideal[0], "w_1": ideal[1]},
+            "closest": {
+                "hash": hashes[closest_idx],
+                "w_0": w0s[closest_idx],
+                "w_1": w1s[closest_idx],
+                "normalized_distance": dists[closest_idx],
+            },
+        }
+        print(json.dumps(summary, indent=4))
+
+    plt.scatter(w0s, w1s, label="Pareto Members")
+    plt.scatter(*ideal, color="green", label="Ideal Point", zorder=5)
+    plt.scatter(w0s[closest_idx], w1s[closest_idx], color="red", label="Closest to Ideal", zorder=5)
+    plt.xlabel("w_0")
+    plt.ylabel("w_1")
+    plt.title("Pareto Front")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+
+if __name__ == "__main__":
+    main()
