@@ -199,13 +199,15 @@ def main():
     print(f"Found {len(store.hashes)} Pareto members.")
 
     points = []
+    w_keys = []
     for h in store.hashes:
         try:
             entry = store.load_entry(h)
-            w0 = entry.get("analyses_combined", {}).get("w_0")
-            w1 = entry.get("analyses_combined", {}).get("w_1")
-            if w0 is not None and w1 is not None:
-                points.append((w0, w1, h))
+            if not w_keys:
+                w_keys = sorted(k for k in entry.get("analyses_combined", {}) if k.startswith("w_"))
+            values = [entry.get("analyses_combined", {}).get(k) for k in w_keys]
+            if all(v is not None for v in values):
+                points.append((*values, h))
         except Exception as e:
             print(f"Error loading {h}: {e}")
 
@@ -213,45 +215,81 @@ def main():
         print("No valid Pareto points found.")
         exit(0)
 
-    w0s, w1s, hashes = zip(*points)
-    ideal = (min(w0s), min(w1s))
+    values_matrix = np.array([p[:-1] for p in points])
+    hashes = [p[-1] for p in points]
 
-    # Normalized distance calculation
-    w0_arr = np.array(w0s)
-    w1_arr = np.array(w1s)
-    w0_min, w0_max = min(w0_arr), max(w0_arr)
-    w1_min, w1_max = min(w1_arr), max(w1_arr)
-    norm_w0 = (w0_arr - w0_min) / (w0_max - w0_min) if w0_max > w0_min else w0_arr
-    norm_w1 = (w1_arr - w1_min) / (w1_max - w1_min) if w1_max > w1_min else w1_arr
-    ideal_norm = ((ideal[0] - w0_min) / (w0_max - w0_min), (ideal[1] - w1_min) / (w1_max - w1_min))
-    dists = np.sqrt((norm_w0 - ideal_norm[0]) ** 2 + (norm_w1 - ideal_norm[1]) ** 2)
+    ideal = np.min(values_matrix, axis=0)
+    mins = np.min(values_matrix, axis=0)
+    maxs = np.max(values_matrix, axis=0)
+
+    norm_matrix = np.array(
+        [
+            [
+                (v - mins[i]) / (maxs[i] - mins[i]) if maxs[i] > mins[i] else v
+                for i, v in enumerate(row)
+            ]
+            for row in values_matrix
+        ]
+    )
+    ideal_norm = [
+        (ideal[i] - mins[i]) / (maxs[i] - mins[i]) if maxs[i] > mins[i] else ideal[i]
+        for i in range(len(ideal))
+    ]
+
+    dists = np.linalg.norm(norm_matrix - ideal_norm, axis=1)
     closest_idx = int(np.argmin(dists))
 
-    print(f"Ideal point: w_0={ideal[0]:.5f}, w_1={ideal[1]:.5f}")
+    print("Ideal point:")
+    for i, key in enumerate(w_keys):
+        print(f"  {key} = {ideal[i]:.5f}")
     print(f"Closest to ideal: {hashes[closest_idx]} | norm_dist={dists[closest_idx]:.5f}")
-    print(f"w_0={w0s[closest_idx]:.5f}, w_1={w1s[closest_idx]:.5f}")
+    for i, key in enumerate(w_keys):
+        print(f"  {key} = {values_matrix[closest_idx][i]:.5f}")
 
     if args.json:
         summary = {
             "n_members": len(hashes),
-            "ideal": {"w_0": ideal[0], "w_1": ideal[1]},
+            "ideal": {k: float(ideal[i]) for i, k in enumerate(w_keys)},
             "closest": {
                 "hash": hashes[closest_idx],
-                "w_0": w0s[closest_idx],
-                "w_1": w1s[closest_idx],
-                "normalized_distance": dists[closest_idx],
+                **{k: float(values_matrix[closest_idx][i]) for i, k in enumerate(w_keys)},
+                "normalized_distance": float(dists[closest_idx]),
             },
         }
         print(json.dumps(summary, indent=4))
 
-    plt.scatter(w0s, w1s, label="Pareto Members")
-    plt.scatter(*ideal, color="green", label="Ideal Point", zorder=5)
-    plt.scatter(w0s[closest_idx], w1s[closest_idx], color="red", label="Closest to Ideal", zorder=5)
-    plt.xlabel("w_0")
-    plt.ylabel("w_1")
-    plt.title("Pareto Front")
+    fig = plt.figure()
+    if len(w_keys) == 2:
+        plt.scatter(values_matrix[:, 0], values_matrix[:, 1], label="Pareto Members")
+        plt.scatter(*ideal, color="green", label="Ideal Point", zorder=5)
+        plt.scatter(
+            values_matrix[closest_idx][0],
+            values_matrix[closest_idx][1],
+            color="red",
+            label="Closest to Ideal",
+            zorder=5,
+        )
+        plt.xlabel(w_keys[0])
+        plt.ylabel(w_keys[1])
+        plt.title("Pareto Front")
+    else:
+        ax = fig.add_subplot(111, projection="3d" if len(w_keys) == 3 else None)
+        if len(w_keys) == 3:
+            ax.scatter(
+                values_matrix[:, 0], values_matrix[:, 1], values_matrix[:, 2], label="Pareto Members"
+            )
+            ax.set_xlabel(w_keys[0])
+            ax.set_ylabel(w_keys[1])
+            ax.set_zlabel(w_keys[2])
+        else:
+            ax.plot(range(len(w_keys)), values_matrix[closest_idx], marker="o")
+            ax.set_xticks(range(len(w_keys)))
+            ax.set_xticklabels(w_keys, rotation=45)
+            ax.set_title("Closest to Ideal Point")
+
     plt.legend()
     plt.grid(True)
+    plt.tight_layout()
     plt.show()
 
 

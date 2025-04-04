@@ -44,24 +44,19 @@ def update_pareto_front(new_index, new_obj, current_front, objectives_dict, high
 
 
 def calc_dist(p0, p1):
-    return math.sqrt((p0[0] - p1[0]) ** 2 + (p0[1] - p1[1]) ** 2)
+    return math.sqrt(sum((a - b) ** 2 for a, b in zip(p0, p1)))
 
 
 def calc_normalized_dist(point, ideal, w0_min, w0_max, w1_min, w1_max):
-    """Calculate normalized Euclidean distance from ideal point."""
-    if w0_max > w0_min:
-        norm_w0 = (point[0] - w0_min) / (w0_max - w0_min)
-        ideal_w0 = (ideal[0] - w0_min) / (w0_max - w0_min)
-    else:
-        norm_w0 = point[0]
-        ideal_w0 = ideal[0]
-    if w1_max > w1_min:
-        norm_w1 = (point[1] - w1_min) / (w1_max - w1_min)
-        ideal_w1 = (ideal[1] - w1_min) / (w1_max - w1_min)
-    else:
-        norm_w1 = point[1]
-        ideal_w1 = ideal[1]
-    return math.sqrt((norm_w0 - ideal_w0) ** 2 + (norm_w1 - ideal_w1) ** 2)
+    norm_point = [
+        (p - min_v) / (max_v - min_v) if max_v > min_v else p
+        for p, min_v, max_v in zip(point, mins, maxs)
+    ]
+    norm_ideal = [
+        (i - min_v) / (max_v - min_v) if max_v > min_v else i
+        for i, min_v, max_v in zip(ideal, mins, maxs)
+    ]
+    return math.sqrt(sum((p - i) ** 2 for p, i in zip(norm_point, norm_ideal)))
 
 
 def format_distance(dist: float) -> str:
