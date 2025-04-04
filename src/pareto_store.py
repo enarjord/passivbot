@@ -114,49 +114,65 @@ class ParetoStore:
         self.hashes.clear()
 
     def compute_ideal_point(self):
-        w0s = []
-        w1s = []
-        for h in self.hashes:
-            try:
-                entry = self.load_entry(h)
-                w0 = entry.get("analyses_combined", {}).get("w_0")
-                w1 = entry.get("analyses_combined", {}).get("w_1")
-                if w0 is not None and w1 is not None:
-                    w0s.append(w0)
-                    w1s.append(w1)
-            except:
-                continue
-        if w0s and w1s:
-            return (min(w0s), min(w1s))
-        return None
+        entries = [self.load_entry(h) for h in self.hashes]
+        w_keys = [k for k in entries[0].get("analyses_combined", {}) if k.startswith("w_")]
+        if not entries or not w_keys:
+            return None
+        ideal = []
+        for key in sorted(w_keys):
+            vals = [
+                e["analyses_combined"].get(key)
+                for e in entries
+                if e["analyses_combined"].get(key) is not None
+            ]
+            if not vals:
+                return None
+            ideal.append(min(vals))
+        return tuple(ideal)
 
     def rename_entries_with_distance(self):
         ideal = self.compute_ideal_point()
         if ideal is None:
             print("No valid entries to compute ideal point.")
             return
-        # compute normalization ranges
-        w0s, w1s = [], []
+
+        # Get all keys w_0, w_1, ..., w_n
+        sample_entry = self.load_entry(next(iter(self.hashes)))
+        w_keys = sorted(k for k in sample_entry.get("analyses_combined", {}) if k.startswith("w_"))
+        if not w_keys:
+            print("No w_i keys found.")
+            return
+
+        dims = len(w_keys)
+        value_matrix = [[] for _ in range(dims)]
         for h in self.hashes:
             entry = self.load_entry(h)
-            w0 = entry.get("analyses_combined", {}).get("w_0")
-            w1 = entry.get("analyses_combined", {}).get("w_1")
-            if w0 is not None and w1 is not None:
-                w0s.append(w0)
-                w1s.append(w1)
-        w0_min, w0_max = min(w0s), max(w0s)
-        w1_min, w1_max = min(w1s), max(w1s)
+            for i, key in enumerate(w_keys):
+                val = entry.get("analyses_combined", {}).get(key)
+                if val is not None:
+                    value_matrix[i].append(val)
+
+        mins = [min(vals) for vals in value_matrix]
+        maxs = [max(vals) for vals in value_matrix]
 
         for h in sorted(self.hashes):
             try:
                 entry = self.load_entry(h)
-                w0 = entry.get("analyses_combined", {}).get("w_0")
-                w1 = entry.get("analyses_combined", {}).get("w_1")
-                if w0 is None or w1 is None:
-                    dist_prefix = "9999.9999"
-                else:
-                    dist = calc_normalized_dist((w0, w1), ideal, w0_min, w0_max, w1_min, w1_max)
-                    dist_prefix = f"{dist:08.4f}"
+                point = []
+                for i, key in enumerate(w_keys):
+                    val = entry.get("analyses_combined", {}).get(key)
+                    if val is None:
+                        val = float("inf")
+                    denom = maxs[i] - mins[i]
+                    norm = (val - mins[i]) / denom if denom > 0 else 0.0
+                    point.append(norm)
+                ideal_norm = [
+                    (ideal[i] - mins[i]) / (maxs[i] - mins[i]) if (maxs[i] - mins[i]) > 0 else 0.0
+                    for i in range(dims)
+                ]
+                dist = math.sqrt(sum((p - i) ** 2 for p, i in zip(point, ideal_norm)))
+                dist_prefix = f"{dist:08.4f}"
+
                 old_path_pattern = os.path.join(self.directory, "pareto", f"*{h}.json")
                 old_matches = glob.glob(old_path_pattern)
                 if not old_matches:
