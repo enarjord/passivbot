@@ -77,6 +77,7 @@ def results_writer_process(queue, results_dir, compress=True):
     index_to_entry = {}
     iteration = 0
     counter = 0
+    n_objectives = None
 
     last_update_time = time.time()
     last_update_iter = 0
@@ -105,6 +106,9 @@ def results_writer_process(queue, results_dir, compress=True):
                     else:
                         output_data = data
 
+                    if n_objectives is None:
+                        n_objectives = len(data["optimize"]["scoring"])
+
                     # --- Write to all_results.bin ---
                     f.write(packer.pack(output_data))
                     f.flush()
@@ -112,65 +116,53 @@ def results_writer_process(queue, results_dir, compress=True):
                     # --- Pareto front update ---
                     if "analyses_combined" not in data:
                         continue
-                    w0 = data["analyses_combined"].get("w_0")
-                    w1 = data["analyses_combined"].get("w_1")
-                    if w0 is None or w1 is None:
+                    keys = [k for k in data["analyses_combined"] if k.startswith("w_")]
+                    scores = [data["analyses_combined"].get(k) for k in sorted(keys)]
+                    if any(s is None or not isinstance(s, (float, int)) for s in scores):
                         continue
-                    w0, w1 = float(w0), float(w1)
-
+                    scores = tuple(float(s) for s in scores)
                     iteration += 1
                     index = iteration
-                    objectives_dict[index] = (w0, w1)
+                    objectives_dict[index] = scores
                     index_to_entry[index] = data
+                    if any(dominates(objectives_dict[idx], scores) for idx in pareto_front):
+                        continue
+                    # Remove dominated entries
+                    dominated = [
+                        idx for idx in pareto_front if dominates(scores, objectives_dict[idx])
+                    ]
+                    for idx in dominated:
+                        old_entry = index_to_entry[idx]
+                        store.remove_entry(
+                            store.hash_entry(round_floats(old_entry, sig_digits=store.sig_digits))
+                        )
 
-                    is_dominated = any(
-                        dominates(objectives_dict[idx], (w0, w1)) for idx in pareto_front
+                    pareto_front = [
+                        idx for idx in pareto_front if not dominates(scores, objectives_dict[idx])
+                    ]
+                    pareto_front.append(index)
+                    store.add_entry(data)
+
+                    now = time.time()
+                    delta_time = now - last_update_time
+                    delta_iters = iteration - last_update_iter
+                    total_updates += 1
+                    avg_time = (now - last_update_time) / total_updates if total_updates > 1 else 0.0
+                    min_str = ", ".join(
+                        f"{min(objectives_dict[idx][i] for idx in pareto_front):.5f}"
+                        for i in range(n_objectives)
                     )
-                    if not is_dominated:
-                        # Remove dominated
-                        dominated = [
-                            idx for idx in pareto_front if dominates((w0, w1), objectives_dict[idx])
-                        ]
-                        for idx in dominated:
-                            old_entry = index_to_entry[idx]
-                            store.remove_entry(
-                                store.hash_entry(round_floats(old_entry, sig_digits=store.sig_digits))
-                            )
-
-                        pareto_front = [
-                            idx
-                            for idx in pareto_front
-                            if not dominates((w0, w1), objectives_dict[idx])
-                        ]
-                        pareto_front.append(index)
-
-                        # Write new Pareto member
-                        store.add_entry(data)
-
-                        # Log
-                        pareto_w0 = [objectives_dict[idx][0] for idx in pareto_front]
-                        pareto_w1 = [objectives_dict[idx][1] for idx in pareto_front]
-                        w0_min = min(pareto_w0)
-                        w0_max = max(pareto_w0)
-                        w1_min = min(pareto_w1)
-                        w1_max = max(pareto_w1)
-
-                        now = time.time()
-                        delta_time = now - last_update_time
-                        delta_iters = iteration - last_update_iter
-                        total_updates += 1
-                        avg_time = (
-                            (now - last_update_time) / total_updates if total_updates > 1 else 0.0
-                        )
-
-                        logging.info(
-                            f"Updated Pareto front | Iter: {iteration} | Members: {len(pareto_front)} | "
-                            f"w_0: [{w0_min:.5f}, {w0_max:.5f}] | w_1: [{w1_min:.5f}, {w1_max:.5f}] | "
-                            f"Δt: {delta_time:.1f}s | Δiters: {delta_iters} | Avg Δt: {avg_time:.1f}s"
-                        )
-                        last_update_time = now
-                        last_update_iter = iteration
-
+                    max_str = ", ".join(
+                        f"{max(objectives_dict[idx][i] for idx in pareto_front):.5f}"
+                        for i in range(n_objectives)
+                    )
+                    logging.info(
+                        f"Updated Pareto front | Iter: {iteration} | Members: {len(pareto_front)} | "
+                        f"Min: [{min_str}] | Max: [{max_str}] | "
+                        f"Δt: {delta_time:.1f}s | Δiters: {delta_iters} | Avg Δt: {avg_time:.1f}s"
+                    )
+                    last_update_time = now
+                    last_update_iter = iteration
                 except Exception as e:
                     logging.error(f"Error writing results: {e}")
 
@@ -434,8 +426,9 @@ class Evaluator:
             analyses[exchange] = expand_analysis(analysis_usd, analysis_btc, fills, config)
 
         analyses_combined = self.combine_analyses(analyses)
-        w_0, w_1 = self.calc_fitness(analyses_combined)
-        analyses_combined.update({"w_0": w_0, "w_1": w_1})
+        objectives = self.calc_fitness(analyses_combined)
+        for i, val in enumerate(objectives):
+            analyses_combined[f"w_{i}"] = val
 
         data = {
             **config,
@@ -445,7 +438,7 @@ class Evaluator:
             },
         }
         self.results_queue.put(data)
-        return w_0, w_1
+        return tuple(objectives)
 
     def combine_analyses(self, analyses):
         analyses_combined = {}
@@ -473,10 +466,12 @@ class Evaluator:
 
     def calc_fitness(self, analyses_combined):
         modifier = 0.0
-        keys = sorted(self.config["optimize"]["limits"])
-        i = len(keys) + 1
+        limit_keys = sorted(self.config["optimize"]["limits"])
+        scoring_keys = self.config["optimize"]["scoring"]
+        n_objectives = len(scoring_keys)
+        i = len(limit_keys) + 1
         prefix = "btc_" if self.config["backtest"]["use_btc_collateral"] else ""
-        for key in keys:
+        for key in limit_keys:
             keym = prefix + key.replace("lower_bound_", "") + "_max"
             if keym not in analyses_combined:
                 keym = key.replace("lower_bound_", "") + "_max"
@@ -490,21 +485,16 @@ class Evaluator:
             analyses_combined[f"{prefix}drawdown_worst_max"] >= 1.0
             or analyses_combined[f"{prefix}equity_balance_diff_neg_max_max"] >= 1.0
         ):
-            w_0 = w_1 = modifier
+            return tuple([modifier] * n_objectives)
         else:
-            assert (
-                len(self.config["optimize"]["scoring"]) == 2
-            ), f"there needs to be two fitness scoring keys {self.config['optimize']['scoring']}"
             scores = []
-            for sk in self.config["optimize"]["scoring"]:
-                skm = f"{sk}_mean"
+            for sk in scoring_keys:
+                skm = f"{prefix}{sk}_mean"
                 if skm not in analyses_combined:
-                    skm = prefix + skm
-                    if skm not in analyses_combined:
-                        raise Exception(f"invalid scoring key {sk}")
+                    skm = f"{sk}_mean"
+                    assert skm in analyses_combined, f"invalid scoring key {sk}"
                 scores.append(modifier - analyses_combined[skm])
-            return scores[0], scores[1]
-        return w_0, w_1
+            return tuple(scores)
 
     def __del__(self):
         if hasattr(self, "mmap_contexts"):
@@ -776,7 +766,8 @@ async def main():
         )
 
         logging.info(f"Finished initializing evaluator...")
-        creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -1.0))  # Minimize both objectives
+        n_objectives = len(config["optimize"]["scoring"])
+        creator.create("FitnessMulti", base.Fitness, weights=(-1.0,) * n_objectives)
         creator.create("Individual", list, fitness=creator.FitnessMulti)
 
         toolbox = base.Toolbox()
