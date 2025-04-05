@@ -78,10 +78,7 @@ def results_writer_process(queue, results_dir, compress=True):
     iteration = 0
     counter = 0
     n_objectives = None
-
-    last_update_time = time.time()
-    last_update_iter = 0
-    total_updates = 0
+    scoring_keys = None
 
     store = ParetoStore(results_dir)
     results_filename = os.path.join(results_dir, "all_results.bin")
@@ -106,8 +103,9 @@ def results_writer_process(queue, results_dir, compress=True):
                     else:
                         output_data = data
 
-                    if n_objectives is None:
-                        n_objectives = len(data["optimize"]["scoring"])
+                    if scoring_keys is None:
+                        scoring_keys = data["optimize"]["scoring"]
+                        n_objectives = len(scoring_keys)
 
                     # --- Write to all_results.bin ---
                     f.write(packer.pack(output_data))
@@ -143,11 +141,6 @@ def results_writer_process(queue, results_dir, compress=True):
                     pareto_front.append(index)
                     store.add_entry(data)
 
-                    now = time.time()
-                    delta_time = now - last_update_time
-                    delta_iters = iteration - last_update_iter
-                    total_updates += 1
-                    avg_time = (now - last_update_time) / total_updates if total_updates > 1 else 0.0
                     min_str = ", ".join(
                         f"{min(objectives_dict[idx][i] for idx in pareto_front):.5f}"
                         for i in range(n_objectives)
@@ -156,13 +149,13 @@ def results_writer_process(queue, results_dir, compress=True):
                         f"{max(objectives_dict[idx][i] for idx in pareto_front):.5f}"
                         for i in range(n_objectives)
                     )
-                    logging.info(
-                        f"Updated Pareto front | Iter: {iteration} | Members: {len(pareto_front)} | "
-                        f"Min: [{min_str}] | Max: [{max_str}] | "
-                        f"Δt: {delta_time:.1f}s | Δiters: {delta_iters} | Avg Δt: {avg_time:.1f}s"
-                    )
-                    last_update_time = now
-                    last_update_iter = iteration
+                    line = "(min,max): "
+                    for i, sk in enumerate(scoring_keys):
+                        line += f"{sk}: ({pbr.round_dynamic(min(objectives_dict[idx][i] for idx in pareto_front), 3)}"
+                        line += f",{pbr.round_dynamic(max(objectives_dict[idx][i] for idx in pareto_front), 3)})"
+                        if i < n_objectives - 1:
+                            line += " | "
+                    logging.info(f"Upd PF | Iter: {iteration} | n memb: {len(pareto_front)} | {line}")
                 except Exception as e:
                     logging.error(f"Error writing results: {e}")
 
@@ -399,6 +392,37 @@ class Evaluator:
         self.config = config
         logging.info("Evaluator initialization complete.")
         self.results_queue = results_queue
+        self.scoring_weights = {
+            "adg": -1.0,
+            "adg_w": -1.0,
+            "calmar_ratio": -1.0,
+            "calmar_ratio_w": -1.0,
+            "drawdown_worst": 1.0,
+            "drawdown_worst_mean_1pct": 1.0,
+            "equity_balance_diff_neg_max": 1.0,
+            "equity_balance_diff_neg_mean": 1.0,
+            "equity_balance_diff_pos_max": 1.0,
+            "equity_balance_diff_pos_mean": 1.0,
+            "expected_shortfall_1pct": 1.0,
+            "gain": -1.0,
+            "loss_profit_ratio": 1.0,
+            "loss_profit_ratio_w": 1.0,
+            "mdg": -1.0,
+            "mdg_w": -1.0,
+            "omega_ratio": -1.0,
+            "omega_ratio_w": -1.0,
+            "position_held_hours_max": 1.0,
+            "position_held_hours_mean": 1.0,
+            "position_held_hours_median": 1.0,
+            "position_unchanged_hours_max": 1.0,
+            "positions_held_per_day": 1.0,
+            "sharpe_ratio": -1.0,
+            "sharpe_ratio_w": -1.0,
+            "sortino_ratio": -1.0,
+            "sortino_ratio_w": -1.0,
+            "sterling_ratio": -1.0,
+            "sterling_ratio_w": -1.0,
+        }
 
     def evaluate(self, individual, overrides_list):
         config = individual_to_config(
@@ -467,7 +491,7 @@ class Evaluator:
     def calc_fitness(self, analyses_combined):
         modifier = 0.0
         limit_keys = sorted(self.config["optimize"]["limits"])
-        scoring_keys = self.config["optimize"]["scoring"]
+        scoring_keys = sorted(self.config["optimize"]["scoring"])
         n_objectives = len(scoring_keys)
         i = len(limit_keys) + 1
         prefix = "btc_" if self.config["backtest"]["use_btc_collateral"] else ""
@@ -493,7 +517,8 @@ class Evaluator:
                 if skm not in analyses_combined:
                     skm = f"{sk}_mean"
                     assert skm in analyses_combined, f"invalid scoring key {sk}"
-                scores.append(modifier - analyses_combined[skm])
+                scores.append(modifier + (analyses_combined[skm] * self.scoring_weights[sk]))
+                # print(f"debug sk {sk} skm {skm} modifier {modifier} a[skm] {analyses_combined[skm]} sw[sk] {self.scoring_weights[sk]} mul {(analyses_combined[skm] * self.scoring_weights[sk])}")
             return tuple(scores)
 
     def __del__(self):
