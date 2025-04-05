@@ -260,6 +260,7 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
             # If it’s something else (not dict/list/str), we do nothing special,
             # preserving original behavior.
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
+    result["optimize"]["scoring"] = sorted(result["optimize"]["scoring"])
     return result
 
 
