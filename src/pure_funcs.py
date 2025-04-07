@@ -665,6 +665,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 "mutation_probability": 0.2,
                 "n_cpus": 5,
                 "population_size": 500,
+                "round_to_n_significant_digits": 5,
                 "scoring": ["adg", "sharpe_ratio"],
             },
         }
