@@ -306,11 +306,6 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
                 config["bot"][pside][key] = min(max(bounds[0], 0.0), bounds[1])
         config = optimizer_overrides(overrides_list, config, pside)
 
-    # ✨ Apply rounding if specified
-    sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits")
-    if isinstance(sig_digits, int) and sig_digits > 0:
-        config["bot"] = round_floats(config["bot"], sig_digits)
-
     return config
 
 
@@ -356,6 +351,30 @@ def validate_array(arr, name):
         raise ValueError(f"{name} contains inf values")
 
 
+def perturb_individual(individual, bounds, sig_digits):
+    perturbed = []
+    for i, val in enumerate(individual):
+        low, high = bounds[i]
+        if high == low:
+            perturbed.append(val)
+            continue
+
+        # Compute rounding step size based on sig digits
+        step_size = (
+            abs(val) * 10 ** -(sig_digits - 1)
+            if val != 0.0
+            else (high - low) * 10 ** -(sig_digits - 1)
+        )
+        step = step_size * np.random.choice([1.0, -1.0, 0.0])
+
+        new_val = val + step
+        new_val = pbr.round_dynamic(new_val, sig_digits)
+        new_val = min(max(new_val, low), high)
+
+        perturbed.append(new_val)
+    return perturbed
+
+
 class Evaluator:
     def __init__(
         self,
@@ -367,6 +386,8 @@ class Evaluator:
         msss,
         config,
         results_queue,
+        seen_hashes=None,
+        duplicate_counter=None,
     ):
         logging.info("Initializing Evaluator...")
         self.shared_memory_files = shared_memory_files
@@ -397,6 +418,12 @@ class Evaluator:
         self.config = config
         logging.info("Evaluator initialization complete.")
         self.results_queue = results_queue
+        self.seen_hashes = seen_hashes if seen_hashes is not None else {}
+        self.duplicate_counter = duplicate_counter
+        self.param_bounds_expanded = [
+            (v[0], v[-1]) for v in list(self.config["optimize"]["bounds"].values())
+        ]
+        self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
         self.scoring_weights = {
             "adg": -1.0,
             "adg_w": -1.0,
@@ -430,9 +457,40 @@ class Evaluator:
         }
 
     def evaluate(self, individual, overrides_list):
+        if self.sig_digits > 0:
+            individual[:] = [pbr.round_dynamic(v, self.sig_digits) for v in individual]
         config = individual_to_config(
             individual, optimizer_overrides, overrides_list, template=self.config
         )
+        individual_hash = calc_hash(individual)
+
+        # Attempt perturbation if duplicate
+        if individual_hash in self.seen_hashes:
+            # Perform one bounded, rounded perturbation
+            perturbed = perturb_individual(individual, self.param_bounds_expanded, self.sig_digits)
+            new_hash = calc_hash(perturbed)
+
+            self.duplicate_counter["count"] += 1
+            dup_ct = self.duplicate_counter["count"]
+
+            if new_hash in self.seen_hashes:
+                logging.info(
+                    f"[DUPLICATE {dup_ct}] Perturbation failed. Still duplicate. Hash: {new_hash}"
+                )
+                return tuple([float("inf")] * len(self.config["optimize"]["scoring"]))
+            else:
+                logging.info(
+                    f"[DUPLICATE {dup_ct}] Successfully perturbed into new individual. Hash: {new_hash}"
+                )
+                config_perturbed = individual_to_config(
+                    perturbed, optimizer_overrides, overrides_list, template=self.config
+                )
+                individual[:] = perturbed  # Mutate in place so DEAP uses updated version
+                self.seen_hashes[new_hash] = True
+                config = config_perturbed
+        else:
+            self.seen_hashes[individual_hash] = True
+
         analyses = {}
         for exchange in self.exchanges:
             bot_params, _, _ = prep_backtest_args(
@@ -762,6 +820,9 @@ async def main():
         # Create results queue and start manager process
         manager = multiprocessing.Manager()
         results_queue = manager.Queue()
+        seen_hashes = manager.dict()
+        duplicate_counter = manager.dict()
+        duplicate_counter["count"] = 0
         writer_process = Process(
             target=results_writer_process,
             args=(results_queue, results_dir),
@@ -793,6 +854,8 @@ async def main():
             msss=msss,
             config=config,
             results_queue=results_queue,
+            seen_hashes=seen_hashes,
+            duplicate_counter=duplicate_counter,
         )
 
         logging.info(f"Finished initializing evaluator...")
