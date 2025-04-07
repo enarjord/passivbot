@@ -195,14 +195,20 @@ def main():
     parser.add_argument("--json", action="store_true", help="Output summary as JSON")
     args = parser.parse_args()
 
+    pareto_dir = args.pareto_dir.rstrip("/")
+    entries = sorted(glob.glob(os.path.join(pareto_dir, "*.json")))
+    print(f"Found {len(entries)} Pareto members.")
+
     store = ParetoStore(os.path.dirname(args.pareto_dir.rstrip("/")))
     print(f"Found {len(store.hashes)} Pareto members.")
 
     points = []
     w_keys = []
-    for h in store.hashes:
+    for entry_path in entries:
         try:
-            entry = store.load_entry(h)
+            with open(entry_path) as f:
+                entry = json.load(f)
+            h = os.path.splitext(os.path.basename(entry_path))[0].split("_")[-1]
             if not w_keys:
                 w_keys = sorted(k for k in entry.get("analyses_combined", {}) if k.startswith("w_"))
             values = [entry.get("analyses_combined", {}).get(k) for k in w_keys]
@@ -258,21 +264,88 @@ def main():
         }
         print(json.dumps(summary, indent=4))
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=(12, 4))
+
     if len(w_keys) == 2:
-        plt.scatter(values_matrix[:, 0], values_matrix[:, 1], label="Pareto Members")
-        plt.scatter(*ideal, color="green", label="Ideal Point", zorder=5)
-        plt.scatter(
+        ax = fig.add_subplot(111)
+        ax.scatter(values_matrix[:, 0], values_matrix[:, 1], label="Pareto Members")
+        ax.scatter(*ideal, color="green", label="Ideal Point", zorder=5)
+        ax.scatter(
             values_matrix[closest_idx][0],
             values_matrix[closest_idx][1],
             color="red",
             label="Closest to Ideal",
             zorder=5,
         )
-        plt.xlabel(w_keys[0])
-        plt.ylabel(w_keys[1])
-        plt.title("Pareto Front")
+        ax.set_xlabel(w_keys[0])
+        ax.set_ylabel(w_keys[1])
+        ax.set_title("Pareto Front")
+        ax.legend()
+        ax.grid(True)
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+    elif len(w_keys) == 3:
+        import plotly.graph_objs as go
+        import plotly.io as pio
+
+        fig = go.Figure()
+
+        # Scatter points for Pareto members
+        fig.add_trace(
+            go.Scatter3d(
+                x=values_matrix[:, 0],
+                y=values_matrix[:, 1],
+                z=values_matrix[:, 2],
+                mode="markers",
+                marker=dict(size=4, color="blue"),
+                name="Pareto Members",
+                text=[f"hash: {h}" for h in hashes],
+                hoverinfo="text",
+            )
+        )
+
+        # Ideal point
+        fig.add_trace(
+            go.Scatter3d(
+                x=[ideal[0]],
+                y=[ideal[1]],
+                z=[ideal[2]],
+                mode="markers",
+                marker=dict(size=8, color="green"),
+                name="Ideal Point",
+            )
+        )
+
+        # Closest point
+        fig.add_trace(
+            go.Scatter3d(
+                x=[values_matrix[closest_idx][0]],
+                y=[values_matrix[closest_idx][1]],
+                z=[values_matrix[closest_idx][2]],
+                mode="markers",
+                marker=dict(size=8, color="red"),
+                name="Closest to Ideal",
+            )
+        )
+
+        fig.update_layout(
+            title="Pareto Front (3D Interactive)",
+            scene=dict(xaxis_title=w_keys[0], yaxis_title=w_keys[1], zaxis_title=w_keys[2]),
+            margin=dict(l=0, r=0, b=0, t=40),
+            legend=dict(x=0.01, y=0.99),
+        )
+
+        fig.show()
     else:
+        ax = fig.add_subplot(111)
+        ax.plot(range(len(w_keys)), values_matrix[closest_idx], marker="o")
+        ax.set_xticks(range(len(w_keys)))
+        ax.set_xticklabels(w_keys, rotation=45)
+        ax.set_title("Closest to Ideal Point")
+        ax.grid(True)
+
         ax = fig.add_subplot(111, projection="3d" if len(w_keys) == 3 else None)
         if len(w_keys) == 3:
             ax.scatter(
@@ -287,10 +360,10 @@ def main():
             ax.set_xticklabels(w_keys, rotation=45)
             ax.set_title("Closest to Ideal Point")
 
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
 
 
 if __name__ == "__main__":
