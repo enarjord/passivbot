@@ -11,7 +11,7 @@ Defaults to `configs/template.json` if no config specified.
 
 ## Results Storage
 
-Optimization results are stored in `optimize_results/`` with filenames containing date, exchanges, number of coins, and unique identifier. Each result is appended as a single-line JSON string containing analysis and configuration.
+Optimization results are stored in directories in `optimize_results/` with filenames containing date, exchanges, number of coins, and unique identifier. Each result is appended as a single-line JSON string containing analysis and configuration, and the pareto front is written each time it is updated. The pareto front is sorted by each member's distance to normalized mean: `xxx.xxxhhhhhhhhhhhhhhhh.json` where `xxx.xxx` is the dist and `hhhhhhhhhhhhhhhh` is a unique identifier hash.
 
 ## Analysis
 The script automatically runs `src/tools/extract_best_config.py` after optimization to identify the best performing configuration, saving the best candidate and the pareto front to `optimize_results_analysis/`.
@@ -49,4 +49,4 @@ Based on daily equity changes: `daily_eqs = equity.groupby(day).pct_change()`
 - equity_balance_diff_pos_max: greatest distance between balance and equity when equity is greater than balance
 - equity_balance_diff_pos_mean: mean distance between balance and equity when equity is greater than balance
 
-Suffix `_w` indicates weighted mean across 10 temporal subsets (whole, last_half, last_third, ... last_tenth).
+Suffix `_w` indicates mean across 10 temporal subsets (whole, last_half, last_third, ... last_tenth). The purpose is to weigh heavier data closer to present.
