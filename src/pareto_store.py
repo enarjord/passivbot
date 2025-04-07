@@ -290,6 +290,15 @@ def main():
         import plotly.graph_objs as go
         import plotly.io as pio
 
+        # Load a config to get metric names
+        sample_entry_path = entries[0]
+        with open(sample_entry_path) as f:
+            sample_entry = json.load(f)
+
+        # Try to read optimize.scoring if available
+        metric_names = sample_entry.get("optimize", {}).get("scoring", [])
+        metric_name_map = {f"w_{i}": name for i, name in enumerate(metric_names)}
+
         fig = go.Figure()
 
         # Scatter points for Pareto members
@@ -332,7 +341,11 @@ def main():
 
         fig.update_layout(
             title="Pareto Front (3D Interactive)",
-            scene=dict(xaxis_title=w_keys[0], yaxis_title=w_keys[1], zaxis_title=w_keys[2]),
+            scene=dict(
+                xaxis_title=metric_name_map.get(w_keys[0], w_keys[0]),
+                yaxis_title=metric_name_map.get(w_keys[1], w_keys[1]),
+                zaxis_title=metric_name_map.get(w_keys[2], w_keys[2]),
+            ),
             margin=dict(l=0, r=0, b=0, t=40),
             legend=dict(x=0.01, y=0.99),
         )
