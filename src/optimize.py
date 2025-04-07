@@ -304,8 +304,13 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
                 if len(bounds) == 1:
                     bounds = [bounds[0], bounds[0]]
                 config["bot"][pside][key] = min(max(bounds[0], 0.0), bounds[1])
-        # Call the optimizer overrides
         config = optimizer_overrides(overrides_list, config, pside)
+
+    # ✨ Apply rounding if specified
+    sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits")
+    if isinstance(sig_digits, int) and sig_digits > 0:
+        config["bot"] = round_floats(config["bot"], sig_digits)
+
     return config
 
 
