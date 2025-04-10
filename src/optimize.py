@@ -435,7 +435,13 @@ class Evaluator:
             "equity_balance_diff_neg_mean": 1.0,
             "equity_balance_diff_pos_max": 1.0,
             "equity_balance_diff_pos_mean": 1.0,
+            "equity_choppiness": 1.0,
+            "equity_choppiness_w": 1.0,
+            "equity_curve_smoothness": 1.0,
+            "equity_curve_smoothness_w": 1.0,
             "expected_shortfall_1pct": 1.0,
+            "exponential_fit_error": 1.0,
+            "exponential_fit_error_w": 1.0,
             "gain": -1.0,
             "loss_profit_ratio": 1.0,
             "loss_profit_ratio_w": 1.0,
@@ -562,6 +568,8 @@ class Evaluator:
             keym = prefix + key.replace("lower_bound_", "") + "_max"
             if keym not in analyses_combined:
                 keym = key.replace("lower_bound_", "") + "_max"
+                if keym not in analyses_combined:
+                    pprint.pprint(analyses_combined)
                 assert keym in analyses_combined, f"malformed key {keym}"
             modifier += (
                 max(self.config["optimize"]["limits"][key], analyses_combined[keym])
