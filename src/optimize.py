@@ -568,8 +568,6 @@ class Evaluator:
             keym = prefix + key.replace("lower_bound_", "") + "_max"
             if keym not in analyses_combined:
                 keym = key.replace("lower_bound_", "") + "_max"
-                if keym not in analyses_combined:
-                    pprint.pprint(analyses_combined)
                 assert keym in analyses_combined, f"malformed key {keym}"
             modifier += (
                 max(self.config["optimize"]["limits"][key], analyses_combined[keym])
