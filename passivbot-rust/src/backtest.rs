@@ -1891,7 +1891,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         0.0
     };
     let equity_choppiness = calc_equity_choppiness(&daily_eqs);
-    let equity_curve_smoothness = calc_equity_curve_smoothness(&daily_eqs);
+    let equity_jerkiness = calc_equity_jerkiness(&daily_eqs);
     let exponential_fit_error = calc_exponential_fit_error(&daily_eqs);
 
     let mut analysis = Analysis::default();
@@ -1917,7 +1917,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     analysis.position_held_hours_median = position_held_hours_median;
     analysis.position_unchanged_hours_max = position_unchanged_hours_max;
     analysis.equity_choppiness = equity_choppiness;
-    analysis.equity_curve_smoothness = equity_curve_smoothness;
+    analysis.equity_jerkiness = equity_jerkiness;
     analysis.exponential_fit_error = exponential_fit_error;
 
     analysis
@@ -1987,9 +1987,9 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         .map(|a| a.equity_choppiness)
         .sum::<f64>()
         / 10.0;
-    analysis.equity_curve_smoothness_w = subset_analyses
+    analysis.equity_jerkiness_w = subset_analyses
         .iter()
-        .map(|a| a.equity_curve_smoothness)
+        .map(|a| a.equity_jerkiness)
         .sum::<f64>()
         / 10.0;
     analysis.exponential_fit_error_w = subset_analyses
@@ -2054,7 +2054,7 @@ pub fn calc_equity_choppiness(equity: &[f64]) -> f64 {
 
 /// Calculates the normalized mean absolute second derivative
 /// (each second difference is divided by the mean of the 3 equity points)
-pub fn calc_equity_curve_smoothness(equity: &[f64]) -> f64 {
+pub fn calc_equity_jerkiness(equity: &[f64]) -> f64 {
     if equity.len() < 3 {
         return 0.0;
     }

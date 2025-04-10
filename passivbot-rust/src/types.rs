@@ -258,10 +258,10 @@ pub struct Analysis {
     pub loss_profit_ratio: f64,
 
     pub equity_choppiness: f64,
-    pub equity_curve_smoothness: f64,
+    pub equity_jerkiness: f64,
     pub exponential_fit_error: f64,
     pub equity_choppiness_w: f64,
-    pub equity_curve_smoothness_w: f64,
+    pub equity_jerkiness_w: f64,
     pub exponential_fit_error_w: f64,
 
     pub positions_held_per_day: f64,
