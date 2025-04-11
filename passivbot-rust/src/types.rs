@@ -300,7 +300,7 @@ impl Default for Analysis {
             equity_balance_diff_pos_mean: 1.0,
             loss_profit_ratio: 1.0,
             equity_choppiness: 1.0,
-            equity_curve_smoothness: 1.0,
+            equity_jerkiness: 1.0,
             exponential_fit_error: 1.0,
             positions_held_per_day: 0.0,
             position_held_hours_mean: 0.0,
@@ -316,7 +316,7 @@ impl Default for Analysis {
             sterling_ratio_w: 0.0,
             loss_profit_ratio_w: 1.0,
             equity_choppiness_w: 1.0,
-            equity_curve_smoothness_w: 1.0,
+            equity_jerkiness_w: 1.0,
             exponential_fit_error_w: 1.0,
         }
     }
