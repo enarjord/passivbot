@@ -5,6 +5,11 @@ import json
 import passivbot_rust as pbr
 import asyncio
 import argparse
+import sys
+
+if sys.platform.startswith("win"):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from procedures import (
     utc_ms,
     make_get_filepath,
