@@ -16,10 +16,13 @@ Example:
 python3 src/optimize.py configs/template.json --start configs/starting_pool/
 ```
 
+Most config parameters can be modified via CLI. `python3 src/optimize.py -h` for more info.
+
 ## Optimization Process
 
 - Uses NSGA-II genetic algorithm to evolve configurations
-- Backtests across historical OHLCV data using shared memory for performance
+- Backtests across historical OHLCV data
+- Uses multiprocessing with shared memory for reduced RAM load
 - Maintains Pareto front of best-performing configurations
 - Enforces constraints via `optimize.limits`
 - Optimizes for multiple metrics via `optimize.scoring`
@@ -40,22 +43,19 @@ Contents:
 
 ## Analyzing Results
 
+Full analysis is included in each member of the Pareto front. Use
 ```bash
 python3 src/pareto_store.py optimize_results/.../pareto/
 ```
-
-Features:
-- 2D/3D metric visualization
-- Identifies ideal point and closest configuration
-- Optional JSON output with `--json` flag
+to produce a visualization. Supports plotting for 2 or 3 metrics.
 
 ## Performance Metrics
 
 ### Returns & Growth
 | Metric | Description |
 |--------|-------------|
-| `adg` / `adg_w` | Average Daily Gain (smoothed geometric) |
-| `mdg` / `mdg_w` | Median Daily Gain |
+| `adg` | Average Daily Gain (smoothed geometric) |
+| `mdg` | Median Daily Gain |
 | `gain` | Final Balance Gain (ratio of end/start balance) |
 
 ### Risk Metrics
@@ -72,12 +72,11 @@ Features:
 ### Ratios & Efficiency
 | Metric | Description |
 |--------|-------------|
-| `sharpe_ratio` / `sharpe_ratio_w` | Return-to-Volatility |
-| `sortino_ratio` / `sortino_ratio_w` | Return-to-Downside Volatility |
-| `calmar_ratio` / `calmar_ratio_w` | Return-to-Max Drawdown |
-| `sterling_ratio` / `sterling_ratio_w` | Return-to-Average Worst Drawdowns |
-| `omega_ratio` / `omega_ratio_w` | Probability-weighted ratio of gains to losses |
-| `loss_profit_ratio` / `loss_profit_ratio_w` | Total Loss / Total Profit |
+| `sharpe_ratio` | Return-to-Volatility |
+| `sortino_ratio` | Return-to-Downside Volatility |
+| `calmar_ratio` | Return-to-Max Drawdown |
+| `sterling_ratio` | Return-to-Average 1% Worst Drawdowns |
+| `omega_ratio` | `sum(pos_returns) / sum(abs(neg_returns))` where returns are daily equity pct changes |
 
 ### Position Metrics
 | Metric | Description |
@@ -91,11 +90,12 @@ Features:
 ### Equity Curve Quality
 | Metric | Description |
 |--------|-------------|
-| `equity_choppiness` / `equity_choppiness_w` | Normalized total variation (lower is smoother) |
-| `equity_curve_smoothness` / `equity_curve_smoothness_w` | Normalized mean absolute second derivative |
-| `exponential_fit_error` / `exponential_fit_error_w` | MSE from log-linear fit (lower = more consistent growth) |
+| `equity_choppiness` | Normalized total variation (lower is smoother) |
+| `equity_curve_smoothness` | Normalized mean absolute second derivative |
+| `exponential_fit_error` | MSE from log-linear fit (lower = more consistent growth) |
 
-> Metrics with `_w` suffix use recency-weighted means across time slices
+> Metrics with the \_w suffix use recency-weighted means across multiple time slices.
+Specifically, each \_w metric is computed as the average of the metric evaluated over 10 overlapping subsets of the equity curve: the entire period, last 1/2, last 1/3, ..., down to the last 1/10. This emphasizes recent performance while still accounting for longer-term behavior.
 
 ## Utilities
 
