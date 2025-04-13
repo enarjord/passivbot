@@ -205,8 +205,9 @@ When optimizing, parameter values are within the lower and upper bounds.
   - Default values are median daily gain and Sharpe ratio.
   - The script uses the NSGA-II algorithm (Non-dominated Sorting Genetic Algorithm II) for multi-objective optimization.
   - The fitness function is set up to minimize both objectives (converted to negative values internally).
-  - Options: adg, mdg, sharpe_ratio, sortino_ratio, omega_ratio, calmar_ratio, sterling_ratio
-  - Examples: ["mdg", "sharpe_ratio"], ["adg", "sortino_ratio"], ["sortino_ratio", "omega_ratio"]
+  - Full list of options: `[adg, adg_w, calmar_ratio, calmar_ratio_w, drawdown_worst, drawdown_worst_mean_1pct, equity_balance_diff_neg_max, equity_balance_diff_neg_mean, equity_balance_diff_pos_max, equity_balance_diff_pos_mean, expected_shortfall_1pct, gain, loss_profit_ratio, loss_profit_ratio_w, mdg, mdg_w, omega_ratio, omega_ratio_w, position_held_hours_max, position_held_hours_mean, position_held_hours_median, position_unchanged_hours_max, positions_held_per_day, sharpe_ratio, sharpe_ratio_w, sortino_ratio, sortino_ratio_w, sterling_ratio, sterling_ratio_w]`
+  - Suffix `_w` indicates mean across 10 temporal subsets (whole, last_half, last_third, ... last_tenth). The purpose is to weigh heavier data closer to present.
+  - Examples: ["mdg", "sharpe_ratio", "loss_profit_ratio"], ["adg", "sortino_ratio", "drawdown_worst"], ["sortino_ratio", "omega_ratio", "adg_w", "position_unchanged_hours_max"]
 
 ### Optimization Limits
 

@@ -257,6 +257,13 @@ pub struct Analysis {
     pub equity_balance_diff_pos_mean: f64,
     pub loss_profit_ratio: f64,
 
+    pub equity_choppiness: f64,
+    pub equity_jerkiness: f64,
+    pub exponential_fit_error: f64,
+    pub equity_choppiness_w: f64,
+    pub equity_jerkiness_w: f64,
+    pub exponential_fit_error_w: f64,
+
     pub positions_held_per_day: f64,
     pub position_held_hours_mean: f64,
     pub position_held_hours_max: f64,
@@ -292,12 +299,14 @@ impl Default for Analysis {
             equity_balance_diff_pos_max: 1.0,
             equity_balance_diff_pos_mean: 1.0,
             loss_profit_ratio: 1.0,
+            equity_choppiness: 1.0,
+            equity_jerkiness: 1.0,
+            exponential_fit_error: 1.0,
             positions_held_per_day: 0.0,
             position_held_hours_mean: 0.0,
             position_held_hours_max: 0.0,
             position_held_hours_median: 0.0,
             position_unchanged_hours_max: 0.0,
-
             adg_w: 0.0,
             mdg_w: 0.0,
             sharpe_ratio_w: 0.0,
@@ -306,6 +315,9 @@ impl Default for Analysis {
             calmar_ratio_w: 0.0,
             sterling_ratio_w: 0.0,
             loss_profit_ratio_w: 1.0,
+            equity_choppiness_w: 1.0,
+            equity_jerkiness_w: 1.0,
+            exponential_fit_error_w: 1.0,
         }
     }
 }

@@ -1577,30 +1577,42 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         return Analysis::default();
     }
     // Calculate daily equities
-    let mut daily_eqs = Vec::new();
+    let mut daily_eqs = Vec::new(); // stores last equity of each day
+    let mut daily_eqs_mins = Vec::new(); // stores min equity of each day
+
     let mut current_day = 0;
     let mut current_min = equities[0];
+    let mut last_equity = equities[0];
 
     for (i, &equity) in equities.iter().enumerate() {
         let day = i / 1440;
         if day > current_day {
-            daily_eqs.push(current_min);
+            daily_eqs.push(last_equity);
+            daily_eqs_mins.push(current_min);
             current_day = day;
             current_min = equity;
         } else {
             current_min = current_min.min(equity);
         }
+        last_equity = equity;
     }
-    if current_min != f64::INFINITY {
-        daily_eqs.push(current_min);
+
+    // Push final day’s values
+    if !equities.is_empty() {
+        daily_eqs.push(last_equity);
+        daily_eqs_mins.push(current_min);
     }
 
     // Calculate daily percentage changes
     let daily_eqs_pct_change: Vec<f64> =
         daily_eqs.windows(2).map(|w| (w[1] - w[0]) / w[0]).collect();
+    let daily_eqs_mins_pct_change: Vec<f64> = daily_eqs_mins
+        .windows(2)
+        .map(|w| (w[1] - w[0]) / w[0])
+        .collect();
 
     // Calculate ADG and standard metrics
-    let adg = daily_eqs_pct_change.iter().sum::<f64>() / daily_eqs_pct_change.len() as f64;
+    let adg = smoothed_terminal_geometric_adg(&daily_eqs);
     let mdg = {
         let mut sorted_pct_change = daily_eqs_pct_change.clone();
         sorted_pct_change.sort_by(|a, b| {
@@ -1624,18 +1636,18 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     };
 
     // Calculate variance and standard deviation
-    let variance = daily_eqs_pct_change
+    let variance = daily_eqs_mins_pct_change
         .iter()
         .map(|&x| (x - adg).powi(2))
         .sum::<f64>()
-        / daily_eqs_pct_change.len() as f64;
+        / daily_eqs_mins_pct_change.len() as f64;
     let std_dev = variance.sqrt();
 
     // Calculate Sharpe Ratio
     let sharpe_ratio = if std_dev != 0.0 { adg / std_dev } else { 0.0 };
 
     // Calculate Sortino Ratio (using downside deviation)
-    let downside_returns: Vec<f64> = daily_eqs_pct_change
+    let downside_returns: Vec<f64> = daily_eqs_mins_pct_change
         .iter()
         .filter(|&&x| x < 0.0)
         .cloned()
@@ -1671,7 +1683,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
 
     // Calculate Expected Shortfall (99%)
     let expected_shortfall_1pct = {
-        let mut sorted_returns = daily_eqs_pct_change.clone();
+        let mut sorted_returns = daily_eqs_mins_pct_change.clone();
         sorted_returns.sort_by(|a, b| {
             a.partial_cmp(b).unwrap_or_else(|| {
                 if a.is_nan() && b.is_nan() {
@@ -1683,7 +1695,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
                 }
             })
         });
-        let cutoff_index = (daily_eqs_pct_change.len() as f64 * 0.01) as usize;
+        let cutoff_index = (daily_eqs_mins_pct_change.len() as f64 * 0.01) as usize;
         if cutoff_index > 0 {
             sorted_returns[..cutoff_index]
                 .iter()
@@ -1696,7 +1708,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     };
 
     // Calculate drawdowns
-    let drawdowns = calc_drawdowns(&daily_eqs);
+    let drawdowns = calc_drawdowns(&daily_eqs_mins);
     let drawdown_worst_mean_1pct = {
         let mut sorted_drawdowns = drawdowns.clone();
         sorted_drawdowns.sort_by(|a, b| {
@@ -1878,6 +1890,9 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     } else {
         0.0
     };
+    let equity_choppiness = calc_equity_choppiness(&daily_eqs);
+    let equity_jerkiness = calc_equity_jerkiness(&daily_eqs);
+    let exponential_fit_error = calc_exponential_fit_error(&daily_eqs);
 
     let mut analysis = Analysis::default();
     analysis.adg = adg;
@@ -1901,6 +1916,9 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     analysis.position_held_hours_max = position_held_hours_max;
     analysis.position_held_hours_median = position_held_hours_median;
     analysis.position_unchanged_hours_max = position_unchanged_hours_max;
+    analysis.equity_choppiness = equity_choppiness;
+    analysis.equity_jerkiness = equity_jerkiness;
+    analysis.exponential_fit_error = exponential_fit_error;
 
     analysis
 }
@@ -1964,6 +1982,21 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         .map(|a| a.loss_profit_ratio)
         .sum::<f64>()
         / 10.0;
+    analysis.equity_choppiness_w = subset_analyses
+        .iter()
+        .map(|a| a.equity_choppiness)
+        .sum::<f64>()
+        / 10.0;
+    analysis.equity_jerkiness_w = subset_analyses
+        .iter()
+        .map(|a| a.equity_jerkiness)
+        .sum::<f64>()
+        / 10.0;
+    analysis.exponential_fit_error_w = subset_analyses
+        .iter()
+        .map(|a| a.exponential_fit_error)
+        .sum::<f64>()
+        / 10.0;
 
     analysis
 }
@@ -2004,4 +2037,100 @@ fn calc_drawdowns(equity_series: &[f64]) -> Vec<f64> {
         .zip(cumulative_max.iter())
         .map(|(&ret, &max)| (ret - max) / max)
         .collect()
+}
+
+/// Calculates the normalized total variation (sum of absolute first differences divided by net equity gain)
+pub fn calc_equity_choppiness(equity: &[f64]) -> f64 {
+    if equity.len() < 2 {
+        return 0.0;
+    }
+    let variation: f64 = equity.windows(2).map(|w| (w[1] - w[0]).abs()).sum();
+    let net_gain = equity.last().unwrap() - equity[0];
+    if net_gain.abs() < f64::EPSILON {
+        return f64::INFINITY; // Prevent division by near-zero
+    }
+    variation / net_gain.abs()
+}
+
+/// Calculates the normalized mean absolute second derivative
+/// (each second difference is divided by the mean of the 3 equity points)
+pub fn calc_equity_jerkiness(equity: &[f64]) -> f64 {
+    if equity.len() < 3 {
+        return 0.0;
+    }
+    equity
+        .windows(3)
+        .map(|w| {
+            let numerator = (w[2] - 2.0 * w[1] + w[0]).abs();
+            let denom = (w[0] + w[1] + w[2]) / 3.0;
+            if denom.abs() < f64::EPSILON {
+                0.0
+            } else {
+                numerator / denom.abs()
+            }
+        })
+        .sum::<f64>()
+        / (equity.len() - 2) as f64
+}
+
+/// Calculates the mean squared error from a log-linear (exponential) fit
+pub fn calc_exponential_fit_error(equity: &[f64]) -> f64 {
+    if equity.len() < 2 || equity.iter().any(|&x| x <= 0.0) {
+        return f64::INFINITY;
+    }
+
+    let n = equity.len();
+    let x: Vec<f64> = (0..n).map(|i| i as f64).collect();
+    let log_y: Vec<f64> = equity.iter().map(|&y| y.ln()).collect();
+
+    let sum_x = x.iter().sum::<f64>();
+    let sum_y = log_y.iter().sum::<f64>();
+    let sum_xx = x.iter().map(|v| v * v).sum::<f64>();
+    let sum_xy = x.iter().zip(log_y.iter()).map(|(x, y)| x * y).sum::<f64>();
+
+    let denom = (n as f64 * sum_xx - sum_x * sum_x);
+    if denom == 0.0 {
+        return f64::INFINITY;
+    }
+
+    let slope = (n as f64 * sum_xy - sum_x * sum_y) / denom;
+    let intercept = (sum_y - slope * sum_x) / n as f64;
+
+    let mse = x
+        .iter()
+        .zip(log_y.iter())
+        .map(|(x_i, y_i)| {
+            let y_hat = slope * x_i + intercept;
+            (y_hat - y_i).powi(2)
+        })
+        .sum::<f64>()
+        / n as f64;
+
+    mse
+}
+
+/// Applies EMA smoothing (span=3) to daily equity values and computes geometric mean growth rate
+pub fn smoothed_terminal_geometric_adg(daily_eqs: &[f64]) -> f64 {
+    if daily_eqs.len() < 2 {
+        return 0.0;
+    }
+    if daily_eqs[0] <= 0.0 {
+        return f64::INFINITY;
+    }
+    let alpha = 2.0 / (3.0 + 1.0); // span = 3 → alpha = 0.5
+    let mut smoothed = Vec::with_capacity(daily_eqs.len());
+    smoothed.push(daily_eqs[0]);
+    for i in 1..daily_eqs.len() {
+        let prev = *smoothed.last().unwrap();
+        let current = alpha * daily_eqs[i] + (1.0 - alpha) * prev;
+        smoothed.push(current);
+    }
+
+    let start = smoothed[0];
+    let end = *smoothed.last().unwrap();
+    if end <= 0.0 {
+        return -1.0;
+    }
+    let n_days = daily_eqs.len() as f64;
+    (end / start).powf(1.0 / n_days) - 1.0
 }

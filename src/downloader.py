@@ -1031,7 +1031,9 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
     unified_array = np.zeros((n_timesteps, n_coins, 4))
 
     # Second pass: Load data from disk and populate the unified array
-    logging.info(f"{exchange} Unifying data for {len(valid_coins)} coins into single numpy array...")
+    logging.info(
+        f"{exchange} Unifying data for {len(valid_coins)} coin{'s' if len(valid_coins) > 1 else ''} into single numpy array..."
+    )
     for i, coin in enumerate(tqdm(valid_coins, desc="Processing coins", unit="coin")):
         file_path = valid_coins[coin]
         ohlcv = np.load(file_path)
