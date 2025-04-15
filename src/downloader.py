@@ -977,9 +977,12 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
                 continue
             first_ts_plus_min_coin_age = first_timestamps_unified[coin] + min_coin_age_ms
             if first_ts_plus_min_coin_age >= end_ts:
+                coin_age_days = int(
+                    round(utc_ms() - first_timestamps_unified[coin]) / (1000 * 60 * 60 * 24)
+                )
                 logging.info(
-                    f"{exchange} Coin {coin}: Not traded due to min_coin_age {int(minimum_coin_age_days)} days"
-                    f"{ts_to_date_utc(first_ts_plus_min_coin_age)}. Skipping"
+                    f"{exchange} Coin {coin}: Not traded due to min_coin_age {int(minimum_coin_age_days)} days. "
+                    f"{coin} is {coin_age_days} days old. Skipping"
                 )
                 continue
             new_adjusted_start_ts = max(first_timestamps_unified[coin] + min_coin_age_ms, first_ts)
