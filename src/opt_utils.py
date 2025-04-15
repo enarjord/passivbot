@@ -2,6 +2,8 @@ import json
 import logging
 import math
 import msgpack
+from typing import Any
+import passivbot_rust as pbr
 
 
 def dominates(p0, p1):
@@ -152,3 +154,14 @@ def load_results(filepath):
             for full_config in apply_diffs([entry], base=current):
                 current = full_config
             yield current
+
+
+def round_floats(obj: Any, sig_digits: int = 6) -> Any:
+    if isinstance(obj, float):
+        return pbr.round_dynamic(obj, sig_digits)
+    elif isinstance(obj, dict):
+        return {k: round_floats(v, sig_digits) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [round_floats(v, sig_digits) for v in obj]
+    else:
+        return obj
