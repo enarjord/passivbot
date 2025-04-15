@@ -1,21 +1,10 @@
 import os
 import json
 import hashlib
-from typing import Any, Dict
+from typing import Dict
 import glob
 import math
-from opt_utils import calc_normalized_dist
-
-
-def round_floats(obj: Any, sig_digits: int = 6) -> Any:
-    if isinstance(obj, float):
-        return float(f"{obj:.{sig_digits}g}")
-    elif isinstance(obj, dict):
-        return {k: round_floats(v, sig_digits) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [round_floats(v, sig_digits) for v in obj]
-    else:
-        return obj
+from opt_utils import calc_normalized_dist, round_floats
 
 
 def hash_entry(entry: Dict) -> str:
