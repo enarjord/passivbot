@@ -752,12 +752,14 @@ def get_starting_configs(starting_configs: str):
     return extract_configs(starting_configs)
 
 
-def configs_to_individuals(cfgs, param_bounds):
+def configs_to_individuals(cfgs, param_bounds, sig_digits=0):
     inds = {}
     for cfg in cfgs:
         try:
             fcfg = format_config(cfg, verbose=False)
             individual = config_to_individual(fcfg, param_bounds)
+            if sig_digits > 0:
+                individual = round_floats(individual, sig_digits)
             inds[calc_hash(individual)] = individual
             # add duplicate of config, but with lowered total wallet exposure limit
             fcfg2 = deepcopy(fcfg)
@@ -1006,7 +1008,9 @@ async def main():
 
         bounds = [(low, high) for low, high in param_bounds.values()]
         starting_individuals = configs_to_individuals(
-            get_starting_configs(args.starting_configs), param_bounds
+            get_starting_configs(args.starting_configs),
+            param_bounds,
+            config["optimize"]["round_to_n_significant_digits"],
         )
         if (nstart := len(starting_individuals)) > (popsize := config["optimize"]["population_size"]):
             logging.info(f"Number of starting configs greater than population size.")
