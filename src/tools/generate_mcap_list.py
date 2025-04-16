@@ -77,6 +77,16 @@ def get_top_market_caps(n_coins, minimum_market_cap_millions, exchange=None):
         added = []
         disapproved = {}
         for elm in market_data:
+            circulating = elm.get("circulating_supply") or 0.0
+            total = elm.get("total_supply") or elm.get("max_supply") or 1.0  # Avoid divide-by-zero
+            price = elm.get("current_price") or 0.0
+            mcap = circulating * price
+            supply_ratio = circulating / total if total > 0 else 0.0
+            penalized_mcap = mcap * supply_ratio  # downweight based on concentration
+            elm["supply_ratio"] = supply_ratio
+            elm["penalized_mcap"] = penalized_mcap
+            elm["liquidity_ratio"] = elm["total_volume"] / elm["market_cap"]
+
             coin = elm["symbol"].upper()
             if len(approved_coins) >= n_coins:
                 print(f"N coins == {n_coins}")
@@ -159,4 +169,5 @@ if __name__ == "__main__":
     else:
         fname = args.output
     print(f"Dumping output to {fname}")
+    # json.dump(market_caps, open(fname.replace(".json", "_full.json"), "w"))
     json.dump(list(market_caps), open(fname, "w"))
