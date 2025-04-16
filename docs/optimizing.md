@@ -49,6 +49,34 @@ python3 src/pareto_store.py optimize_results/.../pareto/
 ```
 to produce a visualization. Supports plotting for 2 or 3 metrics.
 
+## Optimization Limits
+
+To enforce constraints during optimization, use the `optimize.limits` key. Each limit defines a threshold beyond which the configuration will be penalized. Penalty grows with severity of violation. CLI and config file formats are supported.
+
+### CLI Format:
+Example:
+```bash
+--limits "--penalize_if_greater_than_drawdown_worst 0.3 --penalize_if_lower_than_adg 0.001"
+```
+
+This will:
+- Penalize any config where `drawdown_worst > 0.3`
+- Penalize any config where `adg < 0.001`
+
+### Config Format:
+```json
+"limits": {
+  "penalize_if_greater_than_drawdown_worst": 0.3,
+  "penalize_if_lower_than_adg": 0.001
+}
+```
+
+### Notes:
+- If the limit key is just `metric_name`, the direction will be inferred from its scoring weight.
+- Metric names may be either plain (e.g., `adg` for regular backtest) or prefixed (e.g., `btc_adg` for BTC collateralized backtest).
+- Penalties are applied to the objective score; they do not disqualify a config.
+- Penalty magnitudes are exponentially scaled but capped to maintain stability.
+
 ## Performance Metrics
 
 ### Returns & Growth
@@ -106,3 +134,4 @@ from opt_utils import load_results
 for config in load_results("optimize_results/.../all_results.bin"):
     # Work with config
 ```
+
