@@ -1175,8 +1175,10 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
         # Check if coin is "too young": first_ts + min_coin_age >= end_ts
         # meaning there's effectively no eligible window to trade/backtest
         if coin_fts + min_coin_age_ms >= end_ts:
+            coin_age_days = int(round(utc_ms() - coin_fts) / (1000 * 60 * 60 * 24))
             logging.info(
-                f"Skipping coin {coin}: it does not satisfy the minimum_coin_age_days = {min_coin_age_days}"
+                f"Skipping coin {coin}: it does not satisfy the minimum_coin_age_days = {min_coin_age_days}. "
+                f"{coin} is {coin_age_days} days old."
             )
             continue
 
