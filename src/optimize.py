@@ -461,6 +461,10 @@ class Evaluator:
             "sterling_ratio": -1.0,
             "sterling_ratio_w": -1.0,
         }
+        self.scoring_prefix = (
+            "btc_" if self.config["backtest"].get("use_btc_collateral", False) else ""
+        )
+        self.build_limit_checks()
 
     def perturb_step_digits(self, individual, change_chance=0.5):
         perturbed = []
@@ -642,38 +646,62 @@ class Evaluator:
                     raise
         return analyses_combined
 
+    def build_limit_checks(self):
+        self.limit_checks = []
+        limits = self.config["optimize"].get("limits", {})
+        scoring_weights = self.scoring_weights
+
+        for i, full_key in enumerate(sorted(limits)):
+            bound = limits[full_key]
+
+            if full_key.startswith("penalize_if_greater_than_"):
+                metric = full_key[len("penalize_if_greater_than_") :]
+                penalize_if = "greater"
+            elif full_key.startswith("penalize_if_lower_than_"):
+                metric = full_key[len("penalize_if_lower_than_") :]
+                penalize_if = "lower"
+            else:
+                # Fallback for scoring_weight-based logic
+                metric = full_key
+                weight = scoring_weights.get(metric)
+                if weight is None:
+                    continue
+                penalize_if = "lower" if weight < 0 else "greater"
+            suffix = "min" if penalize_if == "lower" else "max"
+
+            self.limit_checks.append(
+                {
+                    "metric_key": f"{self.scoring_prefix}{metric}_{suffix}",
+                    "fallback_key": f"{metric}_{suffix}",
+                    "penalize_if": penalize_if,
+                    "bound": bound,
+                    "penalty_weight": min(10 ** (len(limits) - i), 1e6),
+                }
+            )
+
     def calc_fitness(self, analyses_combined):
         modifier = 0.0
-        limit_keys = sorted(self.config["optimize"]["limits"])
-        scoring_keys = sorted(self.config["optimize"]["scoring"])
-        n_objectives = len(scoring_keys)
-        i = len(limit_keys) + 1
-        prefix = "btc_" if self.config["backtest"]["use_btc_collateral"] else ""
-        for key in limit_keys:
-            keym = prefix + key.replace("lower_bound_", "") + "_max"
-            if keym not in analyses_combined:
-                keym = key.replace("lower_bound_", "") + "_max"
-                assert keym in analyses_combined, f"malformed key {keym}"
-            modifier += (
-                max(self.config["optimize"]["limits"][key], analyses_combined[keym])
-                - self.config["optimize"]["limits"][key]
-            ) * 10**i
-            i -= 1
-        if (
-            analyses_combined[f"{prefix}drawdown_worst_max"] >= 1.0
-            or analyses_combined[f"{prefix}equity_balance_diff_neg_max_max"] >= 1.0
-        ):
-            return tuple([modifier] * n_objectives)
-        else:
-            scores = []
-            for sk in scoring_keys:
-                skm = f"{prefix}{sk}_mean"
-                if skm not in analyses_combined:
-                    skm = f"{sk}_mean"
-                    assert skm in analyses_combined, f"invalid scoring key {sk}"
-                scores.append(modifier + (analyses_combined[skm] * self.scoring_weights[sk]))
-                # print(f"debug sk {sk} skm {skm} modifier {modifier} a[skm] {analyses_combined[skm]} sw[sk] {self.scoring_weights[sk]} mul {(analyses_combined[skm] * self.scoring_weights[sk])}")
-            return tuple(scores)
+        for check in self.limit_checks:
+            val = analyses_combined.get(check["metric_key"])
+            if val is None:
+                val = analyses_combined.get(check["fallback_key"])
+            if val is None:
+                continue
+
+            if check["penalize_if"] == "greater" and val > check["bound"]:
+                modifier += (val - check["bound"]) * (check["penalty_weight"])
+            elif check["penalize_if"] == "lower" and val < check["bound"]:
+                modifier += (check["bound"] - val) * (check["penalty_weight"])
+
+        scores = []
+        for sk in sorted(self.config["optimize"]["scoring"]):
+            val = analyses_combined.get(f"{self.scoring_prefix}{sk}_mean")
+            if val is None:
+                val = analyses_combined.get(f"{sk}_mean")
+            if val is None:
+                return None
+            scores.append(val * self.scoring_weights[sk] + modifier)
+        return tuple(scores)
 
     def __del__(self):
         if hasattr(self, "mmap_contexts"):
