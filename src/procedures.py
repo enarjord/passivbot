@@ -261,6 +261,36 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
             # preserving original behavior.
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
     result["optimize"]["scoring"] = sorted(result["optimize"]["scoring"])
+    result["optimize"]["limits"] = parse_limits_string(result["optimize"]["limits"])
+    return result
+
+
+def parse_limits_string(limits_str: Union[str, dict]) -> dict:
+    """
+    Parses a string like "--penalize_if_greater_than_drawdown_worst 0.3 --penalize_if_lower_than_gain 0.005"
+    into a dictionary like:
+    {
+        "penalize_if_greater_than_drawdown_worst": 0.3,
+        "penalize_if_lower_than_gain": 0.005,
+    }
+    """
+    print("debug a", limits_str)
+    if not limits_str:
+        return {}
+    if isinstance(limits_str, dict):
+        return limits_str
+    tokens = limits_str.replace(":", "").split("--")
+    result = {}
+    for token in tokens:
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            k, v = token.split()
+            result[k] = float(v)
+        except ValueError:
+            raise ValueError(f"Invalid limits format for token: {token}")
+    print("debug b", result)
     return result
 
 
@@ -1532,7 +1562,7 @@ def create_acronym(full_name, acronyms=set()):
             "backtest.",
             "live.",
             "optimize.bounds.",
-            "optimize.limits.lower_bound",
+            "optimize.limits.",
             "optimize.",
             "bot.",
         ]:
@@ -1573,6 +1603,9 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             type_ = type(value)
             if "bounds" in full_name:
                 type_ = comma_separated_values_float
+            if "limits" in full_name:
+                type_ = str
+                appendix = 'Example: "--loss_profit_ratio 0.5 --drawdown_worst 0.3333"'
             elif "approved_coins" in full_name:
                 acronym = "s"
                 type_ = comma_separated_values
