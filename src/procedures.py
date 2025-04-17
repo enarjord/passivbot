@@ -274,7 +274,6 @@ def parse_limits_string(limits_str: Union[str, dict]) -> dict:
         "penalize_if_lower_than_gain": 0.005,
     }
     """
-    print("debug a", limits_str)
     if not limits_str:
         return {}
     if isinstance(limits_str, dict):
@@ -290,7 +289,6 @@ def parse_limits_string(limits_str: Union[str, dict]) -> dict:
             result[k] = float(v)
         except ValueError:
             raise ValueError(f"Invalid limits format for token: {token}")
-    print("debug b", result)
     return result
 
 
