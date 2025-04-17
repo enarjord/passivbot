@@ -4,6 +4,7 @@ import hashlib
 from typing import Dict
 import glob
 import math
+import numpy as np
 from opt_utils import calc_normalized_dist, round_floats
 
 
@@ -173,6 +174,46 @@ class ParetoStore:
                 print(f"Failed to rename entry {h}: {e}")
 
 
+def compute_ideal(values_matrix, mode="min", weights=None, eps=1e-3, pct=10):
+    # values_matrix:  shape (n_points, n_obj)
+    if mode == "min":
+        return values_matrix.min(axis=0)
+
+    if mode == "weighted":
+        if weights is None:
+            raise ValueError("weights required")
+        vmin = values_matrix.min(axis=0)
+        vmax = values_matrix.max(axis=0)
+        return vmin + weights * (vmax - vmin)
+
+    if mode == "utopian":
+        mins = values_matrix.min(axis=0)
+        ranges = values_matrix.ptp(axis=0)
+        return mins - eps * ranges  # ε‑shift
+
+    if mode == "percentile":
+        return np.percentile(values_matrix, pct, axis=0)
+
+    if mode == "midrange":
+        return 0.5 * (values_matrix.min(axis=0) + values_matrix.max(axis=0))
+
+    if mode == "geomedian":
+        # one Weiszfeld step is already a good approximation
+        z = values_matrix.mean(axis=0)
+        for _ in range(10):
+            d = np.linalg.norm(values_matrix - z, axis=1)
+            w = np.where(d > 0, 1.0 / d, 0.0)
+            z_new = (values_matrix * w[:, None]).sum(axis=0) / w.sum()
+            if np.allclose(z, z_new, atol=1e-9):
+                break
+            z = z_new
+        return z
+
+    raise ValueError(f"unknown mode {mode}")
+
+def comma_separated_values_float(x):
+    return [float(z) for z in x.split(",")]
+
 def main():
     import argparse
     import matplotlib.pyplot as plt
@@ -182,6 +223,24 @@ def main():
     parser = argparse.ArgumentParser(description="Analyze and plot Pareto front")
     parser.add_argument("pareto_dir", type=str, help="Path to pareto/ directory")
     parser.add_argument("--json", action="store_true", help="Output summary as JSON")
+    parser.add_argument(
+        "-w",
+        "--weights",
+        type=comma_separated_values_float,
+        required=False,
+        dest="weights",
+        default=None,
+        help="Weight for ideal point offset. Default=(0.0) * n_objectives",
+    )
+    parser.add_argument(
+        "-m",
+        "--mode",
+        type=str,
+        required=False,
+        dest="mode",
+        default="weighted",
+        help="Mode for ideal point computation. Options: [min, weighted (default), geomedian]",
+    )
     args = parser.parse_args()
 
     pareto_dir = args.pareto_dir.rstrip("/")
@@ -192,6 +251,7 @@ def main():
     print(f"Found {len(store.hashes)} Pareto members.")
 
     points = []
+    filenames = {}
     w_keys = []
     for entry_path in entries:
         try:
@@ -203,6 +263,7 @@ def main():
             values = [entry.get("analyses_combined", {}).get(k) for k in w_keys]
             if all(v is not None for v in values):
                 points.append((*values, h))
+                filenames[h] = os.path.split(entry_path)[-1]
         except Exception as e:
             print(f"Error loading {h}: {e}")
 
@@ -213,7 +274,11 @@ def main():
     values_matrix = np.array([p[:-1] for p in points])
     hashes = [p[-1] for p in points]
 
-    ideal = np.min(values_matrix, axis=0)
+    weights = tuple([0.0] * values_matrix.shape[1]) if args.weights is None else args.weights
+    if len(weights) == 1:
+        weights = tuple([weights[0]] * values_matrix.shape[1])
+
+    ideal = compute_ideal(values_matrix, mode=args.mode, weights=weights)
     mins = np.min(values_matrix, axis=0)
     maxs = np.max(values_matrix, axis=0)
 
@@ -234,10 +299,10 @@ def main():
     dists = np.linalg.norm(norm_matrix - ideal_norm, axis=1)
     closest_idx = int(np.argmin(dists))
 
-    print("Ideal point:")
+    print(f"Ideal point ({args.mode}{' ' + str(weights) if args.mode == 'weighted' else ''})")
     for i, key in enumerate(w_keys):
         print(f"  {key} = {ideal[i]:.5f}")
-    print(f"Closest to ideal: {hashes[closest_idx]} | norm_dist={dists[closest_idx]:.5f}")
+    print(f"Closest to ideal: {filenames[hashes[closest_idx]]} | norm_dist={dists[closest_idx]:.5f}")
     for i, key in enumerate(w_keys):
         print(f"  {key} = {values_matrix[closest_idx][i]:.5f}")
 
@@ -247,6 +312,7 @@ def main():
             "ideal": {k: float(ideal[i]) for i, k in enumerate(w_keys)},
             "closest": {
                 "hash": hashes[closest_idx],
+
                 **{k: float(values_matrix[closest_idx][i]) for i, k in enumerate(w_keys)},
                 "normalized_distance": float(dists[closest_idx]),
             },
