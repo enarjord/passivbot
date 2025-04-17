@@ -675,7 +675,7 @@ class Evaluator:
                     "fallback_key": f"{metric}_{suffix}",
                     "penalize_if": penalize_if,
                     "bound": bound,
-                    "penalty_weight": min(10 ** (len(limits) - i), 1e6),
+                    "penalty_weight": 1e6,
                 }
             )
 
