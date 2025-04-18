@@ -851,13 +851,13 @@ async def main():
     )
     if args.config_path is None:
         logging.info(f"loading default template config configs/template.json")
-        config = load_config("configs/template.json", verbose=False)
+        config = load_config("configs/template.json", verbose=True)
     else:
         logging.info(f"loading config {args.config_path}")
-        config = load_config(args.config_path, verbose=False)
+        config = load_config(args.config_path, verbose=True)
     old_config = deepcopy(config)
     update_config_with_args(config, args)
-    config = format_config(config, verbose=False)
+    config = format_config(config, verbose=True)
     await add_all_eligible_coins_to_config(config)
     try:
         # Prepare data for each exchange
