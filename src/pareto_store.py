@@ -5,6 +5,7 @@ from typing import Dict
 import glob
 import math
 import numpy as np
+import itertools
 from opt_utils import calc_normalized_dist, round_floats
 
 
@@ -211,8 +212,10 @@ def compute_ideal(values_matrix, mode="min", weights=None, eps=1e-3, pct=10):
 
     raise ValueError(f"unknown mode {mode}")
 
+
 def comma_separated_values_float(x):
     return [float(z) for z in x.split(",")]
+
 
 def main():
     import argparse
@@ -241,6 +244,12 @@ def main():
         default="weighted",
         help="Mode for ideal point computation. Options: [min, weighted (default), geomedian]",
     )
+    parser.add_argument(
+        "--limit",
+        dest="limits",
+        nargs="*",
+        help='Limit filters (needs quotes), e.g., "w_0<1.0", "w_1<-0.0006", "w_2<1.0"',
+    )
     args = parser.parse_args()
 
     pareto_dir = args.pareto_dir.rstrip("/")
@@ -253,6 +262,38 @@ def main():
     points = []
     filenames = {}
     w_keys = []
+    metric_names, metric_name_map = None, None
+
+    import operator
+    import re
+
+    OPERATORS = {
+        "<": operator.lt,
+        "<=": operator.le,
+        ">": operator.gt,
+        ">=": operator.ge,
+        "==": operator.eq,
+        "=": operator.eq,
+    }
+
+    def parse_limit_expr(expr: str):
+        for op_str in ["<=", ">=", "<", ">", "==", "="]:
+            if op_str in expr:
+                key, val = expr.split(op_str)
+                key, val = key.strip(), float(val.strip())
+                return key, OPERATORS[op_str], val
+        raise ValueError(f"Invalid limit expression: {expr}")
+
+    limit_checks = []
+    if args.limits:
+        for expr in args.limits:
+            try:
+                key, op_fn, val = parse_limit_expr(expr)
+                limit_checks.append((key, op_fn, val))
+            except Exception as e:
+                print(f"Skipping invalid limit expression '{expr}': {e}")
+    print("limit_checks", limit_checks)
+
     for entry_path in entries:
         try:
             with open(entry_path) as f:
@@ -260,6 +301,14 @@ def main():
             h = os.path.splitext(os.path.basename(entry_path))[0].split("_")[-1]
             if not w_keys:
                 w_keys = sorted(k for k in entry.get("analyses_combined", {}) if k.startswith("w_"))
+            if metric_names is None:
+                metric_names = entry.get("optimize", {}).get("scoring", [])
+                metric_name_map = {f"w_{i}": name for i, name in enumerate(metric_names)}
+            if any(
+                not op(entry.get("analyses_combined", {}).get(key, float("inf")), val)
+                for key, op, val in limit_checks
+            ):
+                continue
             values = [entry.get("analyses_combined", {}).get(k) for k in w_keys]
             if all(v is not None for v in values):
                 points.append((*values, h))
@@ -273,6 +322,9 @@ def main():
 
     values_matrix = np.array([p[:-1] for p in points])
     hashes = [p[-1] for p in points]
+    if values_matrix.shape[1] != len(w_keys):
+        print("Mismatch between values and keys!")
+        exit(1)
 
     weights = tuple([0.0] * values_matrix.shape[1]) if args.weights is None else args.weights
     if len(weights) == 1:
@@ -300,11 +352,15 @@ def main():
     closest_idx = int(np.argmin(dists))
 
     print(f"Ideal point ({args.mode}{' ' + str(weights) if args.mode == 'weighted' else ''})")
+    paddings = {k: len(v) for k, v in metric_name_map.items()}
+    paddings = {k: max(paddings.values()) - v for k, v in paddings.items()}
     for i, key in enumerate(w_keys):
-        print(f"  {key} = {ideal[i]:.5f}")
+        print(f"  {key} ({metric_name_map[key]}) {' ' * paddings[key]} = {ideal[i]:.5f}")
     print(f"Closest to ideal: {filenames[hashes[closest_idx]]} | norm_dist={dists[closest_idx]:.5f}")
     for i, key in enumerate(w_keys):
-        print(f"  {key} = {values_matrix[closest_idx][i]:.5f}")
+        print(
+            f"  {key} ({metric_name_map[key]}) {' ' * paddings[key]} = {values_matrix[closest_idx][i]:.5f}"
+        )
 
     if args.json:
         summary = {
@@ -312,7 +368,6 @@ def main():
             "ideal": {k: float(ideal[i]) for i, k in enumerate(w_keys)},
             "closest": {
                 "hash": hashes[closest_idx],
-
                 **{k: float(values_matrix[closest_idx][i]) for i, k in enumerate(w_keys)},
                 "normalized_distance": float(dists[closest_idx]),
             },
@@ -406,31 +461,41 @@ def main():
         )
 
         fig.show()
-    else:
-        ax = fig.add_subplot(111)
-        ax.plot(range(len(w_keys)), values_matrix[closest_idx], marker="o")
-        ax.set_xticks(range(len(w_keys)))
-        ax.set_xticklabels(w_keys, rotation=45)
-        ax.set_title("Closest to Ideal Point")
-        ax.grid(True)
+    elif len(w_keys) > 3:
+        # Pairwise 2D scatter plots for all w_i vs w_j
+        n = len(w_keys)
+        pairs = list(itertools.combinations(range(n), 2))
+        fig, axs = plt.subplots(
+            nrows=int(np.ceil(len(pairs) / 3)),
+            ncols=3,
+            figsize=(15, 4 * int(np.ceil(len(pairs) / 3))),
+        )
+        axs = axs.flatten()
 
-        ax = fig.add_subplot(111, projection="3d" if len(w_keys) == 3 else None)
-        if len(w_keys) == 3:
-            ax.scatter(
-                values_matrix[:, 0], values_matrix[:, 1], values_matrix[:, 2], label="Pareto Members"
+        for i, (ix, iy) in enumerate(pairs):
+            ax = axs[i]
+            sc = ax.scatter(
+                values_matrix[:, ix],
+                values_matrix[:, iy],
+                c=dists,
+                cmap="viridis",
+                s=20,
+                alpha=0.8,
             )
-            ax.set_xlabel(w_keys[0])
-            ax.set_ylabel(w_keys[1])
-            ax.set_zlabel(w_keys[2])
-        else:
-            ax.plot(range(len(w_keys)), values_matrix[closest_idx], marker="o")
-            ax.set_xticks(range(len(w_keys)))
-            ax.set_xticklabels(w_keys, rotation=45)
-            ax.set_title("Closest to Ideal Point")
+            ax.set_xlabel(w_keys[ix])
+            ax.set_ylabel(w_keys[iy])
+            ax.set_title(f"{w_keys[ix]} vs {w_keys[iy]}")
+            ax.grid(True)
 
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
+        # Hide unused subplots
+        for j in range(len(pairs), len(axs)):
+            fig.delaxes(axs[j])
+
+        fig.suptitle("Pairwise Objective Scatter Plots", fontsize=16)
+        fig.tight_layout()
+        fig.subplots_adjust(top=0.93)
+        cbar = fig.colorbar(sc, ax=axs.tolist(), shrink=0.95)
+        cbar.set_label("Distance to Ideal")
         plt.show()
 
 
