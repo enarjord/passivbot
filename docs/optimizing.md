@@ -73,7 +73,7 @@ This will:
 
 ### Notes:
 - If the limit key is just `metric_name`, the direction will be inferred from its scoring weight.
-- Metric names may be either plain (e.g., `adg` for regular backtest) or prefixed (e.g., `btc_adg` for BTC collateralized backtest).
+- Metric names may be either plain (e.g., `adg` for USD collateralized backtest) or prefixed with "\_btc" (e.g., `btc_adg` for BTC collateralized backtest).
 - Penalties are applied to the objective score; they do not disqualify a config.
 - Penalty magnitudes are exponentially scaled but capped to maintain stability.
 
