@@ -427,6 +427,36 @@ class Evaluator:
         self.scoring_weights = {
             "adg": -1.0,
             "adg_w": -1.0,
+            "btc_adg": -1.0,
+            "btc_adg_w": -1.0,
+            "btc_calmar_ratio": -1.0,
+            "btc_calmar_ratio_w": -1.0,
+            "btc_drawdown_worst": 1.0,
+            "btc_drawdown_worst_mean_1pct": 1.0,
+            "btc_equity_balance_diff_neg_max": 1.0,
+            "btc_equity_balance_diff_neg_mean": 1.0,
+            "btc_equity_balance_diff_pos_max": 1.0,
+            "btc_equity_balance_diff_pos_mean": 1.0,
+            "btc_equity_choppiness": 1.0,
+            "btc_equity_choppiness_w": 1.0,
+            "btc_equity_jerkiness": 1.0,
+            "btc_equity_jerkiness_w": 1.0,
+            "btc_expected_shortfall_1pct": 1.0,
+            "btc_exponential_fit_error": 1.0,
+            "btc_exponential_fit_error_w": 1.0,
+            "btc_gain": -1.0,
+            "btc_loss_profit_ratio": 1.0,
+            "btc_loss_profit_ratio_w": 1.0,
+            "btc_mdg": -1.0,
+            "btc_mdg_w": -1.0,
+            "btc_omega_ratio": -1.0,
+            "btc_omega_ratio_w": -1.0,
+            "btc_sharpe_ratio": -1.0,
+            "btc_sharpe_ratio_w": -1.0,
+            "btc_sortino_ratio": -1.0,
+            "btc_sortino_ratio_w": -1.0,
+            "btc_sterling_ratio": -1.0,
+            "btc_sterling_ratio_w": -1.0,
             "calmar_ratio": -1.0,
             "calmar_ratio_w": -1.0,
             "drawdown_worst": 1.0,
@@ -461,9 +491,6 @@ class Evaluator:
             "sterling_ratio": -1.0,
             "sterling_ratio_w": -1.0,
         }
-        self.scoring_prefix = (
-            "btc_" if self.config["backtest"].get("use_btc_collateral", False) else ""
-        )
         self.build_limit_checks()
 
     def perturb_step_digits(self, individual, change_chance=0.5):
@@ -671,8 +698,7 @@ class Evaluator:
 
             self.limit_checks.append(
                 {
-                    "metric_key": f"{self.scoring_prefix}{metric}_{suffix}",
-                    "fallback_key": f"{metric}_{suffix}",
+                    "metric_key": f"{metric}_{suffix}",
                     "penalize_if": penalize_if,
                     "bound": bound,
                     "penalty_weight": 1e6,
@@ -684,8 +710,6 @@ class Evaluator:
         for check in self.limit_checks:
             val = analyses_combined.get(check["metric_key"])
             if val is None:
-                val = analyses_combined.get(check["fallback_key"])
-            if val is None:
                 continue
 
             if check["penalize_if"] == "greater" and val > check["bound"]:
@@ -695,7 +719,7 @@ class Evaluator:
 
         scores = []
         for sk in sorted(self.config["optimize"]["scoring"]):
-            val = analyses_combined.get(f"{self.scoring_prefix}{sk}_mean")
+            val = analyses_combined.get(f"{sk}_mean")
             if val is None:
                 val = analyses_combined.get(f"{sk}_mean")
             if val is None:
