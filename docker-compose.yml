@@ -1,9 +1,14 @@
 services:
   passivbot:
     build: .
+    image: passivbot:latest
     container_name: passivbot
     restart: unless-stopped
     volumes:
       - ./:/app/
-    command: python passivbot.py binance_01 XMRUSDT live_configs/binance_default.json
+    working_dir: /app
+    # Default command runs src/main.py; override as needed
+    #command: python src/main.py configs/template.json
+    #command: python src/backtest.py configs/examples/top20mcap.json
+    #command: python src/optimize.py configs/template.json
     
