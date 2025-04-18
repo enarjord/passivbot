@@ -134,9 +134,9 @@
               "crossover_probability": 0.7,
               "enable_overrides": [],
               "iters": 300000,
-              "limits": "--drawdown_worst 0.333 --loss_profit_ratio: 0.9 --position_unchanged_hours_max 300.0",
+              "limits": "--btc_drawdown_worst 0.333 --loss_profit_ratio: 0.9 --position_unchanged_hours_max 300.0",
               "mutation_probability": 0.2,
               "n_cpus": 5,
               "population_size": 500,
               "round_to_n_significant_digits": 5,
-              "scoring": ["calmar_ratio", "mdg", "omega_ratio"]}}
+              "scoring": ["btc_adg", "btc_mdg", "btc_omega_ratio"]}}
