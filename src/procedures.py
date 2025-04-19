@@ -262,6 +262,13 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
     result["optimize"]["scoring"] = sorted(result["optimize"]["scoring"])
     result["optimize"]["limits"] = parse_limits_string(result["optimize"]["limits"])
+    for k, v in sorted(result["optimize"]["limits"].items()):
+        if k.startswith("lower_bound_"):
+            new_k = k.replace("lower_bound_", "penalize_if_greater_than_")
+            result["optimize"]["limits"][new_k] = v
+            if verbose:
+                print(f"changed config.optimize.limits.{k} -> {new_k}")
+            del result["optimize"]["limits"][k]
     if not result["backtest"]["use_btc_collateral"]:
         for i in range(len(result["optimize"]["scoring"])):
             val = result["optimize"]["scoring"][i]
