@@ -5,7 +5,6 @@ import passivbot_rust as pbr
 import asyncio
 import argparse
 import multiprocessing
-import subprocess
 import mmap
 from multiprocessing import Queue, Process
 from collections import defaultdict
@@ -1079,10 +1078,12 @@ async def main():
                 ]
                 population[i] = creator.Individual(adjusted)
 
+            # populate up to half of the population with duplicates of random choices within starting configs
+            # duplicates will be perturbed during runtime
             for i in range(len(starting_individuals), len(population) // 2):
-                mutant = deepcopy(population[np.random.choice(range(len(starting_individuals)))])
-                toolbox.mutate(mutant)
-                population[i] = mutant
+                population[i] = deepcopy(
+                    population[np.random.choice(range(len(starting_individuals)))]
+                )
 
         logging.info(f"Initial population size: {len(population)}")
 
@@ -1101,6 +1102,7 @@ async def main():
 
         # Run the optimization
         logging.info(f"Starting optimize...")
+        return
         population, logbook = algorithms.eaMuPlusLambda(
             population,
             toolbox,
