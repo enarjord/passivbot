@@ -177,28 +177,28 @@ class ParetoStore:
 
 def compute_ideal(values_matrix, mode="min", weights=None, eps=1e-3, pct=10):
     # values_matrix:  shape (n_points, n_obj)
-    if mode == "min":
+    if mode in ["m", "min"]:
         return values_matrix.min(axis=0)
 
-    if mode == "weighted":
+    if mode in ["w", "weighted"]:
         if weights is None:
             raise ValueError("weights required")
         vmin = values_matrix.min(axis=0)
         vmax = values_matrix.max(axis=0)
         return vmin + weights * (vmax - vmin)
 
-    if mode == "utopian":
+    if mode in ["u", "utopian"]:
         mins = values_matrix.min(axis=0)
         ranges = values_matrix.ptp(axis=0)
         return mins - eps * ranges  # ε‑shift
 
-    if mode == "percentile":
+    if mode in ["p", "percentile"]:
         return np.percentile(values_matrix, pct, axis=0)
 
-    if mode == "midrange":
+    if mode in ["mi", "midrange"]:
         return 0.5 * (values_matrix.min(axis=0) + values_matrix.max(axis=0))
 
-    if mode == "geomedian":
+    if mode in ["g", "geomedian"]:
         # one Weiszfeld step is already a good approximation
         z = values_matrix.mean(axis=0)
         for _ in range(10):
@@ -242,10 +242,12 @@ def main():
         required=False,
         dest="mode",
         default="weighted",
-        help="Mode for ideal point computation. Options: [min, weighted (default), geomedian]",
+        help="Mode for ideal point computation. Default=min. Options: [min (m), weighted (w), geomedian (g)]",
     )
     parser.add_argument(
+        "-l",
         "--limit",
+        "--limits",
         dest="limits",
         nargs="*",
         help='Limit filters (needs quotes), e.g., "w_0<1.0", "w_1<-0.0006", "w_2<1.0"',
@@ -253,6 +255,8 @@ def main():
     args = parser.parse_args()
 
     pareto_dir = args.pareto_dir.rstrip("/")
+    if not pareto_dir.endswith("pareto"):
+        pareto_dir += "/pareto"
     entries = sorted(glob.glob(os.path.join(pareto_dir, "*.json")))
     print(f"Found {len(entries)} Pareto members.")
 
@@ -289,10 +293,9 @@ def main():
         for expr in args.limits:
             try:
                 key, op_fn, val = parse_limit_expr(expr)
-                limit_checks.append((key, op_fn, val))
+                limit_checks.append((key + "_mean", op_fn, val))
             except Exception as e:
                 print(f"Skipping invalid limit expression '{expr}': {e}")
-    print("limit_checks", limit_checks)
 
     for entry_path in entries:
         try:
