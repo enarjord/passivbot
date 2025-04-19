@@ -1102,7 +1102,6 @@ async def main():
 
         # Run the optimization
         logging.info(f"Starting optimize...")
-        return
         population, logbook = algorithms.eaMuPlusLambda(
             population,
             toolbox,
