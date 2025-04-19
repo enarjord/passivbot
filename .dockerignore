@@ -1,0 +1,4 @@
+backtests/
+caches/
+historical_data/
+optimize_results/
