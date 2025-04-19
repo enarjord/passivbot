@@ -164,23 +164,36 @@ def attempt_gap_fix_ohlcvs(df, symbol=None):
     return new_df.reset_index().rename(columns={"index": "timestamp"})
 
 
-async def fetch_url(session, url):
-    async with session.get(url) as response:
-        response.raise_for_status()
-        return await response.read()
+async def fetch_url(session, url, retries=5, backoff=1.5):
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            async with session.get(url) as response:
+                response.raise_for_status()
+                return await response.read()
+        except Exception as e:
+            last_exc = e
+            wait_time = backoff**attempt
+            logging.warning(
+                f"Attempt {attempt + 1} failed for {url}: {e}, retrying in {wait_time:.1f}s..."
+            )
+            await asyncio.sleep(wait_time)
+    logging.error(f"All {retries} attempts failed for {url}")
+    raise last_exc
 
 
 async def fetch_zips(url):
-    try:
-        async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as session:
+        try:
             content = await fetch_url(session, url)
-        zips = []
-        with zipfile.ZipFile(BytesIO(content), "r") as z:
-            for f in z.namelist():
-                zips.append(z.open(f))
-        return zips
-    except Exception as e:
-        logging.error(f"Error fetching zips {url}: {e}")
+            zips = []
+            with zipfile.ZipFile(BytesIO(content), "r") as z:
+                for f in z.namelist():
+                    zips.append(z.open(f))
+            return zips
+        except Exception as e:
+            logging.error(f"Error fetching zips {url}: {e}")
+            return []
 
 
 async def get_zip_binance(url):
