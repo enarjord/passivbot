@@ -119,7 +119,7 @@ This will:
 | Metric | Description |
 |--------|-------------|
 | `equity_choppiness` | Normalized total variation (lower is smoother) |
-| `equity_curve_smoothness` | Normalized mean absolute second derivative |
+| `equity_jerkiness` | Normalized mean absolute second derivative |
 | `exponential_fit_error` | MSE from log-linear fit (lower = more consistent growth) |
 
 > Metrics with the \_w suffix use recency-weighted means across multiple time slices.
