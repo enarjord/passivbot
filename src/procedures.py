@@ -145,28 +145,33 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                 result[key] = deepcopy(template[key])
     else:
         raise Exception(f"failed to format config")
-    for k0, v0, v1 in [
-        ("close_trailing_qty_pct", 1.0, [0.05, 1.0]),
-        (
-            "filter_rolling_window",
+    for pside in ["long", "short"]:
+        for k0, v0, v1 in [
+            ("close_trailing_qty_pct", 1.0, [0.05, 1.0]),
             (
-                result["live"]["ohlcv_rolling_window"]
-                if "ohlcv_rolling_window" in result["live"]
-                else 60.0
+                "entry_trailing_double_down_factor",
+                result["bot"][pside]["entry_grid_double_down_factor"],
+                [0.05, 3.0],
             ),
-            [10.0, 1440.0],
-        ),
-        (
-            "filter_relative_volume_clip_pct",
             (
-                result["live"]["relative_volume_filter_clip_pct"]
-                if "relative_volume_filter_clip_pct" in result["live"]
-                else 0.5
+                "filter_rolling_window",
+                (
+                    result["live"]["ohlcv_rolling_window"]
+                    if "ohlcv_rolling_window" in result["live"]
+                    else 60.0
+                ),
+                [10.0, 1440.0],
             ),
-            [0.0, 1.0],
-        ),
-    ]:
-        for pside in ["long", "short"]:
+            (
+                "filter_relative_volume_clip_pct",
+                (
+                    result["live"]["relative_volume_filter_clip_pct"]
+                    if "relative_volume_filter_clip_pct" in result["live"]
+                    else 0.5
+                ),
+                [0.0, 1.0],
+            ),
+        ]:
             if k0 not in result["bot"][pside]:
                 result["bot"][pside][k0] = v0
                 if verbose:
@@ -176,6 +181,7 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                 result["optimize"]["bounds"][opt_key] = v1
                 if verbose:
                     print(f"adding missing optimize parameter {pside} {opt_key}: {v1}")
+    result["bot"] = sort_dict_keys(result["bot"])
     for k0, src, dst in [
         ("live", "minimum_market_age_days", "minimum_coin_age_days"),
         ("live", "noisiness_rolling_mean_window_size", "ohlcv_rolling_window"),
