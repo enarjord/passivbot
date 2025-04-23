@@ -30,11 +30,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calc_pnl_short, m)?)?;
     m.add_function(wrap_pyfunction!(calc_wallet_exposure, m)?)?;
     m.add_function(wrap_pyfunction!(calc_new_psize_pprice, m)?)?;
-    m.add_function(wrap_pyfunction!(calc_grid_entry_long_py, m)?)?;
-    m.add_function(wrap_pyfunction!(calc_trailing_entry_long_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_next_entry_long_py, m)?)?;
-    m.add_function(wrap_pyfunction!(calc_trailing_close_long_py, m)?)?;
-    m.add_function(wrap_pyfunction!(calc_grid_close_long_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_next_close_long_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_entries_long_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_next_entry_short_py, m)?)?;

@@ -109,6 +109,7 @@ pub struct BotParams {
     pub entry_grid_spacing_pct: f64,
     pub entry_initial_ema_dist: f64,
     pub entry_initial_qty_pct: f64,
+    pub entry_trailing_double_down_factor: f64,
     pub entry_trailing_retracement_pct: f64,
     pub entry_trailing_grid_ratio: f64,
     pub entry_trailing_threshold_pct: f64,

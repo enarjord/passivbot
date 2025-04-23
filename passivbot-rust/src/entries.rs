@@ -85,6 +85,7 @@ pub fn calc_reentry_qty(
     entry_price: f64,
     balance: f64,
     position_size: f64,
+    double_down_factor: f64,
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
 ) -> f64 {
@@ -92,7 +93,7 @@ pub fn calc_reentry_qty(
         calc_min_entry_qty(entry_price, &exchange_params),
         round_(
             f64::max(
-                position_size.abs() * bot_params.entry_grid_double_down_factor,
+                position_size.abs() * double_down_factor,
                 cost_to_qty(balance, entry_price, exchange_params.c_mult)
                     * bot_params.wallet_exposure_limit
                     * bot_params.entry_initial_qty_pct,
@@ -214,6 +215,7 @@ pub fn calc_grid_entry_long(
             reentry_price,
             state_params.balance,
             position.size,
+            bot_params.entry_grid_double_down_factor,
             exchange_params,
             bot_params,
         ),
@@ -255,6 +257,7 @@ pub fn calc_grid_entry_long(
             next_reentry_price,
             state_params.balance,
             psize_if_filled,
+            bot_params.entry_grid_double_down_factor,
             exchange_params,
             bot_params,
         ),
@@ -491,6 +494,7 @@ pub fn calc_trailing_entry_long(
             reentry_price,
             state_params.balance,
             position.size,
+            bot_params.entry_trailing_double_down_factor,
             &exchange_params,
             &bot_params,
         ),
@@ -590,6 +594,7 @@ pub fn calc_grid_entry_short(
             reentry_price,
             state_params.balance,
             position_size_abs,
+            bot_params.entry_grid_double_down_factor,
             exchange_params,
             bot_params,
         ),
@@ -631,6 +636,7 @@ pub fn calc_grid_entry_short(
             next_reentry_price,
             state_params.balance,
             psize_if_filled,
+            bot_params.entry_grid_double_down_factor,
             exchange_params,
             bot_params,
         ),
@@ -779,6 +785,7 @@ pub fn calc_trailing_entry_short(
             reentry_price,
             state_params.balance,
             position_size_abs,
+            bot_params.entry_trailing_double_down_factor,
             &exchange_params,
             &bot_params,
         ),
