@@ -258,17 +258,19 @@ impl<'a> Backtest<'a> {
             _ => panic!("Invalid pside"),
         };
 
-        // Early return if all coins are already eligible
         if self.n_coins <= n_positions {
             return (0..self.n_coins).collect();
         }
+        let volume_filtered = self.filter_by_relative_volume(k, pside);
+        self.rank_by_noisiness(k, &volume_filtered, pside)
+    }
 
-        let n_eligible = match pside {
-            LONG => self.n_eligible_long,
-            SHORT => self.n_eligible_short,
+    fn filter_by_relative_volume(&mut self, k: usize, pside: usize) -> Vec<usize> {
+        let bot_params = match pside {
+            LONG => &self.bot_params_pair.long,
+            SHORT => &self.bot_params_pair.short,
             _ => panic!("Invalid pside"),
         };
-
         let window = bot_params.filter_rolling_window;
         let start_k = k.saturating_sub(window);
 
@@ -284,12 +286,9 @@ impl<'a> Backtest<'a> {
             _ => panic!("Invalid pside"),
         };
 
-        // Use the pre-allocated buffer for volume indices
         let volume_indices = self.volume_indices_buffer.as_mut().unwrap();
 
-        // Update rolling volume sums
         if k > window && k - *prev_k < window {
-            // Rolling calculation
             let safe_start = (*prev_k).saturating_sub(window);
             for idx in 0..self.n_coins {
                 rolling_volume_sum[idx] -=
@@ -298,7 +297,6 @@ impl<'a> Backtest<'a> {
                 volume_indices[idx] = (rolling_volume_sum[idx], idx);
             }
         } else {
-            // Full calculation
             for idx in 0..self.n_coins {
                 rolling_volume_sum[idx] = self.hlcvs.slice(s![start_k..k, idx, VOLUME]).sum();
                 volume_indices[idx] = (rolling_volume_sum[idx], idx);
@@ -306,29 +304,45 @@ impl<'a> Backtest<'a> {
         }
         *prev_k = k;
 
-        // Sort by volume in descending order
         volume_indices.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
 
-        // Calculate noisiness for top n_eligible coins
-        let actual_n_eligible = n_eligible.min(self.n_coins);
-        let mut noisinesses = Vec::with_capacity(actual_n_eligible);
+        let n_eligible = match pside {
+            LONG => self.n_eligible_long,
+            SHORT => self.n_eligible_short,
+            _ => panic!("Invalid pside"),
+        };
+        volume_indices
+            .iter()
+            .take(n_eligible.min(self.n_coins))
+            .map(|&(_, idx)| idx)
+            .collect()
+    }
 
-        for &(_, idx) in volume_indices.iter().take(actual_n_eligible) {
-            let noisiness: f64 = self
-                .hlcvs
-                .slice(s![start_k..k, idx, ..])
-                .axis_iter(Axis(0))
-                .map(|row| (row[HIGH] - row[LOW]) / row[CLOSE])
-                .sum();
-            noisinesses.push((noisiness, idx));
-        }
+    fn rank_by_noisiness(&self, k: usize, candidates: &[usize], pside: usize) -> Vec<usize> {
+        let bot_params = match pside {
+            LONG => &self.bot_params_pair.long,
+            SHORT => &self.bot_params_pair.short,
+            _ => panic!("Invalid pside"),
+        };
+        let start_k = k.saturating_sub(bot_params.filter_rolling_window);
 
-        // Sort by noisiness in descending order
+        let mut noisinesses: Vec<(f64, usize)> = candidates
+            .iter()
+            .map(|&idx| {
+                let noisiness: f64 = self
+                    .hlcvs
+                    .slice(s![start_k..k, idx, ..])
+                    .axis_iter(Axis(0))
+                    .map(|row| (row[HIGH] - row[LOW]) / row[CLOSE])
+                    .sum();
+                (noisiness, idx)
+            })
+            .collect();
+
         noisinesses.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
-
-        // Return indices sorted by noisiness
         noisinesses.into_iter().map(|(_, idx)| idx).collect()
     }
+
     pub fn run(&mut self) -> (Vec<Fill>, Equities) {
         let check_points: Vec<usize> = (0..7).map(|i| i * 60 * 24).collect();
         let n_timesteps = self.hlcvs.shape()[0];
@@ -1612,7 +1626,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         .collect();
 
     // Calculate ADG and standard metrics
-    let adg = smoothed_terminal_geometric_adg(&daily_eqs);
+    let (gain, adg) = smoothed_terminal_geometric_gain_and_adg(&daily_eqs);
     let mdg = {
         let mut sorted_pct_change = daily_eqs_pct_change.clone();
         sorted_pct_change.sort_by(|a, b| {
@@ -1792,8 +1806,6 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     } else {
         0.0
     };
-
-    let gain = fills[fills.len() - 1].balance_usd_total / fills[0].balance_usd_total;
 
     // Calculate profit factor
     let (total_profit, total_loss) = fills.iter().fold((0.0, 0.0), |(profit, loss), fill| {
@@ -2110,12 +2122,12 @@ pub fn calc_exponential_fit_error(equity: &[f64]) -> f64 {
 }
 
 /// Applies EMA smoothing (span=3) to daily equity values and computes geometric mean growth rate
-pub fn smoothed_terminal_geometric_adg(daily_eqs: &[f64]) -> f64 {
+pub fn smoothed_terminal_geometric_gain_and_adg(daily_eqs: &[f64]) -> (f64, f64) {
     if daily_eqs.len() < 2 {
-        return 0.0;
+        return (0.0, 0.0);
     }
     if daily_eqs[0] <= 0.0 {
-        return f64::INFINITY;
+        return (f64::INFINITY, f64::INFINITY);
     }
     let alpha = 2.0 / (3.0 + 1.0); // span = 3 → alpha = 0.5
     let mut smoothed = Vec::with_capacity(daily_eqs.len());
@@ -2129,8 +2141,9 @@ pub fn smoothed_terminal_geometric_adg(daily_eqs: &[f64]) -> f64 {
     let start = smoothed[0];
     let end = *smoothed.last().unwrap();
     if end <= 0.0 {
-        return -1.0;
+        return (-1.0, -1.0);
     }
     let n_days = daily_eqs.len() as f64;
-    (end / start).powf(1.0 / n_days) - 1.0
+    let gain = end / start;
+    (gain, gain.powf(1.0 / n_days) - 1.0)
 }
