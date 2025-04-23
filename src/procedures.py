@@ -151,7 +151,7 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
             (
                 "entry_trailing_double_down_factor",
                 result["bot"][pside]["entry_grid_double_down_factor"],
-                [0.05, 3.0],
+                [0.01, 3.0],
             ),
             (
                 "filter_rolling_window",
