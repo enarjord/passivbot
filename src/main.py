@@ -152,4 +152,5 @@ def manage_rust_compilation():
 if __name__ == "__main__":
     manage_rust_compilation()
     from passivbot import main
+
     asyncio.run(main())
