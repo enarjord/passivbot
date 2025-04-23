@@ -2284,6 +2284,10 @@ def setup_bot(config):
         from exchanges.gateio import GateIOBot
 
         bot = GateIOBot(config)
+    elif user_info["exchange"] == "defx":
+        from exchanges.defx import DefxBot
+
+        bot = DefxBot(config)
     else:
         raise Exception(f"unknown exchange {user_info['exchange']}")
     return bot
