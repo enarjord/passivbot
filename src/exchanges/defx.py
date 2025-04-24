@@ -5,6 +5,7 @@ import ccxt.async_support as ccxt_async
 import asyncio
 import traceback
 import numpy as np
+import passivbot_rust as pbr
 from pure_funcs import (
     floatify,
     ts_to_date_utc,
@@ -52,14 +53,17 @@ class DefxBot(Passivbot):
             self.qty_steps[symbol] = elm["precision"]["amount"]
             self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
+            self.max_leverage[symbol] = int(elm["limits"]["leverage"]["max"])
 
     async def watch_balance(self):
         # TODO
+        return
         while True:
             try:
                 if self.stop_websocket:
                     break
                 res = await self.ccp.watch_balance()
+                print("debug kkkk", res)
                 self.handle_balance_update(res)
             except Exception as e:
                 logging.error(f"exception watch_balance {e}")
@@ -67,16 +71,13 @@ class DefxBot(Passivbot):
                 await asyncio.sleep(1)
 
     async def watch_orders(self):
-        # TODO
         while True:
             try:
                 if self.stop_websocket:
                     break
                 res = await self.ccp.watch_orders()
                 for order in res:
-                    order["position_side"] = (
-                        order.get("info", {}).get("positionSide", "unknown").lower()
-                    )
+                    order["position_side"] = self.determine_pos_side(order)
                     order["qty"] = order["amount"]
                 self.handle_order_update(res)
             except Exception as e:
@@ -122,13 +123,18 @@ class DefxBot(Passivbot):
             for p in fetched_positions:
                 positions.append(
                     {
-                        "symbol": self.get_symbol_id_inv(p["symbol"]),
-                        "position_side": p["info"]["positionSide"].lower(),
-                        "size": float(p["contracts"]),
-                        "price": float(p["entryPrice"]),
+                        **p,
+                        **{
+                            "symbol": p["symbol"],
+                            "position_side": p["info"]["positionSide"].lower(),
+                            "size": float(p["contracts"]),
+                            "price": float(p["entryPrice"]),
+                        },
                     }
                 )
-            balance = float(fetched_balance[self.quote]["total"])
+            balance = float(fetched_balance[self.quote]["total"]) + sum(
+                [float(p["info"]["marginAmount"]) for p in fetched_positions]
+            )
             return positions, balance
         except Exception as e:
             logging.error(f"error fetching positions and balance {e}")
@@ -185,18 +191,21 @@ class DefxBot(Passivbot):
         )
 
     async def execute_order(self, order: dict) -> dict:
-        order_type = order["type"] if "type" in order else "limit"
-        executed = await self.cca.create_order(
-            symbol=order["symbol"],
-            type=order_type,
-            side=order["side"],
-            amount=abs(order["qty"]),
-            price=order["price"],
-            params={
+        # order_type = order["type"] if "type" in order else "limit"
+        order_type = "limit"
+        params = {
+            "symbol": order["symbol"],
+            "type": order_type,
+            "side": order["side"],
+            "amount": abs(order["qty"]),
+            "price": order["price"],
+            "params": {
                 "timeInForce": "GTC",
                 "reduceOnly": order["reduce_only"],
             },
-        )
+        }
+        print(params)
+        executed = await self.cca.create_order(**params)
         if "info" in executed and "orderId" in executed["info"]:
             for k in ["price", "id", "side", "position_side"]:
                 if k not in executed or executed[k] is None:
@@ -245,3 +254,43 @@ class DefxBot(Passivbot):
         )
         if verbose:
             logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
+
+    async def update_exchange_config_by_symbols(self, symbols):
+        coros_to_call_leverage = {}
+        for symbol in symbols:
+            try:
+                params = {
+                    "leverage": int(
+                        min(
+                            self.max_leverage[symbol],
+                            self.live_configs[symbol]["leverage"],
+                            pbr.round_up(
+                                max(
+                                    self.get_wallet_exposure_limit("long", symbol),
+                                    self.get_wallet_exposure_limit("short", symbol),
+                                )
+                                * 1.1,
+                                1,
+                            ),
+                        )
+                    ),
+                    "symbol": symbol,
+                }
+                print("debug update_exchange_config_by_symbols", params)
+                coros_to_call_leverage[symbol] = asyncio.create_task(self.cca.set_leverage(**params))
+            except Exception as e:
+                logging.error(f"{symbol}: error setting leverage {e}")
+        for symbol in symbols:
+            res = None
+            to_print = ""
+            try:
+                res = await coros_to_call_leverage[symbol]
+                to_print += f"set leverage {res}"
+            except Exception as e:
+                if '"code":"59107"' in e.args[0]:
+                    to_print += f" cross mode and leverage: {res} {e}"
+                else:
+                    logging.error(f"{symbol} error setting leverage {res} {e}")
+            if to_print:
+                logging.info(f"{symbol}: {to_print}")
+        return
