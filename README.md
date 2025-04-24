@@ -157,6 +157,7 @@ https://partner.bybit.com/b/passivbot
 https://partner.bitget.com/bg/Y8FU1W  
 https://www.okx.com/join/PASSIVBOT  (20% rebate)  
 https://app.hyperliquid.xyz/join/PASSIVBOT  
+https://app.defx.com/join/4DKR14  
 
 **Note on Binance**  
 To support continued Passivbot development, please use a Binance account which  

@@ -5,7 +5,8 @@
         "okx": "https://www.okx.com/join/PASSIVBOT",
         "binance": "https://accounts.binance.com/register?ref=TII4B07C",
         "gateio": "https://www.gate.io/signup/AQCRUVTE",
-        "hyperliquid": "https://app.hyperliquid.xyz/join/PASSIVBOT"
+        "hyperliquid": "https://app.hyperliquid.xyz/join/PASSIVBOT",
+        "defx": "https://app.defx.com/join/4DKR14"
     },
     "binance_01" : {
         "exchange": "binance",
