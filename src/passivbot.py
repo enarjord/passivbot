@@ -956,7 +956,7 @@ class Passivbot:
                     self.recent_fill = True
                     self.previous_REST_update_ts = 0
                     self.remove_order(upd, source="WS", reason="   filled")
-                elif upd["status"] in ["canceled", "cancelled", "expired", "rejected"]:
+                elif upd["status"].lower() in ["canceled", "cancelled", "expired", "rejected"]:
                     # remove order from open_orders
                     self.remove_order(
                         upd, source="WS", reason=upd["status"].replace("canceled", "cancelled")
