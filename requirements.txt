@@ -16,7 +16,7 @@ deap==1.4.1
 websockets==10.1
 aiohttp==3.8.1
 numpy==1.22.4
-ccxt==4.4.39
+ccxt==4.4.77
 hjson==3.0.2
 prettytable==3.0.0
 maturin==1.5.1
