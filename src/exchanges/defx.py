@@ -192,7 +192,8 @@ class DefxBot(Passivbot):
 
     async def execute_order(self, order: dict) -> dict:
         # order_type = order["type"] if "type" in order else "limit"
-        order_type = "limit"
+        order_type = "limit"  # only limit orders
+        reduce_only = False  # reduceOnly=True gives server error
         params = {
             "symbol": order["symbol"],
             "type": order_type,
@@ -201,7 +202,7 @@ class DefxBot(Passivbot):
             "price": order["price"],
             "params": {
                 "timeInForce": "GTC",
-                "reduceOnly": order["reduce_only"],
+                "reduceOnly": reduce_only,
             },
         }
         print(params)
