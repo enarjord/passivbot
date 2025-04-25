@@ -1044,7 +1044,7 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
     timestamps = np.arange(global_start_time, global_end_time + interval_ms, interval_ms)
 
     # Pre-allocate the unified array
-    unified_array = np.zeros((n_timesteps, n_coins, 4))
+    unified_array = np.full((n_timesteps, n_coins, 4), -1.0, dtype=np.float64)
 
     # Second pass: Load data from disk and populate the unified array
     logging.info(
@@ -1286,7 +1286,7 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
     pprint.pprint(dict(exchange_volume_ratios_mapped))
 
     # We'll store [high, low, close, volume] in the last dimension
-    unified_array = np.zeros((n_timesteps, n_coins, 4), dtype=np.float64)
+    unified_array = np.full((n_timesteps, n_coins, 4), -1.0, dtype=np.float64)
 
     # For each coin i, reindex its DataFrame onto the full timestamps
     for i, coin in enumerate(valid_coins):
@@ -1303,11 +1303,11 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
         df["high"] = df["high"].fillna(df["close"])
         df["low"] = df["low"].fillna(df["close"])
 
-        # Fill volume with 0.0 for missing bars, then apply scaling factor
-        df["volume"] = df["volume"].fillna(0.0)
+        # Apply scaling factor, then fill volume with -1.0 for missing bars
         exchange_for_this_coin = chosen_mss_per_coin[coin]["exchange"]
         scaling_factor = exchange_volume_ratios_mapped[exchange_for_this_coin][reference_exchange]
         df["volume"] *= scaling_factor
+        df["volume"] = df["volume"].fillna(-1.0)
 
         # Now extract columns in correct order
         coin_data = df[["high", "low", "close", "volume"]].values
