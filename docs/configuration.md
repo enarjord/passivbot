@@ -127,7 +127,7 @@ If a position is stuck, the bot uses profits from other positions to realize los
 
 Coins selected for trading are filtered by volume and noisiness. First, filter coins by volume, dropping a percentage of the lowest volume coins. Then, sort eligible coins by noisiness and select the top noisiest coins for trading.
 
-- **filter_relative_volume_clip_pct**: Volume filter; disapproves the lowest relative volume coins.
+- **filter_relative_volume_clip_pct**: Volume filter. Disapproves the lowest relative volume coins.
   - Example: `filter_relative_volume_clip_pct = 0.1` drops the 10% lowest volume coins. Set to `0` to allow all.
 - **filter_rolling_window**: Number of minutes to look into the past to compute volume and noisiness, used for dynamic coin selection in forager mode.
   - Noisiness is normalized relative range of 1m OHLCVs: `mean((high - low) / close)`.
