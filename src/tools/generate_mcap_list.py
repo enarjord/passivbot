@@ -3,6 +3,7 @@ import json
 import argparse
 import sys
 import os
+import traceback
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from pure_funcs import calc_hash, symbol_to_coin, ts_to_date_utc
@@ -10,14 +11,19 @@ from procedures import utc_ms
 
 
 def is_stablecoin(elm):
-    if elm["symbol"] in ["tether", "usdb", "usdy", "tusd", "usd0", "usde"]:
-        return True
-    if (
-        all([abs(elm[k] - 1.0) < 0.01 for k in ["high_24h", "low_24h", "current_price"]])
-        and abs(elm["price_change_24h"]) < 0.01
-    ):
-        return True
-    return False
+    try:
+        if elm["symbol"] in ["tether", "usdb", "usdy", "tusd", "usd0", "usde"]:
+            return True
+        if (
+            all([abs(elm[k] - 1.0) < 0.01 for k in ["high_24h", "low_24h", "current_price"]])
+            and abs(elm["price_change_24h"]) < 0.01
+        ):
+            return True
+        return False
+    except Exception as e:
+        print(f"error with is_stablecoin {elm} {e}")
+        traceback.print_exc()
+        return False
 
 
 def get_top_market_caps(n_coins, minimum_market_cap_millions, exchange=None):
