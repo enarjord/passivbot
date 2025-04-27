@@ -359,7 +359,9 @@ def main():
     paddings = {k: max(paddings.values()) - v for k, v in paddings.items()}
     for i, key in enumerate(w_keys):
         print(f"  {key} ({metric_name_map[key]}) {' ' * paddings[key]} = {ideal[i]:.5f}")
-    print(f"Closest to ideal: {filenames[hashes[closest_idx]]} | norm_dist={dists[closest_idx]:.5f}")
+    print(
+        f"Closest to ideal: {pareto_dir}/{filenames[hashes[closest_idx]]} | norm_dist={dists[closest_idx]:.5f}"
+    )
     for i, key in enumerate(w_keys):
         print(
             f"  {key} ({metric_name_map[key]}) {' ' * paddings[key]} = {values_matrix[closest_idx][i]:.5f}"
