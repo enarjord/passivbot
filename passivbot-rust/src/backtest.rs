@@ -193,11 +193,11 @@ impl<'a> Backtest<'a> {
         bot_params_pair_cloned.long.n_positions = n_coins.min(bot_params_pair.long.n_positions);
         bot_params_pair_cloned.short.n_positions = n_coins.min(bot_params_pair.short.n_positions);
         let n_eligible_long = bot_params_pair_cloned.long.n_positions.max(
-            (n_coins as f64 * (1.0 - bot_params_pair.long.filter_relative_volume_clip_pct)).round()
+            (n_coins as f64 * (1.0 - bot_params_pair.long.filter_volume_drop_pct)).round()
                 as usize,
         );
         let n_eligible_short = bot_params_pair_cloned.short.n_positions.max(
-            (n_coins as f64 * (1.0 - bot_params_pair.short.filter_relative_volume_clip_pct)).round()
+            (n_coins as f64 * (1.0 - bot_params_pair.short.filter_volume_drop_pct)).round()
                 as usize,
         );
         Backtest {
@@ -273,7 +273,7 @@ impl<'a> Backtest<'a> {
             SHORT => &self.bot_params_pair.short,
             _ => panic!("Invalid pside"),
         };
-        let window = bot_params.filter_rolling_window;
+        let window = bot_params.filter_volume_rolling_window;
         let start_k = k.saturating_sub(window);
 
         let (rolling_volume_sum, prev_k) = match pside {
@@ -326,7 +326,7 @@ impl<'a> Backtest<'a> {
             SHORT => &self.bot_params_pair.short,
             _ => panic!("Invalid pside"),
         };
-        let start_k = k.saturating_sub(bot_params.filter_rolling_window);
+        let start_k = k.saturating_sub(bot_params.filter_noisiness_rolling_window);
 
         let mut noisinesses: Vec<(f64, usize)> = candidates
             .iter()
