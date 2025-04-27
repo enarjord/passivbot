@@ -147,4 +147,4 @@
               "n_cpus": 5,
               "population_size": 1000,
               "round_to_n_significant_digits": 4,
-              "scoring": ["btc_adg", "btc_mdg", "btc_omega_ratio"]}}
+              "scoring": ["btc_adg_w", "btc_mdg_w", "btc_omega_ratio_w"]}}
