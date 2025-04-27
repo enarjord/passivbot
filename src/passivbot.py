@@ -406,8 +406,9 @@ class Passivbot:
             "total_wallet_exposure_limit",
             "unstuck_loss_allowance_pct",
             "unstuck_close_pct",
-            "filter_rolling_window",
-            "filter_relative_volume_clip_pct",
+            "filter_noisiness_rolling_window",
+            "filter_volume_rolling_window",
+            "filter_volume_drop_pct",
         }  # skip parameters affecting global behavior
         for pside in ["long", "short"]:
             self.config["bot"][pside]["n_positions"] = min(
@@ -819,7 +820,7 @@ class Passivbot:
             if candidates == []:
                 self.warn_on_high_effective_min_cost(pside)
             # filter coins by relative volume and noisiness
-            clip_pct = self.config["bot"][pside]["filter_relative_volume_clip_pct"]
+            clip_pct = self.config["bot"][pside]["filter_volume_drop_pct"]
             max_n_positions = self.get_max_n_positions(pside)
             if clip_pct > 0.0:
                 volumes = self.calc_volumes(pside, symbols=candidates)
@@ -1943,7 +1944,7 @@ class Passivbot:
         if eligible_symbols is None:
             eligible_symbols = self.eligible_symbols
         noisiness = {}
-        n = int(round(self.config["bot"][pside]["filter_rolling_window"]))
+        n = int(round(self.config["bot"][pside]["filter_noisiness_rolling_window"]))
         for symbol in eligible_symbols:
             if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
                 ohlcvs_1m = [v for v in self.ohlcvs_1m[symbol].values()[-n:]]
@@ -1953,7 +1954,7 @@ class Passivbot:
         return noisiness
 
     def calc_volumes(self, pside, symbols=None):
-        n = int(round(self.config["bot"][pside]["filter_rolling_window"]))
+        n = int(round(self.config["bot"][pside]["filter_volume_rolling_window"]))
         volumes = {}
         if symbols is None:
             symbols = self.get_symbols_approved_or_has_pos(pside)
