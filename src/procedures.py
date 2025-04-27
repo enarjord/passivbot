@@ -1136,8 +1136,12 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
         ccxt_clients[ex_name].options["defaultType"] = "swap"
     try:
         print("Loading markets for each exchange...")
-        await asyncio.gather(*(ccxt_clients[e].load_markets() for e in ccxt_clients))
-
+        load_tasks = [ccxt_clients[e].load_markets() for e in ccxt_clients]
+        results = await asyncio.gather(*load_tasks, return_exceptions=True)
+        for ex_name, res in zip(list(ccxt_clients.keys()), results):
+            if isinstance(res, Exception):
+                print(f"Warning: failed to load markets for {ex_name}: {res}")
+                ccxt_clients.pop(ex_name)
         # We'll fetch missing coins in batches of 10 to avoid overloading
         BATCH_SIZE = 10
         missing_coins = sorted(missing_coins)
@@ -1178,7 +1182,7 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
                                     f"Fetched {ex_name} {coin} => first candle: {data[0] if data else 'no data'}"
                                 )
                         except Exception as e:
-                            print(f"Error fetching {ex_name} {coin}: {e}")
+                            print(f"Warning: failed to fetch OHLCV for {coin} on {ex_name}: {e}")
 
             # Process results for each coin in this batch
             for coin in batch:
@@ -1222,7 +1226,9 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
         # Otherwise, return earliest cross-exchange timestamps
         return ftss
     finally:
-        await asyncio.gather(*(ccxt_clients[e].close() for e in ccxt_clients))
+        await asyncio.gather(
+            *(ccxt_clients[e].close() for e in ccxt_clients if hasattr(ccxt_clients[e], "close"))
+        )
 
 
 async def get_first_ohlcv_timestamps_new(symbols=None, exchange="binance"):
