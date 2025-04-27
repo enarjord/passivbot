@@ -135,7 +135,7 @@
                          "short_filter_rolling_window": [10, 360],
                          "short_filter_volume_drop_pct": [0, 1],
                          "short_filter_volume_rolling_window": [10, 1440],
-                         "short_n_positions": [0],
+                         "short_n_positions": [0, 0],
                          "short_total_wallet_exposure_limit": [0, 2],
                          "short_unstuck_close_pct": [0.001, 0.1],
                          "short_unstuck_ema_dist": [-0.1, 0.01],
