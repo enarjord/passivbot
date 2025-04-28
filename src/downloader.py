@@ -988,11 +988,10 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
                     f"{exchange} Coin {coin} too young, start date {ts_to_date_utc(first_ts)}. Skipping"
                 )
                 continue
-            first_ts_plus_min_coin_age = first_timestamps_unified[coin] + min_coin_age_ms
-            if first_ts_plus_min_coin_age >= end_ts:
-                coin_age_days = int(
-                    round(utc_ms() - first_timestamps_unified[coin]) / (1000 * 60 * 60 * 24)
-                )
+            coin_age_days = int(
+                round(utc_ms() - first_timestamps_unified[coin]) / (1000 * 60 * 60 * 24)
+            )
+            if coin_age_days < minimum_coin_age_days:
                 logging.info(
                     f"{exchange} Coin {coin}: Not traded due to min_coin_age {int(minimum_coin_age_days)} days. "
                     f"{coin} is {coin_age_days} days old. Skipping"
@@ -1186,9 +1185,8 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
             continue
 
         # Check if coin is "too young": first_ts + min_coin_age >= end_ts
-        # meaning there's effectively no eligible window to trade/backtest
-        if coin_fts + min_coin_age_ms >= end_ts:
-            coin_age_days = int(round(utc_ms() - coin_fts) / (1000 * 60 * 60 * 24))
+        coin_age_days = int(round(utc_ms() - coin_fts) / (1000 * 60 * 60 * 24))
+        if coin_age_days < min_coin_age_days:
             logging.info(
                 f"Skipping coin {coin}: it does not satisfy the minimum_coin_age_days = {min_coin_age_days}. "
                 f"{coin} is {coin_age_days} days old."
