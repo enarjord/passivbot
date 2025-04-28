@@ -193,8 +193,7 @@ impl<'a> Backtest<'a> {
         bot_params_pair_cloned.long.n_positions = n_coins.min(bot_params_pair.long.n_positions);
         bot_params_pair_cloned.short.n_positions = n_coins.min(bot_params_pair.short.n_positions);
         let n_eligible_long = bot_params_pair_cloned.long.n_positions.max(
-            (n_coins as f64 * (1.0 - bot_params_pair.long.filter_volume_drop_pct)).round()
-                as usize,
+            (n_coins as f64 * (1.0 - bot_params_pair.long.filter_volume_drop_pct)).round() as usize,
         );
         let n_eligible_short = bot_params_pair_cloned.short.n_positions.max(
             (n_coins as f64 * (1.0 - bot_params_pair.short.filter_volume_drop_pct)).round()
@@ -690,6 +689,7 @@ impl<'a> Backtest<'a> {
             println!("coin: {}", self.backtest_params.coins[idx]);
             println!("new_psize: {}", new_psize);
             println!("close order: {:?}", close_fill);
+            println!("bot config: {:?}", self.bot_params_pair.long);
             new_psize = 0.0;
             adjusted_close_qty = -self.positions.long[&idx].size;
         }
