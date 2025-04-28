@@ -106,6 +106,21 @@ def generate_diffs(dictlist):
         prev = d
 
 
+def deep_updated(base, diff):
+    out = {}  # build a fresh dict
+    keys = base.keys() | diff.keys()
+    for k in keys:
+        if k in diff:
+            v2 = diff[k]
+            if isinstance(v2, dict) and isinstance(base.get(k), dict):
+                out[k] = deep_updated(base[k], v2)
+            else:
+                out[k] = v2
+        else:
+            out[k] = base[k]
+    return out
+
+
 def generate_incremental_diff(prev, current):
     """Return the diff between two dicts."""
 
@@ -127,19 +142,10 @@ def generate_incremental_diff(prev, current):
 
 def apply_diffs(difflist, base=None):
     """Yield full dicts by applying diffs, supporting nested dicts."""
-
-    def deep_update(d, u):
-        for k, v in u.items():
-            if isinstance(v, dict) and isinstance(d.get(k), dict):
-                deep_update(d[k], v)
-            else:
-                d[k] = v
-        return d
-
     current = base or {}
-    for diff in difflist:
-        current = deep_update(current, diff.copy())
-        yield current.copy()
+    for d in difflist:
+        current = deep_updated(current, d)
+        yield current
 
 
 def load_results(filepath):
