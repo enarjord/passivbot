@@ -1131,17 +1131,36 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
 
     # Initialize ccxt clients for each exchange
     ccxt_clients = {}
-    for ex_name in exchange_map:
-        ccxt_clients[ex_name] = getattr(ccxta, ex_name)()
-        ccxt_clients[ex_name].options["defaultType"] = "swap"
+    for ex_name in sorted(exchange_map):
+        try:
+            ccxt_clients[ex_name] = getattr(ccxta, ex_name)()
+            ccxt_clients[ex_name].options["defaultType"] = "swap"
+        except Exception as e:
+            print(f"Error loading {ex_name} from ccxt. Skipping. {e}")
+            del exchange_map[ex_name]
+            if ex_name in ccxt_clients:
+                del ccxt_clients[ex_name]
     try:
         print("Loading markets for each exchange...")
-        load_tasks = [ccxt_clients[e].load_markets() for e in ccxt_clients]
-        results = await asyncio.gather(*load_tasks, return_exceptions=True)
-        for ex_name, res in zip(list(ccxt_clients.keys()), results):
-            if isinstance(res, Exception):
-                print(f"Warning: failed to load markets for {ex_name}: {res}")
-                ccxt_clients.pop(ex_name)
+        load_tasks = {}
+        for ex_name in sorted(ccxt_clients):
+            try:
+                load_tasks[ex_name] = ccxt_clients[ex_name].load_markets()
+            except Exception as e:
+                print(f"Error creating task for {ex_name}: {e}")
+                del ccxt_clients[ex_name]
+                if ex_name in exchange_map:
+                    del exchange_map[ex_name]
+        results = []
+        for ex_name, task in load_tasks.items():
+            try:
+                res = await task
+                results.append(res)
+            except Exception as e:
+                print(f"Warning: failed to load markets for {ex_name}: {e}")
+                del ccxt_clients[ex_name]
+                if ex_name in exchange_map:
+                    del exchange_map[ex_name]
         # We'll fetch missing coins in batches of 10 to avoid overloading
         BATCH_SIZE = 10
         missing_coins = sorted(missing_coins)
