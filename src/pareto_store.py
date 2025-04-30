@@ -467,41 +467,147 @@ def main():
 
         fig.show()
     elif len(w_keys) > 3:
-        # Pairwise 2D scatter plots for all w_i vs w_j
-        n = len(w_keys)
-        pairs = list(itertools.combinations(range(n), 2))
-        fig, axs = plt.subplots(
-            nrows=int(np.ceil(len(pairs) / 3)),
-            ncols=3,
-            figsize=(15, 4 * int(np.ceil(len(pairs) / 3))),
+        # More efficient implementation for high-dimensional Pareto fronts
+        # Focus only on essential visualizations and optimize performance
+        import pandas as pd
+
+        # Convert data to pandas DataFrame for easier handling
+        df = pd.DataFrame(values_matrix, columns=w_keys)
+        df["hash"] = hashes
+        df["dist_from_ideal"] = dists
+
+        # Sort by distance from ideal
+        df_sorted = df.sort_values("dist_from_ideal")
+
+        # Create a streamlined figure with just two key plots
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+        # 1. Parallel Coordinates - more efficient implementation
+        ax = axes[0]
+
+        # Only show the top 20 solutions to avoid clutter and improve performance
+        top_indices = df_sorted.index[:20]
+
+        # Plot in one batch for better performance
+        for i in top_indices:
+            if i == closest_idx:
+                ax.plot(range(len(w_keys)), norm_matrix[i], "r-", linewidth=2.5, alpha=0.9, zorder=5)
+            else:
+                ax.plot(range(len(w_keys)), norm_matrix[i], "b-", linewidth=1, alpha=0.3)
+
+        # Plot ideal point
+        ax.plot(range(len(w_keys)), ideal_norm, "go--", linewidth=2, markersize=8)
+
+        # Customize appearance
+        ax.set_xticks(range(len(w_keys)))
+        ax.set_xticklabels([metric_name_map.get(k, k) for k in w_keys], rotation=45, ha="right")
+        ax.set_ylim([0, 1])
+        ax.set_title("Parallel Coordinates (Top 20 Solutions)")
+        ax.grid(True, alpha=0.3)
+
+        # 2. Create a heatmap instead of a radar chart (more compatible)
+        ax = axes[1]
+
+        # Create correlation matrix
+        corr_matrix = np.zeros((len(w_keys), len(w_keys)))
+        for i, key1 in enumerate(w_keys):
+            for j, key2 in enumerate(w_keys):
+                vals1 = values_matrix[:, i]
+                vals2 = values_matrix[:, j]
+
+                # Calculate correlation
+                mean1, mean2 = np.mean(vals1), np.mean(vals2)
+                num = np.sum((vals1 - mean1) * (vals2 - mean2))
+                den = np.sqrt(np.sum((vals1 - mean1) ** 2) * np.sum((vals2 - mean2) ** 2))
+
+                if den != 0:
+                    corr_matrix[i, j] = num / den
+                else:
+                    corr_matrix[i, j] = 0
+
+        # Create heatmap
+        im = ax.imshow(corr_matrix, cmap="coolwarm", vmin=-1, vmax=1)
+
+        # Add colorbar
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label("Correlation")
+
+        # Add labels
+        ax.set_xticks(range(len(w_keys)))
+        ax.set_yticks(range(len(w_keys)))
+        ax.set_xticklabels([metric_name_map.get(k, k) for k in w_keys], rotation=45, ha="right")
+        ax.set_yticklabels([metric_name_map.get(k, k) for k in w_keys])
+
+        # Add correlation values as text
+        for i in range(len(w_keys)):
+            for j in range(len(w_keys)):
+                ax.text(
+                    j,
+                    i,
+                    f"{corr_matrix[i, j]:.2f}",
+                    ha="center",
+                    va="center",
+                    color="white" if abs(corr_matrix[i, j]) > 0.6 else "black",
+                )
+
+        ax.set_title("Objective Correlation Matrix")
+
+        plt.tight_layout()
+        # Print top 5 solutions in a compact table format
+        print("\nTop 5 Solutions Closest to Ideal:")
+        print("-" * 80)
+        header = f"{'Rank':<5} {'Hash':<16} {'Distance':<10} " + " ".join(
+            [f"{shorten_str(metric_name_map.get(k, k))[:8]:<10}" for k in w_keys]
         )
-        axs = axs.flatten()
+        print(header)
+        print("-" * 80)
 
-        for i, (ix, iy) in enumerate(pairs):
-            ax = axs[i]
-            sc = ax.scatter(
-                values_matrix[:, ix],
-                values_matrix[:, iy],
-                c=dists,
-                cmap="viridis",
-                s=20,
-                alpha=0.8,
-            )
-            ax.set_xlabel(w_keys[ix])
-            ax.set_ylabel(w_keys[iy])
-            ax.set_title(f"{w_keys[ix]} vs {w_keys[iy]}")
-            ax.grid(True)
+        for rank, (idx, row) in enumerate(df_sorted.head(5).iterrows(), 1):
+            values_str = " ".join([f"{row[k]:<10.4f}" for k in w_keys])
+            print(f"{rank:<5} {row['hash']:<16} {row['dist_from_ideal']:<10.4f} {values_str}")
 
-        # Hide unused subplots
-        for j in range(len(pairs), len(axs)):
-            fig.delaxes(axs[j])
+        # Print key insights
+        print("\nKey Insights:")
+        print("-" * 80)
 
-        fig.suptitle("Pairwise Objective Scatter Plots", fontsize=16)
-        fig.tight_layout()
-        fig.subplots_adjust(top=0.93)
-        cbar = fig.colorbar(sc, ax=axs.tolist(), shrink=0.95)
-        cbar.set_label("Distance to Ideal")
+        # Find strongly correlated objectives
+        strong_correlations = []
+        for i in range(len(w_keys)):
+            for j in range(i + 1, len(w_keys)):
+                corr = corr_matrix[i, j]
+                if abs(corr) > 0.65:
+                    relation = "positively correlated with" if corr > 0 else "trade-off with"
+                    strong_correlations.append((w_keys[i], w_keys[j], corr, relation))
+
+        if strong_correlations:
+            print("Strong relationships between objectives:")
+            for obj1, obj2, corr, relation in strong_correlations:
+                name1 = metric_name_map.get(obj1, obj1)
+                name2 = metric_name_map.get(obj2, obj2)
+                print(f"- {name1} is {relation} {name2} (correlation: {corr:.2f})")
+        else:
+            print("No strong correlations found between objectives.")
+
+        # Calculate diversity of solutions
+        diversity_scores = []
+        for i in range(len(w_keys)):
+            col_values = values_matrix[:, i]
+            min_val = min(col_values)
+            max_val = max(col_values)
+            diversity = max_val - min_val
+            diversity_scores.append((w_keys[i], diversity))
+
+        diversity_scores.sort(key=lambda x: x[1], reverse=True)
+        print("\nObjective diversity (range of values):")
+        for obj, score in diversity_scores:
+            name = metric_name_map.get(obj, obj)
+            print(f"- {name}: {score:.4f}")
+
         plt.show()
+
+
+def shorten_str(s: str) -> str:
+    return s  #''.join(c for c in s if c.lower() not in 'aeiou').replace('_', '')
 
 
 if __name__ == "__main__":
