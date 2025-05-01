@@ -396,7 +396,7 @@ class Passivbot:
         n_positions = self.get_max_n_positions(pside)
         if n_positions == 0:
             return False
-        if n_positions >= len(self.approved_coins[pside]):
+        if n_positions >= len(self.approved_coins_minus_ignored_coins[pside]):
             return False
         return True
 
@@ -652,7 +652,7 @@ class Passivbot:
             return symbol
 
     def is_approved(self, pside, symbol) -> bool:
-        if symbol not in self.approved_coins[pside]:
+        if symbol not in self.approved_coins_minus_ignored_coins[pside]:
             return False
         if symbol in self.ignored_coins[pside]:
             return False
@@ -813,12 +813,14 @@ class Passivbot:
         # filter coins by min effective cost
         # filter coins by relative volume
         # filter coins by noisiness
+        if self.forced_modes[pside]:
+            return []
+        candidates = self.approved_coins_minus_ignored_coins[pside]
+        candidates = [s for s in candidates if self.is_old_enough(pside, s)]
+        candidates = [s for s in candidates if self.effective_min_cost_is_low_enough(pside, s)]
+        if candidates == []:
+            self.warn_on_high_effective_min_cost(pside)
         if self.is_forager_mode(pside):
-            candidates = self.approved_coins_minus_ignored_coins[pside]
-            candidates = [s for s in candidates if self.is_old_enough(pside, s)]
-            candidates = [s for s in candidates if self.effective_min_cost_is_low_enough(pside, s)]
-            if candidates == []:
-                self.warn_on_high_effective_min_cost(pside)
             # filter coins by relative volume and noisiness
             clip_pct = self.config["bot"][pside]["filter_volume_drop_pct"]
             max_n_positions = self.get_max_n_positions(pside)
@@ -832,20 +834,22 @@ class Passivbot:
             noisiness = self.calc_noisiness(pside, eligible_symbols=candidates)
             noisiness = {k: v for k, v in sorted(noisiness.items(), key=lambda x: x[1], reverse=True)}
             ideal_coins = [k for k in noisiness.keys()][:max_n_positions]
-        elif self.forced_modes[pside]:
-            return []
         else:
-            # all approved coins are selected, no filtering
-            ideal_coins = sorted(self.approved_coins_minus_ignored_coins[pside])
+            # all approved coins are selected, no filtering by volume and noisiness
+            ideal_coins = sorted(candidates)
         return ideal_coins
 
     def warn_on_high_effective_min_cost(self, pside):
         if not self.config["live"]["filter_by_min_effective_cost"]:
             return
-        eligible_symbols_filtered = [
-            x for x in self.eligible_symbols if self.effective_min_cost_is_low_enough(pside, x)
+        if not self.is_pside_enabled(pside):
+            return
+        approved_coins_filtered = [
+            x
+            for x in self.approved_coins_minus_ignored_coins[pside]
+            if self.effective_min_cost_is_low_enough(pside, x)
         ]
-        if len(eligible_symbols_filtered) == 0:
+        if len(approved_coins_filtered) == 0:
             logging.info(
                 f"Warning: No {pside} symbols are approved due to min effective cost too high. "
                 + f"Suggestions: 1) increase account balance, 2) "
@@ -891,6 +895,12 @@ class Passivbot:
             if n_positions == 0:
                 return 0.0
             return round(twel / n_positions, 8)
+
+    def is_pside_enabled(self, pside):
+        return (
+            self.config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
+            and self.config["bot"][pside]["n_positions"] > 0.0
+        )
 
     def effective_min_cost_is_low_enough(self, pside, symbol):
         if not self.config["live"]["filter_by_min_effective_cost"]:
