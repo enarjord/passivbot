@@ -4,6 +4,7 @@ import hashlib
 from typing import Dict
 import glob
 import math
+import time
 import numpy as np
 import itertools
 from opt_utils import calc_normalized_dist, round_floats
@@ -19,9 +20,12 @@ def calc_dist(p0, p1):
 
 
 class ParetoStore:
-    def __init__(self, directory: str, sig_digits: int = 6):
+    def __init__(self, directory: str, sig_digits: int = 6, update_interval: str = 60):
         self.directory = directory
+        self.pareto_dir = os.path.join(self.directory, "pareto")
         self.sig_digits = sig_digits
+        self.update_interval = update_interval  # seconds
+        self._last_update_time = 0.0  # unix-epoch seconds
         os.makedirs(os.path.join(self.directory, "pareto"), exist_ok=True)
         self.index_path = os.path.join(self.directory, "index.json")
         self.hashes = set()
@@ -30,13 +34,22 @@ class ParetoStore:
     def hash_entry(self, entry):
         return hash_entry(entry)
 
-    def _load_index(self):
+    def _load_index_old(self):
         if os.path.exists(self.index_path):
             try:
                 with open(self.index_path, "r") as f:
                     self.hashes = set(json.load(f))
             except Exception as e:
                 print(f"Failed to load Pareto index: {e}")
+
+    def _load_index(self):
+        results = set()
+        for fname in os.listdir(self.pareto_dir):
+            if not fname.endswith(".json"):
+                continue
+            hash_part = fname.split("_")[-1][:-5]
+            results.add(hash_part)
+        self.hashes = results
 
     def _save_index(self):
         tmp_path = self.index_path + ".tmp"
@@ -62,7 +75,7 @@ class ParetoStore:
             self._save_index()
 
             # Recompute distances and rename all
-            self.rename_entries_with_distance()
+            self._maybe_update_front()
             return True
         except Exception as e:
             print(f"Failed to write Pareto entry {h}: {e}")
@@ -122,6 +135,8 @@ class ParetoStore:
         return tuple(ideal)
 
     def rename_entries_with_distance(self):
+        start_ts = time.time()
+        self._load_index()
         ideal = self.compute_ideal_point()
         if ideal is None:
             print("No valid entries to compute ideal point.")
@@ -173,6 +188,26 @@ class ParetoStore:
                 os.rename(old_path, new_path)
             except Exception as e:
                 print(f"Failed to rename entry {h}: {e}")
+        end_ts = time.time()
+        print(f"Time to perform rename_entries_with_distance: {end_ts - start_ts:.4f}s")
+
+    def _maybe_update_front(self) -> None:
+        """
+        Call ``rename_entries_with_distance`` only if at least
+        ``update_interval`` seconds have elapsed since the previous call.
+        """
+        now = time.time()
+        if now - self._last_update_time >= self.update_interval:
+            self.rename_entries_with_distance()
+            self._last_update_time = now
+
+    def flush_updates(self) -> None:
+        """
+        Run an *immediate* front update, ignoring the time guard.
+        Use this when the optimizer is about to exit.
+        """
+        self.rename_entries_with_distance()
+        self._last_update_time = time.time()
 
 
 def compute_ideal(values_matrix, mode="min", weights=None, eps=1e-3, pct=10):

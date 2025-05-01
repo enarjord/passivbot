@@ -63,7 +63,7 @@ def is_dominated(candidate, others):
     return False
 
 
-def results_writer_process(queue, results_dir, compress=True):
+def results_writer_process(queue, results_dir, store, compress=True):
     import time
     import logging
     import json
@@ -79,7 +79,6 @@ def results_writer_process(queue, results_dir, compress=True):
     n_objectives = None
     scoring_keys = None
 
-    store = ParetoStore(results_dir)
     results_filename = os.path.join(results_dir, "all_results.bin")
 
     try:
@@ -967,9 +966,10 @@ async def main():
         seen_hashes = manager.dict()
         duplicate_counter = manager.dict()
         duplicate_counter["count"] = 0
+        store = ParetoStore(results_dir)
         writer_process = Process(
             target=results_writer_process,
-            args=(results_queue, results_dir),
+            args=(results_queue, results_dir, store),
             kwargs={"compress": config["optimize"]["compress_results_file"]},
         )
         writer_process.start()
@@ -1133,6 +1133,18 @@ async def main():
             pool.close()
             pool.terminate()
             pool.join()
+
+        # ------------------------------------------------------------------
+        # Make *absolutely* sure the Pareto directory has fresh distance
+        # prefixes before we quit (even after Ctrl-C or an uncaught error).
+        # ------------------------------------------------------------------
+        try:
+            store.update_interval = 0.0
+            store.flush_updates()
+            logging.info("Final Pareto-front update completed.")
+        except Exception as e:
+            logging.error(f"Unable to flush Pareto front on shutdown: {e}")
+            traceback.print_exc()
 
         # Remove shared memory files (including BTC/USD)
         if "shared_memory_files" in locals():
