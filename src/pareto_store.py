@@ -6,8 +6,8 @@ import glob
 import math
 import time
 import numpy as np
-import itertools
-from opt_utils import calc_normalized_dist, round_floats
+import threading
+from opt_utils import calc_normalized_dist, round_floats, dominates
 
 
 def hash_entry(entry: Dict) -> str:
@@ -15,18 +15,21 @@ def hash_entry(entry: Dict) -> str:
     return hashlib.sha256(entry_str.encode("utf-8")).hexdigest()[:16]
 
 
-def calc_dist(p0, p1):
-    return math.sqrt((p0[0] - p1[0]) ** 2 + (p0[1] - p1[1]) ** 2)
-
-
 class ParetoStore:
-    def __init__(self, directory: str, sig_digits: int = 6, update_interval: str = 60):
+    def __init__(self, directory: str, sig_digits: int = 6, flush_interval: str = 60):
         self.directory = directory
         self.pareto_dir = os.path.join(self.directory, "pareto")
         self.sig_digits = sig_digits
-        self.update_interval = update_interval  # seconds
+        self.flush_interval = flush_interval  # seconds
         self._last_update_time = 0.0  # unix-epoch seconds
         os.makedirs(os.path.join(self.directory, "pareto"), exist_ok=True)
+        # --- in‑memory structures -----------------------------------------
+        self._entries: dict[str, dict] = {}  # hash -> full entry
+        self._objectives: dict[str, tuple] = {}  # hash -> objective vector
+        self._front: list[str] = []  # list of hashes (Pareto set)
+        # ------------------------------------------------------------------
+        self._last_flush_ts = time.time()
+        self._lock = threading.RLock()
         self.index_path = os.path.join(self.directory, "index.json")
         self.hashes = set()
         self._load_index()
@@ -194,10 +197,10 @@ class ParetoStore:
     def _maybe_update_front(self) -> None:
         """
         Call ``rename_entries_with_distance`` only if at least
-        ``update_interval`` seconds have elapsed since the previous call.
+        ``flush_interval`` seconds have elapsed since the previous call.
         """
         now = time.time()
-        if now - self._last_update_time >= self.update_interval:
+        if now - self._last_update_time >= self.flush_interval:
             self.rename_entries_with_distance()
             self._last_update_time = now
 
