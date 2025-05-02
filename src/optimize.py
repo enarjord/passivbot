@@ -53,6 +53,8 @@ from opt_utils import make_json_serializable, dominates, generate_incremental_di
 from pareto_store import ParetoStore
 import msgpack
 
+SENTINEL = object()
+
 
 def is_dominated(candidate, others):
     for other in others:
@@ -63,12 +65,12 @@ def is_dominated(candidate, others):
     return False
 
 
-def results_writer_process(queue, results_dir, store, compress=True):
-    import time
-    import logging
-    import json
-    from opt_utils import make_json_serializable, dominates
-    import os
+def results_writer_process(queue, results_dir, sig_digits, flush_interval, *, compress=True):
+    store = ParetoStore(
+        directory=results_dir,
+        sig_digits=sig_digits,
+        flush_interval=flush_interval,
+    )
 
     prev_data = None
     pareto_front = []
@@ -86,7 +88,7 @@ def results_writer_process(queue, results_dir, store, compress=True):
             packer = msgpack.Packer(use_bin_type=True)
             while True:
                 data = queue.get()
-                if data == "DONE":
+                if data is SENTINEL:
                     break
                 try:
                     # Write raw results (diffed if compress enabled)
@@ -159,6 +161,18 @@ def results_writer_process(queue, results_dir, store, compress=True):
 
     except Exception as e:
         logging.error(f"Results writer process error: {e}")
+    finally:
+        # ------------------------------------------------------------------
+        # Make *absolutely* sure the Pareto directory has fresh distance
+        # prefixes before we quit (even after Ctrl-C or an uncaught error).
+        # ------------------------------------------------------------------
+        try:
+            store.flush_interval = 0.0
+            store.flush_updates()
+            logging.info("Final Pareto-front update completed.")
+        except Exception as e1:
+            logging.error(f"Unable to flush Pareto front on shutdown: {e1}")
+            traceback.print_exc()
 
 
 def create_shared_memory_file(hlcvs):
@@ -424,9 +438,17 @@ class Evaluator:
         self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
         self.scoring_weights = {
             "adg": -1.0,
+            "adg_per_exposure_long": -1.0,
+            "adg_per_exposure_short": -1.0,
             "adg_w": -1.0,
+            "adg_w_per_exposure_long": -1.0,
+            "adg_w_per_exposure_short": -1.0,
             "btc_adg": -1.0,
+            "btc_adg_per_exposure_long": -1.0,
+            "btc_adg_per_exposure_short": -1.0,
             "btc_adg_w": -1.0,
+            "btc_adg_w_per_exposure_long": -1.0,
+            "btc_adg_w_per_exposure_short": -1.0,
             "btc_calmar_ratio": -1.0,
             "btc_calmar_ratio_w": -1.0,
             "btc_drawdown_worst": 1.0,
@@ -443,10 +465,16 @@ class Evaluator:
             "btc_exponential_fit_error": 1.0,
             "btc_exponential_fit_error_w": 1.0,
             "btc_gain": -1.0,
+            "btc_gain_per_exposure_long": -1.0,
+            "btc_gain_per_exposure_short": -1.0,
             "btc_loss_profit_ratio": 1.0,
             "btc_loss_profit_ratio_w": 1.0,
             "btc_mdg": -1.0,
+            "btc_mdg_per_exposure_long": -1.0,
+            "btc_mdg_per_exposure_short": -1.0,
             "btc_mdg_w": -1.0,
+            "btc_mdg_w_per_exposure_long": -1.0,
+            "btc_mdg_w_per_exposure_short": -1.0,
             "btc_omega_ratio": -1.0,
             "btc_omega_ratio_w": -1.0,
             "btc_sharpe_ratio": -1.0,
@@ -471,10 +499,16 @@ class Evaluator:
             "exponential_fit_error": 1.0,
             "exponential_fit_error_w": 1.0,
             "gain": -1.0,
+            "gain_per_exposure_long": -1.0,
+            "gain_per_exposure_short": -1.0,
             "loss_profit_ratio": 1.0,
             "loss_profit_ratio_w": 1.0,
             "mdg": -1.0,
+            "mdg_per_exposure_long": -1.0,
+            "mdg_per_exposure_short": -1.0,
             "mdg_w": -1.0,
+            "mdg_w_per_exposure_long": -1.0,
+            "mdg_w_per_exposure_short": -1.0,
             "omega_ratio": -1.0,
             "omega_ratio_w": -1.0,
             "position_held_hours_max": 1.0,
@@ -489,6 +523,7 @@ class Evaluator:
             "sterling_ratio": -1.0,
             "sterling_ratio_w": -1.0,
         }
+
         self.build_limit_checks()
 
     def perturb_step_digits(self, individual, change_chance=0.5):
@@ -966,10 +1001,12 @@ async def main():
         seen_hashes = manager.dict()
         duplicate_counter = manager.dict()
         duplicate_counter["count"] = 0
-        store = ParetoStore(results_dir)
-        writer_process = Process(
+        flush_interval = 60  # or read from your config
+        sig_digits = config["optimize"]["round_to_n_significant_digits"]
+
+        writer_process = multiprocessing.Process(
             target=results_writer_process,
-            args=(results_queue, results_dir, store),
+            args=(results_queue, results_dir, sig_digits, flush_interval),
             kwargs={"compress": config["optimize"]["compress_results_file"]},
         )
         writer_process.start()
@@ -1126,25 +1163,13 @@ async def main():
     finally:
         # Signal the writer process to shut down and wait for it
         if "results_queue" in locals():
-            results_queue.put("DONE")
+            results_queue.put(SENTINEL)
             writer_process.join()
         if "pool" in locals():
             logging.info("Closing and terminating the process pool...")
             pool.close()
             pool.terminate()
             pool.join()
-
-        # ------------------------------------------------------------------
-        # Make *absolutely* sure the Pareto directory has fresh distance
-        # prefixes before we quit (even after Ctrl-C or an uncaught error).
-        # ------------------------------------------------------------------
-        try:
-            store.update_interval = 0.0
-            store.flush_updates()
-            logging.info("Final Pareto-front update completed.")
-        except Exception as e:
-            logging.error(f"Unable to flush Pareto front on shutdown: {e}")
-            traceback.print_exc()
 
         # Remove shared memory files (including BTC/USD)
         if "shared_memory_files" in locals():
