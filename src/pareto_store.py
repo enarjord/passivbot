@@ -110,7 +110,7 @@ class ParetoStore:
             self._last_flush_ts = time.time()
 
     def _write_all_to_disk(self) -> None:
-        """Write each (distance‑prefixed) file.  Overwrite if newer Pareto rank."""
+        """Write each (distance‑prefixed) file. """
         if not self._front:
             return
 
@@ -127,6 +127,14 @@ class ParetoStore:
             dist_prefix = f"{dist:08.4f}"
             fname = f"{dist_prefix}_{h}.json"
             path = os.path.join(self.pareto_dir, fname)
+
+            # remove any obsolete files that have the same hash but an older prefix
+            for old in glob.glob(os.path.join(self.pareto_dir, f"*_{h}.json")):
+                if old != path:
+                    try:
+                        os.remove(old)
+                    except OSError as e:
+                        self._log.warning(f"Could not remove stale Pareto file {old}: {e}")
 
             # write if not present or contents changed
             if not os.path.exists(path):
@@ -474,8 +482,8 @@ def main():
         # 1. Parallel Coordinates - more efficient implementation
         ax = axes[0]
 
-        # Only show the top 20 solutions to avoid clutter and improve performance
-        top_indices = df_sorted.index[:20]
+        # Only show up to the top 100 solutions to avoid clutter and improve performance
+        top_indices = df_sorted.index[:100]
 
         # Plot in one batch for better performance
         for i in top_indices:
@@ -491,7 +499,7 @@ def main():
         ax.set_xticks(range(len(w_keys)))
         ax.set_xticklabels([metric_name_map.get(k, k) for k in w_keys], rotation=45, ha="right")
         ax.set_ylim([0, 1])
-        ax.set_title("Parallel Coordinates (Top 20 Solutions)")
+        ax.set_title(f"Parallel Coordinates (Top {len(top_indices)} Solutions)")
         ax.grid(True, alpha=0.3)
 
         # 2. Create a heatmap instead of a radar chart (more compatible)
@@ -590,7 +598,7 @@ def main():
         print("\nObjective diversity (range of values):")
         for obj, score in diversity_scores:
             name = metric_name_map.get(obj, obj)
-            print(f"- {name}: {score:.4f}")
+            print(f"- {name}: {pbr.round_dynamic(score, 4)}")
 
         plt.show()
 
