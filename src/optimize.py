@@ -49,27 +49,28 @@ import math
 import fcntl
 from tqdm import tqdm
 from optimizer_overrides import optimizer_overrides
-from opt_utils import make_json_serializable, dominates, generate_incremental_diff, round_floats
+from opt_utils import make_json_serializable, generate_incremental_diff, round_floats
 from pareto_store import ParetoStore
 import msgpack
 
-SENTINEL = object()
-
-
-def is_dominated(candidate, others):
-    for other in others:
-        if all(o <= c for o, c in zip(other, candidate)) and any(
-            o < c for o, c in zip(other, candidate)
-        ):
-            return True
-    return False
+logging.basicConfig(
+    format="%(asctime)s %(processName)-12s %(levelname)-8s %(message)s",
+    level=logging.INFO,
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
 
 
 def results_writer_process(queue, results_dir, sig_digits, flush_interval, *, compress=True):
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(processName)-12s %(levelname)-8s %(message)s",
+    )
+    log = logging.getLogger("optimizer.pareto")
     store = ParetoStore(
         directory=results_dir,
         sig_digits=sig_digits,
         flush_interval=flush_interval,
+        log_name="optimizer.pareto",
     )
 
     prev_data = None
@@ -88,7 +89,8 @@ def results_writer_process(queue, results_dir, sig_digits, flush_interval, *, co
             packer = msgpack.Packer(use_bin_type=True)
             while True:
                 data = queue.get()
-                if data is SENTINEL:
+                if data == "DONE":
+                    store.flush_now()
                     break
                 try:
                     # Write raw results (diffed if compress enabled)
@@ -110,54 +112,12 @@ def results_writer_process(queue, results_dir, sig_digits, flush_interval, *, co
                     # --- Write to all_results.bin ---
                     f.write(packer.pack(output_data))
                     f.flush()
-
-                    # --- Pareto front update ---
-                    if "analyses_combined" not in data:
-                        continue
-                    keys = [k for k in data["analyses_combined"] if k.startswith("w_")]
-                    scores = [data["analyses_combined"].get(k) for k in sorted(keys)]
-                    if any(s is None or not isinstance(s, (float, int)) for s in scores):
-                        continue
-                    scores = tuple(float(s) for s in scores)
-                    iteration += 1
-                    index = iteration
-                    objectives_dict[index] = scores
-                    index_to_entry[index] = data
-                    if any(dominates(objectives_dict[idx], scores) for idx in pareto_front):
-                        continue
-                    # Remove dominated entries
-                    dominated = [
-                        idx for idx in pareto_front if dominates(scores, objectives_dict[idx])
-                    ]
-                    for idx in dominated:
-                        old_entry = index_to_entry[idx]
-                        store.remove_entry(
-                            store.hash_entry(round_floats(old_entry, sig_digits=store.sig_digits))
-                        )
-
-                    pareto_front = [
-                        idx for idx in pareto_front if not dominates(scores, objectives_dict[idx])
-                    ]
-                    pareto_front.append(index)
-                    store.add_entry(data)
-
-                    min_str = ", ".join(
-                        f"{min(objectives_dict[idx][i] for idx in pareto_front):.5f}"
-                        for i in range(n_objectives)
-                    )
-                    max_str = ", ".join(
-                        f"{max(objectives_dict[idx][i] for idx in pareto_front):.5f}"
-                        for i in range(n_objectives)
-                    )
-                    line = "(min,max): "
-                    for i, sk in enumerate(scoring_keys):
-                        line += f"{sk}: ({pbr.round_dynamic(min(objectives_dict[idx][i] for idx in pareto_front), 3)}"
-                        line += f",{pbr.round_dynamic(max(objectives_dict[idx][i] for idx in pareto_front), 3)})"
-                        if i < n_objectives - 1:
-                            line += " | "
-                    logging.info(f"Upd PF | Iter: {iteration} | n memb: {len(pareto_front)} | {line}")
                 except Exception as e:
                     logging.error(f"Error writing results: {e}")
+                try:
+                    store.add_entry(data)
+                except Exception as e:
+                    logging.error(f"ParetoStore error: {e}")
 
     except Exception as e:
         logging.error(f"Results writer process error: {e}")
@@ -877,11 +837,6 @@ async def main():
     add_arguments_recursively(parser, template_config)
     add_extra_options(parser)
     args = parser.parse_args()
-    logging.basicConfig(
-        format="%(asctime)s %(levelname)-8s %(message)s",
-        level=logging.INFO,
-        datefmt="%Y-%m-%dT%H:%M:%S",
-    )
     if args.config_path is None:
         logging.info(f"loading default template config configs/template.json")
         config = load_config("configs/template.json", verbose=True)
@@ -1163,7 +1118,7 @@ async def main():
     finally:
         # Signal the writer process to shut down and wait for it
         if "results_queue" in locals():
-            results_queue.put(SENTINEL)
+            results_queue.put("DONE")
             writer_process.join()
         if "pool" in locals():
             logging.info("Closing and terminating the process pool...")
