@@ -151,4 +151,5 @@
                           "btc_adg_w_per_exposure_long",
                           "btc_omega_ratio",
                           "position_unchanged_hours_max",
-                          "btc_equity_jerkiness"]}}
+                          "btc_equity_jerkiness"],
+              "write_all_results": true}}
