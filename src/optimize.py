@@ -8,6 +8,7 @@ import multiprocessing
 import mmap
 from multiprocessing import Queue, Process
 from collections import defaultdict
+from contextlib import nullcontext
 from backtest import (
     prepare_hlcvs_mss,
     prep_backtest_args,
@@ -60,7 +61,15 @@ logging.basicConfig(
 )
 
 
-def results_writer_process(queue, results_dir, sig_digits, flush_interval, *, compress=True):
+def results_writer_process(
+    queue,
+    results_dir,
+    sig_digits,
+    flush_interval,
+    *,
+    compress: bool = True,
+    write_all_results: bool = True,
+):
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(processName)-12s %(levelname)-8s %(message)s",
@@ -73,47 +82,48 @@ def results_writer_process(queue, results_dir, sig_digits, flush_interval, *, co
         log_name="optimizer.pareto",
     )
 
-    prev_data = None
     pareto_front = []
     objectives_dict = {}
     index_to_entry = {}
     iteration = 0
-    counter = 0
     n_objectives = None
     scoring_keys = None
 
     results_filename = os.path.join(results_dir, "all_results.bin")
 
     try:
-        with open(results_filename, "ab") as f:
-            packer = msgpack.Packer(use_bin_type=True)
+        with open(results_filename, "ab") if write_all_results else nullcontext() as f:
+            packer = msgpack.Packer(use_bin_type=True) if write_all_results else None
+            prev_data = None
+            counter = 0
             while True:
                 data = queue.get()
                 if data == "DONE":
                     store.flush_now()
                     break
-                try:
-                    # Write raw results (diffed if compress enabled)
-                    if compress:
-                        if prev_data is None or counter % 100 == 0:
-                            output_data = make_json_serializable(data)
+                if write_all_results:
+                    try:
+                        # Write raw results (diffed if compress enabled)
+                        if compress:
+                            if prev_data is None or counter % 100 == 0:
+                                output_data = make_json_serializable(data)
+                            else:
+                                diff = generate_incremental_diff(prev_data, data)
+                                output_data = make_json_serializable(diff)
+                            counter += 1
+                            prev_data = data
                         else:
-                            diff = generate_incremental_diff(prev_data, data)
-                            output_data = make_json_serializable(diff)
-                        counter += 1
-                        prev_data = data
-                    else:
-                        output_data = data
+                            output_data = data
 
-                    if scoring_keys is None:
-                        scoring_keys = data["optimize"]["scoring"]
-                        n_objectives = len(scoring_keys)
+                        if scoring_keys is None:
+                            scoring_keys = data["optimize"]["scoring"]
+                            n_objectives = len(scoring_keys)
 
-                    # --- Write to all_results.bin ---
-                    f.write(packer.pack(output_data))
-                    f.flush()
-                except Exception as e:
-                    logging.error(f"Error writing results: {e}")
+                        # --- Write to all_results.bin ---
+                        f.write(packer.pack(output_data))
+                        f.flush()
+                    except Exception as e:
+                        logging.error(f"Error writing results: {e}")
                 try:
                     store.add_entry(data)
                 except Exception as e:
@@ -958,11 +968,13 @@ async def main():
         duplicate_counter["count"] = 0
         flush_interval = 60  # or read from your config
         sig_digits = config["optimize"]["round_to_n_significant_digits"]
-
         writer_process = multiprocessing.Process(
             target=results_writer_process,
             args=(results_queue, results_dir, sig_digits, flush_interval),
-            kwargs={"compress": config["optimize"]["compress_results_file"]},
+            kwargs={
+                "compress": config["optimize"]["compress_results_file"],
+                "write_all_results": config["optimize"].get("write_all_results", True),  # ← new
+            },
         )
         writer_process.start()
 
