@@ -32,6 +32,7 @@ class ParetoStore:
         self._entries: dict[str, dict] = {}  # hash -> full entry
         self._objectives: dict[str, tuple] = {}  # hash -> objective vector
         self._front: list[str] = []  # list of hashes (Pareto set)
+        self._objective_lookup: dict[tuple, str] = {}  # objective vector ➜ hash
         # ------------------------------------------------------------------
         self.n_iters = 0
         self._last_flush_ts = time.time()
@@ -60,6 +61,13 @@ class ParetoStore:
             w_keys = sorted(k for k in rounded["analyses_combined"] if k.startswith("w_"))
             obj = tuple(rounded["analyses_combined"][k] for k in w_keys)
 
+            # ───────────── NEW: dedupe on the objective vector ──────────────
+            # identical after rounding  → nothing new to store or write
+            if obj in self._objective_lookup:
+                self._log.info(f"Dropping candidate whose obj score is already present: {obj}")
+                return False
+            # ────────────────────────────────────────────────────────────────
+
             # discard if dominated by current front
             if any(dominates(self._objectives[idx], obj) for idx in self._front):
                 return False
@@ -67,12 +75,14 @@ class ParetoStore:
             # remove dominated members
             dominated = [idx for idx in self._front if dominates(obj, self._objectives[idx])]
             for idx in dominated:
+                del self._objective_lookup[self._objectives[idx]]
                 self._front.remove(idx)
 
             # add new member
             self._entries[h] = rounded
             self._objectives[h] = obj
             self._front.append(h)
+            self._objective_lookup[obj] = h
 
             self._log_front_state(
                 added=1,
