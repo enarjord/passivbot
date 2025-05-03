@@ -147,9 +147,7 @@
               "n_cpus": 5,
               "population_size": 1000,
               "round_to_n_significant_digits": 4,
-              "scoring": ["btc_mdg_w_per_exposure_long",
-                          "btc_adg_w_per_exposure_long",
-                          "btc_omega_ratio",
-                          "position_unchanged_hours_max",
-                          "btc_equity_jerkiness"],
+              "scoring": ["btc_mdg_w",
+                          "btc_adg_w",
+                          "btc_omega_ratio"],
               "write_all_results": true}}
