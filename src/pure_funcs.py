@@ -666,6 +666,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 "population_size": 500,
                 "round_to_n_significant_digits": 5,
                 "scoring": ["adg", "sharpe_ratio"],
+                "write_all_results": True,
             },
         }
     elif passivbot_mode == "multi_hjson":
