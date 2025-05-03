@@ -138,7 +138,7 @@ def results_writer_process(
         # ------------------------------------------------------------------
         try:
             store.flush_interval = 0.0
-            store.flush_updates()
+            store.flush_now()
             logging.info("Final Pareto-front update completed.")
         except Exception as e1:
             logging.error(f"Unable to flush Pareto front on shutdown: {e1}")
