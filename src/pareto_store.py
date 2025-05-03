@@ -139,7 +139,6 @@ class ParetoStore:
                 print(f"bootstrap skip {fp}: {e}")
 
     def _log_front_state(self, *, added: int, removed: int) -> None:
-
         """Emit a compact one‑liner with min / max / spread per objective."""
         objs = [self._objectives[idx] for idx in self._front]
 
