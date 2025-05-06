@@ -119,7 +119,6 @@ class Passivbot:
         self.fetched_open_orders = []
         self.open_orders = {}
         self.positions = {}
-        self.pnls = []
         self.symbol_ids = {}
         self.min_costs = {}
         self.min_qtys = {}
@@ -1024,7 +1023,7 @@ class Passivbot:
     async def init_pnls(self):
         if not hasattr(self, "pnls"):
             self.pnls = []
-        elif self.pnls:
+        else:
             return  # pnls already initiated; abort
         logging.info(f"initiating pnls...")
         age_limit = (
@@ -1071,11 +1070,8 @@ class Passivbot:
             self.get_exchange_time()
             - 1000 * 60 * 60 * 24 * self.config["live"]["pnls_max_lookback_days"]
         )
-        if not hasattr(self, "pnls"):
-            self.pnls = []
+        await self.init_pnls()  # will do nothing if already initiated
         old_ids = {elm["id"] for elm in self.pnls}
-        if len(self.pnls) == 0:
-            await self.init_pnls()
         start_time = self.pnls[-1]["timestamp"] - 1000 if self.pnls else age_limit
         res = await self.fetch_pnls(start_time=start_time, limit=100)
         if res in [None, False]:
