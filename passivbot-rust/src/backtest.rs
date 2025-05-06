@@ -987,7 +987,7 @@ impl<'a> Backtest<'a> {
         // check if coin is delisted; if so, close pos as unstuck close
         if let Some(&delist_timestamp) = self.last_valid_timestamps.get(&idx) {
             if k >= delist_timestamp && self.positions.long.contains_key(&idx) {
-                self.open_orders.long.get_mut(&idx).unwrap().closes = [Order {
+                self.open_orders.long.entry(idx).or_default().closes = vec![Order {
                     qty: -self.positions.long[&idx].size,
                     price: round_(
                         f64::min(
@@ -997,9 +997,13 @@ impl<'a> Backtest<'a> {
                         self.exchange_params_list[idx].price_step,
                     ),
                     order_type: OrderType::CloseUnstuckLong,
-                }]
-                .to_vec();
-                self.open_orders.long.entry(idx).or_default().entries = Vec::new();
+                }];
+                self.open_orders
+                    .long
+                    .entry(idx)
+                    .or_default()
+                    .entries
+                    .clear();
                 return;
             }
         }
@@ -1059,7 +1063,7 @@ impl<'a> Backtest<'a> {
         // check if coin is delisted; if so, close pos as unstuck close
         if let Some(&delist_timestamp) = self.last_valid_timestamps.get(&idx) {
             if k >= delist_timestamp && self.positions.short.contains_key(&idx) {
-                self.open_orders.short.get_mut(&idx).unwrap().closes = [Order {
+                self.open_orders.short.entry(idx).or_default().closes = vec![Order {
                     qty: self.positions.short[&idx].size.abs(),
                     price: round_(
                         f64::max(
@@ -1068,10 +1072,14 @@ impl<'a> Backtest<'a> {
                         ),
                         self.exchange_params_list[idx].price_step,
                     ),
-                    order_type: OrderType::CloseUnstuckLong,
-                }]
-                .to_vec();
-                self.open_orders.short.entry(idx).or_default().entries = Vec::new();
+                    order_type: OrderType::CloseUnstuckShort,
+                }];
+                self.open_orders
+                    .short
+                    .entry(idx)
+                    .or_default()
+                    .entries
+                    .clear();
                 return;
             }
         }
@@ -1403,18 +1411,18 @@ impl<'a> Backtest<'a> {
                 LONG => {
                     self.open_orders
                         .long
-                        .get_mut(&unstucking_idx)
-                        .unwrap()
-                        .closes = [unstucking_close].to_vec();
+                        .entry(unstucking_idx)
+                        .or_default()
+                        .closes = vec![unstucking_close];
                 }
                 SHORT => {
                     self.open_orders
                         .short
-                        .get_mut(&unstucking_idx)
-                        .unwrap()
-                        .closes = [unstucking_close].to_vec();
+                        .entry(unstucking_idx)
+                        .or_default()
+                        .closes = vec![unstucking_close];
                 }
-                _ => panic!("Invalid unstucking_pside"),
+                _ => unreachable!(),
             }
         }
     }

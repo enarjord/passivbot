@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import json
 import hashlib
@@ -6,208 +7,172 @@ import glob
 import math
 import time
 import numpy as np
-import itertools
-from opt_utils import calc_normalized_dist, round_floats
-
-
-def hash_entry(entry: Dict) -> str:
-    entry_str = json.dumps(entry, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(entry_str.encode("utf-8")).hexdigest()[:16]
-
-
-def calc_dist(p0, p1):
-    return math.sqrt((p0[0] - p1[0]) ** 2 + (p0[1] - p1[1]) ** 2)
+import threading
+import logging
+import passivbot_rust as pbr
+from opt_utils import calc_normalized_dist, round_floats, dominates
+from pure_funcs import calc_hash
 
 
 class ParetoStore:
-    def __init__(self, directory: str, sig_digits: int = 6, update_interval: str = 60):
+    def __init__(
+        self,
+        directory: str,
+        sig_digits: int = 6,
+        flush_interval: int = 60,
+        log_name: str | None = None,
+    ):
+        self._log = logging.getLogger(log_name or __name__)
         self.directory = directory
         self.pareto_dir = os.path.join(self.directory, "pareto")
         self.sig_digits = sig_digits
-        self.update_interval = update_interval  # seconds
-        self._last_update_time = 0.0  # unix-epoch seconds
+        self.flush_interval = flush_interval  # seconds
         os.makedirs(os.path.join(self.directory, "pareto"), exist_ok=True)
-        self.index_path = os.path.join(self.directory, "index.json")
-        self.hashes = set()
-        self._load_index()
+        # --- in‑memory structures -----------------------------------------
+        self._entries: dict[str, dict] = {}  # hash -> full entry
+        self._objectives: dict[str, tuple] = {}  # hash -> objective vector
+        self._front: list[str] = []  # list of hashes (Pareto set)
+        self._objective_lookup: dict[tuple, str] = {}  # objective vector ➜ hash
+        # ------------------------------------------------------------------
+        self.n_iters = 0
+        self._last_flush_ts = time.time()
+        self._lock = threading.RLock()
 
-    def hash_entry(self, entry):
-        return hash_entry(entry)
+        self.scoring_keys = None
 
-    def _load_index_old(self):
-        if os.path.exists(self.index_path):
-            try:
-                with open(self.index_path, "r") as f:
-                    self.hashes = set(json.load(f))
-            except Exception as e:
-                print(f"Failed to load Pareto index: {e}")
+        # bootstrap from disk if any
+        self._bootstrap_from_disk()
 
-    def _load_index(self):
-        results = set()
-        for fname in os.listdir(self.pareto_dir):
-            if not fname.endswith(".json"):
-                continue
-            hash_part = fname.split("_")[-1][:-5]
-            results.add(hash_part)
-        self.hashes = results
-
-    def _save_index(self):
-        tmp_path = self.index_path + ".tmp"
-        with open(tmp_path, "w") as f:
-            json.dump(sorted(self.hashes), f)
-        os.replace(tmp_path, self.index_path)
-
-    def add_entry(self, entry: Dict) -> bool:
+    def add_entry(self, entry: dict) -> bool:
+        """
+        Add a new entry, update Pareto front in‑memory.
+        Return True if the store actually changed.
+        """
+        self.n_iters += 1
+        if self.scoring_keys is None:
+            self.scoring_keys = entry["optimize"]["scoring"]
         rounded = round_floats(entry, self.sig_digits)
-        h = hash_entry(rounded)
-        if h in self.hashes:
-            return False  # already exists
+        h = calc_hash(rounded)
+        with self._lock:
+            if h in self._entries:  # fast‑dedupe
+                return False
 
-        # Save entry without distance prefix
-        filename = f"{h}.json"
-        filepath = os.path.join(self.directory, "pareto", filename)
-        tmp_path = filepath + ".tmp"
-        try:
-            with open(tmp_path, "w") as f:
-                json.dump(rounded, f, separators=(",", ":"), indent=4, sort_keys=True)
-            os.replace(tmp_path, filepath)
-            self.hashes.add(h)
-            self._save_index()
+            # objective vector = sorted w_i keys
+            w_keys = sorted(k for k in rounded["analyses_combined"] if k.startswith("w_"))
+            obj = tuple(rounded["analyses_combined"][k] for k in w_keys)
 
-            # Recompute distances and rename all
-            self._maybe_update_front()
+            # ───────────── NEW: dedupe on the objective vector ──────────────
+            # identical after rounding  → nothing new to store or write
+            if obj in self._objective_lookup:
+                self._log.info(f"Dropping candidate whose obj score is already present: {obj}")
+                return False
+            # ────────────────────────────────────────────────────────────────
+
+            # discard if dominated by current front
+            if any(dominates(self._objectives[idx], obj) for idx in self._front):
+                return False
+
+            # remove dominated members
+            dominated = [idx for idx in self._front if dominates(obj, self._objectives[idx])]
+            for idx in dominated:
+                del self._objective_lookup[self._objectives[idx]]
+                self._front.remove(idx)
+
+            # add new member
+            self._entries[h] = rounded
+            self._objectives[h] = obj
+            self._front.append(h)
+            self._objective_lookup[obj] = h
+
+            self._log_front_state(
+                added=1,
+                removed=len(dominated),
+            )
+
+            # maybe flush
+            self._maybe_flush()
+
             return True
-        except Exception as e:
-            print(f"Failed to write Pareto entry {h}: {e}")
-            return False
 
-    def remove_entry(self, hash_str: str) -> bool:
-        pattern = os.path.join(self.directory, "pareto", f"*_{hash_str}.json")
-        matches = glob.glob(pattern)
-        success = False
-        for filepath in matches:
-            try:
-                os.remove(filepath)
-                success = True
-            except Exception as e:
-                print(f"Failed to remove file {filepath}: {e}")
-        if hash_str in self.hashes:
-            self.hashes.remove(hash_str)
-            self._save_index()
-        return success
+    def get_front(self) -> list[dict]:
+        with self._lock:
+            return [self._entries[h] for h in self._front]
 
-    def list_entries(self) -> list:
-        return sorted(self.hashes)
+    def flush_now(self) -> None:
+        """Force a write of the current in‑memory set to disk."""
+        with self._lock:
+            self._write_all_to_disk()
+            self._last_flush_ts = time.time()
 
-    def load_entry(self, hash_str: str) -> Dict:
-        pattern = os.path.join(self.directory, "pareto", f"*_{hash_str}.json")
-        matches = glob.glob(pattern)
-        if not matches:
-            pattern_alt = os.path.join(self.directory, "pareto", f"{hash_str}.json")
-            matches = glob.glob(pattern_alt)
-        if not matches:
-            raise FileNotFoundError(f"No entry found for hash {hash_str}")
-        with open(matches[0], "r") as f:
-            return json.load(f)
+    def _maybe_flush(self) -> None:
+        if time.time() - self._last_flush_ts >= self.flush_interval:
+            self._write_all_to_disk()
+            self._last_flush_ts = time.time()
 
-    def clear(self):
-        for h in list(self.hashes):
-            self.remove_entry(h)
-        if os.path.exists(self.index_path):
-            os.remove(self.index_path)
-        self.hashes.clear()
-
-    def compute_ideal_point(self):
-        entries = [self.load_entry(h) for h in self.hashes]
-        w_keys = [k for k in entries[0].get("analyses_combined", {}) if k.startswith("w_")]
-        if not entries or not w_keys:
-            return None
-        ideal = []
-        for key in sorted(w_keys):
-            vals = [
-                e["analyses_combined"].get(key)
-                for e in entries
-                if e["analyses_combined"].get(key) is not None
-            ]
-            if not vals:
-                return None
-            ideal.append(min(vals))
-        return tuple(ideal)
-
-    def rename_entries_with_distance(self):
-        start_ts = time.time()
-        self._load_index()
-        ideal = self.compute_ideal_point()
-        if ideal is None:
-            print("No valid entries to compute ideal point.")
+    def _write_all_to_disk(self) -> None:
+        """Write each (distance‑prefixed) file. """
+        if not self._front:
             return
 
-        # Get all keys w_0, w_1, ..., w_n
-        sample_entry = self.load_entry(next(iter(self.hashes)))
-        w_keys = sorted(k for k in sample_entry.get("analyses_combined", {}) if k.startswith("w_"))
-        if not w_keys:
-            print("No w_i keys found.")
-            return
+        # Pre‑compute min/max for distance normalisation
+        obj_matrix = list(self._objectives[h] for h in self._front)
+        mins = [min(col) for col in zip(*obj_matrix)]
+        maxs = [max(col) for col in zip(*obj_matrix)]
+        ideal = mins  # min‑as‑ideal
 
-        dims = len(w_keys)
-        value_matrix = [[] for _ in range(dims)]
-        for h in self.hashes:
-            entry = self.load_entry(h)
-            for i, key in enumerate(w_keys):
-                val = entry.get("analyses_combined", {}).get(key)
-                if val is not None:
-                    value_matrix[i].append(val)
+        for h in self._front:
+            obj = self._objectives[h]
+            norm = [(v - mi) / (ma - mi) if ma > mi else 0.0 for v, mi, ma in zip(obj, mins, maxs)]
+            dist = math.sqrt(sum((v - i) ** 2 for v, i in zip(norm, [0.0] * len(norm))))
+            dist_prefix = f"{dist:08.4f}"
+            fname = f"{dist_prefix}_{h}.json"
+            path = os.path.join(self.pareto_dir, fname)
 
-        mins = [min(vals) for vals in value_matrix]
-        maxs = [max(vals) for vals in value_matrix]
+            # remove any obsolete files that have the same hash but an older prefix
+            for old in glob.glob(os.path.join(self.pareto_dir, f"*_{h}.json")):
+                if old != path:
+                    try:
+                        os.remove(old)
+                    except OSError as e:
+                        self._log.warning(f"Could not remove stale Pareto file {old}: {e}")
 
-        for h in sorted(self.hashes):
+            # write if not present or contents changed
+            if not os.path.exists(path):
+                tmp = path + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(self._entries[h], f, separators=(",", ":"), indent=4)
+                os.replace(tmp, path)
+
+    def _bootstrap_from_disk(self) -> None:
+        """
+        Read existing *.json files once at start so we don’t lose old results
+        when the new optimizer run appends.
+        """
+        for fp in glob.glob(os.path.join(self.pareto_dir, "*.json")):
             try:
-                entry = self.load_entry(h)
-                point = []
-                for i, key in enumerate(w_keys):
-                    val = entry.get("analyses_combined", {}).get(key)
-                    if val is None:
-                        val = float("inf")
-                    denom = maxs[i] - mins[i]
-                    norm = (val - mins[i]) / denom if denom > 0 else 0.0
-                    point.append(norm)
-                ideal_norm = [
-                    (ideal[i] - mins[i]) / (maxs[i] - mins[i]) if (maxs[i] - mins[i]) > 0 else 0.0
-                    for i in range(dims)
-                ]
-                dist = math.sqrt(sum((p - i) ** 2 for p, i in zip(point, ideal_norm)))
-                dist_prefix = f"{dist:08.4f}"
-
-                old_path_pattern = os.path.join(self.directory, "pareto", f"*{h}.json")
-                old_matches = glob.glob(old_path_pattern)
-                if not old_matches:
-                    continue
-                old_path = old_matches[0]
-                new_path = os.path.join(self.directory, "pareto", f"{dist_prefix}_{h}.json")
-                os.rename(old_path, new_path)
+                with open(fp) as f:
+                    entry = json.load(f)
+                self.add_entry(entry)  # uses the normal path
             except Exception as e:
-                print(f"Failed to rename entry {h}: {e}")
-        end_ts = time.time()
-        print(f"Time to perform rename_entries_with_distance: {end_ts - start_ts:.4f}s")
+                print(f"bootstrap skip {fp}: {e}")
 
-    def _maybe_update_front(self) -> None:
-        """
-        Call ``rename_entries_with_distance`` only if at least
-        ``update_interval`` seconds have elapsed since the previous call.
-        """
-        now = time.time()
-        if now - self._last_update_time >= self.update_interval:
-            self.rename_entries_with_distance()
-            self._last_update_time = now
+    def _log_front_state(self, *, added: int, removed: int) -> None:
+        """Emit a compact one‑liner with min / max / spread per objective."""
+        objs = [self._objectives[idx] for idx in self._front]
 
-    def flush_updates(self) -> None:
-        """
-        Run an *immediate* front update, ignoring the time guard.
-        Use this when the optimizer is about to exit.
-        """
-        self.rename_entries_with_distance()
-        self._last_update_time = time.time()
+        mins = [min(col) for col in zip(*objs)]
+        maxs = [max(col) for col in zip(*objs)]
+
+        metrics = []
+        for i, key in enumerate(self.scoring_keys):
+            metrics.append(
+                f"{key}:(" f"{pbr.round_dynamic(mins[i], 3)}," f"{pbr.round_dynamic(maxs[i], 3)}),"
+            )
+
+        line = " | ".join(metrics)
+        self._log.info(
+            f"Iter: {self.n_iters} | Pareto ↑ | +{added}/-{removed} | size:{len(self._front)} | {line}"
+        )
 
 
 def compute_ideal(values_matrix, mode="min", weights=None, eps=1e-3, pct=10):
@@ -294,9 +259,6 @@ def main():
         pareto_dir += "/pareto"
     entries = sorted(glob.glob(os.path.join(pareto_dir, "*.json")))
     print(f"Found {len(entries)} Pareto members.")
-
-    store = ParetoStore(os.path.dirname(args.pareto_dir.rstrip("/")))
-    print(f"Found {len(store.hashes)} Pareto members.")
 
     points = []
     filenames = {}
@@ -520,8 +482,8 @@ def main():
         # 1. Parallel Coordinates - more efficient implementation
         ax = axes[0]
 
-        # Only show the top 20 solutions to avoid clutter and improve performance
-        top_indices = df_sorted.index[:20]
+        # Only show up to the top 100 solutions to avoid clutter and improve performance
+        top_indices = df_sorted.index[:100]
 
         # Plot in one batch for better performance
         for i in top_indices:
@@ -537,7 +499,7 @@ def main():
         ax.set_xticks(range(len(w_keys)))
         ax.set_xticklabels([metric_name_map.get(k, k) for k in w_keys], rotation=45, ha="right")
         ax.set_ylim([0, 1])
-        ax.set_title("Parallel Coordinates (Top 20 Solutions)")
+        ax.set_title(f"Parallel Coordinates (Top {len(top_indices)} Solutions)")
         ax.grid(True, alpha=0.3)
 
         # 2. Create a heatmap instead of a radar chart (more compatible)
@@ -636,7 +598,7 @@ def main():
         print("\nObjective diversity (range of values):")
         for obj, score in diversity_scores:
             name = metric_name_map.get(obj, obj)
-            print(f"- {name}: {score:.4f}")
+            print(f"- {name}: {pbr.round_dynamic(score, 4)}")
 
         plt.show()
 

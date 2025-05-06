@@ -301,6 +301,20 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
 
 
 def expand_analysis(analysis_usd, analysis_btc, fills, config):
+    keys = ["adg", "adg_w", "mdg", "mdg_w", "gain"]
+    for pside in ["long", "short"]:
+        twel = config["bot"][pside]["total_wallet_exposure_limit"]
+        for key in keys:
+            analysis_usd[f"{key}_per_exposure_{pside}"] = (
+                (analysis_usd[key] / twel if twel > 0.0 else 0.0)
+                if analysis_usd[key] is not None
+                else None
+            )
+            analysis_btc[f"{key}_per_exposure_{pside}"] = (
+                (analysis_btc[key] / twel if twel > 0.0 else 0.0)
+                if analysis_btc[key] is not None
+                else None
+            )
     if not config["backtest"]["use_btc_collateral"]:
         return analysis_usd
     return {
