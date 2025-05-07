@@ -110,7 +110,7 @@ class ParetoStore:
             self._last_flush_ts = time.time()
 
     def _write_all_to_disk(self) -> None:
-        """Write each (distance‑prefixed) file. """
+        """Write each (distance‑prefixed) file."""
         if not self._front:
             return
 
@@ -483,7 +483,7 @@ def main():
         ax = axes[0]
 
         # Only show up to the top 100 solutions to avoid clutter and improve performance
-        top_indices = df_sorted.index[:100]
+        top_indices = df_sorted.index[:200]
 
         # Plot in one batch for better performance
         for i in top_indices:
