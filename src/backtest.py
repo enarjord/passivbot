@@ -46,15 +46,24 @@ logging.basicConfig(
 
 
 @contextmanager
-def create_shared_memory_file(hlcvs):
-    temp_file = tempfile.NamedTemporaryFile(delete=False)
-    shared_memory_file = temp_file.name
+def create_shared_memory_file(array: np.ndarray):
+    with tempfile.NamedTemporaryFile(delete=False) as f:
+        filepath = f.name
+        array.tofile(f)
+    
     try:
-        with open(shared_memory_file, "wb") as f:
-            f.write(hlcvs.tobytes())
-        yield shared_memory_file
+        yield filepath
     finally:
-        os.unlink(shared_memory_file)
+        # Ensure file is closed before deleting
+        try:
+            os.unlink(filepath)
+        except PermissionError:
+            import time
+            time.sleep(0.1)  # Wait briefly and try again
+            try:
+                os.unlink(filepath)
+            except Exception as e:
+                print(f"Failed to delete temporary file {filepath}: {e}")
 
 
 plt.rcParams["figure.figsize"] = [29, 18]
