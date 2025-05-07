@@ -3,6 +3,9 @@ import pandas as pd
 import os
 import json
 import passivbot_rust as pbr
+from tools.event_loop_policy import set_windows_event_loop_policy
+# on Windows this will pick the SelectorEventLoopPolicy
+set_windows_event_loop_policy()
 import asyncio
 import argparse
 
