@@ -585,7 +585,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 "filter_by_min_effective_cost": True,
                 "forced_mode_long": "",
                 "forced_mode_short": "",
-                "ignored_coins": [],
+                "ignored_coins": {"long": [], "short": []},
                 "leverage": 10.0,
                 "market_orders_allowed": True,
                 "max_n_cancellations_per_batch": 5,
