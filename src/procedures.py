@@ -52,6 +52,7 @@ from pure_funcs import (
 def format_config(config: dict, verbose=True, live_only=False) -> dict:
     # attempts to format a config to v7 config
     template = get_template_live_config("v7")
+    # renamings
     cmap = {
         "ddown_factor": "entry_grid_double_down_factor",
         "initial_eprice_ema_dist": "entry_initial_ema_dist",
@@ -145,37 +146,45 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                 result[key] = deepcopy(template[key])
     else:
         raise Exception(f"failed to format config")
-    for k0, v0, v1 in [
-        ("close_trailing_qty_pct", 1.0, [0.05, 1.0]),
-        (
-            "filter_rolling_window",
+    for pside in ["long", "short"]:
+        for k0, v_bt, v_opt in [
+            ("close_trailing_qty_pct", 1.0, [0.05, 1.0]),
             (
-                result["live"]["ohlcv_rolling_window"]
-                if "ohlcv_rolling_window" in result["live"]
-                else 60.0
+                "entry_trailing_double_down_factor",
+                result["bot"][pside].get("entry_grid_double_down_factor", 1.0),
+                [0.01, 3.0],
             ),
-            [10.0, 1440.0],
-        ),
-        (
-            "filter_relative_volume_clip_pct",
             (
-                result["live"]["relative_volume_filter_clip_pct"]
-                if "relative_volume_filter_clip_pct" in result["live"]
-                else 0.5
+                "filter_noisiness_rolling_window",
+                result["bot"][pside].get(
+                    "filter_rolling_window", result["live"].get("ohlcv_rolling_window", 60.0)
+                ),
+                [10.0, 1440.0],
             ),
-            [0.0, 1.0],
-        ),
-    ]:
-        for pside in ["long", "short"]:
+            (
+                "filter_volume_rolling_window",
+                result["bot"][pside].get(
+                    "filter_rolling_window", result["live"].get("ohlcv_rolling_window", 60.0)
+                ),
+                [10.0, 1440.0],
+            ),
+            (
+                "filter_volume_drop_pct",
+                result["live"].get("filter_relative_volume_clip_pct", 0.5),
+                [0.0, 1.0],
+            ),
+        ]:
             if k0 not in result["bot"][pside]:
-                result["bot"][pside][k0] = v0
+                result["bot"][pside][k0] = v_bt
                 if verbose:
-                    print(f"adding missing backtest parameter {pside} {k0}: {v0}")
+                    print(f"adding missing backtest parameter {pside} {k0}: {v_bt}")
             opt_key = f"{pside}_{k0}"
             if opt_key not in result["optimize"]["bounds"]:
-                result["optimize"]["bounds"][opt_key] = v1
+                result["optimize"]["bounds"][opt_key] = v_opt
                 if verbose:
-                    print(f"adding missing optimize parameter {pside} {opt_key}: {v1}")
+                    print(f"adding missing optimize parameter {pside} {opt_key}: {v_opt}")
+    result["bot"] = sort_dict_keys(result["bot"])
+
     for k0, src, dst in [
         ("live", "minimum_market_age_days", "minimum_coin_age_days"),
         ("live", "noisiness_rolling_mean_window_size", "ohlcv_rolling_window"),
@@ -193,6 +202,7 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
             )
         del result["backtest"]["exchange"]
     add_missing_keys_recursively(template, result, verbose=verbose)
+    remove_unused_keys_recursively(template["bot"], result["bot"], parent=["bot"], verbose=verbose)
     if not live_only:
         for k_coins in ["approved_coins", "ignored_coins"]:
             path = result["live"][k_coins]
@@ -260,6 +270,69 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
             # If it’s something else (not dict/list/str), we do nothing special,
             # preserving original behavior.
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
+    result["optimize"]["scoring"] = sorted(result["optimize"]["scoring"])
+    result["optimize"]["limits"] = parse_limits_string(result["optimize"]["limits"])
+    for k, v in sorted(result["optimize"]["limits"].items()):
+        if k.startswith("lower_bound_"):
+            new_k = k.replace("lower_bound_", "penalize_if_greater_than_")
+            result["optimize"]["limits"][new_k] = v
+            if verbose:
+                print(f"changed config.optimize.limits.{k} -> {new_k}")
+            del result["optimize"]["limits"][k]
+    if not result["backtest"]["use_btc_collateral"]:
+        for i in range(len(result["optimize"]["scoring"])):
+            val = result["optimize"]["scoring"][i]
+            if val.startswith("btc_"):
+                new_val = val[len("btc_") :]
+                if verbose:
+                    print(f"changed config.optimize.scoring.{val} -> {new_val}")
+                result["optimize"]["scoring"][i] = new_val
+        for key in sorted(result["optimize"]["limits"]):
+            if key.startswith("btc_"):
+                new_key = key[len("btc_") :]
+                val = result["optimize"]["limits"][key]
+                if verbose:
+                    print(f"changed config.optimize.limits.{key} -> {new_key}")
+                result["optimize"]["limits"][new_key] = val
+                del result["optimize"]["limits"][key]
+    for k, v in sorted(result["optimize"]["bounds"].items()):
+        # sort all bounds, low -> high
+        if isinstance(v, list):
+            if len(v) == 1:
+                result["optimize"]["bounds"][k] = [v[0], v[0]]
+            elif len(v) == 2:
+                result["optimize"]["bounds"][k] = sorted(v)
+    for pside in result["bot"]:
+        result["bot"][pside]["enforce_exposure_limit"] = bool(
+            result["bot"][pside]["enforce_exposure_limit"]
+        )
+    return result
+
+
+def parse_limits_string(limits_str: Union[str, dict]) -> dict:
+    """
+    Parses a string like "--penalize_if_greater_than_drawdown_worst 0.3 --penalize_if_lower_than_gain 0.005"
+    into a dictionary like:
+    {
+        "penalize_if_greater_than_drawdown_worst": 0.3,
+        "penalize_if_lower_than_gain": 0.005,
+    }
+    """
+    if not limits_str:
+        return {}
+    if isinstance(limits_str, dict):
+        return limits_str
+    tokens = limits_str.replace(":", "").split("--")
+    result = {}
+    for token in tokens:
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            k, v = token.split()
+            result[k] = float(v)
+        except ValueError:
+            raise ValueError(f"Invalid limits format for token: {token}")
     return result
 
 
@@ -275,6 +348,17 @@ def add_missing_keys_recursively(src, dst, parent=[], verbose=True):
                 if verbose:
                     print(f"Adding missing key -> val {'.'.join(parent + [k])} -> {src[k]} to config")
                 dst[k] = src[k]
+
+
+def remove_unused_keys_recursively(src, dst, parent=[], verbose=True):
+    for k in sorted(dst):
+        if k in src:
+            if isinstance(dst[k], dict):
+                remove_unused_keys_recursively(src[k], dst[k], parent + [k], verbose=verbose)
+        else:
+            del dst[k]
+            if verbose:
+                print(f"Removed unused key from config: {'.'.join(parent + [k])}")
 
 
 def get_all_eligible_symbols(exchange="binance"):
@@ -343,10 +427,6 @@ def load_config(filepath: str, live_only=False, verbose=True) -> dict:
 
 def dump_config(config: dict, filepath: str):
     config_ = deepcopy(config)
-    for pside in config_["bot"]:
-        config_["bot"][pside]["enforce_exposure_limit"] = bool(
-            config_["bot"][pside]["enforce_exposure_limit"]
-        )
     dump_pretty_json(config_, filepath)
 
 
@@ -1051,13 +1131,36 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
 
     # Initialize ccxt clients for each exchange
     ccxt_clients = {}
-    for ex_name in exchange_map:
-        ccxt_clients[ex_name] = getattr(ccxta, ex_name)()
-        ccxt_clients[ex_name].options["defaultType"] = "swap"
+    for ex_name in sorted(exchange_map):
+        try:
+            ccxt_clients[ex_name] = getattr(ccxta, ex_name)()
+            ccxt_clients[ex_name].options["defaultType"] = "swap"
+        except Exception as e:
+            print(f"Error loading {ex_name} from ccxt. Skipping. {e}")
+            del exchange_map[ex_name]
+            if ex_name in ccxt_clients:
+                del ccxt_clients[ex_name]
     try:
         print("Loading markets for each exchange...")
-        await asyncio.gather(*(ccxt_clients[e].load_markets() for e in ccxt_clients))
-
+        load_tasks = {}
+        for ex_name in sorted(ccxt_clients):
+            try:
+                load_tasks[ex_name] = ccxt_clients[ex_name].load_markets()
+            except Exception as e:
+                print(f"Error creating task for {ex_name}: {e}")
+                del ccxt_clients[ex_name]
+                if ex_name in exchange_map:
+                    del exchange_map[ex_name]
+        results = []
+        for ex_name, task in load_tasks.items():
+            try:
+                res = await task
+                results.append(res)
+            except Exception as e:
+                print(f"Warning: failed to load markets for {ex_name}: {e}")
+                del ccxt_clients[ex_name]
+                if ex_name in exchange_map:
+                    del exchange_map[ex_name]
         # We'll fetch missing coins in batches of 10 to avoid overloading
         BATCH_SIZE = 10
         missing_coins = sorted(missing_coins)
@@ -1098,7 +1201,7 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
                                     f"Fetched {ex_name} {coin} => first candle: {data[0] if data else 'no data'}"
                                 )
                         except Exception as e:
-                            print(f"Error fetching {ex_name} {coin}: {e}")
+                            print(f"Warning: failed to fetch OHLCV for {coin} on {ex_name}: {e}")
 
             # Process results for each coin in this batch
             for coin in batch:
@@ -1142,7 +1245,9 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
         # Otherwise, return earliest cross-exchange timestamps
         return ftss
     finally:
-        await asyncio.gather(*(ccxt_clients[e].close() for e in ccxt_clients))
+        await asyncio.gather(
+            *(ccxt_clients[e].close() for e in ccxt_clients if hasattr(ccxt_clients[e], "close"))
+        )
 
 
 async def get_first_ohlcv_timestamps_new(symbols=None, exchange="binance"):
@@ -1531,7 +1636,7 @@ def create_acronym(full_name, acronyms=set()):
             "backtest.",
             "live.",
             "optimize.bounds.",
-            "optimize.limits.lower_bound",
+            "optimize.limits.",
             "optimize.",
             "bot.",
         ]:
@@ -1572,6 +1677,9 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             type_ = type(value)
             if "bounds" in full_name:
                 type_ = comma_separated_values_float
+            if "limits" in full_name:
+                type_ = str
+                appendix = 'Example: "--loss_profit_ratio 0.5 --drawdown_worst 0.3333"'
             elif "approved_coins" in full_name:
                 acronym = "s"
                 type_ = comma_separated_values

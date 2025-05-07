@@ -9,4 +9,5 @@
 	mexc: ""
 	hyperliquid: ""
 	gateio: "passivbot"
+	defx: ""
 }

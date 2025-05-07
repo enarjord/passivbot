@@ -5,10 +5,10 @@ import passivbot_rust as pbr
 import asyncio
 import argparse
 import multiprocessing
-import subprocess
 import mmap
 from multiprocessing import Queue, Process
 from collections import defaultdict
+from contextlib import nullcontext
 from backtest import (
     prepare_hlcvs_mss,
     prep_backtest_args,
@@ -46,60 +46,103 @@ from deap import base, creator, tools, algorithms
 from contextlib import contextmanager
 import tempfile
 import time
+import math
 import fcntl
 from tqdm import tqdm
-import dictdiffer
 from optimizer_overrides import optimizer_overrides
+from opt_utils import make_json_serializable, generate_incremental_diff, round_floats
+from pareto_store import ParetoStore
+import msgpack
+
+logging.basicConfig(
+    format="%(asctime)s %(processName)-12s %(levelname)-8s %(message)s",
+    level=logging.INFO,
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
 
 
-def make_json_serializable(obj):
-    """
-    Recursively convert tuples in the object to lists to make it JSON serializable.
-    """
-    if isinstance(obj, dict):
-        return {k: make_json_serializable(v) for k, v in obj.items()}
-    elif isinstance(obj, tuple):
-        return [make_json_serializable(e) for e in obj]
-    elif isinstance(obj, list):
-        return [make_json_serializable(e) for e in obj]
-    else:
-        return obj
+def results_writer_process(
+    queue,
+    results_dir,
+    sig_digits,
+    flush_interval,
+    *,
+    compress: bool = True,
+    write_all_results: bool = True,
+):
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(processName)-12s %(levelname)-8s %(message)s",
+    )
+    log = logging.getLogger("optimizer.pareto")
+    store = ParetoStore(
+        directory=results_dir,
+        sig_digits=sig_digits,
+        flush_interval=flush_interval,
+        log_name="optimizer.pareto",
+    )
 
+    pareto_front = []
+    objectives_dict = {}
+    index_to_entry = {}
+    iteration = 0
+    n_objectives = None
+    scoring_keys = None
 
-def results_writer_process(queue: Queue, results_filename: str, compress=True):
-    """
-    Manager process that handles writing results to file.
-    Runs in a separate process and receives results through a queue.
-    Applies diffing to the entire data dictionary.
-    """
-    prev_data = None  # Initialize previous data as None
+    results_filename = os.path.join(results_dir, "all_results.bin")
+
     try:
-        while True:
-            data = queue.get()
-            if data == "DONE":  # Sentinel value to signal shutdown
-                break
-            try:
-                if prev_data is None or not compress:
-                    # First data entry or compression disabled, write full data
-                    output_data = data
-                else:
-                    # Compute diff of the entire data dictionary
-                    diff = list(dictdiffer.diff(prev_data, data))
-                    for i in range(len(diff)):
-                        if diff[i][0] == "change":
-                            diff[i] = [diff[i][1], diff[i][2][1]]
-                    output_data = {"diff": make_json_serializable(diff)}
+        with open(results_filename, "ab") if write_all_results else nullcontext() as f:
+            packer = msgpack.Packer(use_bin_type=True) if write_all_results else None
+            prev_data = None
+            counter = 0
+            while True:
+                data = queue.get()
+                if data == "DONE":
+                    store.flush_now()
+                    break
+                if write_all_results:
+                    try:
+                        # Write raw results (diffed if compress enabled)
+                        if compress:
+                            if prev_data is None or counter % 100 == 0:
+                                output_data = make_json_serializable(data)
+                            else:
+                                diff = generate_incremental_diff(prev_data, data)
+                                output_data = make_json_serializable(diff)
+                            counter += 1
+                            prev_data = data
+                        else:
+                            output_data = data
 
-                prev_data = data
+                        if scoring_keys is None:
+                            scoring_keys = data["optimize"]["scoring"]
+                            n_objectives = len(scoring_keys)
 
-                # Write to disk
-                with open(results_filename, "a") as f:
-                    json.dump(denumpyize(output_data), f)
-                    f.write("\n")
-            except Exception as e:
-                logging.error(f"Error writing results: {e}")
+                        # --- Write to all_results.bin ---
+                        f.write(packer.pack(output_data))
+                        f.flush()
+                    except Exception as e:
+                        logging.error(f"Error writing results: {e}")
+                try:
+                    store.add_entry(data)
+                except Exception as e:
+                    logging.error(f"ParetoStore error: {e}")
+
     except Exception as e:
         logging.error(f"Results writer process error: {e}")
+    finally:
+        # ------------------------------------------------------------------
+        # Make *absolutely* sure the Pareto directory has fresh distance
+        # prefixes before we quit (even after Ctrl-C or an uncaught error).
+        # ------------------------------------------------------------------
+        try:
+            store.flush_interval = 0.0
+            store.flush_now()
+            logging.info("Final Pareto-front update completed.")
+        except Exception as e1:
+            logging.error(f"Unable to flush Pareto front on shutdown: {e1}")
+            traceback.print_exc()
 
 
 def create_shared_memory_file(hlcvs):
@@ -243,8 +286,8 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
                 if len(bounds) == 1:
                     bounds = [bounds[0], bounds[0]]
                 config["bot"][pside][key] = min(max(bounds[0], 0.0), bounds[1])
-        # Call the optimizer overrides
         config = optimizer_overrides(overrides_list, config, pside)
+
     return config
 
 
@@ -290,6 +333,30 @@ def validate_array(arr, name):
         raise ValueError(f"{name} contains inf values")
 
 
+def perturb_individual(individual, bounds, sig_digits):
+    perturbed = []
+    for i, val in enumerate(individual):
+        low, high = bounds[i]
+        if high == low:
+            perturbed.append(val)
+            continue
+
+        # Compute rounding step size based on sig digits
+        step_size = (
+            abs(val) * 10 ** -(sig_digits - 1)
+            if val != 0.0
+            else (high - low) * 10 ** -(sig_digits - 1)
+        )
+        step = step_size * np.random.choice([1.0, -1.0, 0.0])
+
+        new_val = val + step
+        new_val = pbr.round_dynamic(new_val, sig_digits)
+        new_val = min(max(new_val, low), high)
+
+        perturbed.append(new_val)
+    return perturbed
+
+
 class Evaluator:
     def __init__(
         self,
@@ -301,6 +368,8 @@ class Evaluator:
         msss,
         config,
         results_queue,
+        seen_hashes=None,
+        duplicate_counter=None,
     ):
         logging.info("Initializing Evaluator...")
         self.shared_memory_files = shared_memory_files
@@ -331,11 +400,224 @@ class Evaluator:
         self.config = config
         logging.info("Evaluator initialization complete.")
         self.results_queue = results_queue
+        self.seen_hashes = seen_hashes if seen_hashes is not None else {}
+        self.duplicate_counter = duplicate_counter
+        self.param_bounds_expanded = [
+            (v[0], v[-1]) for v in list(self.config["optimize"]["bounds"].values())
+        ]
+        self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
+        self.scoring_weights = {
+            "adg": -1.0,
+            "adg_per_exposure_long": -1.0,
+            "adg_per_exposure_short": -1.0,
+            "adg_w": -1.0,
+            "adg_w_per_exposure_long": -1.0,
+            "adg_w_per_exposure_short": -1.0,
+            "btc_adg": -1.0,
+            "btc_adg_per_exposure_long": -1.0,
+            "btc_adg_per_exposure_short": -1.0,
+            "btc_adg_w": -1.0,
+            "btc_adg_w_per_exposure_long": -1.0,
+            "btc_adg_w_per_exposure_short": -1.0,
+            "btc_calmar_ratio": -1.0,
+            "btc_calmar_ratio_w": -1.0,
+            "btc_drawdown_worst": 1.0,
+            "btc_drawdown_worst_mean_1pct": 1.0,
+            "btc_equity_balance_diff_neg_max": 1.0,
+            "btc_equity_balance_diff_neg_mean": 1.0,
+            "btc_equity_balance_diff_pos_max": 1.0,
+            "btc_equity_balance_diff_pos_mean": 1.0,
+            "btc_equity_choppiness": 1.0,
+            "btc_equity_choppiness_w": 1.0,
+            "btc_equity_jerkiness": 1.0,
+            "btc_equity_jerkiness_w": 1.0,
+            "btc_expected_shortfall_1pct": 1.0,
+            "btc_exponential_fit_error": 1.0,
+            "btc_exponential_fit_error_w": 1.0,
+            "btc_gain": -1.0,
+            "btc_gain_per_exposure_long": -1.0,
+            "btc_gain_per_exposure_short": -1.0,
+            "btc_loss_profit_ratio": 1.0,
+            "btc_loss_profit_ratio_w": 1.0,
+            "btc_mdg": -1.0,
+            "btc_mdg_per_exposure_long": -1.0,
+            "btc_mdg_per_exposure_short": -1.0,
+            "btc_mdg_w": -1.0,
+            "btc_mdg_w_per_exposure_long": -1.0,
+            "btc_mdg_w_per_exposure_short": -1.0,
+            "btc_omega_ratio": -1.0,
+            "btc_omega_ratio_w": -1.0,
+            "btc_sharpe_ratio": -1.0,
+            "btc_sharpe_ratio_w": -1.0,
+            "btc_sortino_ratio": -1.0,
+            "btc_sortino_ratio_w": -1.0,
+            "btc_sterling_ratio": -1.0,
+            "btc_sterling_ratio_w": -1.0,
+            "calmar_ratio": -1.0,
+            "calmar_ratio_w": -1.0,
+            "drawdown_worst": 1.0,
+            "drawdown_worst_mean_1pct": 1.0,
+            "equity_balance_diff_neg_max": 1.0,
+            "equity_balance_diff_neg_mean": 1.0,
+            "equity_balance_diff_pos_max": 1.0,
+            "equity_balance_diff_pos_mean": 1.0,
+            "equity_choppiness": 1.0,
+            "equity_choppiness_w": 1.0,
+            "equity_jerkiness": 1.0,
+            "equity_jerkiness_w": 1.0,
+            "expected_shortfall_1pct": 1.0,
+            "exponential_fit_error": 1.0,
+            "exponential_fit_error_w": 1.0,
+            "gain": -1.0,
+            "gain_per_exposure_long": -1.0,
+            "gain_per_exposure_short": -1.0,
+            "loss_profit_ratio": 1.0,
+            "loss_profit_ratio_w": 1.0,
+            "mdg": -1.0,
+            "mdg_per_exposure_long": -1.0,
+            "mdg_per_exposure_short": -1.0,
+            "mdg_w": -1.0,
+            "mdg_w_per_exposure_long": -1.0,
+            "mdg_w_per_exposure_short": -1.0,
+            "omega_ratio": -1.0,
+            "omega_ratio_w": -1.0,
+            "position_held_hours_max": 1.0,
+            "position_held_hours_mean": 1.0,
+            "position_held_hours_median": 1.0,
+            "position_unchanged_hours_max": 1.0,
+            "positions_held_per_day": 1.0,
+            "sharpe_ratio": -1.0,
+            "sharpe_ratio_w": -1.0,
+            "sortino_ratio": -1.0,
+            "sortino_ratio_w": -1.0,
+            "sterling_ratio": -1.0,
+            "sterling_ratio_w": -1.0,
+        }
+
+        self.build_limit_checks()
+
+    def perturb_step_digits(self, individual, change_chance=0.5):
+        perturbed = []
+        for i, val in enumerate(individual):
+            if np.random.random() < change_chance:  # x% chance of leaving unchanged
+                perturbed.append(val)
+                continue
+            low, high = self.param_bounds_expanded[i]
+            if high == low:
+                perturbed.append(val)
+                continue
+
+            if val != 0.0:
+                exponent = math.floor(math.log10(abs(val))) - (self.sig_digits - 1)
+                step = 10**exponent
+            else:
+                step = (high - low) * 10 ** -(self.sig_digits - 1)
+
+            direction = np.random.choice([-1.0, 1.0])
+            new_val = pbr.round_dynamic(val + step * direction, self.sig_digits)
+            new_val = min(max(new_val, low), high)
+            perturbed.append(new_val)
+
+        return perturbed
+
+    def perturb_x_pct(self, individual, magnitude=0.01):
+        perturbed = []
+        for i, val in enumerate(individual):
+            low, high = self.param_bounds_expanded[i]
+            if high == low:
+                perturbed.append(val)
+                continue
+            new_val = val * (1 + np.random.uniform(-magnitude, magnitude))
+            new_val = min(max(pbr.round_dynamic(new_val, self.sig_digits), low), high)
+            perturbed.append(new_val)
+        return perturbed
+
+    def perturb_random_subset(self, individual, frac=0.2):
+        perturbed = individual.copy()
+        n = len(individual)
+        indices = np.random.choice(n, max(1, int(frac * n)), replace=False)
+        for i in indices:
+            low, high = self.param_bounds_expanded[i]
+            if low != high:
+                delta = (high - low) * 0.01
+                step = delta * np.random.uniform(-1.0, 1.0)
+                val = individual[i] + step
+                perturbed[i] = pbr.round_dynamic(np.clip(val, low, high), self.sig_digits)
+        return perturbed
+
+    def perturb_sample_some(self, individual, frac=0.2):
+        perturbed = individual.copy()
+        n = len(individual)
+        indices = np.random.choice(n, max(1, int(frac * n)), replace=False)
+        for i in indices:
+            low, high = self.param_bounds_expanded[i]
+            if low != high:
+                perturbed[i] = pbr.round_dynamic(np.random.uniform(low, high), self.sig_digits)
+        return perturbed
+
+    def perturb_gaussian(self, individual, scale=0.01):
+        perturbed = []
+        for i, val in enumerate(individual):
+            low, high = self.param_bounds_expanded[i]
+            if high == low:
+                perturbed.append(val)
+                continue
+            noise = np.random.normal(0, scale * (high - low))
+            new_val = pbr.round_dynamic(val + noise, self.sig_digits)
+            new_val = min(max(new_val, low), high)
+            perturbed.append(new_val)
+        return perturbed
+
+    def perturb_large_uniform(self, individual):
+        perturbed = []
+        for i in range(len(individual)):
+            low, high = self.param_bounds_expanded[i]
+            if low == high:
+                perturbed.append(low)
+            else:
+                perturbed.append(pbr.round_dynamic(np.random.uniform(low, high), self.sig_digits))
+        return perturbed
 
     def evaluate(self, individual, overrides_list):
+        if self.sig_digits > 0:
+            individual[:] = [pbr.round_dynamic(v, self.sig_digits) for v in individual]
         config = individual_to_config(
             individual, optimizer_overrides, overrides_list, template=self.config
         )
+        individual_hash = calc_hash(individual)
+        if individual_hash in self.seen_hashes:
+            existing_score = self.seen_hashes[individual_hash]
+            self.duplicate_counter["count"] += 1
+            dup_ct = self.duplicate_counter["count"]
+            perturbation_funcs = [
+                self.perturb_x_pct,
+                self.perturb_step_digits,
+                self.perturb_gaussian,
+                self.perturb_random_subset,
+                self.perturb_sample_some,
+                self.perturb_large_uniform,
+            ]
+            for perturb_fn in perturbation_funcs:
+                perturbed = round_floats(perturb_fn(individual), self.sig_digits)
+                # changed = [(x, y) for x, y in zip(individual, perturbed) if x != y]
+                # print("debug c", changed)
+                new_hash = calc_hash(perturbed)
+                if new_hash not in self.seen_hashes:
+                    logging.info(
+                        f"[DUPLICATE {dup_ct}] resolved with {perturb_fn.__name__} Hash: {new_hash}"
+                    )
+                    individual[:] = perturbed
+                    self.seen_hashes[new_hash] = None
+                    config = individual_to_config(
+                        perturbed, optimizer_overrides, overrides_list, template=self.config
+                    )
+                    break
+            else:
+                logging.info(f"[DUPLICATE {dup_ct}] All perturbations failed.")
+                if existing_score is not None:
+                    return existing_score
+        else:
+            self.seen_hashes[individual_hash] = None
         analyses = {}
         for exchange in self.exchanges:
             bot_params, _, _ = prep_backtest_args(
@@ -349,27 +631,26 @@ class Evaluator:
                 self.shared_memory_files[exchange],
                 self.hlcvs_shapes[exchange],
                 self.hlcvs_dtypes[exchange].str,
-                self.btc_usd_shared_memory_files[exchange],  # Pass BTC/USD shared memory file
-                self.btc_usd_dtypes[exchange].str,  # Pass BTC/USD dtype
+                self.btc_usd_shared_memory_files[exchange],
+                self.btc_usd_dtypes[exchange].str,
                 bot_params,
                 self.exchange_params[exchange],
                 self.backtest_params[exchange],
             )
             analyses[exchange] = expand_analysis(analysis_usd, analysis_btc, fills, config)
-
         analyses_combined = self.combine_analyses(analyses)
-        w_0, w_1 = self.calc_fitness(analyses_combined)
-        analyses_combined.update({"w_0": w_0, "w_1": w_1})
-
+        objectives = self.calc_fitness(analyses_combined)
+        for i, val in enumerate(objectives):
+            analyses_combined[f"w_{i}"] = val
         data = {
             **config,
-            **{
-                "analyses_combined": analyses_combined,
-                "analyses": analyses,
-            },
+            "analyses_combined": analyses_combined,
+            "analyses": analyses,
         }
         self.results_queue.put(data)
-        return w_0, w_1
+        actual_hash = calc_hash(individual)
+        self.seen_hashes[actual_hash] = tuple(objectives)
+        return tuple(objectives)
 
     def combine_analyses(self, analyses):
         analyses_combined = {}
@@ -395,40 +676,59 @@ class Evaluator:
                     raise
         return analyses_combined
 
+    def build_limit_checks(self):
+        self.limit_checks = []
+        limits = self.config["optimize"].get("limits", {})
+        scoring_weights = self.scoring_weights
+
+        for i, full_key in enumerate(sorted(limits)):
+            bound = limits[full_key]
+
+            if full_key.startswith("penalize_if_greater_than_"):
+                metric = full_key[len("penalize_if_greater_than_") :]
+                penalize_if = "greater"
+            elif full_key.startswith("penalize_if_lower_than_"):
+                metric = full_key[len("penalize_if_lower_than_") :]
+                penalize_if = "lower"
+            else:
+                # Fallback for scoring_weight-based logic
+                metric = full_key
+                weight = scoring_weights.get(metric)
+                if weight is None:
+                    continue
+                penalize_if = "lower" if weight < 0 else "greater"
+            suffix = "min" if penalize_if == "lower" else "max"
+
+            self.limit_checks.append(
+                {
+                    "metric_key": f"{metric}_{suffix}",
+                    "penalize_if": penalize_if,
+                    "bound": bound,
+                    "penalty_weight": 1e6,
+                }
+            )
+
     def calc_fitness(self, analyses_combined):
         modifier = 0.0
-        keys = sorted(self.config["optimize"]["limits"])
-        i = len(keys) + 1
-        prefix = "btc_" if self.config["backtest"]["use_btc_collateral"] else ""
-        for key in keys:
-            keym = key.replace("lower_bound_", "") + "_max"
-            if keym not in analyses_combined:
-                keym = prefix + keym
-                assert keym in analyses_combined, f"malformed key {keym}"
-            modifier += (
-                max(self.config["optimize"]["limits"][key], analyses_combined[keym])
-                - self.config["optimize"]["limits"][key]
-            ) * 10**i
-            i -= 1
-        if (
-            analyses_combined[f"{prefix}drawdown_worst_max"] >= 1.0
-            or analyses_combined[f"{prefix}equity_balance_diff_neg_max_max"] >= 1.0
-        ):
-            w_0 = w_1 = modifier
-        else:
-            assert (
-                len(self.config["optimize"]["scoring"]) == 2
-            ), f"there needs to be two fitness scoring keys {self.config['optimize']['scoring']}"
-            scores = []
-            for sk in self.config["optimize"]["scoring"]:
-                skm = f"{sk}_mean"
-                if skm not in analyses_combined:
-                    skm = prefix + skm
-                    if skm not in analyses_combined:
-                        raise Exception(f"invalid scoring key {sk}")
-                scores.append(modifier - analyses_combined[skm])
-            return scores[0], scores[1]
-        return w_0, w_1
+        for check in self.limit_checks:
+            val = analyses_combined.get(check["metric_key"])
+            if val is None:
+                continue
+
+            if check["penalize_if"] == "greater" and val > check["bound"]:
+                modifier += (val - check["bound"]) * (check["penalty_weight"])
+            elif check["penalize_if"] == "lower" and val < check["bound"]:
+                modifier += (check["bound"] - val) * (check["penalty_weight"])
+
+        scores = []
+        for sk in sorted(self.config["optimize"]["scoring"]):
+            val = analyses_combined.get(f"{sk}_mean")
+            if val is None:
+                val = analyses_combined.get(f"{sk}_mean")
+            if val is None:
+                return None
+            scores.append(val * self.scoring_weights[sk] + modifier)
+        return tuple(scores)
 
     def __del__(self):
         if hasattr(self, "mmap_contexts"):
@@ -474,7 +774,7 @@ def add_extra_options(parser):
 def extract_configs(path):
     cfgs = []
     if os.path.exists(path):
-        if path.endswith("_all_results.txt"):
+        if path.endswith("_all_results.bin"):
             logging.info(f"Skipping {path}")
             return []
         if path.endswith(".json"):
@@ -507,12 +807,14 @@ def get_starting_configs(starting_configs: str):
     return extract_configs(starting_configs)
 
 
-def configs_to_individuals(cfgs, param_bounds):
+def configs_to_individuals(cfgs, param_bounds, sig_digits=0):
     inds = {}
     for cfg in cfgs:
         try:
             fcfg = format_config(cfg, verbose=False)
             individual = config_to_individual(fcfg, param_bounds)
+            if sig_digits > 0:
+                individual = round_floats(individual, sig_digits)
             inds[calc_hash(individual)] = individual
             # add duplicate of config, but with lowered total wallet exposure limit
             fcfg2 = deepcopy(fcfg)
@@ -545,20 +847,15 @@ async def main():
     add_arguments_recursively(parser, template_config)
     add_extra_options(parser)
     args = parser.parse_args()
-    logging.basicConfig(
-        format="%(asctime)s %(levelname)-8s %(message)s",
-        level=logging.INFO,
-        datefmt="%Y-%m-%dT%H:%M:%S",
-    )
     if args.config_path is None:
         logging.info(f"loading default template config configs/template.json")
-        config = load_config("configs/template.json", verbose=False)
+        config = load_config("configs/template.json", verbose=True)
     else:
         logging.info(f"loading config {args.config_path}")
-        config = load_config(args.config_path, verbose=False)
+        config = load_config(args.config_path, verbose=True)
     old_config = deepcopy(config)
     update_config_with_args(config, args)
-    config = format_config(config, verbose=False)
+    config = format_config(config, verbose=True)
     await add_all_eligible_coins_to_config(config)
     try:
         # Prepare data for each exchange
@@ -654,18 +951,30 @@ async def main():
                 / (1000 * 60 * 60 * 24)
             )
         )
-        config["results_filename"] = make_get_filepath(
-            f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}_all_results.txt"
+        results_dir = make_get_filepath(
+            f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}/"
         )
+        os.makedirs(results_dir, exist_ok=True)
+        config["results_dir"] = results_dir
+        results_filename = os.path.join(results_dir, "all_results.bin")
+        config["results_filename"] = results_filename
         overrides_list = config.get("optimize", {}).get("enable_overrides", [])
 
         # Create results queue and start manager process
         manager = multiprocessing.Manager()
         results_queue = manager.Queue()
-        writer_process = Process(
+        seen_hashes = manager.dict()
+        duplicate_counter = manager.dict()
+        duplicate_counter["count"] = 0
+        flush_interval = 60  # or read from your config
+        sig_digits = config["optimize"]["round_to_n_significant_digits"]
+        writer_process = multiprocessing.Process(
             target=results_writer_process,
-            args=(results_queue, config["results_filename"]),
-            kwargs={"compress": config["optimize"]["compress_results_file"]},
+            args=(results_queue, results_dir, sig_digits, flush_interval),
+            kwargs={
+                "compress": config["optimize"]["compress_results_file"],
+                "write_all_results": config["optimize"].get("write_all_results", True),  # ← new
+            },
         )
         writer_process.start()
 
@@ -693,10 +1002,13 @@ async def main():
             msss=msss,
             config=config,
             results_queue=results_queue,
+            seen_hashes=seen_hashes,
+            duplicate_counter=duplicate_counter,
         )
 
         logging.info(f"Finished initializing evaluator...")
-        creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -1.0))  # Minimize both objectives
+        n_objectives = len(config["optimize"]["scoring"])
+        creator.create("FitnessMulti", base.Fitness, weights=(-1.0,) * n_objectives)
         creator.create("Individual", list, fitness=creator.FitnessMulti)
 
         toolbox = base.Toolbox()
@@ -751,7 +1063,9 @@ async def main():
 
         bounds = [(low, high) for low, high in param_bounds.values()]
         starting_individuals = configs_to_individuals(
-            get_starting_configs(args.starting_configs), param_bounds
+            get_starting_configs(args.starting_configs),
+            param_bounds,
+            config["optimize"]["round_to_n_significant_digits"],
         )
         if (nstart := len(starting_individuals)) > (popsize := config["optimize"]["population_size"]):
             logging.info(f"Number of starting configs greater than population size.")
@@ -768,22 +1082,25 @@ async def main():
                 ]
                 population[i] = creator.Individual(adjusted)
 
+            # populate up to half of the population with duplicates of random choices within starting configs
+            # duplicates will be perturbed during runtime
             for i in range(len(starting_individuals), len(population) // 2):
-                mutant = deepcopy(population[np.random.choice(range(len(starting_individuals)))])
-                toolbox.mutate(mutant)
-                population[i] = mutant
+                population[i] = deepcopy(
+                    population[np.random.choice(range(len(starting_individuals)))]
+                )
 
         logging.info(f"Initial population size: {len(population)}")
 
         # Set up statistics and hall of fame
         stats = tools.Statistics(lambda ind: ind.fitness.values)
-        stats.register("avg", np.mean, axis=0)
-        stats.register("std", np.std, axis=0)
+        # stats.register("avg", np.mean, axis=0)
+        # stats.register("std", np.std, axis=0)
         stats.register("min", np.min, axis=0)
         stats.register("max", np.max, axis=0)
 
         logbook = tools.Logbook()
-        logbook.header = "gen", "evals", "std", "min", "avg", "max"
+        # logbook.header = "gen", "evals", "std", "min", "avg", "max"
+        logbook.header = "gen", "evals", "min", "max"
 
         hof = tools.ParetoFront()
 
@@ -799,7 +1116,7 @@ async def main():
             ngen=max(1, int(config["optimize"]["iters"] / len(population))),
             stats=stats,
             halloffame=hof,
-            verbose=True,
+            verbose=False,
         )
 
         # Print statistics
@@ -807,17 +1124,6 @@ async def main():
 
         logging.info(f"Optimization complete.")
 
-        try:
-            logging.info(f"Extracting best config...")
-            result = subprocess.run(
-                ["python3", "src/tools/extract_best_config.py", config["results_filename"], "-v"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            print(result.stdout)
-        except Exception as e:
-            logging.error(f"failed to extract best config {e}")
     except Exception as e:
         logging.error(f"An error occurred: {e}")
         traceback.print_exc()

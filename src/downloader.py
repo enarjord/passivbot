@@ -164,23 +164,36 @@ def attempt_gap_fix_ohlcvs(df, symbol=None):
     return new_df.reset_index().rename(columns={"index": "timestamp"})
 
 
-async def fetch_url(session, url):
-    async with session.get(url) as response:
-        response.raise_for_status()
-        return await response.read()
+async def fetch_url(session, url, retries=5, backoff=1.5):
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            async with session.get(url) as response:
+                response.raise_for_status()
+                return await response.read()
+        except Exception as e:
+            last_exc = e
+            wait_time = backoff**attempt
+            logging.warning(
+                f"Attempt {attempt + 1} failed for {url}: {e}, retrying in {wait_time:.1f}s..."
+            )
+            await asyncio.sleep(wait_time)
+    logging.error(f"All {retries} attempts failed for {url}")
+    raise last_exc
 
 
 async def fetch_zips(url):
-    try:
-        async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as session:
+        try:
             content = await fetch_url(session, url)
-        zips = []
-        with zipfile.ZipFile(BytesIO(content), "r") as z:
-            for f in z.namelist():
-                zips.append(z.open(f))
-        return zips
-    except Exception as e:
-        logging.error(f"Error fetching zips {url}: {e}")
+            zips = []
+            with zipfile.ZipFile(BytesIO(content), "r") as z:
+                for f in z.namelist():
+                    zips.append(z.open(f))
+            return zips
+        except Exception as e:
+            logging.error(f"Error fetching zips {url}: {e}")
+            return []
 
 
 async def get_zip_binance(url):
@@ -975,11 +988,13 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
                     f"{exchange} Coin {coin} too young, start date {ts_to_date_utc(first_ts)}. Skipping"
                 )
                 continue
-            first_ts_plus_min_coin_age = first_timestamps_unified[coin] + min_coin_age_ms
-            if first_ts_plus_min_coin_age >= end_ts:
+            coin_age_days = int(
+                round(utc_ms() - first_timestamps_unified[coin]) / (1000 * 60 * 60 * 24)
+            )
+            if coin_age_days < minimum_coin_age_days:
                 logging.info(
-                    f"{exchange} Coin {coin}: Not traded due to min_coin_age {int(minimum_coin_age_days)} days"
-                    f"{ts_to_date_utc(first_ts_plus_min_coin_age)}. Skipping"
+                    f"{exchange} Coin {coin}: Not traded due to min_coin_age {int(minimum_coin_age_days)} days. "
+                    f"{coin} is {coin_age_days} days old. Skipping"
                 )
                 continue
             new_adjusted_start_ts = max(first_timestamps_unified[coin] + min_coin_age_ms, first_ts)
@@ -1028,10 +1043,12 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
     timestamps = np.arange(global_start_time, global_end_time + interval_ms, interval_ms)
 
     # Pre-allocate the unified array
-    unified_array = np.zeros((n_timesteps, n_coins, 4))
+    unified_array = np.full((n_timesteps, n_coins, 4), -1.0, dtype=np.float64)
 
     # Second pass: Load data from disk and populate the unified array
-    logging.info(f"{exchange} Unifying data for {len(valid_coins)} coins into single numpy array...")
+    logging.info(
+        f"{exchange} Unifying data for {len(valid_coins)} coin{'s' if len(valid_coins) > 1 else ''} into single numpy array..."
+    )
     for i, coin in enumerate(tqdm(valid_coins, desc="Processing coins", unit="coin")):
         file_path = valid_coins[coin]
         ohlcv = np.load(file_path)
@@ -1168,10 +1185,11 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
             continue
 
         # Check if coin is "too young": first_ts + min_coin_age >= end_ts
-        # meaning there's effectively no eligible window to trade/backtest
-        if coin_fts + min_coin_age_ms >= end_ts:
+        coin_age_days = int(round(utc_ms() - coin_fts) / (1000 * 60 * 60 * 24))
+        if coin_age_days < min_coin_age_days:
             logging.info(
-                f"Skipping coin {coin}: it does not satisfy the minimum_coin_age_days = {min_coin_age_days}"
+                f"Skipping coin {coin}: it does not satisfy the minimum_coin_age_days = {min_coin_age_days}. "
+                f"{coin} is {coin_age_days} days old."
             )
             continue
 
@@ -1266,7 +1284,7 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
     pprint.pprint(dict(exchange_volume_ratios_mapped))
 
     # We'll store [high, low, close, volume] in the last dimension
-    unified_array = np.zeros((n_timesteps, n_coins, 4), dtype=np.float64)
+    unified_array = np.full((n_timesteps, n_coins, 4), -1.0, dtype=np.float64)
 
     # For each coin i, reindex its DataFrame onto the full timestamps
     for i, coin in enumerate(valid_coins):
@@ -1283,11 +1301,11 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
         df["high"] = df["high"].fillna(df["close"])
         df["low"] = df["low"].fillna(df["close"])
 
-        # Fill volume with 0.0 for missing bars, then apply scaling factor
-        df["volume"] = df["volume"].fillna(0.0)
+        # Apply scaling factor, then fill volume with -1.0 for missing bars
         exchange_for_this_coin = chosen_mss_per_coin[coin]["exchange"]
         scaling_factor = exchange_volume_ratios_mapped[exchange_for_this_coin][reference_exchange]
         df["volume"] *= scaling_factor
+        df["volume"] = df["volume"].fillna(-1.0)
 
         # Now extract columns in correct order
         coin_data = df[["high", "low", "close", "volume"]].values

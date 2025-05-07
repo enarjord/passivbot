@@ -1,11 +1,9 @@
 use crate::backtest::{analyze_backtest_pair, Backtest};
 use crate::closes::{
-    calc_closes_long, calc_closes_short, calc_grid_close_long, calc_next_close_long,
-    calc_next_close_short, calc_trailing_close_long,
+    calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
 };
 use crate::entries::{
-    calc_entries_long, calc_entries_short, calc_grid_entry_long, calc_next_entry_long,
-    calc_next_entry_short, calc_trailing_entry_long,
+    calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
 };
 use crate::types::{
     Analysis, BacktestParams, BotParams, BotParamsPair, EMABands, Equities, ExchangeParams, Order,
@@ -226,14 +224,24 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         entry_grid_spacing_pct: extract_value(dict, "entry_grid_spacing_pct")?,
         entry_initial_ema_dist: extract_value(dict, "entry_initial_ema_dist")?,
         entry_initial_qty_pct: extract_value(dict, "entry_initial_qty_pct")?,
+        entry_trailing_double_down_factor: extract_value(
+            dict,
+            "entry_trailing_double_down_factor",
+        )?,
         entry_trailing_retracement_pct: extract_value(dict, "entry_trailing_retracement_pct")?,
         entry_trailing_grid_ratio: extract_value(dict, "entry_trailing_grid_ratio")?,
         entry_trailing_threshold_pct: extract_value(dict, "entry_trailing_threshold_pct")?,
-        filter_rolling_window: {
-            let filter_rolling_window_float: f64 = extract_value(dict, "filter_rolling_window")?;
-            filter_rolling_window_float.round() as usize
+        filter_noisiness_rolling_window: {
+            let filter_noisiness_rolling_window_float: f64 =
+                extract_value(dict, "filter_noisiness_rolling_window")?;
+            filter_noisiness_rolling_window_float.round() as usize
         },
-        filter_relative_volume_clip_pct: extract_value(dict, "filter_relative_volume_clip_pct")?,
+        filter_volume_rolling_window: {
+            let filter_volume_rolling_window_float: f64 =
+                extract_value(dict, "filter_volume_rolling_window")?;
+            filter_volume_rolling_window_float.round() as usize
+        },
+        filter_volume_drop_pct: extract_value(dict, "filter_volume_drop_pct")?,
         ema_span_0: extract_value(dict, "ema_span_0")?,
         ema_span_1: extract_value(dict, "ema_span_1")?,
         n_positions: {
@@ -259,215 +267,6 @@ fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a PyDict, key: &str) -> 
 }
 
 #[pyfunction]
-pub fn calc_grid_close_long_py(
-    qty_step: f64,
-    price_step: f64,
-    min_qty: f64,
-    min_cost: f64,
-    c_mult: f64,
-    close_grid_markup_range: f64,
-    close_grid_min_markup: f64,
-    close_grid_qty_pct: f64,
-    wallet_exposure_limit: f64,
-    balance: f64,
-    position_size: f64,
-    position_price: f64,
-    order_book_ask: f64,
-) -> (f64, f64, String) {
-    let exchange_params = ExchangeParams {
-        qty_step,
-        price_step,
-        min_qty,
-        min_cost,
-        c_mult,
-    };
-    let state_params = StateParams {
-        balance,
-        order_book: OrderBook {
-            ask: order_book_ask,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let bot_params = BotParams {
-        close_grid_markup_range,
-        close_grid_min_markup,
-        close_grid_qty_pct,
-        wallet_exposure_limit,
-        ..Default::default()
-    };
-    let position = Position {
-        size: position_size,
-        price: position_price,
-    };
-
-    let order = calc_grid_close_long(&exchange_params, &state_params, &bot_params, &position);
-    (order.qty, order.price, order.order_type.to_string())
-}
-
-#[pyfunction]
-pub fn calc_trailing_close_long_py(
-    price_step: f64,
-    order_book_ask: f64,
-    max_since_open: f64,
-    min_since_max: f64,
-    close_trailing_threshold_pct: f64,
-    close_trailing_retracement_pct: f64,
-    position_size: f64,
-    position_price: f64,
-) -> (f64, f64, String) {
-    let exchange_params = ExchangeParams {
-        price_step,
-        ..Default::default()
-    };
-    let state_params = StateParams {
-        order_book: OrderBook {
-            ask: order_book_ask,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let bot_params = BotParams {
-        close_trailing_retracement_pct: close_trailing_retracement_pct,
-        close_trailing_threshold_pct: close_trailing_threshold_pct,
-        ..Default::default()
-    };
-    let position = Position {
-        size: position_size,
-        price: position_price,
-    };
-    let trailing_price_bundle = TrailingPriceBundle {
-        max_since_open: max_since_open,
-        min_since_max: min_since_max,
-        ..Default::default()
-    };
-    let order = calc_trailing_close_long(
-        &exchange_params,
-        &state_params,
-        &bot_params,
-        &position,
-        &trailing_price_bundle,
-    );
-    (order.qty, order.price, order.order_type.to_string())
-}
-
-#[pyfunction]
-pub fn calc_grid_entry_long_py(
-    qty_step: f64,
-    price_step: f64,
-    min_qty: f64,
-    min_cost: f64,
-    c_mult: f64,
-    balance: f64,
-    order_book_bid: f64,
-    ema_bands_lower: f64,
-    entry_grid_double_down_factor: f64,
-    entry_grid_spacing_weight: f64,
-    entry_grid_spacing_pct: f64,
-    entry_initial_ema_dist: f64,
-    entry_initial_qty_pct: f64,
-    wallet_exposure_limit: f64,
-    position_size: f64,
-    position_price: f64,
-) -> (f64, f64, String) {
-    let exchange_params = ExchangeParams {
-        qty_step,
-        price_step,
-        min_qty,
-        min_cost,
-        c_mult,
-    };
-    let state_params = StateParams {
-        balance,
-        order_book: OrderBook {
-            bid: order_book_bid,
-            ..Default::default()
-        },
-        ema_bands: EMABands {
-            lower: ema_bands_lower,
-            ..Default::default()
-        },
-    };
-    let bot_params = BotParams {
-        entry_grid_double_down_factor,
-        entry_grid_spacing_weight,
-        entry_grid_spacing_pct,
-        entry_initial_ema_dist,
-        entry_initial_qty_pct,
-        wallet_exposure_limit,
-        ..Default::default()
-    };
-    let position = Position {
-        size: position_size,
-        price: position_price,
-    };
-
-    let order = calc_grid_entry_long(&exchange_params, &state_params, &bot_params, &position);
-    (order.qty, order.price, order.order_type.to_string())
-}
-
-#[pyfunction]
-pub fn calc_trailing_entry_long_py(
-    qty_step: f64,
-    price_step: f64,
-    min_qty: f64,
-    min_cost: f64,
-    c_mult: f64,
-    balance: f64,
-    order_book_bid: f64,
-    entry_grid_double_down_factor: f64,
-    entry_initial_qty_pct: f64,
-    wallet_exposure_limit: f64,
-    position_size: f64,
-    position_price: f64,
-    min_since_open: f64,
-    max_since_min: f64,
-    entry_trailing_threshold_pct: f64,
-    entry_trailing_retracement_pct: f64,
-) -> (f64, f64, String) {
-    let exchange_params = ExchangeParams {
-        qty_step,
-        price_step,
-        min_qty,
-        min_cost,
-        c_mult,
-    };
-    let state_params = StateParams {
-        balance,
-        order_book: OrderBook {
-            bid: order_book_bid,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let bot_params = BotParams {
-        entry_grid_double_down_factor,
-        entry_initial_qty_pct,
-        entry_trailing_threshold_pct,
-        entry_trailing_retracement_pct,
-        wallet_exposure_limit,
-        ..Default::default()
-    };
-    let position = Position {
-        size: position_size,
-        price: position_price,
-    };
-    let trailing_price_bundle = TrailingPriceBundle {
-        min_since_open: min_since_open,
-        max_since_min: max_since_min,
-        ..Default::default()
-    };
-    let order = calc_trailing_entry_long(
-        &exchange_params,
-        &state_params,
-        &bot_params,
-        &position,
-        &trailing_price_bundle,
-    );
-    (order.qty, order.price, order.order_type.to_string())
-}
-
-#[pyfunction]
 pub fn calc_next_entry_long_py(
     qty_step: f64,
     price_step: f64,
@@ -479,6 +278,7 @@ pub fn calc_next_entry_long_py(
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
+    entry_trailing_double_down_factor: f64,
     entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
     entry_trailing_threshold_pct: f64,
@@ -516,6 +316,7 @@ pub fn calc_next_entry_long_py(
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
+        entry_trailing_double_down_factor,
         entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
         entry_trailing_threshold_pct,
@@ -631,6 +432,7 @@ pub fn calc_next_entry_short_py(
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
+    entry_trailing_double_down_factor: f64,
     entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
     entry_trailing_threshold_pct: f64,
@@ -668,6 +470,7 @@ pub fn calc_next_entry_short_py(
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
+        entry_trailing_double_down_factor,
         entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
         entry_trailing_threshold_pct,
@@ -783,6 +586,7 @@ pub fn calc_entries_long_py(
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
+    entry_trailing_double_down_factor: f64,
     entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
     entry_trailing_threshold_pct: f64,
@@ -822,6 +626,7 @@ pub fn calc_entries_long_py(
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
+        entry_trailing_double_down_factor,
         entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
         entry_trailing_threshold_pct,
@@ -865,6 +670,7 @@ pub fn calc_entries_short_py(
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
+    entry_trailing_double_down_factor: f64,
     entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
     entry_trailing_threshold_pct: f64,
@@ -904,6 +710,7 @@ pub fn calc_entries_short_py(
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
+        entry_trailing_double_down_factor,
         entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
         entry_trailing_threshold_pct,

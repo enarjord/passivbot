@@ -69,6 +69,10 @@ def release_lock():
 
 
 def check_compilation_needed():
+    # Skip Rust compilation checks if requested via environment variable
+    if os.environ.get("SKIP_RUST_COMPILE", "").lower() in ("1", "true", "yes"):
+        print("SKIP_RUST_COMPILE set; skipping Rust extension compilation.")
+        return False
     try:
         # Find the most recently modified compiled extension
         compiled_files = [path for path in COMPILED_EXTENSION_PATHS if os.path.exists(path)]

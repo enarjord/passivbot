@@ -3,6 +3,7 @@ import json
 import argparse
 import sys
 import os
+import traceback
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from pure_funcs import calc_hash, symbol_to_coin, ts_to_date_utc
@@ -10,14 +11,19 @@ from procedures import utc_ms
 
 
 def is_stablecoin(elm):
-    if elm["symbol"] in ["tether", "usdb", "usdy", "tusd", "usd0", "usde"]:
-        return True
-    if (
-        all([abs(elm[k] - 1.0) < 0.01 for k in ["high_24h", "low_24h", "current_price"]])
-        and abs(elm["price_change_24h"]) < 0.01
-    ):
-        return True
-    return False
+    try:
+        if elm["symbol"] in ["tether", "usdb", "usdy", "tusd", "usd0", "usde"]:
+            return True
+        if (
+            all([abs(elm[k] - 1.0) < 0.01 for k in ["high_24h", "low_24h", "current_price"]])
+            and abs(elm["price_change_24h"]) < 0.01
+        ):
+            return True
+        return False
+    except Exception as e:
+        print(f"error with is_stablecoin {elm} {e}")
+        traceback.print_exc()
+        return False
 
 
 def get_top_market_caps(n_coins, minimum_market_cap_millions, exchange=None):
@@ -77,6 +83,16 @@ def get_top_market_caps(n_coins, minimum_market_cap_millions, exchange=None):
         added = []
         disapproved = {}
         for elm in market_data:
+            circulating = elm.get("circulating_supply") or 0.0
+            total = elm.get("total_supply") or elm.get("max_supply") or 1.0  # Avoid divide-by-zero
+            price = elm.get("current_price") or 0.0
+            mcap = circulating * price
+            supply_ratio = circulating / total if total > 0 else 0.0
+            penalized_mcap = mcap * supply_ratio  # downweight based on concentration
+            elm["supply_ratio"] = supply_ratio
+            elm["penalized_mcap"] = penalized_mcap
+            elm["liquidity_ratio"] = elm["total_volume"] / elm["market_cap"]
+
             coin = elm["symbol"].upper()
             if len(approved_coins) >= n_coins:
                 print(f"N coins == {n_coins}")
@@ -159,4 +175,5 @@ if __name__ == "__main__":
     else:
         fname = args.output
     print(f"Dumping output to {fname}")
+    json.dump(market_caps, open(fname.replace(".json", "_full.json"), "w"))
     json.dump(list(market_caps), open(fname, "w"))
