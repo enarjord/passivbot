@@ -110,38 +110,45 @@ class ParetoStore:
             self._last_flush_ts = time.time()
 
     def _write_all_to_disk(self) -> None:
-        """Write each (distance‑prefixed) file. """
+        """
+        Flush the current Pareto front to disk.
+
+        * For every hash in ``self._front`` an up‑to‑date
+          ``"<dist>_<hash>.json"`` file is created if it does not already exist.
+        * After writing, every ``*.json`` file whose hash is **not** in
+          the front is removed.  The directory therefore mirrors the
+          in‑memory set 1‑to‑1.
+        """
         if not self._front:
             return
 
-        # Pre‑compute min/max for distance normalisation
-        obj_matrix = list(self._objectives[h] for h in self._front)
+        # ── distance normalisation ------------------------------------------------
+        obj_matrix = [self._objectives[h] for h in self._front]
         mins = [min(col) for col in zip(*obj_matrix)]
         maxs = [max(col) for col in zip(*obj_matrix)]
-        ideal = mins  # min‑as‑ideal
+
+        live_files: set[str] = set()
 
         for h in self._front:
             obj = self._objectives[h]
             norm = [(v - mi) / (ma - mi) if ma > mi else 0.0 for v, mi, ma in zip(obj, mins, maxs)]
-            dist = math.sqrt(sum((v - i) ** 2 for v, i in zip(norm, [0.0] * len(norm))))
-            dist_prefix = f"{dist:08.4f}"
-            fname = f"{dist_prefix}_{h}.json"
-            path = os.path.join(self.pareto_dir, fname)
+            dist = math.sqrt(sum(v * v for v in norm))
+            path = os.path.join(self.pareto_dir, f"{dist:08.4f}_{h}.json")
+            live_files.add(path)
 
-            # remove any obsolete files that have the same hash but an older prefix
-            for old in glob.glob(os.path.join(self.pareto_dir, f"*_{h}.json")):
-                if old != path:
-                    try:
-                        os.remove(old)
-                    except OSError as e:
-                        self._log.warning(f"Could not remove stale Pareto file {old}: {e}")
-
-            # write if not present or contents changed
             if not os.path.exists(path):
                 tmp = path + ".tmp"
                 with open(tmp, "w") as f:
                     json.dump(self._entries[h], f, separators=(",", ":"), indent=4)
                 os.replace(tmp, path)
+
+        # ── one‑pass purge of everything that is *not* in the front --------------
+        for fp in glob.glob(os.path.join(self.pareto_dir, "*.json")):
+            if fp not in live_files:
+                try:
+                    os.remove(fp)
+                except OSError as e:
+                    self._log.warning("Could not remove obsolete Pareto file %s: %s", fp, e)
 
     def _bootstrap_from_disk(self) -> None:
         """
@@ -483,7 +490,7 @@ def main():
         ax = axes[0]
 
         # Only show up to the top 100 solutions to avoid clutter and improve performance
-        top_indices = df_sorted.index[:100]
+        top_indices = df_sorted.index[:200]
 
         # Plot in one batch for better performance
         for i in top_indices:

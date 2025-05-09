@@ -280,6 +280,8 @@ pub struct Analysis {
     pub calmar_ratio_w: f64,
     pub sterling_ratio_w: f64,
     pub loss_profit_ratio_w: f64,
+    pub volume_pct_per_day_avg: f64,
+    pub volume_pct_per_day_avg_w: f64,
 }
 
 impl Default for Analysis {
@@ -320,6 +322,8 @@ impl Default for Analysis {
             equity_choppiness_w: 1.0,
             equity_jerkiness_w: 1.0,
             exponential_fit_error_w: 1.0,
+            volume_pct_per_day_avg: 0.0,
+            volume_pct_per_day_avg_w: 0.0,
         }
     }
 }

@@ -53,12 +53,35 @@ from optimizer_overrides import optimizer_overrides
 from opt_utils import make_json_serializable, generate_incremental_diff, round_floats
 from pareto_store import ParetoStore
 import msgpack
+from typing import Sequence, Tuple, List
 
 logging.basicConfig(
     format="%(asctime)s %(processName)-12s %(levelname)-8s %(message)s",
     level=logging.INFO,
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
+
+# === bounds helpers =========================================================
+
+Bound = Tuple[float, float]
+
+
+def enforce_bounds(values: Sequence[float], bounds: Sequence[Bound]) -> List[float]:
+    """
+    Clamp each value to its corresponding [low, high] interval.
+
+    Args:
+        values : iterable of floats (length == len(bounds))
+        bounds : iterable of (low, high) pairs
+
+    Returns
+        List[float]  – clamped copy (original is *not* modified)
+    """
+    assert len(values) == len(bounds), "values/bounds length mismatch"
+    return [high if v > high else low if v < low else v for v, (low, high) in zip(values, bounds)]
+
+
+# ============================================================================
 
 
 def results_writer_process(
@@ -305,9 +328,7 @@ def config_to_individual(config, param_bounds):
             if k not in keys_ignored
         ]
     # adjust to bounds
-    bounds = [(low, high) for low, high in param_bounds.values()]
-    adjusted = [max(min(x, bounds[z][1]), bounds[z][0]) for z, x in enumerate(individual)]
-    return adjusted
+    return enforce_bounds(individual, [(lo, hi) for lo, hi in param_bounds.values()])
 
 
 @contextmanager
@@ -331,30 +352,6 @@ def validate_array(arr, name):
         raise ValueError(f"{name} contains NaN values")
     if np.any(np.isinf(arr)):
         raise ValueError(f"{name} contains inf values")
-
-
-def perturb_individual(individual, bounds, sig_digits):
-    perturbed = []
-    for i, val in enumerate(individual):
-        low, high = bounds[i]
-        if high == low:
-            perturbed.append(val)
-            continue
-
-        # Compute rounding step size based on sig digits
-        step_size = (
-            abs(val) * 10 ** -(sig_digits - 1)
-            if val != 0.0
-            else (high - low) * 10 ** -(sig_digits - 1)
-        )
-        step = step_size * np.random.choice([1.0, -1.0, 0.0])
-
-        new_val = val + step
-        new_val = pbr.round_dynamic(new_val, sig_digits)
-        new_val = min(max(new_val, low), high)
-
-        perturbed.append(new_val)
-    return perturbed
 
 
 class Evaluator:
@@ -515,10 +512,9 @@ class Evaluator:
 
             direction = np.random.choice([-1.0, 1.0])
             new_val = pbr.round_dynamic(val + step * direction, self.sig_digits)
-            new_val = min(max(new_val, low), high)
             perturbed.append(new_val)
 
-        return perturbed
+        return enforce_bounds(perturbed, self.param_bounds_expanded)
 
     def perturb_x_pct(self, individual, magnitude=0.01):
         perturbed = []
@@ -527,10 +523,11 @@ class Evaluator:
             if high == low:
                 perturbed.append(val)
                 continue
-            new_val = val * (1 + np.random.uniform(-magnitude, magnitude))
-            new_val = min(max(pbr.round_dynamic(new_val, self.sig_digits), low), high)
+            new_val = pbr.round_dynamic(
+                val * (1 + np.random.uniform(-magnitude, magnitude)), self.sig_digits
+            )
             perturbed.append(new_val)
-        return perturbed
+        return enforce_bounds(perturbed, self.param_bounds_expanded)
 
     def perturb_random_subset(self, individual, frac=0.2):
         perturbed = individual.copy()
@@ -542,8 +539,8 @@ class Evaluator:
                 delta = (high - low) * 0.01
                 step = delta * np.random.uniform(-1.0, 1.0)
                 val = individual[i] + step
-                perturbed[i] = pbr.round_dynamic(np.clip(val, low, high), self.sig_digits)
-        return perturbed
+                perturbed[i] = pbr.round_dynamic(val, self.sig_digits)
+        return enforce_bounds(perturbed, self.param_bounds_expanded)
 
     def perturb_sample_some(self, individual, frac=0.2):
         perturbed = individual.copy()
@@ -553,7 +550,7 @@ class Evaluator:
             low, high = self.param_bounds_expanded[i]
             if low != high:
                 perturbed[i] = pbr.round_dynamic(np.random.uniform(low, high), self.sig_digits)
-        return perturbed
+        return enforce_bounds(perturbed, self.param_bounds_expanded)
 
     def perturb_gaussian(self, individual, scale=0.01):
         perturbed = []
@@ -566,7 +563,7 @@ class Evaluator:
             new_val = pbr.round_dynamic(val + noise, self.sig_digits)
             new_val = min(max(new_val, low), high)
             perturbed.append(new_val)
-        return perturbed
+        return enforce_bounds(perturbed, self.param_bounds_expanded)
 
     def perturb_large_uniform(self, individual):
         perturbed = []
@@ -576,11 +573,14 @@ class Evaluator:
                 perturbed.append(low)
             else:
                 perturbed.append(pbr.round_dynamic(np.random.uniform(low, high), self.sig_digits))
-        return perturbed
+        return enforce_bounds(perturbed, self.param_bounds_expanded)
 
     def evaluate(self, individual, overrides_list):
         if self.sig_digits > 0:
-            individual[:] = [pbr.round_dynamic(v, self.sig_digits) for v in individual]
+            individual[:] = enforce_bounds(
+                [pbr.round_dynamic(v, self.sig_digits) for v in individual],
+                self.param_bounds_expanded,
+            )
         config = individual_to_config(
             individual, optimizer_overrides, overrides_list, template=self.config
         )
@@ -599,8 +599,7 @@ class Evaluator:
             ]
             for perturb_fn in perturbation_funcs:
                 perturbed = round_floats(perturb_fn(individual), self.sig_digits)
-                # changed = [(x, y) for x, y in zip(individual, perturbed) if x != y]
-                # print("debug c", changed)
+                perturbed = enforce_bounds(perturbed, self.param_bounds_expanded)
                 new_hash = calc_hash(perturbed)
                 if new_hash not in self.seen_hashes:
                     logging.info(
@@ -1076,10 +1075,7 @@ async def main():
         if starting_individuals:
             bounds = [(low, high) for low, high in param_bounds.values()]
             for i in range(len(starting_individuals)):
-                adjusted = [
-                    max(min(x, bounds[z][1]), bounds[z][0])
-                    for z, x in enumerate(starting_individuals[i])
-                ]
+                adjusted = enforce_bounds(starting_individuals[i], bounds)
                 population[i] = creator.Individual(adjusted)
 
             # populate up to half of the population with duplicates of random choices within starting configs

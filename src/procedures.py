@@ -203,6 +203,9 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
         del result["backtest"]["exchange"]
     add_missing_keys_recursively(template, result, verbose=verbose)
     remove_unused_keys_recursively(template["bot"], result["bot"], parent=["bot"], verbose=verbose)
+    remove_unused_keys_recursively(
+        template["optimize"]["bounds"], result["optimize"]["bounds"], parent=["bot"], verbose=verbose
+    )
     if not live_only:
         for k_coins in ["approved_coins", "ignored_coins"]:
             path = result["live"][k_coins]
