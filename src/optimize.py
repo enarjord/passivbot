@@ -1,6 +1,22 @@
 import os
-import shutil
 import sys
+if sys.platform.startswith("win"):
+    # ==== BEGIN fcntl stub for Windows ====
+    try:
+        import fcntl
+    except ImportError:
+        # create a fake module so later `import fcntl` works without error
+        class _FcntlStub:
+            LOCK_EX = None
+            LOCK_SH = None
+            LOCK_UN = None
+            def lockf(self, *args, **kwargs): pass
+            def ioctl(self, *args, **kwargs): pass
+
+        sys.modules['fcntl'] = _FcntlStub()
+        fcntl = sys.modules['fcntl']
+    # ==== END fcntl stub for Windows ====
+import shutil
 import passivbot_rust as pbr
 import asyncio
 import argparse
