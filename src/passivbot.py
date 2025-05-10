@@ -2224,7 +2224,7 @@ class Passivbot:
                 if not hasattr(self, k):
                     setattr(self, k, {"long": set(), "short": set()})
                 # single source‑of‑truth 🚀
-                parsed = normalise_coins_source(self.config["live"][k])
+                parsed = normalize_coins_source(self.config["live"][k])
                 self.add_to_coins_lists(parsed, k)
             self.approved_coins_minus_ignored_coins = {}
             for pside in self.approved_coins:
