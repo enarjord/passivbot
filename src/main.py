@@ -5,9 +5,6 @@ import subprocess
 import sys
 import select
 import platform
-from tools.event_loop_policy import set_windows_event_loop_policy
-# on Windows this will pick the SelectorEventLoopPolicy
-set_windows_event_loop_policy()
 
 RUST_SOURCE_DIR = "passivbot-rust/"
 COMPILED_EXTENSION_NAME = "libpassivbot_rust"
