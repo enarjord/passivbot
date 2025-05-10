@@ -34,6 +34,7 @@ from procedures import (
     format_config,
     print_async_exception,
     read_external_coins_lists,
+    normalize_coins_source,
 )
 from njit_funcs import (
     calc_ema,
@@ -2218,40 +2219,13 @@ class Passivbot:
                 getattr(self, k_coins)[pside] = symbols
 
     def refresh_approved_ignored_coins_lists(self):
-        # if config.live.approved_coins or config.live.approved_coins are external files,
-        # use content of files as approved/ignored coins
-        # approved/ignored coins may be list of coins or {'long': list, 'short': list}
         try:
-            for k_coins in ["approved_coins", "ignored_coins"]:
-                if not hasattr(self, k_coins):
-                    setattr(self, k_coins, {"long": set(), "short": set()})
-                path = self.config["live"][k_coins]
-                if isinstance(path, list) and len(path) == 1 and isinstance(path[0], str):
-                    path = path[0]
-                if isinstance(path, str):
-                    if path == "":
-                        continue
-                    if os.path.exists(path):
-                        try:
-                            content = read_external_coins_lists(path)
-                            if content:
-                                self.add_to_coins_lists(content, k_coins)
-                        except Exception as e:
-                            logging.error(f"Failed to read contents of {path} {e}")
-                    elif self.coin_to_symbol(path):
-                        self.add_to_coins_lists({"long": [path], "short": [path]}, k_coins)
-                    else:
-                        logging.error(
-                            f"error with refresh_approved_ignored_coins_lists: failed to load {path} {k_coins}"
-                        )
-                else:
-                    try:
-                        if isinstance(path, (list, tuple)):
-                            self.add_to_coins_lists({"long": path, "short": path}, k_coins)
-                        elif isinstance(path, dict) and sorted(path) == ["long", "short"]:
-                            self.add_to_coins_lists(path, k_coins)
-                    except Exception as e:
-                        logging.error(f"Failed to read {k_coins} from config: {path}")
+            for k in ("approved_coins", "ignored_coins"):
+                if not hasattr(self, k):
+                    setattr(self, k, {"long": set(), "short": set()})
+                # single source‑of‑truth 🚀
+                parsed = normalize_coins_source(self.config["live"][k])
+                self.add_to_coins_lists(parsed, k)
             self.approved_coins_minus_ignored_coins = {}
             for pside in self.approved_coins:
                 if self.config["live"]["empty_means_all_approved"] and not self.approved_coins[pside]:
@@ -2260,7 +2234,7 @@ class Passivbot:
                 self.approved_coins_minus_ignored_coins[pside] = (
                     self.approved_coins[pside] - self.ignored_coins[pside]
                 )
-        except Exception as e1:
+        except Exception as e:
             logging.error(f"error with refresh_approved_ignored_coins_lists {e}")
             traceback.print_exc()
 

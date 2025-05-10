@@ -202,115 +202,89 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
             )
         del result["backtest"]["exchange"]
 
-    if not live_only:
-        for k_coins in ["approved_coins", "ignored_coins"]:
-            path = result["live"].get(k_coins, "")
-
-            # --- 1) If it's already a dict {"long": [...], "short": [...]}, handle each side ---
-            sides = ["long", "short"]
-            if isinstance(path, dict) and all(side in path for side in sides):
-                for side in sides:
-                    side_val = path.get(side, [])
-                    if isinstance(side_val, list):
-                        expanded = []
-                        for item in side_val:
-                            # Expand comma‐delimited strings like "ADAUSDT,DOGEUSDT"
-                            if isinstance(item, str) and "," in item:
-                                expanded.extend(x.strip() for x in item.split(","))
-                            else:
-                                expanded.append(item)
-                        path[side] = expanded
-                # Reassign the modified dict back
-                result["live"][k_coins] = path
-                # Skip the rest of the loop because the original snippet only did further logic if
-                # path was a list or string in "approved_coins"/"ignored_coins"
-                continue
-
-            # --- 2) If it's a list, first check if single item is a file path, else expand commas ---
-            if isinstance(path, list):
-                # Check for single‐item list referencing an external file
-                if len(path) == 1 and isinstance(path[0], str) and os.path.exists(path[0]):
-                    if any(path[0].endswith(k) for k in [".txt", ".json", ".hjson"]):
-                        path = path[0]  # e.g. "coins.json"
-                else:
-                    # Expand comma‐delimited strings, e.g. ["ADAUSDT,DOGEUSDT"] => ["ADAUSDT","DOGEUSDT"]
-                    expanded = []
-                    for item in path:
-                        if isinstance(item, str) and "," in item:
-                            expanded.extend(x.strip() for x in item.split(","))
-                        else:
-                            expanded.append(item)
-                    path = expanded
-
-            # --- 3) If it's now a string, apply the original file/empty logic ---
-            if isinstance(path, str):
-                if path == "":
-                    result["live"][k_coins] = {"long": [], "short": []}
-                elif os.path.exists(path):
-                    try:
-                        content = read_external_coins_lists(path)
-                        if content:
-                            if verbose and result["live"][k_coins] != content:
-                                print(f"set {k_coins} {content}")
-                            result["live"][k_coins] = content
-                    except Exception as e:
-                        print(f"failed to load {k_coins} from file {path} {e}")
-                else:
-                    if verbose:
-                        print(f"path to {k_coins} file does not exist {path}")
-                    result["live"][k_coins] = {"long": [], "short": []}
-
-            # --- 4) Finally, if it's still a list, convert it into {"long":[...],"short":[...]} ---
-            elif isinstance(path, list):
-                result["live"][k_coins] = {
-                    "long": deepcopy(path),
-                    "short": deepcopy(path),
-                }
-            # If it’s something else (not dict/list/str), we do nothing special,
-            # preserving original behavior.
     add_missing_keys_recursively(template, result, verbose=verbose)
     remove_unused_keys_recursively(template["bot"], result["bot"], parent=["bot"], verbose=verbose)
     remove_unused_keys_recursively(
         template["optimize"]["bounds"], result["optimize"]["bounds"], parent=["bot"], verbose=verbose
     )
-    result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
-    result["optimize"]["scoring"] = sorted(result["optimize"]["scoring"])
-    result["optimize"]["limits"] = parse_limits_string(result["optimize"]["limits"])
-    for k, v in sorted(result["optimize"]["limits"].items()):
-        if k.startswith("lower_bound_"):
-            new_k = k.replace("lower_bound_", "penalize_if_greater_than_")
-            result["optimize"]["limits"][new_k] = v
-            if verbose:
-                print(f"changed config.optimize.limits.{k} -> {new_k}")
-            del result["optimize"]["limits"][k]
-    if not result["backtest"]["use_btc_collateral"]:
-        for i in range(len(result["optimize"]["scoring"])):
-            val = result["optimize"]["scoring"][i]
-            if val.startswith("btc_"):
-                new_val = val[len("btc_") :]
+
+    if not live_only:
+        # unneeded adjustments if running live
+        for k in ("approved_coins", "ignored_coins"):
+            result["live"][k] = normalize_coins_source(result["live"].get(k, ""))
+        result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
+        result["optimize"]["scoring"] = sorted(result["optimize"]["scoring"])
+        result["optimize"]["limits"] = parse_limits_string(result["optimize"]["limits"])
+        for k, v in sorted(result["optimize"]["limits"].items()):
+            if k.startswith("lower_bound_"):
+                new_k = k.replace("lower_bound_", "penalize_if_greater_than_")
+                result["optimize"]["limits"][new_k] = v
                 if verbose:
-                    print(f"changed config.optimize.scoring.{val} -> {new_val}")
-                result["optimize"]["scoring"][i] = new_val
-        for key in sorted(result["optimize"]["limits"]):
-            if key.startswith("btc_"):
-                new_key = key[len("btc_") :]
-                val = result["optimize"]["limits"][key]
-                if verbose:
-                    print(f"changed config.optimize.limits.{key} -> {new_key}")
-                result["optimize"]["limits"][new_key] = val
-                del result["optimize"]["limits"][key]
-    for k, v in sorted(result["optimize"]["bounds"].items()):
-        # sort all bounds, low -> high
-        if isinstance(v, list):
-            if len(v) == 1:
-                result["optimize"]["bounds"][k] = [v[0], v[0]]
-            elif len(v) == 2:
-                result["optimize"]["bounds"][k] = sorted(v)
+                    print(f"changed config.optimize.limits.{k} -> {new_k}")
+                del result["optimize"]["limits"][k]
+        if not result["backtest"]["use_btc_collateral"]:
+            for i in range(len(result["optimize"]["scoring"])):
+                val = result["optimize"]["scoring"][i]
+                if val.startswith("btc_"):
+                    new_val = val[len("btc_") :]
+                    if verbose:
+                        print(f"changed config.optimize.scoring.{val} -> {new_val}")
+                    result["optimize"]["scoring"][i] = new_val
+            for key in sorted(result["optimize"]["limits"]):
+                if key.startswith("btc_"):
+                    new_key = key[len("btc_") :]
+                    val = result["optimize"]["limits"][key]
+                    if verbose:
+                        print(f"changed config.optimize.limits.{key} -> {new_key}")
+                    result["optimize"]["limits"][new_key] = val
+                    del result["optimize"]["limits"][key]
+        for k, v in sorted(result["optimize"]["bounds"].items()):
+            # sort all bounds, low -> high
+            if isinstance(v, list):
+                if len(v) == 1:
+                    result["optimize"]["bounds"][k] = [v[0], v[0]]
+                elif len(v) == 2:
+                    result["optimize"]["bounds"][k] = sorted(v)
+
     for pside in result["bot"]:
         result["bot"][pside]["enforce_exposure_limit"] = bool(
             result["bot"][pside]["enforce_exposure_limit"]
         )
     return result
+
+
+def normalize_coins_source(src) -> dict[str, list[str]]:
+    """
+    Turn   str | list | {'long':[..],'short':[...]} | ''   into
+    {'long':[...], 'short':[...]}   (comma expansion included).
+    """
+
+    def expand(seq):
+        out = []
+        for item in seq:
+            out.extend(x.strip() for x in str(item).split(",") if x.strip())
+        return out
+
+    # dict already?
+    if isinstance(src, dict) and sorted(src) == ["long", "short"]:
+        return {side: expand(src[side]) for side in src}
+
+    # list / tuple?
+    if isinstance(src, (list, tuple)):
+        if len(src) == 1 and isinstance(src[0], str) and os.path.exists(src[0]):
+            return read_external_coins_lists(src[0])
+        return {"long": expand(src), "short": expand(src)}
+
+    # string?
+    if isinstance(src, str):
+        if src == "":
+            return {"long": [], "short": []}
+        if os.path.exists(src):
+            return read_external_coins_lists(src)
+        return {"long": expand([src]), "short": expand([src])}
+
+    # anything else – empty fallback
+    return {"long": [], "short": []}
 
 
 def parse_limits_string(limits_str: Union[str, dict]) -> dict:
@@ -340,13 +314,22 @@ def parse_limits_string(limits_str: Union[str, dict]) -> dict:
     return result
 
 
-def add_missing_keys_recursively(src, dst, parent=[], verbose=True):
+def add_missing_keys_recursively(src, dst, parent=None, verbose=True):
+    if parent is None:
+        parent = []
     for k in src:
-        if isinstance(src[k], dict):
-            if k not in dst:
-                raise Exception(f"Fatal: {k} missing from config")
-            else:
-                add_missing_keys_recursively(src[k], dst[k], parent + [k], verbose=verbose)
+        # --- NEW: only walk down if both sides are dicts -------------
+        if isinstance(src[k], dict) and isinstance(dst.get(k), dict):
+            add_missing_keys_recursively(src[k], dst[k], parent + [k], verbose)
+        # --------------------------------------------------------------
+        elif isinstance(src[k], dict):
+            # type clash: leave the user’s value untouched
+            if verbose:
+                print(
+                    f"Skipping template subtree {'.'.join(parent+[k])} "
+                    f"(template is dict, config is {type(dst.get(k)).__name__})"
+                )
+            continue
         else:
             if k not in dst:
                 if verbose:
