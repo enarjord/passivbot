@@ -208,13 +208,12 @@ impl fmt::Display for OrderType {
 
 #[derive(Default)]
 pub struct Balance {
-    pub usd: f64,                    // usd balance
-    pub usd_total: f64,              // total in usd
-    pub usd_total_rounded: f64,      // total in usd rounded for calculations
-    pub usd_total_rounded_last: f64, // last usd total rounded for hysterisis
-    pub btc: f64,                    // btc balance
-    pub btc_total: f64,              // total in btc
-    pub use_btc_collateral: bool,    // whether to use btc as collateral
+    pub usd: f64,                 // usd balance
+    pub usd_total: f64,           // total in usd
+    pub usd_total_rounded: f64,   // total in usd rounded for calculations
+    pub btc: f64,                 // btc balance
+    pub btc_total: f64,           // total in btc
+    pub use_btc_collateral: bool, // whether to use btc as collateral
 }
 
 #[derive(Default, Clone)]

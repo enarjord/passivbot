@@ -172,7 +172,6 @@ impl<'a> Backtest<'a> {
             backtest_params.starting_balance
         };
         balance.usd_total = backtest_params.starting_balance;
-        balance.usd_total_rounded_last = balance.usd_total;
         balance.usd_total_rounded = balance.usd_total;
 
         let n_timesteps = hlcvs.shape()[0];
@@ -375,15 +374,14 @@ impl<'a> Backtest<'a> {
                 self.balance.btc_total = self.balance.usd_total / self.btc_usd_prices[k];
                 let new_usd_total_rounded = hysteresis_rounding(
                     self.balance.usd_total,
-                    self.balance.usd_total_rounded_last,
+                    self.balance.usd_total_rounded,
                     0.02,
                     0.5,
                 );
                 if new_usd_total_rounded != self.balance.usd_total_rounded {
-                    self.balance.usd_total_rounded_last = self.balance.usd_total_rounded;
-                    self.balance.usd_total_rounded = new_usd_total_rounded;
                     balance_changed = true;
                 }
+                self.balance.usd_total_rounded = new_usd_total_rounded;
             }
             if balance_changed || !self.did_fill_long.is_empty() || !self.did_fill_short.is_empty()
             {
@@ -448,7 +446,6 @@ impl<'a> Backtest<'a> {
             // Keep total fields consistent
             self.balance.usd_total = self.balance.usd;
             self.balance.usd_total_rounded = self.balance.usd;
-            self.balance.usd_total_rounded_last = self.balance.usd;
             self.balance.btc_total = 0.0;
         }
     }
