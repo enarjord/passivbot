@@ -271,6 +271,8 @@ def normalize_coins_source(src) -> dict[str, list[str]]:
 
     # list / tuple?
     if isinstance(src, (list, tuple)):
+        if len(src) == 1 and isinstance(src[0], str) and os.path.exists(src[0]):
+            return read_external_coins_lists(src[0])
         return {"long": expand(src), "short": expand(src)}
 
     # string?
