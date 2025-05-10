@@ -201,14 +201,10 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                 f"changed backtest.exchange: {result['backtest']['exchange']} -> backtest.exchanges: [{result['backtest']['exchange']}]"
             )
         del result["backtest"]["exchange"]
-    add_missing_keys_recursively(template, result, verbose=verbose)
-    remove_unused_keys_recursively(template["bot"], result["bot"], parent=["bot"], verbose=verbose)
-    remove_unused_keys_recursively(
-        template["optimize"]["bounds"], result["optimize"]["bounds"], parent=["bot"], verbose=verbose
-    )
+
     if not live_only:
         for k_coins in ["approved_coins", "ignored_coins"]:
-            path = result["live"][k_coins]
+            path = result["live"].get(k_coins, "")
 
             # --- 1) If it's already a dict {"long": [...], "short": [...]}, handle each side ---
             sides = ["long", "short"]
@@ -272,6 +268,11 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                 }
             # If it’s something else (not dict/list/str), we do nothing special,
             # preserving original behavior.
+    add_missing_keys_recursively(template, result, verbose=verbose)
+    remove_unused_keys_recursively(template["bot"], result["bot"], parent=["bot"], verbose=verbose)
+    remove_unused_keys_recursively(
+        template["optimize"]["bounds"], result["optimize"]["bounds"], parent=["bot"], verbose=verbose
+    )
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
     result["optimize"]["scoring"] = sorted(result["optimize"]["scoring"])
     result["optimize"]["limits"] = parse_limits_string(result["optimize"]["limits"])
