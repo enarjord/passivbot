@@ -61,6 +61,9 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 
+
+TEMPLATE_CONFIG_MODE = "v7"
+
 # === bounds helpers =========================================================
 
 Bound = Tuple[float, float]  # (low, high)
@@ -82,10 +85,8 @@ def enforce_bounds(
         List[float]  – clamped copy (original is *not* modified)
     """
     assert len(values) == len(bounds), "values/bounds length mismatch"
-    enforced = [high if v > high else low if v < low else v for v, (low, high) in zip(values, bounds)]
-    if sig_digits is None:
-        return enforced
-    return round_floats(enforced, sig_digits)
+    rounded = values if sig_digits is None else round_floats(values, sig_digits)
+    return [high if v > high else low if v < low else v for v, (low, high) in zip(rounded, bounds)]
 
 
 def extract_bounds_tuple_list_from_config(config) -> [Bound]:
@@ -104,7 +105,9 @@ def extract_bounds_tuple_list_from_config(config) -> [Bound]:
                 return tuple(sorted([val[0], val[1]]))
         raise Exception(f"malformed bound {key}: {val}")
 
-    template_config = get_template_live_config()  # single source of truth for key names
+    template_config = get_template_live_config(
+        TEMPLATE_CONFIG_MODE
+    )  # single source of truth for key names
     keys_ignored = get_bound_keys_ignored()
     bounds = []
     for pside in sorted(template_config["bot"]):
@@ -854,7 +857,7 @@ async def main():
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )
-    template_config = get_template_live_config("v7")
+    template_config = get_template_live_config(TEMPLATE_CONFIG_MODE)
     del template_config["bot"]
     keep_live_keys = {
         "approved_coins",
