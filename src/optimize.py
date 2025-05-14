@@ -61,24 +61,76 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 
+
+TEMPLATE_CONFIG_MODE = "v7"
+
 # === bounds helpers =========================================================
 
-Bound = Tuple[float, float]
+Bound = Tuple[float, float]  # (low, high)
 
 
-def enforce_bounds(values: Sequence[float], bounds: Sequence[Bound]) -> List[float]:
+def enforce_bounds(
+    values: Sequence[float], bounds: Sequence[Bound], sig_digits: int = None
+) -> List[float]:
     """
     Clamp each value to its corresponding [low, high] interval.
+    Also round to significant digits (optional).
 
     Args:
         values : iterable of floats (length == len(bounds))
         bounds : iterable of (low, high) pairs
+        sig_digits: int
 
     Returns
-        List[float]  – clamped copy (original is *not* modified)
+        List[float]  – clamped copy (original is *not* modified)
     """
     assert len(values) == len(bounds), "values/bounds length mismatch"
-    return [high if v > high else low if v < low else v for v, (low, high) in zip(values, bounds)]
+    rounded = values if sig_digits is None else round_floats(values, sig_digits)
+    return [high if v > high else low if v < low else v for v, (low, high) in zip(rounded, bounds)]
+
+
+def extract_bounds_tuple_list_from_config(config) -> [Bound]:
+    """
+    extracts list of tuples (low, high) which are lower and upper bounds for bot parameters.
+    also sets all bounds to (low, low) if pside is not enabled.
+    """
+
+    def extract_bound_vals(key, val) -> tuple:
+        if isinstance(val, (float, int)):
+            return (val, val)
+        elif isinstance(val, (tuple, list)):
+            if len(val) == 1:
+                return (val[0], val[0])
+            elif len(val) == 2:
+                return tuple(sorted([val[0], val[1]]))
+        raise Exception(f"malformed bound {key}: {val}")
+
+    template_config = get_template_live_config(
+        TEMPLATE_CONFIG_MODE
+    )  # single source of truth for key names
+    keys_ignored = get_bound_keys_ignored()
+    bounds = []
+    for pside in sorted(template_config["bot"]):
+        is_enabled = all(
+            [
+                extract_bound_vals(k, config["optimize"]["bounds"][k])[1] > 0.0
+                for k in [f"{pside}_n_positions", f"{pside}_total_wallet_exposure_limit"]
+            ]
+        )
+        for key in sorted(template_config["bot"][pside]):
+            if key in keys_ignored:
+                continue
+            bound_key = f"{pside}_{key}"
+            assert (
+                bound_key in config["optimize"]["bounds"]
+            ), f"bound {bound_key} missing from optimize.bounds"
+            bound_vals = extract_bound_vals(bound_key, config["optimize"]["bounds"][bound_key])
+            bounds.append(bound_vals if is_enabled else (bound_vals[0], bound_vals[0]))
+    return bounds
+
+
+def get_bound_keys_ignored():
+    return ["enforce_exposure_limit"]
 
 
 # ============================================================================
@@ -286,49 +338,36 @@ def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up):
     return ind1, ind2
 
 
-def individual_to_config(individual, optimizer_overrides, overrides_list, template=None):
-    if template is None:
-        template = get_template_live_config("v7")
-    keys_ignored = ["enforce_exposure_limit"]
+def individual_to_config(individual, optimizer_overrides, overrides_list, template):
+    """
+    assume individual is already bound enforced (or will be after)
+    """
+    keys_ignored = get_bound_keys_ignored()
     config = deepcopy(template)
-    keys = [k for k in sorted(config["bot"]["long"]) if k not in keys_ignored]
     i = 0
-    for pside in ["long", "short"]:
-        for key in keys:
+    for pside in sorted(config["bot"]):
+        for key in sorted(config["bot"][pside]):
+            if key in keys_ignored:
+                continue
             config["bot"][pside][key] = individual[i]
             i += 1
-        is_enabled = (
-            config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
-            and config["bot"][pside]["n_positions"] > 0.0
-        )
-        if not is_enabled:
-            for key in config["bot"][pside]:
-                if key in keys_ignored:
-                    continue
-                bounds = config["optimize"]["bounds"][f"{pside}_{key}"]
-                if len(bounds) == 1:
-                    bounds = [bounds[0], bounds[0]]
-                config["bot"][pside][key] = min(max(bounds[0], 0.0), bounds[1])
         config = optimizer_overrides(overrides_list, config, pside)
 
     return config
 
 
-def config_to_individual(config, param_bounds):
-    individual = []
-    keys_ignored = ["enforce_exposure_limit"]
-    for pside in ["long", "short"]:
-        is_enabled = (
-            param_bounds[f"{pside}_n_positions"][1] > 0.0
-            and param_bounds[f"{pside}_total_wallet_exposure_limit"][1] > 0.0
-        )
-        individual += [
-            (v if is_enabled else 0.0)
-            for k, v in sorted(config["bot"][pside].items())
-            if k not in keys_ignored
-        ]
-    # adjust to bounds
-    return enforce_bounds(individual, [(lo, hi) for lo, hi in param_bounds.values()])
+def config_to_individual(config, bounds, sig_digits=None):
+    keys_ignored = get_bound_keys_ignored()
+    return enforce_bounds(
+        [
+            config["bot"][pside][key]
+            for pside in sorted(config["bot"])
+            for key in sorted(config["bot"][pside])
+            if key not in keys_ignored
+        ],
+        bounds,
+        sig_digits,
+    )
 
 
 @contextmanager
@@ -399,9 +438,7 @@ class Evaluator:
         self.results_queue = results_queue
         self.seen_hashes = seen_hashes if seen_hashes is not None else {}
         self.duplicate_counter = duplicate_counter
-        self.param_bounds_expanded = [
-            (v[0], v[-1]) for v in list(self.config["optimize"]["bounds"].values())
-        ]
+        self.bounds = extract_bounds_tuple_list_from_config(self.config)
         self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
         self.scoring_weights = {
             "adg": -1.0,
@@ -499,7 +536,7 @@ class Evaluator:
             if np.random.random() < change_chance:  # x% chance of leaving unchanged
                 perturbed.append(val)
                 continue
-            low, high = self.param_bounds_expanded[i]
+            low, high = self.bounds[i]
             if high == low:
                 perturbed.append(val)
                 continue
@@ -511,15 +548,14 @@ class Evaluator:
                 step = (high - low) * 10 ** -(self.sig_digits - 1)
 
             direction = np.random.choice([-1.0, 1.0])
-            new_val = pbr.round_dynamic(val + step * direction, self.sig_digits)
-            perturbed.append(new_val)
+            perturbed.append(pbr.round_dynamic(val + step * direction, self.sig_digits))
 
-        return enforce_bounds(perturbed, self.param_bounds_expanded)
+        return perturbed
 
     def perturb_x_pct(self, individual, magnitude=0.01):
         perturbed = []
         for i, val in enumerate(individual):
-            low, high = self.param_bounds_expanded[i]
+            low, high = self.bounds[i]
             if high == low:
                 perturbed.append(val)
                 continue
@@ -527,63 +563,54 @@ class Evaluator:
                 val * (1 + np.random.uniform(-magnitude, magnitude)), self.sig_digits
             )
             perturbed.append(new_val)
-        return enforce_bounds(perturbed, self.param_bounds_expanded)
+        return perturbed
 
     def perturb_random_subset(self, individual, frac=0.2):
         perturbed = individual.copy()
         n = len(individual)
         indices = np.random.choice(n, max(1, int(frac * n)), replace=False)
         for i in indices:
-            low, high = self.param_bounds_expanded[i]
+            low, high = self.bounds[i]
             if low != high:
                 delta = (high - low) * 0.01
                 step = delta * np.random.uniform(-1.0, 1.0)
-                val = individual[i] + step
-                perturbed[i] = pbr.round_dynamic(val, self.sig_digits)
-        return enforce_bounds(perturbed, self.param_bounds_expanded)
+                perturbed[i] = individual[i] + step
+        return perturbed
 
     def perturb_sample_some(self, individual, frac=0.2):
         perturbed = individual.copy()
         n = len(individual)
         indices = np.random.choice(n, max(1, int(frac * n)), replace=False)
         for i in indices:
-            low, high = self.param_bounds_expanded[i]
+            low, high = self.bounds[i]
             if low != high:
-                perturbed[i] = pbr.round_dynamic(np.random.uniform(low, high), self.sig_digits)
-        return enforce_bounds(perturbed, self.param_bounds_expanded)
+                perturbed[i] = np.random.uniform(low, high)
+        return perturbed
 
     def perturb_gaussian(self, individual, scale=0.01):
         perturbed = []
         for i, val in enumerate(individual):
-            low, high = self.param_bounds_expanded[i]
+            low, high = self.bounds[i]
             if high == low:
                 perturbed.append(val)
                 continue
             noise = np.random.normal(0, scale * (high - low))
-            new_val = pbr.round_dynamic(val + noise, self.sig_digits)
-            new_val = min(max(new_val, low), high)
-            perturbed.append(new_val)
-        return enforce_bounds(perturbed, self.param_bounds_expanded)
+            perturbed.append(val + noise)
+        return perturbed
 
     def perturb_large_uniform(self, individual):
         perturbed = []
         for i in range(len(individual)):
-            low, high = self.param_bounds_expanded[i]
+            low, high = self.bounds[i]
             if low == high:
                 perturbed.append(low)
             else:
-                perturbed.append(pbr.round_dynamic(np.random.uniform(low, high), self.sig_digits))
-        return enforce_bounds(perturbed, self.param_bounds_expanded)
+                perturbed.append(np.random.uniform(low, high))
+        return perturbed
 
     def evaluate(self, individual, overrides_list):
-        if self.sig_digits > 0:
-            individual[:] = enforce_bounds(
-                [pbr.round_dynamic(v, self.sig_digits) for v in individual],
-                self.param_bounds_expanded,
-            )
-        config = individual_to_config(
-            individual, optimizer_overrides, overrides_list, template=self.config
-        )
+        individual[:] = enforce_bounds(individual, self.bounds, self.sig_digits)
+        config = individual_to_config(individual, optimizer_overrides, overrides_list, self.config)
         individual_hash = calc_hash(individual)
         if individual_hash in self.seen_hashes:
             existing_score = self.seen_hashes[individual_hash]
@@ -598,8 +625,8 @@ class Evaluator:
                 self.perturb_large_uniform,
             ]
             for perturb_fn in perturbation_funcs:
-                perturbed = round_floats(perturb_fn(individual), self.sig_digits)
-                perturbed = enforce_bounds(perturbed, self.param_bounds_expanded)
+                perturbed = perturb_fn(individual)
+                perturbed = enforce_bounds(perturbed, self.bounds, self.sig_digits)
                 new_hash = calc_hash(perturbed)
                 if new_hash not in self.seen_hashes:
                     logging.info(
@@ -608,7 +635,7 @@ class Evaluator:
                     individual[:] = perturbed
                     self.seen_hashes[new_hash] = None
                     config = individual_to_config(
-                        perturbed, optimizer_overrides, overrides_list, template=self.config
+                        perturbed, optimizer_overrides, overrides_list, self.config
                     )
                     break
             else:
@@ -806,20 +833,18 @@ def get_starting_configs(starting_configs: str):
     return extract_configs(starting_configs)
 
 
-def configs_to_individuals(cfgs, param_bounds, sig_digits=0):
+def configs_to_individuals(cfgs, bounds, sig_digits=0):
     inds = {}
     for cfg in cfgs:
         try:
             fcfg = format_config(cfg, verbose=False)
-            individual = config_to_individual(fcfg, param_bounds)
-            if sig_digits > 0:
-                individual = round_floats(individual, sig_digits)
+            individual = config_to_individual(fcfg, bounds, sig_digits)
             inds[calc_hash(individual)] = individual
             # add duplicate of config, but with lowered total wallet exposure limit
             fcfg2 = deepcopy(fcfg)
             for pside in ["long", "short"]:
                 fcfg2["bot"][pside]["total_wallet_exposure_limit"] *= 0.75
-            individual2 = config_to_individual(fcfg2, param_bounds)
+            individual2 = config_to_individual(fcfg2, bounds, sig_digits)
             inds[calc_hash(individual2)] = individual2
         except Exception as e:
             logging.error(f"error loading starting config: {e}")
@@ -832,7 +857,7 @@ async def main():
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )
-    template_config = get_template_live_config("v7")
+    template_config = get_template_live_config(TEMPLATE_CONFIG_MODE)
     del template_config["bot"]
     keep_live_keys = {
         "approved_coins",
@@ -1013,19 +1038,15 @@ async def main():
         toolbox = base.Toolbox()
 
         # Define parameter bounds
-        param_bounds = sort_dict_keys(config["optimize"]["bounds"])
-        for k, v in param_bounds.items():
-            if len(v) == 1:
-                param_bounds[k] = [v[0], v[0]]
+        bounds = extract_bounds_tuple_list_from_config(config)
+        sig_digits = config["optimize"]["round_to_n_significant_digits"]
 
         # Register attribute generators
-        for i, (param_name, (low, high)) in enumerate(param_bounds.items()):
+        for i, (low, high) in enumerate(bounds):
             toolbox.register(f"attr_{i}", np.random.uniform, low, high)
 
         def create_individual():
-            return creator.Individual(
-                [getattr(toolbox, f"attr_{i}")() for i in range(len(param_bounds))]
-            )
+            return creator.Individual([getattr(toolbox, f"attr_{i}")() for i in range(len(bounds))])
 
         toolbox.register("individual", create_individual)
         toolbox.register("population", tools.initRepeat, list, toolbox.individual)
@@ -1038,16 +1059,16 @@ async def main():
             "mate",
             cxSimulatedBinaryBoundedWrapper,
             eta=20.0,
-            low=[low for low, high in param_bounds.values()],
-            up=[high for low, high in param_bounds.values()],
+            low=[low for low, high in bounds],
+            up=[high for low, high in bounds],
         )
         toolbox.register(
             "mutate",
             mutPolynomialBoundedWrapper,
             eta=20.0,
-            low=[low for low, high in param_bounds.values()],
-            up=[high for low, high in param_bounds.values()],
-            indpb=1.0 / len(param_bounds),
+            low=[low for low, high in bounds],
+            up=[high for low, high in bounds],
+            indpb=1.0 / len(bounds),
         )
         toolbox.register("select", tools.selNSGA2)
 
@@ -1060,11 +1081,10 @@ async def main():
         # Create initial population
         logging.info(f"Creating initial population...")
 
-        bounds = [(low, high) for low, high in param_bounds.values()]
         starting_individuals = configs_to_individuals(
             get_starting_configs(args.starting_configs),
-            param_bounds,
-            config["optimize"]["round_to_n_significant_digits"],
+            bounds,
+            sig_digits,
         )
         if (nstart := len(starting_individuals)) > (popsize := config["optimize"]["population_size"]):
             logging.info(f"Number of starting configs greater than population size.")
@@ -1073,10 +1093,8 @@ async def main():
 
         population = toolbox.population(n=config["optimize"]["population_size"])
         if starting_individuals:
-            bounds = [(low, high) for low, high in param_bounds.values()]
             for i in range(len(starting_individuals)):
-                adjusted = enforce_bounds(starting_individuals[i], bounds)
-                population[i] = creator.Individual(adjusted)
+                population[i] = creator.Individual(starting_individuals[i])
 
             # populate up to half of the population with duplicates of random choices within starting configs
             # duplicates will be perturbed during runtime
@@ -1084,6 +1102,8 @@ async def main():
                 population[i] = deepcopy(
                     population[np.random.choice(range(len(starting_individuals)))]
                 )
+        for i in range(len(population)):
+            population[i][:] = enforce_bounds(population[i], bounds, sig_digits)
 
         logging.info(f"Initial population size: {len(population)}")
 

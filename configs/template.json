@@ -142,7 +142,7 @@
               "crossover_probability": 0.64,
               "enable_overrides": [],
               "iters": 300000,
-              "limits": "--btc_drawdown_worst 0.333 --loss_profit_ratio: 0.9 --position_unchanged_hours_max 720.0",
+              "limits": "--btc_drawdown_worst 0.4 --loss_profit_ratio: 0.9 --position_unchanged_hours_max 720.0",
               "mutation_probability": 0.34,
               "n_cpus": 5,
               "population_size": 1000,
