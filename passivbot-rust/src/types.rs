@@ -96,8 +96,8 @@ pub struct BotParamsPair {
 
 #[derive(Clone, Default, Debug)]
 pub struct BotParams {
-    pub close_grid_markup_range: f64,
-    pub close_grid_min_markup: f64,
+    pub close_grid_markup_end: f64,
+    pub close_grid_markup_start: f64,
     pub close_grid_qty_pct: f64,
     pub close_trailing_retracement_pct: f64,
     pub close_trailing_grid_ratio: f64,
