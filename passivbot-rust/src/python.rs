@@ -211,8 +211,8 @@ fn extract_bool_value(dict: &PyDict, key: &str) -> PyResult<bool> {
 
 fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
     Ok(BotParams {
-        close_grid_markup_range: extract_value(dict, "close_grid_markup_range")?,
-        close_grid_min_markup: extract_value(dict, "close_grid_min_markup")?,
+        close_grid_markup_end: extract_value(dict, "close_grid_markup_end")?,
+        close_grid_markup_start: extract_value(dict, "close_grid_markup_start")?,
         close_grid_qty_pct: extract_value(dict, "close_grid_qty_pct")?,
         close_trailing_retracement_pct: extract_value(dict, "close_trailing_retracement_pct")?,
         close_trailing_grid_ratio: extract_value(dict, "close_trailing_grid_ratio")?,
@@ -354,8 +354,8 @@ pub fn calc_next_close_long_py(
     min_qty: f64,
     min_cost: f64,
     c_mult: f64,
-    close_grid_markup_range: f64,
-    close_grid_min_markup: f64,
+    close_grid_markup_end: f64,
+    close_grid_markup_start: f64,
     close_grid_qty_pct: f64,
     close_trailing_grid_ratio: f64,
     close_trailing_qty_pct: f64,
@@ -386,8 +386,8 @@ pub fn calc_next_close_long_py(
         ..Default::default()
     };
     let bot_params = BotParams {
-        close_grid_markup_range,
-        close_grid_min_markup,
+        close_grid_markup_end,
+        close_grid_markup_start,
         close_grid_qty_pct,
         close_trailing_grid_ratio,
         close_trailing_qty_pct,
@@ -508,8 +508,8 @@ pub fn calc_next_close_short_py(
     min_qty: f64,
     min_cost: f64,
     c_mult: f64,
-    close_grid_markup_range: f64,
-    close_grid_min_markup: f64,
+    close_grid_markup_end: f64,
+    close_grid_markup_start: f64,
     close_grid_qty_pct: f64,
     close_trailing_grid_ratio: f64,
     close_trailing_qty_pct: f64,
@@ -540,8 +540,8 @@ pub fn calc_next_close_short_py(
         ..Default::default()
     };
     let bot_params = BotParams {
-        close_grid_markup_range,
-        close_grid_min_markup,
+        close_grid_markup_end,
+        close_grid_markup_start,
         close_grid_qty_pct,
         close_trailing_grid_ratio,
         close_trailing_qty_pct,
@@ -749,8 +749,8 @@ pub fn calc_closes_long_py(
     min_qty: f64,
     min_cost: f64,
     c_mult: f64,
-    close_grid_markup_range: f64,
-    close_grid_min_markup: f64,
+    close_grid_markup_end: f64,
+    close_grid_markup_start: f64,
     close_grid_qty_pct: f64,
     close_trailing_grid_ratio: f64,
     close_trailing_qty_pct: f64,
@@ -783,8 +783,8 @@ pub fn calc_closes_long_py(
     };
 
     let bot_params = BotParams {
-        close_grid_markup_range,
-        close_grid_min_markup,
+        close_grid_markup_end,
+        close_grid_markup_start,
         close_grid_qty_pct,
         close_trailing_grid_ratio,
         close_trailing_qty_pct,
@@ -826,8 +826,8 @@ pub fn calc_closes_short_py(
     min_qty: f64,
     min_cost: f64,
     c_mult: f64,
-    close_grid_markup_range: f64,
-    close_grid_min_markup: f64,
+    close_grid_markup_end: f64,
+    close_grid_markup_start: f64,
     close_grid_qty_pct: f64,
     close_trailing_grid_ratio: f64,
     close_trailing_qty_pct: f64,
@@ -860,8 +860,8 @@ pub fn calc_closes_short_py(
     };
 
     let bot_params = BotParams {
-        close_grid_markup_range,
-        close_grid_min_markup,
+        close_grid_markup_end,
+        close_grid_markup_start,
         close_grid_qty_pct,
         close_trailing_grid_ratio,
         close_trailing_qty_pct,
