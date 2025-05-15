@@ -516,8 +516,8 @@ def get_template_live_config(passivbot_mode="v7"):
             },
             "bot": {
                 "long": {
-                    "close_grid_markup_range": 0.0255,
-                    "close_grid_min_markup": 0.0089,
+                    "close_grid_markup_end": 0.0089,
+                    "close_grid_markup_start": 0.0344,
                     "close_grid_qty_pct": 0.125,
                     "close_trailing_grid_ratio": 0.5,
                     "close_trailing_qty_pct": 0.125,
@@ -546,8 +546,8 @@ def get_template_live_config(passivbot_mode="v7"):
                     "unstuck_threshold": 0.916,
                 },
                 "short": {
-                    "close_grid_markup_range": 0.0255,
-                    "close_grid_min_markup": 0.0089,
+                    "close_grid_markup_end": 0.0089,
+                    "close_grid_markup_start": 0.0344,
                     "close_grid_qty_pct": 0.125,
                     "close_trailing_grid_ratio": 0.5,
                     "close_trailing_qty_pct": 0.125,
@@ -601,8 +601,8 @@ def get_template_live_config(passivbot_mode="v7"):
             },
             "optimize": {
                 "bounds": {
-                    "long_close_grid_markup_range": [0.0, 0.03],
-                    "long_close_grid_min_markup": [0.001, 0.03],
+                    "long_close_grid_markup_end": [0.001, 0.03],
+                    "long_close_grid_markup_start": [0.001, 0.03],
                     "long_close_grid_qty_pct": [0.05, 1.0],
                     "long_close_trailing_grid_ratio": [-1.0, 1.0],
                     "long_close_trailing_qty_pct": [0.05, 1.0],
@@ -628,8 +628,8 @@ def get_template_live_config(passivbot_mode="v7"):
                     "long_unstuck_ema_dist": [-0.1, 0.01],
                     "long_unstuck_loss_allowance_pct": [0.001, 0.05],
                     "long_unstuck_threshold": [0.4, 0.95],
-                    "short_close_grid_markup_range": [0.0, 0.03],
-                    "short_close_grid_min_markup": [0.001, 0.03],
+                    "short_close_grid_markup_end": [0.001, 0.03],
+                    "short_close_grid_markup_start": [0.001, 0.03],
                     "short_close_grid_qty_pct": [0.05, 1.0],
                     "short_close_trailing_grid_ratio": [-1.0, 1.0],
                     "short_close_trailing_qty_pct": [0.05, 1.0],
