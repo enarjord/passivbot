@@ -169,13 +169,13 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                 [10.0, 1440.0],
             ),
             (
-                "markup_start",
+                "close_grid_markup_start",
                 result["bot"][pside].get("min_markup", 0.001)
                 + result["bot"][pside].get("markup_range", 0.001),
                 result["optimize"]["bounds"].get(f"{pside}_min_markup", [0.001, 0.03]),
             ),
             (
-                "markup_end",
+                "close_grid_markup_end",
                 result["bot"][pside].get("min_markup", 0.001),
                 result["optimize"]["bounds"].get(f"{pside}_min_markup", [0.001, 0.03]),
             ),
