@@ -55,16 +55,13 @@ pub fn calc_grid_close_long(
     if position.size <= 0.0 {
         return Order::default();
     }
-    if bot_params.close_grid_markup_range <= 0.0
-        || bot_params.close_grid_qty_pct < 0.0
-        || bot_params.close_grid_qty_pct >= 1.0
-    {
+    if bot_params.close_grid_qty_pct < 0.0 || bot_params.close_grid_qty_pct >= 1.0 {
         return Order {
             qty: -round_(position.size, exchange_params.qty_step),
             price: f64::max(
                 state_params.order_book.ask,
                 round_up(
-                    position.price * (1.0 + bot_params.close_grid_min_markup),
+                    position.price * (1.0 + bot_params.close_grid_markup_start),
                     exchange_params.price_step,
                 ),
             ),
@@ -72,12 +69,11 @@ pub fn calc_grid_close_long(
         };
     }
     let close_prices_start = round_up(
-        position.price * (1.0 + bot_params.close_grid_min_markup),
+        position.price * (1.0 + bot_params.close_grid_markup_start),
         exchange_params.price_step,
     );
     let close_prices_end = round_up(
-        position.price
-            * (1.0 + bot_params.close_grid_min_markup + bot_params.close_grid_markup_range),
+        position.price * (1.0 + bot_params.close_grid_markup_end),
         exchange_params.price_step,
     );
     if close_prices_start == close_prices_end {
@@ -87,7 +83,8 @@ pub fn calc_grid_close_long(
             order_type: OrderType::CloseGridLong,
         };
     }
-    let n_steps = ((close_prices_end - close_prices_start) / exchange_params.price_step).ceil();
+    let n_steps =
+        ((close_prices_end - close_prices_start).abs() / exchange_params.price_step).ceil();
     let close_grid_qty_pct_modified = f64::max(bot_params.close_grid_qty_pct, 1.0 / n_steps);
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
@@ -95,17 +92,23 @@ pub fn calc_grid_close_long(
         position.size,
         position.price,
     );
-    let wallet_exposure_ratio = f64::min(1.0, wallet_exposure / bot_params.wallet_exposure_limit);
-    let close_price = f64::max(
-        round_up(
-            position.price
-                * (1.0
-                    + bot_params.close_grid_min_markup
-                    + bot_params.close_grid_markup_range * (1.0 - wallet_exposure_ratio)),
-            exchange_params.price_step,
-        ),
-        state_params.order_book.ask,
-    );
+    let wallet_exposure_ratio = wallet_exposure / bot_params.wallet_exposure_limit;
+    let close_price = if wallet_exposure_ratio > 1.0 {
+        f64::max(
+            state_params.order_book.ask,
+            f64::min(close_prices_start, close_prices_end),
+        )
+    } else {
+        f64::max(
+            state_params.order_book.ask,
+            round_up(
+                close_prices_start
+                    + (close_prices_end - close_prices_start)
+                        * f64::min(1.0, wallet_exposure_ratio),
+                exchange_params.price_step,
+            ),
+        )
+    };
     let close_qty = -calc_close_qty(
         &exchange_params,
         &bot_params,
@@ -364,16 +367,13 @@ pub fn calc_grid_close_short(
     if position_size_abs == 0.0 {
         return Order::default();
     }
-    if bot_params.close_grid_markup_range <= 0.0
-        || bot_params.close_grid_qty_pct < 0.0
-        || bot_params.close_grid_qty_pct >= 1.0
-    {
+    if bot_params.close_grid_qty_pct < 0.0 || bot_params.close_grid_qty_pct >= 1.0 {
         return Order {
             qty: round_(position_size_abs, exchange_params.qty_step),
             price: f64::min(
                 state_params.order_book.bid,
                 round_dn(
-                    position.price * (1.0 - bot_params.close_grid_min_markup),
+                    position.price * (1.0 - bot_params.close_grid_markup_start),
                     exchange_params.price_step,
                 ),
             ),
@@ -381,12 +381,11 @@ pub fn calc_grid_close_short(
         };
     }
     let close_prices_start = round_dn(
-        position.price * (1.0 - bot_params.close_grid_min_markup),
+        position.price * (1.0 - bot_params.close_grid_markup_start),
         exchange_params.price_step,
     );
     let close_prices_end = round_dn(
-        position.price
-            * (1.0 - bot_params.close_grid_min_markup - bot_params.close_grid_markup_range),
+        position.price * (1.0 - bot_params.close_grid_markup_end),
         exchange_params.price_step,
     );
     if close_prices_start == close_prices_end {
@@ -396,7 +395,8 @@ pub fn calc_grid_close_short(
             order_type: OrderType::CloseGridShort,
         };
     }
-    let n_steps = ((close_prices_start - close_prices_end) / exchange_params.price_step).ceil();
+    let n_steps =
+        ((close_prices_start - close_prices_end).abs() / exchange_params.price_step).ceil();
     let close_grid_qty_pct_modified = f64::max(bot_params.close_grid_qty_pct, 1.0 / n_steps);
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
@@ -404,17 +404,23 @@ pub fn calc_grid_close_short(
         position_size_abs,
         position.price,
     );
-    let wallet_exposure_ratio = f64::min(1.0, wallet_exposure / bot_params.wallet_exposure_limit);
-    let close_price = f64::min(
-        round_dn(
-            position.price
-                * (1.0
-                    - bot_params.close_grid_min_markup
-                    - bot_params.close_grid_markup_range * (1.0 - wallet_exposure_ratio)),
-            exchange_params.price_step,
-        ),
-        state_params.order_book.bid,
-    );
+    let wallet_exposure_ratio = wallet_exposure / bot_params.wallet_exposure_limit;
+    let close_price = if wallet_exposure_ratio > 1.0 {
+        f64::min(
+            state_params.order_book.bid,
+            f64::max(close_prices_start, close_prices_end),
+        )
+    } else {
+        f64::min(
+            state_params.order_book.bid,
+            round_dn(
+                close_prices_start
+                    + (close_prices_end - close_prices_start)
+                        * f64::min(1.0, wallet_exposure_ratio),
+                exchange_params.price_step,
+            ),
+        )
+    };
     let close_qty = calc_close_qty(
         &exchange_params,
         &bot_params,
@@ -683,17 +689,14 @@ pub fn calc_closes_long(
 ) -> Vec<Order> {
     let mut closes = Vec::<Order>::new();
     let mut psize = position.size;
-    let mut ask = state_params.order_book.ask;
     for _ in 0..500 {
         let position_mod = Position {
             size: psize,
             price: position.price,
         };
-        let mut state_params_mod = state_params.clone();
-        state_params_mod.order_book.ask = ask;
         let close = calc_next_close_long(
             exchange_params,
-            &state_params_mod,
+            &state_params,
             bot_params,
             &position_mod,
             &trailing_price_bundle,
@@ -702,7 +705,6 @@ pub fn calc_closes_long(
             break;
         }
         psize = round_(psize + close.qty, exchange_params.qty_step);
-        ask = ask.max(close.price);
         if !closes.is_empty() {
             if close.order_type == OrderType::CloseTrailingLong {
                 break;
@@ -723,6 +725,7 @@ pub fn calc_closes_long(
         }
         closes.push(close);
     }
+    closes.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap());
     closes
 }
 
@@ -735,17 +738,14 @@ pub fn calc_closes_short(
 ) -> Vec<Order> {
     let mut closes = Vec::<Order>::new();
     let mut psize = position.size;
-    let mut bid = state_params.order_book.bid;
     for _ in 0..500 {
         let position_mod = Position {
             size: psize,
             price: position.price,
         };
-        let mut state_params_mod = state_params.clone();
-        state_params_mod.order_book.bid = bid;
         let close = calc_next_close_short(
             exchange_params,
-            &state_params_mod,
+            &state_params,
             bot_params,
             &position_mod,
             &trailing_price_bundle,
@@ -754,7 +754,6 @@ pub fn calc_closes_short(
             break;
         }
         psize = round_(psize + close.qty, exchange_params.qty_step);
-        bid = bid.min(close.price);
         if !closes.is_empty() {
             if close.order_type == OrderType::CloseTrailingShort {
                 break;
@@ -775,5 +774,6 @@ pub fn calc_closes_short(
         }
         closes.push(close);
     }
+    closes.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap());
     closes
 }
