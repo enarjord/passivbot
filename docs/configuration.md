@@ -81,21 +81,25 @@ The same logic applies to both trailing entries and trailing closes.
 
 ### Grid Close Parameters
 
-- **close_grid_markup_range**, **close_grid_min_markup**, **close_grid_qty_pct**:
-  - Take Profit (TP) prices are spread out from:
-    - `pos_price * (1 + min_markup)` to `pos_price * (1 + min_markup + markup_range)` for long.
-    - `pos_price * (1 - min_markup)` to `pos_price * (1 - min_markup - markup_range)` for short.
-  - Example: If `long_pos_price = 100`, `min_markup = 0.01`, `markup_range = 0.02`, and `close_grid_qty_pct = 0.2`, there are at most `1 / 0.2 = 5` TP orders, with TP prices at `[101, 101.5, 102, 102.5, 103]`.
+- **close_grid_markup_start**, **close_grid_markup_end**, **close_grid_qty_pct**:
+  - Take Profit (TP) prices are linearly spaced between:
+    - `pos_price * (1 + markup_start)` to `pos_price * (1 + markup_end)` for **long**.
+    - `pos_price * (1 - markup_start)` to `pos_price * (1 - markup_end)` for **short**.
+  - The TP direction depends on the relative values of `markup_start` and `markup_end`:
+    - If `markup_start > markup_end`: TP grid is built **backwards** (starting at higher price and descending for long / ascending for short).
+    - If `markup_start < markup_end`: TP grid is built **forwards** (starting at lower price and ascending for long / descending for short).
+  - Example (**long**, backwards TP): If `pos_price = 100`, `markup_start = 0.01`, `markup_end = 0.005`, and `close_grid_qty_pct = 0.2`, TP prices are: `[101.0, 100.9, 100.8, 100.7, 100.6]`.
+  - Example (**long**, forwards TP): If `markup_start = 0.005`, `markup_end = 0.01`, TP prices are: `[100.5, 100.6, 100.7, 100.8, 100.9]`.
+  - Example (**short**, forwards TP): If `pos_price = 100`, `markup_start = 0.005`, `markup_end = 0.01`, TP prices are: `[99.5, 99.4, 99.3, 99.2, 99.1]`.
+  - Example (**short**, backwards TP): If `markup_start = 0.01`, `markup_end = 0.005`, TP prices are: `[99.0, 99.1, 99.2, 99.3, 99.4]`.
   - Quantity per order is `full pos size * close_grid_qty_pct`.
-  - Note: Full position size is when the position is maxed out. If the position is less than full, fewer than `1 / close_grid_qty_pct` orders may be created.
-  - The TP grid is built from the top down:
-    - First TP at `103` up to 20% of full position size.
-    - Next TP at `102.5` from 20% to 40% of full position size.
-    - Next TP at `102.0` from 40% to 60% of full position size.
-    - Etc.
-  - Example: If `full_pos_size = 100` and `long_pos_size = 55`, then TP orders are `[15@102.0, 20@102.5, 20@103.0]`.
-  - If position is greater than full position size, leftovers are added to the lowest TP order.
-    - Example: If `long_pos_size = 130`, then TP orders are `[50@101.0, 20@101.5, 20@102.0, 20@102.5, 20@103.0]`.
+  - Note: Full position size refers to the maxed-out size. If the actual position is smaller, fewer than `1 / close_grid_qty_pct` orders may be created.
+  - The TP grid is filled in order from `markup_start` to `markup_end`, allocating each slice up to the respective quantity:
+    - First TP up to `close_grid_qty_pct * full_pos_size`.
+    - Second TP from `close_grid_qty_pct` to `2 * close_grid_qty_pct`, etc.
+  - Example: If `full_pos_size = 100` and `long_pos_size = 55`, and prices are built backwards, then TP orders might be `[15@100.8, 20@100.9, 20@101.0]`.
+  - If position exceeds full position size, excess size is added to the TP order closest to `markup_start`.
+    - Example: If `long_pos_size = 130` and grid is forwards, TP orders are `[50@100.5, 20@100.6, 20@100.7, 20@100.8, 20@100.9]`.
 
 ### Trailing Close Parameters
 
