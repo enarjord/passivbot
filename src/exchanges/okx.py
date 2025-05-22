@@ -250,7 +250,7 @@ class OKXBot(Passivbot):
         if len(orders) == 0:
             return []
         to_execute = []
-        orders = orders[: self.config["live"]["max_n_creations_per_batch"]]
+        orders = orders
         for order in orders:
             to_execute.append(
                 {
