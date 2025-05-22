@@ -297,7 +297,10 @@ class GateIOBot(Passivbot):
             traceback.print_exc()
 
     def did_cancel_order(self, executed):
-        return "status" in executed and executed["status"] != "rejected"
+        try:
+            return "status" in executed and executed["status"] != "rejected"
+        except:
+            return False
 
     async def execute_order(self, order: dict) -> dict:
         return await self.execute_orders([order])
@@ -334,7 +337,10 @@ class GateIOBot(Passivbot):
         return executed
 
     def did_create_order(self, executed):
-        return "status" in executed and executed["status"] != "rejected"
+        try:
+            return "status" in executed and executed["status"] != "rejected"
+        except:
+            return False
 
     async def update_exchange_config_by_symbols(self, symbols):
         return
