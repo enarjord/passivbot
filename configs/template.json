@@ -63,7 +63,7 @@
                    "unstuck_ema_dist": -0.1,
                    "unstuck_loss_allowance_pct": 0.001,
                    "unstuck_threshold": 0.4}},
- "live": {"approved_coins": "configs/approved_coins_top15mcap.json",
+ "live": {"approved_coins": "configs/approved_coins_top20mcap.json",
           "auto_gs": true,
           "coin_flags": {},
           "empty_means_all_approved": true,
