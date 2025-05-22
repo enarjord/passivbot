@@ -435,7 +435,7 @@ class Passivbot:
                 elif ex[key] is None:
                     debug_prints.setdefault("is_none", []).append((key, od[key]))
                     ex[key] = od[key]
-            if debug_prints:
+            if debug_prints and self.debug_mode:
                 print("debug create_orders", debug_prints)
             to_return.append(ex)
         if to_return:
@@ -479,7 +479,7 @@ class Passivbot:
                 elif ex[key] is None:
                     debug_prints.setdefault("is_none", []).append((key, od[key]))
                     ex[key] = od[key]
-            if debug_prints:
+            if debug_prints and self.debug_mode:
                 print("debug cancel_orders", debug_prints)
             to_return.append(ex)
         if to_return:
@@ -488,11 +488,17 @@ class Passivbot:
         return to_return
 
     def did_create_order(self, executed) -> bool:
-        return "id" in executed and executed["id"] is not None
+        try:
+            return "id" in executed and executed["id"] is not None
+        except:
+            return False
         # further tests defined in child class
 
     def did_cancel_order(self, executed) -> bool:
-        return "id" in executed and executed["id"] is not None
+        try:
+            return "id" in executed and executed["id"] is not None
+        except:
+            return False
         # further tests defined in child class
 
     def is_forager_mode(self, pside=None):
