@@ -406,32 +406,31 @@ class BinanceBot(Passivbot):
         return await self.execute_multiple(orders, "execute_cancellation")
 
     async def execute_order(self, order: dict) -> dict:
-        order_type = order["type"] if "type" in order else "limit"
-        params = {
-            "positionSide": order["position_side"].upper(),
-            "newClientOrderId": order["custom_id"],
-        }
-        if order_type == "limit":
-            params["timeInForce"] = (
-                "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
+        executed = None
+        try:
+            order_type = order["type"] if "type" in order else "limit"
+            params = {
+                "positionSide": order["position_side"].upper(),
+                "newClientOrderId": order["custom_id"],
+            }
+            if order_type == "limit":
+                params["timeInForce"] = (
+                    "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
+                )
+            executed = await self.cca.create_order(
+                type=order_type,
+                symbol=order["symbol"],
+                side=order["side"],
+                amount=abs(order["qty"]),
+                price=order["price"],
+                params=params,
             )
-        executed = await self.cca.create_order(
-            type=order_type,
-            symbol=order["symbol"],
-            side=order["side"],
-            amount=abs(order["qty"]),
-            price=order["price"],
-            params=params,
-        )
-        return executed
-        if "info" in executed and "code" in executed["info"] and executed["info"]["code"] == "-5022":
-            logging.info(f"{executed['info']['msg']}")
-            return {}
-        elif "status" in executed and executed["status"] in ["open", "closed"]:
-            executed["position_side"] = executed["info"]["positionSide"].lower()
-            executed["qty"] = executed["amount"]
-            executed["reduce_only"] = executed["reduceOnly"]
             return executed
+        except Exception as e:
+            logging.error(f"error executing order {order} {e}")
+            print_async_exception(executed)
+            traceback.print_exc()
+            return {}
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if len(orders) == 0:
@@ -439,7 +438,7 @@ class BinanceBot(Passivbot):
         if len(orders) == 1:
             return [await self.execute_order(orders[0])]
         to_execute = []
-        for order in orders[: self.config["live"]["max_n_creations_per_batch"]]:
+        for order in orders:
             params = {
                 "positionSide": order["position_side"].upper(),
                 "newClientOrderId": order["custom_id"],
@@ -462,30 +461,11 @@ class BinanceBot(Passivbot):
         try:
             executed = await self.cca.create_orders(to_execute)
             return executed
-            for i in range(len(executed)):
-                executed[i]["position_side"] = (
-                    executed[i]["info"]["positionSide"].lower()
-                    if "info" in executed[i] and "positionSide" in executed[i]["info"]
-                    else None
-                )
-                executed[i]["qty"] = executed[i]["amount"] if "amount" in executed[i] else 0.0
-                executed[i]["reduce_only"] = (
-                    executed[i]["reduceOnly"] if "reduceOnly" in executed[i] else None
-                )
-
-                if (
-                    "info" in executed[i]
-                    and "code" in executed[i]["info"]
-                    and executed[i]["info"]["code"] == "-5022"
-                ):
-                    logging.info(f"{executed[i]['info']['msg']}")
-                    executed[i] = {}
-            return executed
         except Exception as e:
             logging.error(f"error executing orders {orders} {e}")
             print_async_exception(executed)
             traceback.print_exc()
-            return {}
+            return []
 
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}
