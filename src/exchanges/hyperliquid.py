@@ -344,6 +344,7 @@ class HyperliquidBot(Passivbot):
                     },
                 }
             )
+        res = None
         try:
             res = await self.cca.create_orders(
                 to_execute,
@@ -356,8 +357,10 @@ class HyperliquidBot(Passivbot):
         except Exception as e:
             if self.adjust_min_cost_on_error(e):
                 return []
-            else:
-                raise
+            logging.error(f"error with execute_orders {e} orders: {orders}")
+            print_async_exception(res)
+            traceback.print_exc()
+            return []
         return res
 
     def did_create_order(self, executed) -> bool:
