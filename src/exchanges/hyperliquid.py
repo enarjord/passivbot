@@ -308,7 +308,10 @@ class HyperliquidBot(Passivbot):
         return await self.execute_multiple(orders, "execute_cancellation")
 
     def did_cancel_order(self, cancelled) -> bool:
-        return "status" in cancelled and cancelled["status"] == "success"
+        try:
+            return "status" in cancelled and cancelled["status"] == "success"
+        except:
+            return False
 
     async def execute_order(self, order: dict) -> dict:
         executed = None
@@ -337,13 +340,16 @@ class HyperliquidBot(Passivbot):
             return {}
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, 'execute_order')
+        return await self.execute_multiple(orders, "execute_order")
 
     def did_create_order(self, executed) -> bool:
         did_create = super().did_create_order(executed)
-        return did_create and (
-            "info" in executed and ("filled" in executed["info"] or "resting" in executed["info"])
-        )
+        try:
+            return did_create and (
+                "info" in executed and ("filled" in executed["info"] or "resting" in executed["info"])
+            )
+        except:
+            return False
 
     def adjust_min_cost_on_error(self, error):
         any_adjusted = False
