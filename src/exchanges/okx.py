@@ -226,6 +226,7 @@ class OKXBot(Passivbot):
         executed = None
         try:
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
+            return executed
             for key in ["symbol", "side", "position_side", "qty", "price"]:
                 if key not in executed or executed[key] is None:
                     executed[key] = order[key]
@@ -240,19 +241,7 @@ class OKXBot(Passivbot):
             return {}
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        if len(orders) > self.config["live"]["max_n_cancellations_per_batch"]:
-            # prioritize cancelling reduce-only orders
-            try:
-                reduce_only_orders = [x for x in orders if x["reduce_only"]]
-                rest = [x for x in orders if not x["reduce_only"]]
-                orders = (reduce_only_orders + rest)[
-                    : self.config["live"]["max_n_cancellations_per_batch"]
-                ]
-            except Exception as e:
-                logging.error(f"debug filter cancellations {e}")
-        return await self.execute_multiple(
-            orders, "execute_cancellation", self.config["live"]["max_n_cancellations_per_batch"]
-        )
+        return await self.execute_multiple(orders, "execute_cancellation")
 
     async def execute_order(self, order: dict) -> dict:
         return self.execute_orders([order])
