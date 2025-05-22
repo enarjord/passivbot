@@ -352,14 +352,6 @@ class BybitBot(Passivbot):
         try:
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
             return executed
-            return {
-                "symbol": executed["symbol"],
-                "side": order["side"],
-                "id": executed["id"],
-                "position_side": order["position_side"],
-                "qty": order["qty"],
-                "price": order["price"],
-            }
         except Exception as e:
             logging.error(f"error cancelling order {order} {e}")
             print_async_exception(executed)
@@ -384,12 +376,6 @@ class BybitBot(Passivbot):
                 "orderLinkId": order["custom_id"],
             },
         )
-        return executed
-        if "symbol" not in executed or executed["symbol"] is None:
-            executed["symbol"] = order["symbol"]
-        for key in ["side", "position_side", "qty", "price"]:
-            if key not in executed or executed[key] is None:
-                executed[key] = order[key]
         return executed
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
