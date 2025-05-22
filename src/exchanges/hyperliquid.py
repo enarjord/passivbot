@@ -291,22 +291,10 @@ class HyperliquidBot(Passivbot):
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
         res = None
         try:
-            if len(orders) > self.config["live"]["max_n_cancellations_per_batch"]:
-                # prioritize cancelling reduce-only orders
-                try:
-                    reduce_only_orders = [x for x in orders if x["reduce_only"]]
-                    rest = [x for x in orders if not x["reduce_only"]]
-                    orders = (reduce_only_orders + rest)[
-                        : self.config["live"]["max_n_cancellations_per_batch"]
-                    ]
-                except Exception as e:
-                    logging.error(f"debug filter cancellations {e}")
             by_symbol = {}
             for order in orders:
-                if order["symbol"] not in by_symbol:
-                    by_symbol[order["symbol"]] = []
-                by_symbol[order["symbol"]].append(order)
-            syms = sorted(by_symbol)
+                by_symbol.setdefault(order["symbol"], []).append(order)
+            syms = list(by_symbol)
             res = await asyncio.gather(
                 *[
                     self.cca.cancel_orders(
@@ -319,19 +307,17 @@ class HyperliquidBot(Passivbot):
                         ),
                     )
                     for sym in syms
-                ]
+                ],
+                return_exceptions=True,
             )
-            cancellations = []
-            for sym, elm in zip(syms, res):
-                if "status" in elm and elm["status"] == "ok":
-                    for status, order in zip(elm["response"]["data"]["statuses"], by_symbol[sym]):
-                        if status == "success":
-                            cancellations.append(order)
-            return cancellations
+            return [y for x in res for y in x]
         except Exception as e:
             logging.error(f"error executing cancellations {e}")
             print_async_exception(res)
             traceback.print_exc()
+
+    def did_cancel_order(self, cancelled) -> bool:
+        return "status" in cancelled and cancelled["status"] == "success"
 
     async def execute_order(self, order: dict) -> dict:
         return await self.execute_orders([order])
@@ -372,11 +358,13 @@ class HyperliquidBot(Passivbot):
                 return []
             else:
                 raise
-        executed = []
-        for ex, order in zip(res, orders):
-            if "info" in ex and "filled" in ex["info"] or "resting" in ex["info"]:
-                executed.append({**ex, **order})
-        return executed
+        return res
+
+    def did_create_order(self, executed) -> bool:
+        did_create = super().did_create_order(executed)
+        return did_create and (
+            "info" in executed and ("filled" in executed["info"] or "resting" in executed["info"])
+        )
 
     def adjust_min_cost_on_error(self, error):
         any_adjusted = False
