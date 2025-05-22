@@ -389,9 +389,6 @@ class Passivbot:
             #    pprint.pprint(x)
         else:
             res = await self.execute_cancellations_parent(to_cancel)
-            if res:
-                for elm in res:
-                    self.remove_order(elm, source="POST")
         if self.debug_mode:
             if to_create:
                 print(f"would create {len(to_create)} orders")
@@ -403,10 +400,6 @@ class Passivbot:
             res = None
             try:
                 res = await self.execute_orders_parent(to_create)
-                if res:
-                    self.handle_backtest_mimic(res)
-                    for elm in res:
-                        self.add_new_order(elm, source="POST")
             except Exception as e:
                 logging.error(f"error executing orders {to_create} {e}")
                 print_async_exception(res)
@@ -445,6 +438,10 @@ class Passivbot:
             if debug_prints:
                 print("debug create_orders", debug_prints)
             to_return.append(ex)
+        if to_return:
+            self.handle_backtest_mimic(to_return)
+            for elm in to_return:
+                self.add_new_order(elm, source="POST")
         return to_return
 
     async def execute_cancellations_parent(self, orders: [dict]) -> [dict]:
@@ -485,6 +482,9 @@ class Passivbot:
             if debug_prints:
                 print("debug cancel_orders", debug_prints)
             to_return.append(ex)
+        if to_return:
+            for elm in to_return:
+                self.remove_order(elm, source="POST")
         return to_return
 
     def did_create_order(self, executed) -> bool:
@@ -2122,7 +2122,7 @@ class Passivbot:
         for order, execution in executions:
             if isinstance(execution, Exception):
                 # Already failed at task creation time
-                results.append((order, execution))
+                results.append(execution)
                 continue
             result = None
             try:
