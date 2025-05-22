@@ -351,6 +351,7 @@ class BybitBot(Passivbot):
         executed = None
         try:
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
+            return executed
             return {
                 "symbol": executed["symbol"],
                 "side": order["side"],
@@ -366,19 +367,7 @@ class BybitBot(Passivbot):
             return {}
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        if len(orders) > self.config["live"]["max_n_cancellations_per_batch"]:
-            # prioritize cancelling reduce-only orders
-            try:
-                reduce_only_orders = [x for x in orders if x["reduce_only"]]
-                rest = [x for x in orders if not x["reduce_only"]]
-                orders = (reduce_only_orders + rest)[
-                    : self.config["live"]["max_n_cancellations_per_batch"]
-                ]
-            except Exception as e:
-                logging.error(f"debug filter cancellations {e}")
-        return await self.execute_multiple(
-            orders, "execute_cancellation", self.config["live"]["max_n_cancellations_per_batch"]
-        )
+        return await self.execute_multiple(orders, "execute_cancellation")
 
     async def execute_order(self, order: dict) -> dict:
         executed = await self.cca.create_order(
@@ -395,6 +384,7 @@ class BybitBot(Passivbot):
                 "orderLinkId": order["custom_id"],
             },
         )
+        return executed
         if "symbol" not in executed or executed["symbol"] is None:
             executed["symbol"] = order["symbol"]
         for key in ["side", "position_side", "qty", "price"]:
@@ -403,9 +393,7 @@ class BybitBot(Passivbot):
         return executed
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(
-            orders, "execute_order", self.config["live"]["max_n_creations_per_batch"]
-        )
+        return await self.execute_multiple(orders, "execute_order")
 
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}
