@@ -380,17 +380,6 @@ class BinanceBot(Passivbot):
         try:
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
             return executed
-            if "code" in executed and executed["code"] == -2011:
-                logging.info(f"{executed}")
-                return {}
-            return {
-                "symbol": executed["symbol"],
-                "side": executed["side"],
-                "id": executed["id"],
-                "position_side": executed["info"]["positionSide"].lower(),
-                "qty": executed["amount"],
-                "price": executed["price"],
-            }
         except Exception as e:
             logging.error(f"error cancelling order {order} {e}")
             if "-2011" not in str(e):
