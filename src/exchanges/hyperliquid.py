@@ -286,82 +286,58 @@ class HyperliquidBot(Passivbot):
             return False
 
     async def execute_cancellation(self, order: dict) -> dict:
-        return await self.execute_cancellations([order])
-
-    async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        res = None
+        executed = None
         try:
-            by_symbol = {}
-            for order in orders:
-                by_symbol.setdefault(order["symbol"], []).append(order)
-            syms = list(by_symbol)
-            res = await asyncio.gather(
-                *[
-                    self.cca.cancel_orders(
-                        [x["id"] for x in by_symbol[sym]],
-                        symbol=sym,
-                        params=(
-                            {"vaultAddress": self.user_info["wallet_address"]}
-                            if self.user_info["is_vault"]
-                            else {}
-                        ),
-                    )
-                    for sym in syms
-                ],
-                return_exceptions=True,
-            )
-            return [y for x in res for y in x]
-        except Exception as e:
-            logging.error(f"error executing cancellations {e}")
-            print_async_exception(res)
-            traceback.print_exc()
-
-    def did_cancel_order(self, cancelled) -> bool:
-        return "status" in cancelled and cancelled["status"] == "success"
-
-    async def execute_order(self, order: dict) -> dict:
-        return await self.execute_orders([order])
-
-    async def execute_orders(self, orders: [dict]) -> [dict]:
-        if len(orders) == 0:
-            return []
-        to_execute = []
-        for order in orders:
-            to_execute.append(
-                {
-                    "symbol": order["symbol"],
-                    "type": order["type"] if "type" in order else "limit",
-                    "side": order["side"],
-                    "amount": order["qty"],
-                    "price": order["price"],
-                    "params": {
-                        # "orderType": {"limit": {"tif": "Alo"}},
-                        # "cloid": order["custom_id"],
-                        "reduceOnly": order["reduce_only"],
-                        "timeInForce": (
-                            "Alo" if self.config["live"]["time_in_force"] == "post_only" else "Gtc"
-                        ),
-                    },
-                }
-            )
-        res = None
-        try:
-            res = await self.cca.create_orders(
-                to_execute,
+            executed = await self.cca.cancel_order(
+                order["id"],
+                symbol=order["symbol"],
                 params=(
                     {"vaultAddress": self.user_info["wallet_address"]}
                     if self.user_info["is_vault"]
                     else {}
                 ),
             )
+            return executed
         except Exception as e:
-            if self.adjust_min_cost_on_error(e):
-                return []
-            logging.error(f"error with execute_orders {e} orders: {orders}")
-            print_async_exception(res)
+            logging.error(f"error cancelling order {order} {e}")
+            print_async_exception(executed)
             traceback.print_exc()
-            return []
-        return res
+            return {}
+
+    async def execute_cancellations(self, orders: [dict]) -> [dict]:
+        return await self.execute_multiple(orders, "execute_cancellation")
+
+    def did_cancel_order(self, cancelled) -> bool:
+        return "status" in cancelled and cancelled["status"] == "success"
+
+    async def execute_order(self, order: dict) -> dict:
+        executed = None
+        try:
+            params = {
+                "reduceOnly": order["reduce_only"],
+                "timeInForce": (
+                    "Alo" if self.config["live"]["time_in_force"] == "post_only" else "Gtc"
+                ),
+            }
+            if self.user_info["is_vault"]:
+                params["vaultAddress"] = self.user_info["wallet_address"]
+            executed = await self.cca.create_order(
+                symbol=order["symbol"],
+                type=order["type"] if "type" in order else "limit",
+                side=order["side"],
+                amount=order["qty"],
+                price=order["price"],
+                params=params,
+            )
+            return executed
+        except Exception as e:
+            logging.error(f"error executing order {order} {e}")
+            print_async_exception(executed)
+            traceback.print_exc()
+            return {}
+
+    async def execute_orders(self, orders: [dict]) -> [dict]:
+        return await self.execute_multiple(orders, 'execute_order')
 
     def did_create_order(self, executed) -> bool:
         did_create = super().did_create_order(executed)
