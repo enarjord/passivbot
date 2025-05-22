@@ -379,6 +379,7 @@ class BinanceBot(Passivbot):
         executed = None
         try:
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
+            return executed
             if "code" in executed and executed["code"] == -2011:
                 logging.info(f"{executed}")
                 return {}
@@ -402,9 +403,7 @@ class BinanceBot(Passivbot):
             return []
         if len(orders) == 1:
             return [await self.execute_cancellation(orders[0])]
-        return await self.execute_multiple(
-            orders, "execute_cancellation", self.config["live"]["max_n_cancellations_per_batch"]
-        )
+        return await self.execute_multiple(orders, "execute_cancellation")
 
     async def execute_order(self, order: dict) -> dict:
         order_type = order["type"] if "type" in order else "limit"
@@ -424,6 +423,7 @@ class BinanceBot(Passivbot):
             price=order["price"],
             params=params,
         )
+        return executed
         if "info" in executed and "code" in executed["info"] and executed["info"]["code"] == "-5022":
             logging.info(f"{executed['info']['msg']}")
             return {}
@@ -461,6 +461,7 @@ class BinanceBot(Passivbot):
         executed = None
         try:
             executed = await self.cca.create_orders(to_execute)
+            return executed
             for i in range(len(executed)):
                 executed[i]["position_side"] = (
                     executed[i]["info"]["positionSide"].lower()
