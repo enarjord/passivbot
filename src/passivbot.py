@@ -420,6 +420,8 @@ class Passivbot:
     async def execute_orders_parent(self, orders: [dict]) -> [dict]:
         orders = orders[: self.config["live"]["max_n_creations_per_batch"]]
         res = await self.execute_orders(orders)
+        if not res:
+            return
         if len(orders) != len(res):
             print(
                 f"debug unequal lengths execute_orders_parent: "
@@ -449,13 +451,16 @@ class Passivbot:
         if len(orders) > self.config["live"]["max_n_cancellations_per_batch"]:
             # prioritize cancelling reduce-only orders
             try:
-                reduce_only_orders = [x for x in orders if x["reduce_only"]]
+                reduce_only_orders = [
+                    x for x in orders if x.get("reduce_only") or x.get("reduceOnly")
+                ]
                 rest = [x for x in orders if not x["reduce_only"]]
                 orders = (reduce_only_orders + rest)[
                     : self.config["live"]["max_n_cancellations_per_batch"]
                 ]
             except Exception as e:
                 logging.error(f"debug filter cancellations {e}")
+                orders = orders[: self.config["live"]["max_n_cancellations_per_batch"]]
         res = await self.execute_cancellations(orders)
         to_return = []
         if len(orders) != len(res):
