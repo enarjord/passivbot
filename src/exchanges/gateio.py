@@ -38,8 +38,12 @@ class GateIOBot(Passivbot):
             120  # gateio has stricter rate limiting on fetching ohlcvs
         )
         self.hedge_mode = False
-        self.max_n_creations_per_batch = 10
-        self.max_n_cancellations_per_batch = 20
+        self.config["live"]["max_n_cancellations_per_batch"] = min(
+            self.config["live"]["max_n_cancellations_per_batch"], 20
+        )
+        self.config["live"]["max_n_creations_per_batch"] = min(
+            self.config["live"]["max_n_creations_per_batch"], 10
+        )
 
     def create_ccxt_sessions(self):
         self.ccp = getattr(ccxt_pro, self.exchange)(
@@ -275,9 +279,6 @@ class GateIOBot(Passivbot):
         if not orders:
             return []
         res = None
-        max_n_cancellations_per_batch = min(
-            self.max_n_cancellations_per_batch, self.config["live"]["max_n_cancellations_per_batch"]
-        )
         try:
             res = await self.cca.cancel_orders([x["id"] for x in orders])
             return res
@@ -305,7 +306,7 @@ class GateIOBot(Passivbot):
         if len(orders) == 0:
             return []
         to_execute = []
-        for order in orders[: self.max_n_creations_per_batch]:
+        for order in orders:
             order_type = order["type"] if "type" in order else "limit"
             params = {
                 "reduce_only": order["reduce_only"],
