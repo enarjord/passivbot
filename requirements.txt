@@ -8,7 +8,7 @@ tqdm==4.62.3
 python-dateutil==2.8.2
 numba==0.59.1; python_version>='3.9'
 numba==0.58.1; python_version<'3.9'
-pandas==1.4.0
+pandas==1.4.3
 PyYAML==6.0
 asyncio==3.4.3
 pyecharts==1.9.1
