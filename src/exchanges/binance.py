@@ -17,7 +17,6 @@ from pure_funcs import (
     determine_pos_side_ccxt,
     flatten,
     shorten_custom_id,
-    hysteresis_rounding,
 )
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version, load_broker_code
 
@@ -188,8 +187,11 @@ class BinanceBot(Passivbot):
             balance = float(fetched_balance["info"]["totalCrossWalletBalance"])
             if not hasattr(self, "previous_rounded_balance"):
                 self.previous_rounded_balance = balance
-            self.previous_rounded_balance = hysteresis_rounding(
-                balance, self.previous_rounded_balance, 0.02, 0.5
+            self.previous_rounded_balance = pbr.hysteresis_rounding(
+                balance,
+                self.previous_rounded_balance,
+                self.hyst_rounding_balance_pct,
+                self.hyst_rounding_balance_h,
             )
             return positions, self.previous_rounded_balance
         except Exception as e:

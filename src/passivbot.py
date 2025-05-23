@@ -159,6 +159,8 @@ class Passivbot:
         self.debug_mode = False
         self.balance_threshold = 1.0  # don't create orders if balance is less than threshold
         self.mimic_backtest_1m_delay = self.config["live"].get("mimic_backtest_1m_delay", False)
+        self.hyst_rounding_balance_pct = 0.02
+        self.hyst_rounding_balance_h = 0.5
 
     async def start_bot(self):
         logging.info(f"Starting bot {self.exchange}...")

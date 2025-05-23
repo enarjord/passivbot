@@ -15,7 +15,6 @@ from pure_funcs import (
     determine_pos_side_ccxt,
     symbol_to_coin,
     flatten,
-    hysteresis_rounding,
 )
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
 
@@ -128,8 +127,11 @@ class BybitBot(Passivbot):
                 balance = float(balinfo["totalWalletBalance"])
                 if not hasattr(self, "previous_rounded_balance"):
                     self.previous_rounded_balance = balance
-                self.previous_rounded_balance = hysteresis_rounding(
-                    balance, self.previous_rounded_balance, 0.02, 0.5
+                self.previous_rounded_balance = pbr.hysteresis_rounding(
+                    balance,
+                    self.previous_rounded_balance,
+                    self.hyst_rounding_balance_pct,
+                    self.hyst_rounding_balance_h,
                 )
                 balance = self.previous_rounded_balance
             else:

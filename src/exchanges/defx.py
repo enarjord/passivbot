@@ -11,7 +11,6 @@ from pure_funcs import (
     ts_to_date_utc,
     calc_hash,
     shorten_custom_id,
-    hysteresis_rounding,
 )
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
 
