@@ -223,6 +223,10 @@ class Passivbot:
         if self.is_forager_mode():
             await self.update_first_timestamps()
 
+    def debug_print(self, *args):
+        if hasattr(self, "debug_mode") and self.debug_mode:
+            print(*args)
+
     async def init_flags(self):
         self.flags = {}
         for k, v in self.config["live"]["coin_flags"].items():
