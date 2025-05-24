@@ -573,5 +573,7 @@ def plot_pareto_front(df, metrics, minimize=(True, True)):
 
 def add_metrics_to_fdf(fdf):
     fdf.loc[:, "wallet_exposure"] = fdf.psize.abs() * fdf.pprice / fdf.balance
-    fdf.loc[:, "pprice_dist"] = fdf.apply(lambda x: pbr.calc_pprice_diff_int(0 if 'long' in x.type else 1, x.pprice, x.price), axis=1)
+    fdf.loc[:, "pprice_dist"] = fdf.apply(
+        lambda x: pbr.calc_pprice_diff_int(0 if "long" in x.type else 1, x.pprice, x.price), axis=1
+    )
     return fdf
