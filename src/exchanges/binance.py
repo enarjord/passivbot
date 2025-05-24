@@ -115,7 +115,7 @@ class BinanceBot(Passivbot):
                 res = await self.ccp.watch_balance()
                 self.handle_balance_update(res)
             except Exception as e:
-                print(f"exception watch_balance", e)
+                logging.error(f"exception watch_balance {e}")
                 traceback.print_exc()
                 await asyncio.sleep(1)
 
@@ -131,7 +131,7 @@ class BinanceBot(Passivbot):
                 self.handle_order_update(res)
             except Exception as e:
                 if "Abnormal closure of client" not in str(e):
-                    print(f"exception watch_orders", e)
+                    logging.error(f"exception watch_orders {e}")
                     traceback.print_exc()
                 await asyncio.sleep(1)
 
@@ -282,8 +282,11 @@ class BinanceBot(Passivbot):
         # fetch fills for all symbols with pos
         # fetch pnls for all symbols
         # fills only needed for symbols with pos for trailing orders
+        # binance returns at most 7 days worth of pnls per fetch unless both start_time and end_time are given
         if limit is None:
             limit = 1000
+        else:
+            limit = min(limit, 1000)
         if start_time is None and end_time is None:
             return await self.fetch_pnl(limit=limit)
         all_fetched = {}
@@ -295,9 +298,10 @@ class BinanceBot(Passivbot):
                 break
             for elm in fetched:
                 all_fetched[elm["tradeId"]] = elm
-            if len(fetched) < limit:
+            if start_time and end_time and len(fetched) < limit:
+                # means fetched all pnls inside [start_time, end_time] range
                 break
-            logging.info(f"debug fetching pnls {ts_to_date_utc(fetched[-1]['timestamp'])}")
+            logging.info(f"fetched pnls until {ts_to_date_utc(fetched[-1]['timestamp'])[:19]}")
             start_time = fetched[-1]["timestamp"]
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
 
@@ -306,40 +310,66 @@ class BinanceBot(Passivbot):
             if symbol not in self.markets_dict:
                 return []
             # limit is max 1000
-            if limit is None:
-                limit = 1000
-            if start_time is None:
-                all_fills = await self.cca.fetch_my_trades(symbol, limit=limit)
+            # fetches at most 7 days worth
+            max_limit = 1000
+            limit = min(max_limit, limit) if limit else max_limit
+            if start_time is None and end_time is None:
+                fills = await self.cca.fetch_my_trades(symbol, limit=limit)
+                all_fills = {x["id"]: x for x in fills}
+            elif start_time is None:
+                fills = await self.cca.fetch_my_trades(
+                    symbol, limit=limit, params={"endTime": int(end_time)}
+                )
+                all_fills = {x["id"]: x for x in fills}
             else:
-                week = 1000 * 60 * 60 * 24 * 7.0
-                all_fills = {}
                 if end_time is None:
                     end_time = self.get_exchange_time() + 1000 * 60 * 60
-                sts = start_time
+                all_fills = {}
+                params = {}
+                week = 1000 * 60 * 60 * 24 * 7.0
+                start_time_sub = start_time
                 while True:
-                    ets = min(end_time, sts + week * 0.999)
                     fills = await self.cca.fetch_my_trades(
-                        symbol, limit=limit, params={"startTime": int(sts), "endTime": int(ets)}
+                        symbol,
+                        limit=limit,
+                        params={
+                            "startTime": int(
+                                min(start_time_sub, self.get_exchange_time() - 1000 * 60)
+                            ),
+                            "endTime": int(min(end_time, start_time_sub + week * 0.999)),
+                        },
                     )
-                    if fills:
-                        if fills[0]["id"] in all_fills and fills[-1]["id"] in all_fills:
+                    if not fills:
+                        if end_time - start_time_sub < week * 0.9:
+                            self.debug_print("debug fetch_fills_sub a", symbol)
                             break
+                        else:
+                            logging.info(
+                                f"fetched 0 fills for {symbol} between {ts_to_date_utc(start_time_sub)[:19]} and {ts_to_date_utc(end_time)[:19]}"
+                            )
+                            start_time_sub += week
+                            continue
+                    if fills[0]["id"] in all_fills and fills[-1]["id"] in all_fills:
+                        if end_time - start_time_sub < week * 0.9:
+                            self.debug_print("debug fetch_fills_sub b", symbol)
+                            break
+                        else:
+                            logging.info(
+                                f"fetched 0 new fills for {symbol} between {ts_to_date_utc(start_time_sub)[:19]} and {ts_to_date_utc(end_time)[:19]}"
+                            )
+                            start_time_sub += week
+                            continue
+                    else:
                         for x in fills:
                             all_fills[x["id"]] = x
-                        if fills[-1]["timestamp"] >= end_time:
-                            break
-                        if end_time - sts < week and len(fills) < limit:
-                            break
-                        sts = fills[-1]["timestamp"]
-                        logging.info(
-                            f"fetched {len(fills)} fill{'s' if len(fills) > 1 else ''} for {symbol} {ts_to_date_utc(fills[0]['timestamp'])}"
-                        )
-                    else:
-                        if end_time - sts < week:
-                            break
-                        sts = sts + week * 0.999
-                    limit = 1000
-                all_fills = sorted(all_fills.values(), key=lambda x: x["timestamp"])
+                    if end_time - start_time_sub < week * 0.9 and len(fills) < limit:
+                        self.debug_print("debug fetch_fills_sub c", symbol)
+                        break
+                    start_time_sub = fills[-1]["timestamp"]
+                    logging.info(
+                        f"fetched {len(fills)} fill{'s' if len(fills) > 1 else ''} for {symbol} {ts_to_date_utc(fills[0]['timestamp'])[:19]}"
+                    )
+            all_fills = sorted(all_fills.values(), key=lambda x: x["timestamp"])
             for i in range(len(all_fills)):
                 all_fills[i]["pnl"] = float(all_fills[i]["info"]["realizedPnl"])
                 all_fills[i]["position_side"] = all_fills[i]["info"]["positionSide"].lower()
@@ -354,12 +384,16 @@ class BinanceBot(Passivbot):
         end_time: int = None,
         limit: int = None,
     ):
+        # will fetch from start_time until end_time, earliest first
+        # if start_time is None and end_time is None, will only fetch for last 7 days
+        # if end_time is None, will fetch for more than 7 days
+        # if start_time is None, will only fetch for last 7 days
         fetched = None
-        # max limit is 1000
+        max_limit = 1000
         if limit is None:
-            limit = 1000
+            limit = max_limit
         try:
-            params = {"incomeType": "REALIZED_PNL", "limit": 1000}
+            params = {"incomeType": "REALIZED_PNL", "limit": min(max_limit, limit)}
             if start_time is not None:
                 params["startTime"] = int(start_time)
             if end_time is not None:
