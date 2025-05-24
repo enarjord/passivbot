@@ -197,6 +197,7 @@ pub fn calc_pnl_short(entry_price: f64, close_price: f64, qty: f64, c_mult: f64)
     qty.abs() * c_mult * (entry_price - close_price)
 }
 
+#[pyfunction]
 pub fn calc_pprice_diff_int(pside: usize, pprice: f64, price: f64) -> f64 {
     match pside {
         LONG => {
