@@ -591,6 +591,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 "max_n_cancellations_per_batch": 5,
                 "max_n_creations_per_batch": 3,
                 "max_n_restarts_per_day": 10,
+                "mimic_backtest_1m_delay": False,
                 "minimum_coin_age_days": 7.0,
                 "ohlcvs_1m_rolling_window_days": 7.0,
                 "ohlcvs_1m_update_after_minutes": 10.0,
