@@ -169,6 +169,17 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
                 [10.0, 1440.0],
             ),
             (
+                "close_grid_markup_start",
+                result["bot"][pside].get("close_grid_min_markup", 0.001)
+                + result["bot"][pside].get("close_grid_markup_range", 0.001),
+                result["optimize"]["bounds"].get(f"{pside}_min_markup", [0.001, 0.03]),
+            ),
+            (
+                "close_grid_markup_end",
+                result["bot"][pside].get("close_grid_min_markup", 0.001),
+                result["optimize"]["bounds"].get(f"{pside}_close_grid_min_markup", [0.001, 0.03]),
+            ),
+            (
                 "filter_volume_drop_pct",
                 result["live"].get("filter_relative_volume_clip_pct", 0.5),
                 [0.0, 1.0],
@@ -253,7 +264,7 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
     return result
 
 
-def normalize_coins_source(src) -> dict[str, list[str]]:
+def normalize_coins_source(src):  # -> dict[str, list[str]]: # python3.8 incompatible
     """
     Turn   str | list | {'long':[..],'short':[...]} | ''   into
     {'long':[...], 'short':[...]}   (comma expansion included).

@@ -6,6 +6,7 @@ import pprint
 import asyncio
 import traceback
 import numpy as np
+import passivbot_rust as pbr
 from collections import defaultdict
 from pure_funcs import (
     multi_replace,
@@ -15,7 +16,6 @@ from pure_funcs import (
     determine_pos_side_ccxt,
     symbol_to_coin,
     flatten,
-    hysteresis_rounding,
 )
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
 
@@ -128,8 +128,11 @@ class BybitBot(Passivbot):
                 balance = float(balinfo["totalWalletBalance"])
                 if not hasattr(self, "previous_rounded_balance"):
                     self.previous_rounded_balance = balance
-                self.previous_rounded_balance = hysteresis_rounding(
-                    balance, self.previous_rounded_balance, 0.02, 0.5
+                self.previous_rounded_balance = pbr.hysteresis_rounding(
+                    balance,
+                    self.previous_rounded_balance,
+                    self.hyst_rounding_balance_pct,
+                    self.hyst_rounding_balance_h,
                 )
                 balance = self.previous_rounded_balance
             else:
@@ -351,14 +354,7 @@ class BybitBot(Passivbot):
         executed = None
         try:
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
-            return {
-                "symbol": executed["symbol"],
-                "side": order["side"],
-                "id": executed["id"],
-                "position_side": order["position_side"],
-                "qty": order["qty"],
-                "price": order["price"],
-            }
+            return executed
         except Exception as e:
             logging.error(f"error cancelling order {order} {e}")
             print_async_exception(executed)
@@ -366,19 +362,7 @@ class BybitBot(Passivbot):
             return {}
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        if len(orders) > self.config["live"]["max_n_cancellations_per_batch"]:
-            # prioritize cancelling reduce-only orders
-            try:
-                reduce_only_orders = [x for x in orders if x["reduce_only"]]
-                rest = [x for x in orders if not x["reduce_only"]]
-                orders = (reduce_only_orders + rest)[
-                    : self.config["live"]["max_n_cancellations_per_batch"]
-                ]
-            except Exception as e:
-                logging.error(f"debug filter cancellations {e}")
-        return await self.execute_multiple(
-            orders, "execute_cancellation", self.config["live"]["max_n_cancellations_per_batch"]
-        )
+        return await self.execute_multiple(orders, "execute_cancellation")
 
     async def execute_order(self, order: dict) -> dict:
         executed = await self.cca.create_order(
@@ -395,17 +379,10 @@ class BybitBot(Passivbot):
                 "orderLinkId": order["custom_id"],
             },
         )
-        if "symbol" not in executed or executed["symbol"] is None:
-            executed["symbol"] = order["symbol"]
-        for key in ["side", "position_side", "qty", "price"]:
-            if key not in executed or executed[key] is None:
-                executed[key] = order[key]
         return executed
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(
-            orders, "execute_order", self.config["live"]["max_n_creations_per_batch"]
-        )
+        return await self.execute_multiple(orders, "execute_order")
 
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}

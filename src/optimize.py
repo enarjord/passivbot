@@ -1,5 +1,6 @@
 import os
 import sys
+
 if sys.platform.startswith("win"):
     # ==== BEGIN fcntl stub for Windows ====
     try:
@@ -10,11 +11,15 @@ if sys.platform.startswith("win"):
             LOCK_EX = None
             LOCK_SH = None
             LOCK_UN = None
-            def lockf(self, *args, **kwargs): pass
-            def ioctl(self, *args, **kwargs): pass
 
-        sys.modules['fcntl'] = _FcntlStub()
-        fcntl = sys.modules['fcntl']
+            def lockf(self, *args, **kwargs):
+                pass
+
+            def ioctl(self, *args, **kwargs):
+                pass
+
+        sys.modules["fcntl"] = _FcntlStub()
+        fcntl = sys.modules["fcntl"]
     # ==== END fcntl stub for Windows ====
 import shutil
 import passivbot_rust as pbr

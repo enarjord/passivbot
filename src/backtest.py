@@ -4,6 +4,7 @@ import os
 import json
 import passivbot_rust as pbr
 from tools.event_loop_policy import set_windows_event_loop_policy
+
 # on Windows this will pick the SelectorEventLoopPolicy
 set_windows_event_loop_policy()
 import asyncio
@@ -53,7 +54,7 @@ def create_shared_memory_file(array: np.ndarray):
     with tempfile.NamedTemporaryFile(delete=False) as f:
         filepath = f.name
         array.tofile(f)
-    
+
     try:
         yield filepath
     finally:
@@ -62,6 +63,7 @@ def create_shared_memory_file(array: np.ndarray):
             os.unlink(filepath)
         except PermissionError:
             import time
+
             time.sleep(0.1)  # Wait briefly and try again
             try:
                 os.unlink(filepath)

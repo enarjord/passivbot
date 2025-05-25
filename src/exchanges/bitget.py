@@ -12,10 +12,10 @@ from pure_funcs import (
     ts_to_date_utc,
     calc_hash,
     shorten_custom_id,
-    hysteresis_rounding,
 )
 from njit_funcs import calc_diff
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
+import passivbot_rust as pbr
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
@@ -139,8 +139,11 @@ class BitgetBot(Passivbot):
                 )
                 if not hasattr(self, "previous_rounded_balance"):
                     self.previous_rounded_balance = balance
-                self.previous_rounded_balance = hysteresis_rounding(
-                    balance, self.previous_rounded_balance, 0.02, 0.5
+                self.previous_rounded_balance = pbr.hysteresis_rounding(
+                    balance,
+                    self.previous_rounded_balance,
+                    self.hyst_rounding_balance_pct,
+                    self.hyst_rounding_balance_h,
                 )
                 balance = self.previous_rounded_balance
             else:
@@ -297,14 +300,7 @@ class BitgetBot(Passivbot):
         executed = None
         try:
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
-            return {
-                "symbol": executed["symbol"],
-                "side": order["side"],
-                "id": executed["id"],
-                "position_side": order["position_side"],
-                "qty": order["qty"],
-                "price": order["price"],
-            }
+            return executed
         except Exception as e:
             logging.error(f"error cancelling order {order} {e}")
             print_async_exception(executed)
@@ -312,19 +308,7 @@ class BitgetBot(Passivbot):
             return {}
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        if len(orders) > self.config["live"]["max_n_cancellations_per_batch"]:
-            # prioritize cancelling reduce-only orders
-            try:
-                reduce_only_orders = [x for x in orders if x["reduce_only"]]
-                rest = [x for x in orders if not x["reduce_only"]]
-                orders = (reduce_only_orders + rest)[
-                    : self.config["live"]["max_n_cancellations_per_batch"]
-                ]
-            except Exception as e:
-                logging.error(f"debug filter cancellations {e}")
-        return await self.execute_multiple(
-            orders, "execute_cancellation", self.config["live"]["max_n_cancellations_per_batch"]
-        )
+        return await self.execute_multiple(orders, "execute_cancellation")
 
     async def execute_order(self, order: dict) -> dict:
         order_type = order["type"] if "type" in order else "limit"
@@ -341,28 +325,10 @@ class BitgetBot(Passivbot):
                 "oneWayMode": False,
             },
         )
-        if "info" in executed and "orderId" in executed["info"]:
-            for k in ["price", "id", "side", "position_side"]:
-                if k not in executed or executed[k] is None:
-                    executed[k] = order[k]
-            executed["qty"] = executed["amount"] if executed["amount"] else order["qty"]
-            executed["timestamp"] = (
-                executed["timestamp"] if executed["timestamp"] else self.get_exchange_time()
-            )
-            executed["custom_id"] = executed["clientOrderId"]
-        return executed
-        if "msg" in executed and executed["msg"] == "success":
-            for key in ["symbol", "side", "position_side", "qty", "price"]:
-                executed[key] = order[key]
-            executed["timestamp"] = float(executed["requestTime"])
-            executed["id"] = executed["data"]["orderId"]
-            executed["custom_id"] = executed["data"]["clientOid"]
         return executed
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(
-            orders, "execute_order", self.config["live"]["max_n_creations_per_batch"]
-        )
+        return await self.execute_multiple(orders, "execute_order")
 
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}

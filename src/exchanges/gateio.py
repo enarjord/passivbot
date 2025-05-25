@@ -38,8 +38,12 @@ class GateIOBot(Passivbot):
             120  # gateio has stricter rate limiting on fetching ohlcvs
         )
         self.hedge_mode = False
-        self.max_n_creations_per_batch = 10
-        self.max_n_cancellations_per_batch = 20
+        self.config["live"]["max_n_cancellations_per_batch"] = min(
+            self.config["live"]["max_n_cancellations_per_batch"], 20
+        )
+        self.config["live"]["max_n_creations_per_batch"] = min(
+            self.config["live"]["max_n_creations_per_batch"], 10
+        )
 
     def create_ccxt_sessions(self):
         self.ccp = getattr(ccxt_pro, self.exchange)(
@@ -275,19 +279,9 @@ class GateIOBot(Passivbot):
         if not orders:
             return []
         res = None
-        max_n_cancellations_per_batch = min(
-            self.max_n_cancellations_per_batch, self.config["live"]["max_n_cancellations_per_batch"]
-        )
         try:
-            if len(orders) > max_n_cancellations_per_batch:
-                # prioritize cancelling reduce-only orders
-                try:
-                    reduce_only_orders = [x for x in orders if x["reduce_only"]]
-                    rest = [x for x in orders if not x["reduce_only"]]
-                    orders = (reduce_only_orders + rest)[:max_n_cancellations_per_batch]
-                except Exception as e:
-                    logging.error(f"debug filter cancellations {e}")
             res = await self.cca.cancel_orders([x["id"] for x in orders])
+            return res
             cancellations = []
             for order, elm in zip(orders, res):
                 if elm["status"] != "rejected":
@@ -302,6 +296,12 @@ class GateIOBot(Passivbot):
             print_async_exception(res)
             traceback.print_exc()
 
+    def did_cancel_order(self, executed):
+        try:
+            return "status" in executed and executed["status"] != "rejected"
+        except:
+            return False
+
     async def execute_order(self, order: dict) -> dict:
         return await self.execute_orders([order])
 
@@ -309,7 +309,7 @@ class GateIOBot(Passivbot):
         if len(orders) == 0:
             return []
         to_execute = []
-        for order in orders[: self.max_n_creations_per_batch]:
+        for order in orders:
             order_type = order["type"] if "type" in order else "limit"
             params = {
                 "reduce_only": order["reduce_only"],
@@ -329,11 +329,18 @@ class GateIOBot(Passivbot):
                 }
             )
         res = await self.cca.create_orders(to_execute)
+        return res
         executed = []
         for ex, order in zip(res, orders):
             if "info" in ex and ex["status"] in ["closed", "open"]:
                 executed.append({**ex, **order})
         return executed
+
+    def did_create_order(self, executed):
+        try:
+            return "status" in executed and executed["status"] != "rejected"
+        except:
+            return False
 
     async def update_exchange_config_by_symbols(self, symbols):
         return

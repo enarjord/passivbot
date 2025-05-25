@@ -74,6 +74,8 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 
+ONE_MIN_MS = 60_000
+
 
 def signal_handler(sig, frame):
     print("\nReceived shutdown signal. Stopping bot...")
@@ -133,9 +135,6 @@ class Passivbot:
         self.ohlcvs_1m_cache_dirpath = make_get_filepath(f"caches/{self.exchange}/ohlcvs_1m/")
         self.previous_REST_update_ts = 0
         self.recent_fill = False
-        self.execution_delay_millis = max(
-            3000.0, self.config["live"]["execution_delay_seconds"] * 1000
-        )
         self.quote = "USDT"
 
         self.minimum_market_age_millis = (
@@ -159,6 +158,9 @@ class Passivbot:
         self.create_ccxt_sessions()
         self.debug_mode = False
         self.balance_threshold = 1.0  # don't create orders if balance is less than threshold
+        self.mimic_backtest_1m_delay = self.config["live"].get("mimic_backtest_1m_delay", False)
+        self.hyst_rounding_balance_pct = 0.02
+        self.hyst_rounding_balance_h = 0.5
 
     async def start_bot(self):
         logging.info(f"Starting bot {self.exchange}...")
@@ -220,6 +222,10 @@ class Passivbot:
         self.n_symbols_missing_ohlcvs_1m = len(self.get_symbols_approved_or_has_pos())
         if self.is_forager_mode():
             await self.update_first_timestamps()
+
+    def debug_print(self, *args):
+        if hasattr(self, "debug_mode") and self.debug_mode:
+            print(*args)
 
     async def init_flags(self):
         self.flags = {}
@@ -301,6 +307,36 @@ class Passivbot:
         self.coin_to_symbol_map[coin] = result
         return result
 
+    def order_to_order_tuple(self, order):
+        return (
+            order["symbol"],
+            order["side"],
+            order["position_side"],
+            round(float(order["qty"]), 12),
+            round(float(order["price"]), 12),
+        )
+
+    def handle_backtest_mimic(self, orders_sent=None):
+        if not self.mimic_backtest_1m_delay:
+            return
+        if not hasattr(self, "whole_minute_cache"):
+            self.whole_minute_cache = {
+                "positions": None,
+                "ideal_orders": None,
+                "orders_sent": None,
+                "whole_minute": 0.0,
+            }
+        whole_minute = int(utc_ms() // ONE_MIN_MS * ONE_MIN_MS)
+        if whole_minute > self.whole_minute_cache.get("whole_minute", 0.0):
+            # we are in new whole minute
+            self.whole_minute_cache["ideal_orders"] = self.calc_ideal_orders()
+            self.whole_minute_cache["positions"] = deepcopy(self.positions)
+            self.whole_minute_cache["orders_sent"] = set()
+            self.whole_minute_cache["whole_minute"] = whole_minute
+        if orders_sent is not None:
+            for order in orders_sent:
+                self.whole_minute_cache["orders_sent"].add(self.order_to_order_tuple(order))
+
     async def run_execution_loop(self):
         while not self.stop_signal_received:
             try:
@@ -309,9 +345,13 @@ class Passivbot:
                     self.previous_REST_update_ts = utc_ms()
                     await self.prepare_for_execution()
                 await self.execute_to_exchange()
-                await asyncio.sleep(
-                    max(0.0, self.config["live"]["execution_delay_seconds"] - (utc_ms() - now) / 1000)
+                sleep_duration = (
+                    self.config["live"]["execution_delay_seconds"] - (utc_ms() - now) / 1000
                 )
+                if self.mimic_backtest_1m_delay:
+                    seconds_until_whole_minute = (ONE_MIN_MS - utc_ms() % ONE_MIN_MS) / 1000
+                    sleep_duration = min(sleep_duration, seconds_until_whole_minute)
+                await asyncio.sleep(max(0.0, sleep_duration))
             except Exception as e:
                 logging.error(f"error with {get_function_name()} {e}")
                 traceback.print_exc()
@@ -354,12 +394,7 @@ class Passivbot:
             # for x in to_cancel:
             #    pprint.pprint(x)
         else:
-            res = await self.execute_cancellations(
-                to_cancel[: self.config["live"]["max_n_cancellations_per_batch"]]
-            )
-            if res:
-                for elm in res:
-                    self.remove_order(elm, source="POST")
+            res = await self.execute_cancellations_parent(to_cancel)
         if self.debug_mode:
             if to_create:
                 print(f"would create {len(to_create)} orders")
@@ -370,12 +405,7 @@ class Passivbot:
         else:
             res = None
             try:
-                res = await self.execute_orders(
-                    to_create[: self.config["live"]["max_n_creations_per_batch"]]
-                )
-                if res:
-                    for elm in res:
-                        self.add_new_order(elm, source="POST")
+                res = await self.execute_orders_parent(to_create)
             except Exception as e:
                 logging.error(f"error executing orders {to_create} {e}")
                 print_async_exception(res)
@@ -385,6 +415,97 @@ class Passivbot:
             self.previous_REST_update_ts = 0
         if self.debug_mode:
             return to_cancel, to_create
+
+    async def execute_orders_parent(self, orders: [dict]) -> [dict]:
+        orders = orders[: self.config["live"]["max_n_creations_per_batch"]]
+        res = await self.execute_orders(orders)
+        if not res:
+            return
+        if len(orders) != len(res):
+            print(
+                f"debug unequal lengths execute_orders_parent: "
+                f"{len(orders)} orders, {len(res)} executions",
+                res,
+            )
+            return []
+        to_return = []
+        for ex, od in zip(res, orders):
+            if not self.did_create_order(ex):
+                print(f"debug did_create_order false {ex}")
+                continue
+            debug_prints = {}
+            for key in od:
+                if key not in ex:
+                    debug_prints.setdefault("missing", []).append((key, od[key]))
+                    ex[key] = od[key]
+                elif ex[key] is None:
+                    debug_prints.setdefault("is_none", []).append((key, od[key]))
+                    ex[key] = od[key]
+            if debug_prints and self.debug_mode:
+                print("debug create_orders", debug_prints)
+            to_return.append(ex)
+        if to_return:
+            self.handle_backtest_mimic(to_return)
+            for elm in to_return:
+                self.add_new_order(elm, source="POST")
+        return to_return
+
+    async def execute_cancellations_parent(self, orders: [dict]) -> [dict]:
+        if len(orders) > self.config["live"]["max_n_cancellations_per_batch"]:
+            # prioritize cancelling reduce-only orders
+            try:
+                reduce_only_orders = [
+                    x for x in orders if x.get("reduce_only") or x.get("reduceOnly")
+                ]
+                rest = [x for x in orders if not x["reduce_only"]]
+                orders = (reduce_only_orders + rest)[
+                    : self.config["live"]["max_n_cancellations_per_batch"]
+                ]
+            except Exception as e:
+                logging.error(f"debug filter cancellations {e}")
+                orders = orders[: self.config["live"]["max_n_cancellations_per_batch"]]
+        res = await self.execute_cancellations(orders)
+        to_return = []
+        if len(orders) != len(res):
+            print(
+                f"debug unequal lengths execute_cancellations_parent: "
+                f"{len(orders)} orders, {len(res)} executions",
+                res,
+            )
+            return []
+        for ex, od in zip(res, orders):
+            if not self.did_cancel_order(ex):
+                print(f"debug did_cancel_order false {ex}")
+                continue
+            debug_prints = {}
+            for key in od:
+                if key not in ex:
+                    debug_prints.setdefault("missing", []).append((key, od[key]))
+                    ex[key] = od[key]
+                elif ex[key] is None:
+                    debug_prints.setdefault("is_none", []).append((key, od[key]))
+                    ex[key] = od[key]
+            if debug_prints and self.debug_mode:
+                print("debug cancel_orders", debug_prints)
+            to_return.append(ex)
+        if to_return:
+            for elm in to_return:
+                self.remove_order(elm, source="POST")
+        return to_return
+
+    def did_create_order(self, executed) -> bool:
+        try:
+            return "id" in executed and executed["id"] is not None
+        except:
+            return False
+        # further tests defined in child class
+
+    def did_cancel_order(self, executed) -> bool:
+        try:
+            return "id" in executed and executed["id"] is not None
+        except:
+            return False
+        # further tests defined in child class
 
     def is_forager_mode(self, pside=None):
         if pside is None:
@@ -1376,8 +1497,8 @@ class Passivbot:
                         self.min_qtys[symbol],
                         self.min_costs[symbol],
                         self.c_mults[symbol],
-                        self.live_configs[symbol][pside]["close_grid_markup_range"],
-                        self.live_configs[symbol][pside]["close_grid_min_markup"],
+                        self.live_configs[symbol][pside]["close_grid_markup_end"],
+                        self.live_configs[symbol][pside]["close_grid_markup_start"],
                         self.live_configs[symbol][pside]["close_grid_qty_pct"],
                         self.live_configs[symbol][pside]["close_trailing_grid_ratio"],
                         self.live_configs[symbol][pside]["close_trailing_qty_pct"],
@@ -1629,7 +1750,13 @@ class Passivbot:
         return "", (0.0, 0.0, "")
 
     def calc_orders_to_cancel_and_create(self):
-        ideal_orders = self.calc_ideal_orders()
+        if self.mimic_backtest_1m_delay:
+            self.handle_backtest_mimic()
+            ideal_orders = self.whole_minute_cache["ideal_orders"]
+            already_sent = self.whole_minute_cache["orders_sent"]
+        else:
+            ideal_orders = self.calc_ideal_orders()
+            already_sent = set()
         actual_orders = {}
         for symbol in self.active_symbols:
             actual_orders[symbol] = []
@@ -1700,7 +1827,17 @@ class Passivbot:
                 logging.info(f"debug: price missing sort to_cancel by mprice_diff {x} {e}")
                 to_cancel_with_mprice_diff.append((0.0, x))
         to_cancel_with_mprice_diff.sort(key=lambda x: x[0])
-        return [x[1] for x in to_cancel_with_mprice_diff], [x[1] for x in to_create_with_mprice_diff]
+        to_cancel = [
+            x[1]
+            for x in to_cancel_with_mprice_diff
+            if self.order_to_order_tuple(x[1]) not in already_sent
+        ]
+        to_create = [
+            x[1]
+            for x in to_create_with_mprice_diff
+            if self.order_to_order_tuple(x[1]) not in already_sent
+        ]
+        return to_cancel, to_create
 
     async def restart_bot_on_too_many_errors(self):
         if not hasattr(self, "error_counts"):
@@ -1746,21 +1883,21 @@ class Passivbot:
     def fill_gaps_ohlcvs_1m_single(self, symbol):
         if symbol not in self.ohlcvs_1m or not self.ohlcvs_1m[symbol]:
             return
-        now_minute = int(self.get_exchange_time() // 60000 * 60000)
+        now_minute = int(self.get_exchange_time() // ONE_MIN_MS * ONE_MIN_MS)
         last_ts, last_ohlcv_1m = self.ohlcvs_1m[symbol].peekitem(-1)
         if now_minute > last_ts:
             self.ohlcvs_1m[symbol][now_minute] = [float(now_minute)] + [last_ohlcv_1m[4]] * 4 + [0.0]
         n_ohlcvs_1m = len(self.ohlcvs_1m[symbol])
         range_ms = self.ohlcvs_1m[symbol].peekitem(-1)[0] - self.ohlcvs_1m[symbol].peekitem(0)[0]
-        ideal_n_ohlcvs_1m = int((range_ms) / 60000) + 1
+        ideal_n_ohlcvs_1m = int((range_ms) / ONE_MIN_MS) + 1
         if ideal_n_ohlcvs_1m > n_ohlcvs_1m:
             ts = self.ohlcvs_1m[symbol].peekitem(0)[0]
             last_ts = self.ohlcvs_1m[symbol].peekitem(-1)[0]
             while ts < last_ts:
-                ts += 60000
+                ts += ONE_MIN_MS
                 if ts not in self.ohlcvs_1m[symbol]:
                     self.ohlcvs_1m[symbol][ts] = (
-                        [float(ts)] + [self.ohlcvs_1m[symbol][ts - 60000][4]] * 4 + [0.0]
+                        [float(ts)] + [self.ohlcvs_1m[symbol][ts - ONE_MIN_MS][4]] * 4 + [0.0]
                     )
 
     def init_EMAs_single(self, symbol):
@@ -1793,7 +1930,7 @@ class Passivbot:
             if symbol not in self.emas["long"]:
                 self.init_EMAs_single(symbol)
             last_ts, last_ohlcv_1m = self.ohlcvs_1m[symbol].peekitem(-1)
-            mn = 60000
+            mn = ONE_MIN_MS
             for ts in range(self.upd_minute_emas[symbol] + mn, last_ts + mn, mn):
                 for pside in ["long", "short"]:
                     self.emas[pside][symbol] = calc_ema(
@@ -1977,30 +2114,36 @@ class Passivbot:
                 volumes[symbol] = 0.0
         return volumes
 
-    async def execute_multiple(self, orders: [dict], type_: str, max_n_executions: int):
+    async def execute_multiple(self, orders: [dict], type_: str):
         if not orders:
             return []
         executions = []
         any_exceptions = False
-        for order in orders[:max_n_executions]:  # sorted by PA dist
-            execution = None
+        for order in orders:  # sorted by PA dist
+            task = None
             try:
-                execution = asyncio.create_task(getattr(self, type_)(order))
-                executions.append((order, execution))
+                task = asyncio.create_task(getattr(self, type_)(order))
+                executions.append((order, task))
             except Exception as e:
                 logging.error(f"error executing {type_} {order} {e}")
-                print_async_exception(execution)
+                print_async_exception(task)
                 traceback.print_exc()
+                executions.append((order, e))
                 any_exceptions = True
         results = []
-        for execution in executions:
+        for order, execution in executions:
+            if isinstance(execution, Exception):
+                # Already failed at task creation time
+                results.append(execution)
+                continue
             result = None
             try:
-                result = await execution[1]
+                result = await execution
                 results.append(result)
             except Exception as e:
                 logging.error(f"error executing {type_} {execution} {e}")
                 print_async_exception(result)
+                results.append(e)
                 traceback.print_exc()
                 any_exceptions = True
         if any_exceptions:

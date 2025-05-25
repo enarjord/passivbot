@@ -262,9 +262,11 @@ def main():
     args = parser.parse_args()
 
     pareto_dir = args.pareto_dir.rstrip("/")
-    if not pareto_dir.endswith("pareto"):
-        pareto_dir += "/pareto"
     entries = sorted(glob.glob(os.path.join(pareto_dir, "*.json")))
+    if not entries:
+        if not pareto_dir.endswith("pareto"):
+            pareto_dir += "/pareto"
+            entries = sorted(glob.glob(os.path.join(pareto_dir, "*.json")))
     print(f"Found {len(entries)} Pareto members.")
 
     points = []

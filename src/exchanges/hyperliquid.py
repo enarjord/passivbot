@@ -286,97 +286,70 @@ class HyperliquidBot(Passivbot):
             return False
 
     async def execute_cancellation(self, order: dict) -> dict:
-        return await self.execute_cancellations([order])
-
-    async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        res = None
+        executed = None
         try:
-            if len(orders) > self.config["live"]["max_n_cancellations_per_batch"]:
-                # prioritize cancelling reduce-only orders
-                try:
-                    reduce_only_orders = [x for x in orders if x["reduce_only"]]
-                    rest = [x for x in orders if not x["reduce_only"]]
-                    orders = (reduce_only_orders + rest)[
-                        : self.config["live"]["max_n_cancellations_per_batch"]
-                    ]
-                except Exception as e:
-                    logging.error(f"debug filter cancellations {e}")
-            by_symbol = {}
-            for order in orders:
-                if order["symbol"] not in by_symbol:
-                    by_symbol[order["symbol"]] = []
-                by_symbol[order["symbol"]].append(order)
-            syms = sorted(by_symbol)
-            res = await asyncio.gather(
-                *[
-                    self.cca.cancel_orders(
-                        [x["id"] for x in by_symbol[sym]],
-                        symbol=sym,
-                        params=(
-                            {"vaultAddress": self.user_info["wallet_address"]}
-                            if self.user_info["is_vault"]
-                            else {}
-                        ),
-                    )
-                    for sym in syms
-                ]
-            )
-            cancellations = []
-            for sym, elm in zip(syms, res):
-                if "status" in elm and elm["status"] == "ok":
-                    for status, order in zip(elm["response"]["data"]["statuses"], by_symbol[sym]):
-                        if status == "success":
-                            cancellations.append(order)
-            return cancellations
-        except Exception as e:
-            logging.error(f"error executing cancellations {e}")
-            print_async_exception(res)
-            traceback.print_exc()
-
-    async def execute_order(self, order: dict) -> dict:
-        return await self.execute_orders([order])
-
-    async def execute_orders(self, orders: [dict]) -> [dict]:
-        if len(orders) == 0:
-            return []
-        to_execute = []
-        for order in orders:
-            to_execute.append(
-                {
-                    "symbol": order["symbol"],
-                    "type": order["type"] if "type" in order else "limit",
-                    "side": order["side"],
-                    "amount": order["qty"],
-                    "price": order["price"],
-                    "params": {
-                        # "orderType": {"limit": {"tif": "Alo"}},
-                        # "cloid": order["custom_id"],
-                        "reduceOnly": order["reduce_only"],
-                        "timeInForce": (
-                            "Alo" if self.config["live"]["time_in_force"] == "post_only" else "Gtc"
-                        ),
-                    },
-                }
-            )
-        try:
-            res = await self.cca.create_orders(
-                to_execute,
+            executed = await self.cca.cancel_order(
+                order["id"],
+                symbol=order["symbol"],
                 params=(
                     {"vaultAddress": self.user_info["wallet_address"]}
                     if self.user_info["is_vault"]
                     else {}
                 ),
             )
+            return executed
         except Exception as e:
-            if self.adjust_min_cost_on_error(e):
-                return []
-            else:
-                raise
-        executed = []
-        for ex, order in zip(res, orders):
-            if "info" in ex and "filled" in ex["info"] or "resting" in ex["info"]:
-                executed.append({**ex, **order})
-        return executed
+            logging.error(f"error cancelling order {order} {e}")
+            print_async_exception(executed)
+            traceback.print_exc()
+            return {}
+
+    async def execute_cancellations(self, orders: [dict]) -> [dict]:
+        return await self.execute_multiple(orders, "execute_cancellation")
+
+    def did_cancel_order(self, cancelled) -> bool:
+        try:
+            return "status" in cancelled and cancelled["status"] == "success"
+        except:
+            return False
+
+    async def execute_order(self, order: dict) -> dict:
+        executed = None
+        try:
+            params = {
+                "reduceOnly": order["reduce_only"],
+                "timeInForce": (
+                    "Alo" if self.config["live"]["time_in_force"] == "post_only" else "Gtc"
+                ),
+            }
+            if self.user_info["is_vault"]:
+                params["vaultAddress"] = self.user_info["wallet_address"]
+            executed = await self.cca.create_order(
+                symbol=order["symbol"],
+                type=order["type"] if "type" in order else "limit",
+                side=order["side"],
+                amount=order["qty"],
+                price=order["price"],
+                params=params,
+            )
+            return executed
+        except Exception as e:
+            logging.error(f"error executing order {order} {e}")
+            print_async_exception(executed)
+            traceback.print_exc()
+            return {}
+
+    async def execute_orders(self, orders: [dict]) -> [dict]:
+        return await self.execute_multiple(orders, "execute_order")
+
+    def did_create_order(self, executed) -> bool:
+        did_create = super().did_create_order(executed)
+        try:
+            return did_create and (
+                "info" in executed and ("filled" in executed["info"] or "resting" in executed["info"])
+            )
+        except:
+            return False
 
     def adjust_min_cost_on_error(self, error):
         any_adjusted = False

@@ -17,7 +17,6 @@ from pure_funcs import (
     determine_pos_side_ccxt,
     flatten,
     shorten_custom_id,
-    hysteresis_rounding,
 )
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version, load_broker_code
 
@@ -116,7 +115,7 @@ class BinanceBot(Passivbot):
                 res = await self.ccp.watch_balance()
                 self.handle_balance_update(res)
             except Exception as e:
-                print(f"exception watch_balance", e)
+                logging.error(f"exception watch_balance {e}")
                 traceback.print_exc()
                 await asyncio.sleep(1)
 
@@ -132,7 +131,7 @@ class BinanceBot(Passivbot):
                 self.handle_order_update(res)
             except Exception as e:
                 if "Abnormal closure of client" not in str(e):
-                    print(f"exception watch_orders", e)
+                    logging.error(f"exception watch_orders {e}")
                     traceback.print_exc()
                 await asyncio.sleep(1)
 
@@ -188,8 +187,11 @@ class BinanceBot(Passivbot):
             balance = float(fetched_balance["info"]["totalCrossWalletBalance"])
             if not hasattr(self, "previous_rounded_balance"):
                 self.previous_rounded_balance = balance
-            self.previous_rounded_balance = hysteresis_rounding(
-                balance, self.previous_rounded_balance, 0.02, 0.5
+            self.previous_rounded_balance = pbr.hysteresis_rounding(
+                balance,
+                self.previous_rounded_balance,
+                self.hyst_rounding_balance_pct,
+                self.hyst_rounding_balance_h,
             )
             return positions, self.previous_rounded_balance
         except Exception as e:
@@ -280,8 +282,11 @@ class BinanceBot(Passivbot):
         # fetch fills for all symbols with pos
         # fetch pnls for all symbols
         # fills only needed for symbols with pos for trailing orders
+        # binance returns at most 7 days worth of pnls per fetch unless both start_time and end_time are given
         if limit is None:
             limit = 1000
+        else:
+            limit = min(limit, 1000)
         if start_time is None and end_time is None:
             return await self.fetch_pnl(limit=limit)
         all_fetched = {}
@@ -293,9 +298,10 @@ class BinanceBot(Passivbot):
                 break
             for elm in fetched:
                 all_fetched[elm["tradeId"]] = elm
-            if len(fetched) < limit:
+            if start_time and end_time and len(fetched) < limit:
+                # means fetched all pnls inside [start_time, end_time] range
                 break
-            logging.info(f"debug fetching pnls {ts_to_date_utc(fetched[-1]['timestamp'])}")
+            logging.info(f"fetched pnls until {ts_to_date_utc(fetched[-1]['timestamp'])[:19]}")
             start_time = fetched[-1]["timestamp"]
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
 
@@ -304,40 +310,66 @@ class BinanceBot(Passivbot):
             if symbol not in self.markets_dict:
                 return []
             # limit is max 1000
-            if limit is None:
-                limit = 1000
-            if start_time is None:
-                all_fills = await self.cca.fetch_my_trades(symbol, limit=limit)
+            # fetches at most 7 days worth
+            max_limit = 1000
+            limit = min(max_limit, limit) if limit else max_limit
+            if start_time is None and end_time is None:
+                fills = await self.cca.fetch_my_trades(symbol, limit=limit)
+                all_fills = {x["id"]: x for x in fills}
+            elif start_time is None:
+                fills = await self.cca.fetch_my_trades(
+                    symbol, limit=limit, params={"endTime": int(end_time)}
+                )
+                all_fills = {x["id"]: x for x in fills}
             else:
-                week = 1000 * 60 * 60 * 24 * 7.0
-                all_fills = {}
                 if end_time is None:
                     end_time = self.get_exchange_time() + 1000 * 60 * 60
-                sts = start_time
+                all_fills = {}
+                params = {}
+                week = 1000 * 60 * 60 * 24 * 7.0
+                start_time_sub = start_time
                 while True:
-                    ets = min(end_time, sts + week * 0.999)
                     fills = await self.cca.fetch_my_trades(
-                        symbol, limit=limit, params={"startTime": int(sts), "endTime": int(ets)}
+                        symbol,
+                        limit=limit,
+                        params={
+                            "startTime": int(
+                                min(start_time_sub, self.get_exchange_time() - 1000 * 60)
+                            ),
+                            "endTime": int(min(end_time, start_time_sub + week * 0.999)),
+                        },
                     )
-                    if fills:
-                        if fills[0]["id"] in all_fills and fills[-1]["id"] in all_fills:
+                    if not fills:
+                        if end_time - start_time_sub < week * 0.9:
+                            self.debug_print("debug fetch_fills_sub a", symbol)
                             break
+                        else:
+                            logging.info(
+                                f"fetched 0 fills for {symbol} between {ts_to_date_utc(start_time_sub)[:19]} and {ts_to_date_utc(end_time)[:19]}"
+                            )
+                            start_time_sub += week
+                            continue
+                    if fills[0]["id"] in all_fills and fills[-1]["id"] in all_fills:
+                        if end_time - start_time_sub < week * 0.9:
+                            self.debug_print("debug fetch_fills_sub b", symbol)
+                            break
+                        else:
+                            logging.info(
+                                f"fetched 0 new fills for {symbol} between {ts_to_date_utc(start_time_sub)[:19]} and {ts_to_date_utc(end_time)[:19]}"
+                            )
+                            start_time_sub += week
+                            continue
+                    else:
                         for x in fills:
                             all_fills[x["id"]] = x
-                        if fills[-1]["timestamp"] >= end_time:
-                            break
-                        if end_time - sts < week and len(fills) < limit:
-                            break
-                        sts = fills[-1]["timestamp"]
-                        logging.info(
-                            f"fetched {len(fills)} fill{'s' if len(fills) > 1 else ''} for {symbol} {ts_to_date_utc(fills[0]['timestamp'])}"
-                        )
-                    else:
-                        if end_time - sts < week:
-                            break
-                        sts = sts + week * 0.999
-                    limit = 1000
-                all_fills = sorted(all_fills.values(), key=lambda x: x["timestamp"])
+                    if end_time - start_time_sub < week * 0.9 and len(fills) < limit:
+                        self.debug_print("debug fetch_fills_sub c", symbol)
+                        break
+                    start_time_sub = fills[-1]["timestamp"]
+                    logging.info(
+                        f"fetched {len(fills)} fill{'s' if len(fills) > 1 else ''} for {symbol} {ts_to_date_utc(fills[0]['timestamp'])[:19]}"
+                    )
+            all_fills = sorted(all_fills.values(), key=lambda x: x["timestamp"])
             for i in range(len(all_fills)):
                 all_fills[i]["pnl"] = float(all_fills[i]["info"]["realizedPnl"])
                 all_fills[i]["position_side"] = all_fills[i]["info"]["positionSide"].lower()
@@ -352,12 +384,16 @@ class BinanceBot(Passivbot):
         end_time: int = None,
         limit: int = None,
     ):
+        # will fetch from start_time until end_time, earliest first
+        # if start_time is None and end_time is None, will only fetch for last 7 days
+        # if end_time is None, will fetch for more than 7 days
+        # if start_time is None, will only fetch for last 7 days
         fetched = None
-        # max limit is 1000
+        max_limit = 1000
         if limit is None:
-            limit = 1000
+            limit = max_limit
         try:
-            params = {"incomeType": "REALIZED_PNL", "limit": 1000}
+            params = {"incomeType": "REALIZED_PNL", "limit": min(max_limit, limit)}
             if start_time is not None:
                 params["startTime"] = int(start_time)
             if end_time is not None:
@@ -379,17 +415,7 @@ class BinanceBot(Passivbot):
         executed = None
         try:
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
-            if "code" in executed and executed["code"] == -2011:
-                logging.info(f"{executed}")
-                return {}
-            return {
-                "symbol": executed["symbol"],
-                "side": executed["side"],
-                "id": executed["id"],
-                "position_side": executed["info"]["positionSide"].lower(),
-                "qty": executed["amount"],
-                "price": executed["price"],
-            }
+            return executed
         except Exception as e:
             logging.error(f"error cancelling order {order} {e}")
             if "-2011" not in str(e):
@@ -402,36 +428,34 @@ class BinanceBot(Passivbot):
             return []
         if len(orders) == 1:
             return [await self.execute_cancellation(orders[0])]
-        return await self.execute_multiple(
-            orders, "execute_cancellation", self.config["live"]["max_n_cancellations_per_batch"]
-        )
+        return await self.execute_multiple(orders, "execute_cancellation")
 
     async def execute_order(self, order: dict) -> dict:
-        order_type = order["type"] if "type" in order else "limit"
-        params = {
-            "positionSide": order["position_side"].upper(),
-            "newClientOrderId": order["custom_id"],
-        }
-        if order_type == "limit":
-            params["timeInForce"] = (
-                "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
+        executed = None
+        try:
+            order_type = order["type"] if "type" in order else "limit"
+            params = {
+                "positionSide": order["position_side"].upper(),
+                "newClientOrderId": order["custom_id"],
+            }
+            if order_type == "limit":
+                params["timeInForce"] = (
+                    "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
+                )
+            executed = await self.cca.create_order(
+                type=order_type,
+                symbol=order["symbol"],
+                side=order["side"],
+                amount=abs(order["qty"]),
+                price=order["price"],
+                params=params,
             )
-        executed = await self.cca.create_order(
-            type=order_type,
-            symbol=order["symbol"],
-            side=order["side"],
-            amount=abs(order["qty"]),
-            price=order["price"],
-            params=params,
-        )
-        if "info" in executed and "code" in executed["info"] and executed["info"]["code"] == "-5022":
-            logging.info(f"{executed['info']['msg']}")
-            return {}
-        elif "status" in executed and executed["status"] in ["open", "closed"]:
-            executed["position_side"] = executed["info"]["positionSide"].lower()
-            executed["qty"] = executed["amount"]
-            executed["reduce_only"] = executed["reduceOnly"]
             return executed
+        except Exception as e:
+            logging.error(f"error executing order {order} {e}")
+            print_async_exception(executed)
+            traceback.print_exc()
+            return {}
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         if len(orders) == 0:
@@ -439,7 +463,7 @@ class BinanceBot(Passivbot):
         if len(orders) == 1:
             return [await self.execute_order(orders[0])]
         to_execute = []
-        for order in orders[: self.config["live"]["max_n_creations_per_batch"]]:
+        for order in orders:
             params = {
                 "positionSide": order["position_side"].upper(),
                 "newClientOrderId": order["custom_id"],
@@ -461,30 +485,12 @@ class BinanceBot(Passivbot):
         executed = None
         try:
             executed = await self.cca.create_orders(to_execute)
-            for i in range(len(executed)):
-                executed[i]["position_side"] = (
-                    executed[i]["info"]["positionSide"].lower()
-                    if "info" in executed[i] and "positionSide" in executed[i]["info"]
-                    else None
-                )
-                executed[i]["qty"] = executed[i]["amount"] if "amount" in executed[i] else 0.0
-                executed[i]["reduce_only"] = (
-                    executed[i]["reduceOnly"] if "reduceOnly" in executed[i] else None
-                )
-
-                if (
-                    "info" in executed[i]
-                    and "code" in executed[i]["info"]
-                    and executed[i]["info"]["code"] == "-5022"
-                ):
-                    logging.info(f"{executed[i]['info']['msg']}")
-                    executed[i] = {}
             return executed
         except Exception as e:
             logging.error(f"error executing orders {orders} {e}")
             print_async_exception(executed)
             traceback.print_exc()
-            return {}
+            return []
 
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}

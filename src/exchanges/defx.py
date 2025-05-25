@@ -11,7 +11,6 @@ from pure_funcs import (
     ts_to_date_utc,
     calc_hash,
     shorten_custom_id,
-    hysteresis_rounding,
 )
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
 
@@ -186,9 +185,7 @@ class DefxBot(Passivbot):
         return res
 
     async def execute_orders(self, orders: dict) -> dict:
-        return await self.execute_multiple(
-            orders, "execute_order", self.config["live"]["max_n_creations_per_batch"]
-        )
+        return await self.execute_multiple(orders, "execute_order")
 
     async def execute_order(self, order: dict) -> dict:
         # order_type = order["type"] if "type" in order else "limit"
@@ -240,9 +237,7 @@ class DefxBot(Passivbot):
             return []
         if len(orders) == 1:
             return [await self.execute_cancellation(orders[0])]
-        return await self.execute_multiple(
-            orders, "execute_cancellation", self.config["live"]["max_n_cancellations_per_batch"]
-        )
+        return await self.execute_multiple(orders, "execute_cancellation")
 
     async def determine_utc_offset(self, verbose=True):
         # returns millis to add to utc to get exchange timestamp
