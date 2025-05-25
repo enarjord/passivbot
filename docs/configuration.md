@@ -160,7 +160,7 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
       - **Panic mode**: Passivbot closes the position immediately.
     - `-lw` or `-sw`: Long or short wallet exposure limit.
     - `-lev`: Leverage.
-    - `-lc`: Path to live config. Loads all bot parameters from another config except `[n_positions, total_wallet_exposure_limit, unstuck_loss_allowance_pct, unstuck_close_pct]`.
+    - `-lc`: Path to live config. Loads all bot parameters from another config except `[n_positions, total_wallet_exposure_limit, unstuck_loss_allowance_pct, unstuck_close_pct, filter_noisiness_rolling_window, filter_volume_rolling_window, filter_volume_drop_pct]`.
 - **empty_means_all_approved**:
   - If `true`, `approved_coins=[]` means all coins are approved.
   - If `false`, `approved_coins=[]` means no coins are approved.
