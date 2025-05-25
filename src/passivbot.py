@@ -324,7 +324,7 @@ class Passivbot:
                 "positions": None,
                 "ideal_orders": None,
                 "orders_sent": None,
-                "whole_minute": None,
+                "whole_minute": 0.0,
             }
         whole_minute = int(utc_ms() // ONE_MIN_MS * ONE_MIN_MS)
         if whole_minute > self.whole_minute_cache.get("whole_minute", 0.0):
