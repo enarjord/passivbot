@@ -6,6 +6,7 @@ import pprint
 import asyncio
 import traceback
 import numpy as np
+import passivbot_rust as pbr
 from collections import defaultdict
 from pure_funcs import (
     multi_replace,
