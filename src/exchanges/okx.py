@@ -227,10 +227,6 @@ class OKXBot(Passivbot):
         try:
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
             return executed
-            for key in ["symbol", "side", "position_side", "qty", "price"]:
-                if key not in executed or executed[key] is None:
-                    executed[key] = order[key]
-            return executed
         except Exception as e:
             if '"sCode":"51400"' in e.args[0]:
                 logging.info(e.args[0])
@@ -275,6 +271,7 @@ class OKXBot(Passivbot):
         executed = None
         try:
             executed = await self.cca.create_orders(to_execute)
+            return executed
         except Exception as e:
             logging.error(f"error executing orders {orders} {e}")
             print_async_exception(executed)
