@@ -179,6 +179,7 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
 - **max_n_cancellations_per_batch**: Cancels `n` open orders per execution.
 - **max_n_creations_per_batch**: Creates `n` new orders per execution.
 - **max_n_restarts_per_day**: If the bot crashes, restart up to `n` times per day before stopping completely.
+- **mimic_backtest_1m_delay**: If `true`, the bot will only update and evaluate open orders once per full minute, synchronized to the clock (e.g., 12:01:00, 12:02:00, etc.). This mimics the backtester's timestep logic and avoids intraminute updates. Useful for achieving higher fidelity between backtest and live performance.
 - **minimum_coin_age_days**: Disallows coins younger than a given number of days.
 - **ohlcvs_1m_rolling_window_days**: How many days of OHLCVs the bot keeps in memory. Reduce if RAM consumption is an issue.
 - **ohlcvs_1m_update_after_minutes**: How many minutes old OHLCVs for a coin may be before fetching fresh ones from the exchange. Increase if rate limiting is an issue.
