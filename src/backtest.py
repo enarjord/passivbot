@@ -333,7 +333,11 @@ def expand_analysis(analysis_usd, analysis_btc, fills, config):
     if not config["backtest"]["use_btc_collateral"]:
         return analysis_usd
     return {
-        **{f"btc_{k}": v for k, v in analysis_btc.items() if "position" not in k},
+        **{
+            f"btc_{k}": v
+            for k, v in analysis_btc.items()
+            if "position" not in k and "volume_pct_per_day" not in k
+        },
         **analysis_usd,
     }
 
