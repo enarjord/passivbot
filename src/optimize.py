@@ -547,6 +547,8 @@ class Evaluator:
             "sortino_ratio_w": -1.0,
             "sterling_ratio": -1.0,
             "sterling_ratio_w": -1.0,
+            "volume_pct_per_day_avg": -1.0,
+            "volume_pct_per_day_avg_w": -1.0,
         }
 
         self.build_limit_checks()
