@@ -174,6 +174,7 @@ def get_cache_hash(config, exchange):
         "exchange": config["backtest"]["exchanges"] if exchange == "combined" else exchange,
         "minimum_coin_age_days": config["live"]["minimum_coin_age_days"],
         "gap_tolerance_ohlcvs_minutes": config["backtest"]["gap_tolerance_ohlcvs_minutes"],
+        "config_has_mimic_backtest_1m_delay": "mimic_backtest_1m_delay" in config["live"],
     }
     return calc_hash(to_hash)
 
