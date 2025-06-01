@@ -26,20 +26,20 @@ def expand_PB_mode(mode: str) -> str:
 
 def apply_allowed_modifications(src, modifications, allowed_overrides, return_full=True):
     """
-    Returns modifications applied to src where allowed, either as full result or diff only.
+    Apply `modifications` to `src`, but only where `allowed_overrides` permits.
 
     Args:
-        src: Source dictionary to modify
-        modifications: Dictionary of modifications to apply
-        allowed_overrides: Dictionary specifying which modifications are allowed
-                          (True = allow, False = don't allow, missing = don't allow)
-        return_full: If True, returns full deepcopy of src with modifications applied.
-                    If False, returns only the allowed modifications (filtered diff).
+        src (dict): The source dictionary (remains untouched).
+        modifications (dict): The requested changes.
+        allowed_overrides (dict): Same shape as `modifications`, with True/False
+                                  (or nested dicts) indicating what is allowed.
+        return_full (bool):  True  -> full, deep-copied result of src ⊕ allowed mods
+                            False -> *diff* containing only allowed & changed fields.
 
     Returns:
-        If return_full=True: Deep copy of src with allowed modifications applied
-        If return_full=False: Dictionary containing only the allowed modifications
+        dict: Either the fully-merged result (return_full=True) or the filtered diff.
     """
+
     if return_full:
         result = deepcopy(src)
         target = result
@@ -48,55 +48,72 @@ def apply_allowed_modifications(src, modifications, allowed_overrides, return_fu
         target = result
 
     def _apply_recursive(target_dict, mod_dict, allowed_dict, src_dict=None):
+        """
+        Recursively walk `mod_dict`:
+          • if allowed_dict[key] is True  – apply (or record) the value
+          • if it is a dict              – recurse
+        `src_dict` carries the corresponding subtree of the original `src`
+        so we can compare values when building a *diff*.
+        """
         for key, mod_value in mod_dict.items():
-            # Check if this key is allowed to be modified
+            # Skip keys that are not explicitly allowed
             if key not in allowed_dict:
-                continue  # Skip if not explicitly allowed
+                continue
 
             allowed_value = allowed_dict[key]
 
+            # ──────────────────────────────────────────────────────────
+            # Nested-dict case
+            # ──────────────────────────────────────────────────────────
             if isinstance(allowed_value, dict) and isinstance(mod_value, dict):
-                # Recursive case: both modification and allowed are dicts
-                if return_full:
-                    # Full mode: work with existing structure or create new
-                    if key in target_dict and isinstance(target_dict[key], dict):
-                        _apply_recursive(
-                            target_dict[key],
-                            mod_value,
-                            allowed_value,
-                            src_dict[key] if src_dict and key in src_dict else None,
-                        )
-                    elif _has_allowed_values(
-                        allowed_value
-                    ):  # Only create if some nested value is allowed
-                        target_dict[key] = {}
-                        _apply_recursive(target_dict[key], mod_value, allowed_value, None)
-                else:
-                    # Diff mode: only include if there are allowed nested modifications
-                    if _has_allowed_values(allowed_value):
-                        if key not in target_dict:
-                            target_dict[key] = {}
-                        _apply_recursive(
-                            target_dict[key],
-                            mod_value,
-                            allowed_value,
-                            src_dict[key] if src_dict and key in src_dict else None,
-                        )
-            elif allowed_value is True:
-                # Base case: modification is explicitly allowed
-                target_dict[key] = deepcopy(mod_value)
-            # If allowed_value is False, skip this modification
+                # Decide whether it is worth recursing (any nested True?)
+                if not _has_allowed_values(allowed_value):
+                    continue
 
-    def _has_allowed_values(allowed_dict):
-        """Helper to check if any nested value in allowed_dict is True"""
-        for value in allowed_dict.values():
-            if value is True:
+                # Ensure a container exists only when needed
+                if key not in target_dict:
+                    if return_full:
+                        target_dict[key] = {}
+                    else:
+                        # In diff mode we create it *lazily*; only if changes survive
+                        target_dict[key] = {}
+
+                # Recurse
+                _apply_recursive(
+                    target_dict[key],
+                    mod_value,
+                    allowed_value,
+                    src_dict[key] if src_dict and key in src_dict else None,
+                )
+
+                # In diff mode, remove empty sub-dicts produced after filtering
+                if not return_full and not target_dict[key]:
+                    target_dict.pop(key, None)
+
+            # ──────────────────────────────────────────────────────────
+            # Scalar / non-dict case
+            # ──────────────────────────────────────────────────────────
+            elif allowed_value is True:
+                if return_full:
+                    # Always copy in full-mode
+                    target_dict[key] = deepcopy(mod_value)
+                else:
+                    # Diff-mode: only include if value *changes* w.r.t. src
+                    src_val = src_dict.get(key) if src_dict else None
+                    if src_val != mod_value:
+                        target_dict[key] = deepcopy(mod_value)
+            # If allowed_value is False ⇒ skip
+
+    def _has_allowed_values(allowed_subdict):
+        """Return True if any nested value (recursively) is True"""
+        for v in allowed_subdict.values():
+            if v is True:
                 return True
-            elif isinstance(value, dict) and _has_allowed_values(value):
+            if isinstance(v, dict) and _has_allowed_values(v):
                 return True
         return False
 
-    _apply_recursive(target, modifications, allowed_overrides, src if return_full else None)
+    _apply_recursive(target, modifications, allowed_overrides, src if return_full else src)
     return result
 
 
@@ -247,6 +264,7 @@ def parse_overrides(config):
             parsed_overrides = apply_allowed_modifications(
                 result, loaded, get_allowed_modifications(), return_full=False
             )
+        print(coin, parsed_overrides)
         nested_update(
             parsed_overrides,
             apply_allowed_modifications(
