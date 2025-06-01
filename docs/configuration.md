@@ -148,6 +148,13 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
 - **auto_gs**: Automatically enable graceful stop for positions on disapproved coins.
   - Graceful stop: The bot continues trading as normal but does not open a new position after the current position is fully closed.
   - If `auto_gs=false`, positions on disapproved coins are put on manual mode.
+- **coin_overrides**:
+  - Specify full or partial configs for individual coins, overriding values from master config.
+  - Format: {"COIN1": overrides1, "COIN2": overrides2}
+  - overrides be given as:
+    - config as dict diff, e.g. `{"bot": {"long": {"close_grid_markup_start": 0.005}}, "live": {"forced_mode_long": "panic"}}`, which would replace config.bot.long.close_grid_markup_start and config.live.forced_mode_long for given coin.
+    - full path to alternate config file, from which all allowed parameters would replace master parameters for the given coin.
+    - filename for alternate config file from the same directory as master config file.
 - **coin_flags**:
   - Specify flags for individual coins, overriding values from bot config.
   - Example: `coin_flags: {"ETH": "-sm n -lm gs", "XRP": "-lm p -lc path/to/other_config.json"}` forces short mode to normal and long mode to graceful stop for ETH; sets long mode to panic and uses another config for XRP.
