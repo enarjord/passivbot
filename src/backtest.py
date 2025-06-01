@@ -423,11 +423,12 @@ def plot_forager(
 ):
     plots_dir = make_get_filepath(oj(results_path, "fills_plots", ""))
     plt.clf()
-    bal_eq[["balance", "equity"]].plot()
+    plot_logy = config.get("plot_logy", False)
+    bal_eq[["balance", "equity"]].plot(logy=plot_logy)
     plt.savefig(oj(results_path, "balance_and_equity.png"))
     if config["backtest"]["use_btc_collateral"]:
         plt.clf()
-        bal_eq[["balance_btc", "equity_btc"]].plot()
+        bal_eq[["balance_btc", "equity_btc"]].plot(logy=plot_logy)
         plt.savefig(oj(results_path, "balance_and_equity_btc.png"))
 
     if not config["disable_plotting"]:
@@ -459,6 +460,13 @@ async def main():
         action="store_true",
         help="disable plotting",
     )
+    parser.add_argument(
+        "--logy",
+        "-ly",
+        dest="plot_logy",
+        action="store_true",
+        help="plot balance/equity with a logarithmic y-axis (linear scale is default)",
+    )
     template_config = get_template_live_config("v7")
     del template_config["optimize"]
     keep_live_keys = {
@@ -481,6 +489,7 @@ async def main():
     config = format_config(config, verbose=False)
     await add_all_eligible_coins_to_config(config)
     config["disable_plotting"] = args.disable_plotting
+    config["plot_logy"] = args.plot_logy
     config["backtest"]["cache_dir"] = {}
     config["backtest"]["coins"] = {}
     if config["backtest"]["combine_ohlcvs"]:
