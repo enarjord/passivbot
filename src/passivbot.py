@@ -59,13 +59,13 @@ from pure_funcs import (
     str2bool,
     symbol_to_coin,
     add_missing_params_to_hjson_live_multi_config,
-    expand_PB_mode,
     ts_to_date_utc,
     get_template_live_config,
     flatten,
     log_dict_changes,
     coin_to_symbol,
 )
+from parser_utils import expand_PB_mode
 
 
 logging.basicConfig(
