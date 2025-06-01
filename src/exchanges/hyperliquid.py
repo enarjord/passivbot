@@ -334,6 +334,8 @@ class HyperliquidBot(Passivbot):
             )
             return executed
         except Exception as e:
+            if self.adjust_min_cost_on_error(e):
+                return {}
             logging.error(f"error executing order {order} {e}")
             print_async_exception(executed)
             traceback.print_exc()
