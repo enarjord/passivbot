@@ -3,6 +3,7 @@ from copy import deepcopy
 from typing import Any, Dict, Tuple, List
 from procedures import load_config
 import argparse
+import pprint
 
 
 Path = Tuple[str, ...]  # ("bot", "long", "entry_grid_spacing_pct")
@@ -122,6 +123,10 @@ def get_allowed_modifications():
                 "entry_trailing_grid_ratio": True,
                 "entry_trailing_retracement_pct": True,
                 "entry_trailing_threshold_pct": True,
+                "unstuck_close_pct": True,
+                "unstuck_ema_dist": True,
+                "unstuck_threshold": True,
+                "wallet_exposure_limit": True,
             },
             "short": {
                 "close_grid_markup_end": True,
@@ -143,10 +148,17 @@ def get_allowed_modifications():
                 "entry_trailing_grid_ratio": True,
                 "entry_trailing_retracement_pct": True,
                 "entry_trailing_threshold_pct": True,
+                "unstuck_close_pct": True,
+                "unstuck_ema_dist": True,
+                "unstuck_threshold": True,
+                "wallet_exposure_limit": True,
             },
         },
-        "live": {},
-        "backtest": {},
+        "live": {
+            "forced_mode_long": True,
+            "forced_mode_short": True,
+            "leverage": True,
+        },
     }
 
 
@@ -214,7 +226,63 @@ def set_nested_value_safe(d: dict, p: list, v: object, create_missing=False):
     return True
 
 
+def nested_update(base_dict, update_dict):
+    """Recursively update base_dict with values from update_dict"""
+    for key, value in update_dict.items():
+        if key in base_dict and isinstance(base_dict[key], dict) and isinstance(value, dict):
+            nested_update(base_dict[key], value)
+        else:
+            base_dict[key] = value
+    return base_dict
+
+
+def parse_overrides(config):
+    result = deepcopy(config)
+    if not result.get("coin_overrides", {}):
+        result["coin_overrides"] = parse_old_coin_flags(config)
+    result["live"].pop("coin_flags", None) if "live" in result else None
+    for coin, overrides in result["coin_overrides"].items():
+        parsed_overrides = {}
+        if loaded := load_override_config(result, coin):
+            parsed_overrides = apply_allowed_modifications(
+                result, loaded, get_allowed_modifications(), return_full=False
+            )
+        nested_update(
+            parsed_overrides,
+            apply_allowed_modifications(
+                result, overrides, get_allowed_modifications(), return_full=False
+            ),
+        )
+
+        result.setdefault("coin_overrides", {})[coin] = parsed_overrides
+    return result
+
+
+def load_override_config(config, coin):
+    try:
+        path = config.get("coin_overrides", {}).get(coin, {}).get("override_config_path")
+        if path and os.path.exists(path):
+            return load_config(path)
+        else:
+            base_config_path = config.get("live", {}).get("base_config_path")
+            if base_config_path and os.path.exists(
+                (
+                    npath := os.path.join(
+                        os.path.dirname(base_config_path),
+                        path,
+                    )
+                )
+            ):
+                return load_config(npath)
+    except Exception as e:
+        print(f"error loading config {path} {e}")
+    return {}
+
+
 def parse_old_coin_flags(config) -> dict:
+    """
+    convert pre v7.3.14 coin flags to v7.3.14 dict diff style config diffs
+    """
     key_map = {
         "short_mode": ["live", "forced_mode_short"],
         "long_mode": ["live", "forced_mode_long"],
@@ -234,37 +302,17 @@ def parse_old_coin_flags(config) -> dict:
             continue
         parser = _build_flag_argparser()
         keysvals = vars(parser.parse_args(flags[coin].split()))
-        print(keysvals)
-        if "live_config_path" in keysvals:
-            val = keysvals["live_config_path"]
-            lcfg = None
-            try:
-                if val and os.path.exists(val):
-                    lcfg = load_config(val)
-                elif "base_config_path" in config["live"] and os.path.exists(
-                    (
-                        npath := os.path.join(
-                            os.path.dirname(config["live"]["base_config_path"]),
-                            val,
-                        )
-                    )
-                ):
-                    lcfg = load_config(npath)
-            except Exception as e:
-                print(f"error loading config {val} {e}")
-            if lcfg:
-                result[coin] = apply_allowed_modifications(
-                    config, lcfg, get_allowed_modifications(), return_full=False
-                )
+        if lcp := keysvals.get("live_config_path"):
+            set_nested_value_safe(
+                result[coin],
+                ["override_config_path"],
+                lcp,
+                create_missing=True,
+            )
         for key, val in keysvals.items():
-            if key in key_map:
+            if val and key in key_map:
                 set_nested_value_safe(result[coin], key_map[key], val, create_missing=True)
     return result
-
-
-# ──────────────────────────────────────────────────────────────────────────
-#  Coin-flags handling (ex-Passivbot.init_flags)
-# ──────────────────────────────────────────────────────────────────────────
 
 
 def _build_flag_argparser() -> argparse.ArgumentParser:
@@ -278,66 +326,3 @@ def _build_flag_argparser() -> argparse.ArgumentParser:
     p.add_argument("-lev", type=float, dest="leverage", default=None)
     p.add_argument("-lc", type=str, dest="live_config_path", default=None)
     return p
-
-
-def _all_paths(d: Dict[str, Any], prefix: Tuple[str, ...] = ()) -> List[Path]:
-    """Return every leaf-path inside *d* as a tuple of keys."""
-    paths = []
-    for k, v in d.items():
-        new_prefix = prefix + (k,)
-        if isinstance(v, dict):
-            paths.extend(_all_paths(v, new_prefix))
-        else:
-            paths.append(new_prefix)
-    return paths
-
-
-def _allowed(path: Path, allowed_mask: Dict[str, Any]) -> bool:
-    """Check if a path is allowed to be overridden."""
-    cur = allowed_mask
-    for p in path:
-        if p not in cur:
-            return False
-        cur = cur[p]
-    return bool(cur)  # must be True at the leaf
-
-
-def _set_by_path(root: Dict[str, Any], path: Path, value: Any) -> None:
-    """Set deep value in nested dict, creating missing levels if needed."""
-    for key in path[:-1]:
-        root = root.setdefault(key, {})
-    root[path[-1]] = value
-
-
-def apply_coin_flags(
-    cfg: Dict[str, Any], allowed_coin_overrides: Dict[str, Any], quiet: bool = False
-) -> Dict[str, Dict[str, Any]]:
-    """
-    Produce a dict {coin: merged_cfg}.
-    Prints what was (or was not) overridden for each coin.
-
-    Example: merged_cfgs = apply_coin_flags(cfg, allowed_mask)
-    """
-    coin_flags = cfg.get("live", {}).get("coin_flags", {})
-    if not coin_flags:  # nothing to do – return a single entry
-        return {"_GLOBAL_": cfg}
-
-    merged = {}
-    for coin, overrides in coin_flags.items():
-        c_cfg = deepcopy(cfg)  # per-coin working copy
-        for section, section_over in overrides.items():
-            for path in _all_paths(section_over, prefix=(section,)):
-                new_val = section_over
-                for p in path[1:]:  # drill down in overrides
-                    new_val = new_val[p]
-
-                if _allowed(path, allowed_coin_overrides):
-                    _set_by_path(c_cfg, path, new_val)
-                    if not quiet:
-                        print(f"{coin}: set {'.'.join(path)} -> {new_val!r}")
-                else:
-                    if not quiet:
-                        print(f"{coin}: NOT allowed to override " f"{'.'.join(path)}")
-        merged[coin] = c_cfg
-
-    return merged
