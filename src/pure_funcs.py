@@ -2516,21 +2516,6 @@ def dict_keysort(d: dict):
     return sorted(d.items(), key=lambda x: x[1])
 
 
-def expand_PB_mode(mode: str) -> str:
-    if mode.lower() in ["gs", "graceful_stop", "graceful-stop"]:
-        return "graceful_stop"
-    elif mode.lower() in ["m", "manual"]:
-        return "manual"
-    elif mode.lower() in ["n", "normal"]:
-        return "normal"
-    elif mode.lower() in ["p", "panic"]:
-        return "panic"
-    elif mode.lower() in ["t", "tp", "tp_only", "tp-only"]:
-        return "tp_only"
-    else:
-        raise Exception(f"unknown passivbot mode {mode}")
-
-
 def extract_and_sort_by_keys_recursive(nested_dict):
     """
     Extracts values from a nested dictionary of arbitrary depth, sorted by their keys.
