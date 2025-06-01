@@ -1559,7 +1559,7 @@ fn find_valid_timestamp_bounds(hlcvs: &ArrayView3<f64>) -> (Vec<usize>, Vec<usiz
         // helper closure to keep the predicate in one place
         let is_invalid = |k: usize| {
             let row = hlcvs.slice(s![k, idx, ..]);
-            row[HIGH] == row[LOW] && row[HIGH] == row[CLOSE] && row[VOLUME] <= 0.0
+            row[HIGH] == row[LOW] && row[HIGH] == row[CLOSE] && row[VOLUME] < 0.0
         };
 
         /* ---------- first valid ---------- */
