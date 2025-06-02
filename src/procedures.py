@@ -223,6 +223,12 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
         # unneeded adjustments if running live
         for k in ("approved_coins", "ignored_coins"):
             result["live"][k] = normalize_coins_source(result["live"].get(k, ""))
+        for pside in result["live"]["approved_coins"]:
+            result["live"]["approved_coins"][pside] = [
+                c
+                for c in result["live"]["approved_coins"][pside]
+                if c not in result["live"]["ignored_coins"][pside]
+            ]
         result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
         result["optimize"]["scoring"] = sorted(result["optimize"]["scoring"])
         result["optimize"]["limits"] = parse_limits_string(result["optimize"]["limits"])
