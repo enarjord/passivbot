@@ -1,0 +1,10 @@
+python-dateutil==2.8.2
+numba==0.59.1; python_version>='3.9'
+numba==0.58.1; python_version<'3.9'
+pandas==1.5.3
+asyncio==3.4.3
+numpy==1.22.4
+ccxt==4.4.85
+hjson==3.0.2
+prettytable==3.0.0
+sortedcontainers==2.4.0
