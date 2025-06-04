@@ -8,8 +8,8 @@ import numpy as np
 import time
 from colorama import init, Fore
 from prettytable import PrettyTable
-
-from procedures import dump_live_config, make_get_filepath
+from config_utils import dump_config
+from procedures import make_get_filepath
 from pure_funcs import denumpyize, ts_to_date
 import passivbot_rust as pbr
 
@@ -177,7 +177,7 @@ def dump_plots(
     sdf.to_csv(result["plots_dirpath"] + "stats.csv")
     table = make_table(result)
 
-    dump_live_config(result, result["plots_dirpath"] + "live_config.json")
+    dump_config(result, result["plots_dirpath"] + "live_config.json")
     json.dump(denumpyize(result), open(result["plots_dirpath"] + "result.json", "w"), indent=4)
 
     print("writing backtest_result.txt...\n")
