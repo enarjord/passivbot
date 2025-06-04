@@ -1,16 +1,17 @@
 import os
+import re
 from copy import deepcopy
 from typing import Any, Dict, Tuple, List
-from procedures import load_config
 import argparse
 import pprint
+from typing import Union
+import traceback
+from pure_funcs import remove_OD, sort_dict_keys, str2bool
+from procedures import format_end_date, dump_pretty_json
+import hjson
 
 
 Path = Tuple[str, ...]  # ("bot", "long", "entry_grid_spacing_pct")
-
-
-
-
 
 
 def load_hjson_config(config_path: str) -> dict:
@@ -18,10 +19,6 @@ def load_hjson_config(config_path: str) -> dict:
         return remove_OD(hjson.load(open(config_path, encoding="utf-8")))
     except Exception as e:
         raise Exception(f"failed to load config file {config_path} {e}")
-
-
-
-
 
 
 def load_config(filepath: str, live_only=False, verbose=True) -> dict:
@@ -38,9 +35,6 @@ def load_config(filepath: str, live_only=False, verbose=True) -> dict:
 def dump_config(config: dict, filepath: str):
     config_ = deepcopy(config)
     dump_pretty_json(config_, filepath)
-
-
-
 
 
 def expand_PB_mode(mode: str) -> str:
@@ -293,7 +287,9 @@ def parse_overrides(config, verbose=True):
         result["coin_overrides"] = parse_old_coin_flags(config)
         if verbose:
             if result["coin_overrides"]:
-                print(f"Converted old coin_flags to coin_overrides: {config['live']['coin_flags']} -> {result['coin_overrides']}")
+                print(
+                    f"Converted old coin_flags to coin_overrides: {config['live']['coin_flags']} -> {result['coin_overrides']}"
+                )
     result["live"].pop("coin_flags", None) if "live" in result else None
     for coin, overrides in result["coin_overrides"].items():
         parsed_overrides = {}
@@ -318,7 +314,7 @@ def load_override_config(config, coin):
     try:
         path = config.get("coin_overrides", {}).get(coin, {}).get("override_config_path")
         if path and os.path.exists(path):
-            return load_config(path)
+            return load_config(path, verbose=False)
         else:
             base_config_path = config.get("live", {}).get("base_config_path")
             if base_config_path and os.path.exists(
@@ -329,7 +325,7 @@ def load_override_config(config, coin):
                     )
                 )
             ):
-                return load_config(npath)
+                return load_config(npath, verbose=False)
     except Exception as e:
         print(f"error loading config {path} {e}")
     return {}
@@ -382,15 +378,6 @@ def _build_flag_argparser() -> argparse.ArgumentParser:
     p.add_argument("-lev", type=float, dest="leverage", default=None)
     p.add_argument("-lc", type=str, dest="live_config_path", default=None)
     return p
-
-
-
-
-
-
-
-
-
 
 
 def format_config(config: dict, verbose=True, live_only=False) -> dict:
@@ -558,7 +545,7 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
         del result["backtest"]["exchange"]
 
     add_missing_keys_recursively(template, result, verbose=verbose)
-    result = parse_overrides(result, verbose=True)
+    result = parse_overrides(result, verbose=verbose)
     remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose)
     remove_unused_keys_recursively(template["optimize"], result["optimize"], verbose=verbose)
 
@@ -613,10 +600,45 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
     return result
 
 
-
-
-
-
+def read_external_coins_lists(filepath) -> dict:
+    """
+    reads filepath and returns dict {'long': [str], 'short': [str]}
+    """
+    try:
+        content = hjson.load(open(filepath))
+        if isinstance(content, list) and all([isinstance(x, str) for x in content]):
+            return {"long": content, "short": content}
+        elif isinstance(content, dict):
+            if all(
+                [
+                    pside in content
+                    and isinstance(content[pside], list)
+                    and all([isinstance(x, str) for x in content[pside]])
+                    for pside in ["long", "short"]
+                ]
+            ):
+                return content
+    except:
+        pass
+    with open(filepath, "r") as file:
+        content = file.read().strip()
+    # Check if the content is in list format
+    if content.startswith("[") and content.endswith("]"):
+        # Remove brackets and split by comma
+        items = content[1:-1].split(",")
+        # Remove quotes and whitespace
+        items = [item.strip().strip("\"'") for item in items if item.strip()]
+    elif all(
+        line.strip().startswith('"') and line.strip().endswith('"')
+        for line in content.split("\n")
+        if line.strip()
+    ):
+        # Split by newline, remove quotes and whitespace
+        items = [line.strip().strip("\"'") for line in content.split("\n") if line.strip()]
+    else:
+        # Split by newline, comma, and/or space, and filter out empty strings
+        items = [item.strip() for item in content.replace(",", " ").split() if item.strip()]
+    return {"long": items, "short": items}
 
 
 def normalize_coins_source(src):  # -> dict[str, list[str]]: # python3.8 incompatible
@@ -716,3 +738,290 @@ def remove_unused_keys_recursively(src, dst, parent=[], verbose=True):
             del dst[k]
             if verbose:
                 print(f"Removed unused key from config: {'.'.join(parent + [k])}")
+
+
+def comma_separated_values_float(x):
+    return [float(z) for z in x.split(",")]
+
+
+def comma_separated_values(x):
+    return x.split(",")
+
+
+def create_acronym(full_name, acronyms=set()):
+    i = 1
+    while True:
+        i += 1
+        if i > 100:
+            raise Exception(f"too many acronym duplicates {acronym}")
+        shortened_name = full_name
+        for k in [
+            "backtest.",
+            "live.",
+            "optimize.bounds.",
+            "optimize.limits.",
+            "optimize.",
+            "bot.",
+        ]:
+            if shortened_name.startswith(k):
+                shortened_name = shortened_name.replace(k, "")
+                break
+
+        # Split on both '_' and '.' using regex
+        splitted = re.split(r"[._]+", shortened_name)
+        acronym = "".join(word[0] for word in splitted if word)  # skip any empty splits
+
+        if acronym not in acronyms:
+            break
+        acronym += str(i)
+        if acronym not in acronyms:
+            break
+    return acronym
+
+
+def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
+
+    for key, value in config.items():
+        full_name = f"{prefix}{key}"
+
+        if isinstance(value, dict):
+            add_arguments_recursively(parser, value, f"{full_name}.", acronyms=acronyms)
+        else:
+            acronym = create_acronym(full_name, acronyms)
+            appendix = ""
+            type_ = type(value)
+            if "bounds" in full_name:
+                type_ = comma_separated_values_float
+            if "limits" in full_name:
+                type_ = str
+                appendix = 'Example: "--loss_profit_ratio 0.5 --drawdown_worst 0.3333"'
+            elif "approved_coins" in full_name:
+                acronym = "s"
+                type_ = comma_separated_values
+            elif any([x in full_name for x in ["ignored_coins", "exchanges"]]):
+                type_ = comma_separated_values
+                appendix = "item1,item2,item3,..."
+            elif "scoring" in full_name:
+                type_ = comma_separated_values
+                acronym = "os"
+                appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
+            elif "cpus" in full_name:
+                acronym = "c"
+            elif "iters" in full_name:
+                acronym = "i"
+            elif type_ == bool:
+                type_ = str2bool
+                appendix = "[y/n]"
+            if "combine_ohlcvs" in full_name:
+                appendix = (
+                    "If true, combine ohlcvs data from all exchanges into single numpy array, otherwise backtest each exchange separately. "
+                    + appendix
+                )
+            parser.add_argument(
+                f"--{full_name}",
+                f"--{full_name.replace('.', '_')}",
+                f"-{acronym}",
+                type=type_,
+                dest=full_name,
+                required=False,
+                default=None,
+                metavar="",
+                help=f"Override {full_name}: {str(type_.__name__)} " + appendix,
+            )
+            acronyms.add(acronym)
+
+
+def recursive_config_update(config, key, value, path=None):
+    if path is None:
+        path = []
+
+    if key in config:
+        if value != config[key]:
+            full_path = ".".join(path + [key])
+            print(f"changed {full_path} {config[key]} -> {value}")
+            config[key] = value
+        return True
+
+    key_split = key.split(".")
+    if key_split[0] in config:
+        new_path = path + [key_split[0]]
+        return recursive_config_update(config[key_split[0]], ".".join(key_split[1:]), value, new_path)
+
+    return False
+
+
+def update_config_with_args(config, args):
+    for key, value in vars(args).items():
+        if value is not None:
+            recursive_config_update(config, key, value)
+
+
+def get_template_live_config(passivbot_mode="v7"):
+    return {
+        "backtest": {
+            "base_dir": "backtests",
+            "combine_ohlcvs": True,
+            "compress_cache": True,
+            "end_date": "now",
+            "exchanges": ["binance", "bybit", "gateio", "bitget"],
+            "gap_tolerance_ohlcvs_minutes": 120.0,
+            "start_date": "2021-04-01",
+            "starting_balance": 100000.0,
+            "use_btc_collateral": False,
+        },
+        "bot": {
+            "long": {
+                "close_grid_markup_end": 0.0089,
+                "close_grid_markup_start": 0.0344,
+                "close_grid_qty_pct": 0.125,
+                "close_trailing_grid_ratio": 0.5,
+                "close_trailing_qty_pct": 0.125,
+                "close_trailing_retracement_pct": 0.002,
+                "close_trailing_threshold_pct": 0.008,
+                "ema_span_0": 1318.0,
+                "ema_span_1": 1435.0,
+                "enforce_exposure_limit": True,
+                "entry_grid_double_down_factor": 0.894,
+                "entry_grid_spacing_pct": 0.04,
+                "entry_grid_spacing_weight": 0.697,
+                "entry_initial_ema_dist": -0.00738,
+                "entry_initial_qty_pct": 0.00592,
+                "entry_trailing_double_down_factor": 0.894,
+                "entry_trailing_grid_ratio": 0.5,
+                "entry_trailing_retracement_pct": 0.01,
+                "entry_trailing_threshold_pct": 0.05,
+                "filter_noisiness_rolling_window": 60,
+                "filter_volume_drop_pct": 0.95,
+                "filter_volume_rolling_window": 60,
+                "n_positions": 10.0,
+                "total_wallet_exposure_limit": 1.7,
+                "unstuck_close_pct": 0.001,
+                "unstuck_ema_dist": 0.0,
+                "unstuck_loss_allowance_pct": 0.03,
+                "unstuck_threshold": 0.916,
+            },
+            "short": {
+                "close_grid_markup_end": 0.0089,
+                "close_grid_markup_start": 0.0344,
+                "close_grid_qty_pct": 0.125,
+                "close_trailing_grid_ratio": 0.5,
+                "close_trailing_qty_pct": 0.125,
+                "close_trailing_retracement_pct": 0.002,
+                "close_trailing_threshold_pct": 0.008,
+                "ema_span_0": 1318.0,
+                "ema_span_1": 1435.0,
+                "enforce_exposure_limit": True,
+                "entry_grid_double_down_factor": 0.894,
+                "entry_grid_spacing_pct": 0.04,
+                "entry_grid_spacing_weight": 0.697,
+                "entry_initial_ema_dist": -0.00738,
+                "entry_initial_qty_pct": 0.00592,
+                "entry_trailing_double_down_factor": 0.894,
+                "entry_trailing_grid_ratio": 0.5,
+                "entry_trailing_retracement_pct": 0.01,
+                "entry_trailing_threshold_pct": 0.05,
+                "filter_noisiness_rolling_window": 60,
+                "filter_volume_drop_pct": 0.95,
+                "filter_volume_rolling_window": 60,
+                "n_positions": 10.0,
+                "total_wallet_exposure_limit": 1.7,
+                "unstuck_close_pct": 0.001,
+                "unstuck_ema_dist": 0.0,
+                "unstuck_loss_allowance_pct": 0.03,
+                "unstuck_threshold": 0.916,
+            },
+        },
+        "coin_overrides": {},
+        "live": {
+            "approved_coins": [],
+            "auto_gs": True,
+            "empty_means_all_approved": False,
+            "execution_delay_seconds": 2.0,
+            "filter_by_min_effective_cost": True,
+            "forced_mode_long": "",
+            "forced_mode_short": "",
+            "ignored_coins": {"long": [], "short": []},
+            "leverage": 10.0,
+            "market_orders_allowed": True,
+            "max_n_cancellations_per_batch": 5,
+            "max_n_creations_per_batch": 3,
+            "max_n_restarts_per_day": 10,
+            "mimic_backtest_1m_delay": False,
+            "minimum_coin_age_days": 7.0,
+            "ohlcvs_1m_rolling_window_days": 7.0,
+            "ohlcvs_1m_update_after_minutes": 10.0,
+            "pnls_max_lookback_days": 30.0,
+            "price_distance_threshold": 0.002,
+            "time_in_force": "good_till_cancelled",
+            "user": "bybit_01",
+        },
+        "optimize": {
+            "bounds": {
+                "long_close_grid_markup_end": [0.001, 0.03],
+                "long_close_grid_markup_start": [0.001, 0.03],
+                "long_close_grid_qty_pct": [0.05, 1.0],
+                "long_close_trailing_grid_ratio": [-1.0, 1.0],
+                "long_close_trailing_qty_pct": [0.05, 1.0],
+                "long_close_trailing_retracement_pct": [0.0, 0.1],
+                "long_close_trailing_threshold_pct": [-0.1, 0.1],
+                "long_ema_span_0": [200.0, 1440.0],
+                "long_ema_span_1": [200.0, 1440.0],
+                "long_entry_grid_double_down_factor": [0.1, 3.0],
+                "long_entry_grid_spacing_pct": [0.005, 0.12],
+                "long_entry_grid_spacing_weight": [0.0, 2.0],
+                "long_entry_initial_ema_dist": [-0.1, 0.002],
+                "long_entry_initial_qty_pct": [0.005, 0.1],
+                "long_entry_trailing_double_down_factor": [0.1, 3.0],
+                "long_entry_trailing_grid_ratio": [-1.0, 1.0],
+                "long_entry_trailing_retracement_pct": [0.0, 0.1],
+                "long_entry_trailing_threshold_pct": [-0.1, 0.1],
+                "long_filter_noisiness_rolling_window": [10.0, 1440.0],
+                "long_filter_volume_drop_pct": [0.0, 1.0],
+                "long_filter_volume_rolling_window": [10.0, 1440.0],
+                "long_n_positions": [1.0, 20.0],
+                "long_total_wallet_exposure_limit": [0.0, 2.0],
+                "long_unstuck_close_pct": [0.001, 0.1],
+                "long_unstuck_ema_dist": [-0.1, 0.01],
+                "long_unstuck_loss_allowance_pct": [0.001, 0.05],
+                "long_unstuck_threshold": [0.4, 0.95],
+                "short_close_grid_markup_end": [0.001, 0.03],
+                "short_close_grid_markup_start": [0.001, 0.03],
+                "short_close_grid_qty_pct": [0.05, 1.0],
+                "short_close_trailing_grid_ratio": [-1.0, 1.0],
+                "short_close_trailing_qty_pct": [0.05, 1.0],
+                "short_close_trailing_retracement_pct": [0.0, 0.1],
+                "short_close_trailing_threshold_pct": [-0.1, 0.1],
+                "short_ema_span_0": [200.0, 1440.0],
+                "short_ema_span_1": [200.0, 1440.0],
+                "short_entry_grid_double_down_factor": [0.1, 3.0],
+                "short_entry_grid_spacing_pct": [0.005, 0.12],
+                "short_entry_grid_spacing_weight": [0.0, 2.0],
+                "short_entry_initial_ema_dist": [-0.1, 0.002],
+                "short_entry_initial_qty_pct": [0.005, 0.1],
+                "short_entry_trailing_double_down_factor": [0.1, 3.0],
+                "short_entry_trailing_grid_ratio": [-1.0, 1.0],
+                "short_entry_trailing_retracement_pct": [0.0, 0.1],
+                "short_entry_trailing_threshold_pct": [-0.1, 0.1],
+                "short_filter_noisiness_rolling_window": [10.0, 1440.0],
+                "short_filter_volume_drop_pct": [0.0, 1.0],
+                "short_filter_volume_rolling_window": [10.0, 1440.0],
+                "short_n_positions": [1.0, 20.0],
+                "short_total_wallet_exposure_limit": [0.0, 2.0],
+                "short_unstuck_close_pct": [0.001, 0.1],
+                "short_unstuck_ema_dist": [-0.1, 0.01],
+                "short_unstuck_loss_allowance_pct": [0.001, 0.05],
+                "short_unstuck_threshold": [0.4, 0.95],
+            },
+            "compress_results_file": True,
+            "crossover_probability": 0.7,
+            "enable_overrides": [],
+            "iters": 30000,
+            "limits": "--drawdown_worst 0.333 --loss_profit_ratio: 0.9 --position_unchanged_hours_max 300.0",
+            "mutation_probability": 0.45,
+            "n_cpus": 5,
+            "population_size": 1000,
+            "round_to_n_significant_digits": 5,
+            "scoring": ["adg", "sharpe_ratio"],
+            "write_all_results": True,
+        },
+    }
