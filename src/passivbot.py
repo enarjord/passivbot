@@ -20,7 +20,16 @@ from uuid import uuid4
 from copy import deepcopy
 from collections import defaultdict
 from sortedcontainers import SortedDict
-
+from config_utils import (
+    load_config,
+    add_arguments_recursively,
+    update_config_with_args,
+    format_config,
+    normalize_coins_source,
+    expand_PB_mode,
+    read_external_coins_lists,
+    get_template_live_config,
+)
 from procedures import (
     load_broker_code,
     load_user_info,
@@ -28,13 +37,7 @@ from procedures import (
     make_get_filepath,
     get_file_mod_utc,
     get_first_timestamps_unified,
-    load_config,
-    add_arguments_recursively,
-    update_config_with_args,
-    format_config,
     print_async_exception,
-    read_external_coins_lists,
-    normalize_coins_source,
 )
 from njit_funcs import (
     calc_ema,
@@ -60,12 +63,10 @@ from pure_funcs import (
     symbol_to_coin,
     add_missing_params_to_hjson_live_multi_config,
     ts_to_date_utc,
-    get_template_live_config,
     flatten,
     log_dict_changes,
     coin_to_symbol,
 )
-from parser_utils import expand_PB_mode
 
 
 logging.basicConfig(
@@ -129,7 +130,6 @@ class Passivbot:
         self.price_steps = {}
         self.c_mults = {}
         self.max_leverage = {}
-        self.live_configs = {}
         self.PB_modes = {"long": {}, "short": {}}
         self.pnls_cache_filepath = make_get_filepath(f"caches/{self.exchange}/{self.user}_pnls.json")
         self.ohlcvs_1m_cache_dirpath = make_get_filepath(f"caches/{self.exchange}/ohlcvs_1m/")
@@ -212,10 +212,12 @@ class Passivbot:
         # for prettier printing
         self.max_len_symbol = max([len(s) for s in self.markets_dict])
         self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
-        await self.init_flags()
+        # await self.init_flags()
+        self.init_coin_overrides()
         await self.update_tickers()
         self.refresh_approved_ignored_coins_lists()
-        self.set_live_configs()
+        # self.set_live_configs()
+        self.set_wallet_exposure_limits()
         await self.update_positions()
         await self.update_open_orders()
         self.update_effective_min_cost()
@@ -226,6 +228,38 @@ class Passivbot:
     def debug_print(self, *args):
         if hasattr(self, "debug_mode") and self.debug_mode:
             print(*args)
+
+    def init_coin_overrides(self):
+        self.coin_overrides = {
+            s: v
+            for k, v in self.config.get("coin_overrides", {}).items()
+            if (s := self.coin_to_symbol(k))
+        }
+
+    def config_get(self, path: [str], symbol=None):
+        """
+        Return value from self.coin_overrides if present,
+        otherwise return value from self.config.
+        """
+        if symbol and symbol in self.coin_overrides:
+            d = self.coin_overrides[symbol]
+            for p in path:
+                if isinstance(d, dict) and p in d:
+                    d = d[p]
+                else:
+                    d = None
+                    break
+            if d is not None:
+                return d
+
+        # fallback to global config
+        d = self.config
+        for p in path:
+            if isinstance(d, dict) and p in d:
+                d = d[p]
+            else:
+                raise KeyError(f"Key path {'.'.join(path)} not found in config or coin overrides.")
+        return d
 
     async def init_flags(self):
         self.flags = {}
@@ -512,7 +546,7 @@ class Passivbot:
             return self.is_forager_mode("long") or self.is_forager_mode("short")
         if self.config["bot"][pside]["total_wallet_exposure_limit"] <= 0.0:
             return False
-        if self.forced_modes[pside]:
+        if self.config["live"][f"forced_mode_{pside}"]:
             return False
         n_positions = self.get_max_n_positions(pside)
         if n_positions == 0:
@@ -607,11 +641,9 @@ class Passivbot:
     def is_trailing(self, symbol, pside=None):
         if pside is None:
             return self.is_trailing(symbol, "long") or self.is_trailing(symbol, "short")
-        return symbol in self.live_configs and any(
-            [
-                self.live_configs[symbol][pside][f"{x}_trailing_grid_ratio"] != 0.0
-                for x in ["entry", "close"]
-            ]
+        return (
+            self.config_get(["bot", pside, "entry_trailing_grid_ratio"], symbol=symbol) != 0.0
+            or self.config_get(["bot", pside, "close_trailing_grid_ratio"], symbol=symbol) != 0.0
         )
 
     def get_last_position_changes(self, symbol=None):
@@ -869,8 +901,9 @@ class Passivbot:
         for pside, other_pside in [("long", "short"), ("short", "long")]:
             if self.is_forager_mode(pside):
                 await self.update_first_timestamps()
-            for symbol in self.flagged_modes[pside]:
-                self.PB_modes[pside][symbol] = self.flagged_modes[pside][symbol]
+            for symbol in self.coin_overrides:
+                if flag := self.get_forced_PB_mode(pside, symbol):
+                    self.PB_modes[pside][symbol] = flag
             ideal_coins = self.get_filtered_coins(pside)
             slots_filled = {
                 k for k, v in self.PB_modes[pside].items() if v in ["normal", "graceful_stop"]
@@ -880,8 +913,8 @@ class Passivbot:
             for symbol in symbols_with_pos:
                 if symbol in self.PB_modes[pside]:
                     continue
-                elif self.forced_modes[pside]:
-                    self.PB_modes[pside][symbol] = self.forced_modes[pside]
+                elif forced_mode := self.get_forced_PB_mode(pside, symbol):
+                    self.PB_modes[pside][symbol] = forced_mode
                 else:
                     if symbol in self.ineligible_symbols:
                         if self.ineligible_symbols[symbol] == "not active":
@@ -934,7 +967,7 @@ class Passivbot:
         # filter coins by min effective cost
         # filter coins by relative volume
         # filter coins by noisiness
-        if self.forced_modes[pside]:
+        if self.get_forced_PB_mode(pside):
             return []
         candidates = self.approved_coins_minus_ignored_coins[pside]
         candidates = [s for s in candidates if self.is_old_enough(pside, s)]
@@ -988,34 +1021,54 @@ class Passivbot:
         n_positions = 0
         for symbol in self.positions:
             if self.positions[symbol][pside]["size"] != 0.0:
-                if symbol in self.flagged_modes[pside]:
-                    if self.flagged_modes[pside][symbol] in ["normal", "graceful_stop"]:
-                        n_positions += 1
+                forced_mode = self.get_forced_PB_mode(pside, symbol)
+                print("debug get_current_n_positions forced_mode", symbol, forced_mode)
+                if forced_mode in ["normal", "graceful_stop"]:
+                    n_positions += 1
                 else:
                     n_positions += 1
         return n_positions
 
-    def set_wallet_exposure_limits(self):
-        for symbol in self.live_configs:
-            for pside in ["long", "short"]:
-                self.live_configs[symbol][pside]["wallet_exposure_limit"] = (
-                    self.get_wallet_exposure_limit(pside, symbol)
-                )
+    def get_forced_PB_mode(self, pside, symbol=None):
+        mode = self.config_get(["live", f"forced_mode_{pside}"], symbol=symbol)
+        if mode:
+            return mode
+        elif symbol and not self.markets_dict[symbol]["active"]:
+            return "tp_only"
+        return None
 
-    def get_wallet_exposure_limit(self, pside, symbol):
-        if (
-            symbol in self.flags
-            and (fwel := getattr(self.flags[symbol], f"WE_limit_{pside}")) is not None
-        ):
-            return fwel
-        else:
-            twel = self.config["bot"][pside]["total_wallet_exposure_limit"]
-            if twel == 0.0:
-                return 0.0
-            n_positions = max(self.get_max_n_positions(pside), self.get_current_n_positions(pside))
-            if n_positions == 0:
-                return 0.0
-            return round(twel / n_positions, 8)
+    def set_wallet_exposure_limits(self):
+        for pside in ["long", "short"]:
+            self.config["bot"][pside]["wallet_exposure_limit"] = self.get_wallet_exposure_limit(pside)
+            for symbol in self.coin_overrides:
+                ov_conf = self.coin_overrides[symbol].get("bot", {}).get(pside, {})
+                if "wallet_exposure_limit" in ov_conf:
+                    self.coin_overrides[symbol]["bot"][pside]["wallet_exposure_limit"] = (
+                        self.get_wallet_exposure_limit(pside, symbol)
+                    )
+                    print(
+                        "debug set_wallet_exposure_limits",
+                        symbol,
+                        self.coin_overrides[symbol]["bot"][pside]["wallet_exposure_limit"],
+                    )
+
+    def get_wallet_exposure_limit(self, pside, symbol=None):
+        if symbol:
+            fwel = (
+                self.coin_overrides.get(symbol, {})
+                .get("bot", {})
+                .get(pside, {})
+                .get("wallet_exposure_limit")
+            )
+            if fwel is not None:
+                return fwel
+        twel = self.config["bot"][pside]["total_wallet_exposure_limit"]
+        if twel <= 0.0:
+            return 0.0
+        n_positions = max(self.get_max_n_positions(pside), self.get_current_n_positions(pside))
+        if n_positions == 0:
+            return 0.0
+        return round(twel / n_positions, 8)
 
     def is_pside_enabled(self, pside):
         return (
@@ -1029,7 +1082,7 @@ class Passivbot:
         return (
             self.balance
             * self.get_wallet_exposure_limit(pside, symbol)
-            * self.live_configs[symbol][pside]["entry_initial_qty_pct"]
+            * self.config_get(["bot", pside, "entry_initial_qty_pct"], symbol=symbol)
             >= self.effective_min_cost[symbol]
         )
 
@@ -1360,7 +1413,7 @@ class Passivbot:
                 / self.balance
             )
             try:
-                wel = self.live_configs[symbol][pside]["wallet_exposure_limit"]
+                wel = self.config_get(["bot", pside, "wallet_exposure_limit"], symbol=symbol)
                 WE_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
             except Exception as e:
                 logging.error(f"error with log_position_changes {e}")
@@ -1473,16 +1526,24 @@ class Passivbot:
                         self.min_qtys[symbol],
                         self.min_costs[symbol],
                         self.c_mults[symbol],
-                        self.live_configs[symbol][pside]["entry_grid_double_down_factor"],
-                        self.live_configs[symbol][pside]["entry_grid_spacing_weight"],
-                        self.live_configs[symbol][pside]["entry_grid_spacing_pct"],
-                        self.live_configs[symbol][pside]["entry_initial_ema_dist"],
-                        self.live_configs[symbol][pside]["entry_initial_qty_pct"],
-                        self.live_configs[symbol][pside]["entry_trailing_double_down_factor"],
-                        self.live_configs[symbol][pside]["entry_trailing_grid_ratio"],
-                        self.live_configs[symbol][pside]["entry_trailing_retracement_pct"],
-                        self.live_configs[symbol][pside]["entry_trailing_threshold_pct"],
-                        self.live_configs[symbol][pside]["wallet_exposure_limit"],
+                        self.config_get(
+                            ["bot", pside, "entry_grid_double_down_factor"], symbol=symbol
+                        ),
+                        self.config_get(["bot", pside, "entry_grid_spacing_weight"], symbol=symbol),
+                        self.config_get(["bot", pside, "entry_grid_spacing_pct"], symbol=symbol),
+                        self.config_get(["bot", pside, "entry_initial_ema_dist"], symbol=symbol),
+                        self.config_get(["bot", pside, "entry_initial_qty_pct"], symbol=symbol),
+                        self.config_get(
+                            ["bot", pside, "entry_trailing_double_down_factor"], symbol=symbol
+                        ),
+                        self.config_get(["bot", pside, "entry_trailing_grid_ratio"], symbol=symbol),
+                        self.config_get(
+                            ["bot", pside, "entry_trailing_retracement_pct"], symbol=symbol
+                        ),
+                        self.config_get(
+                            ["bot", pside, "entry_trailing_threshold_pct"], symbol=symbol
+                        ),
+                        self.config_get(["bot", pside, "wallet_exposure_limit"], symbol=symbol),
                         self.balance,
                         self.positions[symbol][pside]["size"],
                         self.positions[symbol][pside]["price"],
@@ -1497,15 +1558,21 @@ class Passivbot:
                         self.min_qtys[symbol],
                         self.min_costs[symbol],
                         self.c_mults[symbol],
-                        self.live_configs[symbol][pside]["close_grid_markup_end"],
-                        self.live_configs[symbol][pside]["close_grid_markup_start"],
-                        self.live_configs[symbol][pside]["close_grid_qty_pct"],
-                        self.live_configs[symbol][pside]["close_trailing_grid_ratio"],
-                        self.live_configs[symbol][pside]["close_trailing_qty_pct"],
-                        self.live_configs[symbol][pside]["close_trailing_retracement_pct"],
-                        self.live_configs[symbol][pside]["close_trailing_threshold_pct"],
-                        bool(self.live_configs[symbol][pside]["enforce_exposure_limit"]),
-                        self.live_configs[symbol][pside]["wallet_exposure_limit"],
+                        self.config_get(["bot", pside, "close_grid_markup_end"], symbol=symbol),
+                        self.config_get(["bot", pside, "close_grid_markup_start"], symbol=symbol),
+                        self.config_get(["bot", pside, "close_grid_qty_pct"], symbol=symbol),
+                        self.config_get(["bot", pside, "close_trailing_grid_ratio"], symbol=symbol),
+                        self.config_get(["bot", pside, "close_trailing_qty_pct"], symbol=symbol),
+                        self.config_get(
+                            ["bot", pside, "close_trailing_retracement_pct"], symbol=symbol
+                        ),
+                        self.config_get(
+                            ["bot", pside, "close_trailing_threshold_pct"], symbol=symbol
+                        ),
+                        bool(
+                            self.config_get(["bot", pside, "enforce_exposure_limit"], symbol=symbol)
+                        ),
+                        self.config_get(["bot", pside, "wallet_exposure_limit"], symbol=symbol),
                         self.balance,
                         self.positions[symbol][pside]["size"],
                         self.positions[symbol][pside]["price"],
@@ -1611,10 +1678,12 @@ class Passivbot:
                         self.positions[symbol][pside]["size"],
                         self.positions[symbol][pside]["price"],
                     )
-                    if (
-                        self.live_configs[symbol][pside]["wallet_exposure_limit"] == 0.0
-                        or wallet_exposure / self.live_configs[symbol][pside]["wallet_exposure_limit"]
-                        > self.live_configs[symbol][pside]["unstuck_threshold"]
+                    if self.config_get(
+                        ["bot", pside, "wallet_exposure_limit"], symbol=symbol
+                    ) == 0.0 or wallet_exposure / self.config_get(
+                        ["bot", pside, "wallet_exposure_limit"], symbol=symbol
+                    ) > self.config_get(
+                        ["bot", pside, "unstuck_threshold"], symbol=symbol
                     ):
                         pprice_diff = calc_pprice_diff(
                             pside,
@@ -1631,7 +1700,7 @@ class Passivbot:
                     self.get_last_price(symbol),
                     pbr.round_up(
                         self.emas[pside][symbol].max()
-                        * (1.0 + self.live_configs[symbol][pside]["unstuck_ema_dist"]),
+                        * (1.0 + self.config_get(["bot", pside, "unstuck_ema_dist"], symbol=symbol)),
                         self.price_steps[symbol],
                     ),
                 )
@@ -1658,8 +1727,10 @@ class Passivbot:
                         pbr.round_dn(
                             pbr.cost_to_qty(
                                 self.balance
-                                * self.live_configs[symbol][pside]["wallet_exposure_limit"]
-                                * self.live_configs[symbol][pside]["unstuck_close_pct"],
+                                * self.config_get(
+                                    ["bot", pside, "wallet_exposure_limit"], symbol=symbol
+                                )
+                                * self.config_get(["bot", pside, "unstuck_close_pct"], symbol=symbol),
                                 close_price,
                                 self.c_mults[symbol],
                             ),
@@ -1692,7 +1763,7 @@ class Passivbot:
                     self.get_last_price(symbol),
                     pbr.round_dn(
                         self.emas[pside][symbol].min()
-                        * (1.0 - self.live_configs[symbol][pside]["unstuck_ema_dist"]),
+                        * (1.0 - self.config_get(["bot", pside, "unstuck_ema_dist"], symbol=symbol)),
                         self.price_steps[symbol],
                     ),
                 )
@@ -1718,8 +1789,10 @@ class Passivbot:
                         pbr.round_dn(
                             pbr.cost_to_qty(
                                 self.balance
-                                * self.live_configs[symbol][pside]["wallet_exposure_limit"]
-                                * self.live_configs[symbol][pside]["unstuck_close_pct"],
+                                * self.config_get(
+                                    ["bot", pside, "wallet_exposure_limit"], symbol=symbol
+                                )
+                                * self.config_get(["bot", pside, "unstuck_close_pct"], symbol=symbol),
                                 close_price,
                                 self.c_mults[symbol],
                             ),
@@ -1904,9 +1977,8 @@ class Passivbot:
         first_ts, first_ohlcv = self.ohlcvs_1m[symbol].peekitem(0)
         for pside in ["long", "short"]:
             self.emas[pside][symbol] = np.repeat(first_ohlcv[4], 3)
-            lc = self.live_configs[symbol][pside]
-            es = [lc["ema_span_0"], lc["ema_span_1"], (lc["ema_span_0"] * lc["ema_span_1"]) ** 0.5]
-            ema_spans = numpyize(sorted(es))
+            es = [self.config_get(["bot", pside, f"ema_span_{i}"], symbol=symbol) for i in [0, 1]]
+            ema_spans = numpyize(sorted(es + [(es[0] * es[1]) ** (0.5)]))
             self.ema_alphas[pside][symbol] = (a := (2.0 / (ema_spans + 1)), 1.0 - a)
         self.upd_minute_emas[symbol] = first_ts
 
@@ -1960,7 +2032,7 @@ class Passivbot:
         return (
             self.approved_coins_minus_ignored_coins[pside]
             | self.get_symbols_with_pos(pside)
-            | {s for s in self.flagged_modes[pside] if self.flagged_modes[pside][s] == "normal"}
+            | {s for s in self.coin_overrides if self.get_forced_PB_mode(pside, s) == "normal"}
         )
 
     def get_ohlcvs_1m_file_mods(self, symbols=None):
