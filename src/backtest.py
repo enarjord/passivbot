@@ -9,20 +9,20 @@ from tools.event_loop_policy import set_windows_event_loop_policy
 set_windows_event_loop_policy()
 import asyncio
 import argparse
-
-from procedures import (
-    utc_ms,
-    make_get_filepath,
-    fetch_market_specific_settings_multi,
+from config_utils import (
     load_config,
     dump_config,
     add_arguments_recursively,
     update_config_with_args,
     format_config,
+    get_template_live_config,
+)
+from procedures import (
+    utc_ms,
+    make_get_filepath,
     format_end_date,
 )
 from pure_funcs import (
-    get_template_live_config,
     ts_to_date,
     sort_dict_keys,
     calc_hash,
