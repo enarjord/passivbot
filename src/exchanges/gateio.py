@@ -351,7 +351,7 @@ class GateIOBot(Passivbot):
                     "leverage": int(
                         min(
                             self.max_leverage[symbol],
-                            self.live_configs[symbol]["leverage"],
+                            self.config_get(["live", "leverage"], symbol=symbol),
                         )
                     )
                 }

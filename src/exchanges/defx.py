@@ -259,7 +259,7 @@ class DefxBot(Passivbot):
                     "leverage": int(
                         min(
                             self.max_leverage[symbol],
-                            self.live_configs[symbol]["leverage"],
+                            self.config_get(["live", "leverage"], symbol=symbol),
                             pbr.round_up(
                                 max(
                                     self.get_wallet_exposure_limit("long", symbol),

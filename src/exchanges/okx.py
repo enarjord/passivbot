@@ -300,7 +300,7 @@ class OKXBot(Passivbot):
                     self.cca.set_margin_mode(
                         "cross",
                         symbol=symbol,
-                        params={"lever": int(self.live_configs[symbol]["leverage"])},
+                        params={"lever": int(self.config_get(["live", "leverage"], symbol=symbol))},
                     )
                 )
             except Exception as e:
