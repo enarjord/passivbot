@@ -35,8 +35,15 @@ from backtest import (
     prep_backtest_args,
     expand_analysis,
 )
-from pure_funcs import (
+from config_utils import (
     get_template_live_config,
+    load_hjson_config,
+    load_config,
+    format_config,
+    add_arguments_recursively,
+    update_config_with_args,
+)
+from pure_funcs import (
     symbol_to_coin,
     ts_to_date_utc,
     denumpyize,
@@ -48,11 +55,6 @@ from pure_funcs import (
 from procedures import (
     make_get_filepath,
     utc_ms,
-    load_hjson_config,
-    load_config,
-    format_config,
-    add_arguments_recursively,
-    update_config_with_args,
 )
 from downloader import add_all_eligible_coins_to_config
 from copy import deepcopy
