@@ -201,7 +201,6 @@ pub fn calc_pnl_short(entry_price: f64, close_price: f64, qty: f64, c_mult: f64)
 pub fn calc_pprice_diff_int(pside: usize, pprice: f64, price: f64) -> f64 {
     match pside {
         LONG => {
-            // long
             if pprice > 0.0 {
                 1.0 - price / pprice
             } else {
@@ -209,7 +208,6 @@ pub fn calc_pprice_diff_int(pside: usize, pprice: f64, price: f64) -> f64 {
             }
         }
         SHORT => {
-            // short
             if pprice > 0.0 {
                 price / pprice - 1.0
             } else {
