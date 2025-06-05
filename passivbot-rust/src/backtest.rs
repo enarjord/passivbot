@@ -120,6 +120,7 @@ pub struct RollingVolumeSum {
 pub struct Backtest<'a> {
     hlcvs: &'a ArrayView3<'a, f64>,
     btc_usd_prices: &'a ArrayView1<'a, f64>, // Change to ArrayView1 (1D view)
+    bot_params: Vec<BotParamsPair>,
     bot_params_pair: BotParamsPair,
     exchange_params_list: Vec<ExchangeParams>,
     backtest_params: BacktestParams,
@@ -198,10 +199,14 @@ impl<'a> Backtest<'a> {
             (n_coins as f64 * (1.0 - bot_params_pair.short.filter_volume_drop_pct)).round()
                 as usize,
         );
+
+        let mut bot_params = vec![bot_params_pair_cloned.clone(); n_coins];
+
         Backtest {
             hlcvs,
             btc_usd_prices,
             bot_params_pair: bot_params_pair_cloned,
+            bot_params: bot_params,
             exchange_params_list,
             backtest_params: backtest_params.clone(),
             balance,
@@ -242,6 +247,15 @@ impl<'a> Backtest<'a> {
                 prev_k_short: 0,
             },
             volume_indices_buffer: Some(vec![(0.0, 0); n_coins]), // Initialize here
+        }
+    }
+
+    #[inline(always)]
+    fn bp(&self, coin_idx: usize, pside: usize) -> &BotParams {
+        match pside {
+            0 => &self.bot_params[coin_idx].long,
+            1 => &self.bot_params[coin_idx].short,
+            _ => unreachable!("invalid pside"),
         }
     }
 
