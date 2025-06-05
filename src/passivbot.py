@@ -48,9 +48,6 @@ from njit_funcs import (
     round_dn,
     round_dynamic,
     calc_pnl,
-    calc_pnl_long,
-    calc_pnl_short,
-    calc_pprice_diff,
 )
 from pure_funcs import (
     numpyize,
@@ -130,6 +127,7 @@ class Passivbot:
         self.price_steps = {}
         self.c_mults = {}
         self.max_leverage = {}
+        self.pside_int_map = {"long": 0, "short": 1}
         self.PB_modes = {"long": {}, "short": {}}
         self.pnls_cache_filepath = make_get_filepath(f"caches/{self.exchange}/{self.user}_pnls.json")
         self.ohlcvs_1m_cache_dirpath = make_get_filepath(f"caches/{self.exchange}/ohlcvs_1m/")
@@ -260,46 +258,6 @@ class Passivbot:
             else:
                 raise KeyError(f"Key path {'.'.join(path)} not found in config or coin overrides.")
         return d
-
-    async def init_flags(self):
-        self.flags = {}
-        for k, v in self.config["live"]["coin_flags"].items():
-            if kr := self.coin_to_symbol(k):
-                logging.info(f"setting flag for {kr}: {v}")
-                self.flags[kr] = v
-
-        # this argparser is used only internally
-        parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
-        parser.add_argument(
-            "-sm", type=expand_PB_mode, required=False, dest="short_mode", default=None
-        )
-        parser.add_argument(
-            "-lm", type=expand_PB_mode, required=False, dest="long_mode", default=None
-        )
-        parser.add_argument("-lw", type=float, required=False, dest="WE_limit_long", default=None)
-        parser.add_argument("-sw", type=float, required=False, dest="WE_limit_short", default=None)
-        parser.add_argument("-lev", type=float, required=False, dest="leverage", default=None)
-        parser.add_argument("-lc", type=str, required=False, dest="live_config_path", default=None)
-        self.forced_modes = {"long": "", "short": ""}
-        for pside in self.forced_modes:
-            if fmode := self.config["live"][f"forced_mode_{pside}"]:
-                try:
-                    self.forced_modes[pside] = expand_PB_mode(fmode)
-                    if self.forced_modes[pside] == "normal":
-                        self.forced_modes[pside] = ""
-                    else:
-                        logging.info(f"Set forced mode {pside} {self.forced_modes[pside]}")
-                        self.PB_mode_stop[pside] = self.forced_modes[pside]
-                except Exception as e:
-                    logging.info(f"Error setting {pside} forced mode {fmode} {e}")
-        self.flagged_modes = {"long": {}, "short": {}}
-        for symbol in self.flags:
-            self.flags[symbol] = parser.parse_args(self.flags[symbol].split())
-            for pside in ["long", "short"]:
-                if (mode := getattr(self.flags[symbol], f"{pside}_mode")) is not None:
-                    self.flagged_modes[pside][symbol] = mode
-                elif not self.markets_dict[symbol]["active"]:
-                    self.flagged_modes[pside][symbol] = "tp_only"
 
     async def update_first_timestamps(self, symbols=[]):
         if not hasattr(self, "first_timestamps"):
@@ -554,55 +512,6 @@ class Passivbot:
         if n_positions >= len(self.approved_coins_minus_ignored_coins[pside]):
             return False
         return True
-
-    def set_live_configs(self):
-        skip = {
-            "n_positions",
-            "total_wallet_exposure_limit",
-            "unstuck_loss_allowance_pct",
-            "unstuck_close_pct",
-            "filter_noisiness_rolling_window",
-            "filter_volume_rolling_window",
-            "filter_volume_drop_pct",
-        }  # skip parameters affecting global behavior
-        for pside in ["long", "short"]:
-            self.config["bot"][pside]["n_positions"] = min(
-                len(self.eligible_symbols), int(round(self.config["bot"][pside]["n_positions"]))
-            )
-        for symbol in self.markets_dict:
-            if symbol in self.ineligible_symbols:
-                if any(
-                    [x in self.ineligible_symbols[symbol] for x in ["quote", "market type", "linear"]]
-                ):
-                    continue
-            self.live_configs[symbol] = deepcopy(self.config["bot"])
-            self.live_configs[symbol]["leverage"] = self.config["live"]["leverage"]
-            if symbol in self.flags and self.flags[symbol].live_config_path is not None:
-                try:
-                    if os.path.exists(self.flags[symbol].live_config_path):
-                        loaded = load_config(self.flags[symbol].live_config_path, verbose=False)
-                        logging.info(
-                            f"successfully loaded {self.flags[symbol].live_config_path} for {symbol}"
-                        )
-                    else:
-                        path2 = os.path.join(
-                            os.path.dirname(self.config["live"]["base_config_path"]),
-                            self.flags[symbol].live_config_path,
-                        )
-                        if os.path.exists(path2):
-                            loaded = load_config(path2, verbose=False)
-                            logging.info(f"successfully loaded {path2} for {symbol}")
-                        else:
-                            raise
-                    for pside in loaded["bot"]:
-                        for k, v in loaded["bot"][pside].items():
-                            if k not in skip:
-                                self.live_configs[symbol][pside][k] = v
-                except Exception as e:
-                    logging.error(
-                        f"failed to load config {self.flags[symbol].live_config_path} for {symbol} {e}. Using default config."
-                    )
-        self.set_wallet_exposure_limits()
 
     def pad_sym(self, symbol):
         return f"{symbol: <{self.sym_padding}}"
@@ -1421,7 +1330,9 @@ class Passivbot:
             last_price = or_default(self.get_last_price, symbol, default=0.0)
             try:
                 pprice_diff = (
-                    calc_pprice_diff(pside, positions_new[symbol][pside]["price"], last_price)
+                    pbr.calc_pprice_diff_int(
+                        self.pside_int_map[pside], positions_new[symbol][pside]["price"], last_price
+                    )
                     if last_price
                     else 0.0
                 )
@@ -1649,6 +1560,167 @@ class Passivbot:
                         order["qty"] = pos_size_abs
         return ideal_orders_f
 
+    def calc_ema_bound(self, pside: str, symbol: str, ema_dist: float, upper_bound: bool):
+        if upper_bound:
+            return pbr.round_up(
+                self.emas[pside][symbol].max() * (1.0 + ema_dist), self.price_steps[symbol]
+            )
+        else:
+            return pbr.round_dn(
+                self.emas[pside][symbol].min() * (1.0 - ema_dist), self.price_steps[symbol]
+            )
+
+    def calc_unstucking_close_new(self):
+        if len(self.pnls) == 0:
+            return "", (0.0, 0.0, "")  # needs trade history to calc unstucking order
+        stuck_positions = []
+        pnls_cumsum = np.array([x["pnl"] for x in self.pnls]).cumsum()
+        pnls_cumsum_max, pnls_cumsum_last = (pnls_cumsum.max(), pnls_cumsum[-1])
+        unstuck_allowances = {}
+        for pside in ["long", "short"]:
+            unstuck_allowances[pside] = (
+                pbr.calc_auto_unstuck_allowance(
+                    self.balance,
+                    self.config["bot"][pside]["unstuck_loss_allowance_pct"]
+                    * self.config["bot"][pside]["total_wallet_exposure_limit"],
+                    pnls_cumsum_max,
+                    pnls_cumsum_last,
+                )
+                if self.config["bot"][pside]["unstuck_loss_allowance_pct"] > 0.0
+                else 0.0
+            )
+            if unstuck_allowances[pside] <= 0.0:
+                continue
+            for symbol in self.positions:
+                if self.has_position(pside, symbol):
+                    wallet_exposure = pbr.calc_wallet_exposure(
+                        self.c_mults[symbol],
+                        self.balance,
+                        self.positions[symbol][pside]["size"],
+                        self.positions[symbol][pside]["price"],
+                    )
+                    we_limit = self.config_get(["bot", pside, "wallet_exposure_limit"], symbol=symbol)
+                    if we_limit == 0.0 or wallet_exposure / we_limit > self.config_get(
+                        ["bot", pside, "unstuck_threshold"], symbol=symbol
+                    ):
+                        # is stuck. Calc ema price and check if would close
+                        ema_price = self.calc_ema_bound(
+                            pside,
+                            symbol,
+                            self.config_get(["bot", pside, "unstuck_ema_dist"], symbol=symbol),
+                            pside == "long",
+                        )
+                        if (pside == "long" and self.get_last_price(symbol) >= ema_price) or (
+                            pside == "short" and self.get_last_price(symbol) <= ema_price
+                        ):
+                            # eligible for unstucking
+                            pprice_diff = pbr.calc_pprice_diff_int(
+                                self.pside_int_map[pside],
+                                self.positions[symbol][pside]["price"],
+                                self.get_last_price(symbol),
+                            )
+                            stuck_positions.append((symbol, pside, pprice_diff, ema_price))
+        if not stuck_positions:
+            return "", (0.0, 0.0, "")
+        stuck_positions.sort(key=lambda x: x[2])
+        for symbol, pside, pprice_diff, ema_price in stuck_positions:
+            close_price = self.get_last_price(symbol)
+            if pside == "long":
+                min_entry_qty = calc_min_entry_qty(
+                    close_price,
+                    False,
+                    self.c_mults[symbol],
+                    self.qty_steps[symbol],
+                    self.min_qtys[symbol],
+                    self.min_costs[symbol],
+                )
+                close_qty = -min(
+                    self.positions[symbol][pside]["size"],
+                    max(
+                        min_entry_qty,
+                        pbr.round_dn(
+                            pbr.cost_to_qty(
+                                self.balance
+                                * self.config_get(
+                                    ["bot", pside, "wallet_exposure_limit"], symbol=symbol
+                                )
+                                * self.config_get(["bot", pside, "unstuck_close_pct"], symbol=symbol),
+                                close_price,
+                                self.c_mults[symbol],
+                            ),
+                            self.qty_steps[symbol],
+                        ),
+                    ),
+                )
+                if close_qty != 0.0:
+                    pnl_if_closed = getattr(pbr, f"calc_pnl_{pside}")(
+                        self.positions[symbol][pside]["price"],
+                        close_price,
+                        close_qty,
+                        self.c_mults[symbol],
+                    )
+                    pnl_if_closed_abs = abs(pnl_if_closed)
+                    if pnl_if_closed < 0.0 and pnl_if_closed_abs > unstuck_allowances[pside]:
+                        close_qty = -min(
+                            self.positions[symbol][pside]["size"],
+                            max(
+                                min_entry_qty,
+                                pbr.round_dn(
+                                    abs(close_qty) * (unstuck_allowances[pside] / pnl_if_closed_abs),
+                                    self.qty_steps[symbol],
+                                ),
+                            ),
+                        )
+                    return symbol, (close_qty, close_price, "unstuck_close_long")
+            elif pside == "short":
+                min_entry_qty = calc_min_entry_qty(
+                    close_price,
+                    False,
+                    self.c_mults[symbol],
+                    self.qty_steps[symbol],
+                    self.min_qtys[symbol],
+                    self.min_costs[symbol],
+                )
+                close_qty = min(
+                    abs(self.positions[symbol][pside]["size"]),
+                    max(
+                        min_entry_qty,
+                        pbr.round_dn(
+                            pbr.cost_to_qty(
+                                self.balance
+                                * self.config_get(
+                                    ["bot", pside, "wallet_exposure_limit"], symbol=symbol
+                                )
+                                * self.config_get(["bot", pside, "unstuck_close_pct"], symbol=symbol),
+                                close_price,
+                                self.c_mults[symbol],
+                            ),
+                            self.qty_steps[symbol],
+                        ),
+                    ),
+                )
+                if close_qty != 0.0:
+                    pnl_if_closed = getattr(pbr, f"calc_pnl_{pside}")(
+                        self.positions[symbol][pside]["price"],
+                        close_price,
+                        close_qty,
+                        self.c_mults[symbol],
+                    )
+                    pnl_if_closed_abs = abs(pnl_if_closed)
+                    if pnl_if_closed < 0.0 and pnl_if_closed_abs > unstuck_allowances[pside]:
+                        close_qty = min(
+                            abs(self.positions[symbol][pside]["size"]),
+                            max(
+                                min_entry_qty,
+                                pbr.round_dn(
+                                    close_qty * (unstuck_allowances[pside] / pnl_if_closed_abs),
+                                    self.qty_steps[symbol],
+                                ),
+                            ),
+                        )
+                    return symbol, (close_qty, close_price, "unstuck_close_short")
+        return "", (0.0, 0.0, "")
+
     def calc_unstucking_close(self, ideal_orders):
         if len(self.pnls) == 0:
             return "", (0.0, 0.0, "")
@@ -1685,8 +1757,8 @@ class Passivbot:
                     ) > self.config_get(
                         ["bot", pside, "unstuck_threshold"], symbol=symbol
                     ):
-                        pprice_diff = calc_pprice_diff(
-                            pside,
+                        pprice_diff = pbr.calc_pprice_diff_int(
+                            self.pside_int_map[pside],
                             self.positions[symbol][pside]["price"],
                             self.get_last_price(symbol),
                         )
