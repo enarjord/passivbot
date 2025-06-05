@@ -392,14 +392,18 @@ class BybitBot(Passivbot):
                     self.cca.set_margin_mode(
                         "cross",
                         symbol=symbol,
-                        params={"leverage": int(self.config_get(["live", "leverage"], symbol=symbol))},
+                        params={
+                            "leverage": int(self.config_get(["live", "leverage"], symbol=symbol))
+                        },
                     )
                 )
             except Exception as e:
                 logging.error(f"{symbol}: error setting cross mode {e}")
             try:
                 coros_to_call_lev[symbol] = asyncio.create_task(
-                    self.cca.set_leverage(int(self.config_get(["live", "leverage"], symbol=symbol)), symbol=symbol)
+                    self.cca.set_leverage(
+                        int(self.config_get(["live", "leverage"], symbol=symbol)), symbol=symbol
+                    )
                 )
             except Exception as e:
                 logging.error(f"{symbol}: a error setting leverage {e}")
