@@ -931,7 +931,6 @@ class Passivbot:
         for symbol in self.positions:
             if self.positions[symbol][pside]["size"] != 0.0:
                 forced_mode = self.get_forced_PB_mode(pside, symbol)
-                print("debug get_current_n_positions forced_mode", symbol, forced_mode)
                 if forced_mode in ["normal", "graceful_stop"]:
                     n_positions += 1
                 else:
