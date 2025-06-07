@@ -547,7 +547,9 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
     add_missing_keys_recursively(template, result, verbose=verbose)
     result = parse_overrides(result, verbose=verbose)
     remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose)
-    remove_unused_keys_recursively(template["optimize"], result["optimize"], verbose=verbose)
+    remove_unused_keys_recursively(
+        template["optimize"]["bounds"], result["optimize"]["bounds"], verbose=verbose
+    )
 
     if not live_only:
         # unneeded adjustments if running live
