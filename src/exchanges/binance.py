@@ -287,9 +287,12 @@ class BinanceBot(Passivbot):
             limit = 1000
         else:
             limit = min(limit, 1000)
-        if start_time is None and end_time is None:
-            return await self.fetch_pnl(limit=limit)
+        if end_time is None:
+            if start_time is None:
+                return await self.fetch_pnl(limit=limit)
+            end_time = self.get_exchange_time() + 1000 * 60 * 60
         all_fetched = {}
+        week = 1000 * 60 * 60 * 24 * 7
         while True:
             fetched = await self.fetch_pnl(start_time, end_time, limit)
             if fetched == []:
@@ -298,10 +301,17 @@ class BinanceBot(Passivbot):
                 break
             for elm in fetched:
                 all_fetched[elm["tradeId"]] = elm
-            if start_time and end_time and len(fetched) < limit:
-                # means fetched all pnls inside [start_time, end_time] range
-                break
-            logging.info(f"fetched pnls until {ts_to_date_utc(fetched[-1]['timestamp'])[:19]}")
+            if len(fetched) < limit:
+                if start_time:
+                    if end_time:
+                        if end_time - start_time < week:
+                            break
+                    else:
+                        if self.get_exchange_time() - start_time < week:
+                            break
+            logging.info(
+                f"fetched {len(fetched)} pnls from {ts_to_date_utc(fetched[0]['timestamp'])[:19]} until {ts_to_date_utc(fetched[-1]['timestamp'])[:19]}"
+            )
             start_time = fetched[-1]["timestamp"]
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
 
