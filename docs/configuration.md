@@ -237,3 +237,9 @@ Limits can be set in the config file under `optimize.limits` or passed via CLI u
   "penalize_if_lower_than_adg": 0.001
 }
 ```
+
+##### CLI arg Example:
+
+```
+python3 src/optimize.py --limits "--penalize_if_lower_than_btc_omega_ratio 3.0 --penalize_if_greater_than_loss_profit_ratio 0.5"
+```
