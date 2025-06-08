@@ -328,6 +328,7 @@ def load_override_config(config, coin):
                 return load_config(npath, verbose=False)
     except Exception as e:
         print(f"error loading config {path} {e}")
+        traceback.print_exc()
     return {}
 
 
