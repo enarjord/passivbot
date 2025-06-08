@@ -151,10 +151,13 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
 - **coin_overrides**:
   - Specify full or partial configs for individual coins, overriding values from master config.
   - Format: {"COIN1": overrides1, "COIN2": overrides2}
-  - overrides be given as:
-    - config as dict diff, e.g. `{"bot": {"long": {"close_grid_markup_start": 0.005}}, "live": {"forced_mode_long": "panic"}}`, which would replace config.bot.long.close_grid_markup_start and config.live.forced_mode_long for given coin.
-    - full path to alternate config file, from which all allowed parameters would replace master parameters for the given coin.
-    - filename for alternate config file from the same directory as master config file.
+  - Whole configs may be loaded with parameter "override_config_path". May either be full path to config, or filename for alternate config file from the same directory as master config file.
+  - Specific override parameters take precedence over override parameters loaded from external config.
+  - Only a subset of config parameters are eligible for overriding master config.
+  - Examples:
+    - `{"COIN1": {"override_config_path": "path/to/override_config.json"}}` -- Will attempt to load "path/to/override_config.json" and apply all eligible parameters from there for COIN1
+    - `{"COIN2": {"override_config_path": "path/to/other_override_config.json", {"bot": {"long": {"close_grid_markup_start": 0.005}}}}}` -- Will attempt to load `"path/to/other_override_config.json"` first, and apply `{"bot": {"long": {"close_grid_markup_start": 0.005}}}` after.
+    - `{"COIN3": {"bot": {"short": {"entry_initial_qty_pct": 0.01}}, "live": {"forced_mode_long": "panic"}}}` -- Will apply given overrides for COIN3.
 - **coin_flags**:
   - Specify flags for individual coins, overriding values from bot config.
   - Example: `coin_flags: {"ETH": "-sm n -lm gs", "XRP": "-lm p -lc path/to/other_config.json"}` forces short mode to normal and long mode to graceful stop for ETH; sets long mode to panic and uses another config for XRP.
