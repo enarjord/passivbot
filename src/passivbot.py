@@ -924,7 +924,7 @@ class Passivbot:
             self.config["bot"][pside]["n_positions"],
             len(self.approved_coins_minus_ignored_coins[pside]),
         )
-        return max(0, max_n_positions)
+        return max(0, int(round(max_n_positions)))
 
     def get_current_n_positions(self, pside):
         n_positions = 0
