@@ -84,25 +84,6 @@ class HyperliquidBot(Passivbot):
         self.n_decimal_places = 6
         self.n_significant_figures = 5
 
-    async def watch_balance(self):
-        # hyperliquid ccxt watch balance not supported.
-        # relying instead on periodic REST updates
-        res = None
-        while True:
-            try:
-                if self.stop_websocket:
-                    break
-                res = await self.cca.fetch_balance()
-                res[self.quote]["total"] = float(res["info"]["marginSummary"]["accountValue"]) - sum(
-                    [float(x["position"]["unrealizedPnl"]) for x in res["info"]["assetPositions"]]
-                )
-                self.handle_balance_update(res)
-                await asyncio.sleep(10)
-            except Exception as e:
-                logging.error(f"exception watch_balance {res} {e}")
-                traceback.print_exc()
-                await asyncio.sleep(1)
-
     async def watch_orders(self):
         res = None
         while True:
