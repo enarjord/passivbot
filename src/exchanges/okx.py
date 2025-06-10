@@ -1,5 +1,6 @@
 from passivbot import Passivbot, logging
 from uuid import uuid4
+import passivbot_rust as pbr
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
 
@@ -61,23 +62,6 @@ class OKXBot(Passivbot):
             self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
 
-    async def watch_balance(self):
-        while True:
-            try:
-                if self.stop_websocket:
-                    break
-                res = await self.ccp.watch_balance()
-                res["USDT"]["total"] = float(
-                    [x for x in res["info"]["data"][0]["details"] if x["ccy"] == self.quote][0][
-                        "cashBal"
-                    ]
-                )
-                self.handle_balance_update(res)
-            except Exception as e:
-                print(f"exception watch_balance", e)
-                traceback.print_exc()
-                await asyncio.sleep(1)
-
     async def watch_orders(self):
         while True:
             try:
@@ -116,11 +100,29 @@ class OKXBot(Passivbot):
                 self.cca.fetch_positions(),
                 self.cca.fetch_balance(),
             )
+            balance = 0.0
+            quote_cash_balance = 0.0
             for elm in fetched_balance["info"]["data"]:
                 for elm2 in elm["details"]:
-                    if elm2["ccy"] == self.quote:
-                        balance = float(elm2["cashBal"])
-                        break
+                    if elm2["collateralEnabled"]:
+                        if elm2["ccy"] == self.quote:
+                            quote_cash_balance = float(elm2["cashBal"])
+                            balance += quote_cash_balance
+                        else:
+                            balance += float(elm2["cashBal"]) * self.get_last_price(
+                                self.coin_to_symbol(elm2["ccy"])
+                            )
+            if balance != quote_cash_balance:
+                # means non USDT collateral is used
+                if not hasattr(self, "previous_rounded_balance"):
+                    self.previous_rounded_balance = balance
+                self.previous_rounded_balance = pbr.hysteresis_rounding(
+                    balance,
+                    self.previous_rounded_balance,
+                    self.hyst_rounding_balance_pct,
+                    self.hyst_rounding_balance_h,
+                )
+                balance = self.previous_rounded_balance
             fetched_positions = [x for x in fetched_positions if x["marginMode"] == "cross"]
             for i in range(len(fetched_positions)):
                 fetched_positions[i]["position_side"] = fetched_positions[i]["side"]
@@ -240,57 +242,27 @@ class OKXBot(Passivbot):
         return await self.execute_multiple(orders, "execute_cancellation")
 
     async def execute_order(self, order: dict) -> dict:
-        return self.execute_orders([order])
+        order_type = order["type"] if "type" in order else "limit"
+        executed = await self.cca.create_order(
+            symbol=order["symbol"],
+            type=order_type,
+            side=order["side"],
+            amount=abs(order["qty"]),
+            price=order["price"],
+            params={
+                "postOnly": self.config["live"]["time_in_force"] == "post_only",
+                "positionSide": order["position_side"],
+                "reduceOnly": order["reduce_only"],
+                "hedged": True,
+                "tag": self.broker_code,
+                "clOrdId": order["custom_id"],
+                "marginMode": "cross",
+            },
+        )
+        return executed
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        if len(orders) == 0:
-            return []
-        to_execute = []
-        orders = orders
-        for order in orders:
-            to_execute.append(
-                {
-                    "type": "limit",
-                    "symbol": order["symbol"],
-                    "side": order["side"],
-                    "ordType": (
-                        "post_only"
-                        if self.config["live"]["time_in_force"] == "post_only"
-                        else "limit"
-                    ),
-                    "amount": abs(order["qty"]),
-                    "tdMode": "cross",
-                    "price": order["price"],
-                    "params": {
-                        "tag": self.broker_code,
-                        "posSide": order["position_side"],
-                        "clOrdId": order["custom_id"],
-                    },
-                }
-            )
-        executed = None
-        try:
-            executed = await self.cca.create_orders(to_execute)
-            return executed
-        except Exception as e:
-            logging.error(f"error executing orders {orders} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return []
-
-        to_return = []
-        for order, res in zip(orders, executed):
-            try:
-                if "status" in res and res["status"] == "rejected":
-                    logging.info(f"order rejected: {res}")
-                for key in order:
-                    if key not in res or res[key] is None:
-                        res[key] = order[key]
-                to_return.append(res)
-            except Exception as e:
-                logging.error(f"error executing order {res} {e}")
-                traceback.print_exc()
-        return to_return
+        return await self.execute_multiple(orders, "execute_order")
 
     async def update_exchange_config_by_symbols(self, symbols: [str]):
         coros_to_call_margin_mode = {}
