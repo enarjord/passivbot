@@ -293,6 +293,45 @@ async def prepare_hlcvs_mss(config, exchange):
     return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices
 
 
+def prep_backtest_args_new(config, mss, exchange, exchange_params=None, backtest_params=None):
+    coins = sorted(set(config["backtest"]["coins"][exchange]))
+    bot_params_list = []
+    bot_params_template = deepcopy(config["bot"])
+    for pside in bot_params_template:
+        n_positions = max(0, min(int(round(bot_params_template[pside]["n_positions"])), len(coins)))
+        bot_params_template[pside]["wallet_exposure_limit"] = (
+            bot_params_template[pside]["total_wallet_exposure_limit"] / n_positions
+            if n_positions > 0
+            else 0.0
+        )
+    for coin in coins:
+        coin_specific_bot_params = deepcopy(bot_params_template)
+        if coin in config.get("coin_overrides", {}):
+            for pside in ["long", "short"]:
+                for key in config["coin_overrides"][coin].get("bot", {}).get(pside, {}):
+                    coin_specific_bot_params[pside][key] = config["coin_overrides"][coin]["bot"][
+                        pside
+                    ][key]
+                coin_specific_bot_params[pside]["is_forced_active"] = (
+                    config["coin_overrides"].get("live", {}).get(f"forced_mode_{pside}", "")
+                    == "normal"
+                )
+        bot_params_list.append(coin_specific_bot_params)
+    if exchange_params is None:
+        exchange_params = [
+            {k: mss[coin][k] for k in ["qty_step", "price_step", "min_qty", "min_cost", "c_mult"]}
+            for coin in coins
+        ]
+    if backtest_params is None:
+        backtest_params = {
+            "starting_balance": config["backtest"]["starting_balance"],
+            "maker_fee": mss[coins[0]]["maker"],
+            "coins": coins,
+            "use_btc_collateral": config["backtest"].get("use_btc_collateral", False),
+        }
+    return bot_params_list, exchange_params, backtest_params
+
+
 def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_params=None):
     coins = sorted(set(config["backtest"]["coins"][exchange]))
     bot_params = {k: config["bot"][k].copy() for k in ["long", "short"]}
@@ -341,6 +380,37 @@ def expand_analysis(analysis_usd, analysis_btc, fills, config):
         },
         **analysis_usd,
     }
+
+
+def run_backtest_new(hlcvs, mss, config: dict, exchange: str, btc_usd_prices):
+    bot_params_list, exchange_params, backtest_params = prep_backtest_args_new(config, mss, exchange)
+    if not config["backtest"]["use_btc_collateral"]:
+        btc_usd_prices = np.ones(len(btc_usd_prices))
+    logging.info(f"Backtesting {exchange}...")
+    sts = utc_ms()
+
+    # Use context managers for both HLCV and BTC/USD shared memory files
+    with create_shared_memory_file(hlcvs) as shared_memory_file, create_shared_memory_file(
+        btc_usd_prices
+    ) as btc_usd_shared_memory_file:
+        fills, equities_usd, equities_btc, analysis_usd, analysis_btc = pbr.run_backtest(
+            shared_memory_file,
+            hlcvs.shape,
+            hlcvs.dtype.str,
+            btc_usd_shared_memory_file,
+            btc_usd_prices.dtype.str,
+            bot_params_list,
+            exchange_params,
+            backtest_params,
+        )
+
+    logging.info(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
+    return (
+        fills,
+        equities_usd,
+        equities_btc,
+        expand_analysis(analysis_usd, analysis_btc, fills, config),
+    )
 
 
 def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices):
