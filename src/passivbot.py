@@ -379,7 +379,6 @@ class Passivbot:
             seen.add(key)
 
         # format custom_id
-        to_create = self.format_custom_ids(to_create)
         if self.debug_mode:
             if to_cancel:
                 print(f"would cancel {len(to_cancel)} orders")
@@ -409,7 +408,7 @@ class Passivbot:
             return to_cancel, to_create
 
     async def execute_orders_parent(self, orders: [dict]) -> [dict]:
-        orders = orders[: self.config["live"]["max_n_creations_per_batch"]]
+        orders = self.format_custom_ids(orders)[: self.config["live"]["max_n_creations_per_batch"]]
         res = await self.execute_orders(orders)
         if not res:
             return
