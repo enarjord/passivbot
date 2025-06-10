@@ -57,18 +57,6 @@ class BybitBot(Passivbot):
             self.price_steps[symbol] = elm["precision"]["price"]
             self.c_mults[symbol] = elm["contractSize"]
 
-    async def watch_balance(self):
-        while True:
-            try:
-                if self.stop_websocket:
-                    break
-                res = await self.ccp.watch_balance()
-                self.handle_balance_update(res)
-            except Exception as e:
-                print(f"exception watch_balance", e)
-                traceback.print_exc()
-                await asyncio.sleep(1)
-
     async def watch_orders(self):
         while True:
             try:
