@@ -333,6 +333,12 @@ class Passivbot:
         while not self.stop_signal_received:
             try:
                 now = utc_ms()
+                if self.config["live"].get("sanity_log", False):
+                    if not hasattr(self, "last_sanity_log_ts"):
+                        self.last_sanity_log_ts = 0
+                    if now - self.last_sanity_log_ts >= 60000:  # 1 minute
+                        self.log_sanity_check()
+                        self.last_sanity_log_ts = now
                 if now - self.previous_REST_update_ts > 1000 * 60:
                     self.previous_REST_update_ts = utc_ms()
                     await self.prepare_for_execution()
@@ -2349,6 +2355,58 @@ class Passivbot:
         except Exception as e:
             logging.error(f"error with refresh_approved_ignored_coins_lists {e}")
             traceback.print_exc()
+
+    def log_sanity_check(self):
+        try:
+            ideal_orders = self.calc_ideal_orders()
+            recent_fills = self.pnls[-10:] if hasattr(self, "pnls") and self.pnls else []
+
+            log_message = f"Sanity Log at {ts_to_date_utc(utc_ms())}:\n"
+            log_message += f"- Balance: {self.balance}\n"
+            log_message += f"- Active Symbols: {', '.join(self.active_symbols)}\n"
+
+            log_message += "- Positions:\n"
+            for symbol in self.positions:
+                pos = self.positions[symbol]
+                log_message += f"  - {symbol}: long: {pos['long']['size']} @ {pos['long']['price']}, short: {pos['short']['size']} @ {pos['short']['price']}\n"
+
+            log_message += "- Open Orders:\n"
+            for symbol in self.open_orders:
+                orders = self.open_orders[symbol]
+                log_message += f"  - {symbol}: {len(orders)} orders\n"
+                for order in orders:
+                    log_message += f"    - {order['side']} {order['qty']} @ {order['price']} (id: {order['id']})\n"
+
+            log_message += "- Ideal Orders:\n"
+            for symbol in ideal_orders:
+                orders = ideal_orders[symbol]
+                log_message += f"  - {symbol}: {len(orders)} orders\n"
+                for order in orders:
+                    log_message += f"    - {order['side']} {order['qty']} @ {order['price']} (type: {order['type']})\n"
+
+            log_message += "- Recent Fills (last 10):\n"
+            if recent_fills:
+                log_message += f"  {'Symbol':<15} {'Side':<5} {'Pos':<5} {'Price':>10} {'Amount':>10} {'Cost':>10} {'PnL':>10} {'Timestamp':<19}\n"
+                for fill in recent_fills:
+                    symbol = fill.get("symbol", "")
+                    side = fill.get("side", "")
+                    pos = fill.get("position_side", "")
+                    price = fill.get("price", 0.0)
+                    amount = fill.get("amount", 0.0)
+                    cost = fill.get("cost", 0.0)
+                    pnl = fill.get("pnl", 0.0)
+                    timestamp_str = fill["datetime"][:19].replace("T", " ")
+                    log_message += f"  {symbol:<15} {side:<5} {pos:<5} {price:>10.5f} {amount:>10.1f} {cost:>10.2f} {pnl:>10.2f} {timestamp_str:<19}\n"
+            else:
+                log_message += "  No recent fills.\n"
+
+            log_message += "- PB_modes:\n"
+            log_message += f"  - long: {self.PB_modes['long']}\n"
+            log_message += f"  - short: {self.PB_modes['short']}\n"
+
+            logging.info(log_message)
+        except Exception as e:
+            logging.error(f"Error in sanity check: {e}")
 
 
 def setup_bot(config):
