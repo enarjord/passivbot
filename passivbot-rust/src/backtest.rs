@@ -126,7 +126,7 @@ pub struct Backtest<'a> {
     backtest_params: BacktestParams,
     pub balance: Balance,
     n_coins: usize,
-    ema_alphas: EmaAlphas,
+    ema_alphas: Vec<EmaAlphas>,
     emas: Vec<EMAs>,
     positions: Positions,
     open_orders: OpenOrdersNew,
@@ -201,7 +201,19 @@ impl<'a> Backtest<'a> {
                 as usize,
         );
 
-        let mut bot_params = vec![bot_params_pair_cloned.clone(); n_coins];
+        // Ensure we have the right number of bot_params
+        let bot_params = if bot_params.len() == n_coins {
+            bot_params
+        } else {
+            panic!(
+                "bot_params length ({}) doesn't match n_coins ({})",
+                bot_params.len(),
+                n_coins
+            );
+        };
+
+        // Calculate EMA alphas for each coin
+        let ema_alphas: Vec<EmaAlphas> = bot_params.iter().map(|bp| calc_ema_alphas(bp)).collect();
 
         Backtest {
             hlcvs,
@@ -212,7 +224,7 @@ impl<'a> Backtest<'a> {
             backtest_params: backtest_params.clone(),
             balance,
             n_coins,
-            ema_alphas: calc_ema_alphas(&bot_params_pair),
+            ema_alphas,
             emas: initial_emas,
             positions: Positions::default(),
             open_orders: OpenOrdersNew::default(),
@@ -1538,10 +1550,10 @@ impl<'a> Backtest<'a> {
         for i in 0..self.n_coins {
             let close_price = self.hlcvs[[k, i, CLOSE]];
 
-            let long_alphas = &self.ema_alphas.long.alphas;
-            let long_alphas_inv = &self.ema_alphas.long.alphas_inv;
-            let short_alphas = &self.ema_alphas.short.alphas;
-            let short_alphas_inv = &self.ema_alphas.short.alphas_inv;
+            let long_alphas = &self.ema_alphas[i].long.alphas;
+            let long_alphas_inv = &self.ema_alphas[i].long.alphas_inv;
+            let short_alphas = &self.ema_alphas[i].short.alphas;
+            let short_alphas_inv = &self.ema_alphas[i].short.alphas_inv;
 
             let emas = &mut self.emas[i];
 
