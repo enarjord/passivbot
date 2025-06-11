@@ -671,7 +671,7 @@ class Evaluator:
             self.seen_hashes[individual_hash] = None
         analyses = {}
         for exchange in self.exchanges:
-            bot_params, _, _ = prep_backtest_args(
+            bot_params_list, _, _ = prep_backtest_args(
                 config,
                 [],
                 exchange,
@@ -684,7 +684,7 @@ class Evaluator:
                 self.hlcvs_dtypes[exchange].str,
                 self.btc_usd_shared_memory_files[exchange],
                 self.btc_usd_dtypes[exchange].str,
-                bot_params,
+                bot_params_list,
                 self.exchange_params[exchange],
                 self.backtest_params[exchange],
             )
