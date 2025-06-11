@@ -120,8 +120,8 @@ pub struct RollingVolumeSum {
 pub struct Backtest<'a> {
     hlcvs: &'a ArrayView3<'a, f64>,
     btc_usd_prices: &'a ArrayView1<'a, f64>, // Change to ArrayView1 (1D view)
-    bot_params: Vec<BotParamsPair>,
     bot_params_pair: BotParamsPair,
+    bot_params: Vec<BotParamsPair>,
     exchange_params_list: Vec<ExchangeParams>,
     backtest_params: BacktestParams,
     pub balance: Balance,
@@ -153,7 +153,7 @@ impl<'a> Backtest<'a> {
     pub fn new(
         hlcvs: &'a ArrayView3<'a, f64>,
         btc_usd_prices: &'a ArrayView1<'a, f64>, // Updated parameter type
-        bot_params_pair: BotParamsPair,
+        bot_params: Vec<BotParamsPair>,
         exchange_params_list: Vec<ExchangeParams>,
         backtest_params: &BacktestParams,
     ) -> Self {
@@ -189,7 +189,8 @@ impl<'a> Backtest<'a> {
         let mut equities = Equities::default();
         equities.usd.push(backtest_params.starting_balance);
         equities.btc.push(balance.btc); // Initial BTC equity
-        let mut bot_params_pair_cloned = bot_params_pair.clone();
+        let mut bot_params_pair_cloned = bot_params[0].clone();
+        let bot_params_pair = bot_params[0].clone();
         bot_params_pair_cloned.long.n_positions = n_coins.min(bot_params_pair.long.n_positions);
         bot_params_pair_cloned.short.n_positions = n_coins.min(bot_params_pair.short.n_positions);
         let n_eligible_long = bot_params_pair_cloned.long.n_positions.max(
