@@ -205,32 +205,39 @@ class BitgetBot(Passivbot):
         if limit:
             params["limit"] = min(100, limit)
         side_pos_side_map = {"buy": "long", "sell": "short"}
-        all_data = []
+        data_d = {}
         while True:
             fetched = await self.cca.private_mix_get_v2_mix_order_fill_history(params)
             end_id = fetched["data"]["endId"]
             data = fetched["data"]["fillList"]
             if data is None:
-                # print("debug d")
-                break
-            for x in data:
-                all_data.append(x)
-                all_data[-1]["pnl"] = float(x["profit"])
-                all_data[-1]["id"] = x["tradeId"]
-                all_data[-1]["timestamp"] = float(x["cTime"])
-                all_data[-1]["datetime"] = ts_to_date_utc(all_data[-1]["timestamp"])
-                all_data[-1]["position_side"] = side_pos_side_map[x["side"]]
-                all_data[-1]["symbol"] = self.get_symbol_id_inv(x["symbol"])
-            if start_time is None:
                 # print("debug a")
                 break
-            if all_data[-1]["timestamp"] < start_time:
+            if not data:
                 # print("debug b")
                 break
-            print(f"debug c fetched pnls {len(data)} {all_data[-1]['datetime']}")
-            params["endTime"] = int(all_data[-1]["timestamp"])
-        all_data_d = {calc_hash(x): x for x in all_data}  # deduplicate
-        return sorted(all_data_d.values(), key=lambda x: x["timestamp"])
+            with_hashes = {calc_hash(x): x for x in data}
+            if all([h in data_d for h in with_hashes]):
+                # print("debug c")
+                break
+            for h, x in with_hashes.items():
+                data_d[h] = x
+                data_d[h]["pnl"] = float(x["profit"])
+                data_d[h]["id"] = x["tradeId"]
+                data_d[h]["timestamp"] = float(x["cTime"])
+                data_d[h]["datetime"] = ts_to_date_utc(data_d[h]["timestamp"])
+                data_d[h]["position_side"] = side_pos_side_map[x["side"]]
+                data_d[h]["symbol"] = self.get_symbol_id_inv(x["symbol"])
+            if start_time is None:
+                # print("debug d")
+                break
+            last_ts = float(data[-1]["cTime"])
+            if last_ts < start_time:
+                # print("debug e")
+                break
+            logging.info(f"fetched {len(data)} fills until {ts_to_date_utc(last_ts)[:19]}")
+            params["endTime"] = int(last_ts)
+        return sorted(data_d.values(), key=lambda x: x["timestamp"])
 
     async def fetch_pnls_old(self, start_time=None, end_time=None, limit=None):
         wait_between_fetches_minimum_seconds = 0.5
