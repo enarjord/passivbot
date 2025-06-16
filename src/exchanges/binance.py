@@ -327,14 +327,16 @@ class BinanceBot(Passivbot):
                 week = 1000 * 60 * 60 * 24 * 7.0
                 start_time_sub = start_time
                 while True:
+                    param_start_time = int(min(start_time_sub, self.get_exchange_time() - 1000 * 60))
+                    param_end_time = max(
+                        param_start_time, int(min(end_time, start_time_sub + week * 0.999))
+                    )
                     fills = await self.cca.fetch_my_trades(
                         symbol,
                         limit=limit,
                         params={
-                            "startTime": int(
-                                min(start_time_sub, self.get_exchange_time() - 1000 * 60)
-                            ),
-                            "endTime": int(min(end_time, start_time_sub + week * 0.999)),
+                            "startTime": param_start_time,
+                            "endTime": param_end_time,
                         },
                     )
                     if not fills:
