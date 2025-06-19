@@ -602,6 +602,49 @@ def format_size(size_bytes: int) -> str:
     return f"{size_bytes:.2f} PB"
 
 
+def compare_dicts_table(dict1, dict2, dict1_name="Dict 1", dict2_name="Dict 2"):
+    """
+    Compare two dictionaries with identical keys in a neat table format.
+    
+    Args:
+        dict1: First dictionary
+        dict2: Second dictionary  
+        dict1_name: Name for first dictionary column
+        dict2_name: Name for second dictionary column
+    """
+    # Get all keys (assuming identical keys)
+    keys = list(dict1.keys())
+    
+    # Calculate column widths
+    key_width = max(len("Key"), max(len(str(k)) for k in keys))
+    val1_width = max(len(dict1_name), max(len(str(dict1[k])) for k in keys))
+    val2_width = max(len(dict2_name), max(len(str(dict2[k])) for k in keys))
+    
+    # Create separator line
+    separator = "+" + "-" * (key_width + 2) + "+" + "-" * (val1_width + 2) + "+" + "-" * (val2_width + 2) + "+"
+    
+    # Print table
+    print(separator)
+    print(f"| {'Key':<{key_width}} | {dict1_name:<{val1_width}} | {dict2_name:<{val2_width}} |")
+    print(separator)
+    
+    for key in sorted(keys):
+        val1 = str(pbr.round_dynamic(dict1[key], 4))
+        val2 = str(pbr.round_dynamic(dict2[key], 4))
+        print(f"| {str(key):<{key_width}} | {val1:<{val1_width}} | {val2:<{val2_width}} |")
+    
+    print(separator)
+
+
+
+
+
+
+
+
+
+
+
 def main():
     pass
 
