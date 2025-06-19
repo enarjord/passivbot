@@ -369,7 +369,6 @@ impl<'a> Backtest<'a> {
         for k in 1..(n_timesteps - 1) {
             self.check_for_fills(k);
             self.update_emas(k);
-            let mut balance_changed = false;
             if self.balance.use_btc_collateral {
                 self.balance.usd_total =
                     (self.balance.btc * self.btc_usd_prices[k]) + self.balance.usd;
@@ -380,9 +379,6 @@ impl<'a> Backtest<'a> {
                     0.02,
                     0.5,
                 );
-                if new_usd_total_rounded != self.balance.usd_total_rounded {
-                    balance_changed = true;
-                }
                 self.balance.usd_total_rounded = new_usd_total_rounded;
             }
             if self.balance.usd != prev_balance
