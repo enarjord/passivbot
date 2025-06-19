@@ -391,10 +391,11 @@ impl<'a> Backtest<'a> {
             }
         }
 
+        let mut prev_balance = 0.0;
+
         for k in 1..(n_timesteps - 1) {
             self.check_for_fills(k);
             self.update_emas(k);
-            let mut balance_changed = false;
             if self.balance.use_btc_collateral {
                 self.balance.usd_total =
                     (self.balance.btc * self.btc_usd_prices[k]) + self.balance.usd;
@@ -405,17 +406,17 @@ impl<'a> Backtest<'a> {
                     0.02,
                     0.5,
                 );
-                if new_usd_total_rounded != self.balance.usd_total_rounded {
-                    balance_changed = true;
-                }
                 self.balance.usd_total_rounded = new_usd_total_rounded;
             }
-            if balance_changed || !self.did_fill_long.is_empty() || !self.did_fill_short.is_empty()
+            if self.balance.usd != prev_balance
+                || !self.did_fill_long.is_empty()
+                || !self.did_fill_short.is_empty()
             {
                 self.update_open_orders_any_fill(k);
             } else {
                 self.update_open_orders_no_fill(k);
             }
+            prev_balance = self.balance.usd;
             self.update_equities(k);
         }
         (self.fills.clone(), self.equities.clone())
