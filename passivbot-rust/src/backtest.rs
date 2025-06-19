@@ -105,6 +105,7 @@ pub struct TrailingEnabled {
     short: bool,
 }
 
+#[derive(Debug)]
 pub struct TradingEnabled {
     long: bool,
     short: bool,
@@ -219,7 +220,7 @@ impl<'a> Backtest<'a> {
             hlcvs,
             btc_usd_prices,
             bot_params_pair: bot_params_pair_cloned,
-            bot_params: bot_params,
+            bot_params: bot_params.clone(),
             exchange_params_list,
             backtest_params: backtest_params.clone(),
             balance,
@@ -235,9 +236,13 @@ impl<'a> Backtest<'a> {
             fills: Vec::new(),
             is_stuck: IsStuck::default(),
             trading_enabled: TradingEnabled {
-                long: bot_params_pair.long.wallet_exposure_limit != 0.0
+                long: bot_params
+                    .iter()
+                    .any(|bp| bp.long.wallet_exposure_limit != 0.0)
                     && bot_params_pair.long.n_positions > 0,
-                short: bot_params_pair.short.wallet_exposure_limit != 0.0
+                short: bot_params
+                    .iter()
+                    .any(|bp| bp.short.wallet_exposure_limit != 0.0)
                     && bot_params_pair.short.n_positions > 0,
             },
             trailing_enabled: TrailingEnabled {
@@ -392,7 +397,7 @@ impl<'a> Backtest<'a> {
         }
 
         let mut prev_balance = 0.0;
-
+        println!("{:?}", self.trading_enabled);
         for k in 1..(n_timesteps - 1) {
             self.check_for_fills(k);
             self.update_emas(k);
@@ -408,7 +413,7 @@ impl<'a> Backtest<'a> {
                 );
                 self.balance.usd_total_rounded = new_usd_total_rounded;
             }
-            if self.balance.usd != prev_balance
+            if prev_balance != self.balance.usd
                 || !self.did_fill_long.is_empty()
                 || !self.did_fill_short.is_empty()
             {
@@ -1379,6 +1384,21 @@ impl<'a> Backtest<'a> {
 
     fn update_open_orders_any_fill(&mut self, k: usize) {
         if self.trading_enabled.long {
+            /*
+
+            // with Vec<TrailingEnabled>
+            let mut positions_long_indices: Vec<usize> =
+                self.positions.long.keys().cloned().collect();
+            positions_long_indices.sort();
+            for idx in &positions_long_indices {
+                if self.trailing_enabled[idx].long {
+                    if !self.did_fill_long.contains(&idx) {
+                        self.update_trailing_prices(k, *idx, LONG);
+                    }
+                }
+            }
+            */
+
             if self.trailing_enabled.long {
                 let mut positions_long_indices: Vec<usize> =
                     self.positions.long.keys().cloned().collect();
