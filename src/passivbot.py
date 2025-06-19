@@ -158,7 +158,10 @@ class Passivbot:
         self.create_ccxt_sessions()
         self.debug_mode = False
         self.balance_threshold = 1.0  # don't create orders if balance is less than threshold
-        self.mimic_backtest_1m_delay = self.config["live"].get("mimic_backtest_1m_delay", False)
+        # there are issues with mimic_backtest_1m_delay. Disabled until fixed (or feature removed)
+        self.mimic_backtest_1m_delay = (
+            False  # self.config["live"].get("mimic_backtest_1m_delay", False)
+        )
         self.hyst_rounding_balance_pct = 0.02
         self.hyst_rounding_balance_h = 0.5
 
