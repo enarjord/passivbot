@@ -1,3 +1,5 @@
+-r requirements-rust.txt
+-r requirements-live.txt
 matplotlib==3.5.1
 prospector==1.6.0
 colorama==0.4.4
@@ -5,22 +7,11 @@ mkdocs==1.4.0
 mkdocs-material==8.1.8
 pymdown-extensions==9.1
 tqdm==4.62.3
-python-dateutil==2.8.2
-numba==0.59.1; python_version>='3.9'
-numba==0.58.1; python_version<'3.9'
-pandas==1.5.3
 PyYAML==6.0
-asyncio==3.4.3
 pyecharts==1.9.1
 deap==1.4.1
 websockets==10.4
 aiohttp==3.11.18
-numpy==1.22.4
-ccxt==4.4.85
-hjson==3.0.2
-prettytable==3.0.0
-maturin==1.5.1
-sortedcontainers==2.4.0
 dictdiffer==0.9.0
 openpyxl==3.1.5
 msgpack==1.1.0

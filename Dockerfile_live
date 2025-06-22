@@ -1,0 +1,54 @@
+# Stage 1: Build Rust extensions
+FROM python:3.10-slim-bullseye AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install dependencies required to compile Rust + Python extensions
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    python3-dev \
+    pkg-config \
+    libssl-dev \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+
+WORKDIR /app
+
+# Copy only files needed for building the Rust extension
+COPY requirements-rust.txt requirements-rust.txt
+COPY passivbot-rust/Cargo.toml passivbot-rust/Cargo.toml
+COPY passivbot-rust/src passivbot-rust/src
+
+# Install maturin and build the extension
+RUN pip install --no-cache-dir -r requirements-rust.txt \
+    && cd passivbot-rust \
+    && maturin build --release
+
+# Stage 2: Final minimal image
+FROM python:3.10-slim-bullseye
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV SKIP_RUST_COMPILE=true
+
+WORKDIR /app
+
+# Copy runtime source files
+COPY requirements-live.txt requirements-live.txt
+COPY broker_codes.hjson broker_codes.hjson
+COPY src src
+
+# Copy prebuilt wheel from the builder stage
+COPY --from=builder /app/passivbot-rust/target/wheels/*.whl /tmp/
+
+# Install Python packages (including Rust extension wheel)
+RUN pip install --no-cache-dir /tmp/*.whl \
+    && pip install --no-cache-dir -r requirements-live.txt \
+    && rm -rf /tmp/* ~/.cache/pip
+
+# Default command
+CMD ["python", "src/main.py"]

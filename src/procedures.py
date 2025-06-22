@@ -1429,7 +1429,7 @@ def load_ccxt_version():
         # Get the directory of the current script
         script_dir = os.path.dirname(os.path.abspath(__file__))
         # Construct the path to the requirements.txt file
-        requirements_path = os.path.join(script_dir, "..", "requirements.txt")
+        requirements_path = os.path.join(script_dir, "..", "requirements-live.txt")
 
         # Open and read the requirements.txt file
         with open(requirements_path, "r") as f:
