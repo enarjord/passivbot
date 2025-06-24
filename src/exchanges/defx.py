@@ -169,13 +169,14 @@ class DefxBot(Passivbot):
                 raise Exception(f"invalid side {res[i]}")
         return res
 
-    async def execute_orders(self, orders: dict) -> dict:
+    async def execute_orders(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(orders, "execute_order")
 
     async def execute_order(self, order: dict) -> dict:
         # order_type = order["type"] if "type" in order else "limit"
         order_type = "limit"  # only limit orders
         reduce_only = False  # reduceOnly=True gives server error
+        # reduce_only = order["reduce_only"] if "reduce_only" in order else False
         params = {
             "symbol": order["symbol"],
             "type": order_type,
@@ -187,8 +188,9 @@ class DefxBot(Passivbot):
                 "reduceOnly": reduce_only,
             },
         }
-        print(params)
+        # print(params)
         executed = await self.cca.create_order(**params)
+        # print(executed)
         if "info" in executed and "orderId" in executed["info"]:
             for k in ["price", "id", "side", "position_side"]:
                 if k not in executed or executed[k] is None:
