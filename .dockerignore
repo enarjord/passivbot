@@ -2,3 +2,29 @@ backtests/
 caches/
 historical_data/
 optimize_results/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Ignore Rust artifacts
+target/
+Cargo.lock
+
+# Ignore VCS and editor files
+.git/
+*.swp
+*.swo
+*.bak
+*.tmp
+.DS_Store
+.idea/
+.vscode/
