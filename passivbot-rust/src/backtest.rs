@@ -397,7 +397,6 @@ impl<'a> Backtest<'a> {
         }
 
         let mut prev_balance = 0.0;
-        println!("{:?}", self.trading_enabled);
         for k in 1..(n_timesteps - 1) {
             self.check_for_fills(k);
             self.update_emas(k);
