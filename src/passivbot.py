@@ -160,8 +160,8 @@ class Passivbot:
         self.mimic_backtest_1m_delay = (
             False  # self.config["live"].get("mimic_backtest_1m_delay", False)
         )
-        self.hyst_rounding_balance_pct = 0.02
-        self.hyst_rounding_balance_h = 0.5
+        self.hyst_rounding_balance_pct = 0.05
+        self.hyst_rounding_balance_h = 0.75
 
     async def start_bot(self):
         logging.info(f"Starting bot {self.exchange}...")
@@ -1057,10 +1057,18 @@ class Passivbot:
                     self.recent_fill = True
                     self.previous_REST_update_ts = 0
                     self.remove_order(upd, source="WS", reason="   filled")
-                elif upd["status"].lower() in ["canceled", "cancelled", "expired", "rejected"]:
+                elif upd["status"].lower() in [
+                    "canceled",
+                    "cancelled",
+                    "expired",
+                    "rejected",
+                    "finished",
+                ]:
                     # remove order from open_orders
                     self.remove_order(
-                        upd, source="WS", reason=upd["status"].replace("canceled", "cancelled")
+                        upd,
+                        source="WS",
+                        reason=upd["status"].lower().replace("canceled", "cancelled"),
                     )
                 elif upd["status"] == "open":
                     # add order to open_orders
