@@ -268,6 +268,57 @@ impl<'a> Backtest<'a> {
         }
     }
 
+    pub fn run(&mut self) -> (Vec<Fill>, Equities) {
+        let n_timesteps = self.hlcvs.shape()[0];
+        for idx in 0..self.n_coins {
+            self.trailing_prices
+                .long
+                .insert(idx, TrailingPriceBundle::default());
+            self.trailing_prices
+                .short
+                .insert(idx, TrailingPriceBundle::default());
+        }
+
+        // --- find first & last valid candle for every coin (binary-search) ---
+        let (first_valid, last_valid) = find_valid_timestamp_bounds(&self.hlcvs);
+        for idx in 0..self.n_coins {
+            self.first_valid_timestamps.insert(idx, first_valid[idx]);
+            if n_timesteps - last_valid[idx] > 1400 {
+                // add only if delisted more than one day before last timestamp
+                self.last_valid_timestamps.insert(idx, last_valid[idx]); // keep same name for callers
+            }
+        }
+
+        let mut prev_balance = 0.0;
+        for k in 1..(n_timesteps - 1) {
+            self.check_for_fills(k);
+            self.update_emas(k);
+            if self.balance.use_btc_collateral {
+                self.balance.usd_total =
+                    (self.balance.btc * self.btc_usd_prices[k]) + self.balance.usd;
+                self.balance.btc_total = self.balance.usd_total / self.btc_usd_prices[k];
+                let new_usd_total_rounded = hysteresis_rounding(
+                    self.balance.usd_total,
+                    self.balance.usd_total_rounded,
+                    0.02,
+                    0.5,
+                );
+                self.balance.usd_total_rounded = new_usd_total_rounded;
+            }
+            if prev_balance != self.balance.usd
+                || !self.did_fill_long.is_empty()
+                || !self.did_fill_short.is_empty()
+            {
+                self.update_open_orders_any_fill(k);
+            } else {
+                self.update_open_orders_no_fill(k);
+            }
+            prev_balance = self.balance.usd;
+            self.update_equities(k);
+        }
+        (self.fills.clone(), self.equities.clone())
+    }
+
     #[inline(always)]
     fn bp(&self, coin_idx: usize, pside: usize) -> &BotParams {
         match pside {
@@ -373,57 +424,6 @@ impl<'a> Backtest<'a> {
 
         noisinesses.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
         noisinesses.into_iter().map(|(_, idx)| idx).collect()
-    }
-
-    pub fn run(&mut self) -> (Vec<Fill>, Equities) {
-        let n_timesteps = self.hlcvs.shape()[0];
-        for idx in 0..self.n_coins {
-            self.trailing_prices
-                .long
-                .insert(idx, TrailingPriceBundle::default());
-            self.trailing_prices
-                .short
-                .insert(idx, TrailingPriceBundle::default());
-        }
-
-        // --- find first & last valid candle for every coin (binary-search) ---
-        let (first_valid, last_valid) = find_valid_timestamp_bounds(&self.hlcvs);
-        for idx in 0..self.n_coins {
-            self.first_valid_timestamps.insert(idx, first_valid[idx]);
-            if n_timesteps - last_valid[idx] > 1400 {
-                // add only if delisted more than one day before last timestamp
-                self.last_valid_timestamps.insert(idx, last_valid[idx]); // keep same name for callers
-            }
-        }
-
-        let mut prev_balance = 0.0;
-        for k in 1..(n_timesteps - 1) {
-            self.check_for_fills(k);
-            self.update_emas(k);
-            if self.balance.use_btc_collateral {
-                self.balance.usd_total =
-                    (self.balance.btc * self.btc_usd_prices[k]) + self.balance.usd;
-                self.balance.btc_total = self.balance.usd_total / self.btc_usd_prices[k];
-                let new_usd_total_rounded = hysteresis_rounding(
-                    self.balance.usd_total,
-                    self.balance.usd_total_rounded,
-                    0.02,
-                    0.5,
-                );
-                self.balance.usd_total_rounded = new_usd_total_rounded;
-            }
-            if prev_balance != self.balance.usd
-                || !self.did_fill_long.is_empty()
-                || !self.did_fill_short.is_empty()
-            {
-                self.update_open_orders_any_fill(k);
-            } else {
-                self.update_open_orders_no_fill(k);
-            }
-            prev_balance = self.balance.usd;
-            self.update_equities(k);
-        }
-        (self.fills.clone(), self.equities.clone())
     }
 
     fn create_state_params(&self, k: usize, idx: usize, pside: usize) -> StateParams {
