@@ -13,6 +13,7 @@ import re
 from collections import defaultdict
 from collections.abc import Sized
 import sys
+import passivbot_rust as pbr
 from typing import Union, Optional, Set, Any, List
 from pathlib import Path
 import ccxt.async_support as ccxta
