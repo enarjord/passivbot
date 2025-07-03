@@ -1302,7 +1302,8 @@ class Passivbot:
                 if hasattr(self, "tickers") and symbol in self.tickers:
                     res = self.tickers[symbol]["last"]
                     if res is None:
-                        logging.info(f"debug get_last_price {symbol} price from tickers is null")
+                        if self.debug_mode:
+                            logging.info(f"debug get_last_price {symbol} price from tickers is null")
                         return null_replace
                     return res
             except Exception as e:
@@ -1311,7 +1312,8 @@ class Passivbot:
             if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
                 res = self.ohlcvs_1m[symbol].peekitem(-1)[1][4]
                 if res is None:
-                    logging.info(f"debug get_last_price {symbol} price from ohlcvs_1m is null")
+                    if self.debug_mode:
+                        logging.info(f"debug get_last_price {symbol} price from ohlcvs_1m is null")
                     return null_replace
                 return res
         except Exception as e:
