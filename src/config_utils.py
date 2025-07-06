@@ -644,38 +644,85 @@ def read_external_coins_lists(filepath) -> dict:
     return {"long": items, "short": items}
 
 
-def normalize_coins_source(src):  # -> dict[str, list[str]]: # python3.8 incompatible
+def normalize_coins_source(src):
     """
-    Turn   str | list | {'long':[..],'short':[...]} | ''   into
-    {'long':[...], 'short':[...]}   (comma expansion included).
+    Always return: {'long': [symbols…], 'short': [symbols…]}
+    – Handles:
+        • direct coin lists or comma-separated strings
+        • lists/tuples containing paths or strings
+        • dicts with 'long' / 'short' keys whose values may themselves
+          be strings, lists, or paths to external lists
     """
 
-    def expand(seq):
+    # --------------------------------------------------------------------- #
+    #  Helpers                                                              #
+    # --------------------------------------------------------------------- #
+    def _expand(seq):
+        """Flatten seq and split any comma-delimited strings it contains."""
         out = []
         for item in seq:
-            out.extend(x.strip() for x in str(item).split(",") if x.strip())
+            if isinstance(item, (list, tuple, set)):
+                out.extend(_expand(item))  # recurse
+            elif isinstance(item, str):
+                out.extend(x.strip() for x in item.split(",") if x.strip())
+            elif item is not None:
+                out.append(str(item).strip())
         return out
 
-    # dict already?
-    if isinstance(src, dict) and sorted(src) == ["long", "short"]:
-        return {side: expand(src[side]) for side in src}
+    def _load_if_file(x):
+        """
+        If *x* (or *x[0]* when x is a single-item list/tuple) is a
+        readable file path, load it with `read_external_coins_lists`.
+        Otherwise just return *x* unchanged.
+        """
+        if isinstance(x, str) and os.path.exists(x):
+            return read_external_coins_lists(x)
 
-    # list / tuple?
-    if isinstance(src, (list, tuple)):
-        if len(src) == 1 and isinstance(src[0], str) and os.path.exists(src[0]):
-            return read_external_coins_lists(src[0])
-        return {"long": expand(src), "short": expand(src)}
+        if (
+            isinstance(x, (list, tuple))
+            and len(x) == 1
+            and isinstance(x[0], str)
+            and os.path.exists(x[0])
+        ):
+            return read_external_coins_lists(x[0])
 
-    # string?
-    if isinstance(src, str):
-        if src == "":
-            return {"long": [], "short": []}
-        if os.path.exists(src):
-            return read_external_coins_lists(src)
-        return {"long": expand([src]), "short": expand([src])}
+        return x
 
-    # anything else – empty fallback
-    return {"long": [], "short": []}
+    def _normalize_side(value, side):
+        """
+        Resolve one *long*/*short* entry:
+        1. Load from file if necessary.
+        2. If the loader returned a dict, pluck the correct side.
+        3. Flatten & split with _expand so we end up with a clean list.
+        """
+        value = _load_if_file(value)
+
+        if isinstance(value, dict) and sorted(value.keys()) == ["long", "short"]:
+            value = value.get(side, [])
+
+        # guarantee a sensible sequence for _expand
+        if not isinstance(value, (list, tuple)):
+            value = [value]
+
+        return _expand(value)
+
+    # --------------------------------------------------------------------- #
+    #  Main logic                                                           #
+    # --------------------------------------------------------------------- #
+    src = _load_if_file(src)  # try to load *src* itself
+
+    # Case 1 – already a dict with 'long' & 'short' keys
+    if isinstance(src, dict) and sorted(src.keys()) == ["long", "short"]:
+        return {
+            "long": _normalize_side(src.get("long", []), "long"),
+            "short": _normalize_side(src.get("short", []), "short"),
+        }
+
+    # Case 2 – anything else is treated the same for both sides
+    return {
+        "long": _normalize_side(src, "long"),
+        "short": _normalize_side(src, "short"),
+    }
 
 
 def parse_limits_string(limits_str: Union[str, dict]) -> dict:
