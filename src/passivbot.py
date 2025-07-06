@@ -2335,7 +2335,7 @@ class Passivbot:
                             expanded_coins.append(item)
                     coins = expanded_coins
 
-                symbols = [self.coin_to_symbol(coin) for coin in coins]
+                symbols = [self.coin_to_symbol(coin) for coin in coins if coin]
                 symbols = set([s for s in symbols if s])
             symbols_already = getattr(self, k_coins)[pside]
             if symbols and symbols_already != symbols:
