@@ -984,7 +984,12 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
             logging.info(f"coin {coin} missing from first_timestamps_unified, skipping")
             continue
         if minimum_coin_age_days > 0.0:
-            first_ts = await om.get_first_timestamp(coin)
+            try:
+                first_ts = await om.get_first_timestamp(coin)
+            except Exception as e:
+                logging.error(f"error with get_first_timestamp for {coin} {e}. Skipping")
+                traceback.print_exc()
+                continue  
             if first_ts >= end_ts:
                 logging.info(
                     f"{exchange} Coin {coin} too young, start date {ts_to_date_utc(first_ts)}. Skipping"
