@@ -139,6 +139,8 @@ pub struct Backtest<'a> {
     is_stuck: IsStuck,
     trading_enabled: TradingEnabled,
     trailing_enabled: Vec<TrailingEnabled>,
+    any_trailing_long: bool,
+    any_trailing_short: bool,
     equities: Equities,
     last_valid_timestamps: HashMap<usize, usize>,
     first_valid_timestamps: HashMap<usize, usize>,
@@ -213,6 +215,8 @@ impl<'a> Backtest<'a> {
                     || bp.short.entry_trailing_grid_ratio != 0.0,
             })
             .collect();
+        let any_trailing_long = trailing_enabled.iter().any(|te| te.long);
+        let any_trailing_short = trailing_enabled.iter().any(|te| te.short);
 
         Backtest {
             hlcvs,
@@ -244,6 +248,8 @@ impl<'a> Backtest<'a> {
                     && bot_params_pair.short.n_positions > 0,
             },
             trailing_enabled,
+            any_trailing_long,
+            any_trailing_short,
             equities: equities,
             last_valid_timestamps: HashMap::new(),
             first_valid_timestamps: HashMap::new(),
@@ -287,6 +293,7 @@ impl<'a> Backtest<'a> {
             self.check_for_fills(k);
             self.update_emas(k);
             self.update_rounded_balance(k);
+            self.update_trailing_prices(k);
             if prev_balance != self.balance.usd
                 || !self.did_fill_long.is_empty()
                 || !self.did_fill_short.is_empty()
@@ -596,7 +603,6 @@ impl<'a> Backtest<'a> {
                         //if order.qty != 0.0 && self.get_position
                         if self.positions.long.contains_key(&idx) {
                             self.did_fill_long.insert(idx);
-                            self.reset_trailing_prices(idx, LONG);
                             self.process_close_fill_long(k, idx, &order);
                         }
                     }
@@ -613,7 +619,6 @@ impl<'a> Backtest<'a> {
                     }
                     for order in entries_to_process {
                         self.did_fill_long.insert(idx);
-                        self.reset_trailing_prices(idx, LONG);
                         self.process_entry_fill_long(k, idx, &order);
                     }
                 }
@@ -637,7 +642,6 @@ impl<'a> Backtest<'a> {
                     for order in closes_to_process {
                         if self.positions.short.contains_key(&idx) {
                             self.did_fill_short.insert(idx);
-                            self.reset_trailing_prices(idx, SHORT);
                             self.process_close_fill_short(k, idx, &order);
                         }
                     }
@@ -654,7 +658,6 @@ impl<'a> Backtest<'a> {
                     }
                     for order in entries_to_process {
                         self.did_fill_short.insert(idx);
-                        self.reset_trailing_prices(idx, SHORT);
                         self.process_entry_fill_short(k, idx, &order);
                     }
                 }
@@ -942,36 +945,67 @@ impl<'a> Backtest<'a> {
         )
     }
 
-    fn reset_trailing_prices(&mut self, idx: usize, pside: usize) {
-        let trailing_price_bundle = if pside == LONG {
-            self.trailing_prices.long.entry(idx).or_default()
-        } else {
-            self.trailing_prices.short.entry(idx).or_default()
-        };
-        *trailing_price_bundle = TrailingPriceBundle::default();
-    }
+    fn update_trailing_prices(&mut self, k: usize) {
+        // ----- LONG side -----
+        if self.trading_enabled.long && self.any_trailing_long {
+            for (&idx, _) in &self.positions.long {
+                if !self.trailing_enabled[idx].long {
+                    continue;
+                }
+                let bundle = self.trailing_prices.long.entry(idx).or_default();
+                if self.did_fill_long.contains(&idx) {
+                    *bundle = TrailingPriceBundle::default();
+                } else {
+                    let low = self.hlcvs[[k, idx, LOW]];
+                    let high = self.hlcvs[[k, idx, HIGH]];
+                    let close = self.hlcvs[[k, idx, CLOSE]];
 
-    fn update_trailing_prices(&mut self, k: usize, idx: usize, pside: usize) {
-        let trailing_price_bundle = if pside == LONG {
-            self.trailing_prices.long.entry(idx).or_default()
-        } else {
-            self.trailing_prices.short.entry(idx).or_default()
-        };
-        if self.hlcvs[[k, idx, LOW]] < trailing_price_bundle.min_since_open {
-            trailing_price_bundle.min_since_open = self.hlcvs[[k, idx, LOW]];
-            trailing_price_bundle.max_since_min = self.hlcvs[[k, idx, CLOSE]];
-        } else {
-            trailing_price_bundle.max_since_min = trailing_price_bundle
-                .max_since_min
-                .max(self.hlcvs[[k, idx, HIGH]]);
+                    if low < bundle.min_since_open {
+                        bundle.min_since_open = low;
+                        bundle.max_since_min = close;
+                    } else {
+                        bundle.max_since_min = bundle.max_since_min.max(high);
+                    }
+
+                    if high > bundle.max_since_open {
+                        bundle.max_since_open = high;
+                        bundle.min_since_max = close;
+                    } else {
+                        bundle.min_since_max = bundle.min_since_max.min(low);
+                    }
+                }
+            }
         }
-        if self.hlcvs[[k, idx, HIGH]] > trailing_price_bundle.max_since_open {
-            trailing_price_bundle.max_since_open = self.hlcvs[[k, idx, HIGH]];
-            trailing_price_bundle.min_since_max = self.hlcvs[[k, idx, CLOSE]];
-        } else {
-            trailing_price_bundle.min_since_max = trailing_price_bundle
-                .min_since_max
-                .min(self.hlcvs[[k, idx, LOW]]);
+
+        // ----- SHORT side -----
+        if self.trading_enabled.short && self.any_trailing_short {
+            for (&idx, _) in &self.positions.short {
+                if !self.trailing_enabled[idx].short {
+                    continue;
+                }
+                let bundle = self.trailing_prices.short.entry(idx).or_default();
+                if self.did_fill_short.contains(&idx) {
+                    *bundle = TrailingPriceBundle::default();
+                } else {
+                    let low = self.hlcvs[[k, idx, LOW]];
+                    let high = self.hlcvs[[k, idx, HIGH]];
+                    let close = self.hlcvs[[k, idx, CLOSE]];
+
+                    if low < bundle.min_since_open {
+                        bundle.min_since_open = low;
+                        bundle.max_since_min = close;
+                    } else {
+                        bundle.max_since_min = bundle.max_since_min.max(high);
+                    }
+
+                    if high > bundle.max_since_open {
+                        bundle.max_since_open = high;
+                        bundle.min_since_max = close;
+                    } else {
+                        bundle.min_since_max = bundle.min_since_max.min(low);
+                    }
+                }
+            }
         }
     }
 
@@ -1382,19 +1416,6 @@ impl<'a> Backtest<'a> {
 
     fn update_open_orders_any_fill(&mut self, k: usize) {
         if self.trading_enabled.long {
-            let any_trailing_long = self.trailing_enabled.iter().any(|te| te.long);
-
-            if any_trailing_long {
-                let mut positions_long_indices: Vec<usize> =
-                    self.positions.long.keys().cloned().collect();
-                positions_long_indices.sort();
-                for idx in &positions_long_indices {
-                    if self.trailing_enabled[*idx].long && !self.did_fill_long.contains(idx) {
-                        self.update_trailing_prices(k, *idx, LONG);
-                    }
-                }
-            }
-
             self.update_actives(k, LONG);
             self.open_orders
                 .long
@@ -1407,19 +1428,6 @@ impl<'a> Backtest<'a> {
             }
         }
         if self.trading_enabled.short {
-            let any_trailing_short = self.trailing_enabled.iter().any(|te| te.short);
-
-            if any_trailing_short {
-                let mut positions_short_indices: Vec<usize> =
-                    self.positions.short.keys().cloned().collect();
-                positions_short_indices.sort();
-                for idx in &positions_short_indices {
-                    if self.trailing_enabled[*idx].short && !self.did_fill_short.contains(idx) {
-                        self.update_trailing_prices(k, *idx, SHORT);
-                    }
-                }
-            }
-
             self.update_actives(k, SHORT);
             self.open_orders
                 .short
@@ -1463,11 +1471,6 @@ impl<'a> Backtest<'a> {
             let mut positions_long_indices: Vec<usize> =
                 self.positions.long.keys().cloned().collect();
             positions_long_indices.sort();
-            for idx in &positions_long_indices {
-                if self.trailing_enabled[*idx].long && !self.did_fill_long.contains(idx) {
-                    self.update_trailing_prices(k, *idx, LONG);
-                }
-            }
             let mut actives_without_pos = Vec::<usize>::new();
             if positions_long_indices.len() < self.bot_params_pair.long.n_positions {
                 actives_without_pos = self.update_actives(k, LONG);
@@ -1499,12 +1502,6 @@ impl<'a> Backtest<'a> {
             let mut positions_short_indices: Vec<usize> =
                 self.positions.short.keys().cloned().collect();
             positions_short_indices.sort();
-            for idx in &positions_short_indices {
-                if self.trailing_enabled[*idx].short && !self.did_fill_short.contains(idx) {
-                    self.update_trailing_prices(k, *idx, SHORT);
-                }
-            }
-
             let mut actives_without_pos = Vec::<usize>::new();
             if positions_short_indices.len() < self.bot_params_pair.short.n_positions {
                 actives_without_pos = self.update_actives(k, SHORT);
