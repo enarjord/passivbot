@@ -138,7 +138,7 @@ pub struct Backtest<'a> {
     fills: Vec<Fill>,
     is_stuck: IsStuck,
     trading_enabled: TradingEnabled,
-    trailing_enabled: TrailingEnabled,
+    trailing_enabled: Vec<TrailingEnabled>,
     equities: Equities,
     last_valid_timestamps: HashMap<usize, usize>,
     first_valid_timestamps: HashMap<usize, usize>,
@@ -153,7 +153,7 @@ pub struct Backtest<'a> {
 impl<'a> Backtest<'a> {
     pub fn new(
         hlcvs: &'a ArrayView3<'a, f64>,
-        btc_usd_prices: &'a ArrayView1<'a, f64>, // Updated parameter type
+        btc_usd_prices: &'a ArrayView1<'a, f64>,
         bot_params: Vec<BotParamsPair>,
         exchange_params_list: Vec<ExchangeParams>,
         backtest_params: &BacktestParams,
@@ -163,16 +163,11 @@ impl<'a> Backtest<'a> {
         balance.use_btc_collateral = btc_usd_prices.iter().any(|&p| p != 1.0);
 
         // Initialize balances
-        balance.btc = if balance.use_btc_collateral {
-            backtest_params.starting_balance / btc_usd_prices[0]
+        if balance.use_btc_collateral {
+            balance.btc = backtest_params.starting_balance / btc_usd_prices[0];
         } else {
-            0.0
-        };
-        balance.usd = if balance.use_btc_collateral {
-            0.0
-        } else {
-            backtest_params.starting_balance
-        };
+            balance.usd = backtest_params.starting_balance;
+        }
         balance.usd_total = backtest_params.starting_balance;
         balance.usd_total_rounded = balance.usd_total;
 
@@ -189,37 +184,40 @@ impl<'a> Backtest<'a> {
             .collect();
         let mut equities = Equities::default();
         equities.usd.push(backtest_params.starting_balance);
-        equities.btc.push(balance.btc); // Initial BTC equity
-        let mut bot_params_pair_cloned = bot_params[0].clone();
+        equities.btc.push(balance.btc);
+
+        // init bot params
+        let mut bot_params_master = bot_params[0].clone();
+        bot_params_master.long.n_positions = n_coins.min(bot_params_master.long.n_positions);
+        bot_params_master.short.n_positions = n_coins.min(bot_params_master.short.n_positions);
+
         let bot_params_pair = bot_params[0].clone();
-        bot_params_pair_cloned.long.n_positions = n_coins.min(bot_params_pair.long.n_positions);
-        bot_params_pair_cloned.short.n_positions = n_coins.min(bot_params_pair.short.n_positions);
-        let n_eligible_long = bot_params_pair_cloned.long.n_positions.max(
-            (n_coins as f64 * (1.0 - bot_params_pair.long.filter_volume_drop_pct)).round() as usize,
-        );
-        let n_eligible_short = bot_params_pair_cloned.short.n_positions.max(
-            (n_coins as f64 * (1.0 - bot_params_pair.short.filter_volume_drop_pct)).round()
+        let n_eligible_long = bot_params_master.long.n_positions.max(
+            (n_coins as f64 * (1.0 - bot_params_master.long.filter_volume_drop_pct)).round()
                 as usize,
         );
-
-        // Ensure we have the right number of bot_params
-        let bot_params = if bot_params.len() == n_coins {
-            bot_params
-        } else {
-            panic!(
-                "bot_params length ({}) doesn't match n_coins ({})",
-                bot_params.len(),
-                n_coins
-            );
-        };
+        let n_eligible_short = bot_params_master.short.n_positions.max(
+            (n_coins as f64 * (1.0 - bot_params_master.short.filter_volume_drop_pct)).round()
+                as usize,
+        );
 
         // Calculate EMA alphas for each coin
         let ema_alphas: Vec<EmaAlphas> = bot_params.iter().map(|bp| calc_ema_alphas(bp)).collect();
 
+        let trailing_enabled: Vec<TrailingEnabled> = bot_params
+            .iter()
+            .map(|bp| TrailingEnabled {
+                long: bp.long.close_trailing_grid_ratio != 0.0
+                    || bp.long.entry_trailing_grid_ratio != 0.0,
+                short: bp.short.close_trailing_grid_ratio != 0.0
+                    || bp.short.entry_trailing_grid_ratio != 0.0,
+            })
+            .collect();
+
         Backtest {
             hlcvs,
             btc_usd_prices,
-            bot_params_pair: bot_params_pair_cloned,
+            bot_params_pair: bot_params_master,
             bot_params: bot_params.clone(),
             exchange_params_list,
             backtest_params: backtest_params.clone(),
@@ -245,12 +243,7 @@ impl<'a> Backtest<'a> {
                     .any(|bp| bp.short.wallet_exposure_limit != 0.0)
                     && bot_params_pair.short.n_positions > 0,
             },
-            trailing_enabled: TrailingEnabled {
-                long: bot_params_pair.long.close_trailing_grid_ratio != 0.0
-                    || bot_params_pair.long.entry_trailing_grid_ratio != 0.0,
-                short: bot_params_pair.short.close_trailing_grid_ratio != 0.0
-                    || bot_params_pair.short.entry_trailing_grid_ratio != 0.0,
-            },
+            trailing_enabled,
             equities: equities,
             last_valid_timestamps: HashMap::new(),
             first_valid_timestamps: HashMap::new(),
@@ -293,18 +286,7 @@ impl<'a> Backtest<'a> {
         for k in 1..(n_timesteps - 1) {
             self.check_for_fills(k);
             self.update_emas(k);
-            if self.balance.use_btc_collateral {
-                self.balance.usd_total =
-                    (self.balance.btc * self.btc_usd_prices[k]) + self.balance.usd;
-                self.balance.btc_total = self.balance.usd_total / self.btc_usd_prices[k];
-                let new_usd_total_rounded = hysteresis_rounding(
-                    self.balance.usd_total,
-                    self.balance.usd_total_rounded,
-                    0.02,
-                    0.5,
-                );
-                self.balance.usd_total_rounded = new_usd_total_rounded;
-            }
+            self.update_rounded_balance(k);
             if prev_balance != self.balance.usd
                 || !self.did_fill_long.is_empty()
                 || !self.did_fill_short.is_empty()
@@ -317,6 +299,23 @@ impl<'a> Backtest<'a> {
             self.update_equities(k);
         }
         (self.fills.clone(), self.equities.clone())
+    }
+
+    #[inline(always)]
+    fn update_rounded_balance(&mut self, k: usize) {
+        if self.balance.use_btc_collateral {
+            // 1. raw, unrounded totals
+            self.balance.usd_total = (self.balance.btc * self.btc_usd_prices[k]) + self.balance.usd;
+            self.balance.btc_total = self.balance.usd_total / self.btc_usd_prices[k];
+
+            // 2. apply hysteresis rounding
+            self.balance.usd_total_rounded = hysteresis_rounding(
+                self.balance.usd_total,
+                self.balance.usd_total_rounded,
+                0.02, // round size
+                0.5,  // stickiness
+            );
+        }
     }
 
     #[inline(always)]
@@ -1383,31 +1382,19 @@ impl<'a> Backtest<'a> {
 
     fn update_open_orders_any_fill(&mut self, k: usize) {
         if self.trading_enabled.long {
-            /*
+            let any_trailing_long = self.trailing_enabled.iter().any(|te| te.long);
 
-            // with Vec<TrailingEnabled>
-            let mut positions_long_indices: Vec<usize> =
-                self.positions.long.keys().cloned().collect();
-            positions_long_indices.sort();
-            for idx in &positions_long_indices {
-                if self.trailing_enabled[idx].long {
-                    if !self.did_fill_long.contains(&idx) {
-                        self.update_trailing_prices(k, *idx, LONG);
-                    }
-                }
-            }
-            */
-
-            if self.trailing_enabled.long {
+            if any_trailing_long {
                 let mut positions_long_indices: Vec<usize> =
                     self.positions.long.keys().cloned().collect();
                 positions_long_indices.sort();
                 for idx in &positions_long_indices {
-                    if !self.did_fill_long.contains(&idx) {
+                    if self.trailing_enabled[*idx].long && !self.did_fill_long.contains(idx) {
                         self.update_trailing_prices(k, *idx, LONG);
                     }
                 }
             }
+
             self.update_actives(k, LONG);
             self.open_orders
                 .long
@@ -1420,16 +1407,19 @@ impl<'a> Backtest<'a> {
             }
         }
         if self.trading_enabled.short {
-            if self.trailing_enabled.short {
+            let any_trailing_short = self.trailing_enabled.iter().any(|te| te.short);
+
+            if any_trailing_short {
                 let mut positions_short_indices: Vec<usize> =
                     self.positions.short.keys().cloned().collect();
                 positions_short_indices.sort();
                 for idx in &positions_short_indices {
-                    if !self.did_fill_short.contains(&idx) {
+                    if self.trailing_enabled[*idx].short && !self.did_fill_short.contains(idx) {
                         self.update_trailing_prices(k, *idx, SHORT);
                     }
                 }
             }
+
             self.update_actives(k, SHORT);
             self.open_orders
                 .short
@@ -1473,11 +1463,9 @@ impl<'a> Backtest<'a> {
             let mut positions_long_indices: Vec<usize> =
                 self.positions.long.keys().cloned().collect();
             positions_long_indices.sort();
-            if self.trailing_enabled.long {
-                for idx in &positions_long_indices {
-                    if !self.did_fill_long.contains(idx) {
-                        self.update_trailing_prices(k, *idx, LONG);
-                    }
+            for idx in &positions_long_indices {
+                if self.trailing_enabled[*idx].long && !self.did_fill_long.contains(idx) {
+                    self.update_trailing_prices(k, *idx, LONG);
                 }
             }
             let mut actives_without_pos = Vec::<usize>::new();
@@ -1511,13 +1499,12 @@ impl<'a> Backtest<'a> {
             let mut positions_short_indices: Vec<usize> =
                 self.positions.short.keys().cloned().collect();
             positions_short_indices.sort();
-            if self.trailing_enabled.short {
-                for idx in &positions_short_indices {
-                    if !self.did_fill_short.contains(idx) {
-                        self.update_trailing_prices(k, *idx, SHORT);
-                    }
+            for idx in &positions_short_indices {
+                if self.trailing_enabled[*idx].short && !self.did_fill_short.contains(idx) {
+                    self.update_trailing_prices(k, *idx, SHORT);
                 }
             }
+
             let mut actives_without_pos = Vec::<usize>::new();
             if positions_short_indices.len() < self.bot_params_pair.short.n_positions {
                 actives_without_pos = self.update_actives(k, SHORT);
@@ -1596,10 +1583,7 @@ fn find_valid_timestamp_bounds(hlcvs: &ArrayView3<f64>) -> (Vec<usize>, Vec<usiz
 
     for idx in 0..n_coins {
         // helper closure to keep the predicate in one place
-        let is_invalid = |k: usize| {
-            let row = hlcvs.slice(s![k, idx, ..]);
-            row[HIGH] == row[LOW] && row[HIGH] == row[CLOSE] && row[VOLUME] < 0.0
-        };
+        let is_invalid = |k: usize| hlcvs[[k, idx, VOLUME]] < 0.0;
 
         /* ---------- first valid ---------- */
         let (mut lo, mut hi) = (0usize, n_ts - 1);
