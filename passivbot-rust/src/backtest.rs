@@ -529,51 +529,63 @@ impl<'a> Backtest<'a> {
         self.equities.btc.push(equity_btc);
     }
 
-    fn update_actives(&mut self, k: usize, pside: usize) -> Vec<usize> {
-        // Calculate all the information we need before borrowing
-        let (positions, n_positions) = match pside {
-            LONG => (&self.positions.long, self.bot_params_pair.long.n_positions),
-            SHORT => (
-                &self.positions.short,
-                self.bot_params_pair.short.n_positions,
-            ),
-            _ => panic!("Invalid pside"),
-        };
+    fn update_actives_long(&mut self, k: usize) -> Vec<usize> {
+        let n_positions = self.bot_params_pair.long.n_positions;
 
-        // Sort positions to ensure stable iteration
-        let mut current_positions: Vec<usize> = positions.keys().cloned().collect();
+        let mut current_positions: Vec<usize> = self.positions.long.keys().cloned().collect();
         current_positions.sort();
-        let mut preferred_coins = Vec::new();
-
-        // Only calculate preferred coins if there are open slots
-        if current_positions.len() < n_positions {
-            preferred_coins = self.calc_preferred_coins(k, pside);
-        }
-
-        // Now we can mutably borrow self.actives
-        let actives = match pside {
-            LONG => &mut self.actives.long,
-            SHORT => &mut self.actives.short,
-            _ => unreachable!(),
+        let preferred_coins = if current_positions.len() < n_positions {
+            self.calc_preferred_coins(k, LONG)
+        } else {
+            Vec::new()
         };
 
+        let actives = &mut self.actives.long;
         actives.clear();
 
-        // Add all markets with existing positions
-        for &market_idx in &current_positions {
-            actives.insert(market_idx);
+        for &idx in &current_positions {
+            actives.insert(idx);
         }
 
         let mut actives_without_pos = Vec::new();
-
-        // Add additional markets based on preferred_coins
-        for &market_idx in &preferred_coins {
-            if actives.len() < n_positions {
-                if actives.insert(market_idx) {
-                    actives_without_pos.push(market_idx);
-                }
-            } else {
+        for &idx in &preferred_coins {
+            if actives.len() >= n_positions {
                 break;
+            }
+            if actives.insert(idx) {
+                actives_without_pos.push(idx);
+            }
+        }
+
+        actives_without_pos
+    }
+
+    fn update_actives_short(&mut self, k: usize) -> Vec<usize> {
+        let n_positions = self.bot_params_pair.short.n_positions;
+
+        let mut current_positions: Vec<usize> = self.positions.short.keys().cloned().collect();
+        current_positions.sort();
+
+        let preferred_coins = if current_positions.len() < n_positions {
+            self.calc_preferred_coins(k, SHORT)
+        } else {
+            Vec::new()
+        };
+
+        let actives = &mut self.actives.short;
+        actives.clear();
+
+        for &idx in &current_positions {
+            actives.insert(idx);
+        }
+
+        let mut actives_without_pos = Vec::new();
+        for &idx in &preferred_coins {
+            if actives.len() >= n_positions {
+                break;
+            }
+            if actives.insert(idx) {
+                actives_without_pos.push(idx);
             }
         }
 
@@ -1191,7 +1203,7 @@ impl<'a> Backtest<'a> {
     }
 
     fn order_filled(&self, k: usize, idx: usize, order: &Order) -> bool {
-        // check if will fill in next candle
+        // check if filled in current candle (pass k+1 to check if will fill in next candle)
         if order.qty > 0.0 {
             self.hlcvs[[k, idx, LOW]] < order.price
         } else if order.qty < 0.0 {
@@ -1416,7 +1428,7 @@ impl<'a> Backtest<'a> {
 
     fn update_open_orders_any_fill(&mut self, k: usize) {
         if self.trading_enabled.long {
-            self.update_actives(k, LONG);
+            self.update_actives_long(k);
             self.open_orders
                 .long
                 .retain(|&idx, _| self.actives.long.contains(&idx));
@@ -1428,7 +1440,7 @@ impl<'a> Backtest<'a> {
             }
         }
         if self.trading_enabled.short {
-            self.update_actives(k, SHORT);
+            self.update_actives_short(k);
             self.open_orders
                 .short
                 .retain(|&idx, _| self.actives.short.contains(&idx));
@@ -1473,7 +1485,7 @@ impl<'a> Backtest<'a> {
             positions_long_indices.sort();
             let mut actives_without_pos = Vec::<usize>::new();
             if positions_long_indices.len() < self.bot_params_pair.long.n_positions {
-                actives_without_pos = self.update_actives(k, LONG);
+                actives_without_pos = self.update_actives_long(k);
                 self.open_orders
                     .long
                     .retain(|&idx, _| self.actives.long.contains(&idx));
@@ -1504,7 +1516,7 @@ impl<'a> Backtest<'a> {
             positions_short_indices.sort();
             let mut actives_without_pos = Vec::<usize>::new();
             if positions_short_indices.len() < self.bot_params_pair.short.n_positions {
-                actives_without_pos = self.update_actives(k, SHORT);
+                actives_without_pos = self.update_actives_short(k);
                 self.open_orders
                     .short
                     .retain(|&idx, _| self.actives.short.contains(&idx));
