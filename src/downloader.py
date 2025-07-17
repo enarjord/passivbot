@@ -989,7 +989,7 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
             except Exception as e:
                 logging.error(f"error with get_first_timestamp for {coin} {e}. Skipping")
                 traceback.print_exc()
-                continue  
+                continue
             if first_ts >= end_ts:
                 logging.info(
                     f"{exchange} Coin {coin} too young, start date {ts_to_date_utc(first_ts)}. Skipping"
