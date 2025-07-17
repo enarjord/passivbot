@@ -259,6 +259,12 @@ def main():
         nargs="*",
         help='Limit filters (needs quotes), e.g., "w_0<1.0", "w_1<-0.0006", "w_2<1.0"',
     )
+    parser.add_argument(
+        "-o",
+        "--objectives",
+        type=str,
+        help="Comma-separated list of objective names to use for Pareto front (e.g., 'btc_adg_w,btc_mdg_w')",
+    )
     args = parser.parse_args()
 
     pareto_dir = args.pareto_dir.rstrip("/")
@@ -267,8 +273,6 @@ def main():
         if not pareto_dir.endswith("pareto"):
             pareto_dir += "/pareto"
             entries = sorted(glob.glob(os.path.join(pareto_dir, "*.json")))
-    print(f"Found {len(entries)} Pareto members.")
-
     points = []
     filenames = {}
     w_keys = []
@@ -308,11 +312,46 @@ def main():
             with open(entry_path) as f:
                 entry = json.load(f)
             h = os.path.splitext(os.path.basename(entry_path))[0].split("_")[-1]
-            if not w_keys:
-                w_keys = sorted(k for k in entry.get("analyses_combined", {}) if k.startswith("w_"))
             if metric_names is None:
                 metric_names = entry.get("optimize", {}).get("scoring", [])
                 metric_name_map = {f"w_{i}": name for i, name in enumerate(metric_names)}
+            if not w_keys:
+                all_w_keys = sorted(
+                    k for k in entry.get("analyses_combined", {}) if k.startswith("w_")
+                )
+
+                # Filter w_keys based on --objectives argument
+                if args.objectives:
+                    requested_objectives = [obj.strip() for obj in args.objectives.split(",")]
+                    # Map objective names to w_keys using metric_name_map
+                    if metric_names is None:
+                        metric_names = entry.get("optimize", {}).get("scoring", [])
+                        metric_name_map = {f"w_{i}": name for i, name in enumerate(metric_names)}
+
+                    # Create reverse mapping: objective name -> w_key
+                    reverse_map = {name: key for key, name in metric_name_map.items()}
+
+                    # Filter w_keys to only include requested objectives
+                    w_keys = []
+                    for obj_name in requested_objectives:
+                        if obj_name in reverse_map:
+                            w_keys.append(reverse_map[obj_name])
+                        else:
+                            # Check if user provided w_key directly
+                            if obj_name in all_w_keys:
+                                w_keys.append(obj_name)
+                            else:
+                                print(
+                                    f"Warning: Objective '{obj_name}' not found. Available objectives: {list(reverse_map.keys())}"
+                                )
+
+                    if not w_keys:
+                        print("Error: No valid objectives found. Exiting.")
+                        exit(1)
+
+                    w_keys = sorted(w_keys)
+                else:
+                    w_keys = all_w_keys
             if any(
                 not op(entry.get("analyses_combined", {}).get(key, float("inf")), val)
                 for key, op, val in limit_checks
@@ -324,7 +363,9 @@ def main():
                 filenames[h] = os.path.split(entry_path)[-1]
         except Exception as e:
             print(f"Error loading {h}: {e}")
-
+    print(f"Found {len(entries)} Pareto members.")
+    if args.objectives:
+        print(f"Using objectives: {[metric_name_map.get(k, k) for k in w_keys]}")
     if not points:
         print("No valid Pareto points found.")
         exit(0)
