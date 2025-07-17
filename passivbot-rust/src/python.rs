@@ -344,7 +344,6 @@ pub fn calc_next_entry_long_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let next_entry = calc_next_entry_long(
         &exchange_params,
@@ -422,7 +421,6 @@ pub fn calc_next_close_long_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let next_entry = calc_next_close_long(
         &exchange_params,
@@ -506,7 +504,6 @@ pub fn calc_next_entry_short_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let next_entry = calc_next_entry_short(
         &exchange_params,
@@ -584,7 +581,6 @@ pub fn calc_next_close_short_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let next_entry = calc_next_close_short(
         &exchange_params,
@@ -671,7 +667,6 @@ pub fn calc_entries_long_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let entries = calc_entries_long(
         &exchange_params,
@@ -759,7 +754,6 @@ pub fn calc_entries_short_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let entries = calc_entries_short(
         &exchange_params,
@@ -840,7 +834,6 @@ pub fn calc_closes_long_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let closes = calc_closes_long(
         &exchange_params,
@@ -920,7 +913,6 @@ pub fn calc_closes_short_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let closes = calc_closes_short(
         &exchange_params,
