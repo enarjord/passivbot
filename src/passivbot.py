@@ -362,9 +362,9 @@ class Passivbot:
                 await asyncio.sleep(1.0)
 
     async def prepare_for_execution(self):
+        await self.update_positions()
         await asyncio.gather(
             self.update_open_orders(),
-            self.update_positions(),
             self.update_pnls(),
         )
         await self.update_ohlcvs_1m_for_actives()
@@ -1514,6 +1514,8 @@ class Passivbot:
                         self.positions[symbol][pside]["price"],
                         self.trailing_prices[symbol][pside]["min_since_open"],
                         self.trailing_prices[symbol][pside]["max_since_min"],
+                        self.trailing_prices[symbol][pside]["max_since_open"],
+                        self.trailing_prices[symbol][pside]["min_since_max"],
                         self.emas[pside][symbol].min(),
                         self.get_last_price(symbol),
                     )
@@ -1535,6 +1537,8 @@ class Passivbot:
                         self.balance,
                         self.positions[symbol][pside]["size"],
                         self.positions[symbol][pside]["price"],
+                        self.trailing_prices[symbol][pside]["min_since_open"],
+                        self.trailing_prices[symbol][pside]["max_since_min"],
                         self.trailing_prices[symbol][pside]["max_since_open"],
                         self.trailing_prices[symbol][pside]["min_since_max"],
                         self.get_last_price(symbol),
