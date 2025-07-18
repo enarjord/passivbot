@@ -20,6 +20,7 @@ from uuid import uuid4
 from copy import deepcopy
 from collections import defaultdict
 from sortedcontainers import SortedDict
+from decimal import Decimal, ROUND_DOWN
 
 from procedures import (
     load_broker_code,
@@ -377,16 +378,38 @@ class Passivbot:
         # debug duplicates
         seen = set()
         for elm in to_cancel:
-            key = str(elm["price"]) + str(elm["qty"])
+            sym = elm["symbol"]
+            price = Decimal(str(elm["price"]))
+            qty = Decimal(str(elm["qty"]))
+            price_step = Decimal(str(self.price_steps[sym]))
+            qty_step = Decimal(str(self.qty_steps[sym]))
+
+            rounded_price = (price / price_step).to_integral_value(rounding=ROUND_DOWN) * price_step
+            rounded_qty = (qty / qty_step).to_integral_value(rounding=ROUND_DOWN) * qty_step        
+
+            key = (rounded_price.normalize(), rounded_qty.normalize())   
+            # old_key = str(elm["price"]) + str(elm["qty"])
+            # logging.info(f"to_cancel => old_key: {old_key} key: {key}")  
             if key in seen:
-                logging.info(f"debug duplicate order cancel {elm}")
+                logging.warning(f"debug duplicate order cancel {elm}")   
             seen.add(key)
 
         seen = set()
         for elm in to_create:
-            key = str(elm["price"]) + str(elm["qty"])
+            sym = elm["symbol"]
+            price = Decimal(str(elm["price"]))
+            qty = Decimal(str(elm["qty"]))
+            price_step = Decimal(str(self.price_steps[sym]))
+            qty_step = Decimal(str(self.qty_steps[sym]))
+
+            rounded_price = (price / price_step).to_integral_value(rounding=ROUND_DOWN) * price_step
+            rounded_qty = (qty / qty_step).to_integral_value(rounding=ROUND_DOWN) * qty_step
+
+            key = (rounded_price.normalize(), rounded_qty.normalize())
+            # old_key = str(elm["price"]) + str(elm["qty"])
+            # logging.info(f"to_create => old_key: {old_key} key: {key}")
             if key in seen:
-                logging.info(f"debug duplicate order create {elm}")
+                logging.warning(f"debug duplicate order create {elm}")
             seen.add(key)
 
         # format custom_id
@@ -1543,9 +1566,22 @@ class Passivbot:
                         continue
                     if not self.has_position(position_side, symbol):
                         continue
-                seen_key = str(abs(order[0])) + str(order[1]) + order[2]
+                rounded_price = round(float(order[1]) / self.price_steps[symbol]) * self.price_steps[symbol]
+                rounded_qty = round(float(order[0]) / self.qty_steps[symbol]) * self.qty_steps[symbol]
+
+                price_step = Decimal(str(self.price_steps[symbol]))      
+                qty_step = Decimal(str(self.qty_steps[symbol]))
+                price = Decimal(str(order[1]))
+                qty = Decimal(str(order[0]))
+
+                rounded_price = (price / price_step).to_integral_value(rounding=ROUND_DOWN) * price_step
+                rounded_qty = (qty / qty_step).to_integral_value(rounding=ROUND_DOWN) * qty_step
+
+                seen_key = (abs(rounded_qty.normalize()), rounded_price.normalize(), order[2])
+                # old_key = str(abs(order[0])) + str(order[1]) + order[2]
+                #logging.info(f"ideal order => old_key: {old_key} seen_key: {seen_key}")
                 if seen_key in seen:
-                    logging.info(f"debug duplicate ideal order {symbol} {order}")
+                    logging.warning(f"debug duplicate ideal order {symbol} {order}")
                     continue
                 order_side = determine_side_from_order_tuple(order)
                 order_type = "limit"
