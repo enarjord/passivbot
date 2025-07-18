@@ -301,9 +301,9 @@ class Passivbot:
         while not self.stop_signal_received:
             try:
                 await self.update_pos_oos_pnls_ohlcvs()
-                await self.execute_to_exchange()
+                res = await self.execute_to_exchange()
                 if self.debug_mode:
-                    break
+                    return res
                 await asyncio.sleep(self.config["live"]["execution_delay_seconds"])
                 sleep_duration = 30
                 for i in range(sleep_duration):
@@ -1080,14 +1080,14 @@ class Passivbot:
                 if oo["id"] not in oo_ids_old:
                     # there was a new open order not caught by websocket
                     created_prints.append(
-                        f"new order {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
+                        f"    new order {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
                     )
             oo_ids_new = {elm["id"] for elm in open_orders}
             for oo in [elm for sublist in self.open_orders.values() for elm in sublist]:
                 if oo["id"] not in oo_ids_new:
                     # there was an order cancellation not caught by websocket
                     cancelled_prints.append(
-                        f"cancelled {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
+                        f"removed order {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
                     )
             self.open_orders = {}
             for elm in open_orders:
@@ -1126,6 +1126,123 @@ class Passivbot:
     def get_exchange_time(self):
         return utc_ms() + self.utc_offset
 
+    def log_position_changes(self, positions_old, positions_new, rd=6):
+        # Map old and new positions for easy comparison
+        psold = {
+            (x["symbol"], x["position_side"]): {k: x[k] for k in ["size", "price"]}
+            for x in positions_old
+        }
+        psnew = {
+            (x["symbol"], x["position_side"]): {k: x[k] for k in ["size", "price"]}
+            for x in positions_new
+        }
+
+        if psold == psnew:
+            return  # No changes
+
+        # Ensure both dicts have all keys
+        for k in psnew:
+            if k not in psold:
+                psold[k] = {"size": 0.0, "price": 0.0}
+        for k in psold:
+            if k not in psnew:
+                psnew[k] = {"size": 0.0, "price": 0.0}
+
+        changed = []
+        for k in psnew:
+            if psold[k] != psnew[k]:
+                changed.append(k)
+
+        if not changed:
+            return
+
+        # Create PrettyTable for aligned output
+        table = PrettyTable()
+        table.border = False
+        table.header = False
+        table.padding_width = 0
+
+        for symbol, pside in changed:
+            old = psold[(symbol, pside)]
+            new = psnew[(symbol, pside)]
+
+            # classify action ------------------------------------------------
+            if old["size"] == 0.0 and new["size"] != 0.0:
+                action = "new pos"
+            elif new["size"] == 0.0:
+                action = "closed"
+            elif new["size"] > old["size"]:
+                action = "added"
+            elif new["size"] < old["size"]:
+                action = "reduced"
+            else:
+                action = "unknown"
+
+            # Compute metrics for new pos
+            wallet_exposure = (
+                pbr.qty_to_cost(new["size"], new["price"], self.c_mults[symbol]) / self.balance
+                if new["size"] != 0
+                else 0.0
+            )
+            try:
+                wel = self.config_get(["bot", pside, "wallet_exposure_limit"], symbol=symbol)
+                WE_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
+            except:
+                WE_ratio = 0.0
+
+            last_price = or_default(self.get_last_price, symbol, default=0.0)
+            try:
+                pprice_diff = (
+                    pbr.calc_pprice_diff_int(self.pside_int_map[pside], new["price"], last_price)
+                    if last_price
+                    else 0.0
+                )
+            except:
+                pprice_diff = 0.0
+
+            try:
+                upnl = (
+                    calc_pnl(
+                        pside,
+                        new["price"],
+                        last_price,
+                        new["size"],
+                        self.inverse,
+                        self.c_mults[symbol],
+                    )
+                    if last_price
+                    else 0.0
+                )
+            except:
+                upnl = 0.0
+
+            table.add_row(
+                [
+                    action.ljust(7) + " ",  # pad so all actions have same width
+                    symbol + " ",
+                    pside + " ",
+                    round_dynamic(old["size"], rd),
+                    " @ ",
+                    round_dynamic(old["price"], rd),
+                    " -> ",
+                    round_dynamic(new["size"], rd),
+                    " @ ",
+                    round_dynamic(new["price"], rd),
+                    " WE: ",
+                    pbr.round_dynamic(wallet_exposure, 3),
+                    " WE ratio: ",
+                    round(WE_ratio, 3),
+                    " PA dist: ",
+                    round(pprice_diff, 4),
+                    " upnl: ",
+                    pbr.round_dynamic(upnl, 3),
+                ]
+            )
+
+        # Print aligned table
+        for line in table.get_string().splitlines():
+            logging.info(line)
+
     async def update_positions(self):
         # also updates balance
         if not hasattr(self, "positions"):
@@ -1134,8 +1251,13 @@ class Passivbot:
         if not res or all(x in [None, False] for x in res):
             return False
         positions_list_new, balance_new = res
+        fetched_positions_old = deepcopy(self.fetched_positions)
         self.fetched_positions = positions_list_new
         self.handle_balance_update({self.quote: {"total": balance_new}}, source="REST")
+        try:
+            self.log_position_changes(fetched_positions_old, self.fetched_positions)
+        except Exception as e:
+            logging.error(f"error logging position changes {e}")
         positions_new = {
             sym: {
                 "long": {"size": 0.0, "price": 0.0},
@@ -1143,7 +1265,6 @@ class Passivbot:
             }
             for sym in set(list(self.positions) + list(self.active_symbols))
         }
-        position_changes = []
         for elm in positions_list_new:
             symbol, pside, pprice = elm["symbol"], elm["position_side"], elm["price"]
             psize = abs(elm["size"]) * (-1.0 if elm["position_side"] == "short" else 1.0)
@@ -1153,13 +1274,6 @@ class Passivbot:
                     "short": {"size": 0.0, "price": 0.0},
                 }
             positions_new[symbol][pside] = {"size": psize, "price": pprice}
-            # check if changed
-            if symbol not in self.positions or self.positions[symbol][pside]["size"] != psize:
-                position_changes.append((symbol, pside))
-        try:
-            self.log_position_changes(position_changes, positions_new)
-        except Exception as e:
-            logging.error(f"error printing position changes {e}")
         self.positions = positions_new
         return True
 
@@ -1188,88 +1302,6 @@ class Passivbot:
             traceback.print_exc()
         logging.info(f"debug get_last_price {symbol} failed")
         return null_replace
-
-    def log_position_changes(self, position_changes, positions_new, rd=6) -> str:
-        if not position_changes:
-            return ""
-        table = PrettyTable()
-        table.border = False
-        table.header = False
-        table.padding_width = 0  # Reduces padding between columns to zero
-        for symbol, pside in position_changes:
-            wallet_exposure = (
-                pbr.qty_to_cost(
-                    positions_new[symbol][pside]["size"],
-                    positions_new[symbol][pside]["price"],
-                    self.c_mults[symbol],
-                )
-                / self.balance
-            )
-            try:
-                wel = self.config_get(["bot", pside, "wallet_exposure_limit"], symbol=symbol)
-                WE_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
-            except Exception as e:
-                logging.error(f"error with log_position_changes {e}")
-                WE_ratio = 0.0
-            last_price = or_default(self.get_last_price, symbol, default=0.0)
-            try:
-                pprice_diff = (
-                    pbr.calc_pprice_diff_int(
-                        self.pside_int_map[pside], positions_new[symbol][pside]["price"], last_price
-                    )
-                    if last_price
-                    else 0.0
-                )
-            except:
-                pprice_diff = 0.0
-            try:
-                upnl = (
-                    calc_pnl(
-                        pside,
-                        positions_new[symbol][pside]["price"],
-                        self.get_last_price(symbol),
-                        positions_new[symbol][pside]["size"],
-                        self.inverse,
-                        self.c_mults[symbol],
-                    )
-                    if last_price
-                    else 0.0
-                )
-            except Exception as e:
-                upnl = 0.0
-            table.add_row(
-                [
-                    symbol + " ",
-                    pside + " ",
-                    (
-                        round_dynamic(self.positions[symbol][pside]["size"], rd)
-                        if symbol in self.positions
-                        else 0.0
-                    ),
-                    " @ ",
-                    (
-                        round_dynamic(self.positions[symbol][pside]["price"], rd)
-                        if symbol in self.positions
-                        else 0.0
-                    ),
-                    " -> ",
-                    round_dynamic(positions_new[symbol][pside]["size"], rd),
-                    " @ ",
-                    round_dynamic(positions_new[symbol][pside]["price"], rd),
-                    " WE: ",
-                    round_dynamic(wallet_exposure, max(3, rd - 2)),
-                    " WE ratio: ",
-                    round(WE_ratio, 3),
-                    " PA dist: ",
-                    round(pprice_diff, 4),
-                    " upnl: ",
-                    round_dynamic(upnl, max(3, rd - 1)),
-                ]
-            )
-        string = table.get_string()
-        for line in string.splitlines():
-            logging.info(line)
-        return string
 
     def update_effective_min_cost(self, symbol=None):
         if not hasattr(self, "effective_min_cost"):
