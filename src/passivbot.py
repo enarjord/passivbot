@@ -108,11 +108,6 @@ class Passivbot:
         self.sym_padding = 17
         self.stop_websocket = False
         self.balance = 1e-12
-        self.upd_timestamps = {
-            "pnls": 0.0,
-            "open_orders": 0.0,
-            "positions": 0.0,
-        }
         self.hedge_mode = True
         self.inverse = False
         self.active_symbols = []
@@ -131,8 +126,6 @@ class Passivbot:
         self.PB_modes = {"long": {}, "short": {}}
         self.pnls_cache_filepath = make_get_filepath(f"caches/{self.exchange}/{self.user}_pnls.json")
         self.ohlcvs_1m_cache_dirpath = make_get_filepath(f"caches/{self.exchange}/ohlcvs_1m/")
-        self.previous_REST_update_ts = 0
-        self.recent_fill = False
         self.quote = "USDT"
 
         self.minimum_market_age_millis = (
@@ -141,7 +134,6 @@ class Passivbot:
         self.emas = {"long": {}, "short": {}}
         self.ema_alphas = {"long": {}, "short": {}}
         self.upd_minute_emas = {}
-        self.ineligible_symbols_with_pos = set()
         self.ohlcvs_1m_update_after_minutes = config["live"]["ohlcvs_1m_update_after_minutes"]
         self.ohlcvs_1m_rolling_window_days = config["live"]["ohlcvs_1m_rolling_window_days"]
         self.n_symbols_missing_ohlcvs_1m = 1000
@@ -156,10 +148,6 @@ class Passivbot:
         self.create_ccxt_sessions()
         self.debug_mode = False
         self.balance_threshold = 1.0  # don't create orders if balance is less than threshold
-        # there are issues with mimic_backtest_1m_delay. Disabled until fixed (or feature removed)
-        self.mimic_backtest_1m_delay = (
-            False  # self.config["live"].get("mimic_backtest_1m_delay", False)
-        )
         self.hyst_rounding_balance_pct = 0.05
         self.hyst_rounding_balance_h = 0.75
 
@@ -170,9 +158,6 @@ class Passivbot:
         logging.info(f"Starting data maintainers...")
         await self.start_data_maintainers()
         await self.wait_for_ohlcvs_1m_to_update()
-        logging.info(f"starting websocket...")
-        self.previous_REST_update_ts = utc_ms()
-        await self.prepare_for_execution()
 
         logging.info(f"starting execution loop...")
         if not self.debug_mode:
@@ -311,54 +296,27 @@ class Passivbot:
             round(float(order["price"]), 12),
         )
 
-    def handle_backtest_mimic(self, orders_sent=None):
-        if not self.mimic_backtest_1m_delay:
-            return
-        if not hasattr(self, "whole_minute_cache"):
-            self.whole_minute_cache = {
-                "positions": None,
-                "ideal_orders": None,
-                "orders_sent": None,
-                "whole_minute": 0.0,
-            }
-        whole_minute = int(utc_ms() // ONE_MIN_MS * ONE_MIN_MS)
-        if whole_minute > self.whole_minute_cache.get("whole_minute", 0.0):
-            # we are in new whole minute
-            self.whole_minute_cache["ideal_orders"] = self.calc_ideal_orders()
-            self.whole_minute_cache["positions"] = deepcopy(self.positions)
-            self.whole_minute_cache["orders_sent"] = set()
-            self.whole_minute_cache["whole_minute"] = whole_minute
-        if orders_sent is not None:
-            for order in orders_sent:
-                self.whole_minute_cache["orders_sent"].add(self.order_to_order_tuple(order))
-
     async def run_execution_loop(self):
+        self.execution_scheduled = False
         while not self.stop_signal_received:
             try:
-                now = utc_ms()
-                if self.config["live"].get("sanity_log", False):
-                    if not hasattr(self, "last_sanity_log_ts"):
-                        self.last_sanity_log_ts = 0
-                    if now - self.last_sanity_log_ts >= 60000:  # 1 minute
-                        self.log_sanity_check()
-                        self.last_sanity_log_ts = now
-                if now - self.previous_REST_update_ts > 1000 * 60:
-                    self.previous_REST_update_ts = utc_ms()
-                    await self.prepare_for_execution()
+                await self.update_pos_oos_pnls_ohlcvs()
                 await self.execute_to_exchange()
-                sleep_duration = (
-                    self.config["live"]["execution_delay_seconds"] - (utc_ms() - now) / 1000
-                )
-                if self.mimic_backtest_1m_delay:
-                    seconds_until_whole_minute = (ONE_MIN_MS - utc_ms() % ONE_MIN_MS) / 1000
-                    sleep_duration = min(sleep_duration, seconds_until_whole_minute)
-                await asyncio.sleep(max(0.0, sleep_duration))
+                if self.debug_mode:
+                    break
+                await asyncio.sleep(self.config["live"]["execution_delay_seconds"])
+                sleep_duration = 30
+                for i in range(sleep_duration):
+                    if self.execution_scheduled:
+                        self.execution_scheduled = False
+                        break
+                    await asyncio.sleep(1)
             except Exception as e:
                 logging.error(f"error with {get_function_name()} {e}")
                 traceback.print_exc()
                 await asyncio.sleep(1.0)
 
-    async def prepare_for_execution(self):
+    async def update_pos_oos_pnls_ohlcvs(self):
         await self.update_positions()
         await asyncio.gather(
             self.update_open_orders(),
@@ -371,6 +329,8 @@ class Passivbot:
         await self.update_EMAs()
         await self.update_exchange_configs()
         to_cancel, to_create = self.calc_orders_to_cancel_and_create()
+        if to_cancel or to_create:
+            self.execution_scheduled = True
 
         # debug duplicates
         seen = set()
@@ -391,15 +351,11 @@ class Passivbot:
         if self.debug_mode:
             if to_cancel:
                 print(f"would cancel {len(to_cancel)} orders")
-            # for x in to_cancel:
-            #    pprint.pprint(x)
         else:
             res = await self.execute_cancellations_parent(to_cancel)
         if self.debug_mode:
             if to_create:
                 print(f"would create {len(to_create)} orders")
-            # for x in to_create:
-            #    pprint.pprint(x)
         elif self.balance < self.balance_threshold:
             logging.info(f"Balance too low: {self.balance} {self.quote}. Not creating any orders.")
         else:
@@ -411,8 +367,6 @@ class Passivbot:
                 print_async_exception(res)
                 traceback.print_exc()
                 await self.restart_bot_on_too_many_errors()
-        if to_cancel or to_create:
-            self.previous_REST_update_ts = 0
         if self.debug_mode:
             return to_cancel, to_create
 
@@ -445,7 +399,6 @@ class Passivbot:
                 print("debug create_orders", debug_prints)
             to_return.append(ex)
         if to_return:
-            self.handle_backtest_mimic(to_return)
             for elm in to_return:
                 self.add_new_order(elm, source="POST")
         return to_return
@@ -748,24 +701,6 @@ class Passivbot:
         # defined by each exchange child class
         pass
 
-    def reformat_symbol(self, symbol: str, verbose=False) -> str:
-        # tries to reformat symbol to correct variant for exchange
-        # (e.g. BONK -> 1000BONK/USDT:USDT, PEPE - kPEPE/USDC:USDC)
-        # if no reformatting is possible, return empty string
-        fsymbol = self.format_symbol(symbol)
-        if fsymbol in self.markets_dict:
-            return fsymbol
-        else:
-            if verbose:
-                logging.info(f"{symbol} missing from {self.exchange}")
-            if fsymbol in self.formatted_symbols_map_inv:
-                for x in self.formatted_symbols_map_inv[fsymbol]:
-                    if x in self.markets_dict:
-                        if verbose:
-                            logging.info(f"changing {symbol} -> {x}")
-                        return x
-        return ""
-
     def is_old_enough(self, pside, symbol):
         if self.is_forager_mode(pside) and self.minimum_market_age_millis > 0:
             first_timestamp = self.get_first_timestamp(symbol)
@@ -1003,81 +938,15 @@ class Passivbot:
         )
 
     def add_new_order(self, order, source="WS"):
-        try:
-            if not order or "id" not in order:
-                return False
-            if "symbol" not in order or order["symbol"] is None:
-                logging.info(f"symbol not in order. Source: {source} {order}")
-                return False
-            if order["symbol"] not in self.open_orders:
-                self.open_orders[order["symbol"]] = []
-            if order["id"] not in {x["id"] for x in self.open_orders[order["symbol"]]}:
-                self.open_orders[order["symbol"]].append(order)
-                logging.info(
-                    f"  created {self.pad_sym(order['symbol'])} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
-                )
-                return True
-        except Exception as e:
-            logging.error(f"failed to add order to self.open_orders {source} {order} {e}")
-            traceback.print_exc()
-            return False
+        return  # only add new orders via REST in self.update_open_orders()
 
     def remove_order(self, order: dict, source="WS", reason="cancelled"):
-        try:
-            if not order or "id" not in order:
-                logging.info(f"debug remove_order, missing 'id' {order}")
-                return False
-            if "symbol" not in order or order["symbol"] is None:
-                logging.info(f"debug remove_order, missing 'symbol' {order}")
-                return False
-            if order["symbol"] not in self.open_orders:
-                logging.info(f"debug remove_order, 'symbol' not in self.open_orders {order}")
-                self.open_orders[order["symbol"]] = []
-                return False
-            if order["id"] in {x["id"] for x in self.open_orders[order["symbol"]]}:
-                self.open_orders[order["symbol"]] = [
-                    x for x in self.open_orders[order["symbol"]] if x["id"] != order["id"]
-                ]
-                logging.info(
-                    f"{reason} {self.pad_sym(order['symbol'])} {order['side']} {order['qty']} {order['position_side']} @ {order['price']} source: {source}"
-                )
-                return True
-        except Exception as e:
-            logging.error(f"failed to remove order from self.open_orders {order} {e}")
-            traceback.print_exc()
-            return False
+        return  # only remove orders via REST in self.update_open_orders()
 
     def handle_order_update(self, upd_list):
-        try:
-            for upd in upd_list:
-                if upd["status"] == "closed" or (
-                    "filled" in upd and upd["filled"] is not None and upd["filled"] > 0.0
-                ):
-                    # There was a fill, partial or full. Schedule update of open orders, pnls, position.
-                    self.recent_fill = True
-                    self.previous_REST_update_ts = 0
-                    self.remove_order(upd, source="WS", reason="   filled")
-                elif upd["status"].lower() in [
-                    "canceled",
-                    "cancelled",
-                    "expired",
-                    "rejected",
-                    "finished",
-                ]:
-                    # remove order from open_orders
-                    self.remove_order(
-                        upd,
-                        source="WS",
-                        reason=upd["status"].lower().replace("canceled", "cancelled"),
-                    )
-                elif upd["status"] == "open":
-                    # add order to open_orders
-                    self.add_new_order(upd, source="WS")
-                else:
-                    print("debug open orders unknown type", upd)
-        except Exception as e:
-            logging.error(f"error updating open orders from websocket {upd_list} {e}")
-            traceback.print_exc()
+        if upd_list:
+            self.execution_scheduled = True
+        return
 
     def handle_balance_update(self, upd, source="WS"):
         try:
@@ -1087,6 +956,7 @@ class Passivbot:
                 logging.info(
                     f"balance changed: {self.balance} -> {upd[self.quote]['total']} equity: {equity:.4f} source: {source}"
                 )
+                self.execution_scheduled = True
             self.balance = max(upd[self.quote]["total"], 1e-12)
         except Exception as e:
             logging.error(f"error updating balance from websocket {upd} {e}")
@@ -1192,7 +1062,6 @@ class Passivbot:
                 json.dump(self.pnls, open(self.pnls_cache_filepath, "w"))
             except Exception as e:
                 logging.error(f"error dumping pnls to {self.pnls_cache_filepath} {e}")
-        self.upd_timestamps["pnls"] = utc_ms()
         return True
 
     async def update_open_orders(self):
@@ -1235,7 +1104,6 @@ class Passivbot:
             else:
                 for line in cancelled_prints:
                     logging.info(line)
-            self.upd_timestamps["open_orders"] = utc_ms()
             return True
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
@@ -1293,7 +1161,6 @@ class Passivbot:
         except Exception as e:
             logging.error(f"error printing position changes {e}")
         self.positions = positions_new
-        self.upd_timestamps["positions"] = utc_ms()
         return True
 
     def get_last_price(self, symbol, null_replace=0.0):
@@ -1743,13 +1610,7 @@ class Passivbot:
         return "", (0.0, 0.0, "")
 
     def calc_orders_to_cancel_and_create(self):
-        if self.mimic_backtest_1m_delay:
-            self.handle_backtest_mimic()
-            ideal_orders = self.whole_minute_cache["ideal_orders"]
-            already_sent = self.whole_minute_cache["orders_sent"]
-        else:
-            ideal_orders = self.calc_ideal_orders()
-            already_sent = set()
+        ideal_orders = self.calc_ideal_orders()
         actual_orders = {}
         for symbol in self.active_symbols:
             actual_orders[symbol] = []
@@ -1820,16 +1681,8 @@ class Passivbot:
                 logging.info(f"debug: price missing sort to_cancel by mprice_diff {x} {e}")
                 to_cancel_with_mprice_diff.append((0.0, x))
         to_cancel_with_mprice_diff.sort(key=lambda x: x[0])
-        to_cancel = [
-            x[1]
-            for x in to_cancel_with_mprice_diff
-            if self.order_to_order_tuple(x[1]) not in already_sent
-        ]
-        to_create = [
-            x[1]
-            for x in to_create_with_mprice_diff
-            if self.order_to_order_tuple(x[1]) not in already_sent
-        ]
+        to_cancel = [x[1] for x in to_cancel_with_mprice_diff]
+        to_create = [x[1] for x in to_create_with_mprice_diff]
         return to_cancel, to_create
 
     async def restart_bot_on_too_many_errors(self):
@@ -2372,58 +2225,6 @@ class Passivbot:
         except Exception as e:
             logging.error(f"error with refresh_approved_ignored_coins_lists {e}")
             traceback.print_exc()
-
-    def log_sanity_check(self):
-        try:
-            ideal_orders = self.calc_ideal_orders()
-            recent_fills = self.pnls[-10:] if hasattr(self, "pnls") and self.pnls else []
-
-            log_message = f"Sanity Log at {ts_to_date_utc(utc_ms())}:\n"
-            log_message += f"- Balance: {self.balance}\n"
-            log_message += f"- Active Symbols: {', '.join(self.active_symbols)}\n"
-
-            log_message += "- Positions:\n"
-            for symbol in self.positions:
-                pos = self.positions[symbol]
-                log_message += f"  - {symbol}: long: {pos['long']['size']} @ {pos['long']['price']}, short: {pos['short']['size']} @ {pos['short']['price']}\n"
-
-            log_message += "- Open Orders:\n"
-            for symbol in self.open_orders:
-                orders = self.open_orders[symbol]
-                log_message += f"  - {symbol}: {len(orders)} orders\n"
-                for order in orders:
-                    log_message += f"    - {order['side']} {order['qty']} @ {order['price']} (id: {order['id']})\n"
-
-            log_message += "- Ideal Orders:\n"
-            for symbol in ideal_orders:
-                orders = ideal_orders[symbol]
-                log_message += f"  - {symbol}: {len(orders)} orders\n"
-                for order in orders:
-                    log_message += f"    - {order['side']} {order['qty']} @ {order['price']} (type: {order['type']})\n"
-
-            log_message += "- Recent Fills (last 10):\n"
-            if recent_fills:
-                log_message += f"  {'Symbol':<15} {'Side':<5} {'Pos':<5} {'Price':>10} {'Amount':>10} {'Cost':>10} {'PnL':>10} {'Timestamp':<19}\n"
-                for fill in recent_fills:
-                    symbol = fill.get("symbol", "")
-                    side = fill.get("side", "")
-                    pos = fill.get("position_side", "")
-                    price = fill.get("price", 0.0)
-                    amount = fill.get("amount", 0.0)
-                    cost = fill.get("cost", 0.0)
-                    pnl = fill.get("pnl", 0.0)
-                    timestamp_str = fill["datetime"][:19].replace("T", " ")
-                    log_message += f"  {symbol:<15} {side:<5} {pos:<5} {price:>10.5f} {amount:>10.1f} {cost:>10.2f} {pnl:>10.2f} {timestamp_str:<19}\n"
-            else:
-                log_message += "  No recent fills.\n"
-
-            log_message += "- PB_modes:\n"
-            log_message += f"  - long: {self.PB_modes['long']}\n"
-            log_message += f"  - short: {self.PB_modes['short']}\n"
-
-            logging.info(log_message)
-        except Exception as e:
-            logging.error(f"Error in sanity check: {e}")
 
 
 def setup_bot(config):
