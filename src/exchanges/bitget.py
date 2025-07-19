@@ -223,6 +223,8 @@ class BitgetBot(Passivbot):
             for h, x in with_hashes.items():
                 data_d[h] = x
                 data_d[h]["pnl"] = float(x["profit"])
+                data_d[h]["price"] = float(x["price"])
+                data_d[h]["amount"] = float(x["baseVolume"])
                 data_d[h]["id"] = x["tradeId"]
                 data_d[h]["timestamp"] = float(x["cTime"])
                 data_d[h]["datetime"] = ts_to_date_utc(data_d[h]["timestamp"])
