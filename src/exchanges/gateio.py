@@ -278,8 +278,10 @@ class GateIOBot(Passivbot):
             traceback.print_exc()
 
     def did_cancel_order(self, executed):
+        if isinstance(executed, list) and len(executed) == 1:
+            return self.did_cancel_order(executed[0])
         try:
-            return "status" in executed and executed["status"] != "rejected"
+            return executed.get("info", {}).get("succeeded", False)
         except:
             return False
 
