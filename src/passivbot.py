@@ -150,6 +150,7 @@ class Passivbot:
         self.balance_threshold = 1.0  # don't create orders if balance is less than threshold
         self.hyst_rounding_balance_pct = 0.05
         self.hyst_rounding_balance_h = 0.75
+        self.state_change_detected_by_symbol = set()
 
     async def start_bot(self):
         logging.info(f"Starting bot {self.exchange}...")
@@ -297,20 +298,20 @@ class Passivbot:
         )
 
     async def run_execution_loop(self):
-        self.execution_scheduled = False
         while not self.stop_signal_received:
             try:
+                self.execution_scheduled = False
+                self.state_change_detected_by_symbol = set()
                 await self.update_pos_oos_pnls_ohlcvs()
                 res = await self.execute_to_exchange()
                 if self.debug_mode:
                     return res
                 await asyncio.sleep(self.config["live"]["execution_delay_seconds"])
                 sleep_duration = 30
-                for i in range(sleep_duration):
+                for i in range(sleep_duration * 10):
                     if self.execution_scheduled:
-                        self.execution_scheduled = False
                         break
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(0.1)
             except Exception as e:
                 logging.error(f"error with {get_function_name()} {e}")
                 traceback.print_exc()
@@ -329,8 +330,6 @@ class Passivbot:
         await self.update_EMAs()
         await self.update_exchange_configs()
         to_cancel, to_create = self.calc_orders_to_cancel_and_create()
-        if to_cancel or to_create:
-            self.execution_scheduled = True
 
         # debug duplicates
         seen = set()
@@ -359,14 +358,27 @@ class Passivbot:
         elif self.balance < self.balance_threshold:
             logging.info(f"Balance too low: {self.balance} {self.quote}. Not creating any orders.")
         else:
+            to_create_mod = deepcopy(to_create)
+            if self.state_change_detected_by_symbol:
+                logging.info(
+                    "state change during execution; skipping order creation"
+                    f" for {self.state_change_detected_by_symbol} until next cycle"
+                )
+                to_create_mod = [
+                    x
+                    for x in to_create_mod
+                    if x["symbol"] not in self.state_change_detected_by_symbol
+                ]
             res = None
             try:
-                res = await self.execute_orders_parent(to_create)
+                res = await self.execute_orders_parent(to_create_mod)
             except Exception as e:
-                logging.error(f"error executing orders {to_create} {e}")
+                logging.error(f"error executing orders {to_create_mod} {e}")
                 print_async_exception(res)
                 traceback.print_exc()
                 await self.restart_bot_on_too_many_errors()
+        if to_cancel or to_create:
+            self.execution_scheduled = True
         if self.debug_mode:
             return to_cancel, to_create
 
@@ -420,6 +432,9 @@ class Passivbot:
         res = await self.execute_cancellations(orders)
         to_return = []
         if len(orders) != len(res):
+            self.execution_scheduled = True
+            for od in orders:
+                self.state_change_detected_by_symbol.add(od["symbol"])
             print(
                 f"debug unequal lengths execute_cancellations_parent: "
                 f"{len(orders)} orders, {len(res)} executions",
@@ -428,6 +443,7 @@ class Passivbot:
             return []
         for ex, od in zip(res, orders):
             if not self.did_cancel_order(ex):
+                self.state_change_detected_by_symbol.add(od["symbol"])
                 print(f"debug did_cancel_order false {ex}")
                 continue
             debug_prints = {}
@@ -454,6 +470,8 @@ class Passivbot:
         # further tests defined in child class
 
     def did_cancel_order(self, executed) -> bool:
+        if isinstance(executed, list) and len(executed) == 1:
+            return self.did_cancel_order(executed[0])
         try:
             return "id" in executed and executed["id"] is not None
         except:
@@ -1094,15 +1112,15 @@ class Passivbot:
                 if elm["symbol"] not in self.open_orders:
                     self.open_orders[elm["symbol"]] = []
                 self.open_orders[elm["symbol"]].append(elm)
+            if len(cancelled_prints) > 12:
+                logging.info(f"{len(created_prints)} removed open orders")
+            else:
+                for line in cancelled_prints:
+                    logging.info(line)
             if len(created_prints) > 12:
                 logging.info(f"{len(created_prints)} new open orders")
             else:
                 for line in created_prints:
-                    logging.info(line)
-            if len(cancelled_prints) > 12:
-                logging.info(f"{len(created_prints)} cancelled open orders")
-            else:
-                for line in cancelled_prints:
                     logging.info(line)
             return True
         except Exception as e:
