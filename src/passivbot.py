@@ -97,6 +97,24 @@ def or_default(f, *args, default=None, **kwargs):
         return default
 
 
+def orders_matching(o0, o1, tolerance=0.002):
+    for k in ["symbol", "side", "position_side"]:
+        if o0[k] != o1[k]:
+            return False
+    if abs(o0["price"] - o1["price"]) / o0["price"] > tolerance:
+        return False
+    if abs(o0["qty"] - o1["qty"]) / o0["qty"] > tolerance:
+        return False
+    return True
+
+
+def order_has_match(order, orders):
+    for elm in orders:
+        if orders_matching(order, elm):
+            return True
+    return False
+
+
 class Passivbot:
     def __init__(self, config: dict):
         self.config = config
@@ -367,7 +385,16 @@ class Passivbot:
         elif self.balance < self.balance_threshold:
             logging.info(f"Balance too low: {self.balance} {self.quote}. Not creating any orders.")
         else:
-            to_create_mod = deepcopy(to_create)
+            # to_create_mod = [x for x in to_create if not order_has_match(x, to_cancel)]
+            to_create_mod = []
+            for x in to_create:
+                if order_has_match(x, to_cancel):
+                    xf = f"{x['symbol']} {x['side']} {x['position_side']} {x['qty']} @ {x['price']}"
+                    logging.info(
+                        f"order scheduled for creation will be delayed until next cycle: {xf}"
+                    )
+                else:
+                    to_create_mod.append(x)
             if self.state_change_detected_by_symbol:
                 logging.info(
                     "state change during execution; skipping order creation"
