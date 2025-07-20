@@ -1,134 +1,179 @@
 #!/usr/bin/env python3
 """
-Logging wrapper for main.py that captures all output to a timestamped log file.
-Usage: python3 run_with_logging.py {original_args}
+Wrapper script to log all console outputs of another script to file.
+Usage: python3 run_with_logging.py <command> [args...]
+Example: python3 run_with_logging.py python3 src/main.py --config config.json
 """
 
-import os
 import sys
+import os
 import subprocess
-import datetime
+import signal
 import re
+from datetime import datetime
 from pathlib import Path
 
 
 def sanitize_filename(text):
-    """Convert text to filename-safe string."""
-    # Replace spaces and special chars with underscores
-    sanitized = re.sub(r"[^\w\-_.]", "_", text)
-    # Remove multiple consecutive underscores
-    sanitized = re.sub(r"_+", "_", sanitized)
-    # Remove leading/trailing underscores
-    sanitized = sanitized.strip("_")
-    # Limit length to avoid filesystem issues
-    return sanitized[:100] if len(sanitized) > 100 else sanitized
+    """Sanitize a string to be safe for use as a filename."""
+    # Replace spaces and path separators with underscores
+    text = re.sub(r"[\s/\\]", "_", text)
+    # Remove or replace other problematic characters
+    text = re.sub(r'[<>:"|?*]', "", text)
+    # Remove leading/trailing dots and spaces
+    text = text.strip(". ")
+    # Limit length
+    if len(text) > 100:
+        text = text[:100]
+    return text
 
 
-def create_log_filename(script_name, args):
-    """Create a descriptive, timestamped log filename."""
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+def create_log_filename(command_args):
+    """Create a log filename based on the command and timestamp."""
+    # Join command arguments and sanitize
+    command_str = " ".join(command_args)
+    sanitized_command = sanitize_filename(command_str)
 
-    # Get base script name without path and extension
-    base_name = Path(script_name).stem
+    # Add timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Create args string (limit length and sanitize)
-    if args:
-        args_str = "_".join(args)
-        args_str = sanitize_filename(args_str)
-        if len(args_str) > 50:  # Keep args portion reasonable
-            args_str = args_str[:47] + "..."
-        filename = f"{base_name}_{args_str}_{timestamp}.log"
-    else:
-        filename = f"{base_name}_{timestamp}.log"
+    # Create filename
+    log_filename = f"{sanitized_command}_{timestamp}.log"
 
-    return filename
+    return log_filename
 
 
-def setup_log_directory():
-    """Create logs directory if it doesn't exist."""
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
-    return log_dir
+class LoggingWrapper:
+    def __init__(self, command_args, log_file_path):
+        self.command_args = command_args
+        self.log_file_path = log_file_path
+        self.process = None
+        self.log_file = None
 
+    def __enter__(self):
+        # Create logs directory if it doesn't exist
+        os.makedirs(os.path.dirname(self.log_file_path), exist_ok=True)
 
-def run_with_logging():
-    """Run the main script with comprehensive logging."""
-    if len(sys.argv) < 1:
-        print("Error: No arguments provided")
-        sys.exit(1)
+        # Open log file
+        self.log_file = open(self.log_file_path, "w", encoding="utf-8", buffering=1)
 
-    # Set up logging
-    log_dir = setup_log_directory()
-    script_path = "src/main.py"
-    args = sys.argv[1:]  # Skip the wrapper script name
+        # Write header to log file
+        self.log_file.write(f"=== Log started at {datetime.now().isoformat()} ===\n")
+        self.log_file.write(f"Command: {' '.join(self.command_args)}\n")
+        self.log_file.write("=" * 50 + "\n\n")
 
-    log_filename = create_log_filename(script_path, args)
-    log_path = log_dir / log_filename
+        return self
 
-    # Build the command
-    cmd = [sys.executable, script_path] + args
-    cmd_str = " ".join(cmd)
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.log_file:
+            self.log_file.write(f"\n=== Log ended at {datetime.now().isoformat()} ===\n")
+            self.log_file.close()
 
-    print(f"Running: {cmd_str}")
-    print(f"Logging to: {log_path}")
-    print("-" * 60)
+    def run(self):
+        """Run the command and log all output."""
+        try:
+            # Start the process
+            self.process = subprocess.Popen(
+                self.command_args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                bufsize=1,
+            )
 
-    # Write initial log entry
-    with open(log_path, "w") as log_file:
-        log_file.write(f"=== Passivbot Execution Log ===\n")
-        log_file.write(f"Timestamp: {datetime.datetime.now().isoformat()}\n")
-        log_file.write(f"Command: {cmd_str}\n")
-        log_file.write(f"Working Directory: {os.getcwd()}\n")
-        log_file.write(f"Python Version: {sys.version}\n")
-        log_file.write("=" * 50 + "\n\n")
-
-    try:
-        # Run the process with real-time output capture
-        process = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1
-        )
-
-        # Stream output to both console and file
-        with open(log_path, "a") as log_file:
-            for line in iter(process.stdout.readline, ""):
-                # Print to console
-                print(line, end="")
+            # Read and log output line by line
+            for line in iter(self.process.stdout.readline, ""):
+                # Write to console (preserve original behavior)
+                sys.stdout.write(line)
                 sys.stdout.flush()
 
-                # Write to log file with timestamp
-                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                log_file.write(f"[{timestamp}] {line}")
-                log_file.flush()
+                # Write to log file
+                self.log_file.write(line)
+                self.log_file.flush()
 
-        # Wait for process to complete
-        return_code = process.wait()
+            # Wait for process to complete
+            return_code = self.process.wait()
+            return return_code
 
-        # Log completion
-        with open(log_path, "a") as log_file:
-            log_file.write(f"\n{'='*50}\n")
-            log_file.write(f"Process completed at: {datetime.datetime.now().isoformat()}\n")
-            log_file.write(f"Exit code: {return_code}\n")
+        except KeyboardInterrupt:
+            # Forward the interrupt signal to the child process
+            if self.process:
+                print(f"\nForwarding keyboard interrupt to child process (PID: {self.process.pid})")
+                self.log_file.write(
+                    f"\n[WRAPPER] Keyboard interrupt received, forwarding to child process\n"
+                )
 
-        print(f"\nExecution completed. Full log saved to: {log_path}")
-        return return_code
+                try:
+                    # Send SIGINT to the child process
+                    self.process.send_signal(signal.SIGINT)
 
+                    # Wait a bit for graceful shutdown
+                    try:
+                        return_code = self.process.wait(timeout=10)
+                        print(f"Child process exited gracefully with code: {return_code}")
+                        self.log_file.write(
+                            f"[WRAPPER] Child process exited gracefully with code: {return_code}\n"
+                        )
+                        return return_code
+                    except subprocess.TimeoutExpired:
+                        print("Child process didn't exit gracefully, sending SIGTERM")
+                        self.log_file.write(
+                            "[WRAPPER] Timeout waiting for graceful exit, sending SIGTERM\n"
+                        )
+                        self.process.terminate()
+
+                        try:
+                            return_code = self.process.wait(timeout=5)
+                            return return_code
+                        except subprocess.TimeoutExpired:
+                            print("Child process still running, sending SIGKILL")
+                            self.log_file.write(
+                                "[WRAPPER] Timeout waiting for SIGTERM, sending SIGKILL\n"
+                            )
+                            self.process.kill()
+                            return self.process.wait()
+
+                except ProcessLookupError:
+                    # Process already terminated
+                    print("Child process already terminated")
+                    self.log_file.write("[WRAPPER] Child process already terminated\n")
+                    return self.process.returncode
+
+            # Re-raise the KeyboardInterrupt
+            raise
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python3 run_with_logging.py <command> [args...]", file=sys.stderr)
+        print(
+            "Example: python3 run_with_logging.py python3 src/main.py --config config.json",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Get command arguments
+    command_args = sys.argv[1:]
+
+    # Create log filename
+    log_filename = create_log_filename(command_args)
+    log_file_path = Path("logs") / log_filename
+
+    print(f"Logging output to: {log_file_path}")
+
+    # Run with logging
+    try:
+        with LoggingWrapper(command_args, log_file_path) as wrapper:
+            return_code = wrapper.run()
+            print(f"\nProcess completed with return code: {return_code}")
+            sys.exit(return_code)
     except KeyboardInterrupt:
-        print(f"\nExecution interrupted. Partial log saved to: {log_path}")
-        if "process" in locals():
-            process.terminate()
-        return 130
+        print("\nWrapper interrupted by user")
+        sys.exit(130)  # Standard exit code for SIGINT
     except Exception as e:
-        error_msg = f"Error running script: {e}"
-        print(error_msg)
-
-        # Log the error
-        with open(log_path, "a") as log_file:
-            log_file.write(f"\n{'='*50}\n")
-            log_file.write(f"ERROR at {datetime.datetime.now().isoformat()}: {error_msg}\n")
-
-        return 1
+        print(f"Error running wrapper: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    exit_code = run_with_logging()
-    sys.exit(exit_code)
+    main()
