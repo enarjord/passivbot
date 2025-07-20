@@ -106,6 +106,15 @@ class Passivbot:
         self.broker_code = load_broker_code(self.user_info["exchange"])
         self.custom_id_max_length = 36
         self.sym_padding = 17
+        self.action_str_max_len = max(
+            len(a)
+            for a in [
+                "posting order",
+                "cancelling order",
+                "removed order",
+                "added order",
+            ]
+        )
         self.stop_websocket = False
         self.balance = 1e-12
         self.hedge_mode = True
@@ -384,6 +393,8 @@ class Passivbot:
 
     async def execute_orders_parent(self, orders: [dict]) -> [dict]:
         orders = self.format_custom_ids(orders)[: self.config["live"]["max_n_creations_per_batch"]]
+        for oo in orders:
+            self.log_order_action(oo, "posting order")
         res = await self.execute_orders(orders)
         if not res:
             return
@@ -429,6 +440,8 @@ class Passivbot:
             except Exception as e:
                 logging.error(f"debug filter cancellations {e}")
                 orders = orders[: self.config["live"]["max_n_cancellations_per_batch"]]
+        for oo in orders:
+            self.log_order_action(oo, "cancelling order")
         res = await self.execute_cancellations(orders)
         to_return = []
         if len(orders) != len(res):
@@ -461,6 +474,12 @@ class Passivbot:
             for elm in to_return:
                 self.remove_order(elm, source="POST")
         return to_return
+
+    def log_order_action(self, order, action, source="passivbot"):
+        logging.info(
+            f"{action: >{self.action_str_max_len}} {self.pad_sym(order['symbol'])} {order['side']} "
+            f"{order['qty']} {order['position_side']} @ {order['price']} source: {source}"
+        )
 
     def did_create_order(self, executed) -> bool:
         try:
@@ -1093,35 +1112,28 @@ class Passivbot:
             self.fetched_open_orders = res
             open_orders = res
             oo_ids_old = {elm["id"] for sublist in self.open_orders.values() for elm in sublist}
-            created_prints, cancelled_prints = [], []
-            for oo in open_orders:
-                if oo["id"] not in oo_ids_old:
-                    # there was a new open order not caught by websocket
-                    created_prints.append(
-                        f"    new order {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
-                    )
             oo_ids_new = {elm["id"] for elm in open_orders}
-            for oo in [elm for sublist in self.open_orders.values() for elm in sublist]:
-                if oo["id"] not in oo_ids_new:
-                    # there was an order cancellation not caught by websocket
-                    cancelled_prints.append(
-                        f"removed order {self.pad_sym(oo['symbol'])} {oo['side']} {oo['qty']} {oo['position_side']} @ {oo['price']} source: REST"
-                    )
+            added_orders = [oo for oo in open_orders if oo["id"] not in oo_ids_old]
+            removed_orders = [
+                oo
+                for oo in [elm for sublist in self.open_orders.values() for elm in sublist]
+                if oo["id"] not in oo_ids_new
+            ]
+            if len(removed_orders) > 12:
+                logging.info(f"removed {len(removed_orders)} orders")
+            else:
+                for oo in removed_orders:
+                    self.log_order_action(oo, "removed order", "fetch_open_orders")
+            if len(added_orders) > 12:
+                logging.info(f"added {len(added_orders)} new orders")
+            else:
+                for oo in added_orders:
+                    self.log_order_action(oo, "added order", "fetch_open_orders")
             self.open_orders = {}
             for elm in open_orders:
                 if elm["symbol"] not in self.open_orders:
                     self.open_orders[elm["symbol"]] = []
                 self.open_orders[elm["symbol"]].append(elm)
-            if len(cancelled_prints) > 12:
-                logging.info(f"{len(created_prints)} removed open orders")
-            else:
-                for line in cancelled_prints:
-                    logging.info(line)
-            if len(created_prints) > 12:
-                logging.info(f"{len(created_prints)} new open orders")
-            else:
-                for line in created_prints:
-                    logging.info(line)
             return True
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
@@ -1186,15 +1198,15 @@ class Passivbot:
 
             # classify action ------------------------------------------------
             if old["size"] == 0.0 and new["size"] != 0.0:
-                action = "new pos"
+                action = "     new pos"
             elif new["size"] == 0.0:
-                action = "closed"
+                action = "  closed pos"
             elif new["size"] > old["size"]:
-                action = "added"
+                action = "added to pos"
             elif new["size"] < old["size"]:
-                action = "reduced"
+                action = " reduced pos"
             else:
-                action = "unknown"
+                action = "     unknown"
 
             # Compute metrics for new pos
             wallet_exposure = (
@@ -1236,7 +1248,7 @@ class Passivbot:
 
             table.add_row(
                 [
-                    action.ljust(7) + " ",  # pad so all actions have same width
+                    action + " ",
                     symbol + " ",
                     pside + " ",
                     round_dynamic(old["size"], rd),
