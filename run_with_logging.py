@@ -10,7 +10,7 @@ import os
 import subprocess
 import signal
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -34,11 +34,11 @@ def create_log_filename(command_args):
     command_str = " ".join(command_args)
     sanitized_command = sanitize_filename(command_str)
 
-    # Add timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Add UTC timestamp
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
-    # Create filename
-    log_filename = f"{sanitized_command}_{timestamp}.log"
+    # Create filename with timestamp first
+    log_filename = f"{timestamp}_{sanitized_command}.log"
 
     return log_filename
 
@@ -58,7 +58,7 @@ class LoggingWrapper:
         self.log_file = open(self.log_file_path, "w", encoding="utf-8", buffering=1)
 
         # Write header to log file
-        self.log_file.write(f"=== Log started at {datetime.now().isoformat()} ===\n")
+        self.log_file.write(f"=== Log started at {datetime.now(timezone.utc).isoformat()} ===\n")
         self.log_file.write(f"Command: {' '.join(self.command_args)}\n")
         self.log_file.write("=" * 50 + "\n\n")
 
@@ -66,7 +66,7 @@ class LoggingWrapper:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.log_file:
-            self.log_file.write(f"\n=== Log ended at {datetime.now().isoformat()} ===\n")
+            self.log_file.write(f"\n=== Log ended at {datetime.now(timezone.utc).isoformat()} ===\n")
             self.log_file.close()
 
     def run(self):
