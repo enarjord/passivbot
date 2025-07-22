@@ -97,21 +97,22 @@ def or_default(f, *args, default=None, **kwargs):
         return default
 
 
-def orders_matching(o0, o1, tolerance=0.002):
+def orders_matching(o0, o1, tolerance_qty=0.01, tolerance_price=0.002):
     for k in ["symbol", "side", "position_side"]:
         if o0[k] != o1[k]:
             return False
-    if abs(o0["price"] - o1["price"]) / o0["price"] > tolerance:
+    if abs(o0["price"] - o1["price"]) / o0["price"] > tolerance_price:
         return False
-    if abs(o0["qty"] - o1["qty"]) / o0["qty"] > tolerance:
+    if abs(o0["qty"] - o1["qty"]) / o0["qty"] > tolerance_qty:
         return False
     return True
 
 
 def order_has_match(order, orders):
+    # if match, return matching order; otherwise return False
     for elm in orders:
         if orders_matching(order, elm):
-            return True
+            return elm
     return False
 
 
@@ -178,6 +179,7 @@ class Passivbot:
         self.hyst_rounding_balance_pct = 0.05
         self.hyst_rounding_balance_h = 0.75
         self.state_change_detected_by_symbol = set()
+        self.recent_order_executions = []
 
     async def start_bot(self):
         logging.info(f"Starting bot {self.exchange}...")
@@ -352,6 +354,21 @@ class Passivbot:
         )
         await self.update_ohlcvs_1m_for_actives()
 
+    def add_to_recent_order_executions(self, order):
+        # keeps track of latest orders posted to exchange
+        self.recent_order_executions.append({**order, **{"execution_timestamp": utc_ms()}})
+
+    def order_was_recently_updated(self, order, max_age_ms=15_000) -> float:
+        # first prune: retain only recent orders
+        # returns 0.0 if no match, delay time otherwise
+        age_limit = utc_ms() - max_age_ms
+        self.recent_order_executions = [
+            x for x in self.recent_order_executions if x["execution_timestamp"] > age_limit
+        ]
+        if matching := order_has_match(order, self.recent_order_executions):
+            return max(0.0, (matching["execution_timestamp"] + max_age_ms) - utc_ms())
+        return 0.0
+
     async def execute_to_exchange(self):
         await self.execution_cycle()
         await self.update_EMAs()
@@ -388,10 +405,14 @@ class Passivbot:
             # to_create_mod = [x for x in to_create if not order_has_match(x, to_cancel)]
             to_create_mod = []
             for x in to_create:
+                xf = f"{x['symbol']} {x['side']} {x['position_side']} {x['qty']} @ {x['price']}"
                 if order_has_match(x, to_cancel):
-                    xf = f"{x['symbol']} {x['side']} {x['position_side']} {x['qty']} @ {x['price']}"
                     logging.info(
-                        f"order scheduled for creation will be delayed until next cycle: {xf}"
+                        f"matching order cancellation found; will be delayed until next cycle: {xf}"
+                    )
+                elif delay_time_ms := self.order_was_recently_updated(x):
+                    logging.info(
+                        f"matching recent order execution found; will be delayed for up to {delay_time_ms/1000:.1f} secs: {xf}"
                     )
                 else:
                     to_create_mod.append(x)
@@ -437,6 +458,7 @@ class Passivbot:
             if not self.did_create_order(ex):
                 print(f"debug did_create_order false {ex}")
                 continue
+            self.add_to_recent_order_executions(od)
             debug_prints = {}
             for key in od:
                 if key not in ex:
@@ -1127,6 +1149,12 @@ class Passivbot:
             except Exception as e:
                 logging.error(f"error dumping pnls to {self.pnls_cache_filepath} {e}")
         return True
+
+    def log_pnls_change(self, old_pnls, new_pnls):
+        keys = ["id", "timestamp", "symbol", "side", "position_side", "price", "qty"]
+        old_pnls_compressed = {(x[k] for k in keys) for x in old_pnls}
+        new_pnls_compressed = [(x[k] for k in keys) for x in new_pnls]
+        added_pnls = [x for x in new_pnls_compressed if x not in old_pnls_compressed]
 
     async def update_open_orders(self):
         if not hasattr(self, "open_orders"):
