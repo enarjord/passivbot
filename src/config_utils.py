@@ -306,7 +306,7 @@ def parse_overrides(config, verbose=True):
 
         result.setdefault("coin_overrides", {})[coin] = parsed_overrides
         if verbose:
-            print(f"Added overrides for {coin}: {parsed_overrides}")
+            print(f"Added overrides for {coin}: {sort_dict_keys(parsed_overrides)}")
     return result
 
 
