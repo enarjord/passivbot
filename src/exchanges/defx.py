@@ -211,14 +211,6 @@ class DefxBot(Passivbot):
         # print(params)
         executed = await self.cca.create_order(**params)
         # print(executed)
-        if "info" in executed and "orderId" in executed["info"]:
-            for k in ["price", "id", "side", "position_side"]:
-                if k not in executed or executed[k] is None:
-                    executed[k] = order[k]
-            executed["qty"] = executed["amount"] if executed["amount"] else order["qty"]
-            executed["timestamp"] = (
-                executed["timestamp"] if executed["timestamp"] else self.get_exchange_time()
-            )
         return executed
 
     async def execute_cancellation(self, order: dict) -> dict:
