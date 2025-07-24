@@ -101,17 +101,25 @@ def orders_matching(o0, o1, tolerance_qty=0.01, tolerance_price=0.002):
     for k in ["symbol", "side", "position_side"]:
         if o0[k] != o1[k]:
             return False
-    if abs(o0["price"] - o1["price"]) / o0["price"] > tolerance_price:
-        return False
-    if abs(o0["qty"] - o1["qty"]) / o0["qty"] > tolerance_qty:
-        return False
+    if tolerance_price:
+        if abs(o0["price"] - o1["price"]) / o0["price"] > tolerance_price:
+            return False
+    else:
+        if o0["price"] != o1["price"]:
+            return False
+    if tolerance_qty:
+        if abs(o0["qty"] - o1["qty"]) / o0["qty"] > tolerance_qty:
+            return False
+    else:
+        if o0["qty"] != o1["qty"]:
+            return False
     return True
 
 
-def order_has_match(order, orders):
+def order_has_match(order, orders, tolerance_qty=0.01, tolerance_price=0.002):
     # if match, return matching order; otherwise return False
     for elm in orders:
-        if orders_matching(order, elm):
+        if orders_matching(order, elm, tolerance_qty, tolerance_price):
             return elm
     return False
 
@@ -180,6 +188,7 @@ class Passivbot:
         self.hyst_rounding_balance_h = 0.75
         self.state_change_detected_by_symbol = set()
         self.recent_order_executions = []
+        self.recent_order_cancellations = []
 
     async def start_bot(self):
         logging.info(f"Starting bot {self.exchange}...")
@@ -354,6 +363,23 @@ class Passivbot:
         )
         await self.update_ohlcvs_1m_for_actives()
 
+    def add_to_recent_order_cancellations(self, order):
+        # keeps track of latest order cancellations posted to exchange
+        self.recent_order_cancellations.append({**order, **{"execution_timestamp": utc_ms()}})
+
+    def order_was_recently_cancelled(self, order, max_age_ms=15_000) -> float:
+        # first prune: retain only recent orders
+        # returns 0.0 if no match, delay time otherwise
+        age_limit = utc_ms() - max_age_ms
+        self.recent_order_cancellations = [
+            x for x in self.recent_order_cancellations if x["execution_timestamp"] > age_limit
+        ]
+        if matching := order_has_match(
+            order, self.recent_order_cancellations, tolerance_price=0.0, tolerance_qty=0.0
+        ):
+            return max(0.0, (matching["execution_timestamp"] + max_age_ms) - utc_ms())
+        return 0.0
+
     def add_to_recent_order_executions(self, order):
         # keeps track of latest orders posted to exchange
         self.recent_order_executions.append({**order, **{"execution_timestamp": utc_ms()}})
@@ -441,8 +467,9 @@ class Passivbot:
 
     async def execute_orders_parent(self, orders: [dict]) -> [dict]:
         orders = self.format_custom_ids(orders)[: self.config["live"]["max_n_creations_per_batch"]]
-        for oo in orders:
-            self.log_order_action(oo, "posting order")
+        for order in orders:
+            self.add_to_recent_order_executions(order)
+            self.log_order_action(order, "posting order")
         res = await self.execute_orders(orders)
         if not res:
             return
@@ -454,19 +481,18 @@ class Passivbot:
             )
             return []
         to_return = []
-        for ex, od in zip(res, orders):
+        for ex, order in zip(res, orders):
             if not self.did_create_order(ex):
                 print(f"debug did_create_order false {ex}")
                 continue
-            self.add_to_recent_order_executions(od)
             debug_prints = {}
-            for key in od:
+            for key in order:
                 if key not in ex:
-                    debug_prints.setdefault("missing", []).append((key, od[key]))
-                    ex[key] = od[key]
+                    debug_prints.setdefault("missing", []).append((key, order[key]))
+                    ex[key] = order[key]
                 elif ex[key] is None:
-                    debug_prints.setdefault("is_none", []).append((key, od[key]))
-                    ex[key] = od[key]
+                    debug_prints.setdefault("is_none", []).append((key, order[key]))
+                    ex[key] = order[key]
             if debug_prints and self.debug_mode:
                 print("debug create_orders", debug_prints)
             to_return.append(ex)
@@ -489,8 +515,9 @@ class Passivbot:
             except Exception as e:
                 logging.error(f"debug filter cancellations {e}")
                 orders = orders[: self.config["live"]["max_n_cancellations_per_batch"]]
-        for oo in orders:
-            self.log_order_action(oo, "cancelling order")
+        for order in orders:
+            self.add_to_recent_order_cancellations(order)
+            self.log_order_action(order, "cancelling order")
         res = await self.execute_cancellations(orders)
         to_return = []
         if len(orders) != len(res):
@@ -1174,21 +1201,32 @@ class Passivbot:
                 for oo in [elm for sublist in self.open_orders.values() for elm in sublist]
                 if oo["id"] not in oo_ids_new
             ]
-            if len(removed_orders) > 12:
+            schedule_update_positions = False
+            if len(removed_orders) > 20:
                 logging.info(f"removed {len(removed_orders)} orders")
             else:
-                for oo in removed_orders:
-                    self.log_order_action(oo, "removed order", "fetch_open_orders")
-            if len(added_orders) > 12:
+                for order in removed_orders:
+                    if not self.order_was_recently_cancelled(order):
+                        # means order is no longer in open orders, but wasn't cancelled by bot
+                        # possible fill
+                        # force another update_positions
+                        schedule_update_positions = True
+                        self.log_order_action(order, "missing order", "fetch_open_orders")
+                    else:
+                        self.log_order_action(order, "removed order", "fetch_open_orders")
+            if len(added_orders) > 20:
                 logging.info(f"added {len(added_orders)} new orders")
             else:
-                for oo in added_orders:
-                    self.log_order_action(oo, "added order", "fetch_open_orders")
+                for order in added_orders:
+                    self.log_order_action(order, "added order", "fetch_open_orders")
             self.open_orders = {}
             for elm in open_orders:
                 if elm["symbol"] not in self.open_orders:
                     self.open_orders[elm["symbol"]] = []
                 self.open_orders[elm["symbol"]].append(elm)
+            if schedule_update_positions:
+                await asyncio.sleep(1.5)
+                await self.update_positions()
             return True
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
