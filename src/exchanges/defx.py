@@ -40,6 +40,28 @@ class DefxBot(Passivbot):
         self.ccp.options["defaultType"] = "swap"
         self.cca.options["defaultType"] = "swap"
 
+    async def fetch_wallet_collaterals(self):
+        fetched = None
+        try:
+            fetched = await self.cca.fetch2(
+                path="api/wallet/balance/collaterals",
+                api=["v1", "private"],  # tuple-like fallback
+                method="GET",
+                params={},
+            )
+            for i in range(len(fetched)):
+                for k in fetched[i]:
+                    try:
+                        fetched[i][k] = float(fetched[i][k])
+                    except:
+                        pass
+            return fetched
+        except Exception as e:
+            logging.error(f"error fetch_wallet_collaterals {e}")
+            print_async_exception(fetched)
+            traceback.print_exc()
+            return False
+
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
         for symbol in self.markets_dict:
@@ -101,7 +123,7 @@ class DefxBot(Passivbot):
         try:
             fetched_positions, fetched_balance = await asyncio.gather(
                 self.cca.fetch_positions(),
-                self.cca.fetch_balance(),
+                self.fetch_wallet_collaterals(),
             )
             positions = []
             for p in fetched_positions:
@@ -116,9 +138,7 @@ class DefxBot(Passivbot):
                         },
                     }
                 )
-            balance = float(fetched_balance[self.quote]["total"]) + sum(
-                [float(p["info"]["marginAmount"]) for p in fetched_positions]
-            )
+            balance = sum([x["marginValue"] for x in fetched_balance])
             return positions, balance
         except Exception as e:
             logging.error(f"error fetching positions and balance {e}")
