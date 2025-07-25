@@ -288,7 +288,7 @@ class HyperliquidBot(Passivbot):
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(orders, "execute_cancellation")
 
-    def did_cancel_order(self, executed) -> bool:
+    def did_cancel_order(self, executed, order=None) -> bool:
         if isinstance(executed, list) and len(executed) == 1:
             return self.did_cancel_order(executed[0])
         try:
