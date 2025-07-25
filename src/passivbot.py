@@ -63,6 +63,7 @@ from pure_funcs import (
     flatten,
     log_dict_changes,
     coin_to_symbol,
+    ensure_millis,
 )
 
 
@@ -415,7 +416,6 @@ class Passivbot:
             if key in seen:
                 logging.info(f"debug duplicate order create {elm}")
             seen.add(key)
-
         # format custom_id
         if self.debug_mode:
             if to_cancel:
@@ -531,9 +531,9 @@ class Passivbot:
             )
             return []
         for ex, od in zip(res, orders):
-            if not self.did_cancel_order(ex):
+            if not self.did_cancel_order(ex, od):
                 self.state_change_detected_by_symbol.add(od["symbol"])
-                print(f"debug did_cancel_order false {ex}")
+                print(f"debug did_cancel_order false {ex} {od}")
                 continue
             debug_prints = {}
             for key in od:
@@ -564,9 +564,9 @@ class Passivbot:
             return False
         # further tests defined in child class
 
-    def did_cancel_order(self, executed) -> bool:
+    def did_cancel_order(self, executed, order=None) -> bool:
         if isinstance(executed, list) and len(executed) == 1:
-            return self.did_cancel_order(executed[0])
+            return self.did_cancel_order(executed[0], order)
         try:
             return "id" in executed and executed["id"] is not None
         except:
@@ -1079,6 +1079,7 @@ class Passivbot:
         if symbol not in self.ohlcvs_1m:
             self.ohlcvs_1m[symbol] = SortedDict()
         for elm in upd:
+            elm[0] = ensure_millis(elm[0])
             self.ohlcvs_1m[symbol][int(elm[0])] = elm
             self.ohlcvs_1m_update_timestamps_WS[symbol] = utc_ms()
 
@@ -2413,6 +2414,10 @@ def setup_bot(config):
         from exchanges.defx import DefxBot
 
         bot = DefxBot(config)
+    elif user_info["exchange"] == "kucoin":
+        from exchanges.kucoin import KucoinBot
+
+        bot = KucoinBot(config)
     else:
         raise Exception(f"unknown exchange {user_info['exchange']}")
     return bot
