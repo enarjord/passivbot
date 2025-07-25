@@ -277,7 +277,7 @@ class GateIOBot(Passivbot):
             print_async_exception(res)
             traceback.print_exc()
 
-    def did_cancel_order(self, executed):
+    def did_cancel_order(self, executed, order=None):
         if isinstance(executed, list) and len(executed) == 1:
             return self.did_cancel_order(executed[0])
         try:
