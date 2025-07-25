@@ -1705,6 +1705,36 @@ def fills_multi_to_df(fills, symbols, c_mults):
     return fdf.set_index("minute")
 
 
+def ensure_millis(timestamp):
+    """
+    Ensure the timestamp is in milliseconds (float).
+    Accepts input in seconds, milliseconds, microseconds, or nanoseconds.
+    """
+    if not isinstance(timestamp, (int, float)):
+        raise TypeError("Timestamp must be an int or float")
+
+    ts = float(timestamp)
+
+    # Heuristics based on magnitude
+    if ts > 1e16:
+        # Nanoseconds
+        return ts / 1e6
+    elif ts > 1e14:
+        # Microseconds
+        return ts / 1e3
+    elif ts > 1e11:
+        # Milliseconds
+        return ts
+    elif ts > 1e9:
+        # Seconds with decimal (e.g. time.time())
+        return ts * 1e3
+    elif ts > 1e6:
+        # Seconds, older timestamps or less precise
+        return ts * 1e3
+    else:
+        raise ValueError("Timestamp value too small or unrecognized format")
+
+
 def analyze_fills_multi(sdf, fdf, params):
     symbols = [c[: c.find("_price")] for c in sdf.columns if "_price" in c]
     starting_balance = sdf.iloc[0].balance
