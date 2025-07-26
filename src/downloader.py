@@ -27,12 +27,16 @@ import numpy as np
 import pandas as pd
 from dateutil import parser
 from tqdm import tqdm
+from config_utils import (
+    add_arguments_recursively,
+    load_config,
+    get_template_live_config,
+)
 from pure_funcs import (
     date_to_ts,
     ts_to_date_utc,
     safe_filename,
     symbol_to_coin,
-    get_template_live_config,
     coin_to_symbol,
 )
 from procedures import (
@@ -41,8 +45,6 @@ from procedures import (
     utc_ms,
     get_file_mod_utc,
     get_first_timestamps_unified,
-    add_arguments_recursively,
-    load_config,
 )
 
 # ========================= CONFIGURABLES & GLOBALS =========================
@@ -987,7 +989,7 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
             except Exception as e:
                 logging.error(f"error with get_first_timestamp for {coin} {e}. Skipping")
                 traceback.print_exc()
-                continue  
+                continue
             if first_ts >= end_ts:
                 logging.info(
                     f"{exchange} Coin {coin} too young, start date {ts_to_date_utc(first_ts)}. Skipping"

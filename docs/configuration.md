@@ -148,19 +148,37 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
 - **auto_gs**: Automatically enable graceful stop for positions on disapproved coins.
   - Graceful stop: The bot continues trading as normal but does not open a new position after the current position is fully closed.
   - If `auto_gs=false`, positions on disapproved coins are put on manual mode.
-- **coin_flags**:
-  - Specify flags for individual coins, overriding values from bot config.
-  - Example: `coin_flags: {"ETH": "-sm n -lm gs", "XRP": "-lm p -lc path/to/other_config.json"}` forces short mode to normal and long mode to graceful stop for ETH; sets long mode to panic and uses another config for XRP.
-  - Flags:
-    - `-lm` or `-sm`: Long or short mode. Choices: `[n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)]`.
-      - **Normal mode**: Passivbot manages the position as normal.
-      - **Manual mode**: Passivbot ignores the position.
-      - **Graceful stop**: If there is a position, Passivbot manages it; otherwise, no new positions are opened.
-      - **Take profit only mode**: Passivbot only manages closing orders.
-      - **Panic mode**: Passivbot closes the position immediately.
-    - `-lw` or `-sw`: Long or short wallet exposure limit.
-    - `-lev`: Leverage.
-    - `-lc`: Path to live config. Loads all bot parameters from another config except `[n_positions, total_wallet_exposure_limit, unstuck_loss_allowance_pct, unstuck_close_pct, filter_noisiness_rolling_window, filter_volume_rolling_window, filter_volume_drop_pct]`.
+- **coin_overrides**:
+  - Specify full or partial configs for individual coins, overriding values from master config.
+  - Format: {"COIN1": overrides1, "COIN2": overrides2}
+  - Whole configs may be loaded with parameter "override_config_path". May either be full path to config, or filename for alternate config file from the same directory as master config file.
+  - Specific override parameters take precedence over override parameters loaded from external config.
+  - Only a subset of config parameters are eligible for overriding master config:
+    - config.bot.long/short:
+      ```
+      [
+        close_grid_markup_end, close_grid_markup_start, close_grid_qty_pct, close_trailing_grid_ratio, close_trailing_qty_pct,
+        close_trailing_retracement_pct, close_trailing_threshold_pct, ema_span_0, ema_span_1, enforce_exposure_limit,
+        entry_grid_double_down_factor, entry_grid_spacing_pct, entry_grid_spacing_weight, entry_initial_ema_dist,
+        entry_initial_qty_pct, entry_trailing_double_down_factor, entry_trailing_grid_ratio, entry_trailing_retracement_pct,
+        entry_trailing_threshold_pct, unstuck_close_pct, unstuck_ema_dist, unstuck_threshold, wallet_exposure_limit
+      ]
+      ```
+    -config.live:
+    ```
+    [forced_mode_long, forced_mode_short, leverage]
+    ```
+  - Examples:
+    - `{"COIN1": {"override_config_path": "path/to/override_config.json"}}` -- Will attempt to load "path/to/override_config.json" and apply all eligible parameters from there for COIN1
+    - `{"COIN2": {"override_config_path": "path/to/other_override_config.json", {"bot": {"long": {"close_grid_markup_start": 0.005}}}}}` -- Will attempt to load `"path/to/other_override_config.json"` first, and apply `{"bot": {"long": {"close_grid_markup_start": 0.005}}}` after.
+    - `{"COIN3": {"bot": {"short": {"entry_initial_qty_pct": 0.01}}, "live": {"forced_mode_long": "panic"}}}` -- Will apply given overrides for COIN3.
+- **forced_modes**:
+  - Choices: `[n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)]`.
+    - **Normal mode**: Passivbot manages the position as normal.
+    - **Manual mode**: Passivbot ignores the position.
+    - **Graceful stop**: If there is a position, Passivbot manages it; otherwise, no new positions are opened.
+    - **Take profit only mode**: Passivbot only manages closing orders.
+    - **Panic mode**: Passivbot closes the position immediately.
 - **empty_means_all_approved**:
   - If `true`, `approved_coins=[]` means all coins are approved.
   - If `false`, `approved_coins=[]` means no coins are approved.
@@ -229,4 +247,10 @@ Limits can be set in the config file under `optimize.limits` or passed via CLI u
   "penalize_if_greater_than_drawdown_worst": 0.3,
   "penalize_if_lower_than_adg": 0.001
 }
+```
+
+##### CLI arg Example:
+
+```
+python3 src/optimize.py --limits "--penalize_if_lower_than_btc_omega_ratio 3.0 --penalize_if_greater_than_loss_profit_ratio 0.5"
 ```

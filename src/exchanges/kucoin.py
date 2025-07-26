@@ -17,50 +17,30 @@ from procedures import print_async_exception, utc_ms, assert_correct_ccxt_versio
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
-class DefxBot(Passivbot):
+class KucoinBot(Passivbot):
     def __init__(self, config: dict):
         super().__init__(config)
         self.custom_id_max_length = 36  # adjust if needed
-        self.quote = "USDC"
+        self.quote = "USDT"
         self.hedge_mode = False
 
     def create_ccxt_sessions(self):
-        self.ccp = getattr(ccxt_pro, self.exchange)(
+        self.ccp = ccxt_pro.kucoinfutures(
             {
                 "apiKey": self.user_info["key"],
                 "secret": self.user_info["secret"],
+                "password": self.user_info["passphrase"],
             }
         )
-        self.cca = getattr(ccxt_async, self.exchange)(
+        self.cca = ccxt_async.kucoinfutures(
             {
                 "apiKey": self.user_info["key"],
                 "secret": self.user_info["secret"],
+                "password": self.user_info["passphrase"],
             }
         )
         self.ccp.options["defaultType"] = "swap"
         self.cca.options["defaultType"] = "swap"
-
-    async def fetch_wallet_collaterals(self):
-        fetched = None
-        try:
-            fetched = await self.cca.fetch2(
-                path="api/wallet/balance/collaterals",
-                api=["v1", "private"],  # tuple-like fallback
-                method="GET",
-                params={},
-            )
-            for i in range(len(fetched)):
-                for k in fetched[i]:
-                    try:
-                        fetched[i][k] = float(fetched[i][k])
-                    except:
-                        pass
-            return fetched
-        except Exception as e:
-            logging.error(f"error fetch_wallet_collaterals {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
-            return False
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
@@ -123,7 +103,7 @@ class DefxBot(Passivbot):
         try:
             fetched_positions, fetched_balance = await asyncio.gather(
                 self.cca.fetch_positions(),
-                self.fetch_wallet_collaterals(),
+                self.cca.fetch_balance(),
             )
             positions = []
             for p in fetched_positions:
@@ -132,13 +112,13 @@ class DefxBot(Passivbot):
                         **p,
                         **{
                             "symbol": p["symbol"],
-                            "position_side": p["info"]["positionSide"].lower(),
+                            "position_side": p["side"],
                             "size": float(p["contracts"]),
                             "price": float(p["entryPrice"]),
                         },
                     }
                 )
-            balance = sum([x["marginValue"] for x in fetched_balance])
+            balance = fetched_balance["info"]["data"]["marginBalance"]
             return positions, balance
         except Exception as e:
             logging.error(f"error fetching positions and balance {e}")
@@ -158,14 +138,6 @@ class DefxBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_ohlcv(self, symbol: str, timeframe="1m"):
-        try:
-            return await self.cca.fetch_ohlcv(symbol, timeframe=timeframe, limit=1000)
-        except Exception as e:
-            logging.error(f"error fetching ohlcv for {symbol} {e}")
-            traceback.print_exc()
-            return False
-
     async def fetch_ohlcvs_1m(self, symbol: str, limit=None):
         n_candles_limit = 1000 if limit is None else limit
         result = await self.cca.fetch_ohlcv(
@@ -177,6 +149,8 @@ class DefxBot(Passivbot):
 
     async def fetch_pnls(self, start_time=None, end_time=None, limit=None):
         # TODO: impl start_time and end_time
+        # fetch_my_trades + fetch_positions_history
+        return []
         res = await self.cca.fetch_my_trades()
         for i in range(len(res)):
             res[i]["qty"] = res[i]["amount"]
@@ -193,10 +167,8 @@ class DefxBot(Passivbot):
         return await self.execute_multiple(orders, "execute_order")
 
     async def execute_order(self, order: dict) -> dict:
-        # order_type = order["type"] if "type" in order else "limit"
-        order_type = "limit"  # only limit orders
-        reduce_only = False  # reduceOnly=True gives server error
-        # reduce_only = order["reduce_only"] if "reduce_only" in order else False
+        order_type = order["type"] if "type" in order else "limit"
+        reduce_only = order["reduce_only"] if "reduce_only" in order else False
         params = {
             "symbol": order["symbol"],
             "type": order_type,
@@ -206,6 +178,7 @@ class DefxBot(Passivbot):
             "params": {
                 "timeInForce": "GTC",
                 "reduceOnly": reduce_only,
+                "marginMode": "CROSS",
             },
         }
         # print(params)
@@ -213,18 +186,25 @@ class DefxBot(Passivbot):
         # print(executed)
         return executed
 
+    def did_cancel_order(self, executed, order=None) -> bool:
+        if isinstance(executed, list) and len(executed) == 1:
+            return self.did_cancel_order(executed[0], order)
+        try:
+            return (
+                executed.get("info", {}).get("code", "") == "200000"
+                and order is not None
+                and order["id"]
+                in executed.get("info", {}).get("data", "").get("cancelledOrderIds", [])
+            )
+        except:
+            return False
+        # further tests defined in child class
+
     async def execute_cancellation(self, order: dict) -> dict:
         executed = None
         try:
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
-            return {
-                "symbol": executed["symbol"],
-                "side": order["side"],
-                "id": executed["id"],
-                "position_side": order["position_side"],
-                "qty": order["qty"],
-                "price": order["price"],
-            }
+            return executed
         except Exception as e:
             logging.error(f"error cancelling order {order} {e}")
             print_async_exception(executed)
@@ -243,7 +223,7 @@ class DefxBot(Passivbot):
         # call some endpoint which includes timestamp for exchange's server
         # if timestamp is not included in self.cca.fetch_balance(),
         # implement method in exchange child class
-        result = await self.cca.fetch_ticker("BTC/USDC:USDC")
+        result = await self.cca.fetch_ticker("BTC/USDT:USDT")
         self.utc_offset = round((result["timestamp"] - utc_ms()) / (1000 * 60 * 60)) * (
             1000 * 60 * 60
         )
@@ -251,7 +231,34 @@ class DefxBot(Passivbot):
             logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
 
     async def update_exchange_config_by_symbols(self, symbols):
-        coros_to_call_leverage = {}
+        coros_to_call = []
+        for symbol in symbols:
+            try:
+                params = {
+                    "marginMode": "cross",
+                    "symbol": symbol,
+                }
+                coros_to_call.append(
+                    (
+                        symbol,
+                        "set_margin_mode",
+                        asyncio.create_task(self.cca.set_margin_mode(**params)),
+                    )
+                )
+            except Exception as e:
+                logging.error(f"{symbol}: error set_margin_mode {e}")
+        for symbol, task_name, task in coros_to_call:
+            res = None
+            to_print = ""
+            try:
+                res = await task
+                to_print += f"{task_name} {res}"
+            except Exception as e:
+                logging.error(f"{symbol} error {task_name} {res} {e}")
+            if to_print:
+                logging.info(f"{symbol}: {to_print}")
+
+        coros_to_call = []
         for symbol in symbols:
             try:
                 params = {
@@ -259,33 +266,23 @@ class DefxBot(Passivbot):
                         min(
                             self.max_leverage[symbol],
                             self.config_get(["live", "leverage"], symbol=symbol),
-                            pbr.round_up(
-                                max(
-                                    self.get_wallet_exposure_limit("long", symbol),
-                                    self.get_wallet_exposure_limit("short", symbol),
-                                )
-                                * 1.1,
-                                1,
-                            ),
                         )
                     ),
                     "symbol": symbol,
+                    "params": {"marginMode": "cross"},
                 }
-                print("debug update_exchange_config_by_symbols", params)
-                coros_to_call_leverage[symbol] = asyncio.create_task(self.cca.set_leverage(**params))
+                coros_to_call.append(
+                    (symbol, "set_leverage", asyncio.create_task(self.cca.set_leverage(**params)))
+                )
             except Exception as e:
-                logging.error(f"{symbol}: error setting leverage {e}")
-        for symbol in symbols:
+                logging.error(f"{symbol}: error set_margin_mode {e}")
+        for symbol, task_name, task in coros_to_call:
             res = None
             to_print = ""
             try:
-                res = await coros_to_call_leverage[symbol]
-                to_print += f"set leverage {res}"
+                res = await task
+                to_print += f"{task_name} {res}"
             except Exception as e:
-                if '"code":"59107"' in e.args[0]:
-                    to_print += f" cross mode and leverage: {res} {e}"
-                else:
-                    logging.error(f"{symbol} error setting leverage {res} {e}")
+                logging.error(f"{symbol} error {task_name} {res} {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
-        return

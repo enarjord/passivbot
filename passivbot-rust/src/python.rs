@@ -29,7 +29,7 @@ pub fn run_backtest(
     hlcvs_dtype: &str,                  // Dtype of HLCV data
     btc_usd_shared_memory_file: &str,   // New BTC/USD shared memory file
     btc_usd_dtype: &str,                // Dtype of BTC/USD data
-    bot_params_pair_dict: &PyDict,      // Bot parameters
+    bot_params: &PyAny,                 // Bot parameters per coin
     exchange_params_list: &PyAny,       // Exchange parameters
     backtest_params_dict: &PyDict,      // Backtest parameters
 ) -> PyResult<(
@@ -80,8 +80,18 @@ pub fn run_backtest(
         )));
     }
 
-    // Prepare bot, exchange, and backtest parameters
-    let bot_params_pair = bot_params_pair_from_dict(bot_params_pair_dict)?;
+    let bot_params_py_list = bot_params
+        .downcast::<PyList>()
+        .map_err(|_| PyValueError::new_err("bot_params must be a list[dict] (one per coin)"))?;
+
+    let mut bot_params_vec = Vec::with_capacity(bot_params_py_list.len());
+    for item in bot_params_py_list {
+        let dict = item
+            .downcast::<PyDict>()
+            .map_err(|_| PyValueError::new_err("each bot_params element must be a dict"))?;
+        bot_params_vec.push(bot_params_pair_from_dict(dict)?);
+    }
+
     let exchange_params = {
         let mut params_vec = Vec::new();
         if let Ok(py_list) = exchange_params_list.downcast::<PyList>() {
@@ -107,7 +117,7 @@ pub fn run_backtest(
     let mut backtest = Backtest::new(
         &hlcvs_rust,
         &btc_usd_rust,
-        bot_params_pair,
+        bot_params_vec,
         exchange_params,
         &backtest_params,
     );
@@ -334,7 +344,6 @@ pub fn calc_next_entry_long_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let next_entry = calc_next_entry_long(
         &exchange_params,
@@ -412,7 +421,6 @@ pub fn calc_next_close_long_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let next_entry = calc_next_close_long(
         &exchange_params,
@@ -496,7 +504,6 @@ pub fn calc_next_entry_short_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let next_entry = calc_next_entry_short(
         &exchange_params,
@@ -574,7 +581,6 @@ pub fn calc_next_close_short_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let next_entry = calc_next_close_short(
         &exchange_params,
@@ -661,7 +667,6 @@ pub fn calc_entries_long_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let entries = calc_entries_long(
         &exchange_params,
@@ -749,7 +754,6 @@ pub fn calc_entries_short_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let entries = calc_entries_short(
         &exchange_params,
@@ -830,7 +834,6 @@ pub fn calc_closes_long_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let closes = calc_closes_long(
         &exchange_params,
@@ -910,7 +913,6 @@ pub fn calc_closes_short_py(
         max_since_min: max_since_min,
         max_since_open: max_since_open,
         min_since_max: min_since_max,
-        ..Default::default()
     };
     let closes = calc_closes_short(
         &exchange_params,

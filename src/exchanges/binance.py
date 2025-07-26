@@ -107,18 +107,6 @@ class BinanceBot(Passivbot):
             self.qty_steps[symbol] = elm["precision"]["amount"]
             self.c_mults[symbol] = elm["contractSize"]
 
-    async def watch_balance(self):
-        while True:
-            try:
-                if self.stop_websocket:
-                    break
-                res = await self.ccp.watch_balance()
-                self.handle_balance_update(res)
-            except Exception as e:
-                logging.error(f"exception watch_balance {e}")
-                traceback.print_exc()
-                await asyncio.sleep(1)
-
     async def watch_orders(self):
         while True:
             try:
@@ -287,9 +275,12 @@ class BinanceBot(Passivbot):
             limit = 1000
         else:
             limit = min(limit, 1000)
-        if start_time is None and end_time is None:
-            return await self.fetch_pnl(limit=limit)
+        if end_time is None:
+            if start_time is None:
+                return await self.fetch_pnl(limit=limit)
+            end_time = self.get_exchange_time() + 1000 * 60 * 60
         all_fetched = {}
+        week = 1000 * 60 * 60 * 24 * 7
         while True:
             fetched = await self.fetch_pnl(start_time, end_time, limit)
             if fetched == []:
@@ -298,10 +289,17 @@ class BinanceBot(Passivbot):
                 break
             for elm in fetched:
                 all_fetched[elm["tradeId"]] = elm
-            if start_time and end_time and len(fetched) < limit:
-                # means fetched all pnls inside [start_time, end_time] range
-                break
-            logging.info(f"fetched pnls until {ts_to_date_utc(fetched[-1]['timestamp'])[:19]}")
+            if len(fetched) < limit:
+                if start_time:
+                    if end_time:
+                        if end_time - start_time < week:
+                            break
+                    else:
+                        if self.get_exchange_time() - start_time < week:
+                            break
+            logging.info(
+                f"fetched {len(fetched)} pnls from {ts_to_date_utc(fetched[0]['timestamp'])[:19]} until {ts_to_date_utc(fetched[-1]['timestamp'])[:19]}"
+            )
             start_time = fetched[-1]["timestamp"]
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
 
@@ -329,14 +327,16 @@ class BinanceBot(Passivbot):
                 week = 1000 * 60 * 60 * 24 * 7.0
                 start_time_sub = start_time
                 while True:
+                    param_start_time = int(min(start_time_sub, self.get_exchange_time() - 1000 * 60))
+                    param_end_time = max(
+                        param_start_time, int(min(end_time, start_time_sub + week * 0.999))
+                    )
                     fills = await self.cca.fetch_my_trades(
                         symbol,
                         limit=limit,
                         params={
-                            "startTime": int(
-                                min(start_time_sub, self.get_exchange_time() - 1000 * 60)
-                            ),
-                            "endTime": int(min(end_time, start_time_sub + week * 0.999)),
+                            "startTime": param_start_time,
+                            "endTime": param_end_time,
                         },
                     )
                     if not fills:
@@ -503,7 +503,9 @@ class BinanceBot(Passivbot):
                 logging.error(f"{symbol}: error setting cross mode {e}")
             try:
                 coros_to_call_lev[symbol] = asyncio.create_task(
-                    self.cca.set_leverage(int(self.live_configs[symbol]["leverage"]), symbol=symbol)
+                    self.cca.set_leverage(
+                        int(self.config_get(["live", "leverage"], symbol=symbol)), symbol=symbol
+                    )
                 )
             except Exception as e:
                 logging.error(f"{symbol}: a error setting leverage {e}")

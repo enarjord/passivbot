@@ -84,25 +84,6 @@ class HyperliquidBot(Passivbot):
         self.n_decimal_places = 6
         self.n_significant_figures = 5
 
-    async def watch_balance(self):
-        # hyperliquid ccxt watch balance not supported.
-        # relying instead on periodic REST updates
-        res = None
-        while True:
-            try:
-                if self.stop_websocket:
-                    break
-                res = await self.cca.fetch_balance()
-                res[self.quote]["total"] = float(res["info"]["marginSummary"]["accountValue"]) - sum(
-                    [float(x["position"]["unrealizedPnl"]) for x in res["info"]["assetPositions"]]
-                )
-                self.handle_balance_update(res)
-                await asyncio.sleep(10)
-            except Exception as e:
-                logging.error(f"exception watch_balance {res} {e}")
-                traceback.print_exc()
-                await asyncio.sleep(1)
-
     async def watch_orders(self):
         res = None
         while True:
@@ -307,9 +288,11 @@ class HyperliquidBot(Passivbot):
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(orders, "execute_cancellation")
 
-    def did_cancel_order(self, cancelled) -> bool:
+    def did_cancel_order(self, executed, order=None) -> bool:
+        if isinstance(executed, list) and len(executed) == 1:
+            return self.did_cancel_order(executed[0])
         try:
-            return "status" in cancelled and cancelled["status"] == "success"
+            return "status" in executed and executed["status"] == "success"
         except:
             return False
 
@@ -405,7 +388,7 @@ class HyperliquidBot(Passivbot):
                     "leverage": int(
                         min(
                             self.max_leverage[symbol],
-                            self.live_configs[symbol]["leverage"],
+                            self.config_get(["live", "leverage"], symbol=symbol),
                         )
                     )
                 }

@@ -223,6 +223,8 @@ class BitgetBot(Passivbot):
             for h, x in with_hashes.items():
                 data_d[h] = x
                 data_d[h]["pnl"] = float(x["profit"])
+                data_d[h]["price"] = float(x["price"])
+                data_d[h]["amount"] = float(x["baseVolume"])
                 data_d[h]["id"] = x["tradeId"]
                 data_d[h]["timestamp"] = float(x["cTime"])
                 data_d[h]["datetime"] = ts_to_date_utc(data_d[h]["timestamp"])
@@ -351,7 +353,9 @@ class BitgetBot(Passivbot):
                 logging.error(f"{symbol}: error setting cross mode {e}")
             try:
                 coros_to_call_lev[symbol] = asyncio.create_task(
-                    self.cca.set_leverage(int(self.live_configs[symbol]["leverage"]), symbol=symbol)
+                    self.cca.set_leverage(
+                        int(self.config_get(["live", "leverage"], symbol=symbol)), symbol=symbol
+                    )
                 )
             except Exception as e:
                 logging.error(f"{symbol}: a error setting leverage {e}")
