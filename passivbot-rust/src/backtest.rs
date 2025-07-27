@@ -279,19 +279,12 @@ impl<'a> Backtest<'a> {
             }
         }
 
-        let mut prev_balance = 0.0;
-
         for k in 1..(n_timesteps - 1) {
             self.check_for_fills(k);
-
             self.update_emas(k);
-
             self.update_rounded_balance(k);
-
             self.update_trailing_prices(k);
-
             self.update_open_orders_all(k);
-            prev_balance = self.balance.usd;
             self.update_equities(k);
         }
         (self.fills.clone(), self.equities.clone())
