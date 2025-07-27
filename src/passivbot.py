@@ -1931,8 +1931,9 @@ class Passivbot:
             if symbol not in self.emas["long"]:
                 self.init_EMAs_single(symbol)
             last_ts, last_ohlcv_1m = self.ohlcvs_1m[symbol].peekitem(-1)
-            mn = ONE_MIN_MS
-            for ts in range(self.upd_minute_emas[symbol] + mn, last_ts + mn, mn):
+            for ts in range(
+                self.upd_minute_emas[symbol] + ONE_MIN_MS, last_ts + ONE_MIN_MS, ONE_MIN_MS
+            ):
                 for pside in ["long", "short"]:
                     self.emas[pside][symbol] = calc_ema(
                         self.ema_alphas[pside][symbol][0],
