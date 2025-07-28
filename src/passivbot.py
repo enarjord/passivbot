@@ -1,4 +1,7 @@
 import os
+# fix Crashes on Windows
+from tools.event_loop_policy import set_windows_event_loop_policy
+set_windows_event_loop_policy()
 
 if "NOJIT" not in os.environ:
     os.environ["NOJIT"] = "true"
