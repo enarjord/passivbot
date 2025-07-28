@@ -57,14 +57,33 @@ After installation, restart the terminal or command prompt.
 
 Create a virtual environment to manage dependencies:
 
+🟢 **Linux/macOS:**
 ```sh
 python3 -m venv venv
 ```
 
+🟦 **Windows (Command Prompt or PowerShell):**
+```cmd
+python -m venv venv
+```
+
+> 💡 Use `python3` if `python` points to Python 2 on your system.
+
 Activate the virtual environment:
 
+🟢 **Linux/macOS:**
 ```sh
 source venv/bin/activate
+```
+
+🟦 **Windows (Command Prompt):**
+```cmd
+venv\Scripts\activate
+```
+
+🟪 **Windows (PowerShell):**
+```powershell
+.\venv\Scripts\Activate.ps1
 ```
 
 ### Step 4: Install Python Dependencies
