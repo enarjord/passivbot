@@ -297,13 +297,6 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
     coins = sorted(set(config["backtest"]["coins"][exchange]))
     bot_params_list = []
     bot_params_template = deepcopy(config["bot"])
-    for pside in bot_params_template:
-        n_positions = max(0, min(int(round(bot_params_template[pside]["n_positions"])), len(coins)))
-        bot_params_template[pside]["wallet_exposure_limit"] = (
-            bot_params_template[pside]["total_wallet_exposure_limit"] / n_positions
-            if n_positions > 0
-            else 0.0
-        )
     for coin in coins:
         coin_specific_bot_params = deepcopy(bot_params_template)
         if coin in config.get("coin_overrides", {}):
@@ -316,6 +309,9 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
                     config["coin_overrides"].get("live", {}).get(f"forced_mode_{pside}", "")
                     == "normal"
                 )
+        for pside in ['long', 'short']:
+            if 'wallet_exposure_limit' not in config["coin_overrides"].get(coin, {}).get("bot", {}).get(pside, {}):
+                coin_specific_bot_params[pside]['wallet_exposure_limit'] = -1.0
         bot_params_list.append(coin_specific_bot_params)
     if exchange_params is None:
         exchange_params = [
