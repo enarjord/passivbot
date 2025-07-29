@@ -37,6 +37,19 @@ pub struct EMAs {
     pub long: [f64; 3],
     pub short: [f64; 3],
 }
+
+#[derive(Debug, Clone)]
+pub struct TotalWalletExposureLimit {
+    pub long: f64,
+    pub short: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct EffectiveNPositions {
+    pub long: usize,
+    pub short: usize,
+}
+
 impl EMAs {
     pub fn compute_bands(&self, pside: usize) -> EMABands {
         let (upper, lower) = match pside {
@@ -117,6 +130,9 @@ pub struct Backtest<'a> {
     btc_usd_prices: &'a ArrayView1<'a, f64>, // Change to ArrayView1 (1D view)
     bot_params_master: BotParamsPair,
     bot_params: Vec<BotParamsPair>,
+    bot_params_original: Vec<BotParamsPair>,
+    total_wallet_exposure_limit: TotalWalletExposureLimit,
+    effective_n_positions: EffectiveNPositions,
     exchange_params_list: Vec<ExchangeParams>,
     backtest_params: BacktestParams,
     pub balance: Balance,
@@ -186,6 +202,15 @@ impl<'a> Backtest<'a> {
         bot_params_master.long.n_positions = n_coins.min(bot_params_master.long.n_positions);
         bot_params_master.short.n_positions = n_coins.min(bot_params_master.short.n_positions);
 
+        // Store original bot params to preserve dynamic WEL indicators
+        let bot_params_original = bot_params.clone();
+
+        // Extract total wallet exposure limits
+        let total_wallet_exposure_limit = TotalWalletExposureLimit {
+            long: bot_params_master.long.total_wallet_exposure_limit,
+            short: bot_params_master.short.total_wallet_exposure_limit,
+        };
+
         let n_eligible_long = bot_params_master.long.n_positions.max(
             (n_coins as f64 * (1.0 - bot_params_master.long.filter_volume_drop_pct)).round()
                 as usize,
@@ -194,6 +219,10 @@ impl<'a> Backtest<'a> {
             (n_coins as f64 * (1.0 - bot_params_master.short.filter_volume_drop_pct)).round()
                 as usize,
         );
+        let effective_n_positions = EffectiveNPositions {
+            long: n_eligible_long,
+            short: n_eligible_short,
+        };
 
         // Calculate EMA alphas for each coin
         let ema_alphas: Vec<EmaAlphas> = bot_params.iter().map(|bp| calc_ema_alphas(bp)).collect();
@@ -215,6 +244,9 @@ impl<'a> Backtest<'a> {
             btc_usd_prices,
             bot_params_master: bot_params_master.clone(),
             bot_params: bot_params.clone(),
+            bot_params_original,
+            total_wallet_exposure_limit,
+            effective_n_positions,
             exchange_params_list,
             backtest_params: backtest_params.clone(),
             balance,
@@ -284,10 +316,63 @@ impl<'a> Backtest<'a> {
             self.update_emas(k);
             self.update_rounded_balance(k);
             self.update_trailing_prices(k);
+            self.update_n_positions_and_wallet_exposure_limits(k);
             self.update_open_orders_all(k);
             self.update_equities(k);
         }
         (self.fills.clone(), self.equities.clone())
+    }
+
+    fn update_n_positions_and_wallet_exposure_limits(&mut self, k: usize) {
+        let last_ts = self.hlcvs.shape()[0] - 1;
+        let eligible: Vec<usize> = (0..self.n_coins)
+            .filter(|&idx| {
+                let first = *self.first_valid_timestamps.get(&idx).unwrap_or(&0);
+                let last = *self.last_valid_timestamps.get(&idx).unwrap_or(&last_ts);
+                k >= first && k <= last
+            })
+            .collect();
+
+        if eligible.is_empty() {
+            return; // nothing tradable right now
+        }
+
+        // ---------- 2. effective position counts ----------
+        self.effective_n_positions.long =
+            self.bot_params_master.long.n_positions.min(eligible.len());
+        self.effective_n_positions.short =
+            self.bot_params_master.short.n_positions.min(eligible.len());
+
+        // avoid division by zero (possible directly after a delisting)
+        if self.effective_n_positions.long == 0 && self.effective_n_positions.short == 0 {
+            return;
+        }
+
+        // ---------- 3. dynamic WELs ----------
+        let dyn_wel_long = if self.effective_n_positions.long > 0 {
+            self.bot_params_master.long.total_wallet_exposure_limit
+                / self.effective_n_positions.long as f64
+        } else {
+            0.0
+        };
+        let dyn_wel_short = if self.effective_n_positions.short > 0 {
+            self.bot_params_master.short.total_wallet_exposure_limit
+                / self.effective_n_positions.short as f64
+        } else {
+            0.0
+        };
+
+        // ---------- 4. apply to every eligible coin ----------
+        for &idx in &eligible {
+            // long side
+            if self.bot_params_original[idx].long.wallet_exposure_limit < 0.0 {
+                self.bot_params[idx].long.wallet_exposure_limit = dyn_wel_long;
+            }
+            // short side
+            if self.bot_params_original[idx].short.wallet_exposure_limit < 0.0 {
+                self.bot_params[idx].short.wallet_exposure_limit = dyn_wel_short;
+            }
+        }
     }
 
     #[inline(always)]
@@ -318,8 +403,8 @@ impl<'a> Backtest<'a> {
 
     pub fn calc_preferred_coins(&mut self, k: usize, pside: usize) -> Vec<usize> {
         let n_positions = match pside {
-            LONG => self.bot_params_master.long.n_positions,
-            SHORT => self.bot_params_master.short.n_positions,
+            LONG => self.effective_n_positions.long,
+            SHORT => self.effective_n_positions.short,
             _ => panic!("Invalid pside"),
         };
 
@@ -505,7 +590,7 @@ impl<'a> Backtest<'a> {
     }
 
     fn update_actives_long(&mut self, k: usize) -> Vec<usize> {
-        let n_positions = self.bot_params_master.long.n_positions;
+        let n_positions = self.effective_n_positions.long;
 
         let mut current_positions: Vec<usize> = self.positions.long.keys().cloned().collect();
         current_positions.sort();
@@ -536,7 +621,7 @@ impl<'a> Backtest<'a> {
     }
 
     fn update_actives_short(&mut self, k: usize) -> Vec<usize> {
-        let n_positions = self.bot_params_master.short.n_positions;
+        let n_positions = self.effective_n_positions.short;
 
         let mut current_positions: Vec<usize> = self.positions.short.keys().cloned().collect();
         current_positions.sort();
@@ -1281,7 +1366,7 @@ impl<'a> Backtest<'a> {
         self.open_orders = OpenOrders::default();
         if self.trading_enabled.long {
             let mut active_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
-            if self.positions.long.len() != self.bot_params_master.long.n_positions {
+            if self.positions.long.len() != self.effective_n_positions.long {
                 self.update_actives_long(k);
                 active_long_indices = self.actives.long.iter().cloned().collect();
             }
@@ -1293,7 +1378,7 @@ impl<'a> Backtest<'a> {
         if self.trading_enabled.short {
             let mut active_short_indices: Vec<usize> =
                 self.positions.short.keys().cloned().collect();
-            if self.positions.short.len() != self.bot_params_master.short.n_positions {
+            if self.positions.short.len() != self.effective_n_positions.short {
                 self.update_actives_short(k);
                 active_short_indices = self.actives.short.iter().cloned().collect();
             }
