@@ -29,7 +29,7 @@
                   "filter_noisiness_rolling_window": 211.7,
                   "filter_volume_drop_pct": 0.9535,
                   "filter_volume_rolling_window": 1140,
-                  "n_positions": 4.5,
+                  "n_positions": 5.0,
                   "total_wallet_exposure_limit": 2,
                   "unstuck_close_pct": 0.04126,
                   "unstuck_ema_dist": 0.008573,
