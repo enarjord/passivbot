@@ -552,6 +552,9 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
         template["optimize"]["bounds"], result["optimize"]["bounds"], verbose=verbose
     )
 
+    for pside in result['bot']:
+        result['bot'][pside]['n_positions'] = int(round(result['bot'][pside]['n_positions']))
+
     if not live_only:
         # unneeded adjustments if running live
         for k in ("approved_coins", "ignored_coins"):
