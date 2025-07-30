@@ -419,12 +419,12 @@ class Passivbot:
         # format custom_id
         if self.debug_mode:
             if to_cancel:
-                print(f"would cancel {len(to_cancel)} orders")
+                print(f"would cancel {len(to_cancel)} order{'s' if len(to_cancel) > 1 else ''}")
         else:
             res = await self.execute_cancellations_parent(to_cancel)
         if self.debug_mode:
             if to_create:
-                print(f"would create {len(to_create)} orders")
+                print(f"would create {len(to_create)} order{'s' if len(to_create) > 1 else ''}")
         elif self.balance < self.balance_threshold:
             logging.info(f"Balance too low: {self.balance} {self.quote}. Not creating any orders.")
         else:
