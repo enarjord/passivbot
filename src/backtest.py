@@ -309,9 +309,11 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
                     config["coin_overrides"].get("live", {}).get(f"forced_mode_{pside}", "")
                     == "normal"
                 )
-        for pside in ['long', 'short']:
-            if 'wallet_exposure_limit' not in config["coin_overrides"].get(coin, {}).get("bot", {}).get(pside, {}):
-                coin_specific_bot_params[pside]['wallet_exposure_limit'] = -1.0
+        for pside in ["long", "short"]:
+            if "wallet_exposure_limit" not in config["coin_overrides"].get(coin, {}).get(
+                "bot", {}
+            ).get(pside, {}):
+                coin_specific_bot_params[pside]["wallet_exposure_limit"] = -1.0
         bot_params_list.append(coin_specific_bot_params)
     if exchange_params is None:
         exchange_params = [
