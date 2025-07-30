@@ -1010,11 +1010,6 @@ class Passivbot:
                     self.coin_overrides[symbol]["bot"][pside]["wallet_exposure_limit"] = (
                         self.get_wallet_exposure_limit(pside, symbol)
                     )
-                    print(
-                        "debug set_wallet_exposure_limits",
-                        symbol,
-                        self.coin_overrides[symbol]["bot"][pside]["wallet_exposure_limit"],
-                    )
 
     def get_wallet_exposure_limit(self, pside, symbol=None):
         if symbol:
