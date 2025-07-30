@@ -13,6 +13,7 @@ from pure_funcs import (
     shorten_custom_id,
 )
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
+from collections import defaultdict
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
@@ -148,20 +149,82 @@ class KucoinBot(Passivbot):
         return result
 
     async def fetch_pnls(self, start_time=None, end_time=None, limit=None):
-        # TODO: impl start_time and end_time
-        # fetch_my_trades + fetch_positions_history
-        return []
-        res = await self.cca.fetch_my_trades()
-        for i in range(len(res)):
-            res[i]["qty"] = res[i]["amount"]
-            res[i]["pnl"] = float(res[i]["info"]["pnl"])
-            if res[i]["side"] == "buy":
-                res[i]["position_side"] = "long" if res[i]["pnl"] == 0.0 else "short"
-            elif res[i]["side"] == "sell":
-                res[i]["position_side"] = "short" if res[i]["pnl"] == 0.0 else "long"
+        params = {}
+        if end_time:
+            params["until"] = int(end_time)
+        if start_time:
+            start_time = int(start_time)
+            params["paginate"] = True
+        # fetch fills...
+        mt = await self.cca.fetch_my_trades(since=start_time, params=params)
+        for i in range(len(mt)):
+            mt[i]["qty"] = mt[i]["amount"]
+            mt[i]["pnl"] = 0.0
+            if mt[i]["side"] == "buy":
+                mt[i]["position_side"] = (
+                    "long" if float(mt[i]["info"]["closeFeePay"]) == 0.0 else "short"
+                )
+            elif mt[i]["side"] == "sell":
+                mt[i]["position_side"] = (
+                    "short" if float(mt[i]["info"]["closeFeePay"]) == 0.0 else "long"
+                )
             else:
-                raise Exception(f"invalid side {res[i]}")
-        return res
+                raise Exception(f"invalid side {mt[i]}")
+        mt = sorted(mt, key=lambda x: x["timestamp"])
+        closes = [
+            x
+            for x in mt
+            if (x["side"] == "sell" and x["position_side"] == "long")
+            or (x["side"] == "buy" and x["position_side"] == "short")
+        ]
+        if not closes:
+            return mt
+
+        # fetch pos history for pnls
+        ph = await self.cca.fetch_positions_history(
+            since=closes[0]["timestamp"] - 60000, params={"until": closes[-1]["timestamp"] + 60000}
+        )
+
+        # match up...
+        cld, phd = defaultdict(list), defaultdict(list)
+        for x in closes:
+            cld[x["symbol"]].append(x)
+        for x in ph:
+            phd[x["symbol"]].append(x)
+        matches = []
+        seen_trade_id = set()
+        for symbol in phd:
+            if symbol not in cld:
+                print(f"debug no fills for pos close {symbol} {phd[symbol]}")
+                continue
+            for p in phd[symbol]:
+                with_td = sorted(
+                    [x for x in cld[symbol] if x["id"] not in seen_trade_id],
+                    key=lambda x: abs(p["lastUpdateTimestamp"] - x["timestamp"]),
+                )
+                best_match = with_td[0]
+                matches.append((p, best_match))
+                print(
+                    f"debug best match fill and pos close {symbol} timedelta {best_match['timestamp'] - p['lastUpdateTimestamp']}ms"
+                )
+                seen_trade_id.add(best_match["id"])
+            if len(phd[symbol]) != len(cld[symbol]):
+                print(
+                    f"debug len mismatch between closes and positions_history for {symbol}: {len(closes[symbol])} {len(phd[symbol])}"
+                )
+        # add pnls, dedup and return
+        deduped = {}
+        for p, c in matches:
+            c["pnl"] = p["realizedPnl"]
+            if c["id"] in deduped:
+                print(f"debug unexpected duplicate {c}")
+                continue
+            deduped[c["id"]] = c
+        for t in mt:
+            if t["id"] not in deduped:
+                deduped[t["id"]] = t
+
+        return sorted(deduped.values(), key=lambda x: x["timestamp"])
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(orders, "execute_order")
@@ -190,15 +253,9 @@ class KucoinBot(Passivbot):
         if isinstance(executed, list) and len(executed) == 1:
             return self.did_cancel_order(executed[0], order)
         try:
-            return (
-                executed.get("info", {}).get("code", "") == "200000"
-                and order is not None
-                and order["id"]
-                in executed.get("info", {}).get("data", "").get("cancelledOrderIds", [])
-            )
+            return order is not None and order["id"] in executed.get("cancelledOrderIds", [])
         except:
             return False
-        # further tests defined in child class
 
     async def execute_cancellation(self, order: dict) -> dict:
         executed = None
