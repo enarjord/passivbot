@@ -163,11 +163,11 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
     - `{"COIN2": {"override_config_path": "path/to/other_override_config.json", {"bot": {"long": {"close_grid_markup_start": 0.005}}}}}` -- Will attempt to load `"path/to/other_override_config.json"` first, and apply `{"bot": {"long": {"close_grid_markup_start": 0.005}}}` after.
     - `{"COIN3": {"bot": {"short": {"entry_initial_qty_pct": 0.01}}, "live": {"forced_mode_long": "panic"}}}` -- Will apply given overrides for COIN3.
 - **forced_modes**:
-  - Choices: `[n (normal), m (manual), gs (graceful_stop), p (panic), t (take_profit_only)]`.
+  - Choices: `[n (normal), m (manual), gs (graceful_stop), t (tp_only), p (panic)]`.
     - **Normal mode**: Passivbot manages the position as normal.
     - **Manual mode**: Passivbot ignores the position.
     - **Graceful stop**: If there is a position, Passivbot manages it; otherwise, no new positions are opened.
-    - **Take profit only mode**: Passivbot only manages closing orders.
+    - **Take Profit Only mode**: Passivbot only manages closing orders.
     - **Panic mode**: Passivbot closes the position immediately.
 
 ## Live Trading Settings
