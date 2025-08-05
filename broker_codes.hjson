@@ -5,7 +5,18 @@
 	bybit: "passivbotbybit"
 	bitget: "Passivbot"
 	okx: "0fe0667832d7BCDE"
-	kucoin: ""
+	kucoin: {
+		"spot": {
+			"partner": "passivbot",
+			"broker-key": "cf4399a3-65cb-4489-9a19-15f78457398a",
+			"broker-name": "passivbot"
+		},
+		"futures": {
+			"partner": "passivbotFutures",
+			"broker-key": "678679be-b2bc-4642-9f27-5b7da68d88b1",
+			"broker-name": "passivbotFutures"
+		}
+	}
 	mexc: ""
 	hyperliquid: ""
 	gateio: "passivbot"
