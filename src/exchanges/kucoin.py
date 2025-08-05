@@ -1,3 +1,4 @@
+from __future__ import annotations
 from passivbot import Passivbot, logging
 from uuid import uuid4
 import ccxt.pro as ccxt_pro
@@ -14,6 +15,50 @@ from pure_funcs import (
 )
 from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
 from collections import defaultdict
+from typing import Any
+import hmac
+import hashlib
+import base64
+
+# ---------------------------------------------------------------------------
+# Broker mixin classes for injecting KC-BROKER-NAME on KuCoin futures requests.
+#
+# When a broker configuration is provided via the ``options['partner']``
+# dictionary (see ``create_ccxt_sessions`` below), CCXT automatically adds
+# ``KC-API-PARTNER``, ``KC-API-PARTNER-SIGN`` and ``KC-API-PARTNER-VERIFY``
+# headers to private API calls.  However, the human friendly broker name
+# (``KC-BROKER-NAME``) is only attached on broker-specific endpoints.  To
+# ensure KuCoin attributes futures trades to the broker, we override the
+# ``sign`` method to append the broker name on private and futuresPrivate
+# requests.  These classes should be used instead of the vanilla CCXT
+# exchange classes when broker codes are defined.
+
+class _KucoinBrokerMixin:
+    def sign(self, path: str, api: str = 'public', method: str = 'GET', params: dict | None = None, headers: dict | None = None, body: Any | None = None) -> dict:
+        # Call the base class to sign and construct the request
+        signed = super().sign(path, api, method, params or {}, headers, body)
+        try:
+            # Attach broker name on private, futuresPrivate or broker endpoints
+            if api in {'private', 'futuresPrivate', 'broker'}:
+                partner_root = getattr(self, 'options', {}).get('partner') or {}
+                partner_cfg = partner_root.get('future', partner_root) if isinstance(partner_root, dict) else {}
+                broker_name = partner_cfg.get('name') if isinstance(partner_cfg, dict) else None
+                if broker_name:
+                    hdrs = dict(signed.get('headers') or {})
+                    hdrs['KC-BROKER-NAME'] = broker_name
+                    signed['headers'] = hdrs
+        except Exception:
+            # Fail silently if we can't attach broker headers
+            pass
+        return signed
+
+class AsyncKucoinBrokerFutures(_KucoinBrokerMixin, ccxt_async.kucoinfutures):
+    """Asynchronous KuCoin futures exchange with broker tagging support."""
+    pass
+
+class ProKucoinBrokerFutures(_KucoinBrokerMixin, ccxt_pro.kucoinfutures):
+    """Websocket-enabled KuCoin futures exchange with broker tagging support."""
+    pass
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
@@ -21,27 +66,89 @@ assert_correct_ccxt_version(ccxt=ccxt_async)
 class KucoinBot(Passivbot):
     def __init__(self, config: dict):
         super().__init__(config)
-        self.custom_id_max_length = 36  # adjust if needed
+        self.custom_id_max_length = 40
         self.quote = "USDT"
         self.hedge_mode = False
 
-    def create_ccxt_sessions(self):
-        self.ccp = ccxt_pro.kucoinfutures(
-            {
-                "apiKey": self.user_info["key"],
-                "secret": self.user_info["secret"],
-                "password": self.user_info["passphrase"],
+    def get_broker_headers(self) -> dict:
+        broker_codes = self.broker_code.get("futures", {})
+        if broker_codes and all(
+            [x in broker_codes for x in ["partner", "broker-key", "broker-name"]]
+        ):
+            return {
+                "KC-API-PARTNER": broker_codes["partner"],
+                "KC-BROKER-NAME": broker_codes["broker-name"],
+                "KC-API-PARTNER-VERIFY": "true",
             }
-        )
-        self.cca = ccxt_async.kucoinfutures(
-            {
-                "apiKey": self.user_info["key"],
-                "secret": self.user_info["secret"],
-                "password": self.user_info["passphrase"],
+        return {}
+
+    def _get_partner_signature(self, timestamp: str) -> str:
+        prehash = f"{timestamp}{self.partner}{self.api_key}"
+        digest = hmac.new(self.broker_key.encode(), prehash.encode(), hashlib.sha256).digest()
+        return base64.b64encode(digest).decode()
+
+    def create_ccxt_sessions(self) -> None:
+        """Initialise CCXT sessions for KuCoin futures with optional broker support.
+
+        If broker codes are defined under ``self.broker_code['futures']``, these
+        values are used to configure partner signing so that private/futures
+        requests include the correct broker metadata.  Otherwise the bot
+        instantiates the standard CCXT classes.
+        """
+        broker_cfg = self.broker_code.get("futures", {}) if isinstance(self.broker_code, dict) else {}
+        partner_id = broker_cfg.get("partner")
+        partner_secret = broker_cfg.get("broker-key")
+        broker_name = broker_cfg.get("broker-name")
+        options = {}
+        if partner_id and partner_secret:
+            options = {
+                'partner': {
+                    'future': {
+                        'id': partner_id,
+                        'secret': partner_secret,
+                        'name': broker_name,
+                    }
+                }
             }
-        )
-        self.ccp.options["defaultType"] = "swap"
-        self.cca.options["defaultType"] = "swap"
+        if partner_id and partner_secret and broker_name:
+            # Instantiate custom classes that inject the broker name on signing
+            self.ccp = ProKucoinBrokerFutures({
+                'apiKey': self.user_info['key'],
+                'secret': self.user_info['secret'],
+                'password': self.user_info['passphrase'],
+                'enableRateLimit': True,
+                'options': options,
+            })
+            self.cca = AsyncKucoinBrokerFutures({
+                'apiKey': self.user_info['key'],
+                'secret': self.user_info['secret'],
+                'password': self.user_info['passphrase'],
+                'enableRateLimit': True,
+                'options': options,
+            })
+        else:
+            # Fall back to vanilla CCXT futures exchanges when no broker codes
+            self.ccp = ccxt_pro.kucoinfutures({
+                'apiKey': self.user_info['key'],
+                'secret': self.user_info['secret'],
+                'password': self.user_info['passphrase'],
+                'enableRateLimit': True,
+            })
+            self.cca = ccxt_async.kucoinfutures({
+                'apiKey': self.user_info['key'],
+                'secret': self.user_info['secret'],
+                'password': self.user_info['passphrase'],
+                'enableRateLimit': True,
+            })
+        # Always trade perpetual swaps on KuCoin by default.
+        try:
+            self.ccp.options['defaultType'] = 'swap'
+        except Exception:
+            pass
+        try:
+            self.cca.options['defaultType'] = 'swap'
+        except Exception:
+            pass
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
@@ -210,7 +317,7 @@ class KucoinBot(Passivbot):
                 seen_trade_id.add(best_match["id"])
             if len(phd[symbol]) != len(cld[symbol]):
                 print(
-                    f"debug len mismatch between closes and positions_history for {symbol}: {len(closes[symbol])} {len(phd[symbol])}"
+                    f"debug len mismatch between closes and positions_history for {symbol}: {len(cld[symbol])} {len(phd[symbol])}"
                 )
         # add pnls, dedup and return
         deduped = {}
@@ -242,11 +349,10 @@ class KucoinBot(Passivbot):
                 "timeInForce": "GTC",
                 "reduceOnly": reduce_only,
                 "marginMode": "CROSS",
+                "clientOid": order["custom_id"],
             },
         }
-        # print(params)
         executed = await self.cca.create_order(**params)
-        # print(executed)
         return executed
 
     def did_cancel_order(self, executed, order=None) -> bool:
