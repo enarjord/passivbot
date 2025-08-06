@@ -33,32 +33,48 @@ import base64
 # requests.  These classes should be used instead of the vanilla CCXT
 # exchange classes when broker codes are defined.
 
+
 class _KucoinBrokerMixin:
-    def sign(self, path: str, api: str = 'public', method: str = 'GET', params: dict | None = None, headers: dict | None = None, body: Any | None = None) -> dict:
+    def sign(
+        self,
+        path: str,
+        api: str = "public",
+        method: str = "GET",
+        params: dict | None = None,
+        headers: dict | None = None,
+        body: Any | None = None,
+    ) -> dict:
         # Call the base class to sign and construct the request
         signed = super().sign(path, api, method, params or {}, headers, body)
         try:
             # Attach broker name on private, futuresPrivate or broker endpoints
-            if api in {'private', 'futuresPrivate', 'broker'}:
-                partner_root = getattr(self, 'options', {}).get('partner') or {}
-                partner_cfg = partner_root.get('future', partner_root) if isinstance(partner_root, dict) else {}
-                broker_name = partner_cfg.get('name') if isinstance(partner_cfg, dict) else None
+            if api in {"private", "futuresPrivate", "broker"}:
+                partner_root = getattr(self, "options", {}).get("partner") or {}
+                partner_cfg = (
+                    partner_root.get("future", partner_root) if isinstance(partner_root, dict) else {}
+                )
+                broker_name = partner_cfg.get("name") if isinstance(partner_cfg, dict) else None
                 if broker_name:
-                    hdrs = dict(signed.get('headers') or {})
-                    hdrs['KC-BROKER-NAME'] = broker_name
-                    signed['headers'] = hdrs
+                    hdrs = dict(signed.get("headers") or {})
+                    hdrs["KC-BROKER-NAME"] = broker_name
+                    signed["headers"] = hdrs
         except Exception:
             # Fail silently if we can't attach broker headers
             pass
         return signed
 
+
 class AsyncKucoinBrokerFutures(_KucoinBrokerMixin, ccxt_async.kucoinfutures):
     """Asynchronous KuCoin futures exchange with broker tagging support."""
+
     pass
+
 
 class ProKucoinBrokerFutures(_KucoinBrokerMixin, ccxt_pro.kucoinfutures):
     """Websocket-enabled KuCoin futures exchange with broker tagging support."""
+
     pass
+
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
@@ -102,51 +118,59 @@ class KucoinBot(Passivbot):
         options = {}
         if partner_id and partner_secret:
             options = {
-                'partner': {
-                    'future': {
-                        'id': partner_id,
-                        'secret': partner_secret,
-                        'name': broker_name,
+                "partner": {
+                    "future": {
+                        "id": partner_id,
+                        "secret": partner_secret,
+                        "name": broker_name,
                     }
                 }
             }
         if partner_id and partner_secret and broker_name:
             # Instantiate custom classes that inject the broker name on signing
-            self.ccp = ProKucoinBrokerFutures({
-                'apiKey': self.user_info['key'],
-                'secret': self.user_info['secret'],
-                'password': self.user_info['passphrase'],
-                'enableRateLimit': True,
-                'options': options,
-            })
-            self.cca = AsyncKucoinBrokerFutures({
-                'apiKey': self.user_info['key'],
-                'secret': self.user_info['secret'],
-                'password': self.user_info['passphrase'],
-                'enableRateLimit': True,
-                'options': options,
-            })
+            self.ccp = ProKucoinBrokerFutures(
+                {
+                    "apiKey": self.user_info["key"],
+                    "secret": self.user_info["secret"],
+                    "password": self.user_info["passphrase"],
+                    "enableRateLimit": True,
+                    "options": options,
+                }
+            )
+            self.cca = AsyncKucoinBrokerFutures(
+                {
+                    "apiKey": self.user_info["key"],
+                    "secret": self.user_info["secret"],
+                    "password": self.user_info["passphrase"],
+                    "enableRateLimit": True,
+                    "options": options,
+                }
+            )
         else:
             # Fall back to vanilla CCXT futures exchanges when no broker codes
-            self.ccp = ccxt_pro.kucoinfutures({
-                'apiKey': self.user_info['key'],
-                'secret': self.user_info['secret'],
-                'password': self.user_info['passphrase'],
-                'enableRateLimit': True,
-            })
-            self.cca = ccxt_async.kucoinfutures({
-                'apiKey': self.user_info['key'],
-                'secret': self.user_info['secret'],
-                'password': self.user_info['passphrase'],
-                'enableRateLimit': True,
-            })
+            self.ccp = ccxt_pro.kucoinfutures(
+                {
+                    "apiKey": self.user_info["key"],
+                    "secret": self.user_info["secret"],
+                    "password": self.user_info["passphrase"],
+                    "enableRateLimit": True,
+                }
+            )
+            self.cca = ccxt_async.kucoinfutures(
+                {
+                    "apiKey": self.user_info["key"],
+                    "secret": self.user_info["secret"],
+                    "password": self.user_info["passphrase"],
+                    "enableRateLimit": True,
+                }
+            )
         # Always trade perpetual swaps on KuCoin by default.
         try:
-            self.ccp.options['defaultType'] = 'swap'
+            self.ccp.options["defaultType"] = "swap"
         except Exception:
             pass
         try:
-            self.cca.options['defaultType'] = 'swap'
+            self.cca.options["defaultType"] = "swap"
         except Exception:
             pass
 
