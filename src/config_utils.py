@@ -25,7 +25,9 @@ def load_config(filepath: str, live_only=False, verbose=True) -> dict:
     # loads hjson or json v7 config
     try:
         config = load_hjson_config(filepath)
-        config = format_config(config, live_only=live_only, verbose=verbose)
+        config = format_config(
+            config, live_only=live_only, verbose=verbose, base_config_path=filepath
+        )
         return config
     except Exception as e:
         traceback.print_exc()
@@ -328,11 +330,15 @@ def load_override_config(config, coin):
             return load_config(path, verbose=False)
         else:
             base_config_path = config.get("live", {}).get("base_config_path")
-            if base_config_path and os.path.exists(
-                (
-                    npath := os.path.join(
-                        os.path.dirname(base_config_path),
-                        path,
+            if (
+                path
+                and base_config_path
+                and os.path.exists(
+                    (
+                        npath := os.path.join(
+                            os.path.dirname(base_config_path),
+                            path,
+                        )
                     )
                 )
             ):
@@ -392,7 +398,7 @@ def _build_flag_argparser() -> argparse.ArgumentParser:
     return p
 
 
-def format_config(config: dict, verbose=True, live_only=False) -> dict:
+def format_config(config: dict, verbose=True, live_only=False, base_config_path: str = "") -> dict:
     # attempts to format a config to v7 config
     template = get_template_live_config("v7")
     # renamings
@@ -557,6 +563,7 @@ def format_config(config: dict, verbose=True, live_only=False) -> dict:
         del result["backtest"]["exchange"]
 
     add_missing_keys_recursively(template, result, verbose=verbose)
+    result["live"]["base_config_path"] = base_config_path
     result = parse_overrides(result, verbose=verbose)
     remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose)
     remove_unused_keys_recursively(
