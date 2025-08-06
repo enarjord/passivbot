@@ -2448,7 +2448,6 @@ async def main():
     config = load_config(args.config_path, live_only=True)
     update_config_with_args(config, args)
     config = format_config(config, live_only=True)
-    config["live"]["base_config_path"] = args.config_path
     cooldown_secs = 60
     restarts = []
     while True:
