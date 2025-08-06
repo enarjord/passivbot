@@ -6,7 +6,7 @@ import argparse
 import pprint
 from typing import Union
 import traceback
-from pure_funcs import remove_OD, sort_dict_keys, str2bool
+from pure_funcs import remove_OD, sort_dict_keys, str2bool, symbol_to_coin
 from procedures import format_end_date, dump_pretty_json
 import hjson
 
@@ -291,6 +291,17 @@ def parse_overrides(config, verbose=True):
                     f"Converted old coin_flags to coin_overrides: {config['live']['coin_flags']} -> {result['coin_overrides']}"
                 )
     result["live"].pop("coin_flags", None) if "live" in result else None
+    for coin in sorted(result["coin_overrides"]):
+        coinf = symbol_to_coin(coin)
+        if coinf != coin:
+            if coinf:
+                result["coin_overrides"][coinf] = deepcopy(result["coin_overrides"][coin])
+                if verbose:
+                    print(f"Renamed {coin} -> {coinf} for coin_overrides")
+            else:
+                if verbose:
+                    print(f"Failed to format {coin}; removed from coin_overrides")
+            del result["coin_overrides"][coin]
     for coin, overrides in result["coin_overrides"].items():
         parsed_overrides = {}
         if loaded := load_override_config(result, coin):
