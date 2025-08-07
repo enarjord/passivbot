@@ -34,20 +34,20 @@ import base64
 # exchange classes when broker codes are defined.
 
 
-class _KucoinBrokerMixin:
-    def sign(
-        self,
-        path: str,
-        api: str = "public",
-        method: str = "GET",
-        params: dict | None = None,
-        headers: dict | None = None,
-        body: Any | None = None,
-    ) -> dict:
-        # Call the base class to sign and construct the request
+class AsyncKucoinBrokerFutures(ccxt_async.kucoinfutures):
+    """Asynchronous KuCoin futures exchange with broker tagging support."""
+
+    def __init__(self, config=None):
+        super().__init__(config)
+
+    @property
+    def checkConflictingProxies(self):
+        """Ensure camelCase version always points to snake_case"""
+        return self.check_conflicting_proxies
+
+    def sign(self, path, api="public", method="GET", params=None, headers=None, body=None):
         signed = super().sign(path, api, method, params or {}, headers, body)
         try:
-            # Attach broker name on private, futuresPrivate or broker endpoints
             if api in {"private", "futuresPrivate", "broker"}:
                 partner_root = getattr(self, "options", {}).get("partner") or {}
                 partner_cfg = (
@@ -59,21 +59,37 @@ class _KucoinBrokerMixin:
                     hdrs["KC-BROKER-NAME"] = broker_name
                     signed["headers"] = hdrs
         except Exception:
-            # Fail silently if we can't attach broker headers
             pass
         return signed
 
 
-class AsyncKucoinBrokerFutures(_KucoinBrokerMixin, ccxt_async.kucoinfutures):
-    """Asynchronous KuCoin futures exchange with broker tagging support."""
-
-    pass
-
-
-class ProKucoinBrokerFutures(_KucoinBrokerMixin, ccxt_pro.kucoinfutures):
+class ProKucoinBrokerFutures(ccxt_pro.kucoinfutures):
     """Websocket-enabled KuCoin futures exchange with broker tagging support."""
 
-    pass
+    def __init__(self, config=None):
+        super().__init__(config)
+
+    @property
+    def checkConflictingProxies(self):
+        """Ensure camelCase version always points to snake_case"""
+        return self.check_conflicting_proxies
+
+    def sign(self, path, api="public", method="GET", params=None, headers=None, body=None):
+        signed = super().sign(path, api, method, params or {}, headers, body)
+        try:
+            if api in {"private", "futuresPrivate", "broker"}:
+                partner_root = getattr(self, "options", {}).get("partner") or {}
+                partner_cfg = (
+                    partner_root.get("future", partner_root) if isinstance(partner_root, dict) else {}
+                )
+                broker_name = partner_cfg.get("name") if isinstance(partner_cfg, dict) else None
+                if broker_name:
+                    hdrs = dict(signed.get("headers") or {})
+                    hdrs["KC-BROKER-NAME"] = broker_name
+                    signed["headers"] = hdrs
+        except Exception:
+            pass
+        return signed
 
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
@@ -85,18 +101,6 @@ class KucoinBot(Passivbot):
         self.custom_id_max_length = 40
         self.quote = "USDT"
         self.hedge_mode = False
-
-    def get_broker_headers(self) -> dict:
-        broker_codes = self.broker_code.get("futures", {})
-        if broker_codes and all(
-            [x in broker_codes for x in ["partner", "broker-key", "broker-name"]]
-        ):
-            return {
-                "KC-API-PARTNER": broker_codes["partner"],
-                "KC-BROKER-NAME": broker_codes["broker-name"],
-                "KC-API-PARTNER-VERIFY": "true",
-            }
-        return {}
 
     def _get_partner_signature(self, timestamp: str) -> str:
         prehash = f"{timestamp}{self.partner}{self.api_key}"
@@ -279,29 +283,89 @@ class KucoinBot(Passivbot):
         )
         return result
 
-    async def fetch_pnls(self, start_time=None, end_time=None, limit=None):
+    async def fetch_fills(self, start_time=None, end_time=None, limit=None):
+        all_fills = []
+        ids_seen = set()
         params = {}
         if end_time:
             params["until"] = int(end_time)
-        if start_time:
-            start_time = int(start_time)
-            params["paginate"] = True
-        # fetch fills...
-        mt = await self.cca.fetch_my_trades(since=start_time, params=params)
-        for i in range(len(mt)):
-            mt[i]["qty"] = mt[i]["amount"]
-            mt[i]["pnl"] = 0.0
-            if mt[i]["side"] == "buy":
-                mt[i]["position_side"] = (
-                    "long" if float(mt[i]["info"]["closeFeePay"]) == 0.0 else "short"
+        day = 1000 * 60 * 60 * 24
+        while True:
+            fills = await self.cca.fetch_my_trades(params=params)
+            if fills:
+                new_until = fills[0]["timestamp"]
+                if "until" in params and new_until == params["until"]:
+                    new_until -= day
+            else:
+                if "until" in params:
+                    new_until = params["until"] - day
+                else:
+                    new_until = self.get_exchange_time() - day
+            params["until"] = new_until
+            all_fills = fills + all_fills
+            if start_time is None or new_until <= start_time + day:
+                break
+            logging.info(
+                f"fetched {len(fills)} fill{'' if len(fills) == 1 else 's'}"
+                f" {ts_to_date_utc(new_until)[:19]}"
+            )
+        for i in range(len(all_fills)):
+            all_fills[i]["qty"] = all_fills[i]["amount"]
+            all_fills[i]["pnl"] = 0.0
+            if all_fills[i]["side"] == "buy":
+                all_fills[i]["position_side"] = (
+                    "long" if float(all_fills[i]["info"]["closeFeePay"]) == 0.0 else "short"
                 )
-            elif mt[i]["side"] == "sell":
-                mt[i]["position_side"] = (
-                    "short" if float(mt[i]["info"]["closeFeePay"]) == 0.0 else "long"
+            elif all_fills[i]["side"] == "sell":
+                all_fills[i]["position_side"] = (
+                    "short" if float(all_fills[i]["info"]["closeFeePay"]) == 0.0 else "long"
                 )
             else:
-                raise Exception(f"invalid side {mt[i]}")
-        mt = sorted(mt, key=lambda x: x["timestamp"])
+                raise Exception(f"invalid side {all_fills[i]}")
+        deduped = {x["id"]: x for x in all_fills}
+        if start_time:
+            deduped = {k: v for k, v in deduped.items() if v["timestamp"] >= start_time}
+        if end_time:
+            deduped = {k: v for k, v in deduped.items() if v["timestamp"] <= end_time}
+        return sorted(deduped.values(), key=lambda x: x["timestamp"])
+
+    async def fetch_positions_history(self, start_time=None, end_time=None, limit=None):
+        all_ph = []
+        ids_seen = set()
+        params = {}
+        if end_time:
+            params["until"] = int(end_time)
+        day = 1000 * 60 * 60 * 24
+        while True:
+            ph = await self.cca.fetch_positions_history(params=params)
+            ph = sorted(ph, key=lambda x: x["lastUpdateTimestamp"])
+            if ph:
+                new_until = ph[0]["lastUpdateTimestamp"]
+                if "until" in params and new_until == params["until"]:
+                    new_until -= day
+            else:
+                if "until" in params:
+                    new_until = params["until"] - day
+                else:
+                    new_until = self.get_exchange_time() - day
+            params["until"] = new_until
+            all_ph = ph + all_ph
+            if start_time is None or new_until <= start_time + day:
+                break
+            logging.info(
+                f"fetched {len(ph)} pos histor{'y' if len(ph) == 1 else 'ies'}"
+                f" {ts_to_date_utc(new_until)[:19]}"
+            )
+        deduped = {x["info"]["closeId"]: x for x in all_ph}
+        if start_time:
+            deduped = {k: v for k, v in deduped.items() if v["lastUpdateTimestamp"] >= start_time}
+        if end_time:
+            deduped = {k: v for k, v in deduped.items() if v["lastUpdateTimestamp"] <= end_time}
+        return sorted(deduped.values(), key=lambda x: x["lastUpdateTimestamp"])
+
+    async def fetch_pnls(self, start_time=None, end_time=None, limit=None):
+        # fetch fills...
+        mt = await self.fetch_fills(start_time=start_time, end_time=end_time)
         closes = [
             x
             for x in mt
@@ -310,10 +374,9 @@ class KucoinBot(Passivbot):
         ]
         if not closes:
             return mt
-
         # fetch pos history for pnls
-        ph = await self.cca.fetch_positions_history(
-            since=closes[0]["timestamp"] - 60000, params={"until": closes[-1]["timestamp"] + 60000}
+        ph = await self.fetch_positions_history(
+            start_time=closes[0]["timestamp"] - 60000, end_time=closes[-1]["timestamp"] + 60000
         )
 
         # match up...
@@ -335,9 +398,11 @@ class KucoinBot(Passivbot):
                 )
                 best_match = with_td[0]
                 matches.append((p, best_match))
-                print(
-                    f"debug best match fill and pos close {symbol} timedelta {best_match['timestamp'] - p['lastUpdateTimestamp']}ms"
-                )
+                timedelta = best_match["timestamp"] - p["lastUpdateTimestamp"]
+                if timedelta > 1000:
+                    print(
+                        f"debug best match fill and pos close {symbol} timedelta>1000ms: {best_match['timestamp'] - p['lastUpdateTimestamp']}ms"
+                    )
                 seen_trade_id.add(best_match["id"])
             if len(phd[symbol]) != len(cld[symbol]):
                 print(
