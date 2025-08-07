@@ -396,6 +396,9 @@ class KucoinBot(Passivbot):
                     [x for x in cld[symbol] if x["id"] not in seen_trade_id],
                     key=lambda x: abs(p["lastUpdateTimestamp"] - x["timestamp"]),
                 )
+                if not with_td:
+                    print(f"debug no matching fill for {p}")
+                    continue
                 best_match = with_td[0]
                 matches.append((p, best_match))
                 timedelta = best_match["timestamp"] - p["lastUpdateTimestamp"]
