@@ -3,6 +3,7 @@ mod closes;
 mod constants;
 mod entries;
 mod python;
+mod trailing_flip;
 mod types;
 mod utils;
 
@@ -12,6 +13,7 @@ use entries::*;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use python::*;
+use trailing_flip::*;
 use utils::*;
 
 /// A Python module implemented in Rust.
@@ -42,5 +44,6 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calc_auto_unstuck_allowance, m)?)?;
     m.add_function(wrap_pyfunction!(hysteresis_rounding, m)?)?;
     m.add_function(wrap_pyfunction!(calc_pprice_diff_int, m)?)?;
+    m.add_function(wrap_pyfunction!(backtest_trailing_flip, m)?)?;
     Ok(())
 }
