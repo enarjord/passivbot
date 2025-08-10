@@ -268,10 +268,12 @@ def ensure_millis(df):
     - If there are multiple unique timestamps, use the median difference between unique timestamps:
       if the median difference is a multiple of 1000 (within a small tolerance), treat timestamps as ms.
       Otherwise treat them as seconds and multiply by 1000.
-    - If only one non-zero timestamp exists, fall back to magnitude-based detection:
-      very large values -> microseconds (divide by 1000),
-      medium values -> milliseconds (no change),
-      small values -> assume milliseconds (no change).
+    - If only one non-zero timestamp exists, fall back to magnitude-based detection using epoch-scale
+      thresholds:
+        - >= 1e15 -> microseconds
+        - >= 1e12 -> milliseconds
+        - >= 1e9  -> seconds
+        - <  1e9  -> assume milliseconds (likely small ms values)
     This avoids mis-detecting when the first timestamp is 0 (which previously caused incorrect scaling).
     """
     if "timestamp" not in df.columns:
@@ -303,20 +305,27 @@ def ensure_millis(df):
             return df  # already milliseconds
         else:
             # Likely seconds -> convert to milliseconds
-            df["timestamp"] = df["timestamp"] * 1000
+            df["timestamp"] = df["timestamp"] * 1000.0
             return df
 
     # Fallback: single representative timestamp -> magnitude-based detection
     rep = float(np.abs(non_zero_ts).max())
 
-    if rep > 1e14:
+    # Epoch magnitude thresholds (approx):
+    # - seconds:      ~1e9
+    # - milliseconds: ~1e12
+    # - microseconds: ~1e15
+    if rep >= 1e15:
         # microseconds -> convert to milliseconds
-        df["timestamp"] = df["timestamp"] / 1000
-    elif rep > 1e11:
+        df["timestamp"] = df["timestamp"] / 1000.0
+    elif rep >= 1e12:
         # already milliseconds
         pass
+    elif rep >= 1e9:
+        # seconds -> convert to milliseconds
+        df["timestamp"] = df["timestamp"] * 1000.0
     else:
-        # Small magnitudes with no spacing info: assume already milliseconds (do nothing)
+        # small magnitudes (< 1e9) are assumed to already be milliseconds (e.g., 60000)
         pass
 
     return df
