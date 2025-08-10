@@ -73,6 +73,39 @@ def get_function_name():
     return inspect.currentframe().f_back.f_code.co_name
 
 
+def normalize_exchange_name(exchange: str) -> str:
+    """
+    Normalize an exchange id to its USD-margined perpetual futures id when available.
+
+    Examples:
+    - "binance" -> "binanceusdm"
+    - "kucoin"  -> "kucoinfutures"
+    - "kraken"  -> "krakenfutures"
+
+    If no specific futures id exists (e.g. "okx", "bybit", "mexc"), the input is returned unchanged.
+    The function uses ccxt.exchanges to detect available ids, so it will automatically catch
+    new exchanges that follow common suffix patterns like 'usdm' or 'futures'.
+    """
+    ex = (exchange or "").lower()
+    valid = set(getattr(ccxt, "exchanges", []))
+
+    # Explicit mapping for known special case
+    if ex == "binance":
+        return "binanceusdm"
+
+    # If already a futures/perp id, keep as-is
+    if ex.endswith("usdm") or ex.endswith("futures"):
+        return ex
+
+    # Heuristic: prefer '{exchange}usdm' then '{exchange}futures' if available in ccxt
+    for suffix in ("usdm", "futures"):
+        cand = f"{ex}{suffix}"
+        if cand in valid:
+            return cand
+
+    return ex
+
+
 def dump_ohlcv_data(data, filepath):
     columns = ["timestamp", "open", "high", "low", "close", "volume"]
     if isinstance(data, pd.DataFrame):
@@ -248,7 +281,7 @@ async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24) -> 
 
     Returns a markets dictionary as provided by ccxt.
     """
-    ex = "binanceusdm" if exchange == "binance" else exchange
+    ex = normalize_exchange_name(exchange)
     markets_path = os.path.join("caches", ex, "markets.json")
 
     # Try cache first
@@ -303,7 +336,7 @@ class OHLCVManager:
         gap_tolerance_ohlcvs_minutes=120.0,
         verbose=True,
     ):
-        self.exchange = "binanceusdm" if exchange == "binance" else exchange
+        self.exchange = normalize_exchange_name(exchange)
         self.quote = "USDC" if exchange == "hyperliquid" else "USDT"
         self.start_date = "2020-01-01" if start_date is None else format_end_date(start_date)
         self.end_date = format_end_date("now" if end_date is None else end_date)
@@ -973,8 +1006,7 @@ async def prepare_hlcvs(config: dict, exchange: str):
         set([symbol_to_coin(c) for c in config["live"]["approved_coins"]["long"]])
         | set([symbol_to_coin(c) for c in config["live"]["approved_coins"]["short"]])
     )
-    if exchange == "binance":
-        exchange = "binanceusdm"
+    exchange = normalize_exchange_name(exchange)
     start_date = config["backtest"]["start_date"]
     end_date = format_end_date(config["backtest"]["end_date"])
 
@@ -1144,9 +1176,7 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
 
 
 async def prepare_hlcvs_combined(config):
-    exchanges_to_consider = [
-        "binanceusdm" if e == "binance" else e for e in config["backtest"]["exchanges"]
-    ]
+    exchanges_to_consider = [normalize_exchange_name(e) for e in config["backtest"]["exchanges"]]
     om_dict = {}
     for ex in exchanges_to_consider:
         om_dict[ex] = OHLCVManager(
