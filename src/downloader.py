@@ -260,14 +260,65 @@ async def get_zip_bitget(url):
 
 
 def ensure_millis(df):
+    """
+    Normalize a DataFrame's 'timestamp' column to milliseconds.
+
+    Heuristic:
+    - If no valid (non-zero, finite) timestamps exist, assume timestamps are already ms.
+    - If there are multiple unique timestamps, use the median difference between unique timestamps:
+      if the median difference is a multiple of 1000 (within a small tolerance), treat timestamps as ms.
+      Otherwise treat them as seconds and multiply by 1000.
+    - If only one non-zero timestamp exists, fall back to magnitude-based detection:
+      very large values -> microseconds (divide by 1000),
+      medium values -> milliseconds (no change),
+      small values -> assume milliseconds (no change).
+    This avoids mis-detecting when the first timestamp is 0 (which previously caused incorrect scaling).
+    """
     if "timestamp" not in df.columns:
         return df
-    if df.timestamp.iloc[0] > 1e14:  # is microseconds
-        df.timestamp /= 1000
-    elif df.timestamp.iloc[0] > 1e11:  # is milliseconds
+
+    # Work with a float copy for robust numeric checks
+    try:
+        ts = df["timestamp"].astype("float64").values
+    except Exception:
+        # If casting fails, leave unchanged
+        return df
+
+    # Identify finite, non-zero timestamps to base heuristics on
+    finite_mask = np.isfinite(ts) & (ts != 0)
+    if not finite_mask.any():
+        # All timestamps are zero or invalid — assume already in milliseconds
+        return df
+
+    non_zero_ts = ts[finite_mask]
+    uniq = np.unique(non_zero_ts)
+
+    if uniq.size > 1:
+        # Use median diff between unique timestamps to determine units.
+        diffs = np.diff(uniq)
+        median_diff = float(np.median(diffs))
+
+        # If median_diff is a clean multiple of 1000, it's likely millisecond data (1 minute = 60000, etc).
+        if abs(median_diff - round(median_diff / 1000.0) * 1000.0) < 1e-6:
+            return df  # already milliseconds
+        else:
+            # Likely seconds -> convert to milliseconds
+            df["timestamp"] = df["timestamp"] * 1000
+            return df
+
+    # Fallback: single representative timestamp -> magnitude-based detection
+    rep = float(np.abs(non_zero_ts).max())
+
+    if rep > 1e14:
+        # microseconds -> convert to milliseconds
+        df["timestamp"] = df["timestamp"] / 1000
+    elif rep > 1e11:
+        # already milliseconds
         pass
-    else:  # is seconds
-        df.timestamp *= 1000
+    else:
+        # Small magnitudes with no spacing info: assume already milliseconds (do nothing)
+        pass
+
     return df
 
 
