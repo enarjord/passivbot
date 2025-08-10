@@ -144,7 +144,7 @@ def fill_gaps_in_ohlcvs(df):
     return new_df.reset_index().rename(columns={"index": "timestamp"})
 
 
-def attempt_gap_fix_ohlcvs(df, symbol=None):
+def attempt_gap_fix_ohlcvs(df, symbol=None, verbose=True):
     interval = 60_000
     max_hours = 12
     max_gap = interval * 60 * max_hours
@@ -153,7 +153,7 @@ def attempt_gap_fix_ohlcvs(df, symbol=None):
         return df
     if greatest_gap > max_gap:
         raise Exception(f"Huge gap in data for {symbol}: {greatest_gap/(1000*60*60)} hours.")
-    if self.verbose:
+    if verbose:
         logging.info(
             f"Filling small gaps in {symbol}. Largest gap: {greatest_gap/(1000*60*60):.3f} hours."
         )
@@ -865,7 +865,7 @@ class OHLCVManager:
             prev_day = earliest - datetime.timedelta(days=1)
             prev_url = self.get_url_bitget(base_url, symbol, prev_day.strftime("%Y%m%d"))
             try:
-                await check_rate_limit()
+                await self.check_rate_limit()
                 async with aiohttp.ClientSession() as session:
                     async with session.head(prev_url) as response:
                         if response.status == 200:
