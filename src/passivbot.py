@@ -3,6 +3,8 @@ import os
 if "NOJIT" not in os.environ:
     os.environ["NOJIT"] = "true"
 
+from ccxt.base.errors import NetworkError
+import random
 import traceback
 import argparse
 import asyncio
@@ -2071,15 +2073,57 @@ class Passivbot:
             await asyncio.sleep(1)  # Adjust sleep time as needed
 
     async def watch_ohlcv_1m_single(self, symbol):
+        backoff = 0.5  # start small, cap later
+        last_warn_ms = 0
+
         while not self.stop_websocket:
             try:
-                res = await self.ccp.watch_ohlcv(symbol)
+                # Be explicit: 1-minute candles, latest only
+                res = await self.ccp.watch_ohlcv(symbol, "1m", None, 1)
                 self.handle_ohlcv_1m_update(symbol, res)
+                # success -> reset backoff
+                backoff = 0.5
+
+            except NetworkError as e:
+                msg = str(e).strip()
+
+                # KuCoin sometimes bubbles a bare numeric (ms) as the error string.
+                is_numeric = False
+                try:
+                    float(msg)  # fast path; '1754776440000.0' etc.
+                    is_numeric = True
+                except Exception:
+                    pass
+
+                # Throttle noisy, harmless hiccups to DEBUG; log other network errors sparsely.
+                now = utc_ms()
+                if is_numeric:
+                    logging.debug(f"watch_ohlcv_1m_single {symbol}: transient WS hiccup ({msg})")
+                else:
+                    # warn at most once per 30s per symbol to avoid log storms
+                    if now - last_warn_ms > 30_000:
+                        logging.warning(f"watch_ohlcv_1m_single {symbol}: network issue: {msg}")
+                        last_warn_ms = now
+
+                # jittered exponential backoff, capped
+                await asyncio.sleep(min(backoff, 10.0) + random.uniform(0.0, 0.3))
+                backoff = min(backoff * 1.6, 10.0)
+
+            except asyncio.CancelledError:
+                # shutting down; don't log as error
+                break
+
             except Exception as e:
-                logging.error(f"exception watch_ohlcv_1m_single {symbol} {e}")
-                traceback.print_exc()
-                await asyncio.sleep(1)
-            await asyncio.sleep(0.1)
+                # real errors: keep the full traceback once per 30s per symbol
+                now = utc_ms()
+                if now - last_warn_ms > 30_000:
+                    logging.error(f"exception watch_ohlcv_1m_single {symbol}: {e}")
+                    traceback.print_exc()
+                    last_warn_ms = now
+                await asyncio.sleep(1.0)
+
+            # small yield to let other tasks run
+            await asyncio.sleep(0.05)
 
     def calc_noisiness(self, pside, eligible_symbols=None):
         if eligible_symbols is None:
