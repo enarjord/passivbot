@@ -238,6 +238,57 @@ def ensure_millis(df):
     return df
 
 
+async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24) -> dict:
+    """
+    Standalone helper to load and cache CCXT markets for a given exchange.
+
+    - Normalizes 'binance' -> 'binanceusdm'
+    - Reads from caches/{exchange}/markets.json if fresh
+    - Otherwise fetches via ccxt, writes cache, and returns the markets dict
+
+    Returns a markets dictionary as provided by ccxt.
+    """
+    ex = "binanceusdm" if exchange == "binance" else exchange
+    markets_path = os.path.join("caches", ex, "markets.json")
+
+    # Try cache first
+    try:
+        if os.path.exists(markets_path):
+            if utc_ms() - get_file_mod_utc(markets_path) < max_age_ms:
+                markets = json.load(open(markets_path))
+                logging.info(f"{ex} Loaded markets from cache")
+                return markets
+    except Exception as e:
+        logging.error(f"Error loading {markets_path} {e}")
+
+    # Fetch from exchange via ccxt
+    cc = getattr(ccxt, ex)({"enableRateLimit": True})
+    try:
+        cc.options["defaultType"] = "swap"
+    except Exception:
+        pass
+
+    try:
+        markets = await cc.load_markets()
+    except Exception as e:
+        logging.error(f"Error loading markets from {ex}: {e}")
+        raise
+    finally:
+        try:
+            await cc.close()
+        except Exception:
+            pass
+
+    # Dump to cache
+    try:
+        json.dump(markets, open(make_get_filepath(markets_path), "w"))
+        logging.info(f"{ex} Dumped markets to cache")
+    except Exception as e:
+        logging.error(f"Error dumping markets to cache at {markets_path} {e}")
+
+    return markets
+
+
 class OHLCVManager:
     """
     Manages OHLCVs for multiple exchanges.
@@ -461,11 +512,13 @@ class OHLCVManager:
 
     async def load_markets(self):
         self.load_cc()
-        self.markets = self.load_markets_from_cache()
-        if self.markets:
-            return
-        self.markets = await self.cc.load_markets()
-        self.dump_markets_to_cache()
+        self.markets = await load_markets(self.exchange)
+        # Populate the ccxt client's markets without incurring another network call if possible
+        try:
+            if hasattr(self.cc, "set_markets"):
+                self.cc.set_markets(self.markets)
+        except Exception:
+            pass
 
     def load_markets_from_cache(self, max_age_ms=1000 * 60 * 60 * 24):
         try:
