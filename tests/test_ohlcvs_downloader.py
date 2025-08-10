@@ -11,7 +11,12 @@ import downloader
 
 def test_normalize_exchange_name(monkeypatch):
     # Make ccxt.exchanges predictable
-    monkeypatch.setattr(downloader.ccxt, "exchanges", ["binance", "binanceusdm", "kucoin", "kucoinfutures", "bybit"], raising=False)
+    monkeypatch.setattr(
+        downloader.ccxt,
+        "exchanges",
+        ["binance", "binanceusdm", "kucoin", "kucoinfutures", "bybit"],
+        raising=False,
+    )
 
     assert downloader.normalize_exchange_name("binance") == "binanceusdm"
     assert downloader.normalize_exchange_name("kucoin") == "kucoinfutures"
@@ -31,19 +36,46 @@ def test_deduplicate_rows():
 
 
 def test_ensure_millis_seconds_to_ms():
-    df = pd.DataFrame({"timestamp": [1_600_000_000], "open": [1], "high": [1], "low": [1], "close": [1], "volume": [1]})
+    df = pd.DataFrame(
+        {
+            "timestamp": [1_600_000_000],
+            "open": [1],
+            "high": [1],
+            "low": [1],
+            "close": [1],
+            "volume": [1],
+        }
+    )
     out = downloader.ensure_millis(df.copy())
     assert out["timestamp"].iloc[0] == 1_600_000_000_000
 
 
 def test_ensure_millis_micros_to_ms():
-    df = pd.DataFrame({"timestamp": [1_600_000_000_000_000], "open": [1], "high": [1], "low": [1], "close": [1], "volume": [1]})
+    df = pd.DataFrame(
+        {
+            "timestamp": [1_600_000_000_000_000],
+            "open": [1],
+            "high": [1],
+            "low": [1],
+            "close": [1],
+            "volume": [1],
+        }
+    )
     out = downloader.ensure_millis(df.copy())
     assert out["timestamp"].iloc[0] == 1_600_000_000_000
 
 
 def test_ensure_millis_ms_unchanged():
-    df = pd.DataFrame({"timestamp": [1_600_000_000_000], "open": [1], "high": [1], "low": [1], "close": [1], "volume": [1]})
+    df = pd.DataFrame(
+        {
+            "timestamp": [1_600_000_000_000],
+            "open": [1],
+            "high": [1],
+            "low": [1],
+            "close": [1],
+            "volume": [1],
+        }
+    )
     out = downloader.ensure_millis(df.copy())
     assert out["timestamp"].iloc[0] == 1_600_000_000_000
 
@@ -153,7 +185,9 @@ async def test_load_markets_fetch_and_cache(tmp_path, monkeypatch):
     assert cache_fp.exists()
 
     # Second call: make cache fresh to test cache path
-    monkeypatch.setattr(downloader, "get_file_mod_utc", lambda p: downloader.utc_ms() - 1000, raising=False)
+    monkeypatch.setattr(
+        downloader, "get_file_mod_utc", lambda p: downloader.utc_ms() - 1000, raising=False
+    )
     markets2 = await downloader.load_markets("binance")
     assert markets2 == markets
 
@@ -174,7 +208,16 @@ async def test_ohlcvmanager_load_markets_calls_set_markets(monkeypatch):
 
     # Monkeypatch top-level load_markets to return a dummy dict
     async def fake_load_markets(ex):
-        return {"BTC/USDT:USDT": {"swap": True, "precision": {"price": 0.01, "amount": 0.001}, "limits": {"cost": {"min": 5.0}, "amount": {"min": 0.0}}, "maker": 0.0002, "taker": 0.0005, "contractSize": 1.0}}
+        return {
+            "BTC/USDT:USDT": {
+                "swap": True,
+                "precision": {"price": 0.01, "amount": 0.001},
+                "limits": {"cost": {"min": 5.0}, "amount": {"min": 0.0}},
+                "maker": 0.0002,
+                "taker": 0.0005,
+                "contractSize": 1.0,
+            }
+        }
 
     monkeypatch.setattr(downloader, "load_markets", fake_load_markets, raising=True)
 
