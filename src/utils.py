@@ -14,6 +14,10 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 
+# In-memory caches for symbol/coin maps with on-disk change detection
+_COIN_TO_SYMBOL_CACHE = {}  # {exchange: {"map": dict, "mtime": float}}
+_SYMBOL_TO_COIN_CACHE = {"map": None, "mtime": None}
+
 
 def get_file_mod_utc(filepath):
     """
@@ -168,6 +172,51 @@ def remove_powers_of_ten(text):
     return re.sub(pattern, "", text)
 
 
+def _load_coin_to_symbol_map(exchange: str) -> dict:
+    """
+    Lazily load and cache caches/{exchange}/coin_to_symbol_map.json in memory.
+    Reloads if the file's mtime changes.
+    """
+    try:
+        path = os.path.join("caches", exchange, "coin_to_symbol_map.json")
+        mtime = os.path.getmtime(path)
+    except Exception:
+        return {}
+    entry = _COIN_TO_SYMBOL_CACHE.get(exchange)
+    if entry and entry.get("mtime") == mtime:
+        return entry.get("map", {})
+    try:
+        data = json.load(open(path))
+        _COIN_TO_SYMBOL_CACHE[exchange] = {"map": data, "mtime": mtime}
+        return data
+    except Exception as e:
+        logging.error(f"failed to load coin_to_symbol_map for {exchange}: {e}")
+        return {}
+
+
+def _load_symbol_to_coin_map() -> dict:
+    """
+    Lazily load and cache caches/symbol_to_coin_map.json in memory.
+    Reloads if the file's mtime changes.
+    """
+    try:
+        path = os.path.join("caches", "symbol_to_coin_map.json")
+        mtime = os.path.getmtime(path)
+    except Exception:
+        return {}
+    entry = _SYMBOL_TO_COIN_CACHE
+    if entry.get("map") is not None and entry.get("mtime") == mtime:
+        return entry.get("map", {})
+    try:
+        data = json.load(open(path))
+        _SYMBOL_TO_COIN_CACHE["map"] = data
+        _SYMBOL_TO_COIN_CACHE["mtime"] = mtime
+        return data
+    except Exception as e:
+        logging.error(f"failed to load symbol_to_coin_map: {e}")
+        return {}
+
+
 async def create_coin_symbol_map_cache(exchange: str, markets=None):
     try:
         exchange = normalize_exchange_name(exchange)
@@ -213,6 +262,19 @@ async def create_coin_symbol_map_cache(exchange: str, markets=None):
         json.dump(coin_to_symbol_map, open(coin_to_symbol_map_path, "w"), indent=4, sort_keys=True)
         logging.info(f"dumping symbol_to_coin_map {symbol_to_coin_map_path}")
         json.dump(symbol_to_coin_map, open(symbol_to_coin_map_path, "w"))
+        # update in-memory caches to avoid stale reads
+        try:
+            _COIN_TO_SYMBOL_CACHE[exchange] = {
+                "map": coin_to_symbol_map,
+                "mtime": os.path.getmtime(coin_to_symbol_map_path),
+            }
+        except Exception:
+            pass
+        try:
+            _SYMBOL_TO_COIN_CACHE["map"] = symbol_to_coin_map
+            _SYMBOL_TO_COIN_CACHE["mtime"] = os.path.getmtime(symbol_to_coin_map_path)
+        except Exception:
+            pass
         return True
     except Exception as e:
         print(f"error with create_coin_symbol_map_cache {exchange}, {e}")
@@ -220,14 +282,13 @@ async def create_coin_symbol_map_cache(exchange: str, markets=None):
 
 
 def coin_to_symbol(coin, exchange):
-    # assumes coin_to_symbol_map is cached
+    # caches coin_to_symbol_map in memory and reloads if file changes
     try:
-        loaded = json.load(
-            open(os.path.join("caches", normalize_exchange_name(exchange), "coin_to_symbol_map.json"))
-        )
-        if coin not in loaded:
+        ex = normalize_exchange_name(exchange)
+        loaded = _load_coin_to_symbol_map(ex)
+        if not loaded or coin not in loaded:
             return ""
-        candidates = loaded[coin]
+        candidates = loaded.get(coin, [])
         if len(candidates) == 1:
             return candidates[0]
         elif len(candidates) == 0:
@@ -243,12 +304,14 @@ def coin_to_symbol(coin, exchange):
 
 
 def symbol_to_coin(symbol):
-    # assumes symbol_to_coin_map is cached
+    # caches symbol_to_coin_map in memory and reloads if file changes
     try:
-        return json.load(open(os.path.join("caches", "symbol_to_coin_map.json")))[symbol]
-    except Exception as e:
+        loaded = _load_symbol_to_coin_map()
+        if symbol in loaded:
+            return loaded[symbol]
         msg = f"failed to convert {symbol} to its coin with symbol_to_coin_map"
-        # logging.error(f"error with symbol_to_coin {symbol} {e}")
+    except Exception:
+        msg = f"failed to convert {symbol} to its coin with symbol_to_coin_map"
 
     if symbol == "":
         return ""
