@@ -10,15 +10,15 @@ import numpy as np
 import json
 import passivbot_rust as pbr
 from copy import deepcopy
+from utils import ts_to_date_utc, utc_ms
 from pure_funcs import (
     floatify,
-    ts_to_date_utc,
     calc_hash,
     determine_pos_side_ccxt,
     flatten,
     shorten_custom_id,
 )
-from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version, load_broker_code
+from procedures import print_async_exception, assert_correct_ccxt_version, load_broker_code
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
