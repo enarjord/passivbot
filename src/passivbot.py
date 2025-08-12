@@ -17,6 +17,7 @@ import numpy as np
 import inspect
 import passivbot_rust as pbr
 import logging
+from utils import load_markets, coin_to_symbol, symbol_to_coin, utc_ms, ts_to_date_utc, make_get_filepath
 from prettytable import PrettyTable
 from uuid import uuid4
 from copy import deepcopy
@@ -31,16 +32,15 @@ from config_utils import (
     expand_PB_mode,
     read_external_coins_lists,
     get_template_live_config,
+    parse_overrides
 )
 from procedures import (
     load_broker_code,
     load_user_info,
-    utc_ms,
-    make_get_filepath,
-    get_file_mod_utc,
     get_first_timestamps_unified,
     print_async_exception,
 )
+from utils import get_file_mod_utc
 from njit_funcs import (
     calc_ema,
     calc_diff,
@@ -59,12 +59,9 @@ from pure_funcs import (
     shorten_custom_id,
     determine_side_from_order_tuple,
     str2bool,
-    symbol_to_coin,
     add_missing_params_to_hjson_live_multi_config,
-    ts_to_date_utc,
     flatten,
     log_dict_changes,
-    coin_to_symbol,
     ensure_millis,
 )
 
@@ -209,7 +206,7 @@ class Passivbot:
         # called at bot startup and once an hour thereafter
         self.init_markets_last_update_ms = utc_ms()
         await self.update_exchange_config()  # set hedge mode
-        self.markets_dict = await self.cca.load_markets(True)
+        self.markets_dict = await load_markets(self.exchange)
         await self.determine_utc_offset(verbose)
         # ineligible symbols cannot open new positions
         self.ineligible_symbols = {}
@@ -325,7 +322,7 @@ class Passivbot:
         if coinf in self.coin_to_symbol_map:
             self.coin_to_symbol_map[coin] = self.coin_to_symbol_map[coinf]
             return self.coin_to_symbol_map[coinf]
-        result = coin_to_symbol(coin, self.eligible_symbols, self.quote)
+        result = coin_to_symbol(coin, self.exchange)
         self.coin_to_symbol_map[coin] = result
         return result
 
@@ -749,19 +746,6 @@ class Passivbot:
                         self.trailing_prices[symbol][pside]["max_since_min"] = max(
                             self.trailing_prices[symbol][pside]["max_since_min"], x[2]
                         )
-
-    def format_symbol(self, symbol: str) -> str:
-        try:
-            return self.formatted_symbols_map[symbol]
-        except (KeyError, AttributeError):
-            pass
-        if not hasattr(self, "formatted_symbols_map"):
-            self.formatted_symbols_map = {}
-            self.formatted_symbols_map_inv = defaultdict(set)
-        formatted = f"{symbol_to_coin(symbol.replace(',', ''))}/{self.quote}:{self.quote}"
-        self.formatted_symbols_map[symbol] = formatted
-        self.formatted_symbols_map_inv[formatted].add(symbol)
-        return formatted
 
     def symbol_is_eligible(self, symbol):
         # defined for each child class
@@ -2492,6 +2476,9 @@ async def main():
     config = load_config(args.config_path, live_only=True)
     update_config_with_args(config, args)
     config = format_config(config, live_only=True)
+    user_info = load_user_info(config['live']['user'])
+    await load_markets(user_info['exchange'])
+    config = parse_overrides(config, verbose=True)
     cooldown_secs = 60
     restarts = []
     while True:
