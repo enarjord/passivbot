@@ -17,7 +17,14 @@ import numpy as np
 import inspect
 import passivbot_rust as pbr
 import logging
-from utils import load_markets, coin_to_symbol, symbol_to_coin, utc_ms, ts_to_date_utc, make_get_filepath
+from utils import (
+    load_markets,
+    coin_to_symbol,
+    symbol_to_coin,
+    utc_ms,
+    ts_to_date_utc,
+    make_get_filepath,
+)
 from prettytable import PrettyTable
 from uuid import uuid4
 from copy import deepcopy
@@ -32,7 +39,7 @@ from config_utils import (
     expand_PB_mode,
     read_external_coins_lists,
     get_template_live_config,
-    parse_overrides
+    parse_overrides,
 )
 from procedures import (
     load_broker_code,
@@ -2476,8 +2483,8 @@ async def main():
     config = load_config(args.config_path, live_only=True)
     update_config_with_args(config, args)
     config = format_config(config, live_only=True)
-    user_info = load_user_info(config['live']['user'])
-    await load_markets(user_info['exchange'])
+    user_info = load_user_info(config["live"]["user"])
+    await load_markets(user_info["exchange"])
     config = parse_overrides(config, verbose=True)
     cooldown_secs = 60
     restarts = []
