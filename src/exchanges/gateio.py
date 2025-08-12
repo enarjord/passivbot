@@ -7,14 +7,13 @@ import asyncio
 import traceback
 import json
 import numpy as np
+from downloader import coin_to_symbol
+from utils import ts_to_date_utc, utc_ms
 from pure_funcs import (
     multi_replace,
     floatify,
-    ts_to_date_utc,
     calc_hash,
     shorten_custom_id,
-    coin2symbol,
-    symbol_to_coin,
 )
 from njit_funcs import (
     calc_diff,
@@ -25,7 +24,7 @@ from njit_funcs import (
     round_dynamic_up,
     round_dynamic_dn,
 )
-from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
+from procedures import print_async_exception, assert_correct_ccxt_version
 from sortedcontainers import SortedDict
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
@@ -168,7 +167,7 @@ class GateIOBot(Passivbot):
                 body=json.dumps({"type": "allMids"}),
             )
             return {
-                coin2symbol(coin, self.quote): {
+                coin_to_symbol(coin, self.exchange): {
                     "bid": float(fetched[coin]),
                     "ask": float(fetched[coin]),
                     "last": float(fetched[coin]),
