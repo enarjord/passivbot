@@ -10,6 +10,7 @@ import shutil
 import sys
 import traceback
 import zipfile
+import re
 from collections import deque
 from functools import wraps
 from io import BytesIO
@@ -33,17 +34,22 @@ from config_utils import (
     get_template_live_config,
 )
 from pure_funcs import (
-    date_to_ts,
-    ts_to_date_utc,
     safe_filename,
+)
+from utils import (
+    make_get_filepath,
+    utc_ms,
+    format_end_date,
+    ts_to_date_utc,
+    date_to_ts,
+    get_file_mod_utc,
+    normalize_exchange_name,
+    get_quote,
     symbol_to_coin,
     coin_to_symbol,
+    load_markets,
 )
 from procedures import (
-    make_get_filepath,
-    format_end_date,
-    utc_ms,
-    get_file_mod_utc,
     get_first_timestamps_unified,
 )
 
@@ -71,39 +77,6 @@ def is_valid_date(date):
 
 def get_function_name():
     return inspect.currentframe().f_back.f_code.co_name
-
-
-def normalize_exchange_name(exchange: str) -> str:
-    """
-    Normalize an exchange id to its USD-margined perpetual futures id when available.
-
-    Examples:
-    - "binance" -> "binanceusdm"
-    - "kucoin"  -> "kucoinfutures"
-    - "kraken"  -> "krakenfutures"
-
-    If no specific futures id exists (e.g. "okx", "bybit", "mexc"), the input is returned unchanged.
-    The function uses ccxt.exchanges to detect available ids, so it will automatically catch
-    new exchanges that follow common suffix patterns like 'usdm' or 'futures'.
-    """
-    ex = (exchange or "").lower()
-    valid = set(getattr(ccxt, "exchanges", []))
-
-    # Explicit mapping for known special case
-    if ex == "binance":
-        return "binanceusdm"
-
-    # If already a futures/perp id, keep as-is
-    if ex.endswith("usdm") or ex.endswith("futures"):
-        return ex
-
-    # Heuristic: prefer '{exchange}usdm' then '{exchange}futures' if available in ccxt
-    for suffix in ("usdm", "futures"):
-        cand = f"{ex}{suffix}"
-        if cand in valid:
-            return cand
-
-    return ex
 
 
 def dump_ohlcv_data(data, filepath):
@@ -331,57 +304,6 @@ def ensure_millis(df):
     return df
 
 
-async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24) -> dict:
-    """
-    Standalone helper to load and cache CCXT markets for a given exchange.
-
-    - Normalizes 'binance' -> 'binanceusdm'
-    - Reads from caches/{exchange}/markets.json if fresh
-    - Otherwise fetches via ccxt, writes cache, and returns the markets dict
-
-    Returns a markets dictionary as provided by ccxt.
-    """
-    ex = normalize_exchange_name(exchange)
-    markets_path = os.path.join("caches", ex, "markets.json")
-
-    # Try cache first
-    try:
-        if os.path.exists(markets_path):
-            if utc_ms() - get_file_mod_utc(markets_path) < max_age_ms:
-                markets = json.load(open(markets_path))
-                logging.info(f"{ex} Loaded markets from cache")
-                return markets
-    except Exception as e:
-        logging.error(f"Error loading {markets_path} {e}")
-
-    # Fetch from exchange via ccxt
-    cc = getattr(ccxt, ex)({"enableRateLimit": True})
-    try:
-        cc.options["defaultType"] = "swap"
-    except Exception:
-        pass
-
-    try:
-        markets = await cc.load_markets()
-    except Exception as e:
-        logging.error(f"Error loading markets from {ex}: {e}")
-        raise
-    finally:
-        try:
-            await cc.close()
-        except Exception:
-            pass
-
-    # Dump to cache
-    try:
-        json.dump(markets, open(make_get_filepath(markets_path), "w"))
-        logging.info(f"{ex} Dumped markets to cache")
-    except Exception as e:
-        logging.error(f"Error dumping markets to cache at {markets_path} {e}")
-
-    return markets
-
-
 class OHLCVManager:
     """
     Manages OHLCVs for multiple exchanges.
@@ -397,7 +319,7 @@ class OHLCVManager:
         verbose=True,
     ):
         self.exchange = normalize_exchange_name(exchange)
-        self.quote = "USDC" if exchange == "hyperliquid" else "USDT"
+        self.quote = get_quote(exchange)
         self.start_date = "2020-01-01" if start_date is None else format_end_date(start_date)
         self.end_date = format_end_date("now" if end_date is None else end_date)
         self.start_ts = date_to_ts(self.start_date)
@@ -435,11 +357,7 @@ class OHLCVManager:
 
     def get_symbol(self, coin):
         assert self.markets, "needs to call self.load_markets() first"
-        return coin_to_symbol(
-            coin,
-            {k for k in self.markets if self.markets[k]["swap"] and k.endswith(f":{self.quote}")},
-            self.quote,
-        )
+        return coin_to_symbol(coin, self.exchange)
 
     def get_market_specific_settings(self, coin):
         mss = self.markets[self.get_symbol(coin)]
@@ -1502,6 +1420,7 @@ async def fetch_data_for_coin_and_exchange(
         df = await om.get_ohlcvs(coin)
     except Exception as e:
         logging.warning(f"Error retrieving {coin} from {ex}: {e}")
+        traceback.print_exc()
         return None
 
     if df.empty:
@@ -1696,7 +1615,7 @@ async def get_all_eligible_coins(exchanges):
             if oms[ex].has_coin(s):
                 coin = symbol_to_coin(s)
                 if coin:
-                    approved_coins.add(symbol_to_coin(s))
+                    approved_coins.add(coin)
     return sorted(approved_coins)
 
 
