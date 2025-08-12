@@ -87,6 +87,7 @@ async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24) -> 
             if utc_ms() - get_file_mod_utc(markets_path) < max_age_ms:
                 markets = json.load(open(markets_path))
                 logging.info(f"{ex} Loaded markets from cache")
+                await create_coin_symbol_map_cache(ex, markets)
                 return markets
     except Exception as e:
         logging.error(f"Error loading {markets_path} {e}")
@@ -173,7 +174,7 @@ async def create_coin_symbol_map_cache(exchange: str, markets=None):
         quote = get_quote(exchange)
         if markets is None:
             markets = await load_markets(exchange)
-        coin_to_symbol_map = defaultdict(list)
+        coin_to_symbol_map = defaultdict(set)
         symbol_to_coin_map = {}
         symbol_to_coin_map_path = make_get_filepath(os.path.join("caches", "symbol_to_coin_map.json"))
         try:
@@ -186,14 +187,24 @@ async def create_coin_symbol_map_cache(exchange: str, markets=None):
                 continue
             if not k.endswith(f":{quote}"):
                 continue
-            coin = v.get("baseName", "") or v.get("base")
-            coin = remove_powers_of_ten(coin.replace("k", ""))
-            coin_to_symbol_map[coin].append(k)
-            symbol_to_coin_map[k] = coin
-            symbol_to_coin_map[coin] = coin
+            base_name, base = v.get("baseName", ""), v.get("base", "")
+            if base_name:
+                coin = remove_powers_of_ten(base_name.replace("k", ""))
+                coin_to_symbol_map[coin].add(k)
+                coin_to_symbol_map[k].add(k)
+                coin_to_symbol_map[base_name].add(k)
+                symbol_to_coin_map[k] = coin
+            if base:
+                coin = remove_powers_of_ten(base.replace("k", ""))
+                coin_to_symbol_map[coin].add(k)
+                coin_to_symbol_map[k].add(k)
+                coin_to_symbol_map[base].add(k)
+                if not base_name:
+                    symbol_to_coin_map[k] = coin
         coin_to_symbol_map_path = make_get_filepath(
             os.path.join("caches", exchange, "coin_to_symbol_map.json")
         )
+        coin_to_symbol_map = {k: list(v) for k, v in coin_to_symbol_map.items()}
         logging.info(f"dumping coin_to_symbol_map {coin_to_symbol_map_path}")
         json.dump(coin_to_symbol_map, open(coin_to_symbol_map_path, "w"), indent=4, sort_keys=True)
         logging.info(f"dumping symbol_to_coin_map {symbol_to_coin_map_path}")
@@ -232,7 +243,8 @@ def symbol_to_coin(symbol):
     try:
         return json.load(open(os.path.join("caches", "symbol_to_coin_map.json")))[symbol]
     except Exception as e:
-        logging.error(f"error with symbol_to_coin {symbol} {e}")
+        msg = f"failed to convert {symbol} to its coin with symbol_to_coin_map"
+        # logging.error(f"error with symbol_to_coin {symbol} {e}")
 
     if symbol == "":
         return ""
@@ -255,4 +267,7 @@ def symbol_to_coin(symbol):
     if coin.startswith("k") and coin[1:].isupper():
         # hyperliquid uses e.g. kSHIB instead of 1000SHIB
         coin = coin[1:]
+    if coin:
+        msg += f". Using heuristics to guess coin: {coin}"
+    logging.warning(msg)
     return coin
