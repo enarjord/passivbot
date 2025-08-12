@@ -6,15 +6,15 @@ import pprint
 import asyncio
 import traceback
 import numpy as np
+from utils import utc_ms, ts_to_date_utc
 from pure_funcs import (
     multi_replace,
     floatify,
-    ts_to_date_utc,
     calc_hash,
     shorten_custom_id,
 )
 from njit_funcs import calc_diff
-from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
+from procedures import print_async_exception, assert_correct_ccxt_version
 import passivbot_rust as pbr
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
