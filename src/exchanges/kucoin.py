@@ -7,13 +7,13 @@ import asyncio
 import traceback
 import numpy as np
 import passivbot_rust as pbr
+from utils import ts_to_date_utc, utc_ms
 from pure_funcs import (
     floatify,
-    ts_to_date_utc,
     calc_hash,
     shorten_custom_id,
 )
-from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
+from procedures import print_async_exception, assert_correct_ccxt_version
 from collections import defaultdict
 from typing import Any
 import hmac
