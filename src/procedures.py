@@ -385,9 +385,7 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
                 for ex_name, quote in exchange_map.items():
                     # Build list of eligible swap symbols on this exchange
                     eligible_symbols = [
-                        s
-                        for s in all_markets[ex_name]
-                        if all_markets[ex_name][s]["swap"]
+                        s for s in all_markets[ex_name] if all_markets[ex_name][s]["swap"]
                     ]
                     # Convert coin to a symbol recognized by the exchange, e.g. "BTC/USDT:USDT"
                     symbol = coin_to_symbol(coin, ex_name)
