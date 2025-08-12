@@ -44,18 +44,12 @@ from config_utils import (
     update_config_with_args,
 )
 from pure_funcs import (
-    symbol_to_coin,
-    ts_to_date_utc,
     denumpyize,
     sort_dict_keys,
     calc_hash,
     flatten,
-    date_to_ts,
 )
-from procedures import (
-    make_get_filepath,
-    utc_ms,
-)
+from utils import date_to_ts, ts_to_date_utc, utc_ms, make_get_filepath
 from downloader import add_all_eligible_coins_to_config
 from copy import deepcopy
 from main import manage_rust_compilation
