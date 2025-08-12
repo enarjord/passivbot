@@ -8,16 +8,16 @@ import pprint
 import asyncio
 import traceback
 import numpy as np
+from utils import ts_to_date_utc, utc_ms
 from pure_funcs import (
     multi_replace,
     floatify,
-    ts_to_date_utc,
     calc_hash,
     determine_pos_side_ccxt,
     shorten_custom_id,
 )
 from njit_funcs import calc_diff
-from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
+from procedures import print_async_exception, assert_correct_ccxt_version
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
