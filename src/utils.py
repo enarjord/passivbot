@@ -194,11 +194,15 @@ async def create_coin_symbol_map_cache(exchange: str, markets=None):
                 coin_to_symbol_map[k].add(k)
                 coin_to_symbol_map[base_name].add(k)
                 symbol_to_coin_map[k] = coin
+                symbol_to_coin_map[coin] = coin
+                symbol_to_coin_map[base_name] = coin
             if base:
                 coin = remove_powers_of_ten(base.replace("k", ""))
                 coin_to_symbol_map[coin].add(k)
                 coin_to_symbol_map[k].add(k)
                 coin_to_symbol_map[base].add(k)
+                symbol_to_coin_map[coin] = coin
+                symbol_to_coin_map[base] = coin
                 if not base_name:
                     symbol_to_coin_map[k] = coin
         coin_to_symbol_map_path = make_get_filepath(
