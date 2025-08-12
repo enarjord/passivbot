@@ -12,6 +12,7 @@ import argparse
 import re
 from collections import defaultdict
 from collections.abc import Sized
+from utils import coin_to_symbol, symbol_to_coin, make_get_filepath, load_markets
 import sys
 import passivbot_rust as pbr
 from typing import Union, Optional, Set, Any, List
@@ -33,17 +34,13 @@ from pure_funcs import (
     numpyize,
     candidate_to_live_config,
     ts_to_date,
-    ts_to_date_utc,
     get_dummy_settings,
     config_pretty_str,
-    date_to_ts2,
     sort_dict_keys,
     make_compatible,
     determine_passivbot_mode,
     date2ts_utc,
-    symbol_to_coin,
     flatten,
-    coin_to_symbol,
 )
 
 
@@ -89,15 +86,6 @@ def get_all_eligible_symbols(exchange="binance"):
             print(f"using cached data")
             return loaded_json
         raise Exception("unable to fetch or load from cache")
-
-
-def format_end_date(end_date) -> str:
-    if end_date in ["today", "now", "", None]:
-        ms2day = 1000 * 60 * 60 * 24
-        end_date = ts_to_date_utc((utc_ms() - ms2day * 2) // ms2day * ms2day)
-    else:
-        end_date = ts_to_date_utc(date_to_ts2(end_date))
-    return end_date[:10]
 
 
 def dump_pretty_json(data: dict, filepath: str):
@@ -153,16 +141,6 @@ def ensure_parent_directory(
         raise PermissionError(f"Permission denied creating directory: {dirpath}") from e
     except Exception as e:
         raise RuntimeError(f"Error processing filepath: {str(e)}") from e
-
-
-def make_get_filepath(filepath: str) -> str:
-    """
-    if not is path, creates dir and subdirs for path, returns path
-    """
-    dirpath = os.path.dirname(filepath) if filepath[-1] != "/" else filepath
-    if not os.path.isdir(dirpath):
-        os.makedirs(dirpath)
-    return filepath
 
 
 def load_user_info(user: str, api_keys_path="api-keys.json") -> dict:
@@ -233,32 +211,8 @@ def print_(args, r=False, n=False):
     return line
 
 
-def utc_ms() -> float:
-    return datetime.utcnow().timestamp() * 1000
-
-
 def local_time() -> float:
     return datetime.now().astimezone().timestamp() * 1000
-
-
-def get_file_mod_utc(filepath):
-    """
-    Get the UTC timestamp of the last modification of a file.
-
-    Args:
-        filepath (str): The path to the file.
-
-    Returns:
-        float: The UTC timestamp in milliseconds of the last modification of the file.
-    """
-    # Get the last modification time of the file in seconds since the epoch
-    mod_time_epoch = os.path.getmtime(filepath)
-
-    # Convert the timestamp to a UTC datetime object
-    mod_time_utc = datetime.utcfromtimestamp(mod_time_epoch)
-
-    # Return the UTC timestamp
-    return mod_time_utc.timestamp() * 1000
 
 
 def print_async_exception(coro):
@@ -400,17 +354,17 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
         load_tasks = {}
         for ex_name in sorted(ccxt_clients):
             try:
-                load_tasks[ex_name] = ccxt_clients[ex_name].load_markets()
+                load_tasks[ex_name] = load_markets(ex_name)
             except Exception as e:
                 print(f"Error creating task for {ex_name}: {e}")
                 del ccxt_clients[ex_name]
                 if ex_name in exchange_map:
                     del exchange_map[ex_name]
-        results = []
+        all_markets = {}
         for ex_name, task in load_tasks.items():
             try:
                 res = await task
-                results.append(res)
+                all_markets[ex_name] = res
             except Exception as e:
                 print(f"Warning: failed to load markets for {ex_name}: {e}")
                 del ccxt_clients[ex_name]
@@ -432,11 +386,11 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
                     # Build list of eligible swap symbols on this exchange
                     eligible_symbols = [
                         s
-                        for s in ccxt_clients[ex_name].markets
-                        if ccxt_clients[ex_name].markets[s]["swap"]
+                        for s in all_markets[ex_name]
+                        if all_markets[ex_name][s]["swap"]
                     ]
                     # Convert coin to a symbol recognized by the exchange, e.g. "BTC/USDT:USDT"
-                    symbol = coin_to_symbol(coin, eligible_symbols, quote)
+                    symbol = coin_to_symbol(coin, ex_name)
                     if symbol:
                         tasks[coin][ex_name] = asyncio.create_task(
                             fetch_ohlcv_with_start(ex_name, symbol, ccxt_clients[ex_name])
