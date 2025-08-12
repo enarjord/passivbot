@@ -6,8 +6,9 @@ import argparse
 import pprint
 from typing import Union
 import traceback
-from pure_funcs import remove_OD, sort_dict_keys, str2bool, symbol_to_coin
-from procedures import format_end_date, dump_pretty_json
+from pure_funcs import remove_OD, sort_dict_keys, str2bool
+from procedures import dump_pretty_json
+from utils import format_end_date, symbol_to_coin
 import hjson
 
 
@@ -564,7 +565,6 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
 
     add_missing_keys_recursively(template, result, verbose=verbose)
     result["live"]["base_config_path"] = base_config_path
-    result = parse_overrides(result, verbose=verbose)
     remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose)
     remove_unused_keys_recursively(
         template["optimize"]["bounds"], result["optimize"]["bounds"], verbose=verbose
