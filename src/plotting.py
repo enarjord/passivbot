@@ -9,7 +9,7 @@ import time
 from colorama import init, Fore
 from prettytable import PrettyTable
 from config_utils import dump_config
-from procedures import make_get_filepath
+from utils import make_get_filepath
 from pure_funcs import denumpyize, ts_to_date
 import passivbot_rust as pbr
 
