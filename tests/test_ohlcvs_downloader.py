@@ -159,7 +159,7 @@ async def test_load_markets_fetch_and_cache(tmp_path, monkeypatch):
         def __init__(self, config=None):
             self.options = {}
 
-        async def load_markets(self):
+        async def load_markets(self, reload=False, params=None):
             return {"BTC/USDT:USDT": {"id": "BTCUSDT", "swap": True}}
 
         async def close(self):
