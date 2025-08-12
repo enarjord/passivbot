@@ -251,23 +251,6 @@ def ts_to_date(timestamp: float) -> str:
     return str(datetime.datetime.fromtimestamp(timestamp)).replace(" ", "T")
 
 
-def ts_to_date_utc(timestamp: float) -> str:
-    if timestamp > 253402297199:
-        return str(datetime.datetime.utcfromtimestamp(timestamp / 1000)).replace(" ", "T")
-    return str(datetime.datetime.utcfromtimestamp(timestamp)).replace(" ", "T")
-
-
-def date_to_ts(d):
-    return int(dateutil.parser.parse(d).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
-
-
-def date_to_ts2(datetime_string):
-    return (
-        dateutil.parser.parse(datetime_string).replace(tzinfo=datetime.timezone.utc).timestamp()
-        * 1000
-    )
-
-
 def date2ts_utc(datetime_string):
     return (
         dateutil.parser.parse(datetime_string).replace(tzinfo=datetime.timezone.utc).timestamp()
@@ -275,41 +258,10 @@ def date2ts_utc(datetime_string):
     )
 
 
-def date_to_ts2_old(datetime_string):
-    try:
-        date_formats = [
-            "%Y",
-            "%Y-%m",
-            "%Y-%m-%d",
-            "%Y-%m-%dT%H",
-            "%Y-%m-%dT%H:%M",
-            "%Y-%m-%dT%H:%M:%S",
-            "%Y-%m-%dT%H:%M:%SZ",
-            "%Y-%m-%d %H",
-            "%Y-%m-%d %H:%M",
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%d %H:%M:%SZ",
-        ]
-        for format in date_formats:
-            try:
-                date_obj = datetime.datetime.strptime(datetime_string, format)
-                if format == "%Y" or format == "%Y-%m" or format == "%Y-%m-%d":
-                    date_obj = date_obj.replace(hour=0, minute=0, second=0, microsecond=0)
-                timestamp = date_obj.replace(tzinfo=datetime.timezone.utc).timestamp()
-                timestamp_ms = int(timestamp * 1000)
-                return timestamp_ms
-            except ValueError:
-                pass
-        raise ValueError("Invalid datetime format")
-    except Exception as e:
-        print("Error:", e)
-        return None
-
-
 def get_day(date):
     # date can be str datetime or float/int timestamp
     try:
-        return ts_to_date_utc(date_to_ts2(date))[:10]
+        return ts_to_date_utc(date_to_ts(date))[:10]
     except:
         pass
     try:
@@ -1986,44 +1938,6 @@ def determine_side_from_order_tuple(order_tuple):
             raise Exception(f"malformed order tuple {order_tuple}")
     else:
         raise Exception(f"malformed order tuple {order_tuple}")
-
-
-def coin_to_symbol(coin, eligible_symbols, quote):
-    coinf = symbol_to_coin(coin)
-    for candidate in eligible_symbols:
-        if coinf == symbol_to_coin(candidate):
-            return candidate
-    return None
-
-
-def symbol_to_coin(symbol: str) -> str:
-    if symbol == "":
-        return ""
-    if "/" in symbol:
-        coin = symbol[: symbol.find("/")]
-    else:
-        coin = symbol
-    for x in ["USDT", "USDC", "BUSD", "USD", "/:"]:
-        coin = coin.replace(x, "")
-    if "1000" in coin:
-        istart = coin.find("1000")
-        iend = istart + 1
-        while True:
-            if iend >= len(coin):
-                break
-            if coin[iend] != "0":
-                break
-            iend += 1
-        coin = coin[:istart] + coin[iend:]
-    if coin.startswith("k") and coin[1:].isupper():
-        # hyperliquid uses e.g. kSHIB instead of 1000SHIB
-        coin = coin[1:]
-    return coin
-
-
-def coin2symbol(coin: str, quote="USDT") -> str:
-    # ccxt formatting
-    return f"{coin}/{quote}:{quote}"
 
 
 def backtested_multiconfig2singleconfig(backtested_config: dict) -> dict:
