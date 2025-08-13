@@ -15,15 +15,14 @@ from pure_funcs import (
     calc_hash,
     shorten_custom_id,
 )
-from njit_funcs import (
-    calc_diff,
-    round_,
-    round_up,
-    round_dn,
-    round_dynamic,
-    round_dynamic_up,
-    round_dynamic_dn,
-)
+import passivbot_rust as pbr
+calc_diff = pbr.calc_diff
+round_ = pbr.round_
+round_up = pbr.round_up
+round_dn = pbr.round_dn
+round_dynamic = pbr.round_dynamic
+round_dynamic_up = pbr.round_dynamic_up
+round_dynamic_dn = pbr.round_dynamic_dn
 from procedures import print_async_exception, assert_correct_ccxt_version
 from sortedcontainers import SortedDict
 

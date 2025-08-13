@@ -48,16 +48,33 @@ from procedures import (
     print_async_exception,
 )
 from utils import get_file_mod_utc
-from njit_funcs import (
-    calc_ema,
-    calc_diff,
-    calc_min_entry_qty,
-    round_,
-    round_up,
-    round_dn,
-    round_dynamic,
-    calc_pnl,
-)
+import passivbot_rust as pbr
+
+calc_ema = pbr.calc_ema
+calc_diff = pbr.calc_diff
+calc_min_entry_qty = pbr.calc_min_entry_qty
+round_ = pbr.round_
+round_up = pbr.round_up
+round_dn = pbr.round_dn
+round_dynamic = pbr.round_dynamic
+
+def calc_pnl(position_side, entry_price, close_price, qty, inverse, c_mult):
+    """
+    Wrapper to mimic the original calc_pnl signature from njit_funcs.
+    Delegates to pbr.calc_pnl_long / pbr.calc_pnl_short depending on position_side.
+    """
+    try:
+        if isinstance(position_side, str):
+            if position_side == "long":
+                return pbr.calc_pnl_long(entry_price, close_price, qty, inverse, c_mult)
+            else:
+                return pbr.calc_pnl_short(entry_price, close_price, qty, inverse, c_mult)
+        else:
+            # fallback: assume long
+            return pbr.calc_pnl_long(entry_price, close_price, qty, inverse, c_mult)
+    except Exception:
+        # rethrow to preserve behavior
+        raise
 from pure_funcs import (
     numpyize,
     denumpyize,

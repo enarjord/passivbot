@@ -16,7 +16,7 @@ from pure_funcs import (
     determine_pos_side_ccxt,
     shorten_custom_id,
 )
-from njit_funcs import calc_diff
+calc_diff = pbr.calc_diff
 from procedures import print_async_exception, assert_correct_ccxt_version
 
 assert_correct_ccxt_version(ccxt=ccxt_async)

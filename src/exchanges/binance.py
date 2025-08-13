@@ -1,6 +1,7 @@
 from passivbot import Passivbot, logging
 from uuid import uuid4
-from njit_funcs import round_
+import passivbot_rust as pbr
+round_ = pbr.round_
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
 import pprint
