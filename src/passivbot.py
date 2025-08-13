@@ -49,7 +49,7 @@ import passivbot_rust as pbr
 
 calc_ema = pbr.calc_ema
 calc_diff = pbr.calc_diff
-calc_min_entry_qty = pbr.calc_min_entry_qty
+calc_min_entry_qty = pbr.calc_min_entry_qty_py
 round_ = pbr.round_
 round_up = pbr.round_up
 round_dn = pbr.round_dn
