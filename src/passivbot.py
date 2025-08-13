@@ -99,8 +99,13 @@ ONE_MIN_MS = 60_000
 
 def signal_handler(sig, frame):
     print("\nReceived shutdown signal. Stopping bot...")
-    if "bot" in globals():
-        bot.stop_signal_received = True
+    bot = globals().get("bot")
+    if bot is not None:
+        try:
+            bot.stop_signal_received = True
+        except Exception:
+            # If signalling the running bot fails for any reason, fall back to exiting.
+            sys.exit(0)
     else:
         sys.exit(0)
 
