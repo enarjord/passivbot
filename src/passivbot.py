@@ -47,13 +47,16 @@ from procedures import (
 from utils import get_file_mod_utc
 import passivbot_rust as pbr
 
-calc_ema = pbr.calc_ema
 calc_diff = pbr.calc_diff
 calc_min_entry_qty = pbr.calc_min_entry_qty_py
 round_ = pbr.round_
 round_up = pbr.round_up
 round_dn = pbr.round_dn
 round_dynamic = pbr.round_dynamic
+
+
+def calc_ema(alpha, alpha_, prev_ema, new_val) -> float:
+    return prev_ema * alpha_ + new_val * alpha
 
 
 def calc_pnl(position_side, entry_price, close_price, qty, inverse, c_mult):
