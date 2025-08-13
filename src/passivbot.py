@@ -58,16 +58,18 @@ round_dynamic = pbr.round_dynamic
 def calc_pnl(position_side, entry_price, close_price, qty, inverse, c_mult):
     """
     Delegates to pbr.calc_pnl_long / pbr.calc_pnl_short depending on position_side.
+    Note: the Rust bindings expect (entry_price, close_price, qty, c_mult) so we
+    omit the 'inverse' argument when calling into the pbr module.
     """
     try:
         if isinstance(position_side, str):
             if position_side == "long":
-                return pbr.calc_pnl_long(entry_price, close_price, qty, inverse, c_mult)
+                return pbr.calc_pnl_long(entry_price, close_price, qty, c_mult)
             else:
-                return pbr.calc_pnl_short(entry_price, close_price, qty, inverse, c_mult)
+                return pbr.calc_pnl_short(entry_price, close_price, qty, c_mult)
         else:
             # fallback: assume long
-            return pbr.calc_pnl_long(entry_price, close_price, qty, inverse, c_mult)
+            return pbr.calc_pnl_long(entry_price, close_price, qty, c_mult)
     except Exception:
         # rethrow to preserve behavior
         raise
