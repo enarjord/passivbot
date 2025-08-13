@@ -234,27 +234,6 @@ pub fn calc_auto_unstuck_allowance(
     (balance_peak * (loss_allowance_pct + drop_since_peak_pct)).max(0.0)
 }
 
-/// EMA: prev * alpha_ + new * alpha
-#[pyfunction]
-pub fn calc_ema(alpha: f64, alpha_: f64, prev_ema: &PyAny, new_val: f64) -> PyResult<PyObject> {
-    Python::with_gil(|py| {
-        // If prev_ema is a 1-D numpy array, return a numpy array
-        if let Ok(arr) = prev_ema.downcast::<PyArray1<f64>>() {
-            // Safe while we hold the GIL
-            let slice = unsafe { arr.as_slice()? };
-            let out: Vec<f64> = slice.iter().map(|v| v * alpha_ + new_val * alpha).collect();
-            Ok(out.into_pyarray(py).to_object(py))
-        // If prev_ema is a scalar, return a Python float
-        } else if let Ok(scalar) = prev_ema.extract::<f64>() {
-            Ok((scalar * alpha_ + new_val * alpha).into_py(py))
-        } else {
-            Err(pyo3::exceptions::PyTypeError::new_err(
-                "prev_ema must be a float or a 1-D numpy array of floats",
-            ))
-        }
-    })
-}
-
 pub fn calc_ema_price_bid(
     price_step: f64,
     order_book_bid: f64,
