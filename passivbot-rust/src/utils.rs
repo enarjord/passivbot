@@ -1,7 +1,7 @@
 use crate::constants::{CLOSE, LONG, NO_POS, SHORT};
 use crate::types::ExchangeParams;
+use numpy::{IntoPyArray, PyArray1};
 use pyo3::prelude::*;
-use numpy::{PyArray1, IntoPyArray};
 use pyo3::Python;
 
 /// Rounds a number to the specified number of decimal places.
@@ -234,16 +234,17 @@ pub fn calc_auto_unstuck_allowance(
     (balance_peak * (loss_allowance_pct + drop_since_peak_pct)).max(0.0)
 }
 
+/// EMA: prev * alpha_ + new * alpha
 #[pyfunction]
 pub fn calc_ema(alpha: f64, alpha_: f64, prev_ema: &PyAny, new_val: f64) -> PyResult<PyObject> {
-    // Use the GIL explicitly and operate on Python objects inside the closure.
     Python::with_gil(|py| {
-        // Try numpy 1-D array first
+        // If prev_ema is a 1-D numpy array, return a numpy array
         if let Ok(arr) = prev_ema.downcast::<PyArray1<f64>>() {
-            // Safety: as_slice is safe while holding the GIL (we have `py`)
+            // Safe while we hold the GIL
             let slice = unsafe { arr.as_slice()? };
             let out: Vec<f64> = slice.iter().map(|v| v * alpha_ + new_val * alpha).collect();
             Ok(out.into_pyarray(py).to_object(py))
+        // If prev_ema is a scalar, return a Python float
         } else if let Ok(scalar) = prev_ema.extract::<f64>() {
             Ok((scalar * alpha_ + new_val * alpha).into_py(py))
         } else {
