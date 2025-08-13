@@ -232,6 +232,11 @@ pub fn calc_auto_unstuck_allowance(
     (balance_peak * (loss_allowance_pct + drop_since_peak_pct)).max(0.0)
 }
 
+#[pyfunction]
+pub fn calc_ema(alpha: f64, alpha_: f64, prev_ema: f64, new_val: f64) -> f64 {
+    prev_ema * alpha_ + new_val * alpha
+}
+
 pub fn calc_ema_price_bid(
     price_step: f64,
     order_book_bid: f64,
