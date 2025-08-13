@@ -1,0 +1,6 @@
+fix(rust): make calc_ema accept 1-D numpy arrays or scalars in passivbot-rust/src/utils.rs
+
+- calc_ema now accepts either a float scalar or a 1-D numpy array and returns matching Python types
+- uses Python GIL and numpy PyArray1 conversion for array operations
+- returns numpy.ndarray for array input and float for scalar input
+- raises TypeError for unsupported types
