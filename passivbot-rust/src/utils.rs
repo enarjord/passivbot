@@ -235,20 +235,23 @@ pub fn calc_auto_unstuck_allowance(
 }
 
 #[pyfunction]
-pub fn calc_ema(py: Python, alpha: f64, alpha_: f64, prev_ema: &PyAny, new_val: f64) -> PyResult<PyObject> {
-    // Try numpy 1-D array first
-    if let Ok(arr) = prev_ema.downcast::<PyArray1<f64>>() {
-        // Safety: as_slice is safe while holding the GIL (we have `py`)
-        let slice = unsafe { arr.as_slice()? };
-        let out: Vec<f64> = slice.iter().map(|v| v * alpha_ + new_val * alpha).collect();
-        Ok(out.into_pyarray(py).to_object(py))
-    } else if let Ok(scalar) = prev_ema.extract::<f64>() {
-        Ok((scalar * alpha_ + new_val * alpha).into_py(py))
-    } else {
-        Err(pyo3::exceptions::PyTypeError::new_err(
-            "prev_ema must be a float or a 1-D numpy array of floats",
-        ))
-    }
+pub fn calc_ema(alpha: f64, alpha_: f64, prev_ema: &PyAny, new_val: f64) -> PyResult<PyObject> {
+    // Use the GIL explicitly and operate on Python objects inside the closure.
+    Python::with_gil(|py| {
+        // Try numpy 1-D array first
+        if let Ok(arr) = prev_ema.downcast::<PyArray1<f64>>() {
+            // Safety: as_slice is safe while holding the GIL (we have `py`)
+            let slice = unsafe { arr.as_slice()? };
+            let out: Vec<f64> = slice.iter().map(|v| v * alpha_ + new_val * alpha).collect();
+            Ok(out.into_pyarray(py).to_object(py))
+        } else if let Ok(scalar) = prev_ema.extract::<f64>() {
+            Ok((scalar * alpha_ + new_val * alpha).into_py(py))
+        } else {
+            Err(pyo3::exceptions::PyTypeError::new_err(
+                "prev_ema must be a float or a 1-D numpy array of floats",
+            ))
+        }
+    })
 }
 
 pub fn calc_ema_price_bid(
