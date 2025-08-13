@@ -16,6 +16,7 @@ from pure_funcs import (
     shorten_custom_id,
 )
 import passivbot_rust as pbr
+
 calc_diff = pbr.calc_diff
 round_ = pbr.round_
 round_up = pbr.round_up

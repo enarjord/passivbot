@@ -14,6 +14,7 @@ from pure_funcs import (
     shorten_custom_id,
 )
 import passivbot_rust as pbr
+
 calc_diff = pbr.calc_diff
 from procedures import print_async_exception, assert_correct_ccxt_version
 import passivbot_rust as pbr

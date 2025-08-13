@@ -16,6 +16,7 @@ from pure_funcs import (
     determine_pos_side_ccxt,
     shorten_custom_id,
 )
+
 calc_diff = pbr.calc_diff
 from procedures import print_async_exception, assert_correct_ccxt_version
 

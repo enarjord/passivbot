@@ -55,6 +55,7 @@ round_up = pbr.round_up
 round_dn = pbr.round_dn
 round_dynamic = pbr.round_dynamic
 
+
 def calc_pnl(position_side, entry_price, close_price, qty, inverse, c_mult):
     """
     Delegates to pbr.calc_pnl_long / pbr.calc_pnl_short depending on position_side.
@@ -73,6 +74,8 @@ def calc_pnl(position_side, entry_price, close_price, qty, inverse, c_mult):
     except Exception:
         # rethrow to preserve behavior
         raise
+
+
 from pure_funcs import (
     numpyize,
     denumpyize,

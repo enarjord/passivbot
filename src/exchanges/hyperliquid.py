@@ -15,6 +15,7 @@ from pure_funcs import (
     calc_hash,
     shorten_custom_id,
 )
+
 calc_diff = pbr.calc_diff
 round_ = pbr.round_
 round_up = pbr.round_up

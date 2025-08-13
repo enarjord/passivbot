@@ -208,7 +208,11 @@ def _load_symbol_to_coin_map() -> dict:
     except Exception:
         return {}
     entry = _SYMBOL_TO_COIN_CACHE
-    if entry.get("map") is not None and entry.get("mtime_ns") == mtime_ns and entry.get("size") == size:
+    if (
+        entry.get("map") is not None
+        and entry.get("mtime_ns") == mtime_ns
+        and entry.get("size") == size
+    ):
         return entry.get("map", {})
     try:
         with open(path) as f:
