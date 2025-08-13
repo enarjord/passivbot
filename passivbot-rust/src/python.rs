@@ -776,6 +776,18 @@ pub fn calc_entries_short_py(
 }
 
 #[pyfunction]
+pub fn calc_min_entry_qty(price: f64, c_mult: f64, qty_step: f64, min_qty: f64, min_cost: f64) -> f64 {
+    let exchange_params = ExchangeParams {
+        qty_step,
+        price_step: 0.0,
+        min_qty,
+        min_cost,
+        c_mult,
+    };
+    crate::entries::calc_min_entry_qty(price, &exchange_params)
+}
+
+#[pyfunction]
 pub fn calc_closes_long_py(
     qty_step: f64,
     price_step: f64,
