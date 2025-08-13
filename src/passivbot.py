@@ -1673,7 +1673,6 @@ class Passivbot:
             if pside == "long":
                 min_entry_qty = calc_min_entry_qty(
                     close_price,
-                    False,
                     self.c_mults[symbol],
                     self.qty_steps[symbol],
                     self.min_qtys[symbol],
@@ -1720,7 +1719,6 @@ class Passivbot:
             elif pside == "short":
                 min_entry_qty = calc_min_entry_qty(
                     close_price,
-                    False,
                     self.c_mults[symbol],
                     self.qty_steps[symbol],
                     self.min_qtys[symbol],
