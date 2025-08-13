@@ -1,8 +1,5 @@
 import os
 
-if "NOJIT" not in os.environ:
-    os.environ["NOJIT"] = "true"
-
 from ccxt.base.errors import NetworkError
 import random
 import traceback
@@ -60,7 +57,6 @@ round_dynamic = pbr.round_dynamic
 
 def calc_pnl(position_side, entry_price, close_price, qty, inverse, c_mult):
     """
-    Wrapper to mimic the original calc_pnl signature from njit_funcs.
     Delegates to pbr.calc_pnl_long / pbr.calc_pnl_short depending on position_side.
     """
     try:
