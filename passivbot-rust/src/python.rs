@@ -776,7 +776,13 @@ pub fn calc_entries_short_py(
 }
 
 #[pyfunction]
-pub fn calc_min_entry_qty(price: f64, c_mult: f64, qty_step: f64, min_qty: f64, min_cost: f64) -> f64 {
+pub fn calc_min_entry_qty_py(
+    price: f64,
+    c_mult: f64,
+    qty_step: f64,
+    min_qty: f64,
+    min_cost: f64,
+) -> f64 {
     let exchange_params = ExchangeParams {
         qty_step,
         price_step: 0.0,
