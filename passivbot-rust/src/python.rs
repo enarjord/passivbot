@@ -272,7 +272,12 @@ fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a PyDict, key: &str) -> 
         .map_err(|_| {
             PyErr::new::<pyo3::exceptions::PyKeyError, _>(format!("Key '{}' not found", key))
         })?
-        .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Value for key '{}' is None", key)))
+        .ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Value for key '{}' is None",
+                key
+            ))
+        })
         .and_then(pyo3::FromPyObject::extract)
 }
 
