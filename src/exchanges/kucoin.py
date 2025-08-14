@@ -451,7 +451,7 @@ class KucoinBot(Passivbot):
         if isinstance(executed, list) and len(executed) == 1:
             return self.did_cancel_order(executed[0], order)
         try:
-            return order is not None and order["id"] in executed.get("cancelledOrderIds", [])
+            return order is not None and order["id"] in executed.get("info", {}).get("data", {}).get("cancelledOrderIds", [])
         except:
             return False
 
