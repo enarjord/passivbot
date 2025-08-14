@@ -123,6 +123,10 @@ def get_function_name():
     return inspect.currentframe().f_back.f_code.co_name
 
 
+def get_caller_name():
+    return inspect.currentframe().f_back.f_back.f_code.co_name
+
+
 def or_default(f, *args, default=None, **kwargs):
     try:
         return f(*args, **kwargs)
@@ -239,12 +243,12 @@ class Passivbot:
         # called at bot startup and once an hour thereafter
         self.init_markets_last_update_ms = utc_ms()
         await self.update_exchange_config()  # set hedge mode
-        self.markets_dict = await load_markets(self.exchange)
+        self.markets_dict = await load_markets(self.exchange, 0)
         await self.determine_utc_offset(verbose)
         # ineligible symbols cannot open new positions
         self.ineligible_symbols = {}
         self.eligible_symbols = set()
-        for symbol in list(self.markets_dict):
+        for symbol in sorted(self.markets_dict):
             if not self.markets_dict[symbol]["active"]:
                 self.ineligible_symbols[symbol] = "not active"
             elif not self.markets_dict[symbol]["swap"]:
@@ -1421,24 +1425,31 @@ class Passivbot:
                 if hasattr(self, "tickers") and symbol in self.tickers:
                     res = self.tickers[symbol]["last"]
                     if res is None:
-                        if self.debug_mode:
-                            logging.info(f"debug get_last_price {symbol} price from tickers is null")
+                        debug_print(
+                            f"debug get_last_price {symbol} price from tickers is null, called by {get_caller_name()}"
+                        )
                         return null_replace
                     return res
             except Exception as e:
-                logging.error(f"Error fetching last price from tickers")
+                logging.error(
+                    f"Error with get_last_price, from tickers, called by {get_caller_name()}"
+                )
         try:
             if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
                 res = self.ohlcvs_1m[symbol].peekitem(-1)[1][4]
                 if res is None:
                     if self.debug_mode:
-                        logging.info(f"debug get_last_price {symbol} price from ohlcvs_1m is null")
+                        logging.info(
+                            f"debug get_last_price {symbol} price from ohlcvs_1m is null, called by {get_caller_name()}"
+                        )
                     return null_replace
                 return res
         except Exception as e:
-            logging.error(f"error with {get_function_name()} for {symbol}: {e}")
+            logging.error(
+                f"error with get_last_price for {symbol}: {e}, called by {get_caller_name()}"
+            )
             traceback.print_exc()
-        logging.info(f"debug get_last_price {symbol} failed")
+        logging.info(f"debug get_last_price {symbol} failed, called by {get_caller_name()}")
         return null_replace
 
     def update_effective_min_cost(self, symbol=None):
@@ -2508,7 +2519,7 @@ async def main():
     update_config_with_args(config, args)
     config = format_config(config, live_only=True)
     user_info = load_user_info(config["live"]["user"])
-    await load_markets(user_info["exchange"])
+    await load_markets(user_info["exchange"], verbose=False)
     config = parse_overrides(config, verbose=True)
     cooldown_secs = 60
     restarts = []
