@@ -72,7 +72,7 @@ def utc_ms() -> float:
     return datetime.datetime.utcnow().timestamp() * 1000
 
 
-async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24) -> dict:
+async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24, verbose=True) -> dict:
     """
     Standalone helper to load and cache CCXT markets for a given exchange.
 
@@ -90,8 +90,9 @@ async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24) -> 
         if os.path.exists(markets_path):
             if utc_ms() - get_file_mod_utc(markets_path) < max_age_ms:
                 markets = json.load(open(markets_path))
-                logging.info(f"{ex} Loaded markets from cache")
-                await create_coin_symbol_map_cache(ex, markets)
+                if verbose:
+                    logging.info(f"{ex} Loaded markets from cache")
+                await create_coin_symbol_map_cache(ex, markets, verbose=verbose)
                 return markets
     except Exception as e:
         logging.error(f"Error loading {markets_path} {e}")
@@ -117,7 +118,8 @@ async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24) -> 
     # Dump to cache
     try:
         json.dump(markets, open(make_get_filepath(markets_path), "w"))
-        logging.info(f"{ex} Dumped markets to cache")
+        if verbose:
+            logging.info(f"{ex} Dumped markets to cache")
     except Exception as e:
         logging.error(f"Error dumping markets to cache at {markets_path} {e}")
     await create_coin_symbol_map_cache(ex, markets)
@@ -226,7 +228,7 @@ def _load_symbol_to_coin_map() -> dict:
         return {}
 
 
-async def create_coin_symbol_map_cache(exchange: str, markets=None):
+async def create_coin_symbol_map_cache(exchange: str, markets=None, verbose=True):
     try:
         exchange = normalize_exchange_name(exchange)
         quote = get_quote(exchange)
@@ -267,9 +269,11 @@ async def create_coin_symbol_map_cache(exchange: str, markets=None):
             os.path.join("caches", exchange, "coin_to_symbol_map.json")
         )
         coin_to_symbol_map = {k: list(v) for k, v in coin_to_symbol_map.items()}
-        logging.info(f"dumping coin_to_symbol_map {coin_to_symbol_map_path}")
+        if verbose:
+            logging.info(f"dumping coin_to_symbol_map {coin_to_symbol_map_path}")
         json.dump(coin_to_symbol_map, open(coin_to_symbol_map_path, "w"), indent=4, sort_keys=True)
-        logging.info(f"dumping symbol_to_coin_map {symbol_to_coin_map_path}")
+        if verbose:
+            logging.info(f"dumping symbol_to_coin_map {symbol_to_coin_map_path}")
         json.dump(symbol_to_coin_map, open(symbol_to_coin_map_path, "w"))
         # update in-memory caches to avoid stale reads
         try:
