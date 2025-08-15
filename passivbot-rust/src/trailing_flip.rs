@@ -211,7 +211,7 @@ fn process_fill(position: Position, open_order: Order, fee_rate: f64) -> Vec<Fil
 }
 
 /// Clips an order's quantity so that wallet exposure does not exceed the specified limit.
-fn clip_order_qty_to_WE_limit(
+fn clip_order_qty_to_we_limit(
     wallet_exposure_limit: f64,
     balance: f64,
     pos: Position,
@@ -252,7 +252,7 @@ fn calc_open_order_and_upnl(
 ) -> (Order, f64) {
     let pos_qty = pos.qty;
     let pos_price = pos.price;
-    let mut upnl = 0.0;
+    let upnl: f64;
 
     if pos_qty > 0.0 {
         // Long position: use the low to compute unrealised PnL
@@ -282,7 +282,7 @@ fn calc_open_order_and_upnl(
                     price: close,
                 };
                 let clipped =
-                    clip_order_qty_to_WE_limit(params.wallet_exposure_limit, balance, pos, order);
+                    clip_order_qty_to_we_limit(params.wallet_exposure_limit, balance, pos, order);
                 return (clipped, upnl);
             }
         }
@@ -314,7 +314,7 @@ fn calc_open_order_and_upnl(
                     price: close,
                 };
                 let clipped =
-                    clip_order_qty_to_WE_limit(params.wallet_exposure_limit, balance, pos, order);
+                    clip_order_qty_to_we_limit(params.wallet_exposure_limit, balance, pos, order);
                 return (clipped, upnl);
             }
         }
@@ -452,15 +452,8 @@ pub fn backtest_trailing_flip<'py>(
         }
 
         // Determine next open order and unrealised PnL.
-        let (new_order, upnl) = calc_open_order_and_upnl(
-            &params,
-            balance,
-            pos,
-            high,
-            low,
-            close,
-            extrema,
-        );
+        let (new_order, upnl) =
+            calc_open_order_and_upnl(&params, balance, pos, high, low, close, extrema);
 
         open_order = new_order;
         equities.push(balance + upnl);
