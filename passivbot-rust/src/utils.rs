@@ -1,8 +1,6 @@
-use crate::constants::{CLOSE, LONG, NO_POS, SHORT};
+use crate::constants::{LONG, SHORT};
 use crate::types::ExchangeParams;
-use numpy::{IntoPyArray, PyArray1};
 use pyo3::prelude::*;
-use pyo3::Python;
 
 /// Rounds a number to the specified number of decimal places.
 fn round_to_decimal_places(value: f64, decimal_places: usize) -> f64 {
