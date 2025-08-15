@@ -489,15 +489,6 @@ impl<'a> Backtest<'a> {
         }
     }
 
-    #[allow(dead_code)]
-    fn get_position(&self, idx: usize, pside: usize) -> Position {
-        match pside {
-            LONG => self.positions.long.get(&idx).cloned().unwrap_or_default(),
-            SHORT => self.positions.short.get(&idx).cloned().unwrap_or_default(),
-            _ => panic!("Invalid pside"),
-        }
-    }
-
     fn update_balance(&mut self, k: usize, mut pnl: f64, fee_paid: f64) {
         if self.balance.use_btc_collateral {
             // Fees reduce USD portion
