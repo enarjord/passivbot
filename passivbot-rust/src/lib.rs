@@ -7,9 +7,6 @@ mod trailing_flip;
 mod types;
 mod utils;
 
-use backtest::*;
-use closes::*;
-use entries::*;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use python::*;
