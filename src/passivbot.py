@@ -1456,7 +1456,7 @@ class Passivbot:
         if not hasattr(self, "effective_min_cost"):
             self.effective_min_cost = {}
         if symbol is None:
-            symbols = sorted(self.eligible_symbols)
+            symbols = sorted(self.get_symbols_approved_or_has_pos())
         else:
             symbols = [symbol]
         for symbol in symbols:
