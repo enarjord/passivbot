@@ -1,14 +1,8 @@
 use crate::entries::calc_min_entry_qty;
 use crate::types::{
-    BotParams, BotParamsPair, EMABands, ExchangeParams, Order, OrderType, Position, Positions,
-    StateParams, TrailingPriceBundle,
+    BotParams, ExchangeParams, Order, OrderType, Position, StateParams, TrailingPriceBundle,
 };
-use crate::utils::{
-    calc_pprice_diff_int, calc_wallet_exposure, cost_to_qty, interpolate, round_, round_dn,
-    round_up,
-};
-use ndarray::{Array1, Array2};
-use std::collections::HashMap;
+use crate::utils::{calc_wallet_exposure, cost_to_qty, interpolate, round_, round_dn, round_up};
 
 pub fn calc_close_qty(
     exchange_params: &ExchangeParams,
