@@ -55,16 +55,6 @@ pub struct Order {
     pub order_type: OrderType,
 }
 
-impl Order {
-    pub fn new(qty: f64, price: f64, order_type: OrderType) -> Self {
-        Order {
-            qty,
-            price,
-            order_type,
-        }
-    }
-}
-
 impl Default for Order {
     fn default() -> Self {
         Order {

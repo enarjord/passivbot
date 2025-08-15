@@ -144,10 +144,14 @@ pub fn run_backtest(
             py_fills[(i, 12)] = fill.order_type.to_string().into_py(py);
         }
 
-        let py_equities_usd = Array1::from_vec(equities.usd).into_pyarray_bounded(py).to_owned();
-        let py_equities_btc = Array1::from_vec(equities.btc).into_pyarray_bounded(py).to_owned();
+        let py_equities_usd = Array1::from_vec(equities.usd)
+            .into_pyarray_bound(py)
+            .unbind();
+        let py_equities_btc = Array1::from_vec(equities.btc)
+            .into_pyarray_bound(py)
+            .unbind();
         Ok((
-            py_fills.into_pyarray(py).to_owned(),
+            py_fills.into_pyarray_bound(py).unbind(),
             py_equities_usd,
             py_equities_btc,
             py_analysis_usd.into(),
