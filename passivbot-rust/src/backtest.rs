@@ -16,7 +16,7 @@ use crate::utils::{
     calc_pprice_diff_int, calc_wallet_exposure, cost_to_qty, hysteresis_rounding, qty_to_cost,
     round_, round_dn, round_up,
 };
-use ndarray::{s, Array1, Array2, Array3, Array4, ArrayView1, ArrayView3, Axis, Dim, ViewRepr};
+use ndarray::{s, ArrayView1, ArrayView3, Axis};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
@@ -38,6 +38,7 @@ pub struct EMAs {
     pub short: [f64; 3],
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TotalWalletExposureLimit {
     pub long: f64,
@@ -131,7 +132,7 @@ pub struct Backtest<'a> {
     bot_params_master: BotParamsPair,
     bot_params: Vec<BotParamsPair>,
     bot_params_original: Vec<BotParamsPair>,
-    total_wallet_exposure_limit: TotalWalletExposureLimit,
+    _total_wallet_exposure_limit: TotalWalletExposureLimit,
     effective_n_positions: EffectiveNPositions,
     exchange_params_list: Vec<ExchangeParams>,
     backtest_params: BacktestParams,
@@ -182,7 +183,7 @@ impl<'a> Backtest<'a> {
         balance.usd_total = backtest_params.starting_balance;
         balance.usd_total_rounded = balance.usd_total;
 
-        let n_timesteps = hlcvs.shape()[0];
+        let _n_timesteps = hlcvs.shape()[0];
         let n_coins = hlcvs.shape()[1];
         let initial_emas = (0..n_coins)
             .map(|i| {
@@ -245,7 +246,7 @@ impl<'a> Backtest<'a> {
             bot_params_master: bot_params_master.clone(),
             bot_params: bot_params.clone(),
             bot_params_original,
-            total_wallet_exposure_limit,
+            _total_wallet_exposure_limit: total_wallet_exposure_limit,
             effective_n_positions,
             exchange_params_list,
             backtest_params: backtest_params.clone(),
@@ -504,6 +505,7 @@ impl<'a> Backtest<'a> {
         }
     }
 
+    #[allow(dead_code)]
     fn get_position(&self, idx: usize, pside: usize) -> Position {
         match pside {
             LONG => self.positions.long.get(&idx).cloned().unwrap_or_default(),
@@ -526,7 +528,7 @@ impl<'a> Backtest<'a> {
                 }
                 // Any remaining positive PNL is converted to BTC
                 if pnl > 0.0 {
-                    let btc_to_add = (pnl / self.btc_usd_prices[k]);
+                    let btc_to_add = pnl / self.btc_usd_prices[k];
                     self.balance.btc += btc_to_add * 0.999; // apply 0.1% spot trading fee
                 }
             } else if pnl < 0.0 {
@@ -2031,7 +2033,7 @@ pub fn calc_exponential_fit_error(equity: &[f64]) -> f64 {
     let sum_xx = x.iter().map(|v| v * v).sum::<f64>();
     let sum_xy = x.iter().zip(log_y.iter()).map(|(x, y)| x * y).sum::<f64>();
 
-    let denom = (n as f64 * sum_xx - sum_x * sum_x);
+    let denom = n as f64 * sum_xx - sum_x * sum_x;
     if denom == 0.0 {
         return f64::INFINITY;
     }
