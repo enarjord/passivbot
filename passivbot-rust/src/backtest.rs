@@ -38,13 +38,6 @@ pub struct EMAs {
     pub short: [f64; 3],
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct TotalWalletExposureLimit {
-    pub long: f64,
-    pub short: f64,
-}
-
 #[derive(Debug, Clone)]
 pub struct EffectiveNPositions {
     pub long: usize,
@@ -132,7 +125,6 @@ pub struct Backtest<'a> {
     bot_params_master: BotParamsPair,
     bot_params: Vec<BotParamsPair>,
     bot_params_original: Vec<BotParamsPair>,
-    _total_wallet_exposure_limit: TotalWalletExposureLimit,
     effective_n_positions: EffectiveNPositions,
     exchange_params_list: Vec<ExchangeParams>,
     backtest_params: BacktestParams,
@@ -183,7 +175,6 @@ impl<'a> Backtest<'a> {
         balance.usd_total = backtest_params.starting_balance;
         balance.usd_total_rounded = balance.usd_total;
 
-        let _n_timesteps = hlcvs.shape()[0];
         let n_coins = hlcvs.shape()[1];
         let initial_emas = (0..n_coins)
             .map(|i| {
@@ -205,12 +196,6 @@ impl<'a> Backtest<'a> {
 
         // Store original bot params to preserve dynamic WEL indicators
         let bot_params_original = bot_params.clone();
-
-        // Extract total wallet exposure limits
-        let total_wallet_exposure_limit = TotalWalletExposureLimit {
-            long: bot_params_master.long.total_wallet_exposure_limit,
-            short: bot_params_master.short.total_wallet_exposure_limit,
-        };
 
         let n_eligible_long = bot_params_master.long.n_positions.max(
             (n_coins as f64 * (1.0 - bot_params_master.long.filter_volume_drop_pct)).round()
@@ -246,7 +231,6 @@ impl<'a> Backtest<'a> {
             bot_params_master: bot_params_master.clone(),
             bot_params: bot_params.clone(),
             bot_params_original,
-            _total_wallet_exposure_limit: total_wallet_exposure_limit,
             effective_n_positions,
             exchange_params_list,
             backtest_params: backtest_params.clone(),
