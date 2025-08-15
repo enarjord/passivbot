@@ -6,21 +6,17 @@ use crate::entries::{
     calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
 };
 use crate::types::{
-    Analysis, BacktestParams, BotParams, BotParamsPair, EMABands, Equities, ExchangeParams, Order,
-    OrderBook, Position, StateParams, TrailingPriceBundle,
+    BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, Position,
+    StateParams, TrailingPriceBundle,
 };
 use memmap::MmapOptions;
-use ndarray::{Array1, Array2, Array3, Array4, ArrayBase, ArrayD, ArrayView, ShapeBuilder};
-use numpy::{
-    IntoPyArray, PyArray1, PyArray2, PyArray3, PyArray4, PyReadonlyArray2, PyReadonlyArray3,
-    PyReadonlyArray4,
-};
+use ndarray::{Array1, Array2, ArrayView};
+use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use pyo3::wrap_pyfunction;
 use serde::Serialize;
-use std::{fs::File, slice};
+use std::fs::File;
 
 #[pyfunction]
 pub fn run_backtest(
