@@ -263,7 +263,7 @@ pub fn calc_grid_entry_long(
         ),
         initial_entry_qty,
     );
-    let (next_wallet_exposure_if_filled, next_reentry_qty_cropped) = calc_cropped_reentry_qty(
+    let (_next_wallet_exposure_if_filled, next_reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,
         bot_params,
         &Position {
@@ -500,7 +500,7 @@ pub fn calc_trailing_entry_long(
         ),
         initial_entry_qty,
     );
-    let (wallet_exposure_if_filled, reentry_qty_cropped) = calc_cropped_reentry_qty(
+    let (_wallet_exposure_if_filled, reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,
         bot_params,
         position,
@@ -642,7 +642,7 @@ pub fn calc_grid_entry_short(
         ),
         initial_entry_qty,
     );
-    let (next_wallet_exposure_if_filled, next_reentry_qty_cropped) = calc_cropped_reentry_qty(
+    let (_next_wallet_exposure_if_filled, next_reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,
         bot_params,
         &Position {
@@ -791,7 +791,7 @@ pub fn calc_trailing_entry_short(
         ),
         initial_entry_qty,
     );
-    let (wallet_exposure_if_filled, reentry_qty_cropped) = calc_cropped_reentry_qty(
+    let (_wallet_exposure_if_filled, reentry_qty_cropped) = calc_cropped_reentry_qty(
         exchange_params,
         bot_params,
         position,
