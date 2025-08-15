@@ -349,6 +349,16 @@ fn calc_open_order_and_upnl(
     )
 }
 
+pub struct BacktestParams {
+    pub initial_qty_pct: f64,
+    pub double_down_factor: f64,
+    pub wallet_exposure_limit: f64,
+    pub trailing_threshold_pct_profit: f64,
+    pub trailing_retracement_pct_profit: f64,
+    pub trailing_threshold_pct_loss: f64,
+    pub trailing_retracement_pct_loss: f64,
+}
+
 /// Run a simple backtest using trailing-stop and flip logic.
 ///
 /// Returns `(fills, equities)` where:
