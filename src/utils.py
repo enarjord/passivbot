@@ -92,7 +92,7 @@ async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24, ver
                 markets = json.load(open(markets_path))
                 if verbose:
                     logging.info(f"{ex} Loaded markets from cache")
-                await create_coin_symbol_map_cache(ex, markets, verbose=verbose)
+                create_coin_symbol_map_cache(ex, markets, verbose=verbose)
                 return markets
     except Exception as e:
         logging.error(f"Error loading {markets_path} {e}")
@@ -122,7 +122,7 @@ async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24, ver
             logging.info(f"{ex} Dumped markets to cache")
     except Exception as e:
         logging.error(f"Error dumping markets to cache at {markets_path} {e}")
-    await create_coin_symbol_map_cache(ex, markets)
+    await create_coin_symbol_map_cache(ex, markets, verbose=verbose)
     return markets
 
 
@@ -228,12 +228,10 @@ def _load_symbol_to_coin_map() -> dict:
         return {}
 
 
-async def create_coin_symbol_map_cache(exchange: str, markets=None, verbose=True):
+def create_coin_symbol_map_cache(exchange: str, markets, verbose=True):
     try:
         exchange = normalize_exchange_name(exchange)
         quote = get_quote(exchange)
-        if markets is None:
-            markets = await load_markets(exchange)
         coin_to_symbol_map = defaultdict(set)
         symbol_to_coin_map = {}
         symbol_to_coin_map_path = make_get_filepath(os.path.join("caches", "symbol_to_coin_map.json"))
