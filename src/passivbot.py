@@ -2013,16 +2013,19 @@ class Passivbot:
         raise Exception("Bot will restart.")
 
     async def update_ohlcvs_1m_for_actives(self):
+        max_age_ms = 1000 * 10 # at least 10 sec freshness of ohlcvs for actives
         try:
             utc_now = utc_ms()
             symbols_to_update = [
                 s
                 for s in self.active_symbols
                 if s not in self.ohlcvs_1m_update_timestamps_WS
-                or utc_now - self.ohlcvs_1m_update_timestamps_WS[s] > 1000 * 60
+                or utc_now - self.ohlcvs_1m_update_timestamps_WS[s] > max_age_ms
             ]
             if symbols_to_update:
-                await asyncio.gather(*[self.update_ohlcvs_1m_single(s) for s in symbols_to_update])
+                await asyncio.gather(
+                    *[self.update_ohlcvs_1m_single(s, max_age_ms) for s in symbols_to_update]
+                )
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
             traceback.print_exc()
