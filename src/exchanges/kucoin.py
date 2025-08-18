@@ -192,6 +192,14 @@ class KucoinBot(Passivbot):
             self.c_mults[symbol] = elm["contractSize"]
             self.max_leverage[symbol] = int(elm["limits"]["leverage"]["max"])
 
+    async def watch_ohlcvs_1m(self):
+        # print("debug watch_ohlcvs_1m")
+        return
+
+    async def watch_ohlcv_1m_single(self, symbol):
+        # print('debug watch_ohlcv_1m_single', symbol)
+        return
+
     async def watch_orders(self):
         while True:
             try:
@@ -451,7 +459,9 @@ class KucoinBot(Passivbot):
         if isinstance(executed, list) and len(executed) == 1:
             return self.did_cancel_order(executed[0], order)
         try:
-            return order is not None and order["id"] in executed.get("info", {}).get("data", {}).get("cancelledOrderIds", [])
+            return order is not None and order["id"] in executed.get("info", {}).get("data", {}).get(
+                "cancelledOrderIds", []
+            )
         except:
             return False
 
