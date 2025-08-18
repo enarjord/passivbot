@@ -73,7 +73,7 @@
           "forced_mode_short": "",
           "ignored_coins": {"long": [], "short": []},
           "leverage": 10,
-          "market_orders_allowed": true,
+          "market_orders_allowed": false,
           "max_n_cancellations_per_batch": 5,
           "max_n_creations_per_batch": 3,
           "max_n_restarts_per_day": 10,
