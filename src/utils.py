@@ -122,7 +122,7 @@ async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24, ver
             logging.info(f"{ex} Dumped markets to cache")
     except Exception as e:
         logging.error(f"Error dumping markets to cache at {markets_path} {e}")
-    await create_coin_symbol_map_cache(ex, markets, verbose=verbose)
+    create_coin_symbol_map_cache(ex, markets, verbose=verbose)
     return markets
 
 
