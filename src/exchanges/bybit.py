@@ -351,25 +351,15 @@ class BybitBot(Passivbot):
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(orders, "execute_cancellation")
 
-    async def execute_order(self, order: dict) -> dict:
-        executed = await self.cca.create_order(
-            type=order["type"] if "type" in order else "limit",
-            symbol=order["symbol"],
-            side=order["side"],
-            amount=abs(order["qty"]),
-            price=order["price"],
-            params={
-                "positionIdx": 1 if order["position_side"] == "long" else 2,
-                "timeInForce": (
-                    "postOnly" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
-                ),
-                "orderLinkId": order["custom_id"],
-            },
-        )
-        return executed
-
-    async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_order")
+    def get_order_execution_params(self, order: dict) -> dict:
+        # defined for each exchange
+        return {
+            "positionIdx": 1 if order["position_side"] == "long" else 2,
+            "timeInForce": (
+                "postOnly" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
+            ),
+            "orderLinkId": order["custom_id"],
+        }
 
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}
