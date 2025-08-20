@@ -332,6 +332,7 @@ class BitgetBot(Passivbot):
                 "holdSide": order["position_side"],
                 "reduceOnly": order["reduce_only"],
                 "oneWayMode": False,
+                "clientOid": order["custom_id"],
             },
         )
         return executed
