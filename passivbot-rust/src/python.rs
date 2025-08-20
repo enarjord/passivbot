@@ -5,6 +5,7 @@ use crate::closes::{
 use crate::entries::{
     calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
 };
+use crate::types::OrderType;
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, Position,
     StateParams, TrailingPriceBundle,
@@ -627,7 +628,7 @@ pub fn calc_entries_long_py(
     min_since_max: f64,
     ema_bands_lower: f64,
     order_book_bid: f64,
-) -> Vec<(f64, f64, String)> {
+) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
         qty_step,
         price_step,
@@ -684,7 +685,7 @@ pub fn calc_entries_long_py(
     // Convert entries to Python-compatible format
     entries
         .into_iter()
-        .map(|order| (order.qty, order.price, order.order_type.to_string()))
+        .map(|order| (order.qty, order.price, order.order_type.id()))
         .collect()
 }
 
@@ -714,7 +715,7 @@ pub fn calc_entries_short_py(
     min_since_max: f64,
     ema_bands_upper: f64,
     order_book_ask: f64,
-) -> Vec<(f64, f64, String)> {
+) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
         qty_step,
         price_step,
@@ -771,7 +772,7 @@ pub fn calc_entries_short_py(
     // Convert entries to Python-compatible format
     entries
         .into_iter()
-        .map(|order| (order.qty, order.price, order.order_type.to_string()))
+        .map(|order| (order.qty, order.price, order.order_type.id()))
         .collect()
 }
 
@@ -817,7 +818,7 @@ pub fn calc_closes_long_py(
     max_since_open: f64,
     min_since_max: f64,
     order_book_ask: f64,
-) -> Vec<(f64, f64, String)> {
+) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
         qty_step,
         price_step,
@@ -869,7 +870,7 @@ pub fn calc_closes_long_py(
     // Convert closes to Python-compatible format
     closes
         .into_iter()
-        .map(|order| (order.qty, order.price, order.order_type.to_string()))
+        .map(|order| (order.qty, order.price, order.order_type.id()))
         .collect()
 }
 
@@ -897,7 +898,7 @@ pub fn calc_closes_short_py(
     max_since_open: f64,
     min_since_max: f64,
     order_book_bid: f64,
-) -> Vec<(f64, f64, String)> {
+) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
         qty_step,
         price_step,
@@ -948,6 +949,60 @@ pub fn calc_closes_short_py(
     // Convert closes to Python-compatible format
     closes
         .into_iter()
-        .map(|order| (order.qty, order.price, order.order_type.to_string()))
+        .map(|order| (order.qty, order.price, order.order_type.id()))
         .collect()
+}
+
+#[pyfunction]
+pub fn order_type_id_to_snake(id: u16) -> PyResult<String> {
+    let ot = OrderType::try_from(id)
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("unknown order type id"))?;
+    Ok(ot.snake().to_string())
+}
+
+#[pyfunction]
+pub fn all_order_types_ids(py: Python<'_>) -> PyResult<Py<PyDict>> {
+    let d = PyDict::new(py);
+    use OrderType::*;
+    let items: &[(OrderType, &str)] = &[
+        (EntryInitialNormalLong, "entry_initial_normal_long"),
+        (EntryInitialPartialLong, "entry_initial_partial_long"),
+        (EntryTrailingNormalLong, "entry_trailing_normal_long"),
+        (EntryTrailingCroppedLong, "entry_trailing_cropped_long"),
+        (EntryGridNormalLong, "entry_grid_normal_long"),
+        (EntryGridCroppedLong, "entry_grid_cropped_long"),
+        (EntryGridInflatedLong, "entry_grid_inflated_long"),
+        (CloseGridLong, "close_grid_long"),
+        (CloseTrailingLong, "close_trailing_long"),
+        (CloseUnstuckLong, "close_unstuck_long"),
+        (CloseAutoReduceLong, "close_auto_reduce_long"),
+        (EntryInitialNormalShort, "entry_initial_normal_short"),
+        (EntryInitialPartialShort, "entry_initial_partial_short"),
+        (EntryTrailingNormalShort, "entry_trailing_normal_short"),
+        (EntryTrailingCroppedShort, "entry_trailing_cropped_short"),
+        (EntryGridNormalShort, "entry_grid_normal_short"),
+        (EntryGridCroppedShort, "entry_grid_cropped_short"),
+        (EntryGridInflatedShort, "entry_grid_inflated_short"),
+        (CloseGridShort, "close_grid_short"),
+        (CloseTrailingShort, "close_trailing_short"),
+        (CloseUnstuckShort, "close_unstuck_short"),
+        (CloseAutoReduceShort, "close_auto_reduce_short"),
+        (Empty, "empty"),
+    ];
+    for (ot, s) in items {
+        d.set_item(ot.id(), *s)?;
+    }
+    Ok(d.into())
+}
+
+#[pyfunction]
+pub fn order_type_snake_to_id(name: &str) -> PyResult<u16> {
+    OrderType::from_snake(name)
+        .map(|ot| ot.id())
+        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("unknown order type name"))
+}
+
+#[pyfunction(name = "get_order_id_type_from_string")]
+pub fn get_order_id_type_from_string_alias(name: &str) -> PyResult<u16> {
+    order_type_snake_to_id(name)
 }
