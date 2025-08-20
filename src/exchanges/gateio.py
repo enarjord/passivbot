@@ -43,6 +43,7 @@ class GateIOBot(Passivbot):
         self.config["live"]["max_n_creations_per_batch"] = min(
             self.config["live"]["max_n_creations_per_batch"], 10
         )
+        self.custom_id_max_length = 28
 
     def create_ccxt_sessions(self):
         self.ccp = getattr(ccxt_pro, self.exchange)(
@@ -284,39 +285,18 @@ class GateIOBot(Passivbot):
         except:
             return False
 
-    async def execute_order(self, order: dict) -> dict:
-        return await self.execute_orders([order])
-
-    async def execute_orders(self, orders: [dict]) -> [dict]:
-        if len(orders) == 0:
-            return []
-        to_execute = []
-        for order in orders:
-            order_type = order["type"] if "type" in order else "limit"
-            params = {
-                "reduce_only": order["reduce_only"],
-            }
-            if order_type == "limit":
-                params["timeInForce"] = (
-                    "poc" if self.config["live"]["time_in_force"] == "post_only" else "gtc"
-                )
-            to_execute.append(
-                {
-                    "symbol": order["symbol"],
-                    "type": order_type,
-                    "side": order["side"],
-                    "amount": order["qty"],
-                    "price": order["price"],
-                    "params": params,
-                }
+    def get_order_execution_params(self, order: dict) -> dict:
+        # defined for each exchange
+        order_type = order["type"] if "type" in order else "limit"
+        params = {
+            "reduce_only": order["reduce_only"],
+            "text": order["custom_id"],
+        }
+        if order_type == "limit":
+            params["timeInForce"] = (
+                "poc" if self.config["live"]["time_in_force"] == "post_only" else "gtc"
             )
-        res = await self.cca.create_orders(to_execute)
-        return res
-        executed = []
-        for ex, order in zip(res, orders):
-            if "info" in ex and ex["status"] in ["closed", "open"]:
-                executed.append({**ex, **order})
-        return executed
+        return params
 
     def did_create_order(self, executed):
         try:
