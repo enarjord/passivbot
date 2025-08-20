@@ -242,28 +242,17 @@ class OKXBot(Passivbot):
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(orders, "execute_cancellation")
 
-    async def execute_order(self, order: dict) -> dict:
-        order_type = order["type"] if "type" in order else "limit"
-        executed = await self.cca.create_order(
-            symbol=order["symbol"],
-            type=order_type,
-            side=order["side"],
-            amount=abs(order["qty"]),
-            price=order["price"],
-            params={
-                "postOnly": self.config["live"]["time_in_force"] == "post_only",
-                "positionSide": order["position_side"],
-                "reduceOnly": order["reduce_only"],
-                "hedged": True,
-                "tag": self.broker_code,
-                "clOrdId": order["custom_id"],
-                "marginMode": "cross",
-            },
-        )
-        return executed
-
-    async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_order")
+    def get_order_execution_params(self, order: dict) -> dict:
+        # defined for each exchange
+        return {
+            "postOnly": self.config["live"]["time_in_force"] == "post_only",
+            "positionSide": order["position_side"],
+            "reduceOnly": order["reduce_only"],
+            "hedged": True,
+            "tag": self.broker_code,
+            "clOrdId": order["custom_id"],
+            "marginMode": "cross",
+        }
 
     async def update_exchange_config_by_symbols(self, symbols: [str]):
         coros_to_call_margin_mode = {}
@@ -318,10 +307,6 @@ class OKXBot(Passivbot):
             ideal_orders[x["symbol"]].append(x)
         return ideal_orders
 
-    def format_custom_ids(self, orders: [dict]) -> [dict]:
-        # okx needs broker code at the beginning of the custom_id
-        new_orders = []
-        for order in orders:
-            order["custom_id"] = (self.broker_code + uuid4().hex)[: self.custom_id_max_length]
-            new_orders.append(order)
-        return new_orders
+    def format_custom_id_single(self, order_type_id: int) -> str:
+        formatted = super().format_custom_id_single(order_type_id)
+        return (self.broker_code + formatted)[: self.custom_id_max_length]
