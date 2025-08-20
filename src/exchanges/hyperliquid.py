@@ -41,6 +41,7 @@ class HyperliquidBot(Passivbot):
             )
             self.user_info["is_vault"] = False
         self.max_n_concurrent_ohlcvs_1m_updates = 2
+        self.custom_id_max_length = 34
 
     def create_ccxt_sessions(self):
         self.ccp = getattr(ccxt_pro, self.exchange)(
@@ -293,25 +294,21 @@ class HyperliquidBot(Passivbot):
         except:
             return False
 
+    def get_order_execution_params(self, order: dict) -> dict:
+        # defined for each exchange
+        params = {
+            "reduceOnly": order["reduce_only"],
+            "timeInForce": ("Alo" if self.config["live"]["time_in_force"] == "post_only" else "Gtc"),
+            "clientOrderId": order["custom_id"],  # TODO
+        }
+        if self.user_info["is_vault"]:
+            params["vaultAddress"] = self.user_info["wallet_address"]
+        return params
+
     async def execute_order(self, order: dict) -> dict:
         executed = None
         try:
-            params = {
-                "reduceOnly": order["reduce_only"],
-                "timeInForce": (
-                    "Alo" if self.config["live"]["time_in_force"] == "post_only" else "Gtc"
-                ),
-            }
-            if self.user_info["is_vault"]:
-                params["vaultAddress"] = self.user_info["wallet_address"]
-            executed = await self.cca.create_order(
-                symbol=order["symbol"],
-                type=order["type"] if "type" in order else "limit",
-                side=order["side"],
-                amount=order["qty"],
-                price=order["price"],
-                params=params,
-            )
+            executed = await super().execute_order(order)
             return executed
         except Exception as e:
             try:
@@ -440,3 +437,7 @@ class HyperliquidBot(Passivbot):
                     ideal_orders[sym][i]["price"], self.price_steps[sym]
                 )
         return ideal_orders
+
+    def format_custom_id_single(self, order_type_id: int) -> str:
+        formatted = super().format_custom_id_single(order_type_id)
+        return (formatted)[: self.custom_id_max_length]
