@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 
 from ccxt.base.errors import NetworkError
@@ -46,6 +47,8 @@ from procedures import (
 )
 from utils import get_file_mod_utc
 import passivbot_rust as pbr
+import re
+
 
 calc_diff = pbr.calc_diff
 calc_min_entry_qty = pbr.calc_min_entry_qty_py
@@ -53,6 +56,38 @@ round_ = pbr.round_
 round_up = pbr.round_up
 round_dn = pbr.round_dn
 round_dynamic = pbr.round_dynamic
+
+# Match "...0xABCD..." anywhere (case-insensitive)
+_TYPE_MARKER_RE = re.compile(r"0x([0-9a-fA-F]{4})", re.IGNORECASE)
+# Leading pure-hex fallback: optional 0x then 4 hex at the very start
+_LEADING_HEX4_RE = re.compile(r"^(?:0x)?([0-9a-fA-F]{4})", re.IGNORECASE)
+
+
+def try_decode_type_id_from_custom_id(custom_id: str) -> int | None:
+    # 1) Preferred: look for "...0x<4-hex>..." anywhere
+    m = _TYPE_MARKER_RE.search(custom_id)
+    if m:
+        return int(m.group(1), 16)
+
+    # 2) Fallback: if string is pure-hex style (no broker code), parse the leading 4
+    m = _LEADING_HEX4_RE.match(custom_id)
+    if m:
+        return int(m.group(1), 16)
+
+    return None
+
+
+def order_type_id_to_hex4(type_id: int) -> str:
+    return f"{type_id:04x}"
+
+
+def type_token(type_id: int, with_marker: bool = True) -> str:
+    h4 = order_type_id_to_hex4(type_id)
+    return ("0x" + h4) if with_marker else h4
+
+
+def snake_of(type_id: int) -> str:
+    return pbr.order_type_id_to_snake(type_id)
 
 
 def calc_ema(alpha, alpha_, prev_ema, new_val) -> float:
@@ -502,7 +537,7 @@ class Passivbot:
             return to_cancel, to_create
 
     async def execute_orders_parent(self, orders: [dict]) -> [dict]:
-        orders = self.format_custom_ids(orders)[: self.config["live"]["max_n_creations_per_batch"]]
+        orders = orders[: self.config["live"]["max_n_creations_per_batch"]]
         for order in orders:
             self.add_to_recent_order_executions(order)
             self.log_order_action(order, "posting order")
@@ -1560,7 +1595,9 @@ class Passivbot:
                         self.trailing_prices[symbol][pside]["min_since_max"],
                         self.get_last_price(symbol),
                     )
-                    ideal_orders[symbol] += entries + closes
+                    ideal_orders[symbol] += [
+                        (x[0], x[1], snake_of(x[2]), x[2]) for x in entries + closes
+                    ]
 
         unstucking_symbol, unstucking_close = self.calc_unstucking_close()
         if unstucking_close[0] != 0.0:
@@ -1609,7 +1646,7 @@ class Passivbot:
                         "qty": abs(order[0]),
                         "price": order[1],
                         "reduce_only": "close" in order[2],
-                        "custom_id": order[2],
+                        "custom_id": self.format_custom_id_single(order[3]),
                         "type": order_type,
                     }
                 )
@@ -1639,9 +1676,14 @@ class Passivbot:
                 self.emas[pside][symbol].min() * (1.0 - ema_dist), self.price_steps[symbol]
             )
 
-    def calc_unstucking_close(self) -> (float, float, str):
+    def calc_unstucking_close(self) -> (float, float, str, int):
         if len(self.pnls) == 0:
-            return "", (0.0, 0.0, "")  # needs trade history to calc unstucking order
+            return "", (
+                0.0,
+                0.0,
+                "",
+                pbr.get_order_id_type_from_string("empty"),
+            )  # needs trade history to calc unstucking order
         stuck_positions = []
         pnls_cumsum = np.array([x["pnl"] for x in self.pnls]).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = (pnls_cumsum.max(), pnls_cumsum[-1])
@@ -1690,7 +1732,7 @@ class Passivbot:
                             )
                             stuck_positions.append((symbol, pside, pprice_diff, ema_price))
         if not stuck_positions:
-            return "", (0.0, 0.0, "")
+            return "", (0.0, 0.0, "", pbr.get_order_id_type_from_string("empty"))
         stuck_positions.sort(key=lambda x: x[2])
         for symbol, pside, pprice_diff, ema_price in stuck_positions:
             close_price = self.get_last_price(symbol)
@@ -1739,7 +1781,12 @@ class Passivbot:
                                 ),
                             ),
                         )
-                    return symbol, (close_qty, close_price, "unstuck_close_long")
+                    return symbol, (
+                        close_qty,
+                        close_price,
+                        "close_unstuck_long",
+                        pbr.get_order_id_type_from_string("close_unstuck_long"),
+                    )
             elif pside == "short":
                 min_entry_qty = calc_min_entry_qty(
                     close_price,
@@ -1785,8 +1832,13 @@ class Passivbot:
                                 ),
                             ),
                         )
-                    return symbol, (close_qty, close_price, "unstuck_close_short")
-        return "", (0.0, 0.0, "")
+                    return symbol, (
+                        close_qty,
+                        close_price,
+                        "close_unstuck_short",
+                        pbr.get_order_id_type_from_string("close_unstuck_short"),
+                    )
+        return "", (0.0, 0.0, "", pbr.get_order_id_type_from_string("empty"))
 
     def calc_orders_to_cancel_and_create(self):
         ideal_orders = self.calc_ideal_orders()
@@ -1877,14 +1929,16 @@ class Passivbot:
             await self.restart_bot()
             raise Exception("too many errors... restarting bot.")
 
-    def format_custom_ids(self, orders: [dict]) -> [dict]:
-        new_orders = []
-        for order in orders:
-            order["custom_id"] = (
-                shorten_custom_id(order["custom_id"] if "custom_id" in order else "") + uuid4().hex
-            )[: self.custom_id_max_length]
-            new_orders.append(order)
-        return new_orders
+    def custom_id_to_snake(self, custom_id) -> str:
+        try:
+            return snake_of(try_decode_type_id_from_custom_id(custom_id))
+        except Exception as e:
+            logging.error(f"failed to convert custom_id {custom_id} to str order_type")
+            return "unknown"
+
+    def format_custom_id_single(self, order_type_id: int) -> str:
+        token = type_token(order_type_id, with_marker=True)  # "0xABCD"
+        return (token + uuid4().hex)[: self.custom_id_max_length]
 
     def debug_dump_bot_state_to_disk(self):
         if not hasattr(self, "tmp_debug_ts"):
@@ -2013,7 +2067,7 @@ class Passivbot:
         raise Exception("Bot will restart.")
 
     async def update_ohlcvs_1m_for_actives(self):
-        max_age_ms = 1000 * 10 # at least 10 sec freshness of ohlcvs for actives
+        max_age_ms = 1000 * 10  # at least 10 sec freshness of ohlcvs for actives
         try:
             utc_now = utc_ms()
             symbols_to_update = [
@@ -2450,6 +2504,25 @@ class Passivbot:
         except Exception as e:
             logging.error(f"error with refresh_approved_ignored_coins_lists {e}")
             traceback.print_exc()
+
+    def get_order_execution_params(self, order: dict) -> dict:
+        # defined for each exchange
+        return {}
+
+    async def execute_order(self, order: dict) -> dict:
+        params = {
+            "symbol": order["symbol"],
+            "type": order.get("type", "limit"),
+            "side": order["side"],
+            "amount": abs(order["qty"]),
+            "price": order["price"],
+            "params": self.get_order_execution_params(order),
+        }
+        executed = await self.cca.create_order(**params)
+        return executed
+
+    async def execute_orders(self, orders: [dict]) -> [dict]:
+        return await self.execute_multiple(orders, "execute_order")
 
 
 def setup_bot(config):
