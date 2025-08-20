@@ -321,25 +321,15 @@ class BitgetBot(Passivbot):
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(orders, "execute_cancellation")
 
-    async def execute_order(self, order: dict) -> dict:
-        order_type = order["type"] if "type" in order else "limit"
-        executed = await self.cca.create_order(
-            symbol=order["symbol"],
-            type=order_type,
-            side=order["side"],
-            amount=abs(order["qty"]),
-            price=order["price"],
-            params={
-                "timeInForce": "PO" if self.config["live"]["time_in_force"] == "post_only" else "GTC",
-                "holdSide": order["position_side"],
-                "reduceOnly": order["reduce_only"],
-                "oneWayMode": False,
-            },
-        )
-        return executed
-
-    async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_order")
+    def get_order_execution_params(self, order: dict) -> dict:
+        # defined for each exchange
+        return {
+            "timeInForce": "PO" if self.config["live"]["time_in_force"] == "post_only" else "GTC",
+            "holdSide": order["position_side"],
+            "reduceOnly": order["reduce_only"],
+            "oneWayMode": False,
+            "clientOid": order["custom_id"],
+        }
 
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}
@@ -404,15 +394,6 @@ class BitgetBot(Passivbot):
         except Exception as e:
             logging.error(f"error setting hedge mode {e} {res}")
 
-    def format_custom_ids(self, orders: [dict]) -> [dict]:
-        # bitget needs broker code plus '#' at the beginning of the custom_id
-        new_orders = []
-        for order in orders:
-            order["custom_id"] = (
-                self.broker_code
-                + "#"
-                + shorten_custom_id(order["custom_id"] if "custom_id" in order else "")
-                + uuid4().hex
-            )[: self.custom_id_max_length]
-            new_orders.append(order)
-        return new_orders
+    def format_custom_id_single(self, order_type_id: int) -> str:
+        formatted = super().format_custom_id_single(order_type_id)
+        return (self.broker_code + "#" + formatted)[: self.custom_id_max_length]
