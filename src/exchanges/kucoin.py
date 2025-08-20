@@ -433,27 +433,14 @@ class KucoinBot(Passivbot):
 
         return sorted(deduped.values(), key=lambda x: x["timestamp"])
 
-    async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_order")
-
-    async def execute_order(self, order: dict) -> dict:
-        order_type = order["type"] if "type" in order else "limit"
-        reduce_only = order["reduce_only"] if "reduce_only" in order else False
-        params = {
-            "symbol": order["symbol"],
-            "type": order_type,
-            "side": order["side"],
-            "amount": abs(order["qty"]),
-            "price": order["price"],
-            "params": {
-                "timeInForce": "GTC",
-                "reduceOnly": reduce_only,
-                "marginMode": "CROSS",
-                "clientOid": order["custom_id"],
-            },
+    def get_order_execution_params(self, order: dict) -> dict:
+        # defined for each exchange
+        return {
+            "timeInForce": "GTC",
+            "reduceOnly": order.get("reduce_only", False),
+            "marginMode": "CROSS",
+            "clientOid": order.get("custom_id", None),
         }
-        executed = await self.cca.create_order(**params)
-        return executed
 
     def did_cancel_order(self, executed, order=None) -> bool:
         if isinstance(executed, list) and len(executed) == 1:
