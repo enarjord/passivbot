@@ -1729,7 +1729,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     let mut unchanged_durations: Vec<usize> = Vec::new(); // Durations of unchanged periods
 
     for fill in fills {
-        let side = if fill.order_type.to_string().contains("long") {
+        let side = if fill.order_type.is_long() {
             "long"
         } else {
             "short"
