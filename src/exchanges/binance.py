@@ -432,67 +432,18 @@ class BinanceBot(Passivbot):
             return [await self.execute_cancellation(orders[0])]
         return await self.execute_multiple(orders, "execute_cancellation")
 
-    async def execute_order(self, order: dict) -> dict:
-        executed = None
-        try:
-            order_type = order["type"] if "type" in order else "limit"
-            params = {
-                "positionSide": order["position_side"].upper(),
-                "newClientOrderId": order["custom_id"],
-            }
-            if order_type == "limit":
-                params["timeInForce"] = (
-                    "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
-                )
-            executed = await self.cca.create_order(
-                type=order_type,
-                symbol=order["symbol"],
-                side=order["side"],
-                amount=abs(order["qty"]),
-                price=order["price"],
-                params=params,
+    def get_order_execution_params(self, order: dict) -> dict:
+        # defined for each exchange
+        order_type = order.get("type", "limit")
+        params = {
+            "positionSide": order["position_side"].upper(),
+            "newClientOrderId": order["custom_id"],
+        }
+        if order_type == "limit":
+            params["timeInForce"] = (
+                "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
             )
-            return executed
-        except Exception as e:
-            logging.error(f"error executing order {order} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return {}
-
-    async def execute_orders(self, orders: [dict]) -> [dict]:
-        if len(orders) == 0:
-            return []
-        if len(orders) == 1:
-            return [await self.execute_order(orders[0])]
-        to_execute = []
-        for order in orders:
-            params = {
-                "positionSide": order["position_side"].upper(),
-                "newClientOrderId": order["custom_id"],
-            }
-            if order["type"] == "limit":
-                params["timeInForce"] = (
-                    "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
-                )
-            to_execute.append(
-                {
-                    "type": "limit",
-                    "symbol": order["symbol"],
-                    "side": order["side"],
-                    "amount": abs(order["qty"]),
-                    "price": order["price"],
-                    "params": deepcopy(params),
-                }
-            )
-        executed = None
-        try:
-            executed = await self.cca.create_orders(to_execute)
-            return executed
-        except Exception as e:
-            logging.error(f"error executing orders {orders} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return []
+        return params
 
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call_lev, coros_to_call_margin_mode = {}, {}
@@ -568,12 +519,6 @@ class BinanceBot(Passivbot):
         all_fetched_d = {x[0]: x for x in all_fetched}
         return sorted(all_fetched_d.values(), key=lambda x: x[0])
 
-    def format_custom_ids(self, orders: [dict]) -> [dict]:
-        # binance needs broker code at the beginning of the custom_id
-        new_orders = []
-        for order in orders:
-            order["custom_id"] = (
-                "x-" + self.broker_code + shorten_custom_id(order["custom_id"]) + uuid4().hex
-            )[: self.custom_id_max_length]
-            new_orders.append(order)
-        return new_orders
+    def format_custom_id_single(self, order_type_id: int) -> str:
+        formatted = super().format_custom_id_single(order_type_id)
+        return ("x-" + self.broker_code + formatted)[: self.custom_id_max_length]
