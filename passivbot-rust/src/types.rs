@@ -135,64 +135,164 @@ impl Default for TrailingPriceBundle {
     }
 }
 
+#[repr(u16)]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum OrderType {
-    EntryInitialNormalLong,
-    EntryInitialPartialLong,
-    EntryTrailingNormalLong,
-    EntryTrailingCroppedLong,
-    EntryGridNormalLong,
-    EntryGridCroppedLong,
-    EntryGridInflatedLong,
+    EntryInitialNormalLong = 0,
+    EntryInitialPartialLong = 1,
+    EntryTrailingNormalLong = 2,
+    EntryTrailingCroppedLong = 3,
+    EntryGridNormalLong = 4,
+    EntryGridCroppedLong = 5,
+    EntryGridInflatedLong = 6,
 
-    CloseGridLong,
-    CloseTrailingLong,
-    CloseUnstuckLong,
-    CloseAutoReduceLong,
+    CloseGridLong = 7,
+    CloseTrailingLong = 8,
+    CloseUnstuckLong = 9,
+    CloseAutoReduceLong = 10,
 
-    EntryInitialNormalShort,
-    EntryInitialPartialShort,
-    EntryTrailingNormalShort,
-    EntryTrailingCroppedShort,
-    EntryGridNormalShort,
-    EntryGridCroppedShort,
-    EntryGridInflatedShort,
+    EntryInitialNormalShort = 11,
+    EntryInitialPartialShort = 12,
+    EntryTrailingNormalShort = 13,
+    EntryTrailingCroppedShort = 14,
+    EntryGridNormalShort = 15,
+    EntryGridCroppedShort = 16,
+    EntryGridInflatedShort = 17,
 
-    CloseGridShort,
-    CloseTrailingShort,
-    CloseUnstuckShort,
-    CloseAutoReduceShort,
+    CloseGridShort = 18,
+    CloseTrailingShort = 19,
+    CloseUnstuckShort = 20,
+    CloseAutoReduceShort = 21,
 
-    Empty,
+    Empty = 65535,
+}
+
+impl OrderType {
+    #[inline]
+    pub const fn snake(self) -> &'static str {
+        use OrderType::*;
+        match self {
+            EntryInitialNormalLong => "entry_initial_normal_long",
+            EntryInitialPartialLong => "entry_initial_partial_long",
+            EntryTrailingNormalLong => "entry_trailing_normal_long",
+            EntryTrailingCroppedLong => "entry_trailing_cropped_long",
+            EntryGridNormalLong => "entry_grid_normal_long",
+            EntryGridCroppedLong => "entry_grid_cropped_long",
+            EntryGridInflatedLong => "entry_grid_inflated_long",
+            CloseGridLong => "close_grid_long",
+            CloseTrailingLong => "close_trailing_long",
+            CloseUnstuckLong => "close_unstuck_long",
+            CloseAutoReduceLong => "close_auto_reduce_long",
+            EntryInitialNormalShort => "entry_initial_normal_short",
+            EntryInitialPartialShort => "entry_initial_partial_short",
+            EntryTrailingNormalShort => "entry_trailing_normal_short",
+            EntryTrailingCroppedShort => "entry_trailing_cropped_short",
+            EntryGridNormalShort => "entry_grid_normal_short",
+            EntryGridCroppedShort => "entry_grid_cropped_short",
+            EntryGridInflatedShort => "entry_grid_inflated_short",
+            CloseGridShort => "close_grid_short",
+            CloseTrailingShort => "close_trailing_short",
+            CloseUnstuckShort => "close_unstuck_short",
+            CloseAutoReduceShort => "close_auto_reduce_short",
+            Empty => "empty",
+        }
+    }
+
+    #[inline]
+    pub const fn id(self) -> u16 {
+        self as u16
+    }
+}
+impl OrderType {
+    #[inline]
+    pub fn from_snake(s: &str) -> Option<Self> {
+        use OrderType::*;
+        Some(match s {
+            "entry_initial_normal_long" => EntryInitialNormalLong,
+            "entry_initial_partial_long" => EntryInitialPartialLong,
+            "entry_trailing_normal_long" => EntryTrailingNormalLong,
+            "entry_trailing_cropped_long" => EntryTrailingCroppedLong,
+            "entry_grid_normal_long" => EntryGridNormalLong,
+            "entry_grid_cropped_long" => EntryGridCroppedLong,
+            "entry_grid_inflated_long" => EntryGridInflatedLong,
+            "close_grid_long" => CloseGridLong,
+            "close_trailing_long" => CloseTrailingLong,
+            "close_unstuck_long" => CloseUnstuckLong,
+            "close_auto_reduce_long" => CloseAutoReduceLong,
+            "entry_initial_normal_short" => EntryInitialNormalShort,
+            "entry_initial_partial_short" => EntryInitialPartialShort,
+            "entry_trailing_normal_short" => EntryTrailingNormalShort,
+            "entry_trailing_cropped_short" => EntryTrailingCroppedShort,
+            "entry_grid_normal_short" => EntryGridNormalShort,
+            "entry_grid_cropped_short" => EntryGridCroppedShort,
+            "entry_grid_inflated_short" => EntryGridInflatedShort,
+            "close_grid_short" => CloseGridShort,
+            "close_trailing_short" => CloseTrailingShort,
+            "close_unstuck_short" => CloseUnstuckShort,
+            "close_auto_reduce_short" => CloseAutoReduceShort,
+            "empty" => Empty,
+            _ => return None,
+        })
+    }
 }
 
 impl fmt::Display for OrderType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            OrderType::EntryInitialNormalLong => write!(f, "entry_initial_normal_long"),
-            OrderType::EntryInitialPartialLong => write!(f, "entry_initial_partial_long"),
-            OrderType::EntryTrailingNormalLong => write!(f, "entry_trailing_normal_long"),
-            OrderType::EntryTrailingCroppedLong => write!(f, "entry_trailing_cropped_long"),
-            OrderType::EntryGridNormalLong => write!(f, "entry_grid_normal_long"),
-            OrderType::EntryGridCroppedLong => write!(f, "entry_grid_cropped_long"),
-            OrderType::EntryGridInflatedLong => write!(f, "entry_grid_inflated_long"),
-            OrderType::CloseGridLong => write!(f, "close_grid_long"),
-            OrderType::CloseTrailingLong => write!(f, "close_trailing_long"),
-            OrderType::CloseUnstuckLong => write!(f, "close_unstuck_long"),
-            OrderType::CloseAutoReduceLong => write!(f, "close_auto_reduce_long"),
-            OrderType::EntryInitialNormalShort => write!(f, "entry_initial_normal_short"),
-            OrderType::EntryInitialPartialShort => write!(f, "entry_initial_partial_short"),
-            OrderType::EntryTrailingNormalShort => write!(f, "entry_trailing_normal_short"),
-            OrderType::EntryTrailingCroppedShort => write!(f, "entry_trailing_cropped_short"),
-            OrderType::EntryGridNormalShort => write!(f, "entry_grid_normal_short"),
-            OrderType::EntryGridCroppedShort => write!(f, "entry_grid_cropped_short"),
-            OrderType::EntryGridInflatedShort => write!(f, "entry_grid_inflated_short"),
-            OrderType::CloseGridShort => write!(f, "close_grid_short"),
-            OrderType::CloseTrailingShort => write!(f, "close_trailing_short"),
-            OrderType::CloseUnstuckShort => write!(f, "close_unstuck_short"),
-            OrderType::CloseAutoReduceShort => write!(f, "close_auto_reduce_short"),
-            OrderType::Empty => write!(f, "empty"),
-        }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.snake())
+    }
+}
+
+impl TryFrom<u16> for OrderType {
+    type Error = ();
+    fn try_from(v: u16) -> Result<Self, Self::Error> {
+        use OrderType::*;
+        Ok(match v {
+            0 => EntryInitialNormalLong,
+            1 => EntryInitialPartialLong,
+            2 => EntryTrailingNormalLong,
+            3 => EntryTrailingCroppedLong,
+            4 => EntryGridNormalLong,
+            5 => EntryGridCroppedLong,
+            6 => EntryGridInflatedLong,
+            7 => CloseGridLong,
+            8 => CloseTrailingLong,
+            9 => CloseUnstuckLong,
+            10 => CloseAutoReduceLong,
+            11 => EntryInitialNormalShort,
+            12 => EntryInitialPartialShort,
+            13 => EntryTrailingNormalShort,
+            14 => EntryTrailingCroppedShort,
+            15 => EntryGridNormalShort,
+            16 => EntryGridCroppedShort,
+            17 => EntryGridInflatedShort,
+            18 => CloseGridShort,
+            19 => CloseTrailingShort,
+            20 => CloseUnstuckShort,
+            21 => CloseAutoReduceShort,
+            65535 => Empty,
+            _ => return Err(()),
+        })
+    }
+}
+
+impl OrderType {
+    #[inline]
+    pub const fn is_long(self) -> bool {
+        use OrderType::*;
+        matches!(
+            self,
+            EntryInitialNormalLong
+                | EntryInitialPartialLong
+                | EntryTrailingNormalLong
+                | EntryTrailingCroppedLong
+                | EntryGridNormalLong
+                | EntryGridCroppedLong
+                | EntryGridInflatedLong
+                | CloseGridLong
+                | CloseTrailingLong
+                | CloseUnstuckLong
+                | CloseAutoReduceLong
+        )
     }
 }
 
