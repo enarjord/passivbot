@@ -196,31 +196,6 @@ class DefxBot(Passivbot):
             "reduceOnly": reduce_only,
         }
 
-    async def execute_cancellation(self, order: dict) -> dict:
-        executed = None
-        try:
-            executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
-            return {
-                "symbol": executed["symbol"],
-                "side": order["side"],
-                "id": executed["id"],
-                "position_side": order["position_side"],
-                "qty": order["qty"],
-                "price": order["price"],
-            }
-        except Exception as e:
-            logging.error(f"error cancelling order {order} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return {}
-
-    async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        if len(orders) == 0:
-            return []
-        if len(orders) == 1:
-            return [await self.execute_cancellation(orders[0])]
-        return await self.execute_multiple(orders, "execute_cancellation")
-
     async def determine_utc_offset(self, verbose=True):
         # returns millis to add to utc to get exchange timestamp
         # call some endpoint which includes timestamp for exchange's server
