@@ -63,6 +63,14 @@ _TYPE_MARKER_RE = re.compile(r"0x([0-9a-fA-F]{4})", re.IGNORECASE)
 _LEADING_HEX4_RE = re.compile(r"^(?:0x)?([0-9a-fA-F]{4})", re.IGNORECASE)
 
 
+def custom_id_to_snake(self, custom_id) -> str:
+    try:
+        return snake_of(try_decode_type_id_from_custom_id(custom_id))
+    except Exception as e:
+        logging.error(f"failed to convert custom_id {custom_id} to str order_type")
+        return "unknown"
+
+
 def try_decode_type_id_from_custom_id(custom_id: str) -> int | None:
     # 1) Preferred: look for "...0x<4-hex>..." anywhere
     m = _TYPE_MARKER_RE.search(custom_id)
@@ -1928,13 +1936,6 @@ class Passivbot:
         if len(self.error_counts) >= max_n_errors_per_hour:
             await self.restart_bot()
             raise Exception("too many errors... restarting bot.")
-
-    def custom_id_to_snake(self, custom_id) -> str:
-        try:
-            return snake_of(try_decode_type_id_from_custom_id(custom_id))
-        except Exception as e:
-            logging.error(f"failed to convert custom_id {custom_id} to str order_type")
-            return "unknown"
 
     def format_custom_id_single(self, order_type_id: int) -> str:
         token = type_token(order_type_id, with_marker=True)  # "0xABCD"
