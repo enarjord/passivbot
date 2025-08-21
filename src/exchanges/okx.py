@@ -239,9 +239,6 @@ class OKXBot(Passivbot):
             traceback.print_exc()
             return {}
 
-    async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_cancellation")
-
     def get_order_execution_params(self, order: dict) -> dict:
         # defined for each exchange
         return {
