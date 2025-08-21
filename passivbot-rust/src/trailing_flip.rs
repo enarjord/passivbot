@@ -1,4 +1,4 @@
-use numpy::PyReadonlyArray2;
+use numpy::{PyReadonlyArray2, PyReadonlyArray1};
 use pyo3::prelude::*;
 
 use crate::utils::{calc_pnl_long, calc_pnl_short};
@@ -360,6 +360,7 @@ fn calc_open_order_and_upnl_with_flip_count(
 pub fn backtest_trailing_flip<'py>(
     py: Python<'py>,
     hlcv: PyReadonlyArray2<'py, f64>, // accept ndarray directly
+    adx: PyReadonlyArray1<'py, f64>, // average directional index
     initial_qty_pct: f64,
     double_down_factor: f64,
     wallet_exposure_limit: f64,
@@ -395,12 +396,14 @@ pub fn backtest_trailing_flip<'py>(
     let mut equities: Vec<f64> = Vec::new();
 
     let mut flip_count = 0;
+    let adx = adx.as_array(); 
 
     for (i, row) in hlcv.outer_iter().enumerate() {
         let high = row[0];
         let low = row[1];
         let close = row[2];
         let _vol = row[3];
+        let adx_val = adx[i];
 
         // Check if the open order would have been filled this bar.
         if (open_order.qty > 0.0 && low < open_order.price)
@@ -441,11 +444,26 @@ pub fn backtest_trailing_flip<'py>(
         }
 
         // Determine next open order and unrealised PnL.
+
+        // Scale thresholds dynamically based on ADX value.
+        let adx_scale = if adx_val > 30.0 {
+            1.5
+        } else if adx_val < 20.0 {
+            0.7
+        } else {
+            1.0
+        };
+    
+        let trailing_threshold_pct_profit_dyn = trailing_threshold_pct_profit * adx_scale;
+        let trailing_threshold_pct_loss_dyn = trailing_threshold_pct_loss * adx_scale;
+        let trailing_retracement_pct_profit_dyn = trailing_retracement_pct_profit * adx_scale;
+        let trailing_retracement_pct_loss_dyn = trailing_retracement_pct_loss * adx_scale;
+    
         let (new_order, upnl, flip_triggered) = calc_open_order_and_upnl_with_flip_count(
-            trailing_threshold_pct_profit,
-            trailing_retracement_pct_profit,
-            trailing_threshold_pct_loss,
-            trailing_retracement_pct_loss,
+            trailing_threshold_pct_profit_dyn,
+            trailing_retracement_pct_profit_dyn,
+            trailing_threshold_pct_loss_dyn,
+            trailing_retracement_pct_loss_dyn,
             wallet_exposure_limit,
             double_down_factor,
             initial_qty_pct,
