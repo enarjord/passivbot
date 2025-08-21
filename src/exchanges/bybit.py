@@ -112,7 +112,10 @@ class BybitBot(Passivbot):
             )
             balinfo = fetched_balance["info"]["result"]["list"][0]
             if balinfo["accountType"] == "UNIFIED":
-                balance = float(balinfo["totalWalletBalance"])
+                balance = 0.0
+                for elm in balinfo["coin"]:
+                    if elm["marginCollateral"] and elm["collateralSwitch"]:
+                        balance += float(elm["usdValue"]) + float(elm["unrealisedPnl"])
                 if not hasattr(self, "previous_rounded_balance"):
                     self.previous_rounded_balance = balance
                 self.previous_rounded_balance = pbr.hysteresis_rounding(
@@ -336,20 +339,6 @@ class BybitBot(Passivbot):
         if x["side"] == "buy":
             return "short" if float(x["info"]["closedSize"]) != 0.0 else "long"
         return "long" if float(x["info"]["closedSize"]) != 0.0 else "short"
-
-    async def execute_cancellation(self, order: dict) -> dict:
-        executed = None
-        try:
-            executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
-            return executed
-        except Exception as e:
-            logging.error(f"error cancelling order {order} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return {}
-
-    async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_cancellation")
 
     def get_order_execution_params(self, order: dict) -> dict:
         # defined for each exchange
