@@ -253,30 +253,6 @@ class GateIOBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def execute_cancellation(self, order: dict) -> dict:
-        return await self.execute_cancellations([order])
-
-    async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        if not orders:
-            return []
-        res = None
-        try:
-            res = await self.cca.cancel_orders([x["id"] for x in orders])
-            return res
-            cancellations = []
-            for order, elm in zip(orders, res):
-                if elm["status"] != "rejected":
-                    joined = order.copy()
-                    for k, v in elm.items():
-                        if k not in joined or not joined[k]:
-                            joined[k] = v
-                    cancellations.append(joined)
-            return cancellations
-        except Exception as e:
-            logging.error(f"error executing cancellations {e} {orders}")
-            print_async_exception(res)
-            traceback.print_exc()
-
     def did_cancel_order(self, executed, order=None):
         if isinstance(executed, list) and len(executed) == 1:
             return self.did_cancel_order(executed[0])
