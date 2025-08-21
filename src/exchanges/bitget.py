@@ -307,20 +307,6 @@ class BitgetBot(Passivbot):
         all_res_list = sorted(all_res.values(), key=lambda x: x["timestamp"])
         return all_res_list
 
-    async def execute_cancellation(self, order: dict) -> dict:
-        executed = None
-        try:
-            executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
-            return executed
-        except Exception as e:
-            logging.error(f"error cancelling order {order} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return {}
-
-    async def execute_cancellations(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_cancellation")
-
     def get_order_execution_params(self, order: dict) -> dict:
         # defined for each exchange
         return {
