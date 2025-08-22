@@ -18,7 +18,7 @@ from config_utils import (
     get_template_live_config,
     parse_overrides,
 )
-from utils import utc_ms, make_get_filepath, load_markets, format_end_date
+from utils import utc_ms, make_get_filepath, load_markets, format_end_date, format_approved_ignored_coins
 from pure_funcs import (
     ts_to_date,
     sort_dict_keys,
@@ -29,7 +29,6 @@ from copy import deepcopy
 from downloader import (
     prepare_hlcvs,
     prepare_hlcvs_combined,
-    add_all_eligible_coins_to_config,
 )
 from pathlib import Path
 from plotting import plot_fills_forager
@@ -505,7 +504,7 @@ async def main():
     for ex in config["backtest"]["exchanges"]:
         await load_markets(ex)
     config = parse_overrides(config, verbose=True)
-    await add_all_eligible_coins_to_config(config)
+    await format_approved_ignored_coins(config, config["backtest"]["exchanges"])
     config["disable_plotting"] = args.disable_plotting
     config["backtest"]["cache_dir"] = {}
     config["backtest"]["coins"] = {}
