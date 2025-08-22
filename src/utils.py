@@ -243,6 +243,8 @@ def create_coin_symbol_map_cache(exchange: str, markets, verbose=True):
         for k, v in markets.items():
             if not v.get("swap"):
                 continue
+            if not v.get("linear"):
+                continue
             if not k.endswith(f":{quote}"):
                 continue
             base_name, base = v.get("baseName", ""), v.get("base", "")
@@ -353,3 +355,164 @@ def symbol_to_coin(symbol):
         msg += f". Using heuristics to guess coin: {coin}"
     logging.warning(msg)
     return coin
+
+
+async def format_approved_ignored_coins(config, exchanges: [str]):
+    path = config["live"]["approved_coins"]
+    if path in [
+        [""],
+        [],
+        None,
+        "",
+        0,
+        0.0,
+        {"long": [], "short": []},
+        {"long": "", "short": ""},
+        {"long": [""], "short": [""]},
+    ]:
+        if config["live"]["empty_means_all_approved"]:
+            marketss = await asyncio.gather(*[load_markets(ex, verbose=False) for ex in exchanges])
+            approved_coins = set()
+            for markets in marketss:
+                for symbol in markets:
+                    approved_coins.add(symbol_to_coin(symbol))
+            approved_coins_sorted = sorted([x for x in approved_coins if x])
+            config["live"]["approved_coins"] = {
+                "long": approved_coins_sorted,
+                "short": approved_coins_sorted,
+            }
+        else:
+            # leave empty
+            config["live"]["approved_coins"] = {"long": [], "short": []}
+    else:
+        ac = normalize_coins_source(config["live"]["approved_coins"])
+        config["live"]["approved_coins"] = {
+            pside: [cf for x in ac[pside] if (cf := symbol_to_coin(x))] for pside in ac
+        }
+
+    ic = normalize_coins_source(config["live"]["ignored_coins"])
+    config["live"]["ignored_coins"] = {
+        pside: [cf for x in ic[pside] if (cf := symbol_to_coin(x))] for pside in ic
+    }
+
+
+def normalize_coins_source(src):
+    """
+    Always return: {'long': [symbols…], 'short': [symbols…]}
+    – Handles:
+        • direct coin lists or comma-separated strings
+        • lists/tuples containing paths or strings
+        • dicts with 'long' / 'short' keys whose values may themselves
+          be strings, lists, or paths to external lists
+    """
+
+    # --------------------------------------------------------------------- #
+    #  Helpers                                                              #
+    # --------------------------------------------------------------------- #
+    def _expand(seq):
+        """Flatten seq and split any comma-delimited strings it contains."""
+        out = []
+        for item in seq:
+            if isinstance(item, (list, tuple, set)):
+                out.extend(_expand(item))  # recurse
+            elif isinstance(item, str):
+                out.extend(x.strip() for x in item.split(",") if x.strip())
+            elif item is not None:
+                out.append(str(item).strip())
+        return out
+
+    def _load_if_file(x):
+        """
+        If *x* (or *x[0]* when x is a single-item list/tuple) is a
+        readable file path, load it with `read_external_coins_lists`.
+        Otherwise just return *x* unchanged.
+        """
+        if isinstance(x, str) and os.path.exists(x):
+            return read_external_coins_lists(x)
+
+        if (
+            isinstance(x, (list, tuple))
+            and len(x) == 1
+            and isinstance(x[0], str)
+            and os.path.exists(x[0])
+        ):
+            return read_external_coins_lists(x[0])
+
+        return x
+
+    def _normalize_side(value, side):
+        """
+        Resolve one *long*/*short* entry:
+        1. Load from file if necessary.
+        2. If the loader returned a dict, pluck the correct side.
+        3. Flatten & split with _expand so we end up with a clean list.
+        """
+        value = _load_if_file(value)
+
+        if isinstance(value, dict) and sorted(value.keys()) == ["long", "short"]:
+            value = value.get(side, [])
+
+        # guarantee a sensible sequence for _expand
+        if not isinstance(value, (list, tuple)):
+            value = [value]
+
+        return _expand(value)
+
+    # --------------------------------------------------------------------- #
+    #  Main logic                                                           #
+    # --------------------------------------------------------------------- #
+    src = _load_if_file(src)  # try to load *src* itself
+
+    # Case 1 – already a dict with 'long' & 'short' keys
+    if isinstance(src, dict) and sorted(src.keys()) == ["long", "short"]:
+        return {
+            "long": _normalize_side(src.get("long", []), "long"),
+            "short": _normalize_side(src.get("short", []), "short"),
+        }
+
+    # Case 2 – anything else is treated the same for both sides
+    return {
+        "long": _normalize_side(src, "long"),
+        "short": _normalize_side(src, "short"),
+    }
+
+
+def read_external_coins_lists(filepath) -> dict:
+    """
+    reads filepath and returns dict {'long': [str], 'short': [str]}
+    """
+    try:
+        content = hjson.load(open(filepath))
+        if isinstance(content, list) and all([isinstance(x, str) for x in content]):
+            return {"long": content, "short": content}
+        elif isinstance(content, dict):
+            if all(
+                [
+                    pside in content
+                    and isinstance(content[pside], list)
+                    and all([isinstance(x, str) for x in content[pside]])
+                    for pside in ["long", "short"]
+                ]
+            ):
+                return content
+    except:
+        pass
+    with open(filepath, "r") as file:
+        content = file.read().strip()
+    # Check if the content is in list format
+    if content.startswith("[") and content.endswith("]"):
+        # Remove brackets and split by comma
+        items = content[1:-1].split(",")
+        # Remove quotes and whitespace
+        items = [item.strip().strip("\"'") for item in items if item.strip()]
+    elif all(
+        line.strip().startswith('"') and line.strip().endswith('"')
+        for line in content.split("\n")
+        if line.strip()
+    ):
+        # Split by newline, remove quotes and whitespace
+        items = [line.strip().strip("\"'") for line in content.split("\n") if line.strip()]
+    else:
+        # Split by newline, comma, and/or space, and filter out empty strings
+        items = [item.strip() for item in content.replace(",", " ").split() if item.strip()]
+    return {"long": items, "short": items}
