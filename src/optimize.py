@@ -49,8 +49,7 @@ from pure_funcs import (
     calc_hash,
     flatten,
 )
-from utils import date_to_ts, ts_to_date_utc, utc_ms, make_get_filepath
-from downloader import add_all_eligible_coins_to_config
+from utils import date_to_ts, ts_to_date_utc, utc_ms, make_get_filepath, format_approved_ignored_coins
 from copy import deepcopy
 from main import manage_rust_compilation
 import numpy as np
@@ -896,10 +895,9 @@ async def main():
     else:
         logging.info(f"loading config {args.config_path}")
         config = load_config(args.config_path, verbose=True)
-    old_config = deepcopy(config)
     update_config_with_args(config, args)
     config = format_config(config, verbose=True)
-    await add_all_eligible_coins_to_config(config)
+    await format_approved_ignored_coins(config, config["backtest"]["exchanges"])
     try:
         # Prepare data for each exchange
         hlcvs_dict = {}
