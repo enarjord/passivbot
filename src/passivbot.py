@@ -22,6 +22,7 @@ from utils import (
     utc_ms,
     ts_to_date_utc,
     make_get_filepath,
+    format_approved_ignored_coins,
 )
 from prettytable import PrettyTable
 from uuid import uuid4
@@ -35,7 +36,6 @@ from config_utils import (
     format_config,
     normalize_coins_source,
     expand_PB_mode,
-    read_external_coins_lists,
     get_template_live_config,
     parse_overrides,
 )
@@ -272,6 +272,7 @@ class Passivbot:
 
     async def start_bot(self):
         logging.info(f"Starting bot {self.exchange}...")
+        await format_approved_ignored_coins(self.config, self.user_info["exchange"])
         await self.init_markets()
         await asyncio.sleep(1)
         logging.info(f"Starting data maintainers...")
@@ -2491,7 +2492,6 @@ class Passivbot:
             for k in ("approved_coins", "ignored_coins"):
                 if not hasattr(self, k):
                     setattr(self, k, {"long": set(), "short": set()})
-                # single source‑of‑truth 🚀
                 parsed = normalize_coins_source(self.config["live"][k])
                 self.add_to_coins_lists(parsed, k)
             self.approved_coins_minus_ignored_coins = {}
@@ -2611,6 +2611,7 @@ async def main():
     config = format_config(config, live_only=True)
     user_info = load_user_info(config["live"]["user"])
     await load_markets(user_info["exchange"], verbose=True)
+    
     config = parse_overrides(config, verbose=True)
     cooldown_secs = 60
     restarts = []
