@@ -18,7 +18,13 @@ from config_utils import (
     get_template_live_config,
     parse_overrides,
 )
-from utils import utc_ms, make_get_filepath, load_markets, format_end_date, format_approved_ignored_coins
+from utils import (
+    utc_ms,
+    make_get_filepath,
+    load_markets,
+    format_end_date,
+    format_approved_ignored_coins,
+)
 from pure_funcs import (
     ts_to_date,
     sort_dict_keys,

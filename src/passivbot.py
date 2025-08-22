@@ -2611,7 +2611,7 @@ async def main():
     config = format_config(config, live_only=True)
     user_info = load_user_info(config["live"]["user"])
     await load_markets(user_info["exchange"], verbose=True)
-    
+
     config = parse_overrides(config, verbose=True)
     cooldown_secs = 60
     restarts = []
