@@ -523,7 +523,7 @@ class OHLCVManager:
 
     async def load_markets(self):
         self.load_cc()
-        self.markets = await load_markets(self.exchange)
+        self.markets = await load_markets(self.exchange, verbose=False)
         # Populate the ccxt client's markets without incurring another network call if possible
         try:
             if hasattr(self.cc, "set_markets"):
@@ -1588,37 +1588,6 @@ async def compute_exchange_volume_ratios(
     return averages
 
 
-async def add_all_eligible_coins_to_config(config):
-    path = config["live"]["approved_coins"]
-    if config["live"]["empty_means_all_approved"] and path in [
-        [""],
-        [],
-        None,
-        "",
-        0,
-        0.0,
-        {"long": [], "short": []},
-        {"long": [""], "short": [""]},
-    ]:
-        approved_coins = await get_all_eligible_coins(config["backtest"]["exchanges"])
-        config["live"]["approved_coins"] = {"long": approved_coins, "short": approved_coins}
-
-
-async def get_all_eligible_coins(exchanges):
-    oms = {}
-    for ex in exchanges:
-        oms[ex] = OHLCVManager(ex, verbose=False)
-    await asyncio.gather(*[oms[ex].load_markets() for ex in oms])
-    approved_coins = set()
-    for ex in oms:
-        for s in oms[ex].markets:
-            if oms[ex].has_coin(s):
-                coin = symbol_to_coin(s)
-                if coin:
-                    approved_coins.add(coin)
-    return sorted(approved_coins)
-
-
 async def main():
     parser = argparse.ArgumentParser(prog="downloader", description="download ohlcv data")
     parser.add_argument(
@@ -1655,7 +1624,7 @@ async def main():
     else:
         logging.info(f"loading config {args.config_path}")
         config = load_config(args.config_path)
-    await add_all_eligible_coins_to_config(config)
+    await format_approved_ignored_coins(config, config["backtest"]["exchanges"])
     oms = {}
     try:
         for ex in config["backtest"]["exchanges"]:
