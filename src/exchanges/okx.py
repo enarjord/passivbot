@@ -101,20 +101,25 @@ class OKXBot(Passivbot):
                 self.cca.fetch_positions(),
                 self.cca.fetch_balance(),
             )
+
             balance = 0.0
-            quote_cash_balance = 0.0
-            for elm in fetched_balance["info"]["data"]:
-                for elm2 in elm["details"]:
-                    if elm2["collateralEnabled"]:
-                        if elm2["ccy"] == self.quote:
-                            quote_cash_balance = float(elm2["cashBal"])
-                            balance += quote_cash_balance
-                        else:
-                            balance += float(elm2["cashBal"]) * self.get_last_price(
-                                self.coin_to_symbol(elm2["ccy"])
+
+            is_multi_asset_mode = True
+            if len(fetched_balance["info"]["data"]) == 1:
+                if len(fetched_balance["info"]["data"][0]["details"]) == 1:
+                    if fetched_balance["info"]["data"][0]["details"][0]["ccy"] == self.quote:
+                        if not fetched_balance["info"]["data"][0]["details"][0]["collateralEnabled"]:
+                            is_multi_asset_mode = False
+
+            if is_multi_asset_mode:
+                for elm in fetched_balance["info"]["data"]:
+                    for elm2 in elm["details"]:
+                        if elm2["collateralEnabled"]:
+                            balance += float(elm2["cashBal"]) * (
+                                self.get_last_price(self.coin_to_symbol(elm2["ccy"]))
+                                if elm2["ccy"] == self.quote
+                                else 1.0
                             )
-            if balance != quote_cash_balance:
-                # means non USDT collateral is used
                 if not hasattr(self, "previous_rounded_balance"):
                     self.previous_rounded_balance = balance
                 self.previous_rounded_balance = pbr.hysteresis_rounding(
@@ -124,6 +129,9 @@ class OKXBot(Passivbot):
                     self.hyst_rounding_balance_h,
                 )
                 balance = self.previous_rounded_balance
+            else:
+                balance = float(fetched_balance["info"]["data"][0]["details"][0]["cashBal"])
+
             fetched_positions = [x for x in fetched_positions if x["marginMode"] == "cross"]
             for i in range(len(fetched_positions)):
                 fetched_positions[i]["position_side"] = fetched_positions[i]["side"]
