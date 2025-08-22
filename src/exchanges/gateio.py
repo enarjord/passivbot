@@ -255,9 +255,9 @@ class GateIOBot(Passivbot):
 
     def did_cancel_order(self, executed, order=None):
         if isinstance(executed, list) and len(executed) == 1:
-            return self.did_cancel_order(executed[0])
+            return self.did_cancel_order(executed[0], order)
         try:
-            return executed.get("info", {}).get("succeeded", False)
+            return executed.get("id", "") == order['id'] and executed.get("status", "") == "canceled"
         except:
             return False
 
