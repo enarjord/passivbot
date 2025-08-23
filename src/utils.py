@@ -6,7 +6,9 @@ import datetime
 import logging
 import dateutil.parser
 import asyncio
+import hjson
 from collections import defaultdict
+from typing import Dict, Any, List, Union, Optional
 
 
 logging.basicConfig(
@@ -61,11 +63,11 @@ def format_end_date(end_date) -> str:
 
 def make_get_filepath(filepath: str) -> str:
     """
-    if not is path, creates dir and subdirs for path, returns path
+    Ensure directory for filepath exists and return the filepath.
     """
-    dirpath = os.path.dirname(filepath) if filepath[-1] != "/" else filepath
-    if not os.path.isdir(dirpath):
-        os.makedirs(dirpath)
+    dirpath = os.path.dirname(filepath) if not filepath.endswith("/") else filepath
+    if dirpath and not os.path.isdir(dirpath):
+        os.makedirs(dirpath, exist_ok=True)
     return filepath
 
 
@@ -90,13 +92,14 @@ async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24, ver
     try:
         if os.path.exists(markets_path):
             if utc_ms() - get_file_mod_utc(markets_path) < max_age_ms:
-                markets = json.load(open(markets_path))
+                with open(markets_path, "r") as f:
+                    markets = json.load(f)
                 if verbose:
                     logging.info(f"{ex} Loaded markets from cache")
                 create_coin_symbol_map_cache(ex, markets, verbose=verbose)
                 return markets
     except Exception as e:
-        logging.error(f"Error loading {markets_path} {e}")
+        logging.error("Error loading %s: %s", markets_path, e)
 
     # Fetch from exchange via ccxt
     cc = getattr(ccxt, ex)({"enableRateLimit": True})
@@ -118,11 +121,13 @@ async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24, ver
 
     # Dump to cache
     try:
-        json.dump(markets, open(make_get_filepath(markets_path), "w"))
+        path = make_get_filepath(markets_path)
+        with open(path, "w") as f:
+            json.dump(markets, f)
         if verbose:
             logging.info(f"{ex} Dumped markets to cache")
     except Exception as e:
-        logging.error(f"Error dumping markets to cache at {markets_path} {e}")
+        logging.error("Error dumping markets to cache at %s: %s", markets_path, e)
     create_coin_symbol_map_cache(ex, markets, verbose=verbose)
     return markets
 
@@ -272,10 +277,12 @@ def create_coin_symbol_map_cache(exchange: str, markets, verbose=True):
         coin_to_symbol_map = {k: list(v) for k, v in coin_to_symbol_map.items()}
         if verbose:
             logging.info(f"dumping coin_to_symbol_map {coin_to_symbol_map_path}")
-        json.dump(coin_to_symbol_map, open(coin_to_symbol_map_path, "w"), indent=4, sort_keys=True)
+        with open(coin_to_symbol_map_path, "w") as f:
+            json.dump(coin_to_symbol_map, f, indent=4, sort_keys=True)
         if verbose:
             logging.info(f"dumping symbol_to_coin_map {symbol_to_coin_map_path}")
-        json.dump(symbol_to_coin_map, open(symbol_to_coin_map_path, "w"))
+        with open(symbol_to_coin_map_path, "w") as f2:
+            json.dump(symbol_to_coin_map, f2)
         # update in-memory caches to avoid stale reads
         try:
             st = os.stat(coin_to_symbol_map_path)
@@ -295,7 +302,7 @@ def create_coin_symbol_map_cache(exchange: str, markets, verbose=True):
             pass
         return True
     except Exception as e:
-        print(f"error with create_coin_symbol_map_cache {exchange}, {e}")
+        logging.error("error with create_coin_symbol_map_cache %s: %s", exchange, e)
         return False
 
 
@@ -483,20 +490,19 @@ def read_external_coins_lists(filepath) -> dict:
     reads filepath and returns dict {'long': [str], 'short': [str]}
     """
     try:
-        content = hjson.load(open(filepath))
-        if isinstance(content, list) and all([isinstance(x, str) for x in content]):
+        with open(filepath, "r") as f:
+            content = hjson.load(f)
+        if isinstance(content, list) and all(isinstance(x, str) for x in content):
             return {"long": content, "short": content}
-        elif isinstance(content, dict):
-            if all(
-                [
-                    pside in content
-                    and isinstance(content[pside], list)
-                    and all([isinstance(x, str) for x in content[pside]])
-                    for pside in ["long", "short"]
-                ]
-            ):
-                return content
-    except:
+        if isinstance(content, dict) and all(
+            pside in content
+            and isinstance(content[pside], list)
+            and all(isinstance(x, str) for x in content[pside])
+            for pside in ["long", "short"]
+        ):
+            return content
+    except Exception:
+        # fallback to plain-text reading below
         pass
     with open(filepath, "r") as file:
         content = file.read().strip()
