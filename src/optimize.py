@@ -766,12 +766,13 @@ class Evaluator:
 
         scores = []
         for sk in sorted(self.config["optimize"]["scoring"]):
-            val = analyses_combined.get(f"{sk}_mean")
-            if val is None:
+            if modifier:
+                scores.append(modifier)
+            else:
                 val = analyses_combined.get(f"{sk}_mean")
-            if val is None:
-                return None
-            scores.append(val * self.scoring_weights[sk] + modifier)
+                if val is None:
+                    return None
+                scores.append(val * self.scoring_weights[sk])
         return tuple(scores)
 
     def __del__(self):
