@@ -234,26 +234,21 @@ def _load_symbol_to_coin_map() -> dict:
         return {}
 
 
-def create_coin_symbol_map_cache(exchange: str, markets, verbose=True):
-    try:
-        exchange = normalize_exchange_name(exchange)
-        quote = get_quote(exchange)
-        coin_to_symbol_map = defaultdict(set)
-        symbol_to_coin_map = {}
-        symbol_to_coin_map_path = make_get_filepath(os.path.join("caches", "symbol_to_coin_map.json"))
+def _build_coin_symbol_maps(markets, quote):
+    """
+    Build coin_to_symbol_map (as dict of lists) and symbol_to_coin_map from markets data.
+    This function is pure and performs no disk I/O.
+    """
+    coin_to_symbol_map = defaultdict(set)
+    symbol_to_coin_map = {}
+    for k, v in markets.items():
         try:
-            if os.path.exists(symbol_to_coin_map_path):
-                symbol_to_coin_map = json.load(open(symbol_to_coin_map_path))
-        except Exception as e:
-            logging.error(f"failed to load symbol_to_coin_map {e}")
-        for k, v in markets.items():
-            if not v.get("swap"):
-                continue
-            if not v.get("linear"):
+            if not v.get("swap") or not v.get("linear"):
                 continue
             if not k.endswith(f":{quote}"):
                 continue
-            base_name, base = v.get("baseName", ""), v.get("base", "")
+            base_name = v.get("baseName", "") or ""
+            base = v.get("base", "") or ""
             if base_name:
                 coin = remove_powers_of_ten(base_name.replace("k", ""))
                 coin_to_symbol_map[coin].add(k)
@@ -271,35 +266,81 @@ def create_coin_symbol_map_cache(exchange: str, markets, verbose=True):
                 symbol_to_coin_map[base] = coin
                 if not base_name:
                     symbol_to_coin_map[k] = coin
-        coin_to_symbol_map_path = make_get_filepath(
-            os.path.join("caches", exchange, "coin_to_symbol_map.json")
-        )
-        coin_to_symbol_map = {k: list(v) for k, v in coin_to_symbol_map.items()}
-        if verbose:
-            logging.info(f"dumping coin_to_symbol_map {coin_to_symbol_map_path}")
-        with open(coin_to_symbol_map_path, "w") as f:
-            json.dump(coin_to_symbol_map, f, indent=4, sort_keys=True)
-        if verbose:
-            logging.info(f"dumping symbol_to_coin_map {symbol_to_coin_map_path}")
-        with open(symbol_to_coin_map_path, "w") as f2:
-            json.dump(symbol_to_coin_map, f2)
-        # update in-memory caches to avoid stale reads
-        try:
-            st = os.stat(coin_to_symbol_map_path)
-            _COIN_TO_SYMBOL_CACHE[exchange] = {
-                "map": coin_to_symbol_map,
-                "mtime_ns": st.st_mtime_ns,
-                "size": st.st_size,
-            }
         except Exception:
-            pass
+            # Skip malformed market entries but continue processing others
+            continue
+
+    # Convert sets to lists for JSON serialisation / on-disk storage
+    coin_to_symbol_map = {k: list(v) for k, v in coin_to_symbol_map.items()}
+    return coin_to_symbol_map, symbol_to_coin_map
+
+
+def _write_coin_symbol_maps(exchange: str, coin_to_symbol_map: dict, symbol_to_coin_map: dict, verbose=True):
+    """
+    Write coin/symbol maps to disk and update in-memory caches.
+    """
+    coin_to_symbol_map_path = make_get_filepath(os.path.join("caches", exchange, "coin_to_symbol_map.json"))
+    symbol_to_coin_map_path = make_get_filepath(os.path.join("caches", "symbol_to_coin_map.json"))
+
+    if verbose:
+        logging.info("dumping coin_to_symbol_map %s", coin_to_symbol_map_path)
+    with open(coin_to_symbol_map_path, "w") as f:
+        json.dump(coin_to_symbol_map, f, indent=4, sort_keys=True)
+
+    if verbose:
+        logging.info("dumping symbol_to_coin_map %s", symbol_to_coin_map_path)
+    with open(symbol_to_coin_map_path, "w") as f2:
+        json.dump(symbol_to_coin_map, f2)
+
+    # update in-memory caches to avoid stale reads
+    try:
+        st = os.stat(coin_to_symbol_map_path)
+        _COIN_TO_SYMBOL_CACHE[exchange] = {
+            "map": coin_to_symbol_map,
+            "mtime_ns": st.st_mtime_ns,
+            "size": st.st_size,
+        }
+    except Exception:
+        pass
+
+    try:
+        st2 = os.stat(symbol_to_coin_map_path)
+        _SYMBOL_TO_COIN_CACHE["map"] = symbol_to_coin_map
+        _SYMBOL_TO_COIN_CACHE["mtime_ns"] = st2.st_mtime_ns
+        _SYMBOL_TO_COIN_CACHE["size"] = st2.st_size
+    except Exception:
+        pass
+
+
+def create_coin_symbol_map_cache(exchange: str, markets, verbose=True):
+    """
+    High-level function that coordinates loading any existing symbol_to_coin_map,
+    building fresh maps from markets, merging them (new data overrides), and
+    writing results to disk. IO is performed here; conversion logic lives in
+    _build_coin_symbol_maps().
+    """
+    try:
+        exchange = normalize_exchange_name(exchange)
+        quote = get_quote(exchange)
+
+        # Attempt to preserve existing symbol->coin mappings when possible
+        symbol_to_coin_map = {}
+        symbol_to_coin_map_path = make_get_filepath(os.path.join("caches", "symbol_to_coin_map.json"))
         try:
-            st2 = os.stat(symbol_to_coin_map_path)
-            _SYMBOL_TO_COIN_CACHE["map"] = symbol_to_coin_map
-            _SYMBOL_TO_COIN_CACHE["mtime_ns"] = st2.st_mtime_ns
-            _SYMBOL_TO_COIN_CACHE["size"] = st2.st_size
-        except Exception:
-            pass
+            if os.path.exists(symbol_to_coin_map_path):
+                with open(symbol_to_coin_map_path, "r") as f:
+                    symbol_to_coin_map = json.load(f)
+        except Exception as e:
+            logging.error("failed to load symbol_to_coin_map %s", e)
+
+        # Build fresh maps from provided markets (pure logic)
+        coin_to_symbol_map, new_symbol_to_coin_map = _build_coin_symbol_maps(markets, quote)
+
+        # Merge: prefer new discovered mappings while retaining others
+        symbol_to_coin_map.update(new_symbol_to_coin_map)
+
+        # Persist to disk and update in-memory caches
+        _write_coin_symbol_maps(exchange, coin_to_symbol_map, symbol_to_coin_map, verbose=verbose)
         return True
     except Exception as e:
         logging.error("error with create_coin_symbol_map_cache %s: %s", exchange, e)
