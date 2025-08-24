@@ -247,25 +247,21 @@ def _build_coin_symbol_maps(markets, quote):
                 continue
             if not k.endswith(f":{quote}"):
                 continue
-            base_name = v.get("baseName", "") or ""
-            base = v.get("base", "") or ""
-            if base_name:
-                coin = remove_powers_of_ten(base_name.replace("k", ""))
-                coin_to_symbol_map[coin].add(k)
-                coin_to_symbol_map[k].add(k)
-                coin_to_symbol_map[base_name].add(k)
+            coin = ""
+            variants = set()
+            for k0 in ["baseName", "base"]:
+                if base := v.get(k0):
+                    variants.add(base)
+                    variants.add(base.replace("k", ""))
+                    variants.add(remove_powers_of_ten(base))
+                    cleaned = remove_powers_of_ten(base.replace("k", ""))
+                    variants.add(cleaned)
+                    if not coin:
+                        coin = cleaned
+            for variant in variants:
+                symbol_to_coin_map[variant] = coin
                 symbol_to_coin_map[k] = coin
-                symbol_to_coin_map[coin] = coin
-                symbol_to_coin_map[base_name] = coin
-            if base:
-                coin = remove_powers_of_ten(base.replace("k", ""))
-                coin_to_symbol_map[coin].add(k)
-                coin_to_symbol_map[k].add(k)
-                coin_to_symbol_map[base].add(k)
-                symbol_to_coin_map[coin] = coin
-                symbol_to_coin_map[base] = coin
-                if not base_name:
-                    symbol_to_coin_map[k] = coin
+                coin_to_symbol_map[variant].add(k)
         except Exception:
             # Skip malformed market entries but continue processing others
             continue
@@ -275,11 +271,15 @@ def _build_coin_symbol_maps(markets, quote):
     return coin_to_symbol_map, symbol_to_coin_map
 
 
-def _write_coin_symbol_maps(exchange: str, coin_to_symbol_map: dict, symbol_to_coin_map: dict, verbose=True):
+def _write_coin_symbol_maps(
+    exchange: str, coin_to_symbol_map: dict, symbol_to_coin_map: dict, verbose=True
+):
     """
     Write coin/symbol maps to disk and update in-memory caches.
     """
-    coin_to_symbol_map_path = make_get_filepath(os.path.join("caches", exchange, "coin_to_symbol_map.json"))
+    coin_to_symbol_map_path = make_get_filepath(
+        os.path.join("caches", exchange, "coin_to_symbol_map.json")
+    )
     symbol_to_coin_map_path = make_get_filepath(os.path.join("caches", "symbol_to_coin_map.json"))
 
     if verbose:
