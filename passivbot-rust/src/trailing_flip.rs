@@ -369,6 +369,8 @@ pub fn backtest_trailing_flip<'py>(
     trailing_threshold_pct_loss: f64,
     trailing_retracement_pct_loss: f64,
     fee_rate: f64, // e.g. 0.00055 for 0.055%
+    adx_scale_higher_width: f64, // e.g. 1.5
+    adx_scale_lower_width: f64, // e.g. 0.7
     max_flips_per_cycle: usize, // max flips per cycle (0 = no limit)
 ) -> PyResult<(
     Vec<(usize, f64, f64, f64, f64, f64, f64, f64, f64, String)>,
@@ -447,9 +449,9 @@ pub fn backtest_trailing_flip<'py>(
 
         // Scale thresholds dynamically based on ADX value.
         let adx_scale = if adx_val > 30.0 {
-            1.5
+            adx_scale_higher_width
         } else if adx_val < 20.0 {
-            0.7
+            adx_scale_lower_width
         } else {
             1.0
         };
