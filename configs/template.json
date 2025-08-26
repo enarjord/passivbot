@@ -152,5 +152,5 @@
               "round_to_n_significant_digits": 4,
               "scoring": ["btc_adg_w",
                           "btc_mdg_w",
-                          "equity_balance_diff_neg_mean"],
+                          "btc_sharpe_ratio"],
               "write_all_results": false}}
