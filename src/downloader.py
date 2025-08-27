@@ -380,6 +380,10 @@ class OHLCVManager:
             mss["taker"] = mss["taker_fee"] = 0.00055
         elif self.exchange == "bitget":
             pass
+        elif self.exchange in ("kucoin", "kucoinfutures"):
+            # ccxt reports incorrect fees for kucoin futures. Assume VIP0
+            mss["maker"] = mss["maker_fee"] = 0.0002
+            mss["taker"] = mss["taker_fee"] = 0.0006
         elif self.exchange == "gateio":
             # ccxt reports incorrect fees for gateio perps. Assume VIP0
             mss["maker"] = mss["maker_fee"] = 0.0002
@@ -468,6 +472,8 @@ class OHLCVManager:
             await self.download_ohlcvs_bybit(coin)
         elif self.exchange == "bitget":
             await self.download_ohlcvs_bitget(coin)
+        elif self.exchange in ("kucoin", "kucoinfutures"):
+            await self.download_ohlcvs_kucoin(coin)
         elif self.exchange == "gateio":
             if self.cc is None:
                 self.load_cc()
@@ -506,6 +512,9 @@ class OHLCVManager:
                 ohlcvs = await self.cc.fetch_ohlcv(
                     self.get_symbol(coin), since=int(date_to_ts("2020-01-01")), timeframe="1d"
                 )
+        elif self.exchange in ("kucoin", "kucoinfutures"):
+            fts = await self.find_first_day_kucoin(coin)
+            return fts
         elif self.exchange == "bitget":
             fts = await self.find_first_day_bitget(coin)
             return fts
@@ -890,6 +899,130 @@ class OHLCVManager:
             self.dump_first_timestamp(coin, fts)
             return fts
         return None
+
+    async def download_ohlcvs_kucoin(self, coin: str):
+        # KuCoin has public data archives for futures
+        missing_days = await self.get_missing_days_ohlcvs(coin)
+        if not missing_days:
+            return
+        symbolf = self.get_symbol(coin).replace("/USDT:", "") + "M"
+        dirpath = make_get_filepath(os.path.join(self.cache_filepaths["ohlcvs"], coin, ""))
+        tasks = []
+        for day in sorted(missing_days):
+            fpath = os.path.join(dirpath, day + ".npy")
+            await self.check_rate_limit()
+            tasks.append(asyncio.create_task(self.download_single_kucoin(symbolf, day, fpath)))
+        for task in tasks:
+            try:
+                await task
+            except Exception as e:
+                logging.error(f"kucoin Error with downloader for {coin} {e}")
+
+    async def download_single_kucoin(self, symbolf: str, day: str, fpath: str):
+        url = f"https://historical-data.kucoin.com/data/futures/daily/klines/{symbolf}/1m/{symbolf}-1m-{day}.zip"
+        try:
+            zips = await fetch_zips(url)
+            if not zips:
+                if self.verbose:
+                    logging.info(f"kucoin No data at {url}")
+                return
+            dfs = []
+            for z in zips:
+                df = pd.read_csv(z)
+                df.columns = [c.strip().lower() for c in df.columns]
+                if "time" in df.columns:
+                    df = df.rename(columns={"time": "timestamp"})
+                required = ["timestamp", "open", "high", "low", "close", "volume"]
+                missing = [c for c in required if c not in df.columns]
+                if missing:
+                    raise Exception(f"kucoin missing columns {missing} in {url}")
+                dfs.append(df[required])
+            dfc = pd.concat(dfs, ignore_index=True)
+            # Cast and sort
+            for c in ["timestamp", "open", "high", "low", "close", "volume"]:
+                dfc[c] = pd.to_numeric(dfc[c], errors="coerce")
+            dfc = dfc.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+            # Normalize timestamp to ms
+            dfc = ensure_millis(dfc)
+            # Clip to day and fill minute gaps
+            start_ts_day = date_to_ts(day)
+            end_ts_day = start_ts_day + 24 * 60 * 60 * 1000
+            dfc = dfc[(dfc["timestamp"] >= start_ts_day) & (dfc["timestamp"] < end_ts_day)]
+            if dfc.empty:
+                if self.verbose:
+                    logging.info(f"kucoin Empty filtered dataframe for {symbolf} {day}")
+                return
+            # Deduplicate by timestamp
+            dfc = dfc.drop_duplicates(subset=["timestamp"], keep="last")
+            # Reindex to full 1m grid and fill
+            expected_ts = np.arange(start_ts_day, end_ts_day, 60000)
+            dfc = dfc.set_index("timestamp").reindex(expected_ts)
+            dfc["close"] = dfc["close"].ffill()
+            for col in ["open", "high", "low"]:
+                dfc[col] = dfc[col].fillna(dfc["close"])
+            dfc["volume"] = dfc["volume"].fillna(0.0)
+            dfc = dfc.reset_index().rename(columns={"index": "timestamp"})
+            if len(dfc) == 1440:
+                dump_ohlcv_data(ensure_millis(dfc), fpath)
+                if self.verbose:
+                    logging.info(f"kucoin Dumped daily data {fpath}")
+            else:
+                if self.verbose:
+                    logging.info(f"kucoin incomplete daily data for {symbolf} {day}: {len(dfc)} rows")
+        except Exception as e:
+            logging.error(f"kucoin Failed to download {url}: {e}")
+            traceback.print_exc()
+
+    async def find_first_day_kucoin(self, coin: str, start_year=2019) -> float:
+        """Find first day where data is available for a given symbol on KuCoin futures"""
+        if fts := self.load_first_timestamp(coin):
+            return fts
+        if not self.markets:
+            await self.load_markets()
+        symbolf = self.get_symbol(coin).replace("/USDT:", "") + "M"
+        base_url = "https://historical-data.kucoin.com/data/futures/daily/klines/"
+        start = datetime.datetime(start_year, 1, 1)
+        end = datetime.datetime.utcnow()
+        earliest = None
+
+        while start <= end:
+            mid = start + (end - start) // 2
+            day = mid.strftime("%Y-%m-%d")
+            url = f"{base_url}{symbolf}/1m/{symbolf}-1m-{day}.zip"
+            try:
+                await self.check_rate_limit()
+                async with aiohttp.ClientSession() as session:
+                    async with session.head(url) as response:
+                        if self.verbose:
+                            logging.info(f"kucoin, searching for first day of data for {symbolf} {day}")
+                        if response.status == 200:
+                            earliest = mid
+                            end = mid - datetime.timedelta(days=1)
+                        else:
+                            start = mid + datetime.timedelta(days=1)
+            except Exception:
+                start = mid + datetime.timedelta(days=1)
+
+        if earliest:
+            prev_day = earliest - datetime.timedelta(days=1)
+            prev_day_str = prev_day.strftime("%Y-%m-%d")
+            prev_url = f"{base_url}{symbolf}/1m/{symbolf}-1m-{prev_day_str}.zip"
+            try:
+                await self.check_rate_limit()
+                async with aiohttp.ClientSession() as session:
+                    async with session.head(prev_url) as response:
+                        if response.status == 200:
+                            earliest = prev_day
+            except Exception:
+                pass
+            fts = date_to_ts(earliest.strftime("%Y-%m-%d"))
+            self.dump_first_timestamp(coin, fts)
+            if self.verbose:
+                logging.info(f"KuCoin, found first day for {symbolf}: {earliest.strftime('%Y-%m-%d')}")
+            return fts
+        fts = 0.0
+        self.dump_first_timestamp(coin, fts)
+        return fts
 
     async def download_ohlcvs_gateio(self, coin: str):
         # GateIO doesn't have public data archives, but has ohlcvs via REST API
