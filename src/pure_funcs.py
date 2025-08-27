@@ -2108,7 +2108,7 @@ def log_dict_changes(d1, d2, parent_key=""):
         return changes
 
     # Compare items in both dictionaries
-    for key in set(d1.keys()) | set(d2.keys()):
+    for key in sorted(set(d1.keys()) | set(d2.keys())):
         new_parent = f"{parent_key}{key}." if parent_key else f"{key}."
 
         # If key exists in both dictionaries
