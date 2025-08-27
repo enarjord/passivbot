@@ -243,7 +243,11 @@ def _build_coin_symbol_maps(markets, quote):
     symbol_to_coin_map = {}
     for k, v in markets.items():
         try:
-            if not v.get("swap") or not v.get("linear"):
+            # Only include swap markets with the right quote.
+            if not v.get("swap"):
+                continue
+            # If "linear" is explicitly False, skip; otherwise treat missing as acceptable.
+            if v.get("linear") is False:
                 continue
             if not k.endswith(f":{quote}"):
                 continue
