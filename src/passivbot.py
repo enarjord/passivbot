@@ -303,8 +303,6 @@ class Passivbot:
                 self.ineligible_symbols[symbol] = "wrong quote"
             elif not self.symbol_is_eligible(symbol):
                 self.ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
-            elif not self.symbol_is_eligible(symbol):
-                self.ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
             else:
                 self.eligible_symbols.add(symbol)
         if verbose:
