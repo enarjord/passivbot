@@ -407,6 +407,8 @@ def symbol_to_coin(symbol):
 
 
 async def format_approved_ignored_coins(config, exchanges: [str]):
+    if isinstance(exchanges, str):
+        exchanges = [exchanges]
     path = config["live"]["approved_coins"]
     if path in [
         [""],
