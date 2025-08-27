@@ -207,7 +207,7 @@ async def test_ohlcvmanager_load_markets_calls_set_markets(monkeypatch):
     om.cc = StubCC()
 
     # Monkeypatch top-level load_markets to return a dummy dict
-    async def fake_load_markets(ex):
+    async def fake_load_markets(ex, verbose=False):
         return {
             "BTC/USDT:USDT": {
                 "swap": True,
