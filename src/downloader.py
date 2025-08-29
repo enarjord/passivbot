@@ -994,7 +994,9 @@ class OHLCVManager:
                 async with aiohttp.ClientSession() as session:
                     async with session.head(url) as response:
                         if self.verbose:
-                            logging.info(f"kucoin, searching for first day of data for {symbolf} {day}")
+                            logging.info(
+                                f"kucoin, searching for first day of data for {symbolf} {day}"
+                            )
                         if response.status == 200:
                             earliest = mid
                             end = mid - datetime.timedelta(days=1)
@@ -1018,7 +1020,9 @@ class OHLCVManager:
             fts = date_to_ts(earliest.strftime("%Y-%m-%d"))
             self.dump_first_timestamp(coin, fts)
             if self.verbose:
-                logging.info(f"KuCoin, found first day for {symbolf}: {earliest.strftime('%Y-%m-%d')}")
+                logging.info(
+                    f"KuCoin, found first day for {symbolf}: {earliest.strftime('%Y-%m-%d')}"
+                )
             return fts
         fts = 0.0
         self.dump_first_timestamp(coin, fts)
