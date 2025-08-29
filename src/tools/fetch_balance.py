@@ -61,6 +61,16 @@ def build_exchange(user_info: Dict[str, Any]) -> ccxt.Exchange:
     if exchange_cls is None:
         raise Exception(f"exchange '{exchange_id}' not found in ccxt")
 
+    # Prefer perpetual futures (swap) when supported
+    try:
+        if not hasattr(exchange_cls, "options") or not isinstance(exchange_cls.options, dict):
+            exchange_cls.options = {"defaultType": "swap"}
+        else:
+            exchange_cls.options["defaultType"] = "swap"
+    except Exception:
+        # best-effort: ignore failures to set class-level options
+        pass
+
     api_key = user_info.get("apiKey") or user_info.get("key") or user_info.get("apikey")
     secret = user_info.get("secret") or user_info.get("apiSecret") or user_info.get("apisecret")
     password = user_info.get("password") or user_info.get("pwd")
