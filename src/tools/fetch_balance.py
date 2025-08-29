@@ -73,7 +73,11 @@ def build_exchange(user_info: Dict[str, Any]) -> ccxt.Exchange:
 
     api_key = user_info.get("apiKey") or user_info.get("key") or user_info.get("apikey")
     secret = user_info.get("secret") or user_info.get("apiSecret") or user_info.get("apisecret")
-    password = user_info.get("password") or user_info.get("pwd")
+    password = (
+        user_info.get("password")
+        or user_info.get("pwd")
+        or user_info.get("passphrase")
+    )
 
     params = {"enableRateLimit": True}
     # Allow passing extra ccxt params through user_info if desired
@@ -81,14 +85,37 @@ def build_exchange(user_info: Dict[str, Any]) -> ccxt.Exchange:
     if isinstance(extra, dict):
         params.update(extra)
 
-    exchange = exchange_cls(
-        {
-            "apiKey": api_key,
-            "secret": secret,
-            "password": password,
-            **params,
-        }
-    )
+    # Build kwargs for the ccxt exchange constructor, normalizing common key names
+    exchange_kwargs = dict(params)  # start with params (e.g. enableRateLimit, etc.)
+    if api_key:
+        exchange_kwargs["apiKey"] = api_key
+    if secret:
+        exchange_kwargs["secret"] = secret
+    if password:
+        exchange_kwargs["password"] = password
+
+    # Include other useful fields from user_info (e.g., wallet_address, private_key),
+    # but avoid copying control fields or credential aliases twice.
+    for k, v in user_info.items():
+        if k in ("exchange", "exchange_id", "exchangeId", "ccxt"):
+            continue
+        if k in (
+            "key",
+            "apiKey",
+            "apikey",
+            "secret",
+            "apiSecret",
+            "apisecret",
+            "password",
+            "pwd",
+            "passphrase",
+        ):
+            continue
+        # don't overwrite already set normalized keys
+        if k not in exchange_kwargs:
+            exchange_kwargs[k] = v
+
+    exchange = exchange_cls(exchange_kwargs)
     return exchange
 
 
