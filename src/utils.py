@@ -266,6 +266,8 @@ def _build_coin_symbol_maps(markets, quote):
                 symbol_to_coin_map[variant] = coin
                 symbol_to_coin_map[k] = coin
                 coin_to_symbol_map[variant].add(k)
+            if symbol_id := v.get("id"):
+                symbol_to_coin_map[symbol_id] = coin
         except Exception:
             # Skip malformed market entries but continue processing others
             continue
