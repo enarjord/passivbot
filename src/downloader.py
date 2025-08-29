@@ -32,6 +32,7 @@ from config_utils import (
     add_arguments_recursively,
     load_config,
     get_template_live_config,
+    update_config_with_args,
 )
 from pure_funcs import (
     safe_filename,
@@ -48,6 +49,7 @@ from utils import (
     symbol_to_coin,
     coin_to_symbol,
     load_markets,
+    format_approved_ignored_coins,
 )
 from procedures import (
     get_first_timestamps_unified,
@@ -1761,6 +1763,7 @@ async def main():
     else:
         logging.info(f"loading config {args.config_path}")
         config = load_config(args.config_path)
+    update_config_with_args(config, args)
     await format_approved_ignored_coins(config, config["backtest"]["exchanges"])
     oms = {}
     try:
@@ -1768,7 +1771,7 @@ async def main():
             oms[ex] = OHLCVManager(
                 ex, config["backtest"]["start_date"], config["backtest"]["end_date"]
             )
-        logging.info("loading markets for {config['backtest']['exchanges']}")
+        logging.info(f"loading markets for {config['backtest']['exchanges']}")
         await asyncio.gather(*[oms[ex].load_markets() for ex in oms])
         coins = [x for y in config["live"]["approved_coins"].values() for x in y]
         for coin in sorted(set(coins)):
