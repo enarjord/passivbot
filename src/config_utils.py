@@ -569,7 +569,8 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
         del result["backtest"]["exchange"]
 
     add_missing_keys_recursively(template, result, verbose=verbose)
-    result["live"]["base_config_path"] = base_config_path
+    if base_config_path or "base_config_path" not in result["live"]:
+        result["live"]["base_config_path"] = base_config_path
     remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose)
     remove_unused_keys_recursively(
         template["optimize"]["bounds"], result["optimize"]["bounds"], verbose=verbose
