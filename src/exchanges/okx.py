@@ -117,7 +117,7 @@ class OKXBot(Passivbot):
                         if elm2["collateralEnabled"]:
                             balance += float(elm2["cashBal"]) * (
                                 self.get_last_price(self.coin_to_symbol(elm2["ccy"]))
-                                if elm2["ccy"] == self.quote
+                                if elm2["ccy"] != self.quote
                                 else 1.0
                             )
                 if not hasattr(self, "previous_rounded_balance"):
