@@ -1,10 +1,10 @@
 ![Passivbot](docs/images/pbot_logo_full.svg)
 
-# Trading bot running on Bybit, OKX, Bitget, GateIO, Binance and Hyperliquid
+# Trading bot running on Bybit, OKX, Bitget, GateIO, Binance, Kucoin and Hyperliquid
 
 :warning: **Used at one's own risk** :warning:
 
-v7.3.19
+v7.3.20
 
 
 ## Overview
@@ -155,9 +155,9 @@ Signing up using these referrals is appreciated:
 https://accounts.binance.com/register?ref=TII4B07C  
 https://partner.bybit.com/b/passivbot  
 https://partner.bitget.com/bg/Y8FU1W  
-https://www.okx.com/join/PASSIVBOT  (20% rebate)  
+https://www.okx.com/join/PASSIVBOT  
 https://app.hyperliquid.xyz/join/PASSIVBOT  
-https://app.defx.com/join/4DKR14  
+https://www.kucoin.com/r/rf/CX8Q6DUF  
 
 **Note on Binance**  
 To support continued Passivbot development, please use a Binance account which  
