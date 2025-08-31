@@ -49,9 +49,7 @@ def get_user_info(api_keys: Dict[str, Any], user: str) -> Dict[str, Any]:
 def build_exchange(user_info: Dict[str, Any]) -> ccxt.Exchange:
     # Accept multiple possible key names for convenience
     exchange_id = (
-        user_info.get("exchange")
-        or user_info.get("exchange_id")
-        or user_info.get("exchangeId")
+        user_info.get("exchange") or user_info.get("exchange_id") or user_info.get("exchangeId")
     )
     if not exchange_id:
         raise KeyError("missing 'exchange' in user info")
@@ -73,11 +71,7 @@ def build_exchange(user_info: Dict[str, Any]) -> ccxt.Exchange:
 
     api_key = user_info.get("apiKey") or user_info.get("key") or user_info.get("apikey")
     secret = user_info.get("secret") or user_info.get("apiSecret") or user_info.get("apisecret")
-    password = (
-        user_info.get("password")
-        or user_info.get("pwd")
-        or user_info.get("passphrase")
-    )
+    password = user_info.get("password") or user_info.get("pwd") or user_info.get("passphrase")
 
     params = {"enableRateLimit": True}
     # Allow passing extra ccxt params through user_info if desired
