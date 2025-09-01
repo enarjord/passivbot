@@ -159,10 +159,6 @@ For more detailed information about Passivbot, see documentation files here: [do
 
 ## Third Party Links, Referrals and Tip Jar
 
-**Passivbot Manager Service:**  
-There is a paid manager service to run Passivbot on the user's behalf:  
-www.passivbotmanager.com  
-
 **Passivbot GUI**
 A graphical user interface for Passivbot:  
 https://github.com/msei99/pbgui
