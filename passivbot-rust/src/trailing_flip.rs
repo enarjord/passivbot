@@ -1,4 +1,4 @@
-use numpy::PyReadonlyArray2;
+use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
 use crate::utils::{calc_pnl_long, calc_pnl_short};
@@ -241,15 +241,21 @@ fn clip_order_qty_to_we_limit(
 }
 
 /// Determines the next open order (if any) and unrealised PnL given the current trailing state.
-fn calc_open_order_and_upnl(
-    params: &BacktestParams,
+fn calc_open_order_and_upnl_with_flip_count(
+    trailing_threshold_pct_profit: f64,
+    trailing_retracement_pct_profit: f64,
+    trailing_threshold_pct_loss: f64,
+    trailing_retracement_pct_loss: f64,
+    wallet_exposure_limit: f64,
+    double_down_factor: f64,
+    initial_qty_pct: f64,
     balance: f64,
     pos: Position,
     high: f64,
     low: f64,
     close: f64,
     extrema: TrailingExtrema,
-) -> (Order, f64) {
+) -> (Order, f64, bool) {
     let pos_qty = pos.qty;
     let pos_price = pos.price;
     let upnl: f64;
@@ -258,9 +264,9 @@ fn calc_open_order_and_upnl(
         // Long position: use the low to compute unrealised PnL
         upnl = calc_pnl_long(pos_price, low, pos_qty, 1.0);
         // Trailing take profit condition
-        if close >= pos_price * (1.0 + params.trailing_threshold_pct_profit) {
+        if close >= pos_price * (1.0 + trailing_threshold_pct_profit) {
             if extrema.min_since_max
-                <= extrema.max_since_open * (1.0 - params.trailing_retracement_pct_profit)
+                <= extrema.max_since_open * (1.0 - trailing_retracement_pct_profit)
             {
                 return (
                     Order {
@@ -268,31 +274,32 @@ fn calc_open_order_and_upnl(
                         price: close,
                     },
                     upnl,
+                    false,
                 );
             }
         }
         // Trailing stop loss / add to losing long condition
-        if close < pos_price * (1.0 - params.trailing_threshold_pct_loss) {
+        if close < pos_price * (1.0 - trailing_threshold_pct_loss) {
             if extrema.max_since_min
-                >= extrema.min_since_open * (1.0 + params.trailing_retracement_pct_loss)
+                >= extrema.min_since_open * (1.0 + trailing_retracement_pct_loss)
             {
-                let close_qty = -pos_qty - pos_qty * params.double_down_factor;
+                let close_qty = -pos_qty - pos_qty * double_down_factor;
                 let order = Order {
                     qty: close_qty,
                     price: close,
                 };
                 let clipped =
-                    clip_order_qty_to_we_limit(params.wallet_exposure_limit, balance, pos, order);
-                return (clipped, upnl);
+                    clip_order_qty_to_we_limit(wallet_exposure_limit, balance, pos, order);
+                return (clipped, upnl, true); // flip triggered
             }
         }
     } else if pos_qty < 0.0 {
         // Short position: use the high to compute unrealised PnL
         upnl = calc_pnl_short(pos_price, high, pos_qty, 1.0);
         // Trailing take profit condition for shorts
-        if close <= pos_price * (1.0 - params.trailing_threshold_pct_profit) {
+        if close <= pos_price * (1.0 - trailing_threshold_pct_profit) {
             if extrema.max_since_min
-                >= extrema.min_since_open * (1.0 + params.trailing_retracement_pct_profit)
+                >= extrema.min_since_open * (1.0 + trailing_retracement_pct_profit)
             {
                 return (
                     Order {
@@ -300,29 +307,30 @@ fn calc_open_order_and_upnl(
                         price: close,
                     },
                     upnl,
+                    false,
                 );
             }
         }
         // Trailing stop loss / add to losing short condition
-        if close >= pos_price * (1.0 + params.trailing_threshold_pct_loss) {
+        if close >= pos_price * (1.0 + trailing_threshold_pct_loss) {
             if extrema.min_since_max
-                <= extrema.max_since_open * (1.0 - params.trailing_retracement_pct_loss)
+                <= extrema.max_since_open * (1.0 - trailing_retracement_pct_loss)
             {
-                let close_qty = -pos_qty - pos_qty * params.double_down_factor;
+                let close_qty = -pos_qty - pos_qty * double_down_factor;
                 let order = Order {
                     qty: close_qty,
                     price: close,
                 };
                 let clipped =
-                    clip_order_qty_to_we_limit(params.wallet_exposure_limit, balance, pos, order);
-                return (clipped, upnl);
+                    clip_order_qty_to_we_limit(wallet_exposure_limit, balance, pos, order);
+                return (clipped, upnl, true); // flip triggered
             }
         }
     } else {
         // Flat: open a new position
         if close != 0.0 {
-            let qty = (balance / close) * params.initial_qty_pct;
-            return (Order { qty, price: close }, 0.0);
+            let qty = (balance / close) * initial_qty_pct;
+            return (Order { qty, price: close }, 0.0, false);
         } else {
             return (
                 Order {
@@ -330,6 +338,7 @@ fn calc_open_order_and_upnl(
                     price: 0.0,
                 },
                 0.0,
+                false,
             );
         }
     }
@@ -340,17 +349,8 @@ fn calc_open_order_and_upnl(
             price: 0.0,
         },
         upnl,
+        false,
     )
-}
-
-pub struct BacktestParams {
-    pub initial_qty_pct: f64,
-    pub double_down_factor: f64,
-    pub wallet_exposure_limit: f64,
-    pub trailing_threshold_pct_profit: f64,
-    pub trailing_retracement_pct_profit: f64,
-    pub trailing_threshold_pct_loss: f64,
-    pub trailing_retracement_pct_loss: f64,
 }
 
 /// Run a simple backtest using trailing-stop and flip logic.
@@ -363,7 +363,9 @@ pub struct BacktestParams {
 #[allow(clippy::too_many_arguments)]
 pub fn backtest_trailing_flip<'py>(
     py: Python<'py>,
-    hlcv: PyReadonlyArray2<'py, f64>, // accept ndarray directly
+    hlcv: PyReadonlyArray2<'py, f64>,  // accept ndarray directly
+    adx_1: PyReadonlyArray1<'py, f64>, // average directional index
+    adx_2: PyReadonlyArray1<'py, f64>,
     initial_qty_pct: f64,
     double_down_factor: f64,
     wallet_exposure_limit: f64,
@@ -371,7 +373,10 @@ pub fn backtest_trailing_flip<'py>(
     trailing_retracement_pct_profit: f64,
     trailing_threshold_pct_loss: f64,
     trailing_retracement_pct_loss: f64,
-    fee_rate: f64, // e.g. 0.00055 for 0.055%
+    fee_rate: f64,               // e.g. 0.00055 for 0.055%
+    adx_scale_higher_width: f64, // e.g. 1.5
+    adx_scale_lower_width: f64,  // e.g. 0.7
+    max_flips_per_cycle: usize,  // max flips per cycle (0 = no limit)
 ) -> PyResult<(
     Vec<(usize, f64, f64, f64, f64, f64, f64, f64, f64, String)>,
     Vec<f64>,
@@ -397,21 +402,17 @@ pub fn backtest_trailing_flip<'py>(
     let mut fills_out: Vec<(usize, f64, f64, f64, f64, f64, f64, f64, f64, String)> = Vec::new();
     let mut equities: Vec<f64> = Vec::new();
 
-    let params = BacktestParams {
-        initial_qty_pct,
-        double_down_factor,
-        wallet_exposure_limit,
-        trailing_threshold_pct_profit,
-        trailing_retracement_pct_profit,
-        trailing_threshold_pct_loss,
-        trailing_retracement_pct_loss,
-    };
+    let mut flip_count = 0;
+    let adx_1 = adx_1.as_array();
+    let adx_2 = adx_2.as_array();
 
     for (i, row) in hlcv.outer_iter().enumerate() {
         let high = row[0];
         let low = row[1];
         let close = row[2];
         let _vol = row[3];
+        let adx_1_val = adx_1[i];
+        let adx_2_val = adx_2[i];
 
         // Check if the open order would have been filled this bar.
         if (open_order.qty > 0.0 && low < open_order.price)
@@ -452,10 +453,52 @@ pub fn backtest_trailing_flip<'py>(
         }
 
         // Determine next open order and unrealised PnL.
-        let (new_order, upnl) =
-            calc_open_order_and_upnl(&params, balance, pos, high, low, close, extrema);
 
-        open_order = new_order;
+        // Scale thresholds dynamically based on ADX value.
+        let adx_scale = if adx_1_val > 30.0 && adx_2_val > 25.0 {
+            adx_scale_higher_width
+        } else if adx_1_val < 20.0 && adx_2_val < 20.0 {
+            adx_scale_lower_width
+        } else {
+            1.0
+        };
+
+        let trailing_threshold_pct_profit_dyn = trailing_threshold_pct_profit * adx_scale;
+        let trailing_threshold_pct_loss_dyn = trailing_threshold_pct_loss * adx_scale;
+        let trailing_retracement_pct_profit_dyn = trailing_retracement_pct_profit * adx_scale;
+        let trailing_retracement_pct_loss_dyn = trailing_retracement_pct_loss * adx_scale;
+
+        let (new_order, upnl, flip_triggered) = calc_open_order_and_upnl_with_flip_count(
+            trailing_threshold_pct_profit_dyn,
+            trailing_retracement_pct_profit_dyn,
+            trailing_threshold_pct_loss_dyn,
+            trailing_retracement_pct_loss_dyn,
+            wallet_exposure_limit,
+            double_down_factor,
+            initial_qty_pct,
+            balance,
+            pos,
+            high,
+            low,
+            close,
+            extrema,
+        );
+
+        if flip_triggered && max_flips_per_cycle > 0 {
+            flip_count += 1;
+        }
+
+        if max_flips_per_cycle > 0 && flip_count >= max_flips_per_cycle {
+            // Close position and reset flip count
+            open_order = Order {
+                qty: -pos.qty,
+                price: close,
+            };
+            flip_count = 0;
+        } else {
+            open_order = new_order;
+        }
+
         equities.push(balance + upnl);
 
         // If we recorded any fills at this bar, update their upnl to the current value.
