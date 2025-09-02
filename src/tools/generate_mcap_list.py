@@ -6,8 +6,8 @@ import os
 import traceback
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from pure_funcs import calc_hash, symbol_to_coin, ts_to_date_utc
-from procedures import utc_ms
+from utils import symbol_to_coin, ts_to_date_utc, utc_ms
+from pure_funcs import calc_hash
 
 
 def is_stablecoin(elm):
