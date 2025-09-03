@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pytest
 
-import candlestick_manager as cm
+import src.candlestick_manager as cm
 
 
 ONE_MIN = cm.ONE_MIN_MS
@@ -351,3 +351,28 @@ async def test_metadata_earliest_discovery_and_reuse(tmp_path, dummy_ccxt, patch
         _ = await mgr2.get(None, earliest + 5 * ONE_MIN)
         # discover should not be called again
         assert calls["discover"] == 1
+
+
+@pytest.mark.asyncio
+async def test_start_is_clamped_to_earliest_when_provided(tmp_path, dummy_ccxt, patch_now):
+    data_root = tmp_path / "candles"
+    exchange = "binanceusdm"
+    symbol = "ATOM/USDT:USDT"
+
+    earliest = ts_ms(2023, 12, 30, 0, 0, 0)
+    series = make_series(earliest, 15, base_price=10.0, dv=0.1, base_vol=1.2)
+    dummy_ccxt.set_series(symbol, series)
+
+    bad_start = earliest - 2 * 24 * 60 * ONE_MIN  # 2 days before earliest
+    async with cm.CandlestickManager(exchange, symbol, data_root=data_root) as mgr:
+        arr = await mgr.get(bad_start, earliest + 5 * ONE_MIN)
+        # Should clamp to earliest and return 5 minutes
+        assert arr.shape[0] == 5
+        assert int(arr[0, 0]) == earliest
+
+        # Metadata persisted with earliest
+        meta_path = mgr.layout.metadata_path(exchange, symbol)
+        assert meta_path.exists()
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        assert int(meta["earliest_ts"]) == earliest

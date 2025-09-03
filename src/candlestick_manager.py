@@ -212,15 +212,37 @@ class CandlestickManager:
     # --------------- Internal helpers ---------------
 
     async def _resolve_start_ms(self, start: Optional[TimestampLike]) -> int:
-        if start is not None:
-            return _to_ms(start)
-        # Find earliest available via cached metadata or discovery
-        cached = await self._load_metadata()
-        if cached and "earliest_ts" in cached:
-            return int(cached["earliest_ts"])
-        earliest = await self._discover_earliest_ts()
-        await self._save_metadata({"earliest_ts": int(earliest)})
-        return int(earliest)
+        """
+        Resolve the effective start timestamp:
+        - If start is None, use earliest available (discover and cache if missing).
+        - If start is provided but earlier than earliest, clamp to earliest.
+        - If no metadata and cache is empty, discover earliest and cache it.
+        """
+        requested = _to_ms(start) if start is not None else None
+
+        # Try reading cached earliest
+        meta = await self._load_metadata()
+        earliest = int(meta["earliest_ts"]) if meta and "earliest_ts" in meta else None
+
+        # If we don't know earliest yet and have no cache, discover and persist it
+        if earliest is None and not self._has_any_cached_data():
+            discovered = await self._discover_earliest_ts()
+            earliest = int(discovered)
+            await self._save_metadata({"earliest_ts": earliest})
+
+        if requested is None:
+            if earliest is not None:
+                return earliest
+            # As a final fallback, discover, persist, and return
+            discovered = await self._discover_earliest_ts()
+            earliest = int(discovered)
+            await self._save_metadata({"earliest_ts": earliest})
+            return earliest
+
+        # Clamp requested to earliest if known
+        if earliest is not None and requested < earliest:
+            return earliest
+        return requested
 
     def _iter_day_starts(self, start_ms: int, end_ms: int):
         cur = _day_start(start_ms)
@@ -475,6 +497,19 @@ class CandlestickManager:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, separators=(",", ":"), sort_keys=True)
             os.replace(tmp_path, meta_path)
+
+    def _has_any_cached_data(self) -> bool:
+        """
+        Returns True if there is any cached candle file for this exchange+symbol.
+        """
+        root = self.layout.data_root / self.exchange_name / self.symbol
+        if not root.exists():
+            return False
+        try:
+            next(root.rglob("*.npy.gz"))
+            return True
+        except StopIteration:
+            return False
 
     # --------------- Earliest timestamp discovery ---------------
 
