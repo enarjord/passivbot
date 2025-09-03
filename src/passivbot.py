@@ -1,7 +1,9 @@
 from __future__ import annotations
 import os
+
 # fix Crashes on Windows
 from tools.event_loop_policy import set_windows_event_loop_policy
+
 set_windows_event_loop_policy()
 
 from ccxt.base.errors import NetworkError
