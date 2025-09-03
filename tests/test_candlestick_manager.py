@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pytest
 
-import src.candlestick_manager as cm
+import candlestick_manager as cm
 
 
 ONE_MIN = cm.ONE_MIN_MS
@@ -18,9 +18,7 @@ ONE_MIN = cm.ONE_MIN_MS
 def ts_ms(y, m, d, hh=0, mm=0, ss=0):
     import datetime as dt
 
-    return int(
-        dt.datetime(y, m, d, hh, mm, ss, tzinfo=dt.timezone.utc).timestamp() * 1000
-    )
+    return int(dt.datetime(y, m, d, hh, mm, ss, tzinfo=dt.timezone.utc).timestamp() * 1000)
 
 
 class DummyExchange:
@@ -224,9 +222,11 @@ async def test_multi_day_fetch_and_cache(tmp_path, dummy_ccxt, patch_now):
 
     async with cm.CandlestickManager(exchange, symbol, data_root=data_root) as mgr:
         req_start = day1 + 23 * 60 * ONE_MIN  # 23:00 day1
-        req_end = day2 + 3 * 60 * ONE_MIN    # 03:00 day2
+        req_end = day2 + 3 * 60 * ONE_MIN  # 03:00 day2
         arr = await mgr.get(req_start, req_end)
-        expected = (60) + (3 * 60)  # 23:00..23:59 (60), 00:00..02:59 (180) -> 240? Wait: 23:00..02:59 = 300?
+        expected = (60) + (
+            3 * 60
+        )  # 23:00..23:59 (60), 00:00..02:59 (180) -> 240? Wait: 23:00..02:59 = 300?
         # re-evaluate: from 23:00 to next day 03:00 exclusive is 4 hours = 240 minutes
         assert arr.shape[0] == 240
         assert int(arr[0, 0]) == req_start
@@ -290,7 +290,9 @@ async def test_cache_integrity_fixes_and_backfill(tmp_path, dummy_ccxt, patch_no
     # - remove some minutes to create gaps that must be backfilled
     broken = []
     for i in range(10):
-        broken.append([day + i * ONE_MIN + 1000, 0.3, 0.31, 0.29, 0.305, 1.0])  # misaligned -> must be dropped
+        broken.append(
+            [day + i * ONE_MIN + 1000, 0.3, 0.31, 0.29, 0.305, 1.0]
+        )  # misaligned -> must be dropped
     # proper aligned duplicates for minute 10
     r10 = series[10]
     broken.append(r10)
