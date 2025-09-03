@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pytest
 
-import src.candlestick_manager as cm
+import candlestick_manager as cm
 
 
 ONE_MIN = cm.ONE_MIN_MS
@@ -82,8 +82,8 @@ class CCXTNamespace:
 
 @pytest.fixture
 def fixed_now_ms():
-    # 2024-01-02 00:10:30 UTC
-    return ts_ms(2024, 1, 2, 0, 10, 30)
+    # 2024-01-10 00:10:30 UTC (moved later to ensure all test request periods are in the past)
+    return ts_ms(2024, 1, 10, 0, 10, 30)
 
 
 @pytest.fixture
