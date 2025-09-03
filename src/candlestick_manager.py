@@ -92,6 +92,7 @@ class CacheLayout:
 
     NPY GZip-compressed to balance disk usage and speed.
     """
+
     data_root: pathlib.Path
 
     def day_dir(self, exchange: str, symbol: str, day_ms: int) -> pathlib.Path:
@@ -251,7 +252,9 @@ class CandlestickManager:
             yield cur
             cur += ONE_DAY_MS
 
-    async def _get_day(self, day_start_ms: int, day_end_exclusive_ms: int, is_last_day: bool) -> CandlesArray:
+    async def _get_day(
+        self, day_start_ms: int, day_end_exclusive_ms: int, is_last_day: bool
+    ) -> CandlesArray:
         """
         Return candles within [day_start_ms, day_end_exclusive_ms), using cache if possible.
         For current/last day, cache may be partial; we will extend and update as needed.
@@ -288,7 +291,7 @@ class CandlestickManager:
                 need_fetch_ranges.append((rng_start, prev + ONE_MIN_MS))
 
         fetched_arrays: List[np.ndarray] = []
-        for (rs, re) in need_fetch_ranges:
+        for rs, re in need_fetch_ranges:
             chunk = await self._fetch_range(rs, re)
             if chunk.size:
                 fetched_arrays.append(chunk)
@@ -348,7 +351,9 @@ class CandlestickManager:
                     await asyncio.sleep(0.5 * (attempt + 1))
             else:
                 # All attempts failed, break to avoid tight loop
-                self._logger.error(f"Failed to fetch OHLCV after {max_tries_per_call} attempts; since={since}")
+                self._logger.error(
+                    f"Failed to fetch OHLCV after {max_tries_per_call} attempts; since={since}"
+                )
                 break
 
             if not ohlcv:
@@ -389,7 +394,9 @@ class CandlestickManager:
         arr = np.array(out, dtype=np.float64)
         return self._verify_and_normalize(arr, start_ms, hard_end)
 
-    def _verify_and_normalize(self, arr: CandlesArray, start_ms: int, end_exclusive_ms: int) -> CandlesArray:
+    def _verify_and_normalize(
+        self, arr: CandlesArray, start_ms: int, end_exclusive_ms: int
+    ) -> CandlesArray:
         """
         - Deduplicate by timestamp
         - Sort ascending
@@ -405,7 +412,9 @@ class CandlestickManager:
         arr = np.array(arr, dtype=np.float64)
 
         # Filter alignment and range
-        m_align = (arr[:, 0] % ONE_MIN_MS == 0) & (arr[:, 0] >= start_ms) & (arr[:, 0] < end_exclusive_ms)
+        m_align = (
+            (arr[:, 0] % ONE_MIN_MS == 0) & (arr[:, 0] >= start_ms) & (arr[:, 0] < end_exclusive_ms)
+        )
         arr = arr[m_align]
 
         if arr.size == 0:
@@ -549,7 +558,9 @@ class CandlestickManager:
         assert self._ex is not None
         try:
             async with self._sem:
-                ohlcv = await self._ex.fetch_ohlcv(self.symbol, timeframe="1m", since=since_ms, limit=1)
+                ohlcv = await self._ex.fetch_ohlcv(
+                    self.symbol, timeframe="1m", since=since_ms, limit=1
+                )
         except Exception:
             return None
         if not ohlcv:
