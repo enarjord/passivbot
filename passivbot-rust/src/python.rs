@@ -1,4 +1,5 @@
-use crate::backtest::{analyze_backtest_pair, Backtest};
+use crate::analysis::analyze_backtest_pair;
+use crate::backtest::Backtest;
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
 };
