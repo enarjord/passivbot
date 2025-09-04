@@ -183,8 +183,8 @@ impl<'a> Backtest<'a> {
                 EMAs {
                     long: [close_price; 3],
                     short: [close_price; 3],
-                    vol_long: hlcvs[[0, i, VOLUME]],
-                    vol_short: hlcvs[[0, i, VOLUME]],
+                    vol_long: f64::max(0.0, hlcvs[[0, i, VOLUME]]),
+                    vol_short: f64::max(0.0, hlcvs[[0, i, VOLUME]]),
                     noise_long: 0.0,
                     noise_short: 0.0,
                 }
@@ -1360,7 +1360,7 @@ impl<'a> Backtest<'a> {
     fn update_emas(&mut self, k: usize) {
         for i in 0..self.n_coins {
             let close_price = self.hlcvs[[k, i, CLOSE]];
-            let vol = self.hlcvs[[k, i, VOLUME]];
+            let vol = f64::max(0.0, self.hlcvs[[k, i, VOLUME]]);
             let high = self.hlcvs[[k, i, HIGH]];
             let low = self.hlcvs[[k, i, LOW]];
 
