@@ -15,7 +15,7 @@ use crate::utils::{
     calc_pprice_diff_int, calc_wallet_exposure, cost_to_qty, hysteresis_rounding, qty_to_cost,
     round_, round_dn, round_up,
 };
-use ndarray::{s, ArrayView1, ArrayView3, Axis};
+use ndarray::{ArrayView1, ArrayView3};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
@@ -23,6 +23,10 @@ use std::collections::{HashMap, HashSet};
 pub struct EmaAlphas {
     pub long: Alphas,
     pub short: Alphas,
+    pub vol_alpha_long: f64,
+    pub vol_alpha_short: f64,
+    pub noise_alpha_long: f64,
+    pub noise_alpha_short: f64,
 }
 
 #[derive(Clone, Default, Copy, Debug)]
@@ -35,6 +39,10 @@ pub struct Alphas {
 pub struct EMAs {
     pub long: [f64; 3],
     pub short: [f64; 3],
+    pub vol_long: f64,
+    pub vol_short: f64,
+    pub noise_long: f64,
+    pub noise_short: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -111,12 +119,7 @@ pub struct TradingEnabled {
     short: bool,
 }
 
-struct RollingSum {
-    long: Vec<f64>,
-    short: Vec<f64>,
-    prev_k_long: usize,
-    prev_k_short: usize,
-}
+// RollingSum (SMA) removed — volume & noisiness are now tracked via EMAs in `EMAs`.
 
 pub struct Backtest<'a> {
     hlcvs: &'a ArrayView3<'a, f64>,
@@ -149,8 +152,7 @@ pub struct Backtest<'a> {
     did_fill_short: HashSet<usize>,
     n_eligible_long: usize,
     n_eligible_short: usize,
-    rolling_volume_sum: RollingSum,
-    volume_indices_buffer: Option<Vec<(f64, usize)>>,
+    // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
 }
 
 impl<'a> Backtest<'a> {
@@ -181,6 +183,10 @@ impl<'a> Backtest<'a> {
                 EMAs {
                     long: [close_price; 3],
                     short: [close_price; 3],
+                    vol_long: hlcvs[[0, i, VOLUME]],
+                    vol_short: hlcvs[[0, i, VOLUME]],
+                    noise_long: 0.0,
+                    noise_short: 0.0,
                 }
             })
             .collect();
@@ -264,13 +270,7 @@ impl<'a> Backtest<'a> {
             did_fill_short: HashSet::new(),
             n_eligible_long,
             n_eligible_short,
-            rolling_volume_sum: RollingSum {
-                long: vec![0.0; n_coins],
-                short: vec![0.0; n_coins],
-                prev_k_long: 0,
-                prev_k_short: 0,
-            },
-            volume_indices_buffer: Some(vec![(0.0, 0); n_coins]), // Initialize here
+            // EMAs already initialized in `emas`; no rolling buffers needed
         }
     }
 
@@ -385,7 +385,7 @@ impl<'a> Backtest<'a> {
         }
     }
 
-    pub fn calc_preferred_coins(&mut self, k: usize, pside: usize) -> Vec<usize> {
+    pub fn calc_preferred_coins(&mut self, pside: usize) -> Vec<usize> {
         let n_positions = match pside {
             LONG => self.effective_n_positions.long,
             SHORT => self.effective_n_positions.short,
@@ -395,80 +395,50 @@ impl<'a> Backtest<'a> {
         if self.n_coins <= n_positions {
             return (0..self.n_coins).collect();
         }
-        let volume_filtered = self.filter_by_relative_volume(k, pside);
-        self.rank_by_noisiness(k, &volume_filtered, pside)
+        let volume_filtered = self.filter_by_relative_volume(pside);
+        self.rank_by_noisiness(&volume_filtered, pside)
     }
 
-    fn filter_by_relative_volume(&mut self, k: usize, pside: usize) -> Vec<usize> {
-        let window = match pside {
-            LONG => self.bot_params_master.long.filter_volume_rolling_window,
-            SHORT => self.bot_params_master.short.filter_volume_rolling_window,
-            _ => panic!("Invalid pside"),
-        };
-        let start_k = k.saturating_sub(window);
-
-        let (rolling_volume_sum, prev_k) = match pside {
-            LONG => (
-                &mut self.rolling_volume_sum.long,
-                &mut self.rolling_volume_sum.prev_k_long,
-            ),
-            SHORT => (
-                &mut self.rolling_volume_sum.short,
-                &mut self.rolling_volume_sum.prev_k_short,
-            ),
-            _ => panic!("Invalid pside"),
-        };
-
-        let volume_indices = self.volume_indices_buffer.as_mut().unwrap();
-
-        if k > window && k - *prev_k < window {
-            let safe_start = (*prev_k).saturating_sub(window);
-            for idx in 0..self.n_coins {
-                rolling_volume_sum[idx] -=
-                    self.hlcvs.slice(s![safe_start..start_k, idx, VOLUME]).sum();
-                rolling_volume_sum[idx] += self.hlcvs.slice(s![*prev_k..k, idx, VOLUME]).sum();
-                volume_indices[idx] = (rolling_volume_sum[idx], idx);
-            }
-        } else {
-            for idx in 0..self.n_coins {
-                rolling_volume_sum[idx] = self.hlcvs.slice(s![start_k..k, idx, VOLUME]).sum();
-                volume_indices[idx] = (rolling_volume_sum[idx], idx);
-            }
+    fn filter_by_relative_volume(&mut self, pside: usize) -> Vec<usize> {
+        // Use EMA of volume for relative volume filtering. Interpret the
+        // "filter_volume_rolling_window" parameter as an EMA span (alpha was
+        // precomputed in `calc_ema_alphas`). We ranked coins by their EMA volume
+        // and return top n_eligible.
+        let mut volume_indices: Vec<(f64, usize)> = Vec::with_capacity(self.n_coins);
+        for idx in 0..self.n_coins {
+            let vol = match pside {
+                LONG => self.emas[idx].vol_long,
+                SHORT => self.emas[idx].vol_short,
+                _ => panic!("Invalid pside"),
+            };
+            volume_indices.push((vol, idx));
         }
-        *prev_k = k;
-
         volume_indices.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
-
         let n_eligible = match pside {
             LONG => self.n_eligible_long,
             SHORT => self.n_eligible_short,
             _ => panic!("Invalid pside"),
         };
         volume_indices
-            .iter()
+            .into_iter()
             .take(n_eligible.min(self.n_coins))
-            .map(|&(_, idx)| idx)
+            .map(|(_, idx)| idx)
             .collect()
     }
 
-    fn rank_by_noisiness(&self, k: usize, candidates: &[usize], pside: usize) -> Vec<usize> {
-        let bot_params = match pside {
-            LONG => &self.bot_params_master.long,
-            SHORT => &self.bot_params_master.short,
-            _ => panic!("Invalid pside"),
-        };
-        let start_k = k.saturating_sub(bot_params.filter_noisiness_rolling_window);
-
+    fn rank_by_noisiness(&self, candidates: &[usize], pside: usize) -> Vec<usize> {
+        // Use EMA of noisiness computed in `update_emas` instead of an SMA over
+        // a window. Interpret the "filter_noisiness_rolling_window" as an EMA
+        // span for alpha calculation (precomputed in `calc_ema_alphas`).
         let mut noisinesses: Vec<(f64, usize)> = candidates
             .iter()
             .map(|&idx| {
-                let noisiness: f64 = self
-                    .hlcvs
-                    .slice(s![start_k..k, idx, ..])
-                    .axis_iter(Axis(0))
-                    .map(|row| (row[HIGH] - row[LOW]) / row[CLOSE])
-                    .sum();
-                (noisiness, idx)
+                let noise = match pside {
+                    LONG => self.emas[idx].noise_long,
+                    SHORT => self.emas[idx].noise_short,
+                    _ => 0.0,
+                };
+                (noise, idx)
             })
             .collect();
 
@@ -565,13 +535,13 @@ impl<'a> Backtest<'a> {
         self.equities.btc.push(equity_btc);
     }
 
-    fn update_actives_long(&mut self, k: usize) -> Vec<usize> {
+    fn update_actives_long(&mut self) -> Vec<usize> {
         let n_positions = self.effective_n_positions.long;
 
         let mut current_positions: Vec<usize> = self.positions.long.keys().cloned().collect();
         current_positions.sort();
         let preferred_coins = if current_positions.len() < n_positions {
-            self.calc_preferred_coins(k, LONG)
+            self.calc_preferred_coins(LONG)
         } else {
             Vec::new()
         };
@@ -596,14 +566,14 @@ impl<'a> Backtest<'a> {
         actives_without_pos
     }
 
-    fn update_actives_short(&mut self, k: usize) -> Vec<usize> {
+    fn update_actives_short(&mut self) -> Vec<usize> {
         let n_positions = self.effective_n_positions.short;
 
         let mut current_positions: Vec<usize> = self.positions.short.keys().cloned().collect();
         current_positions.sort();
 
         let preferred_coins = if current_positions.len() < n_positions {
-            self.calc_preferred_coins(k, SHORT)
+            self.calc_preferred_coins(SHORT)
         } else {
             Vec::new()
         };
@@ -1343,7 +1313,7 @@ impl<'a> Backtest<'a> {
         if self.trading_enabled.long {
             let mut active_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
             if self.positions.long.len() != self.effective_n_positions.long {
-                self.update_actives_long(k);
+                self.update_actives_long();
                 active_long_indices = self.actives.long.iter().cloned().collect();
             }
             active_long_indices.sort();
@@ -1355,7 +1325,7 @@ impl<'a> Backtest<'a> {
             let mut active_short_indices: Vec<usize> =
                 self.positions.short.keys().cloned().collect();
             if self.positions.short.len() != self.effective_n_positions.short {
-                self.update_actives_short(k);
+                self.update_actives_short();
                 active_short_indices = self.actives.short.iter().cloned().collect();
             }
             active_short_indices.sort();
@@ -1390,6 +1360,9 @@ impl<'a> Backtest<'a> {
     fn update_emas(&mut self, k: usize) {
         for i in 0..self.n_coins {
             let close_price = self.hlcvs[[k, i, CLOSE]];
+            let vol = self.hlcvs[[k, i, VOLUME]];
+            let high = self.hlcvs[[k, i, HIGH]];
+            let low = self.hlcvs[[k, i, LOW]];
 
             let long_alphas = &self.ema_alphas[i].long.alphas;
             let long_alphas_inv = &self.ema_alphas[i].long.alphas_inv;
@@ -1398,10 +1371,30 @@ impl<'a> Backtest<'a> {
 
             let emas = &mut self.emas[i];
 
+            // price EMAs (3 levels)
             for z in 0..3 {
                 emas.long[z] = close_price * long_alphas[z] + emas.long[z] * long_alphas_inv[z];
                 emas.short[z] = close_price * short_alphas[z] + emas.short[z] * short_alphas_inv[z];
             }
+
+            // volume EMAs (single value per pside)
+            let vol_alpha_long = self.ema_alphas[i].vol_alpha_long;
+            let vol_alpha_short = self.ema_alphas[i].vol_alpha_short;
+            emas.vol_long = vol * vol_alpha_long + emas.vol_long * (1.0 - vol_alpha_long);
+            emas.vol_short = vol * vol_alpha_short + emas.vol_short * (1.0 - vol_alpha_short);
+
+            // noisiness metric: (high - low) / close
+            let noisiness = if close_price != 0.0 {
+                (high - low) / close_price
+            } else {
+                0.0
+            };
+            let noise_alpha_long = self.ema_alphas[i].noise_alpha_long;
+            let noise_alpha_short = self.ema_alphas[i].noise_alpha_short;
+            emas.noise_long =
+                noisiness * noise_alpha_long + emas.noise_long * (1.0 - noise_alpha_long);
+            emas.noise_short =
+                noisiness * noise_alpha_short + emas.noise_short * (1.0 - noise_alpha_short);
         }
     }
 }
@@ -1483,5 +1476,11 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
             alphas: ema_alphas_short,
             alphas_inv: ema_alphas_short_inv,
         },
+        // Interpret the filter rolling window params as EMA spans for volume/noisiness
+        vol_alpha_long: 2.0 / (bot_params_pair.long.filter_volume_rolling_window as f64 + 1.0),
+        vol_alpha_short: 2.0 / (bot_params_pair.short.filter_volume_rolling_window as f64 + 1.0),
+        noise_alpha_long: 2.0 / (bot_params_pair.long.filter_noisiness_rolling_window as f64 + 1.0),
+        noise_alpha_short: 2.0
+            / (bot_params_pair.short.filter_noisiness_rolling_window as f64 + 1.0),
     }
 }
