@@ -1,3 +1,4 @@
+mod analysis;
 mod backtest;
 mod closes;
 mod constants;
