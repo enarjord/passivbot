@@ -28,6 +28,7 @@ from utils import (
     ts_to_date_utc,
     make_get_filepath,
     format_approved_ignored_coins,
+    filter_markets,
 )
 from prettytable import PrettyTable
 from uuid import uuid4
@@ -295,28 +296,9 @@ class Passivbot:
         self.markets_dict = await load_markets(self.exchange, 0, verbose=False)
         await self.determine_utc_offset(verbose)
         # ineligible symbols cannot open new positions
-        self.ineligible_symbols = {}
-        self.eligible_symbols = set()
-        for symbol in sorted(self.markets_dict):
-            if not self.markets_dict[symbol]["active"]:
-                self.ineligible_symbols[symbol] = "not active"
-            elif not self.markets_dict[symbol]["swap"]:
-                self.ineligible_symbols[symbol] = "wrong market type"
-            elif not self.markets_dict[symbol]["linear"]:
-                self.ineligible_symbols[symbol] = "not linear"
-            elif not symbol.endswith(f"/{self.quote}:{self.quote}"):
-                self.ineligible_symbols[symbol] = "wrong quote"
-            elif not self.symbol_is_eligible(symbol):
-                self.ineligible_symbols[symbol] = f"not eligible on {self.exchange}"
-            else:
-                self.eligible_symbols.add(symbol)
-        if verbose:
-            for line in set(self.ineligible_symbols.values()):
-                syms_ = [s for s in self.ineligible_symbols if self.ineligible_symbols[s] == line]
-                if len(syms_) > 12:
-                    logging.info(f"{line}: {len(syms_)} symbols")
-                elif len(syms_) > 0:
-                    logging.info(f"{line}: {','.join(sorted(set([s for s in syms_])))}")
+        eligible, _, reasons = filter_markets(self.markets_dict, self.exchange, verbose)
+        self.eligible_symbols = set(eligible)
+        self.ineligible_symbols = reasons
         self.set_market_specific_settings()
         # for prettier printing
         self.max_len_symbol = max([len(s) for s in self.markets_dict])
