@@ -7,6 +7,7 @@ import logging
 import dateutil.parser
 import asyncio
 import hjson
+import inspect
 from collections import defaultdict
 from typing import Dict, Any, List, Union, Optional
 
@@ -73,6 +74,47 @@ def make_get_filepath(filepath: str) -> str:
 
 def utc_ms() -> float:
     return datetime.datetime.utcnow().timestamp() * 1000
+
+
+def filter_markets(markets: dict, exchange: str, verbose=False) -> (dict, dict, dict):
+    """
+    returns (eligible, ineligible, reasons)
+    """
+    eligible = {}
+    ineligible = {}
+    reasons = {}
+    quote = get_quote(normalize_exchange_name(exchange))
+    for k, v in markets.items():
+        if not v["active"]:
+            ineligible[k] = v
+            reasons[k] = "not active"
+        elif not v["swap"]:
+            ineligible[k] = v
+            reasons[k] = "not swap"
+        elif not v["linear"]:
+            ineligible[k] = v
+            reasons[k] = "not linear"
+        elif not k.endswith(f"/{quote}:{quote}"):
+            ineligible[k] = v
+            reasons[k] = "wrong quote"
+        elif exchange == "hyperliquid" and (
+            v.get("info", {}).get("onlyIsolated")
+            or float(v.get("info", {}).get("openInterest")) == 0.0
+        ):
+            ineligible[k] = v
+            reasons[k] = f"ineligible on {exchange}"
+        else:
+            eligible[k] = v
+
+    if verbose:
+        for line in sorted(set(reasons.values())):
+            syms = [k for k in reasons if reasons[k] == line]
+            if len(syms) > 12:
+                logging.info(f"{line}: {len(syms)} symbols")
+            elif len(syms) > 0:
+                logging.info(f"{line}: {','.join(sorted(set([s for s in syms])))}")
+
+    return eligible, ineligible, reasons
 
 
 async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24, verbose=True) -> dict:
@@ -375,15 +417,19 @@ def coin_to_symbol(coin, exchange):
     return f"{coin}/{quote}:{quote}"
 
 
+def get_caller_name():
+    return inspect.currentframe().f_back.f_back.f_code.co_name
+
+
 def symbol_to_coin(symbol):
     # caches symbol_to_coin_map in memory and reloads if file changes
     try:
         loaded = _load_symbol_to_coin_map()
         if symbol in loaded:
             return loaded[symbol]
-        msg = f"failed to convert {symbol} to its coin with symbol_to_coin_map"
+        msg = f"failed to convert {symbol} to its coin with symbol_to_coin_map. Caller: {get_caller_name()}"
     except Exception:
-        msg = f"failed to convert {symbol} to its coin with symbol_to_coin_map"
+        msg = f"failed to convert {symbol} to its coin with symbol_to_coin_map. Caller: {get_caller_name()}"
 
     if symbol == "":
         return ""
@@ -429,6 +475,7 @@ async def format_approved_ignored_coins(config, exchanges: [str]):
     ]:
         if config["live"]["empty_means_all_approved"]:
             marketss = await asyncio.gather(*[load_markets(ex, verbose=False) for ex in exchanges])
+            marketss = [filter_markets(m, ex)[0] for m, ex in zip(marketss, exchanges)]
             approved_coins = set()
             for markets in marketss:
                 for symbol in markets:
