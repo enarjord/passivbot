@@ -12,7 +12,7 @@ import numpy as np
 import json
 import passivbot_rust as pbr
 from copy import deepcopy
-from utils import ts_to_date_utc, utc_ms
+from utils import ts_to_date, utc_ms
 from pure_funcs import (
     floatify,
     calc_hash,
@@ -300,7 +300,7 @@ class BinanceBot(Passivbot):
                         if self.get_exchange_time() - start_time < week:
                             break
             logging.info(
-                f"fetched {len(fetched)} pnls from {ts_to_date_utc(fetched[0]['timestamp'])[:19]} until {ts_to_date_utc(fetched[-1]['timestamp'])[:19]}"
+                f"fetched {len(fetched)} pnls from {ts_to_date(fetched[0]['timestamp'])[:19]} until {ts_to_date(fetched[-1]['timestamp'])[:19]}"
             )
             start_time = fetched[-1]["timestamp"]
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
@@ -347,7 +347,7 @@ class BinanceBot(Passivbot):
                             break
                         else:
                             logging.info(
-                                f"fetched 0 fills for {symbol} between {ts_to_date_utc(start_time_sub)[:19]} and {ts_to_date_utc(end_time)[:19]}"
+                                f"fetched 0 fills for {symbol} between {ts_to_date(start_time_sub)[:19]} and {ts_to_date(end_time)[:19]}"
                             )
                             start_time_sub += week
                             continue
@@ -357,7 +357,7 @@ class BinanceBot(Passivbot):
                             break
                         else:
                             logging.info(
-                                f"fetched 0 new fills for {symbol} between {ts_to_date_utc(start_time_sub)[:19]} and {ts_to_date_utc(end_time)[:19]}"
+                                f"fetched 0 new fills for {symbol} between {ts_to_date(start_time_sub)[:19]} and {ts_to_date(end_time)[:19]}"
                             )
                             start_time_sub += week
                             continue
@@ -369,7 +369,7 @@ class BinanceBot(Passivbot):
                         break
                     start_time_sub = fills[-1]["timestamp"]
                     logging.info(
-                        f"fetched {len(fills)} fill{'s' if len(fills) > 1 else ''} for {symbol} {ts_to_date_utc(fills[0]['timestamp'])[:19]}"
+                        f"fetched {len(fills)} fill{'s' if len(fills) > 1 else ''} for {symbol} {ts_to_date(fills[0]['timestamp'])[:19]}"
                     )
             all_fills = sorted(all_fills.values(), key=lambda x: x["timestamp"])
             for i in range(len(all_fills)):
