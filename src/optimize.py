@@ -49,7 +49,7 @@ from pure_funcs import (
     calc_hash,
     flatten,
 )
-from utils import date_to_ts, ts_to_date_utc, utc_ms, make_get_filepath, format_approved_ignored_coins
+from utils import date_to_ts, ts_to_date, utc_ms, make_get_filepath, format_approved_ignored_coins
 from copy import deepcopy
 from main import manage_rust_compilation
 import numpy as np
@@ -980,7 +980,7 @@ async def main():
                 )
         exchanges = config["backtest"]["exchanges"]
         exchanges_fname = "combined" if config["backtest"]["combine_ohlcvs"] else "_".join(exchanges)
-        date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
+        date_fname = ts_to_date(utc_ms())[:19].replace(":", "_")
         coins = sorted(set([x for y in config["backtest"]["coins"].values() for x in y]))
         coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
         hash_snippet = uuid4().hex[:8]
