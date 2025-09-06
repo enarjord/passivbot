@@ -6,7 +6,7 @@ import pprint
 import asyncio
 import traceback
 import numpy as np
-from utils import utc_ms, ts_to_date_utc
+from utils import utc_ms, ts_to_date
 from pure_funcs import (
     multi_replace,
     floatify,
@@ -229,7 +229,7 @@ class BitgetBot(Passivbot):
                 data_d[h]["amount"] = float(x["baseVolume"])
                 data_d[h]["id"] = x["tradeId"]
                 data_d[h]["timestamp"] = float(x["cTime"])
-                data_d[h]["datetime"] = ts_to_date_utc(data_d[h]["timestamp"])
+                data_d[h]["datetime"] = ts_to_date(data_d[h]["timestamp"])
                 data_d[h]["position_side"] = side_pos_side_map[x["side"]]
                 data_d[h]["symbol"] = self.get_symbol_id_inv(x["symbol"])
             if start_time is None:
@@ -239,7 +239,7 @@ class BitgetBot(Passivbot):
             if last_ts < start_time:
                 # print("debug e")
                 break
-            logging.info(f"fetched {len(data)} fills until {ts_to_date_utc(last_ts)[:19]}")
+            logging.info(f"fetched {len(data)} fills until {ts_to_date(last_ts)[:19]}")
             params["endTime"] = int(last_ts)
         return sorted(data_d.values(), key=lambda x: x["timestamp"])
 
