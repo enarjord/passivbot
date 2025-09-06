@@ -25,7 +25,7 @@ from utils import (
     coin_to_symbol,
     symbol_to_coin,
     utc_ms,
-    ts_to_date_utc,
+    ts_to_date,
     make_get_filepath,
     format_approved_ignored_coins,
     filter_markets,
@@ -51,7 +51,7 @@ from procedures import (
     get_first_timestamps_unified,
     print_async_exception,
 )
-from utils import get_file_mod_utc
+from utils import get_file_mod_ms
 import passivbot_rust as pbr
 import re
 
@@ -1171,7 +1171,7 @@ class Passivbot:
             if pnls_cache[0]["timestamp"] > age_limit + 1000 * 60 * 60 * 4:
                 # might be older missing pnls
                 logging.info(
-                    f"fetching missing pnls from before {ts_to_date_utc(pnls_cache[0]['timestamp'])}"
+                    f"fetching missing pnls from before {ts_to_date(pnls_cache[0]['timestamp'])}"
                 )
                 missing_pnls = await self.fetch_pnls(
                     start_time=age_limit, end_time=pnls_cache[0]["timestamp"]
@@ -2037,11 +2037,11 @@ class Passivbot:
             try:
                 filepath = self.get_ohlcvs_1m_filepath(symbol)
                 if os.path.exists(filepath):
-                    last_update_tss.append((get_file_mod_utc(filepath), symbol))
+                    last_update_tss.append((get_file_mod_ms(filepath), symbol))
                 else:
                     last_update_tss.append((0.0, symbol))
             except Exception as e:
-                logging.info(f"debug error with get_file_mod_utc for {symbol} {e}")
+                logging.info(f"debug error with get_file_mod_ms for {symbol} {e}")
                 last_update_tss.append((0.0, symbol))
         return last_update_tss
 
@@ -2335,7 +2335,7 @@ class Passivbot:
                 self.ohlcvs_1m[symbol][int(x[0])] = x
             self.dump_ohlcvs_1m_to_cache(symbol)
             self.ohlcvs_1m_update_timestamps[symbol] = or_default(
-                get_file_mod_utc, filepath, default=0.0
+                get_file_mod_ms, filepath, default=0.0
             )
         finally:
             self.remove_lock_file(filepath)
@@ -2354,7 +2354,7 @@ class Passivbot:
             for x in data:
                 self.ohlcvs_1m[symbol][int(x[0])] = x
             self.ohlcvs_1m_update_timestamps[symbol] = or_default(
-                get_file_mod_utc, filepath, default=0.0
+                get_file_mod_ms, filepath, default=0.0
             )
         except Exception as e:
             logging.error(f"error with update_ohlcvs_1m_single_from_disk {symbol} {e}")
@@ -2381,7 +2381,7 @@ class Passivbot:
                     self.remove_lock_file(filepath)
                     await self.update_ohlcvs_1m_single_from_exchange(symbol)
             elif os.path.exists(filepath):
-                mod_ts = or_default(get_file_mod_utc, filepath, default=0.0)
+                mod_ts = or_default(get_file_mod_ms, filepath, default=0.0)
                 if utc_ms() - mod_ts > max_age_ms:
                     await self.update_ohlcvs_1m_single_from_exchange(symbol)
                 else:
@@ -2418,7 +2418,7 @@ class Passivbot:
     def get_lock_age_ms(self, filepath):
         try:
             if self.lock_exists(filepath):
-                return utc_ms() - get_file_mod_utc(f"{filepath}.lock")
+                return utc_ms() - get_file_mod_ms(f"{filepath}.lock")
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
             traceback.print_exc()
