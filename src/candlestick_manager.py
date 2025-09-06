@@ -421,8 +421,11 @@ class CandlestickManager:
             left = np.searchsorted(ts, start_ts, side="left")
             right = np.searchsorted(ts, end_ts, side="right")
             sub = arr[left:right].copy()
-            # standardize gaps across requested range using sub and arr for seed
-            res = self.standardize_gaps(sub, start_ts, end_ts, strict=strict)
+            # standardize gaps across requested range using full in-memory array as seed so we can
+            # find the previous close before start_ts. This ensures gap-filling produces candles
+            # covering the exact requested start_ts..end_ts range even when on-disk/remote data
+            # doesn't contain pre-start records.
+            res = self.standardize_gaps(arr, start_ts, end_ts, strict=strict)
             return res
 
     async def get_current_close(self, symbol: str, max_age_ms: Optional[int] = None) -> float:
