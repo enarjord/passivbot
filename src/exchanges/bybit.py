@@ -8,7 +8,7 @@ import traceback
 import numpy as np
 import passivbot_rust as pbr
 from collections import defaultdict
-from utils import ts_to_date_utc, utc_ms
+from utils import ts_to_date, utc_ms
 from pure_funcs import (
     multi_replace,
     floatify,
@@ -206,7 +206,7 @@ class BybitBot(Passivbot):
                 if sts <= start_time:
                     break
                 i += 1
-                logging.info(f"fetched pnls for more than a week {ts_to_date_utc(sts)}")
+                logging.info(f"fetched pnls for more than a week {ts_to_date(sts)}")
         return sorted(pnls, key=lambda x: x["timestamp"])
 
     async def fetch_pnl(
@@ -260,7 +260,7 @@ class BybitBot(Passivbot):
                 if len(fetched["list"]) < limit:
                     break
                 logging.info(
-                    f"fetched pnls from {ts_to_date_utc(fetched['list'][-1]['updatedTime'])} n pnls: {len(fetched['list'])}"
+                    f"fetched pnls from {ts_to_date(fetched['list'][-1]['updatedTime'])} n pnls: {len(fetched['list'])}"
                 )
                 params["cursor"] = fetched["nextPageCursor"]
                 fetched = (await self.cca.private_get_v5_position_closed_pnl(params))["result"]
