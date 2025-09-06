@@ -41,9 +41,9 @@ from utils import (
     make_get_filepath,
     utc_ms,
     format_end_date,
-    ts_to_date_utc,
+    ts_to_date,
     date_to_ts,
-    get_file_mod_utc,
+    get_file_mod_ms,
     normalize_exchange_name,
     get_quote,
     symbol_to_coin,
@@ -341,7 +341,7 @@ class OHLCVManager:
     def update_date_range(self, new_start_date=None, new_end_date=None):
         if new_start_date:
             if isinstance(new_start_date, (float, int)):
-                self.start_date = ts_to_date_utc(new_start_date)
+                self.start_date = ts_to_date(new_start_date)
             elif isinstance(new_start_date, str):
                 self.start_date = new_start_date
             else:
@@ -349,7 +349,7 @@ class OHLCVManager:
             self.start_ts = date_to_ts(self.start_date)
         if new_end_date:
             if isinstance(new_end_date, (float, int)):
-                self.end_date = ts_to_date_utc(new_end_date)
+                self.end_date = ts_to_date(new_end_date)
             elif isinstance(new_end_date, str):
                 self.end_date = new_end_date
             else:
@@ -452,7 +452,7 @@ class OHLCVManager:
 
     async def get_start_date_modified(self, coin):
         fts = await self.get_first_timestamp(coin)
-        return ts_to_date_utc(max(self.start_ts, fts))[:10]
+        return ts_to_date(max(self.start_ts, fts))[:10]
 
     async def get_missing_days_ohlcvs(self, coin):
         start_date = await self.get_start_date_modified(coin)
@@ -545,7 +545,7 @@ class OHLCVManager:
     def load_markets_from_cache(self, max_age_ms=1000 * 60 * 60 * 24):
         try:
             if os.path.exists(self.cache_filepaths["markets"]):
-                if utc_ms() - get_file_mod_utc(self.cache_filepaths["markets"]) < max_age_ms:
+                if utc_ms() - get_file_mod_ms(self.cache_filepaths["markets"]) < max_age_ms:
                     markets = json.load(open(self.cache_filepaths["markets"]))
                     if self.verbose:
                         logging.info(f"{self.exchange} Loaded markets from cache")
@@ -662,7 +662,7 @@ class OHLCVManager:
                 return
 
         # Download monthy first (there may be gaps)
-        month_now = ts_to_date_utc(utc_ms())[:7]
+        month_now = ts_to_date(utc_ms())[:7]
         missing_months = sorted({x[:7] for x in missing_days if x[:7] != month_now})
         tasks = []
         for month in missing_months:
@@ -804,7 +804,7 @@ class OHLCVManager:
         fts = await self.find_first_day_bitget(coin)
         if fts == 0.0:
             return
-        first_day = ts_to_date_utc(fts)
+        first_day = ts_to_date(fts)
         missing_days = await self.get_missing_days_ohlcvs(coin)
         if not missing_days:
             return
@@ -1194,7 +1194,7 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
                 continue
             if first_ts >= end_ts:
                 logging.info(
-                    f"{exchange} Coin {coin} too young, start date {ts_to_date_utc(first_ts)}. Skipping"
+                    f"{exchange} Coin {coin} too young, start date {ts_to_date(first_ts)}. Skipping"
                 )
                 continue
             coin_age_days = int(
@@ -1210,7 +1210,7 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
             if new_adjusted_start_ts > adjusted_start_ts:
                 logging.info(
                     f"{exchange} Coin {coin}: Adjusting start date from {start_date} "
-                    f"to {ts_to_date_utc(new_adjusted_start_ts)}"
+                    f"to {ts_to_date(new_adjusted_start_ts)}"
                 )
                 adjusted_start_ts = new_adjusted_start_ts
         try:
@@ -1461,10 +1461,10 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
     valid_coins = sorted(chosen_data_per_coin.keys())
     n_coins = len(valid_coins)
     # use at most last 60 days of date range to compute volume ratios
-    start_date_for_volume_ratios = ts_to_date_utc(
+    start_date_for_volume_ratios = ts_to_date(
         max(global_start_time, global_end_time - 1000 * 60 * 60 * 24 * 60)
     )
-    end_date_for_volume_ratios = ts_to_date_utc(global_end_time)
+    end_date_for_volume_ratios = ts_to_date(global_end_time)
 
     exchanges_with_data = sorted(set([chosen_mss_per_coin[coin]["exchange"] for coin in valid_coins]))
     exchange_volume_ratios = await compute_exchange_volume_ratios(
