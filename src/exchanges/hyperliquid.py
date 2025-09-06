@@ -8,7 +8,7 @@ import traceback
 import json
 import numpy as np
 import passivbot_rust as pbr
-from utils import ts_to_date_utc, symbol_to_coin, coin_to_symbol, utc_ms
+from utils import ts_to_date, symbol_to_coin, coin_to_symbol, utc_ms
 from pure_funcs import (
     multi_replace,
     floatify,
@@ -235,7 +235,7 @@ class HyperliquidBot(Passivbot):
                 break
             prev_hash = new_hash
             logging.info(
-                f"debug fetching pnls {ts_to_date_utc(fetched[-1]['timestamp'])} len {len(fetched)}"
+                f"debug fetching pnls {ts_to_date(fetched[-1]['timestamp'])} len {len(fetched)}"
             )
             start_time = fetched[-1]["timestamp"] - 1000
             limit = 2000

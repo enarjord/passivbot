@@ -8,7 +8,7 @@ import pprint
 import asyncio
 import traceback
 import numpy as np
-from utils import ts_to_date_utc, utc_ms
+from utils import ts_to_date, utc_ms
 from pure_funcs import (
     multi_replace,
     floatify,
@@ -201,7 +201,7 @@ class OKXBot(Passivbot):
                 all_fetched[elm["id"]] = elm
             if len(fetched) < limit:
                 break
-            logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
+            logging.info(f"debug fetching income {ts_to_date(fetched[-1]['timestamp'])}")
             end_time = fetched[0]["timestamp"]
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
         return sorted(

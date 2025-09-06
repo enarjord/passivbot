@@ -8,7 +8,7 @@ import traceback
 import json
 import numpy as np
 from downloader import coin_to_symbol
-from utils import ts_to_date_utc, utc_ms
+from utils import ts_to_date, utc_ms
 from pure_funcs import (
     multi_replace,
     floatify,
@@ -228,7 +228,7 @@ class GateIOBot(Passivbot):
                 break
             if fetched[0]["timestamp"] <= start_time:
                 break
-            logging.info(f"debug fetching pnls {ts_to_date_utc(fetched[-1]['timestamp'])}")
+            logging.info(f"debug fetching pnls {ts_to_date(fetched[-1]['timestamp'])}")
             offset += limit
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
 

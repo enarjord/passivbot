@@ -8,7 +8,7 @@ import numpy as np
 import passivbot_rust as pbr
 from pure_funcs import (
     floatify,
-    ts_to_date_utc,
+    ts_to_date,
     calc_hash,
     shorten_custom_id,
 )

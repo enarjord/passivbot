@@ -7,7 +7,7 @@ import asyncio
 import traceback
 import numpy as np
 import passivbot_rust as pbr
-from utils import ts_to_date_utc, utc_ms
+from utils import ts_to_date, utc_ms
 from pure_funcs import (
     floatify,
     calc_hash,
@@ -315,7 +315,7 @@ class KucoinBot(Passivbot):
                 break
             logging.info(
                 f"fetched {len(fills)} fill{'' if len(fills) == 1 else 's'}"
-                f" {ts_to_date_utc(new_until)[:19]}"
+                f" {ts_to_date(new_until)[:19]}"
             )
         for i in range(len(all_fills)):
             all_fills[i]["qty"] = all_fills[i]["amount"]
@@ -362,7 +362,7 @@ class KucoinBot(Passivbot):
                 break
             logging.info(
                 f"fetched {len(ph)} pos histor{'y' if len(ph) == 1 else 'ies'}"
-                f" {ts_to_date_utc(new_until)[:19]}"
+                f" {ts_to_date(new_until)[:19]}"
             )
         deduped = {x["info"]["closeId"]: x for x in all_ph}
         if start_time:
