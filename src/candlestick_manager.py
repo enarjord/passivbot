@@ -371,8 +371,8 @@ class CandlestickManager:
         """
         now = int(time.time() * 1000)
         if end_ts is None:
-            # floor to minute and add one minute to make last minute complete boundary
-            end_ts = _floor_minute(now) + ONE_MIN_MS
+            # floor to minute (use last completed minute as inclusive end)
+            end_ts = _floor_minute(now)
         else:
             end_ts = _floor_minute(_ensure_ts_int64(end_ts))
         if start_ts is None:
