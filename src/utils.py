@@ -8,8 +8,10 @@ import dateutil.parser
 import asyncio
 import hjson
 import inspect
+import time
 from collections import defaultdict
 from typing import Dict, Any, List, Union, Optional
+import re
 
 
 logging.basicConfig(
@@ -23,42 +25,113 @@ _COIN_TO_SYMBOL_CACHE = {}  # {exchange: {"map": dict, "mtime_ns": int, "size": 
 _SYMBOL_TO_COIN_CACHE = {"map": None, "mtime_ns": None, "size": None}
 
 
-def get_file_mod_utc(filepath):
+def ts_to_date(timestamp: Union[float, str, int]) -> str:
+    """
+    Convert a timestamp to UTC date string in ISO format.
+    
+    Args:
+        timestamp: Timestamp as float, str, or int - may be seconds, milliseconds, or nanoseconds
+        
+    Returns:
+        UTC date string in ISO format (e.g., "2025-03-12T12:43:22.123")
+    """
+    # Convert to float if string or int
+    if isinstance(timestamp, (str, int)):
+        timestamp = float(timestamp)
+    
+    # Detect timestamp precision and convert to seconds
+    if timestamp > 1e15:  # Likely nanoseconds (> ~2033 in milliseconds)
+        # Nanoseconds
+        timestamp_seconds = timestamp / 1_000_000_000
+    elif timestamp > 1e10:  # Likely milliseconds (> ~2001 in seconds)
+        # Milliseconds
+        timestamp_seconds = timestamp / 1000
+    else:
+        # Seconds
+        timestamp_seconds = timestamp
+    
+    # Convert to UTC datetime
+    dt = datetime.datetime.fromtimestamp(timestamp_seconds, tz=datetime.timezone.utc)
+    
+    # Return ISO format without timezone suffix
+    return dt.isoformat().replace('+00:00', '')
+
+
+def date_to_ts(date_str: str) -> float:
+    """
+    Convert a flexible date string to UTC timestamp in milliseconds.
+    
+    Args:
+        date_str: Date string in various formats:
+                 - "2020" -> "2020-01-01T00:00:00"
+                 - "2024-04" -> "2024-04-01T00:00:00"  
+                 - "2022-04-23" -> "2022-04-23T00:00:00"
+                 - "2021-11-13T03:23:12" (full ISO format)
+                 - And other common variants
+                 
+    Returns:
+        UTC timestamp in milliseconds as float
+    """
+    date_str = date_str.strip()
+    
+    # Use dateutil.parser with default date of Jan 1, 2000 for missing components
+    default_date = datetime.datetime(2000, 1, 1)
+    
+    try:
+        dt = dateutil.parser.parse(date_str, default=default_date)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Unable to parse date string '{date_str}': {e}")
+    
+    # If the datetime is naive (no timezone info), treat it as UTC
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    
+    # Convert to UTC timestamp in milliseconds
+    return dt.timestamp() * 1000
+
+
+def get_file_mod_ms(filepath):
     """
     Get the UTC timestamp of the last modification of a file.
-
     Args:
         filepath (str): The path to the file.
-
     Returns:
         float: The UTC timestamp in milliseconds of the last modification of the file.
     """
-    # Get the last modification time of the file in seconds since the epoch
+    # Get the last modification time in seconds since epoch (already UTC-based)
     mod_time_epoch = os.path.getmtime(filepath)
-
-    # Convert the timestamp to a UTC datetime object
-    mod_time_utc = datetime.datetime.utcfromtimestamp(mod_time_epoch)
-
-    # Return the UTC timestamp
-    return mod_time_utc.timestamp() * 1000
+    # Convert to milliseconds
+    return mod_time_epoch * 1000
 
 
-def ts_to_date_utc(timestamp: float) -> str:
-    if timestamp > 253402297199:
-        return str(datetime.datetime.utcfromtimestamp(timestamp / 1000)).replace(" ", "T")
-    return str(datetime.datetime.utcfromtimestamp(timestamp)).replace(" ", "T")
 
+def date_to_ts(date_str: str) -> float:
+    """
+    Convert a date string to UTC timestamp (seconds since epoch).
 
-def date_to_ts(d):
-    return int(dateutil.parser.parse(d).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
+    Args:
+        date_str: Date string in ISO format (e.g., "2025-03-12T12:43:22" or with microseconds)
+
+    Returns:
+        UTC timestamp as float
+    """
+    # Parse the datetime string - fromisoformat handles various ISO formats
+    dt = datetime.datetime.fromisoformat(date_str)
+
+    # If the datetime is naive (no timezone info), treat it as UTC
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+
+    # Convert to UTC timestamp
+    return dt.timestamp()
 
 
 def format_end_date(end_date) -> str:
     if end_date in ["today", "now", "", None]:
         ms2day = 1000 * 60 * 60 * 24
-        end_date = ts_to_date_utc((utc_ms() - ms2day * 2) // ms2day * ms2day)
+        end_date = ts_to_date((utc_ms() - ms2day * 2) // ms2day * ms2day)
     else:
-        end_date = ts_to_date_utc(date_to_ts(end_date))
+        end_date = ts_to_date(date_to_ts(end_date))
     return end_date[:10]
 
 
@@ -73,7 +146,7 @@ def make_get_filepath(filepath: str) -> str:
 
 
 def utc_ms() -> float:
-    return datetime.datetime.utcnow().timestamp() * 1000
+    return time.time() * 1000
 
 
 def filter_markets(markets: dict, exchange: str, verbose=False) -> (dict, dict, dict):
@@ -133,7 +206,7 @@ async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24, ver
     # Try cache first
     try:
         if os.path.exists(markets_path):
-            if utc_ms() - get_file_mod_utc(markets_path) < max_age_ms:
+            if utc_ms() - get_file_mod_ms(markets_path) < max_age_ms:
                 with open(markets_path, "r") as f:
                     markets = json.load(f)
                 if verbose:
