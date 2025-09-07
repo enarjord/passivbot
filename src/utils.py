@@ -217,12 +217,7 @@ async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24, ver
         logging.error("Error loading %s: %s", markets_path, e)
 
     # Fetch from exchange via ccxt
-    cc = getattr(ccxt, ex)({"enableRateLimit": True})
-    try:
-        cc.options["defaultType"] = "swap"
-    except Exception:
-        pass
-
+    cc = load_ccxt_instance(ex, enable_rate_limit=True)
     try:
         markets = await cc.load_markets(True)
     except Exception as e:
@@ -279,6 +274,23 @@ def normalize_exchange_name(exchange: str) -> str:
 
     return ex
 
+
+def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True):
+    """
+    Return a ccxt async-support exchange instance for the given exchange id.
+
+    The returned instance should be closed by the caller with: await cc.close()
+    """
+    ex = normalize_exchange_name(exchange_id)
+    try:
+        cc = getattr(ccxt, ex)({"enableRateLimit": bool(enable_rate_limit)})
+    except Exception:
+        raise RuntimeError(f"ccxt exchange '{ex}' not available")
+    try:
+        cc.options["defaultType"] = "swap"
+    except Exception:
+        pass
+    return cc
 
 def get_quote(exchange):
     exchange = normalize_exchange_name(exchange)
