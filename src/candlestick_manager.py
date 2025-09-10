@@ -1127,6 +1127,21 @@ class CandlestickManager:
         cache[key] = (res, int(end_ts), int(now))
         return res
 
+    async def get_latest_ema_nrr_1h(
+        self, symbol: str, span: int, max_age_ms: Optional[int] = None
+    ) -> float:
+        """Convenience wrapper: EMA NRR on 1h candles excluding current hour.
+
+        - Aligns to full-hour buckets and excludes the in-progress hour.
+        - Uses native 1h OHLCV via the exchange (no 1m resampling).
+        - For "only fetch when a new hour begins" behavior, omit `max_age_ms`
+          (let it default to None), so cached candles are reused for the
+          current finalized hour window.
+        """
+        return await self.get_latest_ema_nrr(
+            symbol, span, max_age_ms=max_age_ms, timeframe="1h"
+        )
+
     # ----- Warmup and refresh -----
 
     async def warmup_since(self, symbols, since_ts: int) -> None:
