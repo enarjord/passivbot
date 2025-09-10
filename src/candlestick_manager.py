@@ -159,6 +159,9 @@ class CandlestickManager:
         self._index: Dict[str, dict] = {}
         # Cache for EMA computations: per symbol -> {(metric, span, tf): (value, end_ts, computed_at_ms)}
         self._ema_cache: Dict[str, Dict[Tuple[str, int, str], Tuple[float, int, int]]] = {}
+        # Cache for fetched higher-timeframe windows to avoid duplicate remote calls
+        # Keyed per symbol -> {(tf_str, start_ts, end_ts): (array, fetched_at_ms)}
+        self._tf_range_cache: Dict[str, Dict[Tuple[str, int, int], Tuple[np.ndarray, int]]] = {}
 
         self._setup_logging()
 
@@ -790,6 +793,14 @@ class CandlestickManager:
                 if start_ts > end_ts:
                     return np.empty((0,), dtype=CANDLE_DTYPE)
 
+                # Check in-memory TF range cache first
+                cache_key = (str(out_tf), int(start_ts), int(end_ts))
+                sym_cache = self._tf_range_cache.setdefault(symbol, {})
+                if cache_key in sym_cache:
+                    arr_cached, fetched_at = sym_cache[cache_key]
+                    if max_age_ms is None or max_age_ms == 0 or (now - int(fetched_at)) <= int(max_age_ms):
+                        return arr_cached
+
                 end_excl = int(end_ts) + period_ms
                 fetched = await self._fetch_ohlcv_paginated(
                     symbol, int(start_ts), int(end_excl), timeframe=out_tf
@@ -801,7 +812,20 @@ class CandlestickManager:
                 ts_arr = _ts_index(fetched)
                 i0 = int(np.searchsorted(ts_arr, start_ts, side="left"))
                 i1 = int(np.searchsorted(ts_arr, end_ts, side="right"))
-                return fetched[i0:i1]
+                out = fetched[i0:i1]
+                # Store in TF range cache
+                sym_cache[cache_key] = (out, int(now))
+                # Simple eviction to bound memory
+                if len(sym_cache) > 8:
+                    try:
+                        # remove an arbitrary old entry
+                        k = next(iter(sym_cache.keys()))
+                        if k != cache_key:
+                            sym_cache.pop(k, None)
+                    except Exception:
+                        pass
+                self._tf_range_cache[symbol] = sym_cache
+                return out
 
         now = _utc_now_ms()
         if end_ts is None:
