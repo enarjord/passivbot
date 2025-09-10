@@ -1063,7 +1063,8 @@ class CandlestickManager:
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         # EMA result cache: reuse if end_ts unchanged and within TTL
         now = _utc_now_ms()
-        key = ("close", int(span), str(out_tf or "1m"))
+        tf_key = str(period_ms)
+        key = ("close", int(span), tf_key)
         cache = self._ema_cache.setdefault(symbol, {})
         if max_age_ms is not None and max_age_ms > 0 and key in cache:
             val, cached_end_ts, computed_at = cache[key]
@@ -1085,7 +1086,8 @@ class CandlestickManager:
         period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         now = _utc_now_ms()
-        key = ("volume", int(span), str(out_tf or "1m"))
+        tf_key = str(period_ms)
+        key = ("volume", int(span), tf_key)
         cache = self._ema_cache.setdefault(symbol, {})
         if max_age_ms is not None and max_age_ms > 0 and key in cache:
             val, cached_end_ts, computed_at = cache[key]
@@ -1106,7 +1108,8 @@ class CandlestickManager:
         period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         now = _utc_now_ms()
-        key = ("nrr", int(span), str(out_tf or "1m"))
+        tf_key = str(period_ms)
+        key = ("nrr", int(span), tf_key)
         cache = self._ema_cache.setdefault(symbol, {})
         if max_age_ms is not None and max_age_ms > 0 and key in cache:
             val, cached_end_ts, computed_at = cache[key]
