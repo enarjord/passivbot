@@ -28,17 +28,17 @@ _SYMBOL_TO_COIN_CACHE = {"map": None, "mtime_ns": None, "size": None}
 def ts_to_date(timestamp: Union[float, str, int]) -> str:
     """
     Convert a timestamp to UTC date string in ISO format.
-    
+
     Args:
         timestamp: Timestamp as float, str, or int - may be seconds, milliseconds, or nanoseconds
-        
+
     Returns:
         UTC date string in ISO format (e.g., "2025-03-12T12:43:22.123")
     """
     # Convert to float if string or int
     if isinstance(timestamp, (str, int)):
         timestamp = float(timestamp)
-    
+
     # Detect timestamp precision and convert to seconds
     if timestamp > 1e15:  # Likely nanoseconds (> ~2033 in milliseconds)
         # Nanoseconds
@@ -49,43 +49,43 @@ def ts_to_date(timestamp: Union[float, str, int]) -> str:
     else:
         # Seconds
         timestamp_seconds = timestamp
-    
+
     # Convert to UTC datetime
     dt = datetime.datetime.fromtimestamp(timestamp_seconds, tz=datetime.timezone.utc)
-    
+
     # Return ISO format without timezone suffix
-    return dt.isoformat().replace('+00:00', '')
+    return dt.isoformat().replace("+00:00", "")
 
 
 def date_to_ts(date_str: str) -> float:
     """
     Convert a flexible date string to UTC timestamp in milliseconds.
-    
+
     Args:
         date_str: Date string in various formats:
                  - "2020" -> "2020-01-01T00:00:00"
-                 - "2024-04" -> "2024-04-01T00:00:00"  
+                 - "2024-04" -> "2024-04-01T00:00:00"
                  - "2022-04-23" -> "2022-04-23T00:00:00"
                  - "2021-11-13T03:23:12" (full ISO format)
                  - And other common variants
-                 
+
     Returns:
         UTC timestamp in milliseconds as float
     """
     date_str = date_str.strip()
-    
+
     # Use dateutil.parser with default date of Jan 1, 2000 for missing components
     default_date = datetime.datetime(2000, 1, 1)
-    
+
     try:
         dt = dateutil.parser.parse(date_str, default=default_date)
     except (ValueError, TypeError) as e:
         raise ValueError(f"Unable to parse date string '{date_str}': {e}")
-    
+
     # If the datetime is naive (no timezone info), treat it as UTC
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=datetime.timezone.utc)
-    
+
     # Convert to UTC timestamp in milliseconds
     return dt.timestamp() * 1000
 
@@ -102,7 +102,6 @@ def get_file_mod_ms(filepath):
     mod_time_epoch = os.path.getmtime(filepath)
     # Convert to milliseconds
     return mod_time_epoch * 1000
-
 
 
 def date_to_ts(date_str: str) -> float:
@@ -291,6 +290,7 @@ def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True):
     except Exception:
         pass
     return cc
+
 
 def get_quote(exchange):
     exchange = normalize_exchange_name(exchange)
