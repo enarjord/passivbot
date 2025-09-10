@@ -507,14 +507,14 @@ class CandlestickManager:
         for attempt in range(5):
             try:
                 params = {}
-                # Provide an end bound for exchanges that support it
-                if (
-                    end_exclusive_ms is not None
-                    and isinstance(self._ex_id, str)
-                    and "bitget" in self._ex_id.lower()
-                ):
-                    # Bitget supports 'until' to bound the end (exclusive)
-                    params["until"] = int(end_exclusive_ms) - 1
+                # Provide an end bound for exchanges that support it.
+                # Note: Avoid passing 'until' to Bitget due to API validation errors on non-1m tfs.
+                if end_exclusive_ms is not None:
+                    exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
+                    if "bitget" not in exid:
+                        # For some exchanges (e.g., bybit/okx), 'until' or equivalent may be supported via ccxt.
+                        # Leave params empty for others to rely on pagination + local clipping.
+                        params["until"] = int(end_exclusive_ms) - 1
                 tf = timeframe or self._ccxt_timeframe
                 self.log.debug(
                     f"ccxt.fetch_ohlcv exchange={self._ex_id} symbol={symbol} tf={tf} since={since_ms} limit={limit} attempt={attempt+1} params={params}"
@@ -618,9 +618,10 @@ class CandlestickManager:
                     diffs = np.diff(arr["ts"].astype(np.int64))
                     max_step = int(diffs.max())
                     min_step = int(diffs.min())
-                    if max_step != ONE_MIN_MS or min_step != ONE_MIN_MS:
+                    # Expect step to match the requested timeframe's period
+                    if max_step != period_ms or min_step != period_ms:
                         self.log.warning(
-                            f"non-1m granularity returned exchange={self._ex_id} symbol={symbol} min_step={min_step} max_step={max_step}"
+                            f"unexpected step for tf exchange={self._ex_id} symbol={symbol} tf={tf} expected={period_ms} min_step={min_step} max_step={max_step}"
                         )
                 else:
                     max_step = ONE_MIN_MS
@@ -732,6 +733,8 @@ class CandlestickManager:
         end_ts: Optional[int] = None,
         max_age_ms: Optional[int] = None,
         strict: bool = False,
+        tf: Optional[str] = None,
+        timeframe: Optional[str] = None,
     ) -> np.ndarray:
         """Return candles in inclusive range [start_ts, end_ts].
 
@@ -740,10 +743,65 @@ class CandlestickManager:
         - If `end_ts` provided but `start_ts` is None: end_ts - window
         - If `max_age_ms` == 0: force refresh (no-op when exchange is None)
         - Negative `max_age_ms` raises ValueError
-        - Applies gap standardization
+        - Applies gap standardization (1m only)
         """
         if max_age_ms is not None and max_age_ms < 0:
             raise ValueError("max_age_ms cannot be negative")
+
+        # When a higher timeframe is requested, fetch it directly from the exchange
+        # and bypass the 1m cache/standardization logic.
+        out_tf = timeframe or tf
+        if out_tf is not None:
+            # parse timeframe to ms (bucket size)
+            def _tf_ms(s: str) -> int:
+                try:
+                    s = s.strip().lower()
+                except Exception:
+                    return ONE_MIN_MS
+                import re
+                m = re.fullmatch(r"(\d+)([smhd])", s)
+                if not m:
+                    return ONE_MIN_MS
+                n = int(m.group(1))
+                unit = m.group(2)
+                if unit == "s":
+                    return max(ONE_MIN_MS, (n // 60) * ONE_MIN_MS)
+                if unit == "m":
+                    return n * ONE_MIN_MS
+                if unit == "h":
+                    return n * 60 * ONE_MIN_MS
+                if unit == "d":
+                    return n * 1440 * ONE_MIN_MS
+                return ONE_MIN_MS
+
+            period_ms = _tf_ms(out_tf)
+            if period_ms > ONE_MIN_MS and self.exchange is not None:
+                now = _utc_now_ms()
+                if end_ts is None:
+                    end_ts = (int(now) // period_ms) * period_ms
+                else:
+                    end_ts = (int(end_ts) // period_ms) * period_ms
+
+                if start_ts is None:
+                    # default window expressed in number of requested-tf buckets
+                    start_ts = int(end_ts) - self.default_window_candles * period_ms
+                start_ts = (int(start_ts) // period_ms) * period_ms
+
+                if start_ts > end_ts:
+                    return np.empty((0,), dtype=CANDLE_DTYPE)
+
+                end_excl = int(end_ts) + period_ms
+                fetched = await self._fetch_ohlcv_paginated(
+                    symbol, int(start_ts), int(end_excl), timeframe=out_tf
+                )
+                if fetched.size == 0:
+                    return fetched
+                # Clip to inclusive [start_ts, end_ts] in bucket space
+                fetched = np.sort(_ensure_dtype(fetched), order="ts")
+                ts_arr = _ts_index(fetched)
+                i0 = int(np.searchsorted(ts_arr, start_ts, side="left"))
+                i1 = int(np.searchsorted(ts_arr, end_ts, side="right"))
+                return fetched[i0:i1]
 
         now = _utc_now_ms()
         if end_ts is None:
@@ -1159,74 +1217,3 @@ __all__ = [
     "ONE_MIN_MS",
     "_floor_minute",
 ]
-
-
-def resample_1m_to_xm(candles: np.ndarray, tf_minutes: int) -> np.ndarray:
-    """Resample 1-minute candles to `tf_minutes` minutes.
-
-    Parameters
-    ----------
-    candles : np.ndarray
-        Structured array of dtype CANDLE_DTYPE containing 1-minute candles.
-        Assumes `ts` is in milliseconds UTC. Order may be arbitrary; the
-        function sorts by `ts` before aggregation.
-    tf_minutes : int
-        Target timeframe in minutes. Must be >= 1.
-
-    Returns
-    -------
-    np.ndarray
-        Structured array of dtype CANDLE_DTYPE aggregated to `tf_minutes`.
-        Aggregation rules:
-        - ts: start of the aggregated bucket (aligned to tf_minutes)
-        - o: first 1m candle's open within the bucket
-        - h: max of highs
-        - l: min of lows
-        - c: last 1m candle's close within the bucket
-        - bv: sum of base volumes
-
-    Notes
-    -----
-    - Missing 1m candles inside a bucket are tolerated; aggregation uses the
-      available candles. If you need strict continuity, call `standardize_gaps`
-      first to synthesize zero-candles.
-    - If `tf_minutes == 1`, returns a sorted copy of the input.
-    """
-    if tf_minutes <= 1:
-        if candles.size == 0:
-            return candles.astype(CANDLE_DTYPE, copy=False)
-        return np.sort(_ensure_dtype(candles), order="ts")
-
-    if candles.size == 0:
-        return np.empty((0,), dtype=CANDLE_DTYPE)
-
-    period_ms = int(tf_minutes) * ONE_MIN_MS
-    a = _ensure_dtype(candles)
-    a = np.sort(a, order="ts")
-
-    ts = a["ts"].astype(np.int64)
-    bucket_ts = (ts // period_ms) * period_ms
-
-    # Group by bucket_ts (contiguous since sorted by ts)
-    ub, idx_start, counts = np.unique(bucket_ts, return_index=True, return_counts=True)
-    # Prepare slice endpoints for reduceat
-    starts = idx_start
-    ends = np.append(starts[1:], len(a))
-
-    # Open = first open in bucket; Close = last close in bucket
-    opens = a["o"][starts]
-    closes = a["c"][ends - 1]
-
-    # High = max, Low = min, Volume = sum using reduceat
-    highs = np.maximum.reduceat(a["h"], starts)
-    lows = np.minimum.reduceat(a["l"], starts)
-    vols = np.add.reduceat(a["bv"], starts)
-
-    out = np.zeros(ub.shape[0], dtype=CANDLE_DTYPE)
-    out["ts"] = ub.astype(np.int64)
-    out["o"] = opens.astype(np.float32, copy=False)
-    out["h"] = highs.astype(np.float32, copy=False)
-    out["l"] = lows.astype(np.float32, copy=False)
-    out["c"] = closes.astype(np.float32, copy=False)
-    out["bv"] = vols.astype(np.float32, copy=False)
-    return out
