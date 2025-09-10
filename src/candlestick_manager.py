@@ -157,8 +157,8 @@ class CandlestickManager:
         self._cache: Dict[str, np.ndarray] = {}
         self._locks: Dict[str, asyncio.Lock] = {}
         self._index: Dict[str, dict] = {}
-        # Cache for EMA computations: per symbol -> {(metric, span): (value, end_ts, computed_at_ms)}
-        self._ema_cache: Dict[str, Dict[Tuple[str, int], Tuple[float, int, int]]] = {}
+        # Cache for EMA computations: per symbol -> {(metric, span, tf): (value, end_ts, computed_at_ms)}
+        self._ema_cache: Dict[str, Dict[Tuple[str, int, str], Tuple[float, int, int]]] = {}
 
         self._setup_logging()
 
@@ -1031,26 +1031,54 @@ class CandlestickManager:
             ema = alpha * float(v) + (1.0 - alpha) * ema
         return ema
 
-    async def _latest_finalized_range(self, span: int) -> Tuple[int, int]:
+    async def _latest_finalized_range(self, span: int, *, period_ms: int = ONE_MIN_MS) -> Tuple[int, int]:
         now = _utc_now_ms()
-        end_ts = _floor_minute(now) - ONE_MIN_MS  # exclude current in-progress minute
-        start_ts = end_ts - ONE_MIN_MS * (span - 1)
-        return int(start_ts), int(end_ts)
+        # Align to timeframe buckets and exclude current in-progress bucket
+        end_floor = (int(now) // int(period_ms)) * int(period_ms)
+        end_ts = int(end_floor - period_ms)
+        start_ts = int(end_ts - period_ms * (span - 1))
+        return start_ts, end_ts
 
     async def get_latest_ema_close(
-        self, symbol: str, span: int, max_age_ms: Optional[int] = None
+        self, symbol: str, span: int, max_age_ms: Optional[int] = None, *, tf: Optional[str] = None, timeframe: Optional[str] = None
     ) -> float:
-        """Return latest EMA of close over last `span` finalized candles."""
-        start_ts, end_ts = await self._latest_finalized_range(span)
+        """Return latest EMA of close over last `span` finalized candles.
+
+        Supports higher timeframe via `tf`/`timeframe`.
+        """
+        out_tf = timeframe or tf
+        def _tf_ms(s: Optional[str]) -> int:
+            if not s:
+                return ONE_MIN_MS
+            try:
+                st = s.strip().lower()
+            except Exception:
+                return ONE_MIN_MS
+            import re
+            m = re.fullmatch(r"(\d+)([smhd])", st)
+            if not m:
+                return ONE_MIN_MS
+            n, unit = int(m.group(1)), m.group(2)
+            if unit == "s":
+                return max(ONE_MIN_MS, (n // 60) * ONE_MIN_MS)
+            if unit == "m":
+                return n * ONE_MIN_MS
+            if unit == "h":
+                return n * 60 * ONE_MIN_MS
+            if unit == "d":
+                return n * 1440 * ONE_MIN_MS
+            return ONE_MIN_MS
+        period_ms = _tf_ms(out_tf)
+        start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         # EMA result cache: reuse if end_ts unchanged and within TTL
         now = _utc_now_ms()
-        key = ("close", int(span))
+        key = ("close", int(span), str(out_tf or "1m"))
         cache = self._ema_cache.setdefault(symbol, {})
         if max_age_ms is not None and max_age_ms > 0 and key in cache:
             val, cached_end_ts, computed_at = cache[key]
             if int(cached_end_ts) == int(end_ts) and (now - int(computed_at)) <= int(max_age_ms):
                 return float(val)
-        arr = await self.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms)
+        arr = await self.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, timeframe=out_tf)
         if arr.size == 0:
             return float("nan")
         closes = np.asarray(arr["c"], dtype=np.float64)
@@ -1060,17 +1088,40 @@ class CandlestickManager:
         return res
 
     async def get_latest_ema_volume(
-        self, symbol: str, span: int, max_age_ms: Optional[int] = None
+        self, symbol: str, span: int, max_age_ms: Optional[int] = None, *, tf: Optional[str] = None, timeframe: Optional[str] = None
     ) -> float:
-        start_ts, end_ts = await self._latest_finalized_range(span)
+        out_tf = timeframe or tf
+        def _tf_ms(s: Optional[str]) -> int:
+            if not s:
+                return ONE_MIN_MS
+            try:
+                st = s.strip().lower()
+            except Exception:
+                return ONE_MIN_MS
+            import re
+            m = re.fullmatch(r"(\d+)([smhd])", st)
+            if not m:
+                return ONE_MIN_MS
+            n, unit = int(m.group(1)), m.group(2)
+            if unit == "s":
+                return max(ONE_MIN_MS, (n // 60) * ONE_MIN_MS)
+            if unit == "m":
+                return n * ONE_MIN_MS
+            if unit == "h":
+                return n * 60 * ONE_MIN_MS
+            if unit == "d":
+                return n * 1440 * ONE_MIN_MS
+            return ONE_MIN_MS
+        period_ms = _tf_ms(out_tf)
+        start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         now = _utc_now_ms()
-        key = ("volume", int(span))
+        key = ("volume", int(span), str(out_tf or "1m"))
         cache = self._ema_cache.setdefault(symbol, {})
         if max_age_ms is not None and max_age_ms > 0 and key in cache:
             val, cached_end_ts, computed_at = cache[key]
             if int(cached_end_ts) == int(end_ts) and (now - int(computed_at)) <= int(max_age_ms):
                 return float(val)
-        arr = await self.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms)
+        arr = await self.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, timeframe=out_tf)
         if arr.size == 0:
             return float("nan")
         vols = np.asarray(arr["bv"], dtype=np.float64)
@@ -1079,17 +1130,40 @@ class CandlestickManager:
         return res
 
     async def get_latest_ema_nrr(
-        self, symbol: str, span: int, max_age_ms: Optional[int] = None
+        self, symbol: str, span: int, max_age_ms: Optional[int] = None, *, tf: Optional[str] = None, timeframe: Optional[str] = None
     ) -> float:
-        start_ts, end_ts = await self._latest_finalized_range(span)
+        out_tf = timeframe or tf
+        def _tf_ms(s: Optional[str]) -> int:
+            if not s:
+                return ONE_MIN_MS
+            try:
+                st = s.strip().lower()
+            except Exception:
+                return ONE_MIN_MS
+            import re
+            m = re.fullmatch(r"(\d+)([smhd])", st)
+            if not m:
+                return ONE_MIN_MS
+            n, unit = int(m.group(1)), m.group(2)
+            if unit == "s":
+                return max(ONE_MIN_MS, (n // 60) * ONE_MIN_MS)
+            if unit == "m":
+                return n * ONE_MIN_MS
+            if unit == "h":
+                return n * 60 * ONE_MIN_MS
+            if unit == "d":
+                return n * 1440 * ONE_MIN_MS
+            return ONE_MIN_MS
+        period_ms = _tf_ms(out_tf)
+        start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         now = _utc_now_ms()
-        key = ("nrr", int(span))
+        key = ("nrr", int(span), str(out_tf or "1m"))
         cache = self._ema_cache.setdefault(symbol, {})
         if max_age_ms is not None and max_age_ms > 0 and key in cache:
             val, cached_end_ts, computed_at = cache[key]
             if int(cached_end_ts) == int(end_ts) and (now - int(computed_at)) <= int(max_age_ms):
                 return float(val)
-        arr = await self.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms)
+        arr = await self.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, timeframe=out_tf)
         if arr.size == 0:
             return float("nan")
         closes = np.asarray(arr["c"], dtype=np.float64)
