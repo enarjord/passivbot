@@ -93,6 +93,30 @@ def _sanitize_symbol(symbol: str) -> str:
     return symbol.replace("/", "_")
 
 
+# Parse timeframe string like '1m','5m','1h','1d' to milliseconds.
+# Falls back to ONE_MIN_MS on invalid input. Seconds are rounded down to minutes.
+def _tf_to_ms(s: Optional[str]) -> int:
+    if not s:
+        return ONE_MIN_MS
+    try:
+        st = s.strip().lower()
+    except Exception:
+        return ONE_MIN_MS
+    import re
+    m = re.fullmatch(r"(\d+)([smhd])", st)
+    if not m:
+        return ONE_MIN_MS
+    n, unit = int(m.group(1)), m.group(2)
+    if unit == "s":
+        return max(ONE_MIN_MS, (n // 60) * ONE_MIN_MS)
+    if unit == "m":
+        return n * ONE_MIN_MS
+    if unit == "h":
+        return n * 60 * ONE_MIN_MS
+    if unit == "d":
+        return n * 1440 * ONE_MIN_MS
+    return ONE_MIN_MS
+
 # ----- CandlestickManager -----
 
 
@@ -583,22 +607,7 @@ class CandlestickManager:
         limit = self._ccxt_limit_default
         tf = timeframe or self._ccxt_timeframe
         # Derive pagination step from timeframe
-        def _tf_ms(tfstr: str) -> int:
-            import re
-            m = re.fullmatch(r"(\d+)([smhd])", tfstr.strip())
-            if not m:
-                return ONE_MIN_MS
-            n, unit = int(m.group(1)), m.group(2)
-            if unit == "s":
-                return max(ONE_MIN_MS, (n // 60) * ONE_MIN_MS)
-            if unit == "m":
-                return n * ONE_MIN_MS
-            if unit == "h":
-                return n * 60 * ONE_MIN_MS
-            if unit == "d":
-                return n * 1440 * ONE_MIN_MS
-            return ONE_MIN_MS
-        period_ms = _tf_ms(tf)
+        period_ms = _tf_to_ms(tf)
         all_rows = []
         while since < end_excl:
             page = await self._ccxt_fetch_ohlcv_once(
@@ -756,28 +765,7 @@ class CandlestickManager:
         out_tf = timeframe or tf
         if out_tf is not None:
             # parse timeframe to ms (bucket size)
-            def _tf_ms(s: str) -> int:
-                try:
-                    s = s.strip().lower()
-                except Exception:
-                    return ONE_MIN_MS
-                import re
-                m = re.fullmatch(r"(\d+)([smhd])", s)
-                if not m:
-                    return ONE_MIN_MS
-                n = int(m.group(1))
-                unit = m.group(2)
-                if unit == "s":
-                    return max(ONE_MIN_MS, (n // 60) * ONE_MIN_MS)
-                if unit == "m":
-                    return n * ONE_MIN_MS
-                if unit == "h":
-                    return n * 60 * ONE_MIN_MS
-                if unit == "d":
-                    return n * 1440 * ONE_MIN_MS
-                return ONE_MIN_MS
-
-            period_ms = _tf_ms(out_tf)
+            period_ms = _tf_to_ms(out_tf)
             if period_ms > ONE_MIN_MS and self.exchange is not None:
                 now = _utc_now_ms()
                 if end_ts is None:
@@ -1071,28 +1059,7 @@ class CandlestickManager:
         Supports higher timeframe via `tf`/`timeframe`.
         """
         out_tf = timeframe or tf
-        def _tf_ms(s: Optional[str]) -> int:
-            if not s:
-                return ONE_MIN_MS
-            try:
-                st = s.strip().lower()
-            except Exception:
-                return ONE_MIN_MS
-            import re
-            m = re.fullmatch(r"(\d+)([smhd])", st)
-            if not m:
-                return ONE_MIN_MS
-            n, unit = int(m.group(1)), m.group(2)
-            if unit == "s":
-                return max(ONE_MIN_MS, (n // 60) * ONE_MIN_MS)
-            if unit == "m":
-                return n * ONE_MIN_MS
-            if unit == "h":
-                return n * 60 * ONE_MIN_MS
-            if unit == "d":
-                return n * 1440 * ONE_MIN_MS
-            return ONE_MIN_MS
-        period_ms = _tf_ms(out_tf)
+        period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         # EMA result cache: reuse if end_ts unchanged and within TTL
         now = _utc_now_ms()
@@ -1115,28 +1082,7 @@ class CandlestickManager:
         self, symbol: str, span: int, max_age_ms: Optional[int] = None, *, tf: Optional[str] = None, timeframe: Optional[str] = None
     ) -> float:
         out_tf = timeframe or tf
-        def _tf_ms(s: Optional[str]) -> int:
-            if not s:
-                return ONE_MIN_MS
-            try:
-                st = s.strip().lower()
-            except Exception:
-                return ONE_MIN_MS
-            import re
-            m = re.fullmatch(r"(\d+)([smhd])", st)
-            if not m:
-                return ONE_MIN_MS
-            n, unit = int(m.group(1)), m.group(2)
-            if unit == "s":
-                return max(ONE_MIN_MS, (n // 60) * ONE_MIN_MS)
-            if unit == "m":
-                return n * ONE_MIN_MS
-            if unit == "h":
-                return n * 60 * ONE_MIN_MS
-            if unit == "d":
-                return n * 1440 * ONE_MIN_MS
-            return ONE_MIN_MS
-        period_ms = _tf_ms(out_tf)
+        period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         now = _utc_now_ms()
         key = ("volume", int(span), str(out_tf or "1m"))
@@ -1157,28 +1103,7 @@ class CandlestickManager:
         self, symbol: str, span: int, max_age_ms: Optional[int] = None, *, tf: Optional[str] = None, timeframe: Optional[str] = None
     ) -> float:
         out_tf = timeframe or tf
-        def _tf_ms(s: Optional[str]) -> int:
-            if not s:
-                return ONE_MIN_MS
-            try:
-                st = s.strip().lower()
-            except Exception:
-                return ONE_MIN_MS
-            import re
-            m = re.fullmatch(r"(\d+)([smhd])", st)
-            if not m:
-                return ONE_MIN_MS
-            n, unit = int(m.group(1)), m.group(2)
-            if unit == "s":
-                return max(ONE_MIN_MS, (n // 60) * ONE_MIN_MS)
-            if unit == "m":
-                return n * ONE_MIN_MS
-            if unit == "h":
-                return n * 60 * ONE_MIN_MS
-            if unit == "d":
-                return n * 1440 * ONE_MIN_MS
-            return ONE_MIN_MS
-        period_ms = _tf_ms(out_tf)
+        period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         now = _utc_now_ms()
         key = ("nrr", int(span), str(out_tf or "1m"))
