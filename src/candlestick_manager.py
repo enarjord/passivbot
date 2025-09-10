@@ -157,6 +157,8 @@ class CandlestickManager:
         self._cache: Dict[str, np.ndarray] = {}
         self._locks: Dict[str, asyncio.Lock] = {}
         self._index: Dict[str, dict] = {}
+        # Cache for EMA computations: per symbol -> {(metric, span): (value, end_ts, computed_at_ms)}
+        self._ema_cache: Dict[str, Dict[Tuple[str, int], Tuple[float, int, int]]] = {}
 
         self._setup_logging()
 
@@ -486,7 +488,12 @@ class CandlestickManager:
     # ----- CCXT fetching -----
 
     async def _ccxt_fetch_ohlcv_once(
-        self, symbol: str, since_ms: int, limit: int, end_exclusive_ms: Optional[int] = None
+        self,
+        symbol: str,
+        since_ms: int,
+        limit: int,
+        end_exclusive_ms: Optional[int] = None,
+        timeframe: Optional[str] = None,
     ) -> list:
         """Fetch a single OHLCV page from ccxt, with basic retry/backoff."""
         if self.exchange is None:
@@ -508,18 +515,19 @@ class CandlestickManager:
                 ):
                     # Bitget supports 'until' to bound the end (exclusive)
                     params["until"] = int(end_exclusive_ms) - 1
+                tf = timeframe or self._ccxt_timeframe
                 self.log.debug(
-                    f"ccxt.fetch_ohlcv symbol={symbol} tf={self._ccxt_timeframe} since={since_ms} limit={limit} attempt={attempt+1} params={params}"
+                    f"ccxt.fetch_ohlcv exchange={self._ex_id} symbol={symbol} tf={tf} since={since_ms} limit={limit} attempt={attempt+1} params={params}"
                 )
                 res = await ex.fetch_ohlcv(
                     symbol,
-                    timeframe=self._ccxt_timeframe,
+                    timeframe=tf,
                     since=since_ms,
                     limit=limit,
                     params=params,
                 )
                 self.log.debug(
-                    f"ccxt.fetch_ohlcv ok symbol={symbol} rows={len(res) if res else 0} since={since_ms}"
+                    f"ccxt.fetch_ohlcv ok exchange={self._ex_id} symbol={symbol} rows={len(res) if res else 0} since={since_ms}"
                 )
                 return res or []
             except Exception as e:  # pragma: no cover - network not used in tests
@@ -558,7 +566,9 @@ class CandlestickManager:
             last = ts[i]
         return arr[keep]
 
-    async def _fetch_ohlcv_paginated(self, symbol: str, since_ms: int, end_exclusive_ms: int) -> np.ndarray:
+    async def _fetch_ohlcv_paginated(
+        self, symbol: str, since_ms: int, end_exclusive_ms: int, *, timeframe: Optional[str] = None
+    ) -> np.ndarray:
         """Fetch OHLCV from `since_ms` up to but excluding `end_exclusive_ms`.
 
         Uses ccxt pagination via since+limit. Returns CANDLE_DTYPE array.
@@ -568,9 +578,29 @@ class CandlestickManager:
         since = int(since_ms)
         end_excl = int(end_exclusive_ms)
         limit = self._ccxt_limit_default
+        tf = timeframe or self._ccxt_timeframe
+        # Derive pagination step from timeframe
+        def _tf_ms(tfstr: str) -> int:
+            import re
+            m = re.fullmatch(r"(\d+)([smhd])", tfstr.strip())
+            if not m:
+                return ONE_MIN_MS
+            n, unit = int(m.group(1)), m.group(2)
+            if unit == "s":
+                return max(ONE_MIN_MS, (n // 60) * ONE_MIN_MS)
+            if unit == "m":
+                return n * ONE_MIN_MS
+            if unit == "h":
+                return n * 60 * ONE_MIN_MS
+            if unit == "d":
+                return n * 1440 * ONE_MIN_MS
+            return ONE_MIN_MS
+        period_ms = _tf_ms(tf)
         all_rows = []
         while since < end_excl:
-            page = await self._ccxt_fetch_ohlcv_once(symbol, since, limit, end_exclusive_ms=end_excl)
+            page = await self._ccxt_fetch_ohlcv_once(
+                symbol, since, limit, end_exclusive_ms=end_excl, timeframe=tf
+            )
             if not page:
                 break
             arr = self._normalize_ccxt_ohlcv(page)
@@ -590,7 +620,7 @@ class CandlestickManager:
                     min_step = int(diffs.min())
                     if max_step != ONE_MIN_MS or min_step != ONE_MIN_MS:
                         self.log.warning(
-                            f"non-1m granularity returned symbol={symbol} min_step={min_step} max_step={max_step}"
+                            f"non-1m granularity returned exchange={self._ex_id} symbol={symbol} min_step={min_step} max_step={max_step}"
                         )
                 else:
                     max_step = ONE_MIN_MS
@@ -598,16 +628,16 @@ class CandlestickManager:
                 first_ts = last_ts = 0
             all_rows.append(arr)
             last_ts = int(arr[-1]["ts"])  # inclusive last
-            new_since = last_ts + ONE_MIN_MS
+            new_since = last_ts + period_ms
             # Safety to avoid infinite loops if exchange returns overlapping data
             if new_since <= since:
                 self.log.debug(
-                    f"pagination stop (no progress) symbol={symbol} since={since} last_ts={last_ts}"
+                    f"pagination stop (no progress) exchange={self._ex_id} symbol={symbol} since={since} last_ts={last_ts}"
                 )
                 break
             since = new_since
         self.log.debug(
-            f"paginated fetch done symbol={symbol} rows={sum(a.shape[0] for a in all_rows) if all_rows else 0}"
+            f"paginated fetch done exchange={self._ex_id} symbol={symbol} rows={sum(a.shape[0] for a in all_rows) if all_rows else 0}"
         )
         if not all_rows:
             return np.empty((0,), dtype=CANDLE_DTYPE)
@@ -731,6 +761,7 @@ class CandlestickManager:
             return np.empty((0,), dtype=CANDLE_DTYPE)
 
         # Optionally refresh only if range touches or includes the current minute
+        allow_fetch_present = True
         if end_ts >= _floor_minute(now) and self.exchange is not None:
             if max_age_ms == 0:
                 await self.refresh(symbol, through_ts=end_ts)
@@ -738,6 +769,8 @@ class CandlestickManager:
                 last_ref = self._get_last_refresh_ms(symbol)
                 if last_ref == 0 or (now - last_ref) > int(max_age_ms):
                     await self.refresh(symbol, through_ts=end_ts)
+                else:
+                    allow_fetch_present = False
 
         # Try to load from disk shards for this range before slicing memory
         try:
@@ -757,6 +790,22 @@ class CandlestickManager:
         else:
             sub = arr
 
+        # Determine if the requested historical window is fully covered in memory
+        def _is_fully_covered(a: np.ndarray, s_ts: int, e_ts: int) -> bool:
+            if a.size == 0:
+                return False
+            expected_len = int((e_ts - s_ts) // ONE_MIN_MS) + 1
+            if a.shape[0] != expected_len:
+                return False
+            if int(a[0]["ts"]) != s_ts or int(a[-1]["ts"]) != e_ts:
+                return False
+            if expected_len > 1:
+                diffs = np.diff(a["ts"].astype(np.int64))
+                if int(diffs.max()) != ONE_MIN_MS or int(diffs.min()) != ONE_MIN_MS:
+                    return False
+            return True
+        fully_covered = _is_fully_covered(sub, start_ts, end_ts)
+
         # For historical ranges, if we don't have shards for all days yet, fetch
         # exactly the range and persist shards for future calls.
         end_finalized = _floor_minute(now) - ONE_MIN_MS
@@ -765,7 +814,8 @@ class CandlestickManager:
             shard_map = self._iter_shard_paths(symbol)
             needed_keys = self._date_keys_between(start_ts, end_ts)
             have_all_days = all(k in shard_map for k in needed_keys.keys())
-            if not have_all_days:
+            # If memory already holds the full requested range, skip fetching even if shards are missing
+            if not have_all_days and not fully_covered:
                 end_excl = min(end_ts + ONE_MIN_MS, end_finalized + ONE_MIN_MS)
                 if start_ts < end_excl:
                     fetched = await self._fetch_ohlcv_paginated(symbol, start_ts, end_excl)
@@ -781,7 +831,7 @@ class CandlestickManager:
                         sub = arr[i0:i1]
                         # update refresh metadata on successful fetch
                         self._set_last_refresh_meta(symbol, last_refresh_ms=now, last_final_ts=int(arr[-1]["ts"]))
-        elif self.exchange is not None:
+        elif self.exchange is not None and allow_fetch_present:
             # Range touches present (end at or beyond current minute); fetch up to current minute inclusive
             end_current = _floor_minute(now)
             end_excl = min(end_ts + ONE_MIN_MS, end_current + ONE_MIN_MS)
@@ -811,7 +861,7 @@ class CandlestickManager:
 
         # Best-effort tail completion: if we still miss trailing minutes within
         # the requested window, attempt one more fetch from the last available ts.
-        if self.exchange is not None:
+        if self.exchange is not None and allow_fetch_present:
             end_current = _floor_minute(now)
             end_excl_range = end_ts + ONE_MIN_MS if historical else min(end_ts + ONE_MIN_MS, end_current + ONE_MIN_MS)
             for _ in range(2):
@@ -838,7 +888,7 @@ class CandlestickManager:
                 self._set_last_refresh_meta(symbol, last_refresh_ms=now, last_final_ts=int(arr[-1]["ts"]))
 
         # Gap-oriented fetch and tagging: try filling internal gaps once; mark remaining as known gaps
-        if self.exchange is not None:
+        if self.exchange is not None and allow_fetch_present:
             end_current = _floor_minute(now)
             inclusive_end = end_ts if historical else min(end_ts, end_current)
             missing = self._missing_spans(sub, start_ts, inclusive_end)
@@ -934,26 +984,53 @@ class CandlestickManager:
     ) -> float:
         """Return latest EMA of close over last `span` finalized candles."""
         start_ts, end_ts = await self._latest_finalized_range(span)
+        # EMA result cache: reuse if end_ts unchanged and within TTL
+        now = _utc_now_ms()
+        key = ("close", int(span))
+        cache = self._ema_cache.setdefault(symbol, {})
+        if max_age_ms is not None and max_age_ms > 0 and key in cache:
+            val, cached_end_ts, computed_at = cache[key]
+            if int(cached_end_ts) == int(end_ts) and (now - int(computed_at)) <= int(max_age_ms):
+                return float(val)
         arr = await self.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms)
         if arr.size == 0:
             return float("nan")
         closes = np.asarray(arr["c"], dtype=np.float64)
-        return float(self._ema(closes, span))
+        res = float(self._ema(closes, span))
+        # Store in cache
+        cache[key] = (res, int(end_ts), int(now))
+        return res
 
     async def get_latest_ema_volume(
         self, symbol: str, span: int, max_age_ms: Optional[int] = None
     ) -> float:
         start_ts, end_ts = await self._latest_finalized_range(span)
+        now = _utc_now_ms()
+        key = ("volume", int(span))
+        cache = self._ema_cache.setdefault(symbol, {})
+        if max_age_ms is not None and max_age_ms > 0 and key in cache:
+            val, cached_end_ts, computed_at = cache[key]
+            if int(cached_end_ts) == int(end_ts) and (now - int(computed_at)) <= int(max_age_ms):
+                return float(val)
         arr = await self.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms)
         if arr.size == 0:
             return float("nan")
         vols = np.asarray(arr["bv"], dtype=np.float64)
-        return float(self._ema(vols, span))
+        res = float(self._ema(vols, span))
+        cache[key] = (res, int(end_ts), int(now))
+        return res
 
     async def get_latest_ema_nrr(
         self, symbol: str, span: int, max_age_ms: Optional[int] = None
     ) -> float:
         start_ts, end_ts = await self._latest_finalized_range(span)
+        now = _utc_now_ms()
+        key = ("nrr", int(span))
+        cache = self._ema_cache.setdefault(symbol, {})
+        if max_age_ms is not None and max_age_ms > 0 and key in cache:
+            val, cached_end_ts, computed_at = cache[key]
+            if int(cached_end_ts) == int(end_ts) and (now - int(computed_at)) <= int(max_age_ms):
+                return float(val)
         arr = await self.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms)
         if arr.size == 0:
             return float("nan")
@@ -962,7 +1039,9 @@ class CandlestickManager:
         lows = np.asarray(arr["l"], dtype=np.float64)
         denom = np.maximum(closes, 1e-12)
         nrr = (highs - lows) / denom
-        return float(self._ema(nrr, span))
+        res = float(self._ema(nrr, span))
+        cache[key] = (res, int(end_ts), int(now))
+        return res
 
     # ----- Warmup and refresh -----
 
@@ -1080,3 +1159,74 @@ __all__ = [
     "ONE_MIN_MS",
     "_floor_minute",
 ]
+
+
+def resample_1m_to_xm(candles: np.ndarray, tf_minutes: int) -> np.ndarray:
+    """Resample 1-minute candles to `tf_minutes` minutes.
+
+    Parameters
+    ----------
+    candles : np.ndarray
+        Structured array of dtype CANDLE_DTYPE containing 1-minute candles.
+        Assumes `ts` is in milliseconds UTC. Order may be arbitrary; the
+        function sorts by `ts` before aggregation.
+    tf_minutes : int
+        Target timeframe in minutes. Must be >= 1.
+
+    Returns
+    -------
+    np.ndarray
+        Structured array of dtype CANDLE_DTYPE aggregated to `tf_minutes`.
+        Aggregation rules:
+        - ts: start of the aggregated bucket (aligned to tf_minutes)
+        - o: first 1m candle's open within the bucket
+        - h: max of highs
+        - l: min of lows
+        - c: last 1m candle's close within the bucket
+        - bv: sum of base volumes
+
+    Notes
+    -----
+    - Missing 1m candles inside a bucket are tolerated; aggregation uses the
+      available candles. If you need strict continuity, call `standardize_gaps`
+      first to synthesize zero-candles.
+    - If `tf_minutes == 1`, returns a sorted copy of the input.
+    """
+    if tf_minutes <= 1:
+        if candles.size == 0:
+            return candles.astype(CANDLE_DTYPE, copy=False)
+        return np.sort(_ensure_dtype(candles), order="ts")
+
+    if candles.size == 0:
+        return np.empty((0,), dtype=CANDLE_DTYPE)
+
+    period_ms = int(tf_minutes) * ONE_MIN_MS
+    a = _ensure_dtype(candles)
+    a = np.sort(a, order="ts")
+
+    ts = a["ts"].astype(np.int64)
+    bucket_ts = (ts // period_ms) * period_ms
+
+    # Group by bucket_ts (contiguous since sorted by ts)
+    ub, idx_start, counts = np.unique(bucket_ts, return_index=True, return_counts=True)
+    # Prepare slice endpoints for reduceat
+    starts = idx_start
+    ends = np.append(starts[1:], len(a))
+
+    # Open = first open in bucket; Close = last close in bucket
+    opens = a["o"][starts]
+    closes = a["c"][ends - 1]
+
+    # High = max, Low = min, Volume = sum using reduceat
+    highs = np.maximum.reduceat(a["h"], starts)
+    lows = np.minimum.reduceat(a["l"], starts)
+    vols = np.add.reduceat(a["bv"], starts)
+
+    out = np.zeros(ub.shape[0], dtype=CANDLE_DTYPE)
+    out["ts"] = ub.astype(np.int64)
+    out["o"] = opens.astype(np.float32, copy=False)
+    out["h"] = highs.astype(np.float32, copy=False)
+    out["l"] = lows.astype(np.float32, copy=False)
+    out["c"] = closes.astype(np.float32, copy=False)
+    out["bv"] = vols.astype(np.float32, copy=False)
+    return out
