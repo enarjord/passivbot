@@ -19,6 +19,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use serde::Serialize;
 use std::fs::File;
+use std::str::FromStr;
 
 #[pyfunction]
 pub fn run_backtest(
@@ -958,49 +959,25 @@ pub fn calc_closes_short_py(
 pub fn order_type_id_to_snake(id: u16) -> PyResult<String> {
     let ot = OrderType::try_from(id)
         .map_err(|_| pyo3::exceptions::PyValueError::new_err("unknown order type id"))?;
-    Ok(ot.snake().to_string())
+    Ok(ot.to_string())
 }
 
 #[pyfunction]
 pub fn all_order_types_ids(py: Python<'_>) -> PyResult<Py<PyDict>> {
+    use strum::IntoEnumIterator;
     let d = PyDict::new(py);
-    use OrderType::*;
-    let items: &[(OrderType, &str)] = &[
-        (EntryInitialNormalLong, "entry_initial_normal_long"),
-        (EntryInitialPartialLong, "entry_initial_partial_long"),
-        (EntryTrailingNormalLong, "entry_trailing_normal_long"),
-        (EntryTrailingCroppedLong, "entry_trailing_cropped_long"),
-        (EntryGridNormalLong, "entry_grid_normal_long"),
-        (EntryGridCroppedLong, "entry_grid_cropped_long"),
-        (EntryGridInflatedLong, "entry_grid_inflated_long"),
-        (CloseGridLong, "close_grid_long"),
-        (CloseTrailingLong, "close_trailing_long"),
-        (CloseUnstuckLong, "close_unstuck_long"),
-        (CloseAutoReduceLong, "close_auto_reduce_long"),
-        (EntryInitialNormalShort, "entry_initial_normal_short"),
-        (EntryInitialPartialShort, "entry_initial_partial_short"),
-        (EntryTrailingNormalShort, "entry_trailing_normal_short"),
-        (EntryTrailingCroppedShort, "entry_trailing_cropped_short"),
-        (EntryGridNormalShort, "entry_grid_normal_short"),
-        (EntryGridCroppedShort, "entry_grid_cropped_short"),
-        (EntryGridInflatedShort, "entry_grid_inflated_short"),
-        (CloseGridShort, "close_grid_short"),
-        (CloseTrailingShort, "close_trailing_short"),
-        (CloseUnstuckShort, "close_unstuck_short"),
-        (CloseAutoReduceShort, "close_auto_reduce_short"),
-        (Empty, "empty"),
-    ];
-    for (ot, s) in items {
-        d.set_item(ot.id(), *s)?;
+    for ot in OrderType::iter() {
+        let id: u16 = ot.into();
+        d.set_item(id, ot.to_string())?;
     }
     Ok(d.into())
 }
 
 #[pyfunction]
 pub fn order_type_snake_to_id(name: &str) -> PyResult<u16> {
-    OrderType::from_snake(name)
+    OrderType::from_str(name)
         .map(|ot| ot.id())
-        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("unknown order type name"))
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("unknown order type name"))
 }
 
 #[pyfunction(name = "get_order_id_type_from_string")]

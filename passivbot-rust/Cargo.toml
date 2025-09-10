@@ -14,3 +14,6 @@ numpy = "0.21.0"
 memmap = "0.7.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+num_enum = "0.7"
+strum = "0.26"
+strum_macros = "0.26"

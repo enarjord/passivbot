@@ -69,7 +69,7 @@ _TYPE_MARKER_RE = re.compile(r"0x([0-9a-fA-F]{4})", re.IGNORECASE)
 _LEADING_HEX4_RE = re.compile(r"^(?:0x)?([0-9a-fA-F]{4})", re.IGNORECASE)
 
 
-def custom_id_to_snake(self, custom_id) -> str:
+def custom_id_to_snake(custom_id) -> str:
     try:
         return snake_of(try_decode_type_id_from_custom_id(custom_id))
     except Exception as e:
@@ -1510,11 +1510,13 @@ class Passivbot:
                     if self.has_position(pside, symbol):
                         # if in panic mode, only one close order at current market price
                         qmul = -1 if pside == "long" else 1
+                        panic_order_type = f"close_panic_{pside}"
                         ideal_orders[symbol].append(
                             (
                                 abs(self.positions[symbol][pside]["size"]) * qmul,
                                 self.get_last_price(symbol),
-                                f"panic_close_{pside}",
+                                panic_order_type,
+                                pbr.order_type_snake_to_id(panic_order_type),
                             )
                         )
                 elif self.PB_modes[pside][symbol] in [
