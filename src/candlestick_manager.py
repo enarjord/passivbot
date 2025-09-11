@@ -542,9 +542,9 @@ class CandlestickManager:
                 # Note: Avoid passing 'until' to Bitget due to API validation errors on non-1m tfs.
                 if end_exclusive_ms is not None:
                     exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
-                    if "bitget" not in exid:
-                        # For some exchanges (e.g., bybit/okx), 'until' or equivalent may be supported via ccxt.
-                        # Leave params empty for others to rely on pagination + local clipping.
+                    # Avoid 'until' for exchanges with inconsistent paging using it (bitget, okx).
+                    if ("bitget" not in exid) and ("okx" not in exid):
+                        # For other exchanges, 'until' may help bound the end; otherwise forward pagination + clipping is used.
                         params["until"] = int(end_exclusive_ms) - 1
                 tf = timeframe or self._ccxt_timeframe
                 self.log.debug(
