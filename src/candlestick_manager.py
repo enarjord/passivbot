@@ -1066,6 +1066,23 @@ class CandlestickManager:
             ema = alpha * float(v) + (1.0 - alpha) * ema
         return ema
 
+    def _ema_series(self, values: np.ndarray, span: int) -> np.ndarray:
+        """Return EMA series for `values` using standard recursive definition.
+
+        y[0] = x[0]; y[t] = α*x[t] + (1-α)*y[t-1]
+        Returns float64 array of same length as `values`.
+        """
+        n = int(values.shape[0])
+        if n == 0:
+            return np.empty((0,), dtype=np.float64)
+        alpha = 2.0 / (span + 1.0)
+        one_minus = 1.0 - alpha
+        out = np.empty((n,), dtype=np.float64)
+        out[0] = float(values[0])
+        for i in range(1, n):
+            out[i] = one_minus * out[i - 1] + alpha * float(values[i])
+        return out
+
     async def _latest_finalized_range(
         self, span: int, *, period_ms: int = ONE_MIN_MS
     ) -> Tuple[int, int]:
@@ -1175,6 +1192,72 @@ class CandlestickManager:
         res = float(self._ema(nrr, span))
         cache[key] = (res, int(end_ts), int(now))
         return res
+
+    # ----- EMA series helpers -----
+
+    async def get_ema_close_series(
+        self,
+        symbol: str,
+        span: int,
+        max_age_ms: Optional[int] = None,
+        *,
+        tf: Optional[str] = None,
+        timeframe: Optional[str] = None,
+    ) -> np.ndarray:
+        out_tf = timeframe or tf
+        period_ms = _tf_to_ms(out_tf)
+        start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
+        arr = await self.get_candles(
+            symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, timeframe=out_tf
+        )
+        if arr.size == 0:
+            return np.empty((0,), dtype=np.float64)
+        values = np.asarray(arr["c"], dtype=np.float64)
+        return self._ema_series(values, span)
+
+    async def get_ema_volume_series(
+        self,
+        symbol: str,
+        span: int,
+        max_age_ms: Optional[int] = None,
+        *,
+        tf: Optional[str] = None,
+        timeframe: Optional[str] = None,
+    ) -> np.ndarray:
+        out_tf = timeframe or tf
+        period_ms = _tf_to_ms(out_tf)
+        start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
+        arr = await self.get_candles(
+            symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, timeframe=out_tf
+        )
+        if arr.size == 0:
+            return np.empty((0,), dtype=np.float64)
+        values = np.asarray(arr["bv"], dtype=np.float64)
+        return self._ema_series(values, span)
+
+    async def get_ema_nrr_series(
+        self,
+        symbol: str,
+        span: int,
+        max_age_ms: Optional[int] = None,
+        *,
+        tf: Optional[str] = None,
+        timeframe: Optional[str] = None,
+    ) -> np.ndarray:
+        out_tf = timeframe or tf
+        period_ms = _tf_to_ms(out_tf)
+        start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
+        arr = await self.get_candles(
+            symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, timeframe=out_tf
+        )
+        if arr.size == 0:
+            return np.empty((0,), dtype=np.float64)
+        closes = np.asarray(arr["c"], dtype=np.float64)
+        highs = np.asarray(arr["h"], dtype=np.float64)
+        lows = np.asarray(arr["l"], dtype=np.float64)
+        denom = np.maximum(closes, 1e-12)
+        nrr = (highs - lows) / denom
+        return self._ema_series(nrr, span)
 
     # ----- Warmup and refresh -----
 
