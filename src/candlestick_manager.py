@@ -190,6 +190,8 @@ class CandlestickManager:
         self._index: Dict[str, dict] = {}
         # Cache for EMA computations: per symbol -> {(metric, span, tf): (value, end_ts, computed_at_ms)}
         self._ema_cache: Dict[str, Dict[Tuple[str, int, str], Tuple[float, int, int]]] = {}
+        # Cache for current (in-progress) minute close per symbol: symbol -> (price, updated_ms)
+        self._current_close_cache: Dict[str, Tuple[float, int]] = {}
         # Cache for fetched higher-timeframe windows to avoid duplicate remote calls
         # Keyed per symbol -> {(tf_str, start_ts, end_ts): (array, fetched_at_ms)}
         self._tf_range_cache: Dict[str, Dict[Tuple[str, int, int], Tuple[np.ndarray, int]]] = {}
@@ -777,10 +779,11 @@ class CandlestickManager:
             period_ms = _tf_to_ms(out_tf)
             if period_ms > ONE_MIN_MS and self.exchange is not None:
                 now = _utc_now_ms()
+                finalized_end = (int(now) // period_ms) * period_ms - period_ms
                 if end_ts is None:
-                    end_ts = (int(now) // period_ms) * period_ms
+                    end_ts = finalized_end
                 else:
-                    end_ts = (int(end_ts) // period_ms) * period_ms
+                    end_ts = min((int(end_ts) // period_ms) * period_ms, finalized_end)
 
                 if start_ts is None:
                     # default window expressed in number of requested-tf buckets
@@ -830,10 +833,11 @@ class CandlestickManager:
 
         now = _utc_now_ms()
         if end_ts is None:
-            # Include the current in-progress minute as the inclusive end
-            end_ts = _floor_minute(now)
+            # Use last completed minute as inclusive end (exclude current in-progress minute)
+            end_ts = _floor_minute(now) - ONE_MIN_MS
         else:
-            end_ts = _floor_minute(int(end_ts))
+            # Clamp to last completed minute
+            end_ts = min(_floor_minute(int(end_ts)), _floor_minute(now) - ONE_MIN_MS)
 
         if start_ts is None:
             start_ts = int(end_ts) - ONE_MIN_MS * self.default_window_candles
@@ -1039,28 +1043,60 @@ class CandlestickManager:
         return result
 
     async def get_current_close(self, symbol: str, max_age_ms: Optional[int] = None) -> float:
-        """Return last finalized close value for symbol.
+        """Return latest close of the current in-progress minute for `symbol`.
 
-        If cache is empty, returns NaN.
+        - Uses exchange data when available; otherwise falls back to last cached close.
+        - Respects `max_age_ms` as minimum freshness for remote fetches.
+        - Returns NaN if no data is available.
         """
         if max_age_ms is not None and max_age_ms < 0:
             raise ValueError("max_age_ms cannot be negative")
-        # Optional TTL-based refresh for present
         now = _utc_now_ms()
-        if self.exchange is not None:
-            end_current = _floor_minute(now)
-            if max_age_ms == 0:
-                await self.refresh(symbol, through_ts=end_current)
-            elif max_age_ms is not None and max_age_ms > 0:
-                last_ref = self._get_last_refresh_ms(symbol)
-                if last_ref == 0 or (now - last_ref) > int(max_age_ms):
-                    await self.refresh(symbol, through_ts=end_current)
 
-        arr = self._cache.get(symbol)
-        if arr is None or arr.size == 0:
+        # Return cached current price if within TTL
+        if max_age_ms is not None and max_age_ms > 0:
+            prev = self._current_close_cache.get(symbol)
+            if prev is not None:
+                price, updated = prev
+                if (now - int(updated)) <= int(max_age_ms):
+                    return float(price)
+
+        price: Optional[float] = None
+        # Try exchange sources for the current in-progress minute
+        if self.exchange is not None:
+            try:
+                # Prefer ticker last price if available
+                if hasattr(self.exchange, "fetch_ticker"):
+                    t = await self.exchange.fetch_ticker(symbol)
+                    price = float(t.get("last") or t.get("close")) if t else None
+            except Exception:
+                price = None
+            if price is None:
+                # Fallback to latest 1m candle including current minute if exchange returns it
+                try:
+                    end_current = _floor_minute(now)
+                    rows = await self._ccxt_fetch_ohlcv_once(
+                        symbol, since_ms=end_current, limit=1, end_exclusive_ms=None, timeframe="1m"
+                    )
+                    arr = self._normalize_ccxt_ohlcv(rows)
+                    if arr.size:
+                        price = float(arr[-1]["c"])  # may be current minute partial
+                except Exception:
+                    pass
+
+        # If still None, fallback to last cached candle close (finalized)
+        if price is None:
+            arr = self._cache.get(symbol)
+            if arr is not None and arr.size:
+                arr = np.sort(_ensure_dtype(arr), order="ts")
+                price = float(arr[-1]["c"])
+
+        if price is None:
             return float("nan")
-        arr = np.sort(_ensure_dtype(arr), order="ts")
-        return float(arr[-1]["c"])  # last close
+
+        # Update local cache of current close
+        self._current_close_cache[symbol] = (float(price), int(now))
+        return float(price)
 
     # ----- EMA helpers -----
 
