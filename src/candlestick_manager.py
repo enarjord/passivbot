@@ -64,10 +64,12 @@ CANDLE_DTYPE = np.dtype(
     ]
 )
 
-EMA_SERIES_DTYPE = np.dtype([
-    ("ts", "int64"),
-    ("ema", "float32"),
-])
+EMA_SERIES_DTYPE = np.dtype(
+    [
+        ("ts", "int64"),
+        ("ema", "float32"),
+    ]
+)
 
 
 # ----- Utilities -----
@@ -1068,7 +1070,7 @@ class CandlestickManager:
                 # Prefer ticker last price if available
                 if hasattr(self.exchange, "fetch_ticker"):
                     t = await self.exchange.fetch_ticker(symbol)
-                    price = float(t.get('last') or t.get('bid') or t.get('ask')) if t else None
+                    price = float(t.get("last") or t.get("bid") or t.get("ask")) if t else None
             except Exception:
                 price = None
             if price is None:
