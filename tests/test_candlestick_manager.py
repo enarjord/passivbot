@@ -139,3 +139,126 @@ async def test_zero_candles_not_persisted(tmp_path):
 
 
 # EOF
+@pytest.mark.asyncio
+async def test_tf_range_cache_reuse_within_ttl(monkeypatch, tmp_path):
+    # Fixed now for deterministic bucket alignment
+    fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    # Dummy exchange id present to enable tf fetch path
+    class _Ex:
+        id = "okx"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="okx", cache_dir=str(tmp_path / "caches"))
+
+    tf = "1h"
+    period = 60 * ONE_MIN_MS
+    span = 5
+    symbol = "BTC/USDT:USDT"
+
+    calls = {"fetch": 0}
+
+    async def fake_fetch(symbol_, since_ms, end_exclusive_ms, *, timeframe=None):
+        calls["fetch"] += 1
+        # Generate hourly candles aligned to tf
+        s = int(since_ms)
+        e = int(end_exclusive_ms)
+        ts = list(range(s, e, period))
+        arr = np.zeros(len(ts), dtype=CANDLE_DTYPE)
+        if ts:
+            arr["ts"] = np.asarray(ts, dtype=np.int64)
+            # trivial ohlcv
+            arr["o"] = 1.0
+            arr["h"] = 2.0
+            arr["l"] = 0.5
+            arr["c"] = 1.5
+            arr["bv"] = 1.0
+        return arr
+
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_fetch)
+
+    # First: compute series -> should fetch once
+    ser = await cm.get_ema_volume_series(symbol, span=span, tf=tf, max_age_ms=60_000)
+    assert ser.size > 0
+    assert calls["fetch"] == 1
+
+    # Second: compute different metric latest, same tf and span -> reuse tf range cache, no extra fetch
+    val = await cm.get_latest_ema_nrr(symbol, span=span, tf=tf, max_age_ms=60_000)
+    assert isinstance(val, float)
+    assert calls["fetch"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_candles_1m_avoids_refetch_after_sharding(monkeypatch, tmp_path):
+    fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    class _Ex:
+        id = "okx"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="okx", cache_dir=str(tmp_path / "caches"))
+    symbol = "AVAX/USDT:USDT"
+
+    calls = {"fetch": 0}
+
+    async def fake_fetch(symbol_, since_ms, end_exclusive_ms, *, timeframe=None):
+        calls["fetch"] += 1
+        s = int(since_ms)
+        e = int(end_exclusive_ms)
+        ts = list(range(s, e, ONE_MIN_MS))
+        arr = np.zeros(len(ts), dtype=CANDLE_DTYPE)
+        if ts:
+            arr["ts"] = np.asarray(ts, dtype=np.int64)
+            arr["o"] = 10.0
+            arr["h"] = 11.0
+            arr["l"] = 9.0
+            arr["c"] = 10.5
+            arr["bv"] = 1.0
+        return arr
+
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_fetch)
+
+    # Range covering two hours ending one minute before now
+    end_final = _floor_minute(fixed_now_ms) - ONE_MIN_MS
+    start_ts = end_final - ONE_MIN_MS * 120
+
+    # First call fetches and writes shards
+    arr1 = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_final, strict=True)
+    assert arr1.size > 0
+    assert calls["fetch"] == 1
+
+    # Drop memory to force disk load path
+    cm._cache.pop(symbol, None)
+
+    # Second call for same range should load from shards, not fetch again
+    arr2 = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_final, strict=True)
+    assert arr2.size > 0
+    assert calls["fetch"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_current_close_uses_ttl(monkeypatch):
+    fixed_now_ms = 1725590400000
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    call_counter = {"ticker": 0}
+
+    class _Ex:
+        id = "okx"
+
+        async def fetch_ticker(self, symbol):
+            call_counter["ticker"] += 1
+            return {"last": 123.45}
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="okx")
+    symbol = "BTC/USDT:USDT"
+
+    # First call fetches ticker
+    p1 = await cm.get_current_close(symbol, max_age_ms=60_000)
+    assert p1 == pytest.approx(123.45)
+    assert call_counter["ticker"] == 1
+
+    # Second call within TTL should use local cache, not refetch
+    p2 = await cm.get_current_close(symbol, max_age_ms=60_000)
+    assert p2 == pytest.approx(123.45)
+    assert call_counter["ticker"] == 1
