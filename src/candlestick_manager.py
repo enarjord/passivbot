@@ -1211,9 +1211,11 @@ class CandlestickManager:
             symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, timeframe=out_tf
         )
         if arr.size == 0:
-            return np.empty((0,), dtype=np.float64)
+            return np.empty((0, 2), dtype=np.float64)
         values = np.asarray(arr["c"], dtype=np.float64)
-        return self._ema_series(values, span)
+        ema_vals = self._ema_series(values, span)
+        ts = np.asarray(arr["ts"], dtype=np.float64)
+        return np.column_stack((ts, ema_vals))
 
     async def get_ema_volume_series(
         self,
@@ -1231,9 +1233,11 @@ class CandlestickManager:
             symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, timeframe=out_tf
         )
         if arr.size == 0:
-            return np.empty((0,), dtype=np.float64)
+            return np.empty((0, 2), dtype=np.float64)
         values = np.asarray(arr["bv"], dtype=np.float64)
-        return self._ema_series(values, span)
+        ema_vals = self._ema_series(values, span)
+        ts = np.asarray(arr["ts"], dtype=np.float64)
+        return np.column_stack((ts, ema_vals))
 
     async def get_ema_nrr_series(
         self,
@@ -1251,13 +1255,15 @@ class CandlestickManager:
             symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, timeframe=out_tf
         )
         if arr.size == 0:
-            return np.empty((0,), dtype=np.float64)
+            return np.empty((0, 2), dtype=np.float64)
         closes = np.asarray(arr["c"], dtype=np.float64)
         highs = np.asarray(arr["h"], dtype=np.float64)
         lows = np.asarray(arr["l"], dtype=np.float64)
         denom = np.maximum(closes, 1e-12)
         nrr = (highs - lows) / denom
-        return self._ema_series(nrr, span)
+        ema_vals = self._ema_series(nrr, span)
+        ts = np.asarray(arr["ts"], dtype=np.float64)
+        return np.column_stack((ts, ema_vals))
 
     # ----- Warmup and refresh -----
 
