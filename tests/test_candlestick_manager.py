@@ -18,7 +18,9 @@ from candlestick_manager import (
 
 @pytest.mark.parametrize("debug", [False])
 def test_standardize_gaps_inserts_zero_candles(tmp_path, debug):
-    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    class _Ex:
+        id = "okx"
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     # create two candles with a one-minute gap between them
     base = int(time.time() * 1000)
     t0 = _floor_minute(base) - 3 * ONE_MIN_MS
@@ -44,7 +46,9 @@ def test_standardize_gaps_inserts_zero_candles(tmp_path, debug):
 
 @pytest.mark.asyncio
 async def test_get_candles_range_and_inclusive(tmp_path):
-    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    class _Ex:
+        id = "okx"
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     base = _floor_minute(int(time.time() * 1000)) - 10 * ONE_MIN_MS
     # create 6 candles
     arr = []
@@ -147,7 +151,9 @@ async def test_zero_candles_not_persisted(tmp_path):
 
 @pytest.mark.asyncio
 async def test_tf_persistence_via_get_candles(tmp_path, monkeypatch):
-    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    class _Ex:
+        id = "okx"
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     symbol = "TFP/USDT"
     base = _floor_minute(int(time.time() * 1000)) - 6 * ONE_MIN_MS * 60
     # Monkeypatch fetcher to simulate 1h candles
@@ -178,6 +184,51 @@ async def test_tf_persistence_via_get_candles(tmp_path, monkeypatch):
     assert os.path.exists(shard_path)
     # Index for 1h present
     assert f"{symbol}::1h" in cm._index
+
+
+@pytest.mark.asyncio
+async def test_tf_loads_from_disk_without_network(tmp_path, monkeypatch):
+    class _Ex:
+        id = "okx"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="okx", cache_dir=str(tmp_path / "caches"))
+    symbol = "REUSE/USDT"
+    # Prepare 1h on-disk by first networked call
+    base = _floor_minute(int(time.time() * 1000)) - 6 * ONE_MIN_MS * 60
+    period = 60 * ONE_MIN_MS
+
+    net_calls = {"n": 0}
+
+    async def fake_fetch(symbol_, since_ms, end_exclusive_ms, *, timeframe=None):
+        net_calls["n"] += 1
+        s = int(since_ms)
+        e = int(end_exclusive_ms)
+        ts = list(range(s, e, period))
+        arr = np.zeros(len(ts), dtype=CANDLE_DTYPE)
+        if ts:
+            arr["ts"] = np.asarray(ts, dtype=np.int64)
+            arr["o"] = 1.0
+            arr["h"] = 2.0
+            arr["l"] = 0.5
+            arr["c"] = 1.5
+            arr["bv"] = 1.0
+        return arr
+
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_fetch)
+    start_ts = base
+    end_ts = base + 5 * period
+    out1 = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, timeframe="1h", strict=True)
+    assert out1.size > 0
+    first_calls = net_calls["n"]
+    assert first_calls >= 1
+
+    # Clear TF LRU cache to force disk path on second call
+    cm._tf_range_cache.clear()
+
+    out2 = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, timeframe="1h", strict=True, max_age_ms=600_000)
+    assert out2.size == out1.size
+    # Should not perform any new network calls; served from disk
+    assert net_calls["n"] == first_calls
 
 
 # EOF

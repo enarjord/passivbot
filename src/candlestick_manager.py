@@ -915,6 +915,35 @@ class CandlestickManager:
                     ):
                         return arr_cached
 
+                # If disk has full coverage for this TF window, serve it without network
+                if isinstance(disk_arr, np.ndarray) and disk_arr.size:
+                    out_disk = self._slice_ts_range(disk_arr, start_ts, end_ts)
+                    if out_disk.size:
+                        # verify full coverage with proper step
+                        tsd = _ts_index(out_disk)
+                        expected_len = int((end_ts - start_ts) // period_ms) + 1
+                        if (
+                            out_disk.shape[0] == expected_len
+                            and int(tsd[0]) == int(start_ts)
+                            and int(tsd[-1]) == int(end_ts)
+                            and (
+                                expected_len == 1
+                                or (
+                                    int(np.diff(tsd).min(initial=period_ms)) == period_ms
+                                    and int(np.diff(tsd).max(initial=period_ms)) == period_ms
+                                )
+                            )
+                        ):
+                            sym_cache[cache_key] = (out_disk, int(now))
+                            try:
+                                sym_cache.move_to_end(cache_key)
+                            except Exception:
+                                pass
+                            while len(sym_cache) > self._tf_range_cache_cap:
+                                sym_cache.popitem(last=False)
+                            self._tf_range_cache[symbol] = sym_cache
+                            return out_disk
+
                 end_excl = int(end_ts) + period_ms
                 fetched = await self._fetch_ohlcv_paginated(
                     symbol, int(start_ts), int(end_excl), timeframe=out_tf
