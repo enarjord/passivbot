@@ -120,11 +120,18 @@ def test_save_shard_writes_index_and_shard(tmp_path):
     cm._save_shard(symbol, date_key, arr)
     shard_path = cm._shard_path(symbol, date_key)
     assert os.path.exists(shard_path)
-    idx = cm._index[symbol]
+    idx = cm._index[f"{symbol}::1m"]
     assert date_key in idx["shards"]
     info = idx["shards"][date_key]
     assert "crc32" in info
     assert info["min_ts"] == int(arr[0]["ts"]) and info["max_ts"] == int(arr[0]["ts"])
+
+    # Also verify 1h persistence path when timeframe provided
+    cm._save_shard(symbol, date_key, arr, timeframe="1h")
+    shard_path_1h = cm._shard_path(symbol, date_key, timeframe="1h")
+    assert os.path.exists(shard_path_1h)
+    idx_1h = cm._index[f"{symbol}::1h"]
+    assert date_key in idx_1h["shards"]
 
 
 @pytest.mark.asyncio
@@ -134,8 +141,43 @@ async def test_zero_candles_not_persisted(tmp_path):
     # empty cache
     res = await cm.get_candles(symbol, start_ts=0, end_ts=ONE_MIN_MS * 2, max_age_ms=0)
     # no shard files should be created for symbol
-    symbol_dir = Path(cm._symbol_dir(symbol))
+    symbol_dir = Path(cm._symbol_dir(symbol, timeframe="1m"))
     assert not symbol_dir.exists() or not any(symbol_dir.rglob("*.npy"))
+
+
+@pytest.mark.asyncio
+async def test_tf_persistence_via_get_candles(tmp_path, monkeypatch):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TFP/USDT"
+    base = _floor_minute(int(time.time() * 1000)) - 6 * ONE_MIN_MS * 60
+    # Monkeypatch fetcher to simulate 1h candles
+    period = 60 * ONE_MIN_MS
+
+    async def fake_fetch(symbol_, since_ms, end_exclusive_ms, *, timeframe=None):
+        s = int(since_ms)
+        e = int(end_exclusive_ms)
+        ts = list(range(s, e, period))
+        arr = np.zeros(len(ts), dtype=CANDLE_DTYPE)
+        if ts:
+            arr["ts"] = np.asarray(ts, dtype=np.int64)
+            arr["o"] = 1.0
+            arr["h"] = 2.0
+            arr["l"] = 0.5
+            arr["c"] = 1.5
+            arr["bv"] = 1.0
+        return arr
+
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_fetch)
+    start_ts = base
+    end_ts = base + 5 * period
+    out = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, timeframe="1h", strict=True)
+    assert out.size > 0
+    # Verify 1h shard saved
+    date_key = time.strftime("%Y-%m-%d", time.gmtime(start_ts / 1000.0))
+    shard_path = cm._shard_path(symbol, date_key, timeframe="1h")
+    assert os.path.exists(shard_path)
+    # Index for 1h present
+    assert f"{symbol}::1h" in cm._index
 
 
 # EOF

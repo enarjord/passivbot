@@ -40,6 +40,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
+from collections import OrderedDict
 
 import numpy as np
 
@@ -146,8 +147,6 @@ class CandlestickManager:
         Name of the exchange used for cache directory layout.
     cache_dir : str
         Root directory for on-disk cache. Default "caches".
-    timeframe : str
-        Timeframe string, kept for directory layout. Default "1m".
     default_window_candles : int
         Default window used when start_ts is not provided.
     overlap_candles : int
@@ -166,7 +165,6 @@ class CandlestickManager:
         exchange_name: str = "unknown",
         *,
         cache_dir: str = "caches",
-        timeframe: str = "1m",
         default_window_candles: int = 100,
         overlap_candles: int = 30,
         memory_days: int = 7,
@@ -180,7 +178,6 @@ class CandlestickManager:
         else:
             self.exchange_name = exchange_name
         self.cache_dir = cache_dir
-        self.timeframe = timeframe
         self.default_window_candles = int(default_window_candles)
         self.overlap_candles = int(overlap_candles)
         self.memory_days = int(memory_days)
@@ -194,14 +191,18 @@ class CandlestickManager:
         self._ema_cache: Dict[str, Dict[Tuple[str, int, str], Tuple[float, int, int]]] = {}
         # Cache for current (in-progress) minute close per symbol: symbol -> (price, updated_ms)
         self._current_close_cache: Dict[str, Tuple[float, int]] = {}
-        # Cache for fetched higher-timeframe windows to avoid duplicate remote calls
-        # Keyed per symbol -> {(tf_str, start_ts, end_ts): (array, fetched_at_ms)}
-        self._tf_range_cache: Dict[str, Dict[Tuple[str, int, int], Tuple[np.ndarray, int]]] = {}
+        # Cache for fetched higher-timeframe windows to avoid duplicate remote calls (LRU per symbol)
+        # Keyed per symbol -> OrderedDict[(tf_str, start_ts, end_ts) -> (array, fetched_at_ms)]
+        self._tf_range_cache: Dict[
+            str, OrderedDict[Tuple[str, int, int], Tuple[np.ndarray, int]]
+        ] = {}
+        self._tf_range_cache_cap = 8
 
         self._setup_logging()
 
         # fetch controls
-        self._ccxt_timeframe = self.timeframe  # expected '1m'
+        # Base timeframe for storage/fetching is always 1m; higher TFs are per-call
+        self._ccxt_timeframe = "1m"
         # Determine exchange id and adjust defaults per exchange quirks
         self._ex_id = getattr(self.exchange, "id", self.exchange_name) or self.exchange_name
         self._ccxt_limit_default = 1000
@@ -238,23 +239,56 @@ class CandlestickManager:
             ch.setLevel(logging.DEBUG)
             self.log.addHandler(ch)
 
+    # ----- Logging helpers -----
+
+    @staticmethod
+    def _fmt_ts(ms: Optional[int]) -> str:
+        try:
+            return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(int(ms) / 1000.0)) if ms is not None else "-"
+        except Exception:
+            return str(ms)
+
+    def _log(self, level: str, event: str, **fields) -> None:
+        try:
+            ex = getattr(self, "_ex_id", self.exchange_name)
+        except Exception:
+            ex = self.exchange_name
+        base = [f"event={event}", f"exchange={ex}"]
+        parts = []
+        for k, v in fields.items():
+            if k.endswith("_ts") and isinstance(v, (int, np.integer)):
+                parts.append(f"{k}={self._fmt_ts(int(v))}")
+            else:
+                parts.append(f"{k}={v}")
+        msg = " ".join(base + parts)
+        if level == "debug":
+            self.log.debug(msg)
+        elif level == "info":
+            self.log.info(msg)
+        elif level == "warning":
+            self.log.warning(msg)
+        else:
+            self.log.error(msg)
+
     # ----- Paths and index -----
 
-    def _symbol_dir(self, symbol: str) -> str:
+    def _symbol_dir(self, symbol: str, timeframe: Optional[str] = None) -> str:
         sym = _sanitize_symbol(symbol)
-        return str(Path(self.cache_dir) / "ohlcv" / self.exchange_name / self.timeframe / sym)
+        tf_dir = (timeframe or "1m").strip().lower()
+        return str(Path(self.cache_dir) / "ohlcv" / self.exchange_name / tf_dir / sym)
 
-    def _index_path(self, symbol: str) -> str:
-        return str(Path(self._symbol_dir(symbol)) / "index.json")
+    def _index_path(self, symbol: str, timeframe: Optional[str] = None) -> str:
+        return str(Path(self._symbol_dir(symbol, timeframe)) / "index.json")
 
-    def _shard_path(self, symbol: str, date_key: str) -> str:
-        return str(Path(self._symbol_dir(symbol)) / f"{date_key}.npy")
+    def _shard_path(self, symbol: str, date_key: str, timeframe: Optional[str] = None) -> str:
+        return str(Path(self._symbol_dir(symbol, timeframe)) / f"{date_key}.npy")
 
-    def _ensure_symbol_index(self, symbol: str) -> dict:
-        if symbol in self._index:
-            return self._index[symbol]
+    def _ensure_symbol_index(self, symbol: str, timeframe: Optional[str] = None) -> dict:
+        key = f"{symbol}::{(timeframe or '1m').strip().lower()}"
+        if key in self._index:
+            return self._index[key]
         # Try load from disk
-        idx_path = self._index_path(symbol)
+        idx_path = self._index_path(symbol, timeframe)
         idx = {"shards": {}, "meta": {}}
         try:
             with open(idx_path, "r", encoding="utf-8") as f:
@@ -262,7 +296,7 @@ class CandlestickManager:
         except FileNotFoundError:
             pass
         except Exception as e:  # pragma: no cover
-            self.log.warning(f"Failed loading index for {symbol}: {e}")
+            self._log("warning", "index_load_failed", symbol=symbol, timeframe=timeframe or "1m", error=str(e))
         # Ensure meta keys
         if not isinstance(idx, dict):
             idx = {"shards": {}, "meta": {}}
@@ -271,7 +305,7 @@ class CandlestickManager:
         meta.setdefault("known_gaps", [])  # list of [start_ts, end_ts]
         meta.setdefault("last_refresh_ms", 0)
         meta.setdefault("last_final_ts", 0)
-        self._index[symbol] = idx
+        self._index[key] = idx
         return idx
 
     def _atomic_write_bytes(self, path: str, data: bytes) -> None:
@@ -283,9 +317,10 @@ class CandlestickManager:
             os.fsync(f.fileno())
         os.replace(tmp_path, path)
 
-    def _save_index(self, symbol: str) -> None:
-        idx_path = self._index_path(symbol)
-        payload = json.dumps(self._index[symbol], sort_keys=True).encode("utf-8")
+    def _save_index(self, symbol: str, timeframe: Optional[str] = None) -> None:
+        key = f"{symbol}::{(timeframe or '1m').strip().lower()}"
+        idx_path = self._index_path(symbol, timeframe)
+        payload = json.dumps(self._index[key], sort_keys=True).encode("utf-8")
         if portalocker is not None:
             # Lock the final target index.json to serialize writers
             os.makedirs(os.path.dirname(idx_path), exist_ok=True)
@@ -312,9 +347,9 @@ class CandlestickManager:
 
     # ----- Shard loading helpers -----
 
-    def _iter_shard_paths(self, symbol: str) -> Dict[str, str]:
+    def _iter_shard_paths(self, symbol: str, timeframe: Optional[str] = None) -> Dict[str, str]:
         """Return mapping date_key -> path for available shard files on disk."""
-        sd = Path(self._symbol_dir(symbol))
+        sd = Path(self._symbol_dir(symbol, timeframe))
         if not sd.exists():
             return {}
         out: Dict[str, str] = {}
@@ -363,10 +398,12 @@ class CandlestickManager:
             self.log.warning(f"Failed loading shard {path}: {e}")
             return np.empty((0,), dtype=CANDLE_DTYPE)
 
-    def _load_from_disk(self, symbol: str, start_ts: int, end_ts: int) -> None:
+    def _load_from_disk(
+        self, symbol: str, start_ts: int, end_ts: int, *, timeframe: Optional[str] = None
+    ) -> Optional[np.ndarray]:
         """Load any shards intersecting [start_ts, end_ts] and merge into cache."""
         try:
-            shards = self._iter_shard_paths(symbol)
+            shards = self._iter_shard_paths(symbol, timeframe)
             if not shards:
                 return
             load_keys = []
@@ -390,16 +427,28 @@ class CandlestickManager:
             if not arrays:
                 return
             merged_disk = np.sort(np.concatenate(arrays), order="ts")
-            self.log.debug(
-                f"load_from_disk symbol={symbol} days={len(load_keys)} rows={merged_disk.shape[0]}"
+            self._log(
+                "debug",
+                "load_from_disk",
+                symbol=symbol,
+                timeframe=timeframe or "1m",
+                days=len(load_keys),
+                rows=int(merged_disk.shape[0]),
+                start_ts=start_ts,
+                end_ts=end_ts,
             )
-            existing = self._ensure_symbol_cache(symbol)
-            merged = self._merge_overwrite(existing, merged_disk)
-            self._cache[symbol] = merged
+            if (timeframe or "1m").strip().lower() == "1m":
+                existing = self._ensure_symbol_cache(symbol)
+                merged = self._merge_overwrite(existing, merged_disk)
+                self._cache[symbol] = merged
+                return merged
+            else:
+                # Do not touch 1m cache for higher TF; let caller handle
+                return merged_disk
         except Exception as e:  # pragma: no cover - noncritical
-            self.log.warning(f"Disk load error for {symbol}: {e}")
-
-    def _save_range(self, symbol: str, arr: np.ndarray) -> None:
+            self._log("warning", "disk_load_error", symbol=symbol, timeframe=timeframe or "1m", error=str(e))
+            return None
+    def _save_range(self, symbol: str, arr: np.ndarray, *, timeframe: Optional[str] = None) -> None:
         """Persist fetched candles to daily shards by date_key."""
         if arr.size == 0:
             return
@@ -413,15 +462,15 @@ class CandlestickManager:
                 current_key = key
             if key != current_key:
                 if bucket:
-                    self._save_shard(symbol, current_key, np.array(bucket, dtype=CANDLE_DTYPE))
+                    self._save_shard(symbol, current_key, np.array(bucket, dtype=CANDLE_DTYPE), timeframe=timeframe or "1m")
                     total += len(bucket)
                 bucket = []
                 current_key = key
             bucket.append(tuple(row.tolist()))
         if bucket and current_key is not None:
-            self._save_shard(symbol, current_key, np.array(bucket, dtype=CANDLE_DTYPE))
+            self._save_shard(symbol, current_key, np.array(bucket, dtype=CANDLE_DTYPE), timeframe=timeframe or "1m")
             total += len(bucket)
-        self.log.debug(f"saved_range symbol={symbol} rows={total}")
+            self._log("debug", "saved_range", symbol=symbol, rows=total)
 
     def _merge_overwrite(self, existing: np.ndarray, new: np.ndarray) -> np.ndarray:
         """Merge two candle arrays by ts, preferring values from `new` on conflict."""
@@ -551,13 +600,25 @@ class CandlestickManager:
                 # Note: Avoid passing 'until' to Bitget due to API validation errors on non-1m tfs.
                 if end_exclusive_ms is not None:
                     exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
-                    # Avoid 'until' for exchanges with inconsistent paging using it (bitget, okx).
-                    if ("bitget" not in exid) and ("okx" not in exid):
-                        # For other exchanges, 'until' may help bound the end; otherwise forward pagination + clipping is used.
+                    # Avoid 'until' for exchanges where it yields tail-anchored or inconsistent pages
+                    # leading to incomplete forward pagination on first run.
+                    if (
+                        "bitget" not in exid
+                        and "okx" not in exid
+                        and "bybit" not in exid
+                        and "kucoin" not in exid
+                    ):
                         params["until"] = int(end_exclusive_ms) - 1
                 tf = timeframe or self._ccxt_timeframe
-                self.log.debug(
-                    f"ccxt.fetch_ohlcv exchange={self._ex_id} symbol={symbol} tf={tf} since={since_ms} limit={limit} attempt={attempt+1} params={params}"
+                self._log(
+                    "debug",
+                    "ccxt_fetch_ohlcv",
+                    symbol=symbol,
+                    tf=tf,
+                    since_ts=int(since_ms),
+                    limit=limit,
+                    attempt=attempt + 1,
+                    params=params,
                 )
                 res = await ex.fetch_ohlcv(
                     symbol,
@@ -566,15 +627,35 @@ class CandlestickManager:
                     limit=limit,
                     params=params,
                 )
-                self.log.debug(
-                    f"ccxt.fetch_ohlcv ok exchange={self._ex_id} symbol={symbol} rows={len(res) if res else 0} since={since_ms}"
+                self._log(
+                    "debug",
+                    "ccxt_fetch_ohlcv_ok",
+                    symbol=symbol,
+                    tf=tf,
+                    since_ts=int(since_ms),
+                    rows=(len(res) if res else 0),
                 )
                 return res or []
             except Exception as e:  # pragma: no cover - network not used in tests
-                self.log.warning(f"fetch_ohlcv attempt {attempt+1} failed: {e}")
+                self._log("warning", "ccxt_fetch_ohlcv_failed", symbol=symbol, attempt=attempt + 1, error=str(e))
                 await asyncio.sleep(backoff)
                 backoff *= 2
         return []
+
+    # ----- Array slicing helpers -----
+
+    def _slice_ts_range(self, arr: np.ndarray, start_ts: int, end_ts: int) -> np.ndarray:
+        """Return arr sliced to [start_ts, end_ts] inclusive by 'ts'.
+
+        Assumes arr is structured dtype CANDLE_DTYPE; sorts by ts before slicing.
+        """
+        if arr.size == 0:
+            return arr
+        arr = np.sort(_ensure_dtype(arr), order="ts")
+        ts_arr = _ts_index(arr)
+        i0 = int(np.searchsorted(ts_arr, start_ts, side="left"))
+        i1 = int(np.searchsorted(ts_arr, end_ts, side="right"))
+        return arr[i0:i1]
 
     def _normalize_ccxt_ohlcv(self, rows: list) -> np.ndarray:
         """Convert ccxt rows [ms,o,h,l,c,vol] to CANDLE_DTYPE and filter alignment."""
@@ -716,9 +797,12 @@ class CandlestickManager:
             i0 = int(np.searchsorted(ts_arr, lo, side="left"))
             i1 = int(np.searchsorted(ts_arr, hi, side="right"))
             if missing:
-                self.log.warning(
-                    f"standardize_gaps(strict=True): missing {len(missing)} minute(s) in range; "
-                    "returning available candles only"
+                self._log(
+                    "warning",
+                    "standardize_gaps_strict_missing",
+                    missing=len(missing),
+                    start_ts=lo,
+                    end_ts=hi,
                 )
             return a[i0:i1]
 
@@ -795,11 +879,35 @@ class CandlestickManager:
                 if start_ts > end_ts:
                     return np.empty((0,), dtype=CANDLE_DTYPE)
 
-                # Check in-memory TF range cache first
+                # Hyperliquid special case: max 5000 candles from current time for any tf
+                try:
+                    exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
+                except Exception:
+                    exid = ""
+                if "hyperliquid" in exid:
+                    earliest = int(finalized_end - period_ms * (5000 - 1))
+                    if start_ts < earliest:
+                        # Mark older part as known gap to avoid repeated fetch attempts
+                        gap_end = min(end_ts, earliest - period_ms)
+                        if start_ts <= gap_end:
+                            self._add_known_gap(symbol, int(start_ts), int(gap_end))
+                        start_ts = max(start_ts, earliest)
+
+                # Load from disk shards for this TF (if present) before resorting to network
+                try:
+                    disk_arr = self._load_from_disk(symbol, start_ts, end_ts, timeframe=out_tf)
+                except Exception:
+                    disk_arr = None
+
+                # Check in-memory TF range cache first (LRU)
                 cache_key = (str(out_tf), int(start_ts), int(end_ts))
-                sym_cache = self._tf_range_cache.setdefault(symbol, {})
+                sym_cache = self._tf_range_cache.setdefault(symbol, OrderedDict())
                 if cache_key in sym_cache:
                     arr_cached, fetched_at = sym_cache[cache_key]
+                    try:
+                        sym_cache.move_to_end(cache_key)
+                    except Exception:
+                        pass
                     if (
                         max_age_ms is None
                         or max_age_ms == 0
@@ -812,24 +920,36 @@ class CandlestickManager:
                     symbol, int(start_ts), int(end_excl), timeframe=out_tf
                 )
                 if fetched.size == 0:
+                    # If network yields nothing, return disk slice if available
+                    if isinstance(disk_arr, np.ndarray) and disk_arr.size:
+                        out = self._slice_ts_range(disk_arr, start_ts, end_ts)
+                        # cache and return
+                        sym_cache[cache_key] = (out, int(now))
+                        try:
+                            sym_cache.move_to_end(cache_key)
+                        except Exception:
+                            pass
+                        while len(sym_cache) > self._tf_range_cache_cap:
+                            sym_cache.popitem(last=False)
+                        self._tf_range_cache[symbol] = sym_cache
+                        return out
                     return fetched
                 # Clip to inclusive [start_ts, end_ts] in bucket space
-                fetched = np.sort(_ensure_dtype(fetched), order="ts")
-                ts_arr = _ts_index(fetched)
-                i0 = int(np.searchsorted(ts_arr, start_ts, side="left"))
-                i1 = int(np.searchsorted(ts_arr, end_ts, side="right"))
-                out = fetched[i0:i1]
+                out = self._slice_ts_range(fetched, start_ts, end_ts)
+                # Persist TF shards
+                self._save_range(symbol, out, timeframe=out_tf)
                 # Store in TF range cache
                 sym_cache[cache_key] = (out, int(now))
-                # Simple eviction to bound memory
-                if len(sym_cache) > 8:
-                    try:
-                        # remove an arbitrary old entry
-                        k = next(iter(sym_cache.keys()))
-                        if k != cache_key:
-                            sym_cache.pop(k, None)
-                    except Exception:
-                        pass
+                try:
+                    sym_cache.move_to_end(cache_key)
+                except Exception:
+                    pass
+                # LRU eviction per symbol
+                try:
+                    while len(sym_cache) > self._tf_range_cache_cap:
+                        sym_cache.popitem(last=False)
+                except Exception:
+                    pass
                 self._tf_range_cache[symbol] = sym_cache
                 return out
 
@@ -849,9 +969,10 @@ class CandlestickManager:
         if start_ts > end_ts:
             return np.empty((0,), dtype=CANDLE_DTYPE)
 
-        # Optionally refresh only if range touches or includes the current minute
+        # Optionally refresh if range touches the latest finalized minute
         allow_fetch_present = True
-        if end_ts >= _floor_minute(now) and self.exchange is not None:
+        latest_finalized = _floor_minute(now) - ONE_MIN_MS
+        if end_ts >= latest_finalized and self.exchange is not None:
             if max_age_ms == 0:
                 await self.refresh(symbol, through_ts=end_ts)
             elif max_age_ms is not None and max_age_ms > 0:
@@ -863,21 +984,13 @@ class CandlestickManager:
 
         # Try to load from disk shards for this range before slicing memory
         try:
-            self._load_from_disk(symbol, start_ts, end_ts)
+            self._load_from_disk(symbol, start_ts, end_ts, timeframe="1m")
         except Exception:  # pragma: no cover - best effort
             pass
 
-        # Get in-memory cached candles for the symbol
+        # Get in-memory cached candles for the symbol and slice to requested range
         arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
-        # Restrict to [start_ts, end_ts]
-        if arr.size:
-            arr = np.sort(arr, order="ts")
-            ts_arr = _ts_index(arr)
-            i0 = int(np.searchsorted(ts_arr, start_ts, side="left"))
-            i1 = int(np.searchsorted(ts_arr, end_ts, side="right"))
-            sub = arr[i0:i1]
-        else:
-            sub = arr
+        sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
 
         # Determine if the requested historical window is fully covered in memory
         def _is_fully_covered(a: np.ndarray, s_ts: int, e_ts: int) -> bool:
@@ -898,31 +1011,57 @@ class CandlestickManager:
 
         # For historical ranges, if we don't have shards for all days yet, fetch
         # exactly the range and persist shards for future calls.
-        end_finalized = _floor_minute(now) - ONE_MIN_MS
-        historical = end_ts <= end_finalized
+        end_finalized = latest_finalized
+        # Treat ranges ending exactly at the latest finalized minute as present-touching
+        historical = end_ts < end_finalized
         if self.exchange is not None and historical:
-            shard_map = self._iter_shard_paths(symbol)
-            needed_keys = self._date_keys_between(start_ts, end_ts)
-            have_all_days = all(k in shard_map for k in needed_keys.keys())
-            # If memory already holds the full requested range, skip fetching even if shards are missing
-            if not have_all_days and not fully_covered:
-                end_excl = min(end_ts + ONE_MIN_MS, end_finalized + ONE_MIN_MS)
-                if start_ts < end_excl:
-                    fetched = await self._fetch_ohlcv_paginated(symbol, start_ts, end_excl)
-                    if fetched.size:
-                        merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), fetched)
-                        self._cache[symbol] = merged
-                        self._save_range(symbol, fetched)
-                        # Re-slice after fetch
-                        arr = np.sort(self._cache[symbol], order="ts")
-                        ts_arr = _ts_index(arr)
-                        i0 = int(np.searchsorted(ts_arr, start_ts, side="left"))
-                        i1 = int(np.searchsorted(ts_arr, end_ts, side="right"))
-                        sub = arr[i0:i1]
-                        # update refresh metadata on successful fetch
-                        self._set_last_refresh_meta(
-                            symbol, last_refresh_ms=now, last_final_ts=int(arr[-1]["ts"])
-                        )
+            # If the requested historical window is not fully covered in memory,
+            # attempt to fetch unknown missing spans, regardless of shard presence.
+            if not fully_covered:
+                # Hyperliquid special case: cap lookback to last 5000 minutes
+                try:
+                    exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
+                except Exception:
+                    exid = ""
+                adj_start_ts = start_ts
+                if "hyperliquid" in exid:
+                    earliest = int(end_finalized - ONE_MIN_MS * (5000 - 1))
+                    if adj_start_ts < earliest:
+                        gap_end = min(end_ts, earliest - ONE_MIN_MS)
+                        if adj_start_ts <= gap_end:
+                            self._add_known_gap(symbol, int(adj_start_ts), int(gap_end))
+                        adj_start_ts = max(adj_start_ts, earliest)
+
+                # Skip fetch if all missing spans are already known gaps
+                missing_before = self._missing_spans(sub, start_ts, end_ts)
+                known = self._get_known_gaps(symbol)
+                def span_in_known(s: int, e: int) -> bool:
+                    for ks, ke in known:
+                        if s >= ks and e <= ke:
+                            return True
+                    return False
+                unknown_missing = [(s, e) for (s, e) in missing_before if not span_in_known(s, e)]
+
+                if unknown_missing:
+                    end_excl = min(end_ts + ONE_MIN_MS, end_finalized + ONE_MIN_MS)
+                    if adj_start_ts < end_excl:
+                        fetched = await self._fetch_ohlcv_paginated(symbol, adj_start_ts, end_excl)
+                        if fetched.size:
+                            merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), fetched)
+                            self._cache[symbol] = merged
+                            self._save_range(symbol, fetched, timeframe="1m")
+                            # Re-slice after fetch
+                            arr = np.sort(self._cache[symbol], order="ts")
+                            sub = self._slice_ts_range(arr, start_ts, end_ts)
+                            # update refresh metadata on successful fetch
+                            self._set_last_refresh_meta(
+                                symbol, last_refresh_ms=now, last_final_ts=int(arr[-1]["ts"])
+                            )
+                        # Mark any remaining unknown spans as known gaps to avoid repeated calls
+                        still_missing = self._missing_spans(sub, start_ts, end_ts)
+                        for s, e in still_missing:
+                            if not span_in_known(s, e):
+                                self._add_known_gap(symbol, s, e)
         elif self.exchange is not None and allow_fetch_present:
             # Range touches present (end at or beyond current minute); fetch up to current minute inclusive
             end_current = _floor_minute(now)
@@ -942,20 +1081,19 @@ class CandlestickManager:
                     if fetched.size:
                         merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), fetched)
                         self._cache[symbol] = merged
-                        self._save_range(symbol, fetched)
+                        self._save_range(symbol, fetched, timeframe="1m")
                         # Re-slice after fetch
                         arr = np.sort(self._cache[symbol], order="ts")
-                        ts_arr = _ts_index(arr)
-                        i0 = int(np.searchsorted(ts_arr, start_ts, side="left"))
-                        i1 = int(np.searchsorted(ts_arr, end_ts, side="right"))
-                        sub = arr[i0:i1]
+                        sub = self._slice_ts_range(arr, start_ts, end_ts)
                         self._set_last_refresh_meta(
                             symbol, last_refresh_ms=now, last_final_ts=int(arr[-1]["ts"])
                         )
 
-        # Best-effort tail completion: if we still miss trailing minutes within
-        # the requested window, attempt one more fetch from the last available ts.
-        if self.exchange is not None and allow_fetch_present:
+        # Best-effort tail completion (present-only): if we still miss trailing
+        # minutes within the requested window, attempt one more fetch from the
+        # last available ts. Skip for historical ranges to avoid redundant calls
+        # when exchanges have permanent holes.
+        if self.exchange is not None and allow_fetch_present and not historical:
             end_current = _floor_minute(now)
             end_excl_range = (
                 end_ts + ONE_MIN_MS
@@ -976,19 +1114,18 @@ class CandlestickManager:
                     break
                 merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), fetched)
                 self._cache[symbol] = merged
-                self._save_range(symbol, fetched)
+                self._save_range(symbol, fetched, timeframe="1m")
                 # Re-slice after fetch
                 arr = np.sort(self._cache[symbol], order="ts")
-                ts_arr = _ts_index(arr)
-                i0 = int(np.searchsorted(ts_arr, start_ts, side="left"))
-                i1 = int(np.searchsorted(ts_arr, end_ts, side="right"))
-                sub = arr[i0:i1]
+                sub = self._slice_ts_range(arr, start_ts, end_ts)
                 self._set_last_refresh_meta(
                     symbol, last_refresh_ms=now, last_final_ts=int(arr[-1]["ts"])
                 )
 
-        # Gap-oriented fetch and tagging: try filling internal gaps once; mark remaining as known gaps
-        if self.exchange is not None and allow_fetch_present:
+        # Gap-oriented fetch and tagging (present-only): try filling internal
+        # gaps once; mark remaining as known gaps. Skip for pure historical
+        # windows; those are handled above with known-gap marking.
+        if self.exchange is not None and allow_fetch_present and not historical:
             end_current = _floor_minute(now)
             inclusive_end = end_ts if historical else min(end_ts, end_current)
             missing = self._missing_spans(sub, start_ts, inclusive_end)
@@ -1018,13 +1155,10 @@ class CandlestickManager:
                     if fetched.size:
                         merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), fetched)
                         self._cache[symbol] = merged
-                        self._save_range(symbol, fetched)
+                        self._save_range(symbol, fetched, timeframe="1m")
                         # Re-slice after fetch
                         arr = np.sort(self._cache[symbol], order="ts")
-                        ts_arr = _ts_index(arr)
-                        i0 = int(np.searchsorted(ts_arr, start_ts, side="left"))
-                        i1 = int(np.searchsorted(ts_arr, end_ts, side="right"))
-                        sub = arr[i0:i1]
+                        sub = self._slice_ts_range(arr, start_ts, end_ts)
                         self._set_last_refresh_meta(
                             symbol, last_refresh_ms=now, last_final_ts=int(arr[-1]["ts"])
                         )
@@ -1181,12 +1315,63 @@ class CandlestickManager:
         tf: Optional[str] = None,
         timeframe: Optional[str] = None,
     ) -> float:
-        out_tf = timeframe or tf
+        return await self._get_latest_ema_generic(
+            symbol,
+            span,
+            max_age_ms,
+            timeframe or tf,
+            metric_key="volume",
+            series_fn=lambda a: np.asarray(a["bv"], dtype=np.float64),
+        )
+
+    async def get_latest_ema_quote_volume(
+        self,
+        symbol: str,
+        span: int,
+        max_age_ms: Optional[int] = None,
+        *,
+        tf: Optional[str] = None,
+        timeframe: Optional[str] = None,
+    ) -> float:
+        """Return latest EMA of quote volume over last `span` finalized candles.
+
+        Quote volume per candle is approximated as base_volume * typical_price,
+        where typical_price = (high + low + close) / 3. This is a common
+        approximation when trade-level VWAP is not available.
+        """
+        return await self._get_latest_ema_generic(
+            symbol,
+            span,
+            max_age_ms,
+            timeframe or tf,
+            metric_key="qv",
+            series_fn=lambda a: (np.asarray(a["bv"], dtype=np.float64)
+                                 * (np.asarray(a["h"], dtype=np.float64)
+                                    + np.asarray(a["l"], dtype=np.float64)
+                                    + np.asarray(a["c"], dtype=np.float64)) / 3.0),
+        )
+
+    async def _get_latest_ema_generic(
+        self,
+        symbol: str,
+        span: int,
+        max_age_ms: Optional[int],
+        timeframe: Optional[str],
+        *,
+        metric_key: str,
+        series_fn,
+    ) -> float:
+        """Shared implementation for EMA helpers over a derived series.
+
+        series_fn: callable taking the candles ndarray and returning a 1-D float64 series.
+        metric_key: short key used in EMA cache to distinguish metrics (e.g., 'volume', 'qv').
+        """
+        out_tf = timeframe
         period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         now = _utc_now_ms()
         tf_key = str(period_ms)
-        key = ("volume", int(span), tf_key)
+        key = (metric_key, int(span), tf_key)
         cache = self._ema_cache.setdefault(symbol, {})
         if max_age_ms is not None and max_age_ms > 0 and key in cache:
             val, cached_end_ts, computed_at = cache[key]
@@ -1197,8 +1382,8 @@ class CandlestickManager:
         )
         if arr.size == 0:
             return float("nan")
-        vols = np.asarray(arr["bv"], dtype=np.float64)
-        res = float(self._ema(vols, span))
+        series = series_fn(arr)
+        res = float(self._ema(series, span))
         cache[key] = (res, int(end_ts), int(now))
         return res
 
@@ -1211,30 +1396,17 @@ class CandlestickManager:
         tf: Optional[str] = None,
         timeframe: Optional[str] = None,
     ) -> float:
-        out_tf = timeframe or tf
-        period_ms = _tf_to_ms(out_tf)
-        start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
-        now = _utc_now_ms()
-        tf_key = str(period_ms)
-        key = ("nrr", int(span), tf_key)
-        cache = self._ema_cache.setdefault(symbol, {})
-        if max_age_ms is not None and max_age_ms > 0 and key in cache:
-            val, cached_end_ts, computed_at = cache[key]
-            if int(cached_end_ts) == int(end_ts) and (now - int(computed_at)) <= int(max_age_ms):
-                return float(val)
-        arr = await self.get_candles(
-            symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, timeframe=out_tf
+        return await self._get_latest_ema_generic(
+            symbol,
+            span,
+            max_age_ms,
+            timeframe or tf,
+            metric_key="nrr",
+            series_fn=lambda a: (
+                (np.asarray(a["h"], dtype=np.float64) - np.asarray(a["l"], dtype=np.float64))
+                / np.maximum(np.asarray(a["c"], dtype=np.float64), 1e-12)
+            ),
         )
-        if arr.size == 0:
-            return float("nan")
-        closes = np.asarray(arr["c"], dtype=np.float64)
-        highs = np.asarray(arr["h"], dtype=np.float64)
-        lows = np.asarray(arr["l"], dtype=np.float64)
-        denom = np.maximum(closes, 1e-12)
-        nrr = (highs - lows) / denom
-        res = float(self._ema(nrr, span))
-        cache[key] = (res, int(end_ts), int(now))
-        return res
 
     # ----- EMA series helpers -----
 
@@ -1369,7 +1541,7 @@ class CandlestickManager:
 
     # ----- Persistence -----
 
-    def _save_shard(self, symbol: str, date_key: str, array: np.ndarray) -> None:
+    def _save_shard(self, symbol: str, date_key: str, array: np.ndarray, *, timeframe: Optional[str] = None) -> None:
         """Save shard as .npy and update index.json atomically.
 
         Parameters
@@ -1389,7 +1561,7 @@ class CandlestickManager:
         data_bytes = arr.tobytes()
         crc = int(zlib.crc32(data_bytes) & 0xFFFFFFFF)
 
-        shard_path = self._shard_path(symbol, date_key)
+        shard_path = self._shard_path(symbol, date_key, timeframe)
         os.makedirs(os.path.dirname(shard_path), exist_ok=True)
         # Write .npy content atomically
         # Use numpy.save to ensure .npy format, writing to a temp path then replace
@@ -1401,7 +1573,7 @@ class CandlestickManager:
         os.replace(tmp_path, shard_path)
 
         # Update index
-        idx = self._ensure_symbol_index(symbol)
+        idx = self._ensure_symbol_index(symbol, timeframe)
         shards = idx.setdefault("shards", {})
         shards[date_key] = {
             "path": shard_path,
@@ -1410,8 +1582,9 @@ class CandlestickManager:
             "count": int(arr.shape[0]),
             "crc32": crc,
         }
-        self._index[symbol] = idx
-        self._save_index(symbol)
+        key = f"{symbol}::{(timeframe or '1m').strip().lower()}"
+        self._index[key] = idx
+        self._save_index(symbol, timeframe)
 
     # ----- Context manager and shutdown -----
 
