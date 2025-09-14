@@ -104,27 +104,6 @@ def get_file_mod_ms(filepath):
     return mod_time_epoch * 1000
 
 
-def date_to_ts(date_str: str) -> float:
-    """
-    Convert a date string to UTC timestamp (seconds since epoch).
-
-    Args:
-        date_str: Date string in ISO format (e.g., "2025-03-12T12:43:22" or with microseconds)
-
-    Returns:
-        UTC timestamp as float
-    """
-    # Parse the datetime string - fromisoformat handles various ISO formats
-    dt = datetime.datetime.fromisoformat(date_str)
-
-    # If the datetime is naive (no timezone info), treat it as UTC
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=datetime.timezone.utc)
-
-    # Convert to UTC timestamp
-    return dt.timestamp()
-
-
 def format_end_date(end_date) -> str:
     if end_date in ["today", "now", "", None]:
         ms2day = 1000 * 60 * 60 * 24
