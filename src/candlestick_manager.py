@@ -37,6 +37,7 @@ import logging
 import os
 import time
 import zlib
+import inspect
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
@@ -74,6 +75,76 @@ EMA_SERIES_DTYPE = np.dtype(
 
 
 # ----- Utilities -----
+
+
+def get_caller_name(depth: int = 2, logger: Optional[logging.Logger] = None) -> str:
+    """Return a qualified name for the first non-CandlestickManager caller.
+
+    - depth: initial frames to skip (default 2 to hop over _log and its caller)
+    - logger: unused (kept for compatibility)
+
+    Traverses the stack beyond `depth` until it finds a frame whose `self`
+    is not a CandlestickManager instance. Falls back to the frame at `depth`
+    if none is found or on any error.
+    """
+
+    def frame_to_name(fr) -> str:
+        try:
+            func = getattr(fr.f_code, "co_name", "unknown")
+            mod = fr.f_globals.get("__name__", None)
+            cls = None
+            if "self" in fr.f_locals and fr.f_locals["self"] is not None:
+                cls = type(fr.f_locals["self"]).__name__
+            elif "cls" in fr.f_locals and fr.f_locals["cls"] is not None:
+                cls = getattr(fr.f_locals["cls"], "__name__", None)
+            parts = []
+            if isinstance(mod, str) and mod:
+                parts.append(mod)
+            if isinstance(cls, str) and cls:
+                parts.append(cls)
+            if isinstance(func, str) and func:
+                parts.append(func)
+            return ".".join(parts) if parts else "unknown"
+        except Exception:
+            return "unknown"
+
+    frame = inspect.currentframe()
+    target = frame
+    fallback_name = "unknown"
+    try:
+        # Initial hop
+        for _ in range(max(0, int(depth))):
+            if target is None:
+                break
+            target = target.f_back  # type: ignore[attr-defined]
+        if target is not None:
+            fallback_name = frame_to_name(target)
+
+        # Walk up to find a frame not belonging to CandlestickManager
+        cur = target
+        for _ in range(20):  # safety cap
+            if cur is None:
+                break
+            try:
+                slf = cur.f_locals.get("self") if hasattr(cur, "f_locals") else None
+                is_cm = slf is not None and type(slf).__name__ == "CandlestickManager"
+            except Exception:
+                is_cm = False
+            if not is_cm:
+                name = frame_to_name(cur)
+                if name and name != "unknown":
+                    return name
+            cur = cur.f_back  # type: ignore[attr-defined]
+    finally:
+        try:
+            del frame
+        except Exception:
+            pass
+        try:
+            del target  # type: ignore[name-defined]
+        except Exception:
+            pass
+    return fallback_name
 
 
 def _utc_now_ms() -> int:
@@ -188,9 +259,9 @@ class CandlestickManager:
         self._current_close_cache: Dict[str, Tuple[float, int]] = {}
         # Cache for fetched higher-timeframe windows to avoid duplicate remote calls (LRU per symbol)
         # Keyed per symbol -> OrderedDict[(tf_str, start_ts, end_ts) -> (array, fetched_at_ms)]
-        self._tf_range_cache: Dict[
-            str, OrderedDict[Tuple[str, int, int], Tuple[np.ndarray, int]]
-        ] = {}
+        self._tf_range_cache: Dict[str, OrderedDict[Tuple[str, int, int], Tuple[np.ndarray, int]]] = (
+            {}
+        )
         self._tf_range_cache_cap = 8
 
         self._setup_logging()
@@ -301,7 +372,11 @@ class CandlestickManager:
     @staticmethod
     def _fmt_ts(ms: Optional[int]) -> str:
         try:
-            return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(int(ms) / 1000.0)) if ms is not None else "-"
+            return (
+                time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(int(ms) / 1000.0))
+                if ms is not None
+                else "-"
+            )
         except Exception:
             return str(ms)
 
@@ -310,7 +385,15 @@ class CandlestickManager:
             ex = getattr(self, "_ex_id", self.exchange_name)
         except Exception:
             ex = self.exchange_name
-        base = [f"event={event}", f"exchange={ex}"]
+        base = [f"event={event}"]
+        # In debug mode, include caller info for traceability
+        if self.debug:
+            try:
+                caller = get_caller_name()
+                base.append(f"called_by={caller}")
+            except Exception:
+                pass
+        base.append(f"exchange={ex}")
         parts = []
         for k, v in fields.items():
             if k.endswith("_ts") and isinstance(v, (int, np.integer)):
@@ -353,7 +436,13 @@ class CandlestickManager:
         except FileNotFoundError:
             pass
         except Exception as e:  # pragma: no cover
-            self._log("warning", "index_load_failed", symbol=symbol, timeframe=timeframe or "1m", error=str(e))
+            self._log(
+                "warning",
+                "index_load_failed",
+                symbol=symbol,
+                timeframe=timeframe or "1m",
+                error=str(e),
+            )
         # Ensure meta keys
         if not isinstance(idx, dict):
             idx = {"shards": {}, "meta": {}}
@@ -503,8 +592,11 @@ class CandlestickManager:
                 # Do not touch 1m cache for higher TF; let caller handle
                 return merged_disk
         except Exception as e:  # pragma: no cover - noncritical
-            self._log("warning", "disk_load_error", symbol=symbol, timeframe=timeframe or "1m", error=str(e))
+            self._log(
+                "warning", "disk_load_error", symbol=symbol, timeframe=timeframe or "1m", error=str(e)
+            )
             return None
+
     def _save_range(self, symbol: str, arr: np.ndarray, *, timeframe: Optional[str] = None) -> None:
         """Persist fetched candles to daily shards by date_key."""
         if arr.size == 0:
@@ -519,13 +611,20 @@ class CandlestickManager:
                 current_key = key
             if key != current_key:
                 if bucket:
-                    self._save_shard(symbol, current_key, np.array(bucket, dtype=CANDLE_DTYPE), timeframe=timeframe or "1m")
+                    self._save_shard(
+                        symbol,
+                        current_key,
+                        np.array(bucket, dtype=CANDLE_DTYPE),
+                        timeframe=timeframe or "1m",
+                    )
                     total += len(bucket)
                 bucket = []
                 current_key = key
             bucket.append(tuple(row.tolist()))
         if bucket and current_key is not None:
-            self._save_shard(symbol, current_key, np.array(bucket, dtype=CANDLE_DTYPE), timeframe=timeframe or "1m")
+            self._save_shard(
+                symbol, current_key, np.array(bucket, dtype=CANDLE_DTYPE), timeframe=timeframe or "1m"
+            )
             total += len(bucket)
             self._log("debug", "saved_range", symbol=symbol, rows=total)
 
@@ -696,7 +795,13 @@ class CandlestickManager:
                 )
                 return res or []
             except Exception as e:  # pragma: no cover - network not used in tests
-                self._log("warning", "ccxt_fetch_ohlcv_failed", symbol=symbol, attempt=attempt + 1, error=str(e))
+                self._log(
+                    "warning",
+                    "ccxt_fetch_ohlcv_failed",
+                    symbol=symbol,
+                    attempt=attempt + 1,
+                    error=str(e),
+                )
                 await asyncio.sleep(backoff)
                 backoff *= 2
         return []
@@ -1122,11 +1227,13 @@ class CandlestickManager:
                 # Skip fetch if all missing spans are already known gaps
                 missing_before = self._missing_spans(sub, start_ts, end_ts)
                 known = self._get_known_gaps(symbol)
+
                 def span_in_known(s: int, e: int) -> bool:
                     for ks, ke in known:
                         if s >= ks and e <= ke:
                             return True
                     return False
+
                 unknown_missing = [(s, e) for (s, e) in missing_before if not span_in_known(s, e)]
 
                 if unknown_missing:
@@ -1412,6 +1519,34 @@ class CandlestickManager:
         cache[key] = (res, int(end_ts), int(now))
         return res
 
+    async def get_ema_bounds(
+        self,
+        symbol: str,
+        span_0: int,
+        span_1: int,
+        max_age_ms: Optional[int] = None,
+        *,
+        timeframe: Optional[str] = None,
+    ) -> Tuple[float, float]:
+        """Return (lower, upper) bounds from EMAs at spans {span_0, span_1, span_2}.
+
+        span_2 = round(sqrt(span_0 * span_1)). Forwards timeframe and TTL to
+        get_latest_ema_close. Computes the three EMAs concurrently.
+        """
+        from math import isfinite
+
+        s2 = int(round((float(span_0) * float(span_1)) ** 0.5))
+        e0, e1, e2 = await asyncio.gather(
+            self.get_latest_ema_close(symbol, span_0, max_age_ms=max_age_ms, timeframe=timeframe),
+            self.get_latest_ema_close(symbol, span_1, max_age_ms=max_age_ms, timeframe=timeframe),
+            self.get_latest_ema_close(symbol, s2, max_age_ms=max_age_ms, timeframe=timeframe),
+        )
+        vals = [e for e in (e0, e1, e2) if isinstance(e, (int, float)) and isfinite(float(e))]
+        if not vals:
+            nan = float("nan")
+            return nan, nan
+        return float(min(vals)), float(max(vals))
+
     async def get_latest_ema_volume(
         self,
         symbol: str,
@@ -1449,10 +1584,15 @@ class CandlestickManager:
             max_age_ms,
             timeframe,
             metric_key="qv",
-            series_fn=lambda a: (np.asarray(a["bv"], dtype=np.float64)
-                                 * (np.asarray(a["h"], dtype=np.float64)
-                                    + np.asarray(a["l"], dtype=np.float64)
-                                    + np.asarray(a["c"], dtype=np.float64)) / 3.0),
+            series_fn=lambda a: (
+                np.asarray(a["bv"], dtype=np.float64)
+                * (
+                    np.asarray(a["h"], dtype=np.float64)
+                    + np.asarray(a["l"], dtype=np.float64)
+                    + np.asarray(a["c"], dtype=np.float64)
+                )
+                / 3.0
+            ),
         )
 
     async def _get_latest_ema_generic(
@@ -1641,7 +1781,9 @@ class CandlestickManager:
 
     # ----- Persistence -----
 
-    def _save_shard(self, symbol: str, date_key: str, array: np.ndarray, *, timeframe: Optional[str] = None) -> None:
+    def _save_shard(
+        self, symbol: str, date_key: str, array: np.ndarray, *, timeframe: Optional[str] = None
+    ) -> None:
         """Save shard as .npy and update index.json atomically.
 
         Parameters
