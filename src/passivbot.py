@@ -20,6 +20,7 @@ import numpy as np
 import inspect
 import passivbot_rust as pbr
 import logging
+from candlestick_manager import CandlestickManager
 from utils import (
     load_markets,
     coin_to_symbol,
@@ -275,6 +276,7 @@ class Passivbot:
         self.state_change_detected_by_symbol = set()
         self.recent_order_executions = []
         self.recent_order_cancellations = []
+        self.cm = CandlestickManager(exchange=self.cca, debug=True)
 
     async def start_bot(self):
         logging.info(f"Starting bot {self.exchange}...")
@@ -305,13 +307,13 @@ class Passivbot:
         self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
         # await self.init_flags()
         self.init_coin_overrides()
-        await self.update_tickers()
+        # await self.update_tickers()
         self.refresh_approved_ignored_coins_lists()
         # self.set_live_configs()
         self.set_wallet_exposure_limits()
         await self.update_positions()
         await self.update_open_orders()
-        self.update_effective_min_cost()
+        await self.update_effective_min_cost()
         self.n_symbols_missing_ohlcvs_1m = len(self.get_symbols_approved_or_has_pos())
         if self.is_forager_mode():
             await self.update_first_timestamps()
@@ -465,7 +467,7 @@ class Passivbot:
         await self.execution_cycle()
         await self.update_EMAs()
         await self.update_exchange_configs()
-        to_cancel, to_create = self.calc_orders_to_cancel_and_create()
+        to_cancel, to_create = await self.calc_orders_to_cancel_and_create()
 
         # debug duplicates
         seen = set()
@@ -910,7 +912,7 @@ class Passivbot:
         # determine coins with pos for normal or gs modes
         # determine coins from ideal coins for normal modes
 
-        self.update_effective_min_cost()
+        await self.update_effective_min_cost()
         self.refresh_approved_ignored_coins_lists()
         self.set_wallet_exposure_limits()
         previous_PB_modes = deepcopy(self.PB_modes) if hasattr(self, "PB_modes") else None
@@ -1108,10 +1110,10 @@ class Passivbot:
             self.execution_scheduled = True
         return
 
-    def handle_balance_update(self, upd, source="WS"):
+    async def handle_balance_update(self, upd, source="WS"):
         try:
             upd[self.quote]["total"] = round_dynamic(upd[self.quote]["total"], 10)
-            equity = upd[self.quote]["total"] + self.calc_upnl_sum()
+            equity = upd[self.quote]["total"] + (await self.calc_upnl_sum())
             if self.balance != upd[self.quote]["total"]:
                 logging.info(
                     f"balance changed: {self.balance} -> {upd[self.quote]['total']} equity: {equity:.4f} source: {source}"
@@ -1130,14 +1132,17 @@ class Passivbot:
             self.ohlcvs_1m[symbol][int(elm[0])] = elm
             self.ohlcvs_1m_update_timestamps_WS[symbol] = utc_ms()
 
-    def calc_upnl_sum(self):
+    async def calc_upnl_sum(self):
         upnl_sum = 0.0
+        last_prices = await self.get_last_prices(
+            set([x["symbol"] for x in self.fetched_positions]), max_age_ms=60_000
+        )
         for elm in self.fetched_positions:
             try:
                 upnl = calc_pnl(
                     elm["position_side"],
                     elm["price"],
-                    self.get_last_price(elm["symbol"]),
+                    last_prices[elm["symbol"]],
                     elm["size"],
                     self.inverse,
                     self.c_mults[elm["symbol"]],
@@ -1297,7 +1302,7 @@ class Passivbot:
     def get_exchange_time(self):
         return utc_ms() + self.utc_offset
 
-    def log_position_changes(self, positions_old, positions_new, rd=6):
+    async def log_position_changes(self, positions_old, positions_new, rd=6):
         # Map old and new positions for easy comparison
         psold = {
             (x["symbol"], x["position_side"]): {k: x[k] for k in ["size", "price"]}
@@ -1361,7 +1366,7 @@ class Passivbot:
             except:
                 WE_ratio = 0.0
 
-            last_price = or_default(self.get_last_price, symbol, default=0.0)
+            last_price = await self.cm.get_current_close(symbol, max_age_ms=60_000)
             try:
                 pprice_diff = (
                     pbr.calc_pprice_diff_int(self.pside_int_map[pside], new["price"], last_price)
@@ -1424,9 +1429,9 @@ class Passivbot:
         positions_list_new, balance_new = res
         fetched_positions_old = deepcopy(self.fetched_positions)
         self.fetched_positions = positions_list_new
-        self.handle_balance_update({self.quote: {"total": balance_new}}, source="REST")
+        await self.handle_balance_update({self.quote: {"total": balance_new}}, source="REST")
         try:
-            self.log_position_changes(fetched_positions_old, self.fetched_positions)
+            await self.log_position_changes(fetched_positions_old, self.fetched_positions)
         except Exception as e:
             logging.error(f"error logging position changes {e}")
         positions_new = {
@@ -1481,19 +1486,20 @@ class Passivbot:
         logging.info(f"debug get_last_price {symbol} failed, called by {get_caller_name()}")
         return null_replace
 
-    def update_effective_min_cost(self, symbol=None):
+    async def update_effective_min_cost(self, symbol=None):
         if not hasattr(self, "effective_min_cost"):
             self.effective_min_cost = {}
         if symbol is None:
             symbols = sorted(self.get_symbols_approved_or_has_pos())
         else:
             symbols = [symbol]
+        last_prices = await self.get_last_prices(symbols, max_age_ms=60_000)
         for symbol in symbols:
             try:
                 self.effective_min_cost[symbol] = max(
                     pbr.qty_to_cost(
                         self.min_qtys[symbol],
-                        self.get_last_price(symbol),
+                        last_prices[symbol],
                         self.c_mults[symbol],
                     ),
                     self.min_costs[symbol],
@@ -1502,8 +1508,38 @@ class Passivbot:
                 logging.error(f"error with {get_function_name()} for {symbol}: {e}")
                 traceback.print_exc()
 
-    def calc_ideal_orders(self):
+    async def get_last_prices(self, symbols, max_age_ms=10_000):
+        # fetches last prices concurrently
+        tasks = {}
+        for symbol in symbols:
+            tasks[symbol] = asyncio.create_task(
+                self.cm.get_current_close(symbol, max_age_ms=max_age_ms)
+            )
+        results = {}
+        for symbol in tasks:
+            results[symbol] = await tasks[symbol]
+        return results
+
+    async def get_ema_bounds(self, symbols, pside, max_age_ms=60_000):
+        tasks = {}
+        for symbol in symbols:
+            span_0 = self.config_get(["bot", pside, "ema_span_0"], symbol=symbol)
+            span_1 = self.config_get(["bot", pside, "ema_span_1"], symbol=symbol)
+            tasks[symbol] = asyncio.create_task(
+                self.cm.get_ema_bounds(symbol, span_0, span_1, max_age_ms=max_age_ms)
+            )
+        results = {}
+        for symbol in tasks:
+            results[symbol] = await tasks[symbol]
+        return results
+
+    async def calc_ideal_orders(self):
         ideal_orders = {symbol: [] for symbol in self.active_symbols}
+        last_prices = await self.get_last_prices(
+            set(flatten(self.PB_modes.values())), max_age_ms=10_000
+        )
+
+        # TODO: rewrite to use self.cm for last prices and emas, calc only for what's to be used
         for pside in self.PB_modes:
             for symbol in self.PB_modes[pside]:
                 if self.PB_modes[pside][symbol] == "panic":
@@ -1514,7 +1550,7 @@ class Passivbot:
                         ideal_orders[symbol].append(
                             (
                                 abs(self.positions[symbol][pside]["size"]) * qmul,
-                                self.get_last_price(symbol),
+                                last_prices[symbol],
                                 panic_order_type,
                                 pbr.order_type_snake_to_id(panic_order_type),
                             )
@@ -1558,8 +1594,12 @@ class Passivbot:
                         self.trailing_prices[symbol][pside]["max_since_min"],
                         self.trailing_prices[symbol][pside]["max_since_open"],
                         self.trailing_prices[symbol][pside]["min_since_max"],
-                        self.emas[pside][symbol].min(),
-                        self.get_last_price(symbol),
+                        (
+                            self.emas[pside][symbol].min()
+                            if pside == "long"
+                            else self.emas[pside][symbol].max()
+                        ),
+                        last_prices[symbol],
                     )
                     closes = getattr(pbr, f"calc_closes_{pside}_py")(
                         self.qty_steps[symbol],
@@ -1589,13 +1629,13 @@ class Passivbot:
                         self.trailing_prices[symbol][pside]["max_since_min"],
                         self.trailing_prices[symbol][pside]["max_since_open"],
                         self.trailing_prices[symbol][pside]["min_since_max"],
-                        self.get_last_price(symbol),
+                        last_prices[symbol],
                     )
                     ideal_orders[symbol] += [
                         (x[0], x[1], snake_of(x[2]), x[2]) for x in entries + closes
                     ]
 
-        unstucking_symbol, unstucking_close = self.calc_unstucking_close()
+        unstucking_symbol, unstucking_close = await self.calc_unstucking_close()
         if unstucking_close[0] != 0.0:
             ideal_orders[unstucking_symbol] = [
                 x for x in ideal_orders[unstucking_symbol] if not "close" in x[2]
@@ -1605,7 +1645,7 @@ class Passivbot:
         ideal_orders_f = {}
         for symbol in ideal_orders:
             ideal_orders_f[symbol] = []
-            last_mprice = self.get_last_price(symbol)
+            last_mprice = last_prices[symbol]
             with_mprice_diff = [(calc_diff(x[1], last_mprice), x) for x in ideal_orders[symbol]]
             seen = set()
             any_partial = any(["partial" in order[2] for _, order in with_mprice_diff])
@@ -1672,7 +1712,7 @@ class Passivbot:
                 self.emas[pside][symbol].min() * (1.0 - ema_dist), self.price_steps[symbol]
             )
 
-    def calc_unstucking_close(self) -> (float, float, str, int):
+    async def calc_unstucking_close(self) -> (float, float, str, int):
         if len(self.pnls) == 0:
             return "", (
                 0.0,
@@ -1684,6 +1724,7 @@ class Passivbot:
         pnls_cumsum = np.array([x["pnl"] for x in self.pnls]).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = (pnls_cumsum.max(), pnls_cumsum[-1])
         unstuck_allowances = {}
+        last_prices = await self.get_last_prices(set(self.positions), max_age_ms=10_000)
         for pside in ["long", "short"]:
             unstuck_allowances[pside] = (
                 pbr.calc_auto_unstuck_allowance(
@@ -1717,21 +1758,21 @@ class Passivbot:
                             self.config_get(["bot", pside, "unstuck_ema_dist"], symbol=symbol),
                             pside == "long",
                         )
-                        if (pside == "long" and self.get_last_price(symbol) >= ema_price) or (
-                            pside == "short" and self.get_last_price(symbol) <= ema_price
+                        if (pside == "long" and last_prices[symbol] >= ema_price) or (
+                            pside == "short" and last_prices[symbol] <= ema_price
                         ):
                             # eligible for unstucking
                             pprice_diff = pbr.calc_pprice_diff_int(
                                 self.pside_int_map[pside],
                                 self.positions[symbol][pside]["price"],
-                                self.get_last_price(symbol),
+                                (await self.cm.get_current_close(symbol, max_age_ms=10_000)),
                             )
                             stuck_positions.append((symbol, pside, pprice_diff, ema_price))
         if not stuck_positions:
             return "", (0.0, 0.0, "", pbr.get_order_id_type_from_string("empty"))
         stuck_positions.sort(key=lambda x: x[2])
         for symbol, pside, pprice_diff, ema_price in stuck_positions:
-            close_price = self.get_last_price(symbol)
+            close_price = last_prices[symbol]
             if pside == "long":
                 min_entry_qty = calc_min_entry_qty(
                     close_price,
@@ -1836,8 +1877,8 @@ class Passivbot:
                     )
         return "", (0.0, 0.0, "", pbr.get_order_id_type_from_string("empty"))
 
-    def calc_orders_to_cancel_and_create(self):
-        ideal_orders = self.calc_ideal_orders()
+    async def calc_orders_to_cancel_and_create(self):
+        ideal_orders = await self.calc_ideal_orders()
         actual_orders = {}
         for symbol in self.active_symbols:
             actual_orders[symbol] = []
@@ -1892,7 +1933,13 @@ class Passivbot:
         for x in to_create:
             try:
                 to_create_with_mprice_diff.append(
-                    (calc_diff(x["price"], self.get_last_price(x["symbol"])), x)
+                    (
+                        calc_diff(
+                            x["price"],
+                            (await self.cm.get_current_close(x["symbol"], max_age_ms=10_000)),
+                        ),
+                        x,
+                    )
                 )
             except Exception as e:
                 logging.info(f"debug: price missing sort to_create by mprice_diff {x} {e}")
@@ -1902,7 +1949,13 @@ class Passivbot:
         for x in to_cancel:
             try:
                 to_cancel_with_mprice_diff.append(
-                    (calc_diff(x["price"], self.get_last_price(x["symbol"])), x)
+                    (
+                        calc_diff(
+                            x["price"],
+                            (await self.cm.get_current_close(x["symbol"], max_age_ms=10_000)),
+                        ),
+                        x,
+                    )
                 )
             except Exception as e:
                 logging.info(f"debug: price missing sort to_cancel by mprice_diff {x} {e}")
