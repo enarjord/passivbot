@@ -130,12 +130,6 @@ def _tf_to_ms(s: Optional[str]) -> int:
 # ----- CandlestickManager -----
 
 
-@dataclass
-class _Index:
-    shards: Dict[str, dict]
-    meta: Dict[str, dict]
-
-
 class CandlestickManager:
     """Manage 1m OHLCV candles with simple cache and gap standardization.
 
@@ -151,10 +145,10 @@ class CandlestickManager:
         Default window used when start_ts is not provided.
     overlap_candles : int
         Overlap applied when refreshing from network (not exercised in tests).
-    memory_days : int
-        Retention in-memory. Not enforced by tests, reserved for future use.
-    disk_retention_days : int
-        Retention on-disk. Not enforced by tests, reserved for future use.
+    max_memory_candles_per_symbol : int
+        Max number of 1m candles in RAM per symbol (rolling window).
+    max_disk_candles_per_symbol_per_tf : int
+        Max total candles per symbol+timeframe on disk (oldest shards pruned).
     debug : bool
         Enable verbose logging.
     """
@@ -167,8 +161,9 @@ class CandlestickManager:
         cache_dir: str = "caches",
         default_window_candles: int = 100,
         overlap_candles: int = 30,
-        memory_days: int = 7,
-        disk_retention_days: int = 30,
+        # Retention knobs (candle-count based):
+        max_memory_candles_per_symbol: int = 200_000,
+        max_disk_candles_per_symbol_per_tf: int = 2_000_000,
         debug: bool = False,
     ) -> None:
         self.exchange = exchange
@@ -180,8 +175,8 @@ class CandlestickManager:
         self.cache_dir = cache_dir
         self.default_window_candles = int(default_window_candles)
         self.overlap_candles = int(overlap_candles)
-        self.memory_days = int(memory_days)
-        self.disk_retention_days = int(disk_retention_days)
+        self.max_memory_candles_per_symbol = int(max_memory_candles_per_symbol)
+        self.max_disk_candles_per_symbol_per_tf = int(max_disk_candles_per_symbol_per_tf)
         self.debug = bool(debug)
 
         self._cache: Dict[str, np.ndarray] = {}
@@ -238,6 +233,68 @@ class CandlestickManager:
             ch.setFormatter(fmt)
             ch.setLevel(logging.DEBUG)
             self.log.addHandler(ch)
+
+    # ----- Retention helpers -----
+
+    def _enforce_memory_retention(self, symbol: str) -> None:
+        try:
+            arr = self._cache.get(symbol)
+            if arr is None or arr.size == 0:
+                return
+            nmax = self.max_memory_candles_per_symbol
+            if nmax > 0 and arr.shape[0] > nmax:
+                # keep last nmax by ts
+                arr = np.sort(arr, order="ts")
+                self._cache[symbol] = arr[-nmax:]
+        except Exception:
+            return
+
+    def _enforce_disk_retention(self, symbol: str, timeframe: str) -> None:
+        try:
+            tf = (timeframe or "1m").strip().lower()
+            idx = self._ensure_symbol_index(symbol, tf)
+            shards = idx.get("shards", {})
+            if not shards:
+                return
+            # Sum counts; if over limit, delete oldest shard files until within limit
+            total = 0
+            items = []
+            for k, v in shards.items():
+                try:
+                    count = int(v.get("count", 0))
+                except Exception:
+                    count = 0
+                total += count
+                items.append((k, v))
+            limit = self.max_disk_candles_per_symbol_per_tf
+            if limit <= 0 or total <= limit:
+                return
+            # Sort shards by date_key ascending (oldest first)
+            items.sort(key=lambda x: x[0])
+            # Remove oldest until under limit
+            for date_key, meta in items:
+                path = meta.get("path")
+                try:
+                    if path and os.path.exists(path):
+                        os.remove(path)
+                except Exception:
+                    pass
+                # update index
+                try:
+                    cnt = int(meta.get("count", 0))
+                except Exception:
+                    cnt = 0
+                total -= cnt
+                shards.pop(date_key, None)
+                if total <= limit:
+                    break
+            # persist updated index
+            idx["shards"] = shards
+            key = f"{symbol}::{tf}"
+            self._index[key] = idx
+            self._save_index(symbol, tf)
+        except Exception:
+            return
 
     # ----- Logging helpers -----
 
@@ -494,7 +551,9 @@ class CandlestickManager:
                 keep[i] = False
             else:
                 seen[t] = True
-        return combo[keep]
+        merged = combo[keep]
+        # Enforce in-memory retention: keep only the latest N candles per symbol (applied by caller after assign)
+        return merged
 
     # ----- Known gap helpers -----
 
@@ -842,7 +901,6 @@ class CandlestickManager:
         end_ts: Optional[int] = None,
         max_age_ms: Optional[int] = None,
         strict: bool = False,
-        tf: Optional[str] = None,
         timeframe: Optional[str] = None,
     ) -> np.ndarray:
         """Return candles in inclusive range [start_ts, end_ts].
@@ -859,7 +917,7 @@ class CandlestickManager:
 
         # When a higher timeframe is requested, fetch it directly from the exchange
         # and bypass the 1m cache/standardization logic.
-        out_tf = timeframe or tf
+        out_tf = timeframe
         if out_tf is not None:
             # parse timeframe to ms (bucket size)
             period_ms = _tf_to_ms(out_tf)
@@ -1078,6 +1136,7 @@ class CandlestickManager:
                         if fetched.size:
                             merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), fetched)
                             self._cache[symbol] = merged
+                            self._enforce_memory_retention(symbol)
                             self._save_range(symbol, fetched, timeframe="1m")
                             # Re-slice after fetch
                             arr = np.sort(self._cache[symbol], order="ts")
@@ -1110,6 +1169,7 @@ class CandlestickManager:
                     if fetched.size:
                         merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), fetched)
                         self._cache[symbol] = merged
+                        self._enforce_memory_retention(symbol)
                         self._save_range(symbol, fetched, timeframe="1m")
                         # Re-slice after fetch
                         arr = np.sort(self._cache[symbol], order="ts")
@@ -1143,6 +1203,7 @@ class CandlestickManager:
                     break
                 merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), fetched)
                 self._cache[symbol] = merged
+                self._enforce_memory_retention(symbol)
                 self._save_range(symbol, fetched, timeframe="1m")
                 # Re-slice after fetch
                 arr = np.sort(self._cache[symbol], order="ts")
@@ -1184,6 +1245,7 @@ class CandlestickManager:
                     if fetched.size:
                         merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), fetched)
                         self._cache[symbol] = merged
+                        self._enforce_memory_retention(symbol)
                         self._save_range(symbol, fetched, timeframe="1m")
                         # Re-slice after fetch
                         arr = np.sort(self._cache[symbol], order="ts")
@@ -1232,7 +1294,15 @@ class CandlestickManager:
             try:
                 # Prefer ticker last price if available
                 if hasattr(self.exchange, "fetch_ticker"):
+                    self._log("debug", "ccxt_fetch_ticker", symbol=symbol)
                     t = await self.exchange.fetch_ticker(symbol)
+                    self._log(
+                        "debug",
+                        "ccxt_fetch_ticker_ok",
+                        symbol=symbol,
+                        last=(t.get("last") if isinstance(t, dict) else None),
+                        close=(t.get("close") if isinstance(t, dict) else None),
+                    )
                     price = float(t.get("last") or t.get("bid") or t.get("ask")) if t else None
             except Exception:
                 price = None
@@ -1240,6 +1310,14 @@ class CandlestickManager:
                 # Fallback to latest 1m candle including current minute if exchange returns it
                 try:
                     end_current = _floor_minute(now)
+                    self._log(
+                        "debug",
+                        "ccxt_fetch_ohlcv_current_minute",
+                        symbol=symbol,
+                        tf="1m",
+                        since_ts=end_current,
+                        limit=1,
+                    )
                     rows = await self._ccxt_fetch_ohlcv_once(
                         symbol, since_ms=end_current, limit=1, end_exclusive_ms=None, timeframe="1m"
                     )
@@ -1305,14 +1383,13 @@ class CandlestickManager:
         span: int,
         max_age_ms: Optional[int] = None,
         *,
-        tf: Optional[str] = None,
         timeframe: Optional[str] = None,
     ) -> float:
         """Return latest EMA of close over last `span` finalized candles.
 
         Supports higher timeframe via `tf`/`timeframe`.
         """
-        out_tf = timeframe or tf
+        out_tf = timeframe
         period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         # EMA result cache: reuse if end_ts unchanged and within TTL
@@ -1341,14 +1418,13 @@ class CandlestickManager:
         span: int,
         max_age_ms: Optional[int] = None,
         *,
-        tf: Optional[str] = None,
         timeframe: Optional[str] = None,
     ) -> float:
         return await self._get_latest_ema_generic(
             symbol,
             span,
             max_age_ms,
-            timeframe or tf,
+            timeframe,
             metric_key="volume",
             series_fn=lambda a: np.asarray(a["bv"], dtype=np.float64),
         )
@@ -1359,7 +1435,6 @@ class CandlestickManager:
         span: int,
         max_age_ms: Optional[int] = None,
         *,
-        tf: Optional[str] = None,
         timeframe: Optional[str] = None,
     ) -> float:
         """Return latest EMA of quote volume over last `span` finalized candles.
@@ -1372,7 +1447,7 @@ class CandlestickManager:
             symbol,
             span,
             max_age_ms,
-            timeframe or tf,
+            timeframe,
             metric_key="qv",
             series_fn=lambda a: (np.asarray(a["bv"], dtype=np.float64)
                                  * (np.asarray(a["h"], dtype=np.float64)
@@ -1422,14 +1497,13 @@ class CandlestickManager:
         span: int,
         max_age_ms: Optional[int] = None,
         *,
-        tf: Optional[str] = None,
         timeframe: Optional[str] = None,
     ) -> float:
         return await self._get_latest_ema_generic(
             symbol,
             span,
             max_age_ms,
-            timeframe or tf,
+            timeframe,
             metric_key="nrr",
             series_fn=lambda a: (
                 (np.asarray(a["h"], dtype=np.float64) - np.asarray(a["l"], dtype=np.float64))
@@ -1445,10 +1519,9 @@ class CandlestickManager:
         span: int,
         max_age_ms: Optional[int] = None,
         *,
-        tf: Optional[str] = None,
         timeframe: Optional[str] = None,
     ) -> np.ndarray:
-        out_tf = timeframe or tf
+        out_tf = timeframe
         period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         arr = await self.get_candles(
@@ -1470,10 +1543,9 @@ class CandlestickManager:
         span: int,
         max_age_ms: Optional[int] = None,
         *,
-        tf: Optional[str] = None,
         timeframe: Optional[str] = None,
     ) -> np.ndarray:
-        out_tf = timeframe or tf
+        out_tf = timeframe
         period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         arr = await self.get_candles(
@@ -1495,10 +1567,9 @@ class CandlestickManager:
         span: int,
         max_age_ms: Optional[int] = None,
         *,
-        tf: Optional[str] = None,
         timeframe: Optional[str] = None,
     ) -> np.ndarray:
-        out_tf = timeframe or tf
+        out_tf = timeframe
         period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         arr = await self.get_candles(
@@ -1614,6 +1685,11 @@ class CandlestickManager:
         key = f"{symbol}::{(timeframe or '1m').strip().lower()}"
         self._index[key] = idx
         self._save_index(symbol, timeframe)
+        # Enforce disk retention per timeframe after writing this shard
+        try:
+            self._enforce_disk_retention(symbol, timeframe or "1m")
+        except Exception:
+            pass
 
     # ----- Context manager and shutdown -----
 

@@ -271,12 +271,12 @@ async def test_tf_range_cache_reuse_within_ttl(monkeypatch, tmp_path):
     monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_fetch)
 
     # First: compute series -> should fetch once
-    ser = await cm.get_ema_volume_series(symbol, span=span, tf=tf, max_age_ms=60_000)
+    ser = await cm.get_ema_volume_series(symbol, span=span, timeframe=tf, max_age_ms=60_000)
     assert ser.size > 0
     assert calls["fetch"] == 1
 
     # Second: compute different metric latest, same tf and span -> reuse tf range cache, no extra fetch
-    val = await cm.get_latest_ema_nrr(symbol, span=span, tf=tf, max_age_ms=60_000)
+    val = await cm.get_latest_ema_nrr(symbol, span=span, timeframe=tf, max_age_ms=60_000)
     assert isinstance(val, float)
     assert calls["fetch"] == 1
 
