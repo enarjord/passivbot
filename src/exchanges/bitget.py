@@ -354,19 +354,23 @@ class BitgetBot(Passivbot):
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 
-    def calc_ideal_orders(self):
+    async def calc_ideal_orders(self):
         # Bitget returns max 100 open orders per fetch_open_orders.
         # Only create 100 open orders.
         # Drop orders whose pprice diff is greatest.
-        ideal_orders = super().calc_ideal_orders()
+        ideal_orders = await super().calc_ideal_orders()
         ideal_orders_tmp = []
         for s in ideal_orders:
             for x in ideal_orders[s]:
-                ideal_orders_tmp.append({**x, **{"symbol": s}})
-        ideal_orders_tmp = sorted(
-            ideal_orders_tmp,
-            key=lambda x: calc_diff(x["price"], self.get_last_price(x["symbol"])),
-        )[:100]
+                ideal_orders_tmp.append(
+                    (
+                        calc_diff(
+                            x["price"], (await self.cm.get_current_close(s, max_age_ms=10_000))
+                        ),
+                        {**x, **{"symbol": s}},
+                    )
+                )
+        ideal_orders_tmp = [x[1] for x in sorted(ideal_orders_tmp)][:100]
         ideal_orders = {symbol: [] for symbol in self.active_symbols}
         for x in ideal_orders_tmp:
             ideal_orders[x["symbol"]].append(x)

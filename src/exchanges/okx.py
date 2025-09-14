@@ -116,7 +116,11 @@ class OKXBot(Passivbot):
                     for elm2 in elm["details"]:
                         if elm2["collateralEnabled"]:
                             balance += float(elm2["cashBal"]) * (
-                                self.get_last_price(self.coin_to_symbol(elm2["ccy"]))
+                                (
+                                    await self.cm.get_current_close(
+                                        self.coin_to_symbol(elm2["ccy"]), max_age_ms=10_000
+                                    )
+                                )
                                 if elm2["ccy"] != self.quote
                                 else 1.0
                             )
@@ -298,15 +302,19 @@ class OKXBot(Passivbot):
 
     def calc_ideal_orders(self):
         # okx has max 100 open orders. Drop orders whose pprice diff is greatest.
-        ideal_orders = super().calc_ideal_orders()
+        ideal_orders = await super().calc_ideal_orders()
         ideal_orders_tmp = []
         for s in ideal_orders:
             for x in ideal_orders[s]:
-                ideal_orders_tmp.append({**x, **{"symbol": s}})
-        ideal_orders_tmp = sorted(
-            ideal_orders_tmp,
-            key=lambda x: calc_diff(x["price"], self.get_last_price(x["symbol"])),
-        )[:100]
+                ideal_orders_tmp.append(
+                    (
+                        calc_diff(
+                            x["price"], (await self.cm.get_current_close(s, max_age_ms=10_000))
+                        ),
+                        {**x, **{"symbol": s}},
+                    )
+                )
+        ideal_orders_tmp = [x[1] for x in sorted(ideal_orders_tmp)][:100]
         ideal_orders = {symbol: [] for symbol in self.active_symbols}
         for x in ideal_orders_tmp:
             ideal_orders[x["symbol"]].append(x)
