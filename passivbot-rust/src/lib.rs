@@ -1,5 +1,6 @@
 mod analysis;
 mod backtest;
+mod candles;
 mod closes;
 mod constants;
 mod entries;
