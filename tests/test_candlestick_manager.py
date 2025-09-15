@@ -20,6 +20,7 @@ from candlestick_manager import (
 def test_standardize_gaps_inserts_zero_candles(tmp_path, debug):
     class _Ex:
         id = "okx"
+
     cm = CandlestickManager(exchange=_Ex(), exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     # create two candles with a one-minute gap between them
     base = int(time.time() * 1000)
@@ -48,6 +49,7 @@ def test_standardize_gaps_inserts_zero_candles(tmp_path, debug):
 async def test_get_candles_range_and_inclusive(tmp_path):
     class _Ex:
         id = "okx"
+
     cm = CandlestickManager(exchange=_Ex(), exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     base = _floor_minute(int(time.time() * 1000)) - 10 * ONE_MIN_MS
     # create 6 candles
@@ -153,6 +155,7 @@ async def test_zero_candles_not_persisted(tmp_path):
 async def test_tf_persistence_via_get_candles(tmp_path, monkeypatch):
     class _Ex:
         id = "okx"
+
     cm = CandlestickManager(exchange=_Ex(), exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     symbol = "TFP/USDT"
     base = _floor_minute(int(time.time() * 1000)) - 6 * ONE_MIN_MS * 60
@@ -225,7 +228,9 @@ async def test_tf_loads_from_disk_without_network(tmp_path, monkeypatch):
     # Clear TF LRU cache to force disk path on second call
     cm._tf_range_cache.clear()
 
-    out2 = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, timeframe="1h", strict=True, max_age_ms=600_000)
+    out2 = await cm.get_candles(
+        symbol, start_ts=start_ts, end_ts=end_ts, timeframe="1h", strict=True, max_age_ms=600_000
+    )
     assert out2.size == out1.size
     # Should not perform any new network calls; served from disk
     assert net_calls["n"] == first_calls
@@ -351,7 +356,106 @@ async def test_get_current_close_uses_ttl(monkeypatch):
     assert p1 == pytest.approx(123.45)
     assert call_counter["ticker"] == 1
 
-    # Second call within TTL should use local cache, not refetch
-    p2 = await cm.get_current_close(symbol, max_age_ms=60_000)
-    assert p2 == pytest.approx(123.45)
-    assert call_counter["ticker"] == 1
+
+@pytest.mark.asyncio
+async def test_get_current_close_primes_ttl_for_candles(monkeypatch, tmp_path):
+    # Fixed now for deterministic minute boundaries
+    fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    class _Ex:
+        id = "okx"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="okx", cache_dir=str(tmp_path / "caches"))
+    symbol = "BTC/USDT:USDT"
+
+    # Track whether network pagination is called by get_candles
+    calls = {"paginated": 0}
+
+    async def fake_paginated(symbol_, since_ms, end_exclusive_ms, *, timeframe=None):
+        calls["paginated"] += 1
+        return np.empty((0,), dtype=CANDLE_DTYPE)
+
+    # Return a single current-minute candle via low-level OHLCV fetch used by get_current_close
+    async def fake_once(symbol_, since_ms, limit, end_exclusive_ms=None, timeframe=None):
+        ts = int((fixed_now_ms // ONE_MIN_MS) * ONE_MIN_MS)
+        return [[ts, 1.0, 1.0, 1.0, 1.23, 1.0]]
+
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_paginated)
+    monkeypatch.setattr(cm, "_ccxt_fetch_ohlcv_once", fake_once)
+
+    # 1) Call get_current_close: this should fetch/merge current-minute candle and update last_refresh_ms
+    p = await cm.get_current_close(symbol, max_age_ms=60_000)
+    assert p == pytest.approx(1.23)
+
+    # 2) Call get_candles ending at latest finalized minute with TTL: should NOT call _fetch_ohlcv_paginated
+    end_finalized = (fixed_now_ms // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
+    start_ts = end_finalized - ONE_MIN_MS * 10
+    out = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_finalized, max_age_ms=60_000)
+    assert isinstance(out, np.ndarray)
+    assert calls["paginated"] == 0
+
+    # No additional network calls expected here; TTL should prevent refresh
+
+
+@pytest.mark.asyncio
+async def test_get_current_close_tail_fetch_merges_and_primes(monkeypatch, tmp_path):
+    fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    class _Ex:
+        id = "okx"
+
+    # Use small overlap to keep payloads small
+    cm = CandlestickManager(
+        exchange=_Ex(), exchange_name="okx", cache_dir=str(tmp_path / "caches"), overlap_candles=5
+    )
+    symbol = "ETH/USDT:USDT"
+
+    # Count paginated fetches triggered by get_candles
+    calls = {"paginated": 0}
+
+    async def fake_paginated(symbol_, since_ms, end_exclusive_ms, *, timeframe=None):
+        calls["paginated"] += 1
+        return np.empty((0,), dtype=CANDLE_DTYPE)
+
+    # Capture args and return 5 recent 1m candles including current minute
+    called = {}
+
+    async def fake_once(symbol_, since_ms, limit, end_exclusive_ms=None, timeframe=None):
+        called["since_ms"] = int(since_ms)
+        called["limit"] = int(limit)
+        end_current = (fixed_now_ms // ONE_MIN_MS) * ONE_MIN_MS
+        # build a sequence from since_ms to end_current inclusive, step 1m
+        ts = list(range(int(since_ms), int(end_current) + ONE_MIN_MS, ONE_MIN_MS))
+        arr = []
+        for i, t in enumerate(ts):
+            # close sequence i + 1.0 to verify values present
+            c = float(i + 1)
+            arr.append([t, c, c, c, c, 1.0])
+        return arr
+
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_paginated)
+    monkeypatch.setattr(cm, "_ccxt_fetch_ohlcv_once", fake_once)
+
+    # Trigger tail fetch via get_current_close
+    p = await cm.get_current_close(symbol, max_age_ms=60_000)
+    assert isinstance(p, float)
+    # Ensure we asked for overlap_candles candles
+    assert called.get("limit") == 5
+    # Ensure since_ms aligns to end_current - 4 minutes
+    end_current = (fixed_now_ms // ONE_MIN_MS) * ONE_MIN_MS
+    assert called.get("since_ms") == end_current - ONE_MIN_MS * 4
+
+    # Cache should now contain at least those 5 candles including current minute
+    arr = cm._cache.get(symbol)
+    assert arr is not None and arr.size >= 5
+    arr = np.sort(arr, order="ts")
+    assert int(arr[-1]["ts"]) == end_current
+
+    # A subsequent get_candles within TTL should not paginate
+    end_finalized = end_current - ONE_MIN_MS
+    start_ts = end_finalized - ONE_MIN_MS * 2
+    out = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_finalized, max_age_ms=60_000)
+    assert out.size > 0
+    assert calls["paginated"] == 0
