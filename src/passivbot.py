@@ -268,7 +268,7 @@ class Passivbot:
         self.state_change_detected_by_symbol = set()
         self.recent_order_executions = []
         self.recent_order_cancellations = []
-        self.cm = CandlestickManager(exchange=self.cca, debug=1)
+        self.cm = CandlestickManager(exchange=self.cca, debug=0)
 
     async def start_bot(self):
         logging.info(f"Starting bot {self.exchange}...")
@@ -2119,7 +2119,7 @@ class Passivbot:
         pside: str,
         eligible_symbols: Optional[Iterable[str]] = None,
         *,
-        max_age_ms: int = 60_000,
+        max_age_ms: Optional[int] = 60_000,
     ) -> Dict[str, float]:
         """Compute 1m EMA of noisiness per symbol: EMA((high - low)/close).
 
@@ -2132,8 +2132,16 @@ class Passivbot:
         # Compute EMA of noisiness on 1m candles: (high-low)/close
         async def one(symbol: str):
             try:
+                # If caller passes a TTL, use it; otherwise select per-symbol TTL
+                if max_age_ms is not None:
+                    ttl = int(max_age_ms)
+                else:
+                    # More generous TTL for non-traded symbols
+                    has_pos = self.has_position(symbol=symbol)
+                    has_oo = bool(self.open_orders.get(symbol)) if hasattr(self, "open_orders") else False
+                    ttl = 60_000 if (has_pos or has_oo) else 600_000
                 val = await self.cm.get_latest_ema_nrr(
-                    symbol, span=span, timeframe=None, max_age_ms=max_age_ms
+                    symbol, span=span, timeframe=None, max_age_ms=ttl
                 )
                 return float(val) if np.isfinite(val) else 0.0
             except Exception:
@@ -2146,7 +2154,7 @@ class Passivbot:
         return out
 
     async def calc_volumes(
-        self, pside: str, symbols: Optional[Iterable[str]] = None, *, max_age_ms: int = 60_000
+        self, pside: str, symbols: Optional[Iterable[str]] = None, *, max_age_ms: Optional[int] = 60_000
     ) -> Dict[str, float]:
         """Compute 1m EMA of quote volume per symbol.
 
@@ -2159,8 +2167,14 @@ class Passivbot:
         # Compute EMA of quote volume on 1m candles
         async def one(symbol: str):
             try:
+                if max_age_ms is not None:
+                    ttl = int(max_age_ms)
+                else:
+                    has_pos = self.has_position(symbol=symbol)
+                    has_oo = bool(self.open_orders.get(symbol)) if hasattr(self, "open_orders") else False
+                    ttl = 60_000 if (has_pos or has_oo) else 600_000
                 val = await self.cm.get_latest_ema_quote_volume(
-                    symbol, span=span, timeframe=None, max_age_ms=max_age_ms
+                    symbol, span=span, timeframe=None, max_age_ms=ttl
                 )
                 return float(val) if np.isfinite(val) else 0.0
             except Exception:

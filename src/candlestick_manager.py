@@ -78,14 +78,12 @@ EMA_SERIES_DTYPE = np.dtype(
 
 
 def get_caller_name(depth: int = 2, logger: Optional[logging.Logger] = None) -> str:
-    """Return a qualified name for the first non-CandlestickManager caller.
+    """Return a more useful origin for debug logs.
 
-    - depth: initial frames to skip (default 2 to hop over _log and its caller)
-    - logger: unused (kept for compatibility)
-
-    Traverses the stack beyond `depth` until it finds a frame whose `self`
-    is not a CandlestickManager instance. Falls back to the frame at `depth`
-    if none is found or on any error.
+    Heuristics:
+    - Skip CandlestickManager frames and common wrappers ("one", "<listcomp>", asyncio internals)
+    - Prefer frames from a Passivbot instance method if present (module contains "passivbot")
+    - Otherwise return the first non-wrapper frame as module.Class.func or module.func
     """
 
     def frame_to_name(fr) -> str:
@@ -120,8 +118,9 @@ def get_caller_name(depth: int = 2, logger: Optional[logging.Logger] = None) -> 
         if target is not None:
             fallback_name = frame_to_name(target)
 
-        # Walk up to find a frame not belonging to CandlestickManager
+        # Walk up to find a meaningful caller
         cur = target
+        preferred: Optional[str] = None
         for _ in range(20):  # safety cap
             if cur is None:
                 break
@@ -130,10 +129,24 @@ def get_caller_name(depth: int = 2, logger: Optional[logging.Logger] = None) -> 
                 is_cm = slf is not None and type(slf).__name__ == "CandlestickManager"
             except Exception:
                 is_cm = False
-            if not is_cm:
+            func = getattr(getattr(cur, "f_code", None), "co_name", "")
+            mod = None
+            try:
+                mod = cur.f_globals.get("__name__")
+            except Exception:
+                mod = None
+
+            # Skip common wrappers and asyncio internals
+            skip_names = {"one", "<listcomp>", "<dictcomp>", "<lambda>", "_run", "gather", "create_task"}
+            is_asyncio = isinstance(mod, str) and (mod.startswith("asyncio.") or mod == "asyncio.events")
+            if not is_cm and func not in skip_names and not is_asyncio:
                 name = frame_to_name(cur)
-                if name and name != "unknown":
-                    return name
+                if isinstance(mod, str) and "passivbot" in mod and name and name != "unknown":
+                    # Prefer first passivbot frame
+                    preferred = name
+                    break
+                if name and name != "unknown" and preferred is None:
+                    preferred = name
             cur = cur.f_back  # type: ignore[attr-defined]
     finally:
         try:
@@ -144,7 +157,7 @@ def get_caller_name(depth: int = 2, logger: Optional[logging.Logger] = None) -> 
             del target  # type: ignore[name-defined]
         except Exception:
             pass
-    return fallback_name
+    return preferred or fallback_name
 
 
 def _utc_now_ms() -> int:
