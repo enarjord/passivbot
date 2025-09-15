@@ -21,6 +21,7 @@ import inspect
 import passivbot_rust as pbr
 import logging
 from candlestick_manager import CandlestickManager
+from typing import Dict, Iterable, Tuple, List, Optional
 from utils import (
     load_markets,
     coin_to_symbol,
@@ -276,7 +277,7 @@ class Passivbot:
         self.state_change_detected_by_symbol = set()
         self.recent_order_executions = []
         self.recent_order_cancellations = []
-        self.cm = CandlestickManager(exchange=self.cca, debug=True)
+        self.cm = CandlestickManager(exchange=self.cca, debug=1)
 
     async def start_bot(self):
         logging.info(f"Starting bot {self.exchange}...")
@@ -285,7 +286,7 @@ class Passivbot:
         await asyncio.sleep(1)
         logging.info(f"Starting data maintainers...")
         await self.start_data_maintainers()
-        await self.wait_for_ohlcvs_1m_to_update()
+        # await self.wait_for_ohlcvs_1m_to_update()
 
         logging.info(f"starting execution loop...")
         if not self.debug_mode:
@@ -465,7 +466,7 @@ class Passivbot:
 
     async def execute_to_exchange(self):
         await self.execution_cycle()
-        await self.update_EMAs()
+        # await self.update_EMAs()
         await self.update_exchange_configs()
         to_cancel, to_create = await self.calc_orders_to_cancel_and_create()
 
@@ -770,12 +771,25 @@ class Passivbot:
             traceback.print_exc()
             return False
 
-    def update_trailing_data(self):
+    async def update_trailing_data(self) -> None:
+        """Update trailing price metrics using CandlestickManager candles.
+
+        For each symbol and side with a trailing position, iterate candles since the
+        last position change and compute:
+        - max_since_open: highest high since open
+        - min_since_max: lowest low after the most recent new high
+        - min_since_open: lowest low since open
+        - max_since_min: highest high (or close per legacy) after the most recent new low
+        Fetches per-symbol candles concurrently to reduce latency.
+        """
         if not hasattr(self, "trailing_prices"):
             self.trailing_prices = {}
         last_position_changes = self.get_last_position_changes()
         symbols = set(self.trailing_prices) | set(last_position_changes) | set(self.active_symbols)
+
+        # Initialize containers for all symbols first
         for symbol in symbols:
+            # Initialize containers
             self.trailing_prices[symbol] = {
                 "long": {
                     "max_since_open": 0.0,
@@ -790,29 +804,58 @@ class Passivbot:
                     "max_since_min": 0.0,
                 },
             }
+
+        # Build concurrent fetches per symbol that has position changes
+        fetch_plan = {}
+        for symbol in symbols:
             if symbol not in last_position_changes:
                 continue
-            for pside in last_position_changes[symbol]:
-                if symbol not in self.ohlcvs_1m:
-                    logging.info(f"debug: {symbol} missing from self.ohlcvs_1m")
-                    continue
-                for ts in self.ohlcvs_1m[symbol]:
-                    if ts <= last_position_changes[symbol][pside]:
+            # Determine earliest start among sides to avoid duplicate fetches
+            starts = [last_position_changes[symbol][ps] for ps in last_position_changes[symbol]]
+            if not starts:
+                continue
+            start_ts = int(min(starts))
+            fetch_plan[symbol] = start_ts
+
+        tasks = {
+            sym: asyncio.create_task(self.cm.get_candles(sym, start_ts=st, end_ts=None, strict=False))
+            for sym, st in fetch_plan.items()
+        }
+
+        results = {}
+        for sym, task in tasks.items():
+            try:
+                results[sym] = await task
+            except Exception as e:
+                logging.info(f"debug: failed to fetch candles for trailing {sym}: {e}")
+                results[sym] = None
+
+        # Compute trailing metrics per symbol/side
+        for symbol, arr in results.items():
+            if arr is None or arr.size == 0:
+                continue
+            arr = np.sort(arr, order="ts")
+            for pside, changed_ts in last_position_changes[symbol].items():
+                for row in arr:
+                    ts = int(row["ts"])  # only after change
+                    if ts <= int(changed_ts):
                         continue
-                    x = self.ohlcvs_1m[symbol][ts]
-                    if x[2] > self.trailing_prices[symbol][pside]["max_since_open"]:
-                        self.trailing_prices[symbol][pside]["max_since_open"] = x[2]
-                        self.trailing_prices[symbol][pside]["min_since_max"] = x[4]
+                    high = float(row["h"]) if "h" in row.dtype.names else float("nan")
+                    low = float(row["l"]) if "l" in row.dtype.names else float("nan")
+                    close = float(row["c"]) if "c" in row.dtype.names else float("nan")
+                    if high > self.trailing_prices[symbol][pside]["max_since_open"]:
+                        self.trailing_prices[symbol][pside]["max_since_open"] = high
+                        self.trailing_prices[symbol][pside]["min_since_max"] = close
                     else:
                         self.trailing_prices[symbol][pside]["min_since_max"] = min(
-                            self.trailing_prices[symbol][pside]["min_since_max"], x[3]
+                            self.trailing_prices[symbol][pside]["min_since_max"], low
                         )
-                    if x[3] < self.trailing_prices[symbol][pside]["min_since_open"]:
-                        self.trailing_prices[symbol][pside]["min_since_open"] = x[3]
-                        self.trailing_prices[symbol][pside]["max_since_min"] = x[4]
+                    if low < self.trailing_prices[symbol][pside]["min_since_open"]:
+                        self.trailing_prices[symbol][pside]["min_since_open"] = low
+                        self.trailing_prices[symbol][pside]["max_since_min"] = close
                     else:
                         self.trailing_prices[symbol][pside]["max_since_min"] = max(
-                            self.trailing_prices[symbol][pside]["max_since_min"], x[2]
+                            self.trailing_prices[symbol][pside]["max_since_min"], high
                         )
 
     def symbol_is_eligible(self, symbol):
@@ -923,7 +966,7 @@ class Passivbot:
             for symbol in self.coin_overrides:
                 if flag := self.get_forced_PB_mode(pside, symbol):
                     self.PB_modes[pside][symbol] = flag
-            ideal_coins = self.get_filtered_coins(pside)
+            ideal_coins = await self.get_filtered_coins(pside)
             slots_filled = {
                 k for k, v in self.PB_modes[pside].items() if v in ["normal", "graceful_stop"]
             }
@@ -975,13 +1018,23 @@ class Passivbot:
             if symbol not in self.open_orders:
                 self.open_orders[symbol] = []
         self.set_wallet_exposure_limits()
-        self.update_trailing_data()
+        await self.update_trailing_data()
         res = log_dict_changes(previous_PB_modes, self.PB_modes)
         for k, v in res.items():
             for elm in v:
                 logging.info(f"{k} {elm}")
 
-    def get_filtered_coins(self, pside):
+    async def get_filtered_coins(self, pside: str) -> List[str]:
+        """Select ideal coins for a side using EMA-based volume and noisiness filters.
+
+        Steps (for forager mode):
+        - Filter by age and effective min cost
+        - Rank by 1m EMA quote volume (span = filter_volume_rolling_window)
+        - Drop the lowest filter_volume_drop_pct fraction
+        - Rank remaining by 1m EMA noisiness (span = filter_noisiness_rolling_window)
+        - Return up to n_positions most noisy symbols
+        For non-forager mode, returns all approved candidates.
+        """
         # filter coins by age
         # filter coins by min effective cost
         # filter coins by relative volume
@@ -998,13 +1051,13 @@ class Passivbot:
             clip_pct = self.config["bot"][pside]["filter_volume_drop_pct"]
             max_n_positions = self.get_max_n_positions(pside)
             if clip_pct > 0.0:
-                volumes = self.calc_volumes(pside, symbols=candidates)
+                volumes = await self.calc_volumes(pside, symbols=candidates)
                 # filter by relative volume
                 n_eligible = round(len(volumes) * (1 - clip_pct))
                 candidates = sorted(volumes, key=lambda x: volumes[x], reverse=True)
                 candidates = candidates[: int(max(n_eligible, max_n_positions))]
             # ideal symbols are high noise symbols
-            noisiness = self.calc_noisiness(pside, eligible_symbols=candidates)
+            noisiness = await self.calc_noisiness(pside, eligible_symbols=candidates)
             noisiness = {k: v for k, v in sorted(noisiness.items(), key=lambda x: x[1], reverse=True)}
             ideal_coins = [k for k in noisiness.keys()][:max_n_positions]
         else:
@@ -1508,38 +1561,97 @@ class Passivbot:
                 logging.error(f"error with {get_function_name()} for {symbol}: {e}")
                 traceback.print_exc()
 
-    async def get_last_prices(self, symbols, max_age_ms=10_000):
-        # fetches last prices concurrently
-        tasks = {}
-        for symbol in symbols:
-            tasks[symbol] = asyncio.create_task(
-                self.cm.get_current_close(symbol, max_age_ms=max_age_ms)
-            )
-        results = {}
-        for symbol in tasks:
-            results[symbol] = await tasks[symbol]
-        return results
+    async def get_last_prices(
+        self, symbols: Iterable[str], max_age_ms: int = 10_000
+    ) -> Dict[str, float]:
+        """Return latest close for current minute per symbol using CandlestickManager.
 
-    async def get_ema_bounds(self, symbols, pside, max_age_ms=60_000):
-        tasks = {}
-        for symbol in symbols:
-            span_0 = self.config_get(["bot", pside, "ema_span_0"], symbol=symbol)
-            span_1 = self.config_get(["bot", pside, "ema_span_1"], symbol=symbol)
-            tasks[symbol] = asyncio.create_task(
-                self.cm.get_ema_bounds(symbol, span_0, span_1, max_age_ms=max_age_ms)
-            )
-        results = {}
-        for symbol in tasks:
-            results[symbol] = await tasks[symbol]
-        return results
+        - symbols: iterable of symbol strings
+        - max_age_ms: TTL for reusing cached current close before fetching
+        Returns mapping symbol -> price (0.0 on failure/missing)
+        """
+        symbols = list(symbols)
+        if not symbols:
+            return {}
+
+        async def one(symbol: str):
+            try:
+                val = await self.cm.get_current_close(symbol, max_age_ms=max_age_ms)
+                return float(val) if np.isfinite(val) else 0.0
+            except Exception:
+                return 0.0
+
+        tasks = {s: asyncio.create_task(one(s)) for s in symbols}
+        out = {}
+        for s, t in tasks.items():
+            out[s] = await t
+        return out
+
+    async def get_ema_bounds(
+        self, symbols: Iterable[str], pside: str, max_age_ms: int = 60_000
+    ) -> Dict[str, Tuple[float, float]]:
+        """Return EMA bounds (lower, upper) per symbol for given side.
+
+        - symbols: iterable of symbol strings
+        - pside: "long" or "short" (used to read spans from config)
+        - max_age_ms: TTL for reusing cached EMA if up-to-date
+        Returns mapping symbol -> (lower, upper); returns (0.0, 0.0) on failure
+        """
+        symbols = list(symbols)
+        if not symbols:
+            return {}
+
+        async def one(symbol: str):
+            try:
+                span_0 = self.config_get(["bot", pside, "ema_span_0"], symbol=symbol)
+                span_1 = self.config_get(["bot", pside, "ema_span_1"], symbol=symbol)
+                vals = await self.cm.get_ema_bounds(symbol, span_0, span_1, max_age_ms=max_age_ms)
+                return tuple([float(v) if np.isfinite(v) else 0.0 for v in vals])  # type: ignore[return-value]
+            except Exception:
+                return (0.0, 0.0)
+
+        tasks = {s: asyncio.create_task(one(s)) for s in symbols}
+        out = {}
+        for s, t in tasks.items():
+            out[s] = await t
+        return out
 
     async def calc_ideal_orders(self):
-        ideal_orders = {symbol: [] for symbol in self.active_symbols}
-        last_prices = await self.get_last_prices(
-            set(flatten(self.PB_modes.values())), max_age_ms=10_000
+        # find out which symbols need fresh data
+        to_update_last_prices = set()
+        to_update_emas = {}
+        for pside in self.PB_modes:
+            to_update_emas[pside] = set()
+            for symbol in self.PB_modes[pside]:
+                if self.PB_modes[pside][symbol] == "panic":
+                    if self.has_position(pside, symbol):
+                        to_update_last_prices.add(symbol)
+                elif self.PB_modes[pside][symbol] in [
+                    "graceful_stop",
+                    "tp_only",
+                ] and not self.has_position(pside, symbol):
+                    pass
+                elif self.PB_modes[pside][symbol] == "manual":
+                    pass
+                else:
+                    to_update_emas[pside].add(symbol)
+                    to_update_last_prices.add(symbol)
+        last_prices, ema_bounds_long, ema_bounds_short = await asyncio.gather(
+            self.get_last_prices(to_update_last_prices, max_age_ms=10_000),
+            self.get_ema_bounds(to_update_emas["long"], "long", max_age_ms=30_000),
+            self.get_ema_bounds(to_update_emas["short"], "short", max_age_ms=30_000),
         )
+        # long entries take lower bound; short entries take upper bound
+        ema_anchor = {
+            "long": {
+                s: ema_bounds_long.get(s, (float("nan"), float("nan")))[0] for s in ema_bounds_long
+            },
+            "short": {
+                s: ema_bounds_short.get(s, (float("nan"), float("nan")))[1] for s in ema_bounds_short
+            },
+        }
 
-        # TODO: rewrite to use self.cm for last prices and emas, calc only for what's to be used
+        ideal_orders = defaultdict(list)
         for pside in self.PB_modes:
             for symbol in self.PB_modes[pside]:
                 if self.PB_modes[pside][symbol] == "panic":
@@ -1594,11 +1706,7 @@ class Passivbot:
                         self.trailing_prices[symbol][pside]["max_since_min"],
                         self.trailing_prices[symbol][pside]["max_since_open"],
                         self.trailing_prices[symbol][pside]["min_since_max"],
-                        (
-                            self.emas[pside][symbol].min()
-                            if pside == "long"
-                            else self.emas[pside][symbol].max()
-                        ),
+                        ema_anchor[pside].get(symbol, last_prices.get(symbol, float("nan"))),
                         last_prices[symbol],
                     )
                     closes = getattr(pbr, f"calc_closes_{pside}_py")(
@@ -1751,13 +1859,37 @@ class Passivbot:
                     if we_limit == 0.0 or wallet_exposure / we_limit > self.config_get(
                         ["bot", pside, "unstuck_threshold"], symbol=symbol
                     ):
-                        # is stuck. Calc ema price and check if would close
-                        ema_price = self.calc_ema_bound(
-                            pside,
-                            symbol,
-                            self.config_get(["bot", pside, "unstuck_ema_dist"], symbol=symbol),
-                            pside == "long",
-                        )
+                        # is stuck. Use CandlestickManager EMA bounds to calc target price
+                        try:
+                            span_0 = self.config_get(["bot", pside, "ema_span_0"], symbol=symbol)
+                            span_1 = self.config_get(["bot", pside, "ema_span_1"], symbol=symbol)
+                            lower, upper = await self.cm.get_ema_bounds(
+                                symbol,
+                                span_0,
+                                span_1,
+                                max_age_ms=30_000,
+                            )
+                            # Apply unstuck_ema_dist and rounding per side
+                            ema_dist = float(
+                                self.config_get(["bot", pside, "unstuck_ema_dist"], symbol=symbol)
+                            )
+                            # For closes: long uses upper bound (round up), short uses lower bound (round down)
+                            if pside == "long":
+                                base = float(upper)
+                                ema_price = pbr.round_up(
+                                    base * (1.0 + ema_dist), self.price_steps[symbol]
+                                )
+                            else:
+                                base = float(lower)
+                                ema_price = pbr.round_dn(
+                                    base * (1.0 - ema_dist), self.price_steps[symbol]
+                                )
+                        except Exception as e:
+                            logging.info(
+                                f"debug: failed ema bounds for unstucking {symbol} {pside}: {e}; skipping unstuck check for this symbol"
+                            )
+                            # Skip unstuck evaluation for this symbol if EMA bounds are unavailable
+                            continue
                         if (pside == "long" and last_prices[symbol] >= ema_price) or (
                             pside == "short" and last_prices[symbol] <= ema_price
                         ):
@@ -2109,19 +2241,33 @@ class Passivbot:
         raise Exception("Bot will restart.")
 
     async def update_ohlcvs_1m_for_actives(self):
-        max_age_ms = 1000 * 10  # at least 10 sec freshness of ohlcvs for actives
+        """Ensure active symbols have fresh 1m candles in CandlestickManager (<=10s old).
+
+        Uses CandlestickManager.get_candles with max_age_ms=10_000 so it refreshes
+        only when its internal last refresh is older than the TTL. Fetches a small
+        recent window ending at the latest finalized minute.
+        """
+        max_age_ms = 10_000
         try:
-            utc_now = utc_ms()
-            symbols_to_update = [
-                s
-                for s in self.active_symbols
-                if s not in self.ohlcvs_1m_update_timestamps_WS
-                or utc_now - self.ohlcvs_1m_update_timestamps_WS[s] > max_age_ms
-            ]
-            if symbols_to_update:
-                await asyncio.gather(
-                    *[self.update_ohlcvs_1m_single(s, max_age_ms) for s in symbols_to_update]
+            now = utc_ms()
+            end_ts = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
+            # Use manager default window if available, otherwise a reasonable fallback
+            try:
+                window = int(getattr(self.cm, "default_window_candles", 120))
+            except Exception:
+                window = 120
+            start_ts = end_ts - ONE_MIN_MS * window
+
+            tasks = [
+                asyncio.create_task(
+                    self.cm.get_candles(
+                        s, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, strict=False
+                    )
                 )
+                for s in self.active_symbols
+            ]
+            if tasks:
+                await asyncio.gather(*tasks)
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
             traceback.print_exc()
@@ -2147,8 +2293,8 @@ class Passivbot:
             k: asyncio.create_task(getattr(self, k)())
             for k in [
                 "maintain_hourly_cycle",
-                "maintain_ohlcvs_1m_REST",
-                "watch_ohlcvs_1m",
+                # "maintain_ohlcvs_1m_REST",
+                # "watch_ohlcvs_1m",
                 "watch_orders",
             ]
         }
@@ -2250,35 +2396,63 @@ class Passivbot:
             # small yield to let other tasks run
             await asyncio.sleep(0.05)
 
-    def calc_noisiness(self, pside, eligible_symbols=None):
+    async def calc_noisiness(
+        self,
+        pside: str,
+        eligible_symbols: Optional[Iterable[str]] = None,
+        *,
+        max_age_ms: int = 60_000,
+    ) -> Dict[str, float]:
+        """Compute 1m EMA of noisiness per symbol: EMA((high - low)/close).
+
+        Returns mapping symbol -> ema_noisiness; non-finite/failed computations yield 0.0.
+        """
         if eligible_symbols is None:
             eligible_symbols = self.eligible_symbols
-        noisiness = {}
-        n = int(round(self.config["bot"][pside]["filter_noisiness_rolling_window"]))
-        for symbol in eligible_symbols:
-            if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
-                ohlcvs_1m = [v for v in self.ohlcvs_1m[symbol].values()[-n:]]
-                noisiness[symbol] = np.mean([(x[2] - x[3]) / x[4] for x in ohlcvs_1m])
-            else:
-                noisiness[symbol] = 0.0
-        return noisiness
+        span = int(round(self.config["bot"][pside]["filter_noisiness_rolling_window"]))
 
-    def calc_volumes(self, pside, symbols=None):
-        n = int(round(self.config["bot"][pside]["filter_volume_rolling_window"]))
-        volumes = {}
+        # Compute EMA of noisiness on 1m candles: (high-low)/close
+        async def one(symbol: str):
+            try:
+                val = await self.cm.get_latest_ema_nrr(
+                    symbol, span=span, timeframe=None, max_age_ms=max_age_ms
+                )
+                return float(val) if np.isfinite(val) else 0.0
+            except Exception:
+                return 0.0
+
+        tasks = {s: asyncio.create_task(one(s)) for s in eligible_symbols}
+        out = {}
+        for s, t in tasks.items():
+            out[s] = await t
+        return out
+
+    async def calc_volumes(
+        self, pside: str, symbols: Optional[Iterable[str]] = None, *, max_age_ms: int = 60_000
+    ) -> Dict[str, float]:
+        """Compute 1m EMA of quote volume per symbol.
+
+        Returns mapping symbol -> ema_quote_volume; non-finite/failed computations yield 0.0.
+        """
+        span = int(round(self.config["bot"][pside]["filter_volume_rolling_window"]))
         if symbols is None:
             symbols = self.get_symbols_approved_or_has_pos(pside)
-        for symbol in symbols:
-            if (
-                symbol in self.ohlcvs_1m
-                and self.ohlcvs_1m[symbol]
-                and len(self.ohlcvs_1m[symbol]) > 0
-            ):
-                ohlcvs_1m = [v for v in self.ohlcvs_1m[symbol].values()[-n:]]
-                volumes[symbol] = sum([x[4] * x[5] for x in ohlcvs_1m])
-            else:
-                volumes[symbol] = 0.0
-        return volumes
+
+        # Compute EMA of quote volume on 1m candles
+        async def one(symbol: str):
+            try:
+                val = await self.cm.get_latest_ema_quote_volume(
+                    symbol, span=span, timeframe=None, max_age_ms=max_age_ms
+                )
+                return float(val) if np.isfinite(val) else 0.0
+            except Exception:
+                return 0.0
+
+        tasks = {s: asyncio.create_task(one(s)) for s in symbols}
+        out = {}
+        for s, t in tasks.items():
+            out[s] = await t
+        return out
 
     async def execute_multiple(self, orders: [dict], type_: str):
         if not orders:
