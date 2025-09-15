@@ -249,7 +249,6 @@ class Passivbot:
         self.pside_int_map = {"long": 0, "short": 1}
         self.PB_modes = {"long": {}, "short": {}}
         self.pnls_cache_filepath = make_get_filepath(f"caches/{self.exchange}/{self.user}_pnls.json")
-        self.ohlcvs_1m_cache_dirpath = make_get_filepath(f"caches/{self.exchange}/ohlcvs_1m/")
         self.quote = "USDT"
 
         self.minimum_market_age_millis = (
@@ -258,13 +257,8 @@ class Passivbot:
         self.emas = {"long": {}, "short": {}}
         self.ema_alphas = {"long": {}, "short": {}}
         self.upd_minute_emas = {}
-        self.ohlcvs_1m_update_after_minutes = config["live"]["ohlcvs_1m_update_after_minutes"]
-        self.ohlcvs_1m_rolling_window_days = config["live"]["ohlcvs_1m_rolling_window_days"]
-        self.n_symbols_missing_ohlcvs_1m = 1000
-        self.ohlcvs_1m_update_timestamps = {}
-        self.max_n_concurrent_ohlcvs_1m_updates = 3
+        # Legacy ohlcvs_1m fields removed in favor of CandlestickManager
         self.stop_signal_received = False
-        self.ohlcvs_1m_update_timestamps_WS = {}
         self.PB_mode_stop = {
             "long": "graceful_stop" if self.config["live"]["auto_gs"] else "manual",
             "short": "graceful_stop" if self.config["live"]["auto_gs"] else "manual",
@@ -315,7 +309,7 @@ class Passivbot:
         await self.update_positions()
         await self.update_open_orders()
         await self.update_effective_min_cost()
-        self.n_symbols_missing_ohlcvs_1m = len(self.get_symbols_approved_or_has_pos())
+        # Legacy: no 1m OHLCV REST maintenance; CandlestickManager handles caching
         if self.is_forager_mode():
             await self.update_first_timestamps()
 
@@ -2131,102 +2125,7 @@ class Passivbot:
             ]
         }
 
-    async def watch_ohlcvs_1m(self):
-        if not hasattr(self, "ohlcvs_1m"):
-            self.ohlcvs_1m = {}
-        self.WS_ohlcvs_1m_tasks = {}
-        while not self.stop_websocket:
-            current_symbols = set(self.active_symbols)
-            started_symbols = set(self.WS_ohlcvs_1m_tasks.keys())
-            for key in self.WS_ohlcvs_1m_tasks:
-                if self.WS_ohlcvs_1m_tasks[key].cancelled():
-                    logging.info(
-                        f"debug ohlcv_1m watcher task is cancelled {key} {self.WS_ohlcvs_1m_tasks[key]}"
-                    )
-                if self.WS_ohlcvs_1m_tasks[key].done():
-                    logging.info(
-                        f"debug ohlcv_1m watcher task is done {key} {self.WS_ohlcvs_1m_tasks[key]}"
-                    )
-                try:
-                    ex = self.WS_ohlcvs_1m_tasks[key].exception()
-                    logging.info(
-                        f"debug ohlcv_1m watcher task exception {key} {self.WS_ohlcvs_1m_tasks[key]} {ex}"
-                    )
-                except:
-                    pass
-            to_print = []
-            # Start watch_ohlcv_1m_single tasks for new symbols
-            for symbol in current_symbols - started_symbols:
-                task = asyncio.create_task(self.watch_ohlcv_1m_single(symbol))
-                self.WS_ohlcvs_1m_tasks[symbol] = task
-                to_print.append(symbol)
-            if to_print:
-                coins = [symbol_to_coin(s) for s in to_print]
-                logging.info(f"Started watching ohlcv_1m for {','.join(coins)}")
-            to_print = []
-            # Cancel tasks for symbols that are no longer active
-            for symbol in started_symbols - current_symbols:
-                self.WS_ohlcvs_1m_tasks[symbol].cancel()
-                del self.WS_ohlcvs_1m_tasks[symbol]
-                to_print.append(symbol)
-            if to_print:
-                coins = [symbol_to_coin(s) for s in to_print]
-                logging.info(f"Stopped watching ohlcv_1m for: {','.join(coins)}")
-            # Wait a bit before checking again
-            await asyncio.sleep(1)  # Adjust sleep time as needed
-
-    async def watch_ohlcv_1m_single(self, symbol):
-        backoff = 0.5  # start small, cap later
-        last_warn_ms = 0
-
-        while not self.stop_websocket:
-            try:
-                # Be explicit: 1-minute candles, latest only
-                res = await self.ccp.watch_ohlcv(symbol, "1m", None, 1)
-                self.handle_ohlcv_1m_update(symbol, res)
-                # success -> reset backoff
-                backoff = 0.5
-
-            except NetworkError as e:
-                msg = str(e).strip()
-
-                # KuCoin sometimes bubbles a bare numeric (ms) as the error string.
-                is_numeric = False
-                try:
-                    float(msg)  # fast path; '1754776440000.0' etc.
-                    is_numeric = True
-                except Exception:
-                    pass
-
-                # Throttle noisy, harmless hiccups to DEBUG; log other network errors sparsely.
-                now = utc_ms()
-                if is_numeric:
-                    logging.debug(f"watch_ohlcv_1m_single {symbol}: transient WS hiccup ({msg})")
-                else:
-                    # warn at most once per 30s per symbol to avoid log storms
-                    if now - last_warn_ms > 30_000:
-                        logging.warning(f"watch_ohlcv_1m_single {symbol}: network issue: {msg}")
-                        last_warn_ms = now
-
-                # jittered exponential backoff, capped
-                await asyncio.sleep(min(backoff, 10.0) + random.uniform(0.0, 0.3))
-                backoff = min(backoff * 1.6, 10.0)
-
-            except asyncio.CancelledError:
-                # shutting down; don't log as error
-                break
-
-            except Exception as e:
-                # real errors: keep the full traceback once per 30s per symbol
-                now = utc_ms()
-                if now - last_warn_ms > 30_000:
-                    logging.error(f"exception watch_ohlcv_1m_single {symbol}: {e}")
-                    traceback.print_exc()
-                    last_warn_ms = now
-                await asyncio.sleep(1.0)
-
-            # small yield to let other tasks run
-            await asyncio.sleep(0.05)
+    # Legacy websocket 1m ohlcv watchers removed; CandlestickManager is authoritative
 
     async def calc_noisiness(
         self,
@@ -2322,178 +2221,15 @@ class Passivbot:
             await self.restart_bot_on_too_many_errors()
         return results
 
-    async def maintain_ohlcvs_1m_REST(self):
-        if not hasattr(self, "ohlcvs_1m"):
-            self.ohlcvs_1m = {}
-        error_count = 0
-        self.ohlcvs_1m_update_timestamps = {}
-        symbol_approved_or_has_pos = self.get_symbols_approved_or_has_pos()
-        self.n_symbols_missing_ohlcvs_1m = len(symbol_approved_or_has_pos)
-        init_ohlcvs_sleep_time = 4.0 / self.n_symbols_missing_ohlcvs_1m
-        for symbol in symbol_approved_or_has_pos:
-            # print("debug update_ohlcvs_1m_single_from_disk", symbol)
-            asyncio.create_task(self.update_ohlcvs_1m_single_from_disk(symbol))
-            await asyncio.sleep(min(0.1, init_ohlcvs_sleep_time))
-        self.ohlcvs_1m_max_age_ms = 1000 * 60 * self.ohlcvs_1m_update_after_minutes
-        loop_sleep_time_ms = 1000 * 1
-        logging.info(f"starting {get_function_name()}")
-        while not self.stop_signal_received:
-            try:
-                symbols_too_old = []
-                max_age_ms = self.ohlcvs_1m_max_age_ms
-                now_utc = utc_ms()
-                for symbol in self.get_symbols_approved_or_has_pos():
-                    if symbol not in self.ohlcvs_1m_update_timestamps:
-                        symbols_too_old.append((0, symbol))
-                    else:
-                        if (
-                            now_utc - self.ohlcvs_1m_update_timestamps[symbol]
-                            > self.ohlcvs_1m_max_age_ms
-                        ):
-                            symbols_too_old.append((self.ohlcvs_1m_update_timestamps[symbol], symbol))
-                symbols_to_update = sorted(symbols_too_old)[: self.max_n_concurrent_ohlcvs_1m_updates]
-                self.n_symbols_missing_ohlcvs_1m = len(symbols_too_old)
-                if not symbols_to_update:
-                    max_age_ms = self.ohlcvs_1m_max_age_ms / 2.0
-                    if self.ohlcvs_1m_update_timestamps:
-                        symbol, ts = sorted(
-                            self.ohlcvs_1m_update_timestamps.items(), key=lambda x: x[1]
-                        )[0]
-                        symbols_to_update = [(ts, symbol)]
-                if symbols_to_update:
-                    await asyncio.gather(
-                        *[
-                            self.update_ohlcvs_1m_single(x[1], max_age_ms=max_age_ms)
-                            for x in symbols_to_update
-                        ]
-                    )
-                sleep_time_ms = loop_sleep_time_ms - (utc_ms() - now_utc)
-                await asyncio.sleep(max(0.0, sleep_time_ms / 1000.0))
-            except Exception as e:
-                logging.error(f"error with {get_function_name()} {e}")
-                traceback.print_exc()
-                await asyncio.sleep(5)
-                await self.restart_bot_on_too_many_errors()
+    # Legacy maintain_ohlcvs_1m_REST removed; CandlestickManager handles caching and TTL
 
-    async def update_ohlcvs_1m_single_from_exchange(self, symbol):
-        filepath = self.get_ohlcvs_1m_filepath(symbol)
-        if self.lock_exists(filepath):
-            return
-        try:
-            self.create_lock_file(filepath)
-            ms_to_min = 1000 * 60
-            if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
-                last_ts = self.ohlcvs_1m[symbol].peekitem(-1)[0]
-                now_minute = self.get_exchange_time() // ms_to_min * ms_to_min
-                limit = min(999, max(3, int(round((now_minute - last_ts) / ms_to_min)) + 5))
-                if limit >= 999:
-                    limit = None
-            else:
-                self.ohlcvs_1m[symbol] = SortedDict()
-                limit = None
-            candles = await self.fetch_ohlcvs_1m(symbol, limit=limit)
-            for x in candles:
-                self.ohlcvs_1m[symbol][int(x[0])] = x
-            self.dump_ohlcvs_1m_to_cache(symbol)
-            self.ohlcvs_1m_update_timestamps[symbol] = or_default(
-                get_file_mod_ms, filepath, default=0.0
-            )
-        finally:
-            self.remove_lock_file(filepath)
+    # Legacy update_ohlcvs_1m_single_from_exchange removed
 
-    async def update_ohlcvs_1m_single_from_disk(self, symbol):
-        filepath = self.get_ohlcvs_1m_filepath(symbol)
-        if not os.path.exists(filepath):
-            return
-        if self.lock_exists(filepath):
-            return
-        try:
-            self.create_lock_file(filepath)
-            if symbol not in self.ohlcvs_1m:
-                self.ohlcvs_1m[symbol] = SortedDict()
-            data = np.load(filepath)
-            for x in data:
-                self.ohlcvs_1m[symbol][int(x[0])] = x
-            self.ohlcvs_1m_update_timestamps[symbol] = or_default(
-                get_file_mod_ms, filepath, default=0.0
-            )
-        except Exception as e:
-            logging.error(f"error with update_ohlcvs_1m_single_from_disk {symbol} {e}")
-            traceback.print_exc()
-            try:
-                os.remove(filepath)
-            except Exception as e0:
-                logging.error(f"failed to remove corrupted ohlcvs_1m file for {symbol} {e0}")
-        finally:
-            self.remove_lock_file(filepath)
+    # Legacy update_ohlcvs_1m_single_from_disk removed
 
-    async def update_ohlcvs_1m_single(self, symbol, max_age_ms=None):
-        if max_age_ms is None:
-            max_age_ms = self.ohlcvs_1m_max_age_ms
-        self.lock_timeout_ms = 5000.0
-        try:
-            if not (symbol in self.active_symbols or symbol in self.eligible_symbols):
-                return
-            filepath = self.get_ohlcvs_1m_filepath(symbol)
-            if self.lock_exists(filepath):
-                # is being updated by other instance
-                if self.get_lock_age_ms(filepath) > self.lock_timeout_ms:
-                    # other instance took too long to finish; assume it crashed
-                    self.remove_lock_file(filepath)
-                    await self.update_ohlcvs_1m_single_from_exchange(symbol)
-            elif os.path.exists(filepath):
-                mod_ts = or_default(get_file_mod_ms, filepath, default=0.0)
-                if utc_ms() - mod_ts > max_age_ms:
-                    await self.update_ohlcvs_1m_single_from_exchange(symbol)
-                else:
-                    if (
-                        symbol not in self.ohlcvs_1m_update_timestamps
-                        or self.ohlcvs_1m_update_timestamps[symbol] != mod_ts
-                    ):
-                        # was updated by other instance
-                        await self.update_ohlcvs_1m_single_from_disk(symbol)
-            else:
-                await self.update_ohlcvs_1m_single_from_exchange(symbol)
-        except Exception as e:
-            logging.error(f"error with {get_function_name()} {e}")
-            traceback.print_exc()
-            await self.restart_bot_on_too_many_errors()
+    # Legacy update_ohlcvs_1m_single removed
 
-    def create_lock_file(self, filepath):
-        try:
-            open(f"{filepath}.lock", "w").close()
-            return True
-        except Exception as e:
-            logging.error(f"error with {get_function_name()} {e}")
-            traceback.print_exc()
-            return False
-
-    def lock_exists(self, filepath):
-        try:
-            return os.path.exists(f"{filepath}.lock")
-        except Exception as e:
-            logging.error(f"error with {get_function_name()} {e}")
-            traceback.print_exc()
-            return False
-
-    def get_lock_age_ms(self, filepath):
-        try:
-            if self.lock_exists(filepath):
-                return utc_ms() - get_file_mod_ms(f"{filepath}.lock")
-        except Exception as e:
-            logging.error(f"error with {get_function_name()} {e}")
-            traceback.print_exc()
-        return utc_ms()
-
-    def remove_lock_file(self, filepath):
-        try:
-            if self.lock_exists(filepath):
-                os.remove(f"{filepath}.lock")
-                return True
-        except Exception as e:
-            logging.error(f"error with {get_function_name()} {e}")
-            traceback.print_exc()
-        return False
+    # Legacy file lock helpers removed
 
     async def close(self):
         logging.info(f"Stopped data maintainers: {self.stop_data_maintainers()}")
