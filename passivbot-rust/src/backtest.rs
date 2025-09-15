@@ -1,4 +1,3 @@
-use crate::candles::BacktestCandleManager;
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
 };
@@ -154,7 +153,6 @@ pub struct Backtest<'a> {
     n_eligible_long: usize,
     n_eligible_short: usize,
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
-    candles: BacktestCandleManager,
 }
 
 impl<'a> Backtest<'a> {
@@ -273,7 +271,6 @@ impl<'a> Backtest<'a> {
             n_eligible_long,
             n_eligible_short,
             // EMAs already initialized in `emas`; no rolling buffers needed
-            candles: BacktestCandleManager::new_empty(),
         }
     }
 
@@ -1363,7 +1360,7 @@ impl<'a> Backtest<'a> {
     fn update_emas(&mut self, k: usize) {
         for i in 0..self.n_coins {
             let close_price = self.hlcvs[[k, i, CLOSE]];
-            let vol_base = f64::max(0.0, self.hlcvs[[k, i, VOLUME]]);
+            let vol = f64::max(0.0, self.hlcvs[[k, i, VOLUME]]);
             let high = self.hlcvs[[k, i, HIGH]];
             let low = self.hlcvs[[k, i, LOW]];
 
@@ -1380,23 +1377,24 @@ impl<'a> Backtest<'a> {
                 emas.short[z] = close_price * short_alphas[z] + emas.short[z] * short_alphas_inv[z];
             }
 
-            // volume EMAs (single value per pside) — compute locally to avoid per-timestep lazy calls
-            // approximate quote volume as base_volume * typical_price
-            let typical_price = (high + low + close_price) / 3.0;
-            let quote_vol = vol_base * typical_price;
-            let a_v_long = self.ema_alphas[i].vol_alpha_long;
-            let a_v_short = self.ema_alphas[i].vol_alpha_short;
-            emas.vol_long = a_v_long * quote_vol + (1.0 - a_v_long) * emas.vol_long;
-            emas.vol_short = a_v_short * quote_vol + (1.0 - a_v_short) * emas.vol_short;
+            // volume EMAs (single value per pside)
+            let vol_alpha_long = self.ema_alphas[i].vol_alpha_long;
+            let vol_alpha_short = self.ema_alphas[i].vol_alpha_short;
+            emas.vol_long = vol * vol_alpha_long + emas.vol_long * (1.0 - vol_alpha_long);
+            emas.vol_short = vol * vol_alpha_short + emas.vol_short * (1.0 - vol_alpha_short);
 
             // noisiness metric: (high - low) / close
-            // compute locally using current candle values to avoid frequent lazy calls
-            let denom = if close_price.abs() < 1e-12 { 1e-12 } else { close_price };
-            let nrr = (high - low) / denom;
-            let a_n_long = self.ema_alphas[i].noise_alpha_long;
-            let a_n_short = self.ema_alphas[i].noise_alpha_short;
-            emas.noise_long = a_n_long * nrr + (1.0 - a_n_long) * emas.noise_long;
-            emas.noise_short = a_n_short * nrr + (1.0 - a_n_short) * emas.noise_short;
+            let noisiness = if close_price != 0.0 {
+                (high - low) / close_price
+            } else {
+                0.0
+            };
+            let noise_alpha_long = self.ema_alphas[i].noise_alpha_long;
+            let noise_alpha_short = self.ema_alphas[i].noise_alpha_short;
+            emas.noise_long =
+                noisiness * noise_alpha_long + emas.noise_long * (1.0 - noise_alpha_long);
+            emas.noise_short =
+                noisiness * noise_alpha_short + emas.noise_short * (1.0 - noise_alpha_short);
         }
     }
 }
