@@ -235,7 +235,7 @@ class CandlestickManager:
         # Retention knobs (candle-count based):
         max_memory_candles_per_symbol: int = 200_000,
         max_disk_candles_per_symbol_per_tf: int = 2_000_000,
-        debug: bool = False,
+        debug: int | bool = False,
     ) -> None:
         self.exchange = exchange
         # If no explicit exchange_name provided, infer from ccxt instance id
@@ -248,7 +248,11 @@ class CandlestickManager:
         self.overlap_candles = int(overlap_candles)
         self.max_memory_candles_per_symbol = int(max_memory_candles_per_symbol)
         self.max_disk_candles_per_symbol_per_tf = int(max_disk_candles_per_symbol_per_tf)
-        self.debug = bool(debug)
+        # Debug levels: 0 = production, 1 = network-only debug, 2 = full debug
+        try:
+            self.debug_level = int(debug)
+        except Exception:
+            self.debug_level = 2 if bool(debug) else 0
 
         self._cache: Dict[str, np.ndarray] = {}
         self._locks: Dict[str, asyncio.Lock] = {}
@@ -282,24 +286,21 @@ class CandlestickManager:
         self.log = logging.getLogger("CandlestickManager")
         # Isolate from root handlers to avoid duplicate/missing logs
         self.log.propagate = False
-        if self.debug:
-            self.log.setLevel(logging.DEBUG)
-        else:
-            self.log.setLevel(logging.INFO)
+        self.log.setLevel(logging.DEBUG if self.debug_level >= 1 else logging.INFO)
         fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%Y-%m-%dT%H:%M:%S")
         # Attach file handler once
         if not any(isinstance(h, logging.FileHandler) for h in self.log.handlers):
             os.makedirs("logs", exist_ok=True)
             fh = logging.FileHandler("logs/candlestick_manager.log")
             fh.setFormatter(fmt)
-            fh.setLevel(logging.DEBUG if self.debug else logging.INFO)
+            fh.setLevel(logging.DEBUG if self.debug_level >= 1 else logging.INFO)
             self.log.addHandler(fh)
         # Attach console handler in debug mode (ensure we don't confuse FileHandler subclassing)
         has_console = any(
             isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
             for h in self.log.handlers
         )
-        if self.debug and not has_console:
+        if self.debug_level >= 1 and not has_console:
             ch = logging.StreamHandler()
             ch.setFormatter(fmt)
             ch.setLevel(logging.DEBUG)
@@ -373,7 +374,7 @@ class CandlestickManager:
     def _fmt_ts(ms: Optional[int]) -> str:
         try:
             return (
-                time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(int(ms) / 1000.0))
+                time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(int(ms) / 1000.0))
                 if ms is not None
                 else "-"
             )
@@ -386,8 +387,8 @@ class CandlestickManager:
         except Exception:
             ex = self.exchange_name
         base = [f"event={event}"]
-        # In debug mode, include caller info for traceability
-        if self.debug:
+        # In debug modes, include caller info for traceability
+        if self.debug_level >= 1:
             try:
                 caller = get_caller_name()
                 base.append(f"called_by={caller}")
@@ -402,6 +403,12 @@ class CandlestickManager:
                 parts.append(f"{k}={v}")
         msg = " ".join(base + parts)
         if level == "debug":
+            # Apply debug filtering: level 0 -> drop; level 1 -> only ccxt_* events; level 2 -> all
+            if self.debug_level <= 0:
+                return
+            is_network = isinstance(event, str) and event.startswith("ccxt_")
+            if self.debug_level == 1 and not is_network:
+                return
             self.log.debug(msg)
         elif level == "info":
             self.log.info(msg)
@@ -1379,27 +1386,127 @@ class CandlestickManager:
     async def get_current_close(self, symbol: str, max_age_ms: Optional[int] = None) -> float:
         """Return latest close of the current in-progress minute for `symbol`.
 
-        - Uses exchange data when available; otherwise falls back to last cached close.
-        - Respects `max_age_ms` as minimum freshness for remote fetches.
-        - Returns NaN if no data is available.
+        Prefers candles over tickers:
+        - Cached current close within TTL
+        - Fresh in-memory current-minute candle
+        - get_candles for the current minute
+        - As last resort: fetch_ticker
+        - Fallback: last finalized cached close
         """
         if max_age_ms is not None and max_age_ms < 0:
             raise ValueError("max_age_ms cannot be negative")
         now = _utc_now_ms()
+        end_current = _floor_minute(now)
 
-        # Return cached current price if within TTL
+        # 1) TTL cache
         if max_age_ms is not None and max_age_ms > 0:
             prev = self._current_close_cache.get(symbol)
             if prev is not None:
                 price, updated = prev
                 if (now - int(updated)) <= int(max_age_ms):
+                    self._log("debug", "get_current_close_cache_hit", symbol=symbol)
                     return float(price)
 
         price: Optional[float] = None
-        # Try exchange sources for the current in-progress minute
+
+        # 2) In-memory current-minute candle fresh enough
+        try:
+            arr = self._cache.get(symbol)
+            if arr is not None and arr.size:
+                arr_sorted = np.sort(_ensure_dtype(arr), order="ts")
+                last_ts = int(arr_sorted[-1]["ts"])
+                if last_ts == end_current:
+                    fresh_enough = True
+                    if max_age_ms is not None and max_age_ms > 0:
+                        last_refresh = self._get_last_refresh_ms(symbol)
+                        fresh_enough = (now - int(last_refresh)) <= int(max_age_ms)
+                    if fresh_enough:
+                        price = float(arr_sorted[-1]["c"])
+                        self._current_close_cache[symbol] = (price, now)
+                        self._log("debug", "get_current_close_mem_candle", symbol=symbol)
+                        return price
+        except Exception:
+            pass
+
+        # 3) Use candles API to get current minute
+        try:
+            self._log(
+                "debug",
+                "get_current_close_via_candles",
+                symbol=symbol,
+                start_ts=end_current,
+                end_ts=end_current,
+            )
+            got = await self.get_candles(
+                symbol,
+                start_ts=end_current,
+                end_ts=end_current,
+                max_age_ms=max_age_ms,
+                timeframe=None,
+                strict=False,
+            )
+            if got is not None and got.size:
+                got_sorted = np.sort(_ensure_dtype(got), order="ts")
+                price = float(got_sorted[-1]["c"])
+                self._current_close_cache[symbol] = (price, now)
+                self._log("debug", "get_current_close_from_candles", symbol=symbol)
+                return price
+        except Exception:
+            pass
+
+        # 3b) Directly fetch a small tail window via OHLCV and merge to cache
         if self.exchange is not None:
             try:
-                # Prefer ticker last price if available
+                n = int(self.overlap_candles) if getattr(self, "overlap_candles", 0) else 1
+                if n <= 0:
+                    n = 1
+                # Cap by exchange default page limit for safety
+                try:
+                    n = int(min(max(1, n), int(self._ccxt_limit_default)))
+                except Exception:
+                    n = max(1, n)
+                since_tail = max(0, int(end_current) - ONE_MIN_MS * (n - 1))
+                self._log(
+                    "debug",
+                    "ccxt_fetch_ohlcv_tail_for_current_close",
+                    symbol=symbol,
+                    tf="1m",
+                    since_ts=since_tail,
+                    limit=n,
+                )
+                rows = await self._ccxt_fetch_ohlcv_once(
+                    symbol,
+                    since_ms=since_tail,
+                    limit=n,
+                    end_exclusive_ms=None,
+                    timeframe="1m",
+                )
+                arr = self._normalize_ccxt_ohlcv(rows)
+                if arr.size:
+                    price = float(arr[-1]["c"])  # may be current minute partial
+                    # Merge into memory cache, persist shard(s), and update refresh meta for TTL gating
+                    merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), arr)
+                    self._cache[symbol] = merged
+                    try:
+                        self._enforce_memory_retention(symbol)
+                        self._save_range(symbol, arr, timeframe="1m")
+                    except Exception:
+                        pass
+                    self._set_last_refresh_meta(symbol, last_refresh_ms=now)
+                    self._current_close_cache[symbol] = (price, now)
+                    self._log(
+                        "debug",
+                        "get_current_close_from_direct_ohlcv",
+                        symbol=symbol,
+                        rows=arr.shape[0],
+                    )
+                    return price
+            except Exception:
+                pass
+
+        # 4) Last resort: ticker
+        if self.exchange is not None:
+            try:
                 if hasattr(self.exchange, "fetch_ticker"):
                     self._log("debug", "ccxt_fetch_ticker", symbol=symbol)
                     t = await self.exchange.fetch_ticker(symbol)
@@ -1411,40 +1518,23 @@ class CandlestickManager:
                         close=(t.get("close") if isinstance(t, dict) else None),
                     )
                     price = float(t.get("last") or t.get("bid") or t.get("ask")) if t else None
+                    if price is not None:
+                        self._current_close_cache[symbol] = (price, now)
+                        return price
             except Exception:
-                price = None
-            if price is None:
-                # Fallback to latest 1m candle including current minute if exchange returns it
-                try:
-                    end_current = _floor_minute(now)
-                    self._log(
-                        "debug",
-                        "ccxt_fetch_ohlcv_current_minute",
-                        symbol=symbol,
-                        tf="1m",
-                        since_ts=end_current,
-                        limit=1,
-                    )
-                    rows = await self._ccxt_fetch_ohlcv_once(
-                        symbol, since_ms=end_current, limit=1, end_exclusive_ms=None, timeframe="1m"
-                    )
-                    arr = self._normalize_ccxt_ohlcv(rows)
-                    if arr.size:
-                        price = float(arr[-1]["c"])  # may be current minute partial
-                except Exception:
-                    pass
+                pass
 
-        # If still None, fallback to last cached candle close (finalized)
+        # 5) Fallback to last cached finalized candle
         if price is None:
-            arr = self._cache.get(symbol)
-            if arr is not None and arr.size:
-                arr = np.sort(_ensure_dtype(arr), order="ts")
-                price = float(arr[-1]["c"])
+            arr2 = self._cache.get(symbol)
+            if arr2 is not None and arr2.size:
+                arr2 = np.sort(_ensure_dtype(arr2), order="ts")
+                price = float(arr2[-1]["c"])
+                self._log("debug", "get_current_close_from_cache_finalized", symbol=symbol)
 
         if price is None:
             return float("nan")
 
-        # Update local cache of current close
         self._current_close_cache[symbol] = (float(price), int(now))
         return float(price)
 
