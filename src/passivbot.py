@@ -714,62 +714,13 @@ class Passivbot:
                             )
         return last_position_changes
 
-    async def wait_for_ohlcvs_1m_to_update(self):
-        await asyncio.sleep(1.0)
-        prev_print_ts = utc_ms() - 5000.0
-        while (
-            not self.stop_signal_received
-            and self.n_symbols_missing_ohlcvs_1m > self.max_n_concurrent_ohlcvs_1m_updates - 1
-        ):
-            if utc_ms() - prev_print_ts > 1000 * 10:
-                logging.info(
-                    f"Waiting for ohlcvs to be refreshed. Number of symbols with "
-                    f"out-of-date ohlcvs: {self.n_symbols_missing_ohlcvs_1m}"
-                )
-                prev_print_ts = utc_ms()
-            await asyncio.sleep(0.1)
+    # Legacy: wait_for_ohlcvs_1m_to_update removed (CandlestickManager handles freshness)
 
-    def get_ohlcvs_1m_filepath(self, symbol):
-        try:
-            return self.ohlcvs_1m_filepaths[symbol]
-        except:
-            if not hasattr(self, "filepath"):
-                self.ohlcvs_1m_filepaths = {}
-            filepath = f"{self.ohlcvs_1m_cache_dirpath}{symbol_to_coin(symbol)}.npy"
-            self.ohlcvs_1m_filepaths[symbol] = filepath
-            return filepath
+    # Legacy: get_ohlcvs_1m_filepath removed
 
-    def trim_ohlcvs_1m(self, symbol):
-        try:
-            if not hasattr(self, "ohlcvs_1m"):
-                return
-            if symbol not in self.ohlcvs_1m:
-                return
-            age_limit = (
-                self.get_exchange_time() - 1000 * 60 * 60 * 24 * self.ohlcvs_1m_rolling_window_days
-            )
-            for i in range(len(self.ohlcvs_1m[symbol])):
-                ts = self.ohlcvs_1m[symbol].peekitem(0)[0]
-                if ts < age_limit:
-                    del self.ohlcvs_1m[symbol][ts]
-                else:
-                    break
-            return True
-        except Exception as e:
-            logging.error(f"error with {get_function_name()} {symbol} {e}")
-            traceback.print_exc()
-            return False
+    # Legacy: trim_ohlcvs_1m removed
 
-    def dump_ohlcvs_1m_to_cache(self, symbol):
-        try:
-            self.trim_ohlcvs_1m(symbol)
-            to_dump = np.array([x for x in self.ohlcvs_1m[symbol].values()])
-            np.save(self.get_ohlcvs_1m_filepath(symbol), to_dump)
-            return True
-        except Exception as e:
-            logging.error(f"error with {get_function_name()} for {symbol}: {e}")
-            traceback.print_exc()
-            return False
+    # Legacy: dump_ohlcvs_1m_to_cache removed
 
     async def update_trailing_data(self) -> None:
         """Update trailing price metrics using CandlestickManager candles.
@@ -1177,13 +1128,7 @@ class Passivbot:
             logging.error(f"error updating balance from websocket {upd} {e}")
             traceback.print_exc()
 
-    def handle_ohlcv_1m_update(self, symbol, upd):
-        if symbol not in self.ohlcvs_1m:
-            self.ohlcvs_1m[symbol] = SortedDict()
-        for elm in upd:
-            elm[0] = ensure_millis(elm[0])
-            self.ohlcvs_1m[symbol][int(elm[0])] = elm
-            self.ohlcvs_1m_update_timestamps_WS[symbol] = utc_ms()
+    # Legacy: handle_ohlcv_1m_update removed
 
     async def calc_upnl_sum(self):
         upnl_sum = 0.0
@@ -1506,38 +1451,7 @@ class Passivbot:
         self.positions = positions_new
         return True
 
-    def get_last_price(self, symbol, null_replace=0.0):
-        if not hasattr(self, "ohlcvs_1m") or symbol not in self.ohlcvs_1m:
-            try:
-                if hasattr(self, "tickers") and symbol in self.tickers:
-                    res = self.tickers[symbol]["last"]
-                    if res is None:
-                        debug_print(
-                            f"debug get_last_price {symbol} price from tickers is null, called by {get_caller_name()}"
-                        )
-                        return null_replace
-                    return res
-            except Exception as e:
-                logging.error(
-                    f"Error with get_last_price, from tickers, called by {get_caller_name()}"
-                )
-        try:
-            if symbol in self.ohlcvs_1m and self.ohlcvs_1m[symbol]:
-                res = self.ohlcvs_1m[symbol].peekitem(-1)[1][4]
-                if res is None:
-                    if self.debug_mode:
-                        logging.info(
-                            f"debug get_last_price {symbol} price from ohlcvs_1m is null, called by {get_caller_name()}"
-                        )
-                    return null_replace
-                return res
-        except Exception as e:
-            logging.error(
-                f"error with get_last_price for {symbol}: {e}, called by {get_caller_name()}"
-            )
-            traceback.print_exc()
-        logging.info(f"debug get_last_price {symbol} failed, called by {get_caller_name()}")
-        return null_replace
+    # Legacy get_last_price removed; use get_last_prices which queries CandlestickManager
 
     async def update_effective_min_cost(self, symbol=None):
         if not hasattr(self, "effective_min_cost"):
@@ -2129,75 +2043,7 @@ class Passivbot:
                     logging.error(f"debug failed to dump to disk {k} {e}")
             self.tmp_debug_ts = utc_ms()
 
-    def fill_gaps_ohlcvs_1m(self):
-        for symbol in self.ohlcvs_1m:
-            self.fill_gaps_ohlcvs_1m_single(symbol)
-
-    def fill_gaps_ohlcvs_1m_single(self, symbol):
-        if symbol not in self.ohlcvs_1m or not self.ohlcvs_1m[symbol]:
-            return
-        now_minute = int(self.get_exchange_time() // ONE_MIN_MS * ONE_MIN_MS)
-        last_ts, last_ohlcv_1m = self.ohlcvs_1m[symbol].peekitem(-1)
-        if now_minute > last_ts:
-            self.ohlcvs_1m[symbol][now_minute] = [float(now_minute)] + [last_ohlcv_1m[4]] * 4 + [0.0]
-        n_ohlcvs_1m = len(self.ohlcvs_1m[symbol])
-        range_ms = self.ohlcvs_1m[symbol].peekitem(-1)[0] - self.ohlcvs_1m[symbol].peekitem(0)[0]
-        ideal_n_ohlcvs_1m = int((range_ms) / ONE_MIN_MS) + 1
-        if ideal_n_ohlcvs_1m > n_ohlcvs_1m:
-            ts = self.ohlcvs_1m[symbol].peekitem(0)[0]
-            last_ts = self.ohlcvs_1m[symbol].peekitem(-1)[0]
-            while ts < last_ts:
-                ts += ONE_MIN_MS
-                if ts not in self.ohlcvs_1m[symbol]:
-                    self.ohlcvs_1m[symbol][ts] = (
-                        [float(ts)] + [self.ohlcvs_1m[symbol][ts - ONE_MIN_MS][4]] * 4 + [0.0]
-                    )
-
-    def init_EMAs_single(self, symbol):
-        first_ts, first_ohlcv = self.ohlcvs_1m[symbol].peekitem(0)
-        for pside in ["long", "short"]:
-            self.emas[pside][symbol] = np.repeat(first_ohlcv[4], 3)
-            es = [self.config_get(["bot", pside, f"ema_span_{i}"], symbol=symbol) for i in [0, 1]]
-            ema_spans = numpyize(sorted(es + [(es[0] * es[1]) ** (0.5)]))
-            self.ema_alphas[pside][symbol] = (a := (2.0 / (ema_spans + 1)), 1.0 - a)
-        self.upd_minute_emas[symbol] = first_ts
-
-    async def update_EMAs(self):
-        for symbol in self.get_symbols_approved_or_has_pos():
-            if symbol not in self.ohlcvs_1m or not self.ohlcvs_1m[symbol]:
-                await self.update_ohlcvs_1m_single(symbol)
-                sts = utc_ms()
-                while symbol not in self.ohlcvs_1m:
-                    await asyncio.sleep(0.2)
-                    if utc_ms() - sts > 1000 * 5:
-                        logging.error(f"timeout 5 secs waiting for ohlcvs_1m update for {symbol}")
-                        break
-            self.update_EMAs_single(symbol)
-
-    def update_EMAs_single(self, symbol):
-        try:
-            if symbol not in self.ohlcvs_1m or not self.ohlcvs_1m[symbol]:
-                return
-            self.fill_gaps_ohlcvs_1m_single(symbol)
-            if symbol not in self.emas["long"]:
-                self.init_EMAs_single(symbol)
-            last_ts, last_ohlcv_1m = self.ohlcvs_1m[symbol].peekitem(-1)
-            for ts in range(
-                self.upd_minute_emas[symbol] + ONE_MIN_MS, last_ts + ONE_MIN_MS, ONE_MIN_MS
-            ):
-                for pside in ["long", "short"]:
-                    self.emas[pside][symbol] = calc_ema(
-                        self.ema_alphas[pside][symbol][0],
-                        self.ema_alphas[pside][symbol][1],
-                        self.emas[pside][symbol],
-                        self.ohlcvs_1m[symbol][ts][4],
-                    )
-            self.upd_minute_emas[symbol] = last_ts
-            return True
-        except Exception as e:
-            logging.error(f"error with {get_function_name()} for {symbol}: {e}")
-            traceback.print_exc()
-            return False
+    # Legacy EMA maintenance (init_EMAs_single/update_EMAs) removed in favor of CandlestickManager
 
     def get_symbols_with_pos(self, pside=None):
         # returns symbols that have position
@@ -2216,21 +2062,7 @@ class Passivbot:
             | {s for s in self.coin_overrides if self.get_forced_PB_mode(pside, s) == "normal"}
         )
 
-    def get_ohlcvs_1m_file_mods(self, symbols=None):
-        if symbols is None:
-            symbols = self.get_symbols_approved_or_has_pos()
-        last_update_tss = []
-        for symbol in symbols:
-            try:
-                filepath = self.get_ohlcvs_1m_filepath(symbol)
-                if os.path.exists(filepath):
-                    last_update_tss.append((get_file_mod_ms(filepath), symbol))
-                else:
-                    last_update_tss.append((0.0, symbol))
-            except Exception as e:
-                logging.info(f"debug error with get_file_mod_ms for {symbol} {e}")
-                last_update_tss.append((0.0, symbol))
-        return last_update_tss
+    # Legacy get_ohlcvs_1m_file_mods removed
 
     async def restart_bot(self):
         logging.info("Initiating bot restart...")
