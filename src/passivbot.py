@@ -2108,8 +2108,6 @@ class Passivbot:
             k: asyncio.create_task(getattr(self, k)())
             for k in [
                 "maintain_hourly_cycle",
-                # "maintain_ohlcvs_1m_REST",
-                # "watch_ohlcvs_1m",
                 "watch_orders",
             ]
         }
