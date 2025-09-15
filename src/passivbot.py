@@ -106,8 +106,7 @@ def snake_of(type_id: int) -> str:
     return pbr.order_type_id_to_snake(type_id)
 
 
-def calc_ema(alpha, alpha_, prev_ema, new_val) -> float:
-    return prev_ema * alpha_ + new_val * alpha
+# Legacy EMA helper removed; CandlestickManager provides EMA utilities
 
 
 def calc_pnl(position_side, entry_price, close_price, qty, inverse, c_mult):
@@ -254,9 +253,7 @@ class Passivbot:
         self.minimum_market_age_millis = (
             self.config["live"]["minimum_coin_age_days"] * 24 * 60 * 60 * 1000
         )
-        self.emas = {"long": {}, "short": {}}
-        self.ema_alphas = {"long": {}, "short": {}}
-        self.upd_minute_emas = {}
+        # Legacy EMA caches removed; use CandlestickManager EMA helpers
         # Legacy ohlcvs_1m fields removed in favor of CandlestickManager
         self.stop_signal_received = False
         self.PB_mode_stop = {
@@ -1718,15 +1715,7 @@ class Passivbot:
                         order["qty"] = pos_size_abs
         return ideal_orders_f
 
-    def calc_ema_bound(self, pside: str, symbol: str, ema_dist: float, upper_bound: bool):
-        if upper_bound:
-            return pbr.round_up(
-                self.emas[pside][symbol].max() * (1.0 + ema_dist), self.price_steps[symbol]
-            )
-        else:
-            return pbr.round_dn(
-                self.emas[pside][symbol].min() * (1.0 - ema_dist), self.price_steps[symbol]
-            )
+    # Legacy calc_ema_bound removed; pricing uses CandlestickManager EMA bounds
 
     async def calc_unstucking_close(self) -> (float, float, str, int):
         if len(self.pnls) == 0:
