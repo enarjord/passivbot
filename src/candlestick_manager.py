@@ -1650,6 +1650,56 @@ class CandlestickManager:
             return nan, nan
         return float(min(vals)), float(max(vals))
 
+    async def get_last_prices(
+        self, symbols: List[str], max_age_ms: int = 10_000
+    ) -> Dict[str, float]:
+        """Return latest close for current minute per symbol.
+
+        Uses get_current_close per symbol with TTL. Returns 0.0 on failure.
+        """
+        out: Dict[str, float] = {}
+        if not symbols:
+            return out
+        async def one(sym: str) -> float:
+            try:
+                val = await self.get_current_close(sym, max_age_ms=max_age_ms)
+                return float(val) if isinstance(val, (int, float)) else 0.0
+            except Exception:
+                return 0.0
+        tasks = {s: asyncio.create_task(one(s)) for s in symbols}
+        for s, t in tasks.items():
+            out[s] = await t
+        return out
+
+    async def get_ema_bounds_many(
+        self,
+        items: List[Tuple[str, int, int]],
+        *,
+        max_age_ms: Optional[int] = 60_000,
+        timeframe: Optional[str] = None,
+    ) -> Dict[str, Tuple[float, float]]:
+        """Return EMA bounds per symbol for a list of (symbol, span_0, span_1).
+
+        Returns mapping symbol -> (lower, upper), using get_ema_bounds per symbol.
+        """
+        out: Dict[str, Tuple[float, float]] = {}
+        if not items:
+            return out
+        async def one(sym: str, s0: int, s1: int) -> Tuple[float, float]:
+            try:
+                lo, hi = await self.get_ema_bounds(sym, s0, s1, max_age_ms=max_age_ms, timeframe=timeframe)
+                lo = float(lo) if isinstance(lo, (int, float)) else float("nan")
+                hi = float(hi) if isinstance(hi, (int, float)) else float("nan")
+                if not (np.isfinite(lo) and np.isfinite(hi)):
+                    return (0.0, 0.0)
+                return (lo, hi)
+            except Exception:
+                return (0.0, 0.0)
+        tasks = {sym: asyncio.create_task(one(sym, s0, s1)) for (sym, s0, s1) in items}
+        for sym, t in tasks.items():
+            out[sym] = await t
+        return out
+
     async def get_latest_ema_volume(
         self,
         symbol: str,

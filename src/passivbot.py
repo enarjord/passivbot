@@ -1123,7 +1123,7 @@ class Passivbot:
 
     async def calc_upnl_sum(self):
         upnl_sum = 0.0
-        last_prices = await self.get_last_prices(
+        last_prices = await self.cm.get_last_prices(
             set([x["symbol"] for x in self.fetched_positions]), max_age_ms=60_000
         )
         for elm in self.fetched_positions:
@@ -1451,7 +1451,7 @@ class Passivbot:
             symbols = sorted(self.get_symbols_approved_or_has_pos())
         else:
             symbols = [symbol]
-        last_prices = await self.get_last_prices(symbols, max_age_ms=60_000)
+        last_prices = await self.cm.get_last_prices(symbols, max_age_ms=60_000)
         for symbol in symbols:
             try:
                 self.effective_min_cost[symbol] = max(
@@ -1466,60 +1466,7 @@ class Passivbot:
                 logging.error(f"error with {get_function_name()} for {symbol}: {e}")
                 traceback.print_exc()
 
-    async def get_last_prices(
-        self, symbols: Iterable[str], max_age_ms: int = 10_000
-    ) -> Dict[str, float]:
-        """Return latest close for current minute per symbol using CandlestickManager.
-
-        - symbols: iterable of symbol strings
-        - max_age_ms: TTL for reusing cached current close before fetching
-        Returns mapping symbol -> price (0.0 on failure/missing)
-        """
-        symbols = list(symbols)
-        if not symbols:
-            return {}
-
-        async def one(symbol: str):
-            try:
-                val = await self.cm.get_current_close(symbol, max_age_ms=max_age_ms)
-                return float(val) if np.isfinite(val) else 0.0
-            except Exception:
-                return 0.0
-
-        tasks = {s: asyncio.create_task(one(s)) for s in symbols}
-        out = {}
-        for s, t in tasks.items():
-            out[s] = await t
-        return out
-
-    async def get_ema_bounds(
-        self, symbols: Iterable[str], pside: str, max_age_ms: int = 60_000
-    ) -> Dict[str, Tuple[float, float]]:
-        """Return EMA bounds (lower, upper) per symbol for given side.
-
-        - symbols: iterable of symbol strings
-        - pside: "long" or "short" (used to read spans from config)
-        - max_age_ms: TTL for reusing cached EMA if up-to-date
-        Returns mapping symbol -> (lower, upper); returns (0.0, 0.0) on failure
-        """
-        symbols = list(symbols)
-        if not symbols:
-            return {}
-
-        async def one(symbol: str):
-            try:
-                span_0 = self.config_get(["bot", pside, "ema_span_0"], symbol=symbol)
-                span_1 = self.config_get(["bot", pside, "ema_span_1"], symbol=symbol)
-                vals = await self.cm.get_ema_bounds(symbol, span_0, span_1, max_age_ms=max_age_ms)
-                return tuple([float(v) if np.isfinite(v) else 0.0 for v in vals])  # type: ignore[return-value]
-            except Exception:
-                return (0.0, 0.0)
-
-        tasks = {s: asyncio.create_task(one(s)) for s in symbols}
-        out = {}
-        for s, t in tasks.items():
-            out[s] = await t
-        return out
+    
 
     async def calc_ideal_orders(self):
         # find out which symbols need fresh data
@@ -1541,10 +1488,20 @@ class Passivbot:
                 else:
                     to_update_emas[pside].add(symbol)
                     to_update_last_prices.add(symbol)
+        # Build span tuples per symbol for long/short based on config (allows per-symbol overrides)
+        def build_items(symbols_set, pside):
+            items = []
+            for sym in symbols_set:
+                s0 = self.config_get(["bot", pside, "ema_span_0"], symbol=sym)
+                s1 = self.config_get(["bot", pside, "ema_span_1"], symbol=sym)
+                items.append((sym, s0, s1))
+            return items
+        items_long = build_items(to_update_emas["long"], "long")
+        items_short = build_items(to_update_emas["short"], "short")
         last_prices, ema_bounds_long, ema_bounds_short = await asyncio.gather(
-            self.get_last_prices(to_update_last_prices, max_age_ms=10_000),
-            self.get_ema_bounds(to_update_emas["long"], "long", max_age_ms=30_000),
-            self.get_ema_bounds(to_update_emas["short"], "short", max_age_ms=30_000),
+            self.cm.get_last_prices(list(to_update_last_prices), max_age_ms=10_000),
+            self.cm.get_ema_bounds_many(items_long, max_age_ms=30_000),
+            self.cm.get_ema_bounds_many(items_short, max_age_ms=30_000),
         )
         # long entries take lower bound; short entries take upper bound
         ema_anchor = {
@@ -1729,7 +1686,7 @@ class Passivbot:
         pnls_cumsum = np.array([x["pnl"] for x in self.pnls]).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = (pnls_cumsum.max(), pnls_cumsum[-1])
         unstuck_allowances = {}
-        last_prices = await self.get_last_prices(set(self.positions), max_age_ms=10_000)
+        last_prices = await self.cm.get_last_prices(set(self.positions), max_age_ms=10_000)
         for pside in ["long", "short"]:
             unstuck_allowances[pside] = (
                 pbr.calc_auto_unstuck_allowance(
