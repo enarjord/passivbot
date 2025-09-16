@@ -274,10 +274,14 @@ class Passivbot:
         logging.info(f"Starting bot {self.exchange}...")
         await format_approved_ignored_coins(self.config, self.user_info["exchange"])
         await self.init_markets()
+        # Staggered warmup of candles for approved symbols (large sets handled gracefully)
+        try:
+            await self.warmup_candles_staggered()
+        except Exception as e:
+            logging.info(f"warmup skipped due to: {e}")
         await asyncio.sleep(1)
         logging.info(f"Starting data maintainers...")
         await self.start_data_maintainers()
-        # await self.wait_for_ohlcvs_1m_to_update()
 
         logging.info(f"starting execution loop...")
         if not self.debug_mode:
@@ -345,6 +349,99 @@ class Passivbot:
             else:
                 raise KeyError(f"Key path {'.'.join(path)} not found in config or coin overrides.")
         return d
+
+    async def warmup_candles_staggered(self, *, concurrency: int = 8, window_candles: int | None = None,
+                                       ttl_ms: int = 300_000) -> None:
+        """Warm up recent candles for all approved symbols in a staggered way.
+
+        - concurrency: max in-flight symbols
+        - window_candles: number of 1m candles to warm; defaults to CandlestickManager.default_window_candles
+        - ttl_ms: skip refresh if data newer than this TTL exists
+
+        Logs a minimal countdown when warming >20 symbols.
+        """
+        # Build symbol set: union of approved (minus ignored) across both sides
+        if not hasattr(self, "approved_coins_minus_ignored_coins"):
+            return
+        symbols = sorted(
+            set().union(*self.approved_coins_minus_ignored_coins.values())
+        )
+        if not symbols:
+            return
+        n = len(symbols)
+        now = utc_ms()
+        end_final = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
+        # Determine window per symbol. For forager mode, use max EMA spans required for
+        # volume/noisiness across both sides; otherwise use provided/default window.
+        default_win = int(getattr(self.cm, "default_window_candles", 120))
+        is_forager = self.is_forager_mode()
+        per_symbol_win: Dict[str, int] = {}
+        for sym in symbols:
+            if window_candles is not None:
+                per_symbol_win[sym] = int(max(1, int(window_candles)))
+                continue
+            if is_forager:
+                try:
+                    lv = int(round(self.config_get(["bot", "long", "filter_volume_rolling_window"], symbol=sym)))
+                except Exception:
+                    lv = default_win
+                try:
+                    ln = int(round(self.config_get(["bot", "long", "filter_noisiness_rolling_window"], symbol=sym)))
+                except Exception:
+                    ln = default_win
+                try:
+                    sv = int(round(self.config_get(["bot", "short", "filter_volume_rolling_window"], symbol=sym)))
+                except Exception:
+                    sv = default_win
+                try:
+                    sn = int(round(self.config_get(["bot", "short", "filter_noisiness_rolling_window"], symbol=sym)))
+                except Exception:
+                    sn = default_win
+                per_symbol_win[sym] = max(1, lv, ln, sv, sn)
+            else:
+                per_symbol_win[sym] = default_win
+
+        sem = asyncio.Semaphore(max(1, int(concurrency)))
+        completed = 0
+        started_ms = utc_ms()
+        last_log_ms = started_ms
+
+        # Informative kickoff log
+        if n > 0:
+            wmins = [per_symbol_win[s] for s in symbols]
+            wmin, wmax = (min(wmins), max(wmins)) if wmins else (default_win, default_win)
+            logging.info(
+                f"warmup starting: {n} symbols, concurrency={concurrency}, ttl={int(ttl_ms/1000)}s, window=[{wmin},{wmax}]m"
+            )
+
+        async def one(sym: str):
+            nonlocal completed
+            async with sem:
+                try:
+                    win = int(per_symbol_win.get(sym, default_win))
+                    start_ts = int(end_final - ONE_MIN_MS * max(1, win))
+                    await self.cm.get_candles(
+                        sym, start_ts=start_ts, end_ts=None, max_age_ms=ttl_ms, strict=False
+                    )
+                except Exception:
+                    pass
+                finally:
+                    completed += 1
+                    # Time-based throttle: log every ~2s or on completion
+                    if n > 20:
+                        now_ms = utc_ms()
+                        if (completed == n) or (now_ms - last_log_ms >= 2000) or completed == 1:
+                            elapsed_s = max(0.001, (now_ms - started_ms) / 1000.0)
+                            rate = completed / elapsed_s
+                            remaining = max(0, n - completed)
+                            eta_s = int(remaining / max(1e-6, rate))
+                            pct = int(100 * completed / n)
+                            logging.info(
+                                f"warmup candles: {completed}/{n} {pct}% elapsed={int(elapsed_s)}s eta~{eta_s}s"
+                            )
+                            last_log_ms = now_ms
+
+        await asyncio.gather(*(one(s) for s in symbols))
 
     async def update_first_timestamps(self, symbols=[]):
         if not hasattr(self, "first_timestamps"):
@@ -1442,8 +1539,6 @@ class Passivbot:
         self.positions = positions_new
         return True
 
-    # Legacy get_last_price removed; use get_last_prices which queries CandlestickManager
-
     async def update_effective_min_cost(self, symbol=None):
         if not hasattr(self, "effective_min_cost"):
             self.effective_min_cost = {}
@@ -1451,7 +1546,7 @@ class Passivbot:
             symbols = sorted(self.get_symbols_approved_or_has_pos())
         else:
             symbols = [symbol]
-        last_prices = await self.cm.get_last_prices(symbols, max_age_ms=60_000)
+        last_prices = await self.cm.get_last_prices(symbols, max_age_ms=600_000)
         for symbol in symbols:
             try:
                 self.effective_min_cost[symbol] = max(
@@ -1465,8 +1560,6 @@ class Passivbot:
             except Exception as e:
                 logging.error(f"error with {get_function_name()} for {symbol}: {e}")
                 traceback.print_exc()
-
-    
 
     async def calc_ideal_orders(self):
         # find out which symbols need fresh data
@@ -1889,7 +1982,9 @@ class Passivbot:
         keys = ("symbol", "side", "position_side", "qty", "price")
         to_cancel, to_create = [], []
         for symbol in actual_orders:
-            to_cancel_, to_create_ = filter_orders(actual_orders[symbol], ideal_orders[symbol], keys)
+            # Some symbols may have no ideal orders for this cycle; treat as empty list
+            ideal_list = ideal_orders.get(symbol, []) if isinstance(ideal_orders, dict) else []
+            to_cancel_, to_create_ = filter_orders(actual_orders[symbol], ideal_list, keys)
             for pside in ["long", "short"]:
                 if self.PB_modes[pside][symbol] == "manual":
                     # neither create nor cancel orders
@@ -2104,10 +2199,35 @@ class Passivbot:
             except Exception:
                 return 0.0
 
-        tasks = {s: asyncio.create_task(one(s)) for s in eligible_symbols}
+        syms = list(eligible_symbols)
+        tasks = {s: asyncio.create_task(one(s)) for s in syms}
         out = {}
-        for s, t in tasks.items():
-            out[s] = await t
+        # Progress logging for large batches
+        n = len(syms)
+        completed = 0
+        started_ms = utc_ms()
+        last_log_ms = started_ms
+        for t in asyncio.as_completed(tasks.values()):
+            # find which symbol this task corresponds to
+            sym = next((k for k, v in tasks.items() if v is t), None)
+            try:
+                val = await t
+            except Exception:
+                val = 0.0
+            if sym is not None:
+                out[sym] = val
+            completed += 1
+            if n > 20:
+                now_ms = utc_ms()
+                if (completed == n) or (now_ms - last_log_ms >= 2000) or completed == 1:
+                    elapsed_s = max(0.001, (now_ms - started_ms) / 1000.0)
+                    rate = completed / elapsed_s
+                    pct = int(100 * completed / n)
+                    eta_s = int((n - completed) / max(1e-6, rate))
+                    logging.info(
+                        f"noisiness EMA: {completed}/{n} {pct}% elapsed={int(elapsed_s)}s eta~{eta_s}s"
+                    )
+                    last_log_ms = now_ms
         return out
 
     async def calc_volumes(
@@ -2137,10 +2257,34 @@ class Passivbot:
             except Exception:
                 return 0.0
 
-        tasks = {s: asyncio.create_task(one(s)) for s in symbols}
+        syms = list(symbols)
+        tasks = {s: asyncio.create_task(one(s)) for s in syms}
         out = {}
-        for s, t in tasks.items():
-            out[s] = await t
+        # Progress logging for large batches
+        n = len(syms)
+        completed = 0
+        started_ms = utc_ms()
+        last_log_ms = started_ms
+        for t in asyncio.as_completed(tasks.values()):
+            sym = next((k for k, v in tasks.items() if v is t), None)
+            try:
+                val = await t
+            except Exception:
+                val = 0.0
+            if sym is not None:
+                out[sym] = val
+            completed += 1
+            if n > 20:
+                now_ms = utc_ms()
+                if (completed == n) or (now_ms - last_log_ms >= 2000) or completed == 1:
+                    elapsed_s = max(0.001, (now_ms - started_ms) / 1000.0)
+                    rate = completed / elapsed_s
+                    pct = int(100 * completed / n)
+                    eta_s = int((n - completed) / max(1e-6, rate))
+                    logging.info(
+                        f"volume EMA: {completed}/{n} {pct}% elapsed={int(elapsed_s)}s eta~{eta_s}s"
+                    )
+                    last_log_ms = now_ms
         return out
 
     async def execute_multiple(self, orders: [dict], type_: str):
