@@ -268,7 +268,33 @@ class Passivbot:
         self.state_change_detected_by_symbol = set()
         self.recent_order_executions = []
         self.recent_order_cancellations = []
-        self.cm = CandlestickManager(exchange=self.cca, debug=0)
+        # CandlestickManager settings from config.live (renamed from legacy fields)
+        live_cfg = self.config.get("live", {}) if hasattr(self, "config") else {}
+        cm_kwargs = {"exchange": self.cca, "debug": 0}
+        try:
+            mem_cap = live_cfg.get("max_memory_candles_per_symbol", None)
+            if mem_cap is not None:
+                cm_kwargs["max_memory_candles_per_symbol"] = int(mem_cap)
+        except Exception:
+            pass
+        try:
+            disk_cap = live_cfg.get("max_disk_candles_per_symbol_per_tf", None)
+            if disk_cap is not None:
+                cm_kwargs["max_disk_candles_per_symbol_per_tf"] = int(disk_cap)
+        except Exception:
+            pass
+        self.cm = CandlestickManager(**cm_kwargs)
+        # TTL (minutes) for EMA candles on non-traded symbols
+        try:
+            ttl_min = live_cfg.get("coin_filter_candles_max_age_minutes", None)
+            if ttl_min is None:
+                # backward compat with legacy naming
+                ttl_min = live_cfg.get("ohlcvs_1m_update_after_minutes", None)
+            self.coin_filter_candles_max_age_ms = (
+                int(float(ttl_min) * 60_000) if ttl_min is not None else 600_000
+            )
+        except Exception:
+            self.coin_filter_candles_max_age_ms = 600_000
 
     async def start_bot(self):
         logging.info(f"Starting bot {self.exchange}...")
@@ -350,8 +376,9 @@ class Passivbot:
                 raise KeyError(f"Key path {'.'.join(path)} not found in config or coin overrides.")
         return d
 
-    async def warmup_candles_staggered(self, *, concurrency: int = 8, window_candles: int | None = None,
-                                       ttl_ms: int = 300_000) -> None:
+    async def warmup_candles_staggered(
+        self, *, concurrency: int = 8, window_candles: int | None = None, ttl_ms: int = 300_000
+    ) -> None:
         """Warm up recent candles for all approved symbols in a staggered way.
 
         - concurrency: max in-flight symbols
@@ -363,9 +390,7 @@ class Passivbot:
         # Build symbol set: union of approved (minus ignored) across both sides
         if not hasattr(self, "approved_coins_minus_ignored_coins"):
             return
-        symbols = sorted(
-            set().union(*self.approved_coins_minus_ignored_coins.values())
-        )
+        symbols = sorted(set().union(*self.approved_coins_minus_ignored_coins.values()))
         if not symbols:
             return
         n = len(symbols)
@@ -382,19 +407,43 @@ class Passivbot:
                 continue
             if is_forager:
                 try:
-                    lv = int(round(self.config_get(["bot", "long", "filter_volume_rolling_window"], symbol=sym)))
+                    lv = int(
+                        round(
+                            self.config_get(
+                                ["bot", "long", "filter_volume_rolling_window"], symbol=sym
+                            )
+                        )
+                    )
                 except Exception:
                     lv = default_win
                 try:
-                    ln = int(round(self.config_get(["bot", "long", "filter_noisiness_rolling_window"], symbol=sym)))
+                    ln = int(
+                        round(
+                            self.config_get(
+                                ["bot", "long", "filter_noisiness_rolling_window"], symbol=sym
+                            )
+                        )
+                    )
                 except Exception:
                     ln = default_win
                 try:
-                    sv = int(round(self.config_get(["bot", "short", "filter_volume_rolling_window"], symbol=sym)))
+                    sv = int(
+                        round(
+                            self.config_get(
+                                ["bot", "short", "filter_volume_rolling_window"], symbol=sym
+                            )
+                        )
+                    )
                 except Exception:
                     sv = default_win
                 try:
-                    sn = int(round(self.config_get(["bot", "short", "filter_noisiness_rolling_window"], symbol=sym)))
+                    sn = int(
+                        round(
+                            self.config_get(
+                                ["bot", "short", "filter_noisiness_rolling_window"], symbol=sym
+                            )
+                        )
+                    )
                 except Exception:
                     sn = default_win
                 per_symbol_win[sym] = max(1, lv, ln, sv, sn)
@@ -1581,6 +1630,7 @@ class Passivbot:
                 else:
                     to_update_emas[pside].add(symbol)
                     to_update_last_prices.add(symbol)
+
         # Build span tuples per symbol for long/short based on config (allows per-symbol overrides)
         def build_items(symbols_set, pside):
             items = []
@@ -1589,6 +1639,7 @@ class Passivbot:
                 s1 = self.config_get(["bot", pside, "ema_span_1"], symbol=sym)
                 items.append((sym, s0, s1))
             return items
+
         items_long = build_items(to_update_emas["long"], "long")
         items_short = build_items(to_update_emas["short"], "short")
         last_prices, ema_bounds_long, ema_bounds_short = await asyncio.gather(
@@ -2190,8 +2241,14 @@ class Passivbot:
                 else:
                     # More generous TTL for non-traded symbols
                     has_pos = self.has_position(symbol=symbol)
-                    has_oo = bool(self.open_orders.get(symbol)) if hasattr(self, "open_orders") else False
-                    ttl = 60_000 if (has_pos or has_oo) else 600_000
+                    has_oo = (
+                        bool(self.open_orders.get(symbol)) if hasattr(self, "open_orders") else False
+                    )
+                    ttl = (
+                        60_000
+                        if (has_pos or has_oo)
+                        else int(getattr(self, "coin_filter_candles_max_age_ms", 600_000))
+                    )
                 val = await self.cm.get_latest_ema_nrr(
                     symbol, span=span, timeframe=None, max_age_ms=ttl
                 )
@@ -2231,7 +2288,11 @@ class Passivbot:
         return out
 
     async def calc_volumes(
-        self, pside: str, symbols: Optional[Iterable[str]] = None, *, max_age_ms: Optional[int] = 60_000
+        self,
+        pside: str,
+        symbols: Optional[Iterable[str]] = None,
+        *,
+        max_age_ms: Optional[int] = 60_000,
     ) -> Dict[str, float]:
         """Compute 1m EMA of quote volume per symbol.
 
@@ -2248,8 +2309,14 @@ class Passivbot:
                     ttl = int(max_age_ms)
                 else:
                     has_pos = self.has_position(symbol=symbol)
-                    has_oo = bool(self.open_orders.get(symbol)) if hasattr(self, "open_orders") else False
-                    ttl = 60_000 if (has_pos or has_oo) else 600_000
+                    has_oo = (
+                        bool(self.open_orders.get(symbol)) if hasattr(self, "open_orders") else False
+                    )
+                    ttl = (
+                        60_000
+                        if (has_pos or has_oo)
+                        else int(getattr(self, "coin_filter_candles_max_age_ms", 600_000))
+                    )
                 val = await self.cm.get_latest_ema_quote_volume(
                     symbol, span=span, timeframe=None, max_age_ms=ttl
                 )

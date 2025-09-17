@@ -137,8 +137,18 @@ def get_caller_name(depth: int = 2, logger: Optional[logging.Logger] = None) -> 
                 mod = None
 
             # Skip common wrappers and asyncio internals
-            skip_names = {"one", "<listcomp>", "<dictcomp>", "<lambda>", "_run", "gather", "create_task"}
-            is_asyncio = isinstance(mod, str) and (mod.startswith("asyncio.") or mod == "asyncio.events")
+            skip_names = {
+                "one",
+                "<listcomp>",
+                "<dictcomp>",
+                "<lambda>",
+                "_run",
+                "gather",
+                "create_task",
+            }
+            is_asyncio = isinstance(mod, str) and (
+                mod.startswith("asyncio.") or mod == "asyncio.events"
+            )
             if not is_cm and func not in skip_names and not is_asyncio:
                 name = frame_to_name(cur)
                 if isinstance(mod, str) and "passivbot" in mod and name and name != "unknown":
@@ -249,6 +259,8 @@ class CandlestickManager:
         max_memory_candles_per_symbol: int = 200_000,
         max_disk_candles_per_symbol_per_tf: int = 2_000_000,
         debug: int | bool = False,
+        # Optional global concurrency limiter for remote ccxt calls
+        max_concurrent_requests: int | None = None,
     ) -> None:
         self.exchange = exchange
         # If no explicit exchange_name provided, infer from ccxt instance id
@@ -282,6 +294,13 @@ class CandlestickManager:
         self._tf_range_cache_cap = 8
 
         self._setup_logging()
+
+        # Initialize optional global semaphore for remote calls
+        try:
+            mcr = None if max_concurrent_requests in (None, 0) else int(max_concurrent_requests)
+            self._net_sem = asyncio.Semaphore(mcr) if (mcr and mcr > 0) else None
+        except Exception:
+            self._net_sem = None
 
         # fetch controls
         # Base timeframe for storage/fetching is always 1m; higher TFs are per-call
@@ -798,13 +817,23 @@ class CandlestickManager:
                     attempt=attempt + 1,
                     params=params,
                 )
-                res = await ex.fetch_ohlcv(
-                    symbol,
-                    timeframe=tf,
-                    since=since_ms,
-                    limit=limit,
-                    params=params,
-                )
+                if getattr(self, "_net_sem", None) is not None:
+                    async with self._net_sem:  # type: ignore[attr-defined]
+                        res = await ex.fetch_ohlcv(
+                            symbol,
+                            timeframe=tf,
+                            since=since_ms,
+                            limit=limit,
+                            params=params,
+                        )
+                else:
+                    res = await ex.fetch_ohlcv(
+                        symbol,
+                        timeframe=tf,
+                        since=since_ms,
+                        limit=limit,
+                        params=params,
+                    )
                 self._log(
                     "debug",
                     "ccxt_fetch_ohlcv_ok",
@@ -1522,7 +1551,11 @@ class CandlestickManager:
             try:
                 if hasattr(self.exchange, "fetch_ticker"):
                     self._log("debug", "ccxt_fetch_ticker", symbol=symbol)
-                    t = await self.exchange.fetch_ticker(symbol)
+                    if getattr(self, "_net_sem", None) is not None:
+                        async with self._net_sem:  # type: ignore[attr-defined]
+                            t = await self.exchange.fetch_ticker(symbol)
+                    else:
+                        t = await self.exchange.fetch_ticker(symbol)
                     self._log(
                         "debug",
                         "ccxt_fetch_ticker_ok",
@@ -1650,9 +1683,7 @@ class CandlestickManager:
             return nan, nan
         return float(min(vals)), float(max(vals))
 
-    async def get_last_prices(
-        self, symbols: List[str], max_age_ms: int = 10_000
-    ) -> Dict[str, float]:
+    async def get_last_prices(self, symbols: List[str], max_age_ms: int = 10_000) -> Dict[str, float]:
         """Return latest close for current minute per symbol.
 
         Uses get_current_close per symbol with TTL. Returns 0.0 on failure.
@@ -1660,12 +1691,14 @@ class CandlestickManager:
         out: Dict[str, float] = {}
         if not symbols:
             return out
+
         async def one(sym: str) -> float:
             try:
                 val = await self.get_current_close(sym, max_age_ms=max_age_ms)
                 return float(val) if isinstance(val, (int, float)) else 0.0
             except Exception:
                 return 0.0
+
         tasks = {s: asyncio.create_task(one(s)) for s in symbols}
         for s, t in tasks.items():
             out[s] = await t
@@ -1685,9 +1718,12 @@ class CandlestickManager:
         out: Dict[str, Tuple[float, float]] = {}
         if not items:
             return out
+
         async def one(sym: str, s0: int, s1: int) -> Tuple[float, float]:
             try:
-                lo, hi = await self.get_ema_bounds(sym, s0, s1, max_age_ms=max_age_ms, timeframe=timeframe)
+                lo, hi = await self.get_ema_bounds(
+                    sym, s0, s1, max_age_ms=max_age_ms, timeframe=timeframe
+                )
                 lo = float(lo) if isinstance(lo, (int, float)) else float("nan")
                 hi = float(hi) if isinstance(hi, (int, float)) else float("nan")
                 if not (np.isfinite(lo) and np.isfinite(hi)):
@@ -1695,6 +1731,7 @@ class CandlestickManager:
                 return (lo, hi)
             except Exception:
                 return (0.0, 0.0)
+
         tasks = {sym: asyncio.create_task(one(sym, s0, s1)) for (sym, s0, s1) in items}
         for sym, t in tasks.items():
             out[sym] = await t
