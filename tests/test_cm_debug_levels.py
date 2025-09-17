@@ -40,4 +40,3 @@ def test_debug_level_full_allows_all_debug():
     msgs = cap.messages
     assert any("event=ccxt_fetch_ohlcv" in m for m in msgs)
     assert any("event=saved_range" in m for m in msgs)
-
