@@ -45,6 +45,25 @@ pub struct EMAs {
     pub noise_short: f64,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct HourBucket {
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub quote_volume: f64,
+}
+
+impl Default for HourBucket {
+    fn default() -> Self {
+        HourBucket {
+            high: 0.0,
+            low: 0.0,
+            close: 0.0,
+            quote_volume: 0.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EffectiveNPositions {
     pub long: usize,
@@ -136,6 +155,10 @@ pub struct Backtest<'a> {
     emas: Vec<EMAs>,
     // Wall-clock timestamp (ms) of the first candle; assumes 1m spacing
     first_timestamp_ms: u64,
+    // Latest computed hourly boundary (aligned to whole hours)
+    last_hour_boundary_ms: u64,
+    // Latest 1h bucket per coin (overwritten each new hour)
+    latest_hour: Vec<HourBucket>,
     positions: Positions,
     open_orders: OpenOrders,
     trailing_prices: TrailingPrices,
@@ -247,6 +270,8 @@ impl<'a> Backtest<'a> {
             emas: initial_emas,
             positions: Positions::default(),
             first_timestamp_ms: backtest_params.first_timestamp_ms,
+            last_hour_boundary_ms: (backtest_params.first_timestamp_ms / 3_600_000) * 3_600_000,
+            latest_hour: vec![HourBucket::default(); n_coins],
             open_orders: OpenOrders::default(),
             trailing_prices: TrailingPrices::default(),
             actives: Actives::default(),
@@ -1361,6 +1386,46 @@ impl<'a> Backtest<'a> {
 
     #[inline]
     fn update_emas(&mut self, k: usize) {
+        // Compute/refresh latest 1h bucket on whole-hour boundaries
+        let current_ts = self.first_timestamp_ms + (k as u64) * 60_000u64;
+        let hour_boundary = (current_ts / 3_600_000u64) * 3_600_000u64;
+        if hour_boundary > self.last_hour_boundary_ms {
+            // window is from max(first_ts, last_boundary) to previous minute
+            let window_start_ms = self.first_timestamp_ms.max(self.last_hour_boundary_ms);
+            if current_ts > window_start_ms + 60_000 {
+                let start_idx = ((window_start_ms - self.first_timestamp_ms) / 60_000u64) as usize;
+                let end_idx = if k == 0 { 0usize } else { k - 1 };
+                if end_idx >= start_idx {
+                    for i in 0..self.n_coins {
+                        let mut h = f64::MIN;
+                        let mut l = f64::MAX;
+                        let mut qv = 0.0f64;
+                        for j in start_idx..=end_idx {
+                            let high = self.hlcvs[[j, i, HIGH]];
+                            let low = self.hlcvs[[j, i, LOW]];
+                            let close = self.hlcvs[[j, i, CLOSE]];
+                            // VOLUME column represents quote volume already
+                            let qvol = f64::max(0.0, self.hlcvs[[j, i, VOLUME]]);
+                            if high > h {
+                                h = high;
+                            }
+                            if low < l {
+                                l = low;
+                            }
+                            qv += qvol;
+                        }
+                        let close = self.hlcvs[[end_idx, i, CLOSE]];
+                        self.latest_hour[i] = HourBucket {
+                            high: if h.is_finite() { h } else { 0.0 },
+                            low: if l.is_finite() { l } else { 0.0 },
+                            close,
+                            quote_volume: qv.max(0.0),
+                        };
+                    }
+                }
+            }
+            self.last_hour_boundary_ms = hour_boundary;
+        }
         for i in 0..self.n_coins {
             let close_price = self.hlcvs[[k, i, CLOSE]];
             let vol = f64::max(0.0, self.hlcvs[[k, i, VOLUME]]);
