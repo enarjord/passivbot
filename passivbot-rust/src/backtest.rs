@@ -134,6 +134,8 @@ pub struct Backtest<'a> {
     n_coins: usize,
     ema_alphas: Vec<EmaAlphas>,
     emas: Vec<EMAs>,
+    // Wall-clock timestamp (ms) of the first candle; assumes 1m spacing
+    first_timestamp_ms: u64,
     positions: Positions,
     open_orders: OpenOrders,
     trailing_prices: TrailingPrices,
@@ -244,6 +246,7 @@ impl<'a> Backtest<'a> {
             ema_alphas,
             emas: initial_emas,
             positions: Positions::default(),
+            first_timestamp_ms: backtest_params.first_timestamp_ms,
             open_orders: OpenOrders::default(),
             trailing_prices: TrailingPrices::default(),
             actives: Actives::default(),

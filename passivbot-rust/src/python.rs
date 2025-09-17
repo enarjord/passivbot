@@ -187,6 +187,8 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         starting_balance: extract_value(dict, "starting_balance").unwrap_or_default(),
         maker_fee: extract_value(dict, "maker_fee").unwrap_or_default(),
         coins: extract_value(dict, "coins").unwrap_or_default(),
+        // For now, hard-code first timestamp to 0; parameterize later via Python
+        first_timestamp_ms: 0,
     })
 }
 
