@@ -428,10 +428,8 @@ impl<'a> Backtest<'a> {
     }
 
     fn filter_by_relative_volume(&mut self, pside: usize) -> Vec<usize> {
-        // Use EMA of volume for relative volume filtering. Interpret the
-        // "filter_volume_rolling_window" parameter as an EMA span (alpha was
-        // precomputed in `calc_ema_alphas`). We ranked coins by their EMA volume
-        // and return top n_eligible.
+        // Use EMA volume (alpha precomputed in `calc_ema_alphas`) to rank coins by
+        // recent activity and return the top n eligible symbols.
         let mut volume_indices: Vec<(f64, usize)> = Vec::with_capacity(self.n_coins);
         for idx in 0..self.n_coins {
             let vol = match pside {
@@ -455,9 +453,8 @@ impl<'a> Backtest<'a> {
     }
 
     fn rank_by_noisiness(&self, candidates: &[usize], pside: usize) -> Vec<usize> {
-        // Use EMA of noisiness computed in `update_emas` instead of an SMA over
-        // a window. Interpret the "filter_noisiness_rolling_window" as an EMA
-        // span for alpha calculation (precomputed in `calc_ema_alphas`).
+        // Use the EMA noisiness values computed in `update_emas` to prioritise the
+        // most volatile coins among the remaining candidates.
         let mut noisinesses: Vec<(f64, usize)> = candidates
             .iter()
             .map(|&idx| {
@@ -1544,11 +1541,10 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
             alphas: ema_alphas_short,
             alphas_inv: ema_alphas_short_inv,
         },
-        // Interpret the filter rolling window params as EMA spans for volume/noisiness
-        vol_alpha_long: 2.0 / (bot_params_pair.long.filter_volume_rolling_window as f64 + 1.0),
-        vol_alpha_short: 2.0 / (bot_params_pair.short.filter_volume_rolling_window as f64 + 1.0),
-        noise_alpha_long: 2.0 / (bot_params_pair.long.filter_noisiness_rolling_window as f64 + 1.0),
-        noise_alpha_short: 2.0
-            / (bot_params_pair.short.filter_noisiness_rolling_window as f64 + 1.0),
+        // EMA spans for the volume/noisiness filters (alphas precomputed from spans)
+        vol_alpha_long: 2.0 / (bot_params_pair.long.filter_volume_ema_span as f64 + 1.0),
+        vol_alpha_short: 2.0 / (bot_params_pair.short.filter_volume_ema_span as f64 + 1.0),
+        noise_alpha_long: 2.0 / (bot_params_pair.long.filter_noisiness_ema_span as f64 + 1.0),
+        noise_alpha_short: 2.0 / (bot_params_pair.short.filter_noisiness_ema_span as f64 + 1.0),
     }
 }

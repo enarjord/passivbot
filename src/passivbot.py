@@ -287,9 +287,6 @@ class Passivbot:
         # TTL (minutes) for EMA candles on non-traded symbols
         try:
             ttl_min = live_cfg.get("coin_filter_candles_max_age_minutes", None)
-            if ttl_min is None:
-                # backward compat with legacy naming
-                ttl_min = live_cfg.get("ohlcvs_1m_update_after_minutes", None)
             self.coin_filter_candles_max_age_ms = (
                 int(float(ttl_min) * 60_000) if ttl_min is not None else 600_000
             )
@@ -410,7 +407,7 @@ class Passivbot:
                     lv = int(
                         round(
                             self.config_get(
-                                ["bot", "long", "filter_volume_rolling_window"], symbol=sym
+                                ["bot", "long", "filter_volume_ema_span"], symbol=sym
                             )
                         )
                     )
@@ -420,7 +417,7 @@ class Passivbot:
                     ln = int(
                         round(
                             self.config_get(
-                                ["bot", "long", "filter_noisiness_rolling_window"], symbol=sym
+                                ["bot", "long", "filter_noisiness_ema_span"], symbol=sym
                             )
                         )
                     )
@@ -430,7 +427,7 @@ class Passivbot:
                     sv = int(
                         round(
                             self.config_get(
-                                ["bot", "short", "filter_volume_rolling_window"], symbol=sym
+                                ["bot", "short", "filter_volume_ema_span"], symbol=sym
                             )
                         )
                     )
@@ -440,7 +437,7 @@ class Passivbot:
                     sn = int(
                         round(
                             self.config_get(
-                                ["bot", "short", "filter_noisiness_rolling_window"], symbol=sym
+                                ["bot", "short", "filter_noisiness_ema_span"], symbol=sym
                             )
                         )
                     )
@@ -1117,9 +1114,9 @@ class Passivbot:
 
         Steps (for forager mode):
         - Filter by age and effective min cost
-        - Rank by 1m EMA quote volume (span = filter_volume_rolling_window)
+        - Rank by 1m EMA quote volume
         - Drop the lowest filter_volume_drop_pct fraction
-        - Rank remaining by 1m EMA noisiness (span = filter_noisiness_rolling_window)
+        - Rank remaining by 1m EMA noisiness
         - Return up to n_positions most noisy symbols
         For non-forager mode, returns all approved candidates.
         """
@@ -2230,7 +2227,7 @@ class Passivbot:
         """
         if eligible_symbols is None:
             eligible_symbols = self.eligible_symbols
-        span = int(round(self.config["bot"][pside]["filter_noisiness_rolling_window"]))
+        span = int(round(self.config["bot"][pside]["filter_noisiness_ema_span"]))
 
         # Compute EMA of noisiness on 1m candles: (high-low)/close
         async def one(symbol: str):
@@ -2298,7 +2295,7 @@ class Passivbot:
 
         Returns mapping symbol -> ema_quote_volume; non-finite/failed computations yield 0.0.
         """
-        span = int(round(self.config["bot"][pside]["filter_volume_rolling_window"]))
+        span = int(round(self.config["bot"][pside]["filter_volume_ema_span"]))
         if symbols is None:
             symbols = self.get_symbols_approved_or_has_pos(pside)
 

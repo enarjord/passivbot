@@ -414,6 +414,8 @@ PB_MULTI_FIELD_MAP = {
     "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_weight",
     "ema_span_0": "ema_span_0",
     "ema_span_1": "ema_span_1",
+    "filter_noisiness_rolling_window": "filter_noisiness_ema_span",
+    "filter_volume_rolling_window": "filter_volume_ema_span",
 }
 PB_MULTI_FIELD_MAP_INV = {v: k for k, v in PB_MULTI_FIELD_MAP.items()}
 
@@ -489,6 +491,42 @@ def _build_from_live_only(config: dict, template: dict) -> dict:
     return result
 
 
+LEGACY_FILTER_KEYS = {
+    "filter_noisiness_rolling_window": "filter_noisiness_ema_span",
+    "filter_volume_rolling_window": "filter_volume_ema_span",
+}
+LEGACY_BOUNDS_KEYS = {
+    "long_filter_noisiness_rolling_window": "long_filter_noisiness_ema_span",
+    "long_filter_volume_rolling_window": "long_filter_volume_ema_span",
+    "short_filter_noisiness_rolling_window": "short_filter_noisiness_ema_span",
+    "short_filter_volume_rolling_window": "short_filter_volume_ema_span",
+}
+
+
+def _apply_backward_compatibility_renames(result: dict, verbose: bool = True) -> None:
+    """Translate legacy rolling_window keys to their EMA-span counterparts."""
+
+    for pside, bot_cfg in result.get("bot", {}).items():
+        if not isinstance(bot_cfg, dict):
+            continue
+        for old, new in LEGACY_FILTER_KEYS.items():
+            if old in bot_cfg:
+                if new not in bot_cfg:
+                    bot_cfg[new] = bot_cfg[old]
+                    if verbose:
+                        print(f"renaming parameter bot.{pside}.{old}: {new}")
+                del bot_cfg[old]
+
+    bounds = result.get("optimize", {}).get("bounds", {})
+    for old, new in LEGACY_BOUNDS_KEYS.items():
+        if old in bounds:
+            if new not in bounds:
+                bounds[new] = bounds[old]
+                if verbose:
+                    print(f"renaming parameter optimize.bounds.{old}: {new}")
+            del bounds[old]
+
+
 def detect_flavor(config: dict, template: dict) -> str:
     """Detect incoming config flavor to drive the builder.
 
@@ -556,16 +594,24 @@ def _ensure_bot_defaults_and_bounds(result: dict, verbose: bool = True) -> None:
                 [0.01, 3.0],
             ),
             (
-                "filter_noisiness_rolling_window",
+                "filter_noisiness_ema_span",
                 result["bot"][pside].get(
-                    "filter_rolling_window", result["live"].get("ohlcv_rolling_window", 60.0)
+                    "filter_noisiness_ema_span",
+                    result["bot"][pside].get(
+                        "filter_rolling_window",
+                        result["live"].get("ohlcv_rolling_window", 60.0),
+                    ),
                 ),
                 [10.0, 1440.0],
             ),
             (
-                "filter_volume_rolling_window",
+                "filter_volume_ema_span",
                 result["bot"][pside].get(
-                    "filter_rolling_window", result["live"].get("ohlcv_rolling_window", 60.0)
+                    "filter_volume_ema_span",
+                    result["bot"][pside].get(
+                        "filter_rolling_window",
+                        result["live"].get("ohlcv_rolling_window", 60.0),
+                    ),
                 ),
                 [10.0, 1440.0],
             ),
@@ -601,6 +647,7 @@ def _rename_config_keys(result: dict, verbose: bool = True) -> None:
     for section, src, dst in [
         ("live", "minimum_market_age_days", "minimum_coin_age_days"),
         ("live", "noisiness_rolling_mean_window_size", "ohlcv_rolling_window"),
+        ("live", "ohlcvs_1m_update_after_minutes", "coin_filter_candles_max_age_minutes"),
     ]:
         if src in result[section]:
             result[section][dst] = deepcopy(result[section][src])
@@ -687,6 +734,7 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     template = get_template_live_config("v7")
     flavor = detect_flavor(config, template)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
+    _apply_backward_compatibility_renames(result, verbose=verbose)
     _ensure_bot_defaults_and_bounds(result, verbose=verbose)
     result["bot"] = sort_dict_keys(result["bot"])
 
@@ -927,9 +975,9 @@ def get_template_live_config(passivbot_mode="v7"):
                 "entry_trailing_grid_ratio": 0.5,
                 "entry_trailing_retracement_pct": 0.01,
                 "entry_trailing_threshold_pct": 0.05,
-                "filter_noisiness_rolling_window": 60,
+                "filter_noisiness_ema_span": 60,
                 "filter_volume_drop_pct": 0.95,
-                "filter_volume_rolling_window": 60,
+                "filter_volume_ema_span": 60,
                 "n_positions": 10.0,
                 "total_wallet_exposure_limit": 1.7,
                 "unstuck_close_pct": 0.001,
@@ -957,9 +1005,9 @@ def get_template_live_config(passivbot_mode="v7"):
                 "entry_trailing_grid_ratio": 0.5,
                 "entry_trailing_retracement_pct": 0.01,
                 "entry_trailing_threshold_pct": 0.05,
-                "filter_noisiness_rolling_window": 60,
+                "filter_noisiness_ema_span": 60,
                 "filter_volume_drop_pct": 0.95,
-                "filter_volume_rolling_window": 60,
+                "filter_volume_ema_span": 60,
                 "n_positions": 10.0,
                 "total_wallet_exposure_limit": 1.7,
                 "unstuck_close_pct": 0.001,
@@ -986,7 +1034,7 @@ def get_template_live_config(passivbot_mode="v7"):
             "mimic_backtest_1m_delay": False,
             "minimum_coin_age_days": 7.0,
             "ohlcvs_1m_rolling_window_days": 7.0,
-            "ohlcvs_1m_update_after_minutes": 10.0,
+            "coin_filter_candles_max_age_minutes": 10.0,
             "pnls_max_lookback_days": 30.0,
             "price_distance_threshold": 0.002,
             "time_in_force": "good_till_cancelled",
@@ -1012,9 +1060,9 @@ def get_template_live_config(passivbot_mode="v7"):
                 "long_entry_trailing_grid_ratio": [-1.0, 1.0],
                 "long_entry_trailing_retracement_pct": [0.0, 0.1],
                 "long_entry_trailing_threshold_pct": [-0.1, 0.1],
-                "long_filter_noisiness_rolling_window": [10.0, 1440.0],
+                "long_filter_noisiness_ema_span": [10.0, 1440.0],
                 "long_filter_volume_drop_pct": [0.0, 1.0],
-                "long_filter_volume_rolling_window": [10.0, 1440.0],
+                "long_filter_volume_ema_span": [10.0, 1440.0],
                 "long_n_positions": [1.0, 20.0],
                 "long_total_wallet_exposure_limit": [0.0, 2.0],
                 "long_unstuck_close_pct": [0.001, 0.1],
@@ -1039,9 +1087,9 @@ def get_template_live_config(passivbot_mode="v7"):
                 "short_entry_trailing_grid_ratio": [-1.0, 1.0],
                 "short_entry_trailing_retracement_pct": [0.0, 0.1],
                 "short_entry_trailing_threshold_pct": [-0.1, 0.1],
-                "short_filter_noisiness_rolling_window": [10.0, 1440.0],
+                "short_filter_noisiness_ema_span": [10.0, 1440.0],
                 "short_filter_volume_drop_pct": [0.0, 1.0],
-                "short_filter_volume_rolling_window": [10.0, 1440.0],
+                "short_filter_volume_ema_span": [10.0, 1440.0],
                 "short_n_positions": [1.0, 20.0],
                 "short_total_wallet_exposure_limit": [0.0, 2.0],
                 "short_unstuck_close_pct": [0.001, 0.1],

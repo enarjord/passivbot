@@ -1,6 +1,7 @@
 import pytest
 
 from config_utils import (
+    _apply_backward_compatibility_renames,
     _apply_non_live_adjustments,
     _ensure_bot_defaults_and_bounds,
     _ensure_enforce_exposure_limit_bool,
@@ -107,3 +108,34 @@ def test_ensure_enforce_exposure_limit_bool_casts_values():
 
     assert config["bot"]["long"]["enforce_exposure_limit"] is True
     assert config["bot"]["short"]["enforce_exposure_limit"] is False
+
+
+def test_apply_backward_compatibility_renames_moves_filter_keys():
+    config = {
+        "bot": {
+            "long": {
+                "filter_noisiness_rolling_window": 42,
+                "filter_noisiness_ema_span": 84,
+                "filter_volume_rolling_window": 21,
+            },
+            "short": {"filter_volume_rolling_window": 11},
+        },
+        "optimize": {
+            "bounds": {
+                "long_filter_noisiness_rolling_window": [10, 20],
+                "short_filter_volume_rolling_window": [30, 40],
+            }
+        },
+    }
+
+    _apply_backward_compatibility_renames(config, verbose=False)
+
+    assert "filter_noisiness_rolling_window" not in config["bot"]["long"]
+    assert config["bot"]["long"]["filter_noisiness_ema_span"] == 84
+    assert config["bot"]["long"]["filter_volume_ema_span"] == 21
+    assert config["bot"]["short"]["filter_volume_ema_span"] == 11
+    bounds = config["optimize"]["bounds"]
+    assert "long_filter_noisiness_rolling_window" not in bounds
+    assert bounds["long_filter_noisiness_ema_span"] == [10, 20]
+    assert "short_filter_volume_rolling_window" not in bounds
+    assert bounds["short_filter_volume_ema_span"] == [30, 40]
