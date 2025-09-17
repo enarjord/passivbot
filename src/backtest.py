@@ -281,7 +281,8 @@ async def prepare_hlcvs_mss(config, exchange):
             logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
             cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices = result
             logging.info(f"Successfully loaded hlcvs data from cache")
-            return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices
+            # No timestamps in cache; assume first timestamp at 0 for now
+            return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, None
     except Exception as e:
         logging.info(f"Unable to load hlcvs data from cache: {e}. Fetching...")
     if exchange == "combined":
@@ -296,7 +297,7 @@ async def prepare_hlcvs_mss(config, exchange):
         logging.error(f"Failed to save hlcvs to cache: {e}")
         traceback.print_exc()
         cache_dir = ""
-    return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices
+    return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps
 
 
 def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_params=None):
@@ -363,12 +364,20 @@ def expand_analysis(analysis_usd, analysis_btc, fills, config):
     }
 
 
-def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices):
+def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timestamps=None):
     bot_params_list, exchange_params, backtest_params = prep_backtest_args(config, mss, exchange)
     if not config["backtest"]["use_btc_collateral"]:
         btc_usd_prices = np.ones(len(btc_usd_prices))
     logging.info(f"Backtesting {exchange}...")
     sts = utc_ms()
+
+    # Inject first timestamp (ms) into backtest params; default to 0 if unknown
+    try:
+        first_ts_ms = int(timestamps[0]) if (timestamps is not None and len(timestamps) > 0) else 0
+    except Exception:
+        first_ts_ms = 0
+    backtest_params = dict(backtest_params)
+    backtest_params["first_timestamp_ms"] = first_ts_ms
 
     # Use context managers for both HLCV and BTC/USD shared memory files
     with create_shared_memory_file(hlcvs) as shared_memory_file, create_shared_memory_file(
@@ -516,8 +525,8 @@ async def main():
     config["backtest"]["coins"] = {}
     if config["backtest"]["combine_ohlcvs"]:
         exchange = "combined"
-        coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await prepare_hlcvs_mss(
-            config, exchange
+        coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps = (
+            await prepare_hlcvs_mss(config, exchange)
         )
         exchange_preference = defaultdict(list)
         for coin in coins:
@@ -527,7 +536,7 @@ async def main():
         config["backtest"]["coins"][exchange] = coins
         config["backtest"]["cache_dir"][exchange] = str(cache_dir)
         fills, equities, equities_btc, analysis = run_backtest(
-            hlcvs, mss, config, exchange, btc_usd_prices
+            hlcvs, mss, config, exchange, btc_usd_prices, timestamps
         )
         post_process(
             config,
@@ -546,11 +555,13 @@ async def main():
         for exchange in config["backtest"]["exchanges"]:
             tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(configs[exchange], exchange))
         for exchange in tasks:
-            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await tasks[exchange]
+            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps = await tasks[
+                exchange
+            ]
             configs[exchange]["backtest"]["coins"][exchange] = coins
             configs[exchange]["backtest"]["cache_dir"][exchange] = str(cache_dir)
             fills, equities, equities_btc, analysis = run_backtest(
-                hlcvs, mss, configs[exchange], exchange, btc_usd_prices
+                hlcvs, mss, configs[exchange], exchange, btc_usd_prices, timestamps
             )
             post_process(
                 configs[exchange],
