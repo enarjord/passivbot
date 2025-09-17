@@ -404,6 +404,91 @@ def _build_flag_argparser() -> argparse.ArgumentParser:
     return p
 
 
+PB_MULTI_FIELD_MAP = {
+    "ddown_factor": "entry_grid_double_down_factor",
+    "initial_eprice_ema_dist": "entry_initial_ema_dist",
+    "initial_qty_pct": "entry_initial_qty_pct",
+    "markup_range": "close_grid_markup_range",
+    "min_markup": "close_grid_min_markup",
+    "rentry_pprice_dist": "entry_grid_spacing_pct",
+    "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_weight",
+    "ema_span_0": "ema_span_0",
+    "ema_span_1": "ema_span_1",
+}
+PB_MULTI_FIELD_MAP_INV = {v: k for k, v in PB_MULTI_FIELD_MAP.items()}
+
+
+def _build_from_pb_multi(config: dict, template: dict) -> dict:
+    result = deepcopy(template)
+    for key1 in result["live"]:
+        if key1 in config:
+            result["live"][key1] = config[key1]
+    if config.get("approved_symbols") and isinstance(config["approved_symbols"], dict):
+        result["live"]["coin_flags"] = config["approved_symbols"]
+    result["live"]["approved_coins"] = sorted(set(config.get("approved_symbols", [])))
+    result["live"]["ignored_coins"] = sorted(set(config.get("ignored_symbols", [])))
+    for pside in ("long", "short"):
+        universal_cfg = config.get("universal_live_config", {}).get(pside, {})
+        for key in result["bot"][pside]:
+            inverse_key = PB_MULTI_FIELD_MAP_INV.get(key)
+            if inverse_key and inverse_key in universal_cfg:
+                result["bot"][pside][key] = universal_cfg[inverse_key]
+        try:
+            result["bot"][pside]["close_grid_qty_pct"] = 1.0 / round(
+                universal_cfg.get("n_close_orders", 0)
+            )
+        except Exception:
+            pass
+        for key in (
+            "close_trailing_grid_ratio",
+            "close_trailing_retracement_pct",
+            "close_trailing_threshold_pct",
+            "entry_trailing_grid_ratio",
+            "entry_trailing_retracement_pct",
+            "entry_trailing_threshold_pct",
+            "unstuck_ema_dist",
+        ):
+            result["bot"][pside][key] = 0.0
+        if config.get("n_longs", 0) == 0 and config.get("n_shorts", 0) == 0:
+            n_positions = len(result["live"].get("coin_flags", {}))
+        else:
+            n_positions = config.get(f"n_{pside}s", 0)
+        result["bot"][pside]["n_positions"] = n_positions
+        result["bot"][pside]["unstuck_close_pct"] = config.get("unstuck_close_pct", 0.0)
+        result["bot"][pside]["unstuck_loss_allowance_pct"] = config.get("loss_allowance_pct", 0.0)
+        result["bot"][pside]["unstuck_threshold"] = config.get("stuck_threshold", 0.0)
+        twe_key = f"TWE_{pside}"
+        if config.get(f"{pside}_enabled", True):
+            result["bot"][pside]["total_wallet_exposure_limit"] = config.get(twe_key, 0.0)
+        else:
+            result["bot"][pside]["total_wallet_exposure_limit"] = 0.0
+    return result
+
+
+def _build_from_v7_legacy(config: dict, template: dict) -> dict:
+    result = deepcopy(template)
+    for section in ("backtest", "live", "optimize", "bot"):
+        source_section = config.get(section, {})
+        for key, value in source_section.items():
+            if key in result[section]:
+                result[section][key] = value
+    common = config.get("common", {})
+    for key, value in common.items():
+        if key in result["live"]:
+            result["live"][key] = value
+    result["live"]["approved_coins"] = common.get("approved_symbols", [])
+    result["live"]["coin_flags"] = common.get("symbol_flags", {})
+    return result
+
+
+def _build_from_live_only(config: dict, template: dict) -> dict:
+    result = deepcopy(config)
+    for section in ("optimize", "backtest"):
+        if section not in result:
+            result[section] = deepcopy(template[section])
+    return result
+
+
 def detect_flavor(config: dict, template: dict) -> str:
     """Detect incoming config flavor to drive the builder.
 
@@ -441,81 +526,12 @@ def build_base_config_from_flavor(
     This function only assembles the skeleton and copies values.
     It intentionally avoids broader migrations/renames.
     """
-    # renamings map used only for the pb_multi flavor when copying universal_live_config
-    cmap = {
-        "ddown_factor": "entry_grid_double_down_factor",
-        "initial_eprice_ema_dist": "entry_initial_ema_dist",
-        "initial_qty_pct": "entry_initial_qty_pct",
-        "markup_range": "close_grid_markup_range",
-        "min_markup": "close_grid_min_markup",
-        "rentry_pprice_dist": "entry_grid_spacing_pct",
-        "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_weight",
-        "ema_span_0": "ema_span_0",
-        "ema_span_1": "ema_span_1",
-    }
-    cmap_inv = {v: k for k, v in cmap.items()}
 
     if flavor == "pb_multi":
-        # PB multi live config
-        result = deepcopy(template)
-        for key1 in result["live"]:
-            if key1 in config:
-                result["live"][key1] = config[key1]
-        if config.get("approved_symbols") and isinstance(config["approved_symbols"], dict):
-            result["live"]["coin_flags"] = config["approved_symbols"]
-        result["live"]["approved_coins"] = sorted(set(config.get("approved_symbols", [])))
-        result["live"]["ignored_coins"] = sorted(set(config.get("ignored_symbols", [])))
-        for pside in ["long", "short"]:
-            for key in result["bot"][pside]:
-                if key in cmap_inv and cmap_inv[key] in config["universal_live_config"][pside]:
-                    result["bot"][pside][key] = config["universal_live_config"][pside][
-                        cmap_inv[key]
-                    ]
-            # derive close_grid_qty_pct
-            try:
-                result["bot"][pside]["close_grid_qty_pct"] = 1.0 / round(
-                    config["universal_live_config"][pside]["n_close_orders"]
-                )
-            except Exception:
-                pass
-            # set trailing to 0.0 for PB flavor
-            for key in [
-                "close_trailing_grid_ratio",
-                "close_trailing_retracement_pct",
-                "close_trailing_threshold_pct",
-                "entry_trailing_grid_ratio",
-                "entry_trailing_retracement_pct",
-                "entry_trailing_threshold_pct",
-                "unstuck_ema_dist",
-            ]:
-                result["bot"][pside][key] = 0.0
-            # positions / exposure
-            if config.get("n_longs", 0) == 0 and config.get("n_shorts", 0) == 0:
-                n_positions = len(result["live"].get("coin_flags", {}))
-            else:
-                n_positions = config.get(f"n_{pside}s", 0)
-            result["bot"][pside]["n_positions"] = n_positions
-            result["bot"][pside]["unstuck_close_pct"] = config.get("unstuck_close_pct", 0.0)
-            result["bot"][pside]["unstuck_loss_allowance_pct"] = config.get("loss_allowance_pct", 0.0)
-            result["bot"][pside]["unstuck_threshold"] = config.get("stuck_threshold", 0.0)
-            result["bot"][pside]["total_wallet_exposure_limit"] = (
-                config.get(f"TWE_{pside}", 0.0) if config.get(f"{pside}_enabled", True) else 0.0
-            )
-        return result
+        return _build_from_pb_multi(config, template)
 
     if flavor == "v7_legacy":
-        result = deepcopy(template)
-        # older v7 config type with a 'common' subtree
-        for k0 in ["backtest", "live", "optimize", "bot"]:
-            for k1 in config.get(k0, {}):
-                if k1 in result[k0]:
-                    result[k0][k1] = config[k0][k1]
-        for key in config.get("common", {}):
-            if key in result["live"]:
-                result["live"][key] = config["common"][key]
-        result["live"]["approved_coins"] = config["common"].get("approved_symbols", [])
-        result["live"]["coin_flags"] = config["common"].get("symbol_flags", {})
-        return result
+        return _build_from_v7_legacy(config, template)
 
     if flavor == "current":
         return deepcopy(config)
@@ -524,11 +540,7 @@ def build_base_config_from_flavor(
         return deepcopy(config["config"])
 
     if flavor == "live_only":
-        result = deepcopy(config)
-        for key in ["optimize", "backtest"]:
-            if key not in result:
-                result[key] = deepcopy(template[key])
-        return result
+        return _build_from_live_only(config, template)
 
     raise Exception("failed to format config: unknown flavor")
 
@@ -675,19 +687,6 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     template = get_template_live_config("v7")
     flavor = detect_flavor(config, template)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
-    # renamings map (used later in this function as today)
-    cmap = {
-        "ddown_factor": "entry_grid_double_down_factor",
-        "initial_eprice_ema_dist": "entry_initial_ema_dist",
-        "initial_qty_pct": "entry_initial_qty_pct",
-        "markup_range": "close_grid_markup_range",
-        "min_markup": "close_grid_min_markup",
-        "rentry_pprice_dist": "entry_grid_spacing_pct",
-        "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_weight",
-        "ema_span_0": "ema_span_0",
-        "ema_span_1": "ema_span_1",
-    }
-    cmap_inv = {v: k for k, v in cmap.items()}
     _ensure_bot_defaults_and_bounds(result, verbose=verbose)
     result["bot"] = sort_dict_keys(result["bot"])
 
