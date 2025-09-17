@@ -881,8 +881,6 @@ async def main():
     keep_live_keys = {
         "approved_coins",
         "minimum_coin_age_days",
-        "ohlcv_rolling_window",
-        "relative_volume_filter_clip_pct",
     }
     for key in sorted(template_config["live"]):
         if key not in keep_live_keys:
