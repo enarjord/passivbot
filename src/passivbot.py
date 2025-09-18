@@ -394,7 +394,7 @@ class Passivbot:
         now = utc_ms()
         end_final = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
         # Determine window per symbol. For forager mode, use max EMA spans required for
-        # volume/noisiness across both sides; otherwise use provided/default window.
+        # volume/log-range across both sides; otherwise use provided/default window.
         default_win = int(getattr(self.cm, "default_window_candles", 120))
         is_forager = self.is_forager_mode()
         per_symbol_win: Dict[str, int] = {}
@@ -412,7 +412,7 @@ class Passivbot:
                 try:
                     ln = int(
                         round(
-                            self.config_get(["bot", "long", "filter_noisiness_ema_span"], symbol=sym)
+                            self.config_get(["bot", "long", "filter_log_range_ema_span"], symbol=sym)
                         )
                     )
                 except Exception:
@@ -426,7 +426,7 @@ class Passivbot:
                 try:
                     sn = int(
                         round(
-                            self.config_get(["bot", "short", "filter_noisiness_ema_span"], symbol=sym)
+                            self.config_get(["bot", "short", "filter_log_range_ema_span"], symbol=sym)
                         )
                     )
                 except Exception:
@@ -1024,7 +1024,7 @@ class Passivbot:
         #   from coin age
         #   from effective min cost (only if has updated price info)
         # determine and set special t,p,m modes and forced modes
-        # determine ideal coins from noisiness and volume
+        # determine ideal coins from log range and volume
         # determine coins with pos for normal or gs modes
         # determine coins from ideal coins for normal modes
 
@@ -1098,20 +1098,20 @@ class Passivbot:
                 logging.info(f"{k} {elm}")
 
     async def get_filtered_coins(self, pside: str) -> List[str]:
-        """Select ideal coins for a side using EMA-based volume and noisiness filters.
+        """Select ideal coins for a side using EMA-based volume and log-range filters.
 
         Steps (for forager mode):
         - Filter by age and effective min cost
         - Rank by 1m EMA quote volume
         - Drop the lowest filter_volume_drop_pct fraction
-        - Rank remaining by 1m EMA noisiness
-        - Return up to n_positions most noisy symbols
+        - Rank remaining by 1m EMA log range
+        - Return up to n_positions most volatile symbols
         For non-forager mode, returns all approved candidates.
         """
         # filter coins by age
         # filter coins by min effective cost
         # filter coins by relative volume
-        # filter coins by noisiness
+        # filter coins by log range
         if self.get_forced_PB_mode(pside):
             return []
         candidates = self.approved_coins_minus_ignored_coins[pside]
@@ -1120,7 +1120,7 @@ class Passivbot:
         if candidates == []:
             self.warn_on_high_effective_min_cost(pside)
         if self.is_forager_mode(pside):
-            # filter coins by relative volume and noisiness
+            # filter coins by relative volume and log range
             clip_pct = self.config["bot"][pside]["filter_volume_drop_pct"]
             max_n_positions = self.get_max_n_positions(pside)
             if clip_pct > 0.0:
@@ -1129,12 +1129,14 @@ class Passivbot:
                 n_eligible = round(len(volumes) * (1 - clip_pct))
                 candidates = sorted(volumes, key=lambda x: volumes[x], reverse=True)
                 candidates = candidates[: int(max(n_eligible, max_n_positions))]
-            # ideal symbols are high noise symbols
-            noisiness = await self.calc_noisiness(pside, eligible_symbols=candidates)
-            noisiness = {k: v for k, v in sorted(noisiness.items(), key=lambda x: x[1], reverse=True)}
-            ideal_coins = [k for k in noisiness.keys()][:max_n_positions]
+            # ideal symbols are high log-range symbols
+            log_ranges = await self.calc_log_range(pside, eligible_symbols=candidates)
+            log_ranges = {
+                k: v for k, v in sorted(log_ranges.items(), key=lambda x: x[1], reverse=True)
+            }
+            ideal_coins = [k for k in log_ranges.keys()][:max_n_positions]
         else:
-            # all approved coins are selected, no filtering by volume and noisiness
+            # all approved coins are selected, no filtering by volume and log range
             ideal_coins = sorted(candidates)
         return ideal_coins
 
@@ -2202,22 +2204,22 @@ class Passivbot:
 
     # Legacy websocket 1m ohlcv watchers removed; CandlestickManager is authoritative
 
-    async def calc_noisiness(
+    async def calc_log_range(
         self,
         pside: str,
         eligible_symbols: Optional[Iterable[str]] = None,
         *,
         max_age_ms: Optional[int] = 60_000,
     ) -> Dict[str, float]:
-        """Compute 1m EMA of noisiness per symbol: EMA((high - low)/close).
+        """Compute 1m EMA of log range per symbol: EMA(ln(high/low)).
 
-        Returns mapping symbol -> ema_noisiness; non-finite/failed computations yield 0.0.
+        Returns mapping symbol -> ema_log_range; non-finite/failed computations yield 0.0.
         """
         if eligible_symbols is None:
             eligible_symbols = self.eligible_symbols
-        span = int(round(self.config["bot"][pside]["filter_noisiness_ema_span"]))
+        span = int(round(self.config["bot"][pside]["filter_log_range_ema_span"]))
 
-        # Compute EMA of noisiness on 1m candles: (high-low)/close
+        # Compute EMA of log range on 1m candles: ln(high/low)
         async def one(symbol: str):
             try:
                 # If caller passes a TTL, use it; otherwise select per-symbol TTL
@@ -2234,7 +2236,7 @@ class Passivbot:
                         if (has_pos or has_oo)
                         else int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
                     )
-                val = await self.cm.get_latest_ema_nrr(
+                val = await self.cm.get_latest_ema_log_range(
                     symbol, span=span, timeframe=None, max_age_ms=ttl
                 )
                 return float(val) if np.isfinite(val) else 0.0
@@ -2267,7 +2269,7 @@ class Passivbot:
                     pct = int(100 * completed / n)
                     eta_s = int((n - completed) / max(1e-6, rate))
                     logging.info(
-                        f"noisiness EMA: {completed}/{n} {pct}% elapsed={int(elapsed_s)}s eta~{eta_s}s"
+                        f"log_range EMA: {completed}/{n} {pct}% elapsed={int(elapsed_s)}s eta~{eta_s}s"
                     )
                     last_log_ms = now_ms
         return out
