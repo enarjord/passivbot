@@ -180,7 +180,10 @@ def get_cache_hash(config, exchange):
         "exchange": config["backtest"]["exchanges"] if exchange == "combined" else exchange,
         "minimum_coin_age_days": config["live"]["minimum_coin_age_days"],
         "gap_tolerance_ohlcvs_minutes": config["backtest"]["gap_tolerance_ohlcvs_minutes"],
-        "config_has_mimic_backtest_1m_delay": "mimic_backtest_1m_delay" in config["live"],
+        "config_has_max_memory_candles_per_symbol": "max_memory_candles_per_symbol"
+        in config[
+            "live"
+        ],  # inclusion purpose is to trigger rewrite of cache if PB version sets hlcv.volume for missing candles as negative
     }
     return calc_hash(to_hash)
 
