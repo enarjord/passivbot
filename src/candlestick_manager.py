@@ -247,6 +247,9 @@ class CandlestickManager:
         Enable verbose logging.
     """
 
+    # Many helpers accept both `timeframe=` and the concise `tf=` alias.  The alias keeps
+    # existing call sites terse while still advertising the more descriptive name.
+
     def __init__(
         self,
         exchange=None,
@@ -353,10 +356,12 @@ class CandlestickManager:
         except Exception:
             return
 
-    def _enforce_disk_retention(self, symbol: str, timeframe: str) -> None:
+    def _enforce_disk_retention(
+        self, symbol: str, timeframe: Optional[str] = None, *, tf: Optional[str] = None
+    ) -> None:
         try:
-            tf = (timeframe or "1m").strip().lower()
-            idx = self._ensure_symbol_index(symbol, tf)
+            tf_norm = self._normalize_timeframe_arg(timeframe, tf)
+            idx = self._ensure_symbol_index(symbol, tf=tf_norm)
             shards = idx.get("shards", {})
             if not shards:
                 return
@@ -394,9 +399,9 @@ class CandlestickManager:
                     break
             # persist updated index
             idx["shards"] = shards
-            key = f"{symbol}::{tf}"
+            key = f"{symbol}::{tf_norm}"
             self._index[key] = idx
-            self._save_index(symbol, tf)
+            self._save_index(symbol, tf=tf_norm)
         except Exception:
             return
 
@@ -451,23 +456,37 @@ class CandlestickManager:
 
     # ----- Paths and index -----
 
-    def _symbol_dir(self, symbol: str, timeframe: Optional[str] = None) -> str:
+    def _symbol_dir(
+        self, symbol: str, timeframe: Optional[str] = None, *, tf: Optional[str] = None
+    ) -> str:
         sym = _sanitize_symbol(symbol)
-        tf_dir = (timeframe or "1m").strip().lower()
+        tf_dir = self._normalize_timeframe_arg(timeframe, tf)
         return str(Path(self.cache_dir) / "ohlcv" / self.exchange_name / tf_dir / sym)
 
-    def _index_path(self, symbol: str, timeframe: Optional[str] = None) -> str:
-        return str(Path(self._symbol_dir(symbol, timeframe)) / "index.json")
+    def _index_path(
+        self, symbol: str, timeframe: Optional[str] = None, *, tf: Optional[str] = None
+    ) -> str:
+        return str(Path(self._symbol_dir(symbol, timeframe=timeframe, tf=tf)) / "index.json")
 
-    def _shard_path(self, symbol: str, date_key: str, timeframe: Optional[str] = None) -> str:
-        return str(Path(self._symbol_dir(symbol, timeframe)) / f"{date_key}.npy")
+    def _shard_path(
+        self,
+        symbol: str,
+        date_key: str,
+        timeframe: Optional[str] = None,
+        *,
+        tf: Optional[str] = None,
+    ) -> str:
+        return str(Path(self._symbol_dir(symbol, timeframe=timeframe, tf=tf)) / f"{date_key}.npy")
 
-    def _ensure_symbol_index(self, symbol: str, timeframe: Optional[str] = None) -> dict:
-        key = f"{symbol}::{(timeframe or '1m').strip().lower()}"
+    def _ensure_symbol_index(
+        self, symbol: str, timeframe: Optional[str] = None, *, tf: Optional[str] = None
+    ) -> dict:
+        tf_norm = self._normalize_timeframe_arg(timeframe, tf)
+        key = f"{symbol}::{tf_norm}"
         if key in self._index:
             return self._index[key]
         # Try load from disk
-        idx_path = self._index_path(symbol, timeframe)
+        idx_path = self._index_path(symbol, timeframe=timeframe, tf=tf_norm)
         idx = {"shards": {}, "meta": {}}
         try:
             with open(idx_path, "r", encoding="utf-8") as f:
@@ -479,7 +498,7 @@ class CandlestickManager:
                 "warning",
                 "index_load_failed",
                 symbol=symbol,
-                timeframe=timeframe or "1m",
+                timeframe=tf_norm,
                 error=str(e),
             )
         # Ensure meta keys
@@ -502,9 +521,12 @@ class CandlestickManager:
             os.fsync(f.fileno())
         os.replace(tmp_path, path)
 
-    def _save_index(self, symbol: str, timeframe: Optional[str] = None) -> None:
-        key = f"{symbol}::{(timeframe or '1m').strip().lower()}"
-        idx_path = self._index_path(symbol, timeframe)
+    def _save_index(
+        self, symbol: str, timeframe: Optional[str] = None, *, tf: Optional[str] = None
+    ) -> None:
+        tf_norm = self._normalize_timeframe_arg(timeframe, tf)
+        key = f"{symbol}::{tf_norm}"
+        idx_path = self._index_path(symbol, timeframe=timeframe, tf=tf_norm)
         payload = json.dumps(self._index[key], sort_keys=True).encode("utf-8")
         if portalocker is not None:
             # Lock the final target index.json to serialize writers
@@ -523,6 +545,19 @@ class CandlestickManager:
             self._locks[symbol] = lock
         return lock
 
+    @staticmethod
+    def _normalize_timeframe_arg(
+        timeframe: Optional[str], tf: Optional[str], default: str = "1m"
+    ) -> str:
+        """Resolve alias combination to a canonical, lowercase timeframe string."""
+        value = tf if tf is not None else timeframe
+        if not value:
+            return default
+        try:
+            return str(value).strip().lower() or default
+        except Exception:
+            return default
+
     def _ensure_symbol_cache(self, symbol: str) -> np.ndarray:
         arr = self._cache.get(symbol)
         if arr is None:
@@ -532,9 +567,11 @@ class CandlestickManager:
 
     # ----- Shard loading helpers -----
 
-    def _iter_shard_paths(self, symbol: str, timeframe: Optional[str] = None) -> Dict[str, str]:
+    def _iter_shard_paths(
+        self, symbol: str, timeframe: Optional[str] = None, *, tf: Optional[str] = None
+    ) -> Dict[str, str]:
         """Return mapping date_key -> path for available shard files on disk."""
-        sd = Path(self._symbol_dir(symbol, timeframe))
+        sd = Path(self._symbol_dir(symbol, timeframe=timeframe, tf=tf))
         if not sd.exists():
             return {}
         out: Dict[str, str] = {}
@@ -584,11 +621,18 @@ class CandlestickManager:
             return np.empty((0,), dtype=CANDLE_DTYPE)
 
     def _load_from_disk(
-        self, symbol: str, start_ts: int, end_ts: int, *, timeframe: Optional[str] = None
+        self,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
     ) -> Optional[np.ndarray]:
         """Load any shards intersecting [start_ts, end_ts] and merge into cache."""
         try:
-            shards = self._iter_shard_paths(symbol, timeframe)
+            tf_norm = self._normalize_timeframe_arg(timeframe, tf)
+            shards = self._iter_shard_paths(symbol, tf=tf_norm)
             if not shards:
                 return
             load_keys = []
@@ -616,13 +660,13 @@ class CandlestickManager:
                 "debug",
                 "load_from_disk",
                 symbol=symbol,
-                timeframe=timeframe or "1m",
+                timeframe=tf_norm,
                 days=len(load_keys),
                 rows=int(merged_disk.shape[0]),
                 start_ts=start_ts,
                 end_ts=end_ts,
             )
-            if (timeframe or "1m").strip().lower() == "1m":
+            if tf_norm == "1m":
                 existing = self._ensure_symbol_cache(symbol)
                 merged = self._merge_overwrite(existing, merged_disk)
                 self._cache[symbol] = merged
@@ -631,16 +675,22 @@ class CandlestickManager:
                 # Do not touch 1m cache for higher TF; let caller handle
                 return merged_disk
         except Exception as e:  # pragma: no cover - noncritical
-            self._log(
-                "warning", "disk_load_error", symbol=symbol, timeframe=timeframe or "1m", error=str(e)
-            )
+            self._log("warning", "disk_load_error", symbol=symbol, timeframe=tf_norm, error=str(e))
             return None
 
-    def _save_range(self, symbol: str, arr: np.ndarray, *, timeframe: Optional[str] = None) -> None:
+    def _save_range(
+        self,
+        symbol: str,
+        arr: np.ndarray,
+        *,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
+    ) -> None:
         """Persist fetched candles to daily shards by date_key."""
         if arr.size == 0:
             return
         arr = np.sort(_ensure_dtype(arr), order="ts")
+        tf_norm = self._normalize_timeframe_arg(timeframe, tf)
         current_key: Optional[str] = None
         bucket = []
         total = 0
@@ -654,16 +704,14 @@ class CandlestickManager:
                         symbol,
                         current_key,
                         np.array(bucket, dtype=CANDLE_DTYPE),
-                        timeframe=timeframe or "1m",
+                        tf=tf_norm,
                     )
                     total += len(bucket)
                 bucket = []
                 current_key = key
             bucket.append(tuple(row.tolist()))
         if bucket and current_key is not None:
-            self._save_shard(
-                symbol, current_key, np.array(bucket, dtype=CANDLE_DTYPE), timeframe=timeframe or "1m"
-            )
+            self._save_shard(symbol, current_key, np.array(bucket, dtype=CANDLE_DTYPE), tf=tf_norm)
             total += len(bucket)
             self._log("debug", "saved_range", symbol=symbol, rows=total)
 
@@ -780,6 +828,8 @@ class CandlestickManager:
         limit: int,
         end_exclusive_ms: Optional[int] = None,
         timeframe: Optional[str] = None,
+        *,
+        tf: Optional[str] = None,
     ) -> list:
         """Fetch a single OHLCV page from ccxt, with basic retry/backoff."""
         if self.exchange is None:
@@ -806,12 +856,12 @@ class CandlestickManager:
                         and "kucoin" not in exid
                     ):
                         params["until"] = int(end_exclusive_ms) - 1
-                tf = timeframe or self._ccxt_timeframe
+                tf_norm = self._normalize_timeframe_arg(timeframe, tf, default=self._ccxt_timeframe)
                 self._log(
                     "debug",
                     "ccxt_fetch_ohlcv",
                     symbol=symbol,
-                    tf=tf,
+                    tf=tf_norm,
                     since_ts=int(since_ms),
                     limit=limit,
                     attempt=attempt + 1,
@@ -821,7 +871,7 @@ class CandlestickManager:
                     async with self._net_sem:  # type: ignore[attr-defined]
                         res = await ex.fetch_ohlcv(
                             symbol,
-                            timeframe=tf,
+                            timeframe=tf_norm,
                             since=since_ms,
                             limit=limit,
                             params=params,
@@ -829,7 +879,7 @@ class CandlestickManager:
                 else:
                     res = await ex.fetch_ohlcv(
                         symbol,
-                        timeframe=tf,
+                        timeframe=tf_norm,
                         since=since_ms,
                         limit=limit,
                         params=params,
@@ -838,7 +888,7 @@ class CandlestickManager:
                     "debug",
                     "ccxt_fetch_ohlcv_ok",
                     symbol=symbol,
-                    tf=tf,
+                    tf=tf_norm,
                     since_ts=int(since_ms),
                     rows=(len(res) if res else 0),
                 )
@@ -901,7 +951,13 @@ class CandlestickManager:
         return arr[keep]
 
     async def _fetch_ohlcv_paginated(
-        self, symbol: str, since_ms: int, end_exclusive_ms: int, *, timeframe: Optional[str] = None
+        self,
+        symbol: str,
+        since_ms: int,
+        end_exclusive_ms: int,
+        *,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
     ) -> np.ndarray:
         """Fetch OHLCV from `since_ms` up to but excluding `end_exclusive_ms`.
 
@@ -912,13 +968,13 @@ class CandlestickManager:
         since = int(since_ms)
         end_excl = int(end_exclusive_ms)
         limit = self._ccxt_limit_default
-        tf = timeframe or self._ccxt_timeframe
+        tf_norm = self._normalize_timeframe_arg(timeframe, tf, default=self._ccxt_timeframe)
         # Derive pagination step from timeframe
-        period_ms = _tf_to_ms(tf)
+        period_ms = _tf_to_ms(tf_norm)
         all_rows = []
         while since < end_excl:
             page = await self._ccxt_fetch_ohlcv_once(
-                symbol, since, limit, end_exclusive_ms=end_excl, timeframe=tf
+                symbol, since, limit, end_exclusive_ms=end_excl, tf=tf_norm
             )
             if not page:
                 break
@@ -940,7 +996,7 @@ class CandlestickManager:
                     # Expect step to match the requested timeframe's period
                     if max_step != period_ms or min_step != period_ms:
                         self.log.warning(
-                            f"unexpected step for tf exchange={self._ex_id} symbol={symbol} tf={tf} expected={period_ms} min_step={min_step} max_step={max_step}"
+                            f"unexpected step for tf exchange={self._ex_id} symbol={symbol} tf={tf_norm} expected={period_ms} min_step={min_step} max_step={max_step}"
                         )
                 else:
                     max_step = ONE_MIN_MS
@@ -957,7 +1013,7 @@ class CandlestickManager:
                 break
             since = new_since
         self.log.debug(
-            f"paginated fetch done exchange={self._ex_id} symbol={symbol} rows={sum(a.shape[0] for a in all_rows) if all_rows else 0}"
+            f"paginated fetch done exchange={self._ex_id} symbol={symbol} tf={tf_norm} rows={sum(a.shape[0] for a in all_rows) if all_rows else 0}"
         )
         if not all_rows:
             return np.empty((0,), dtype=CANDLE_DTYPE)
@@ -1056,6 +1112,7 @@ class CandlestickManager:
         max_age_ms: Optional[int] = None,
         strict: bool = False,
         timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
     ) -> np.ndarray:
         """Return candles in inclusive range [start_ts, end_ts].
 
@@ -1071,7 +1128,7 @@ class CandlestickManager:
 
         # When a higher timeframe is requested, fetch it directly from the exchange
         # and bypass the 1m cache/standardization logic.
-        out_tf = timeframe
+        out_tf = timeframe or tf
         if out_tf is not None:
             # parse timeframe to ms (bucket size)
             period_ms = _tf_to_ms(out_tf)
@@ -1627,12 +1684,13 @@ class CandlestickManager:
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
     ) -> float:
         """Return latest EMA of close over last `span` finalized candles.
 
         Supports higher timeframe via `tf`/`timeframe`.
         """
-        out_tf = timeframe
+        out_tf = timeframe if timeframe is not None else tf
         period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         # EMA result cache: reuse if end_ts unchanged and within TTL
@@ -1663,6 +1721,7 @@ class CandlestickManager:
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
     ) -> Tuple[float, float]:
         """Return (lower, upper) bounds from EMAs at spans {span_0, span_1, span_2}.
 
@@ -1673,9 +1732,13 @@ class CandlestickManager:
 
         s2 = int(round((float(span_0) * float(span_1)) ** 0.5))
         e0, e1, e2 = await asyncio.gather(
-            self.get_latest_ema_close(symbol, span_0, max_age_ms=max_age_ms, timeframe=timeframe),
-            self.get_latest_ema_close(symbol, span_1, max_age_ms=max_age_ms, timeframe=timeframe),
-            self.get_latest_ema_close(symbol, s2, max_age_ms=max_age_ms, timeframe=timeframe),
+            self.get_latest_ema_close(
+                symbol, span_0, max_age_ms=max_age_ms, timeframe=timeframe, tf=tf
+            ),
+            self.get_latest_ema_close(
+                symbol, span_1, max_age_ms=max_age_ms, timeframe=timeframe, tf=tf
+            ),
+            self.get_latest_ema_close(symbol, s2, max_age_ms=max_age_ms, timeframe=timeframe, tf=tf),
         )
         vals = [e for e in (e0, e1, e2) if isinstance(e, (int, float)) and isfinite(float(e))]
         if not vals:
@@ -1710,6 +1773,7 @@ class CandlestickManager:
         *,
         max_age_ms: Optional[int] = 60_000,
         timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
     ) -> Dict[str, Tuple[float, float]]:
         """Return EMA bounds per symbol for a list of (symbol, span_0, span_1).
 
@@ -1722,7 +1786,7 @@ class CandlestickManager:
         async def one(sym: str, s0: int, s1: int) -> Tuple[float, float]:
             try:
                 lo, hi = await self.get_ema_bounds(
-                    sym, s0, s1, max_age_ms=max_age_ms, timeframe=timeframe
+                    sym, s0, s1, max_age_ms=max_age_ms, timeframe=timeframe, tf=tf
                 )
                 lo = float(lo) if isinstance(lo, (int, float)) else float("nan")
                 hi = float(hi) if isinstance(hi, (int, float)) else float("nan")
@@ -1744,12 +1808,14 @@ class CandlestickManager:
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
     ) -> float:
         return await self._get_latest_ema_generic(
             symbol,
             span,
             max_age_ms,
             timeframe,
+            tf=tf,
             metric_key="volume",
             series_fn=lambda a: np.asarray(a["bv"], dtype=np.float64),
         )
@@ -1761,6 +1827,7 @@ class CandlestickManager:
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
     ) -> float:
         """Return latest EMA of quote volume over last `span` finalized candles.
 
@@ -1773,6 +1840,7 @@ class CandlestickManager:
             span,
             max_age_ms,
             timeframe,
+            tf=tf,
             metric_key="qv",
             series_fn=lambda a: (
                 np.asarray(a["bv"], dtype=np.float64)
@@ -1792,6 +1860,7 @@ class CandlestickManager:
         max_age_ms: Optional[int],
         timeframe: Optional[str],
         *,
+        tf: Optional[str] = None,
         metric_key: str,
         series_fn,
     ) -> float:
@@ -1800,7 +1869,7 @@ class CandlestickManager:
         series_fn: callable taking the candles ndarray and returning a 1-D float64 series.
         metric_key: short key used in EMA cache to distinguish metrics (e.g., 'volume', 'qv').
         """
-        out_tf = timeframe
+        out_tf = timeframe if timeframe is not None else tf
         period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         now = _utc_now_ms()
@@ -1828,12 +1897,14 @@ class CandlestickManager:
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
     ) -> float:
         return await self._get_latest_ema_generic(
             symbol,
             span,
             max_age_ms,
             timeframe,
+            tf=tf,
             metric_key="nrr",
             series_fn=lambda a: (
                 (np.asarray(a["h"], dtype=np.float64) - np.asarray(a["l"], dtype=np.float64))
@@ -1850,8 +1921,9 @@ class CandlestickManager:
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
     ) -> np.ndarray:
-        out_tf = timeframe
+        out_tf = timeframe if timeframe is not None else tf
         period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         arr = await self.get_candles(
@@ -1874,8 +1946,9 @@ class CandlestickManager:
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
     ) -> np.ndarray:
-        out_tf = timeframe
+        out_tf = timeframe if timeframe is not None else tf
         period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         arr = await self.get_candles(
@@ -1898,8 +1971,9 @@ class CandlestickManager:
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
     ) -> np.ndarray:
-        out_tf = timeframe
+        out_tf = timeframe if timeframe is not None else tf
         period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         arr = await self.get_candles(
@@ -1972,7 +2046,13 @@ class CandlestickManager:
     # ----- Persistence -----
 
     def _save_shard(
-        self, symbol: str, date_key: str, array: np.ndarray, *, timeframe: Optional[str] = None
+        self,
+        symbol: str,
+        date_key: str,
+        array: np.ndarray,
+        *,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
     ) -> None:
         """Save shard as .npy and update index.json atomically.
 
@@ -1993,7 +2073,8 @@ class CandlestickManager:
         data_bytes = arr.tobytes()
         crc = int(zlib.crc32(data_bytes) & 0xFFFFFFFF)
 
-        shard_path = self._shard_path(symbol, date_key, timeframe)
+        tf_norm = self._normalize_timeframe_arg(timeframe, tf)
+        shard_path = self._shard_path(symbol, date_key, tf=tf_norm)
         os.makedirs(os.path.dirname(shard_path), exist_ok=True)
         # Write .npy content atomically
         # Use numpy.save to ensure .npy format, writing to a temp path then replace
@@ -2005,7 +2086,7 @@ class CandlestickManager:
         os.replace(tmp_path, shard_path)
 
         # Update index
-        idx = self._ensure_symbol_index(symbol, timeframe)
+        idx = self._ensure_symbol_index(symbol, tf=tf_norm)
         shards = idx.setdefault("shards", {})
         shards[date_key] = {
             "path": shard_path,
@@ -2014,12 +2095,12 @@ class CandlestickManager:
             "count": int(arr.shape[0]),
             "crc32": crc,
         }
-        key = f"{symbol}::{(timeframe or '1m').strip().lower()}"
+        key = f"{symbol}::{tf_norm}"
         self._index[key] = idx
-        self._save_index(symbol, timeframe)
+        self._save_index(symbol, tf=tf_norm)
         # Enforce disk retention per timeframe after writing this shard
         try:
-            self._enforce_disk_retention(symbol, timeframe or "1m")
+            self._enforce_disk_retention(symbol, tf=tf_norm)
         except Exception:
             pass
 
