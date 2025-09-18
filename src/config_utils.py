@@ -556,9 +556,7 @@ def detect_flavor(config: dict, template: dict) -> str:
     return "unknown"
 
 
-def build_base_config_from_flavor(
-    config: dict, template: dict, flavor: str, verbose: bool
-) -> dict:
+def build_base_config_from_flavor(config: dict, template: dict, flavor: str, verbose: bool) -> dict:
     """Return a base v7-shaped config based on detected flavor.
 
     This function only assembles the skeleton and copies values.
@@ -642,12 +640,13 @@ def _ensure_bot_defaults_and_bounds(result: dict, verbose: bool = True) -> None:
                 if verbose:
                     print(f"adding missing optimize parameter {pside} {opt_key}: {v_opt}")
 
+
 def _rename_config_keys(result: dict, verbose: bool = True) -> None:
     """Rename legacy keys to their current names."""
     for section, src, dst in [
         ("live", "minimum_market_age_days", "minimum_coin_age_days"),
         ("live", "noisiness_rolling_mean_window_size", "ohlcv_rolling_window"),
-        ("live", "ohlcvs_1m_update_after_minutes", "coin_filter_candles_max_age_minutes"),
+        ("live", "ohlcvs_1m_update_after_minutes", "inactive_coin_candle_ttl_minutes"),
     ]:
         if src in result[section]:
             result[section][dst] = deepcopy(result[section][src])
@@ -662,7 +661,9 @@ def _rename_config_keys(result: dict, verbose: bool = True) -> None:
         del result["backtest"]["exchange"]
 
 
-def _sync_with_template(template: dict, result: dict, base_config_path: str, verbose: bool = True) -> None:
+def _sync_with_template(
+    template: dict, result: dict, base_config_path: str, verbose: bool = True
+) -> None:
     """Synchronize the config with the template structure and prune unused keys."""
     add_missing_keys_recursively(template, result, verbose=verbose)
     if base_config_path or "base_config_path" not in result["live"]:
@@ -728,6 +729,7 @@ def _ensure_enforce_exposure_limit_bool(result: dict) -> None:
         result["bot"][pside]["enforce_exposure_limit"] = bool(
             result["bot"][pside]["enforce_exposure_limit"]
         )
+
 
 def format_config(config: dict, verbose=True, live_only=False, base_config_path: str = "") -> dict:
     # attempts to format a config to v7 config
@@ -1020,6 +1022,7 @@ def get_template_live_config(passivbot_mode="v7"):
         "live": {
             "approved_coins": [],
             "auto_gs": True,
+            "inactive_coin_candle_ttl_minutes": 10.0,
             "empty_means_all_approved": False,
             "execution_delay_seconds": 2.0,
             "filter_by_min_effective_cost": True,
@@ -1028,13 +1031,12 @@ def get_template_live_config(passivbot_mode="v7"):
             "ignored_coins": {"long": [], "short": []},
             "leverage": 10.0,
             "market_orders_allowed": True,
+            "max_memory_candles_per_symbol": 200000,
+            "max_disk_candles_per_symbol_per_tf": 2000000,
             "max_n_cancellations_per_batch": 5,
             "max_n_creations_per_batch": 3,
             "max_n_restarts_per_day": 10,
-            "mimic_backtest_1m_delay": False,
             "minimum_coin_age_days": 7.0,
-            "ohlcvs_1m_rolling_window_days": 7.0,
-            "coin_filter_candles_max_age_minutes": 10.0,
             "pnls_max_lookback_days": 30.0,
             "price_distance_threshold": 0.002,
             "time_in_force": "good_till_cancelled",
