@@ -414,7 +414,7 @@ PB_MULTI_FIELD_MAP = {
     "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_weight",
     "ema_span_0": "ema_span_0",
     "ema_span_1": "ema_span_1",
-    "filter_noisiness_rolling_window": "filter_noisiness_ema_span",
+    "filter_noisiness_rolling_window": "filter_log_range_ema_span",
     "filter_volume_rolling_window": "filter_volume_ema_span",
 }
 PB_MULTI_FIELD_MAP_INV = {v: k for k, v in PB_MULTI_FIELD_MAP.items()}
@@ -492,13 +492,16 @@ def _build_from_live_only(config: dict, template: dict) -> dict:
 
 
 LEGACY_FILTER_KEYS = {
-    "filter_noisiness_rolling_window": "filter_noisiness_ema_span",
+    "filter_noisiness_rolling_window": "filter_log_range_ema_span",
+    "filter_noisiness_ema_span": "filter_log_range_ema_span",
     "filter_volume_rolling_window": "filter_volume_ema_span",
 }
 LEGACY_BOUNDS_KEYS = {
-    "long_filter_noisiness_rolling_window": "long_filter_noisiness_ema_span",
+    "long_filter_noisiness_rolling_window": "long_filter_log_range_ema_span",
+    "long_filter_noisiness_ema_span": "long_filter_log_range_ema_span",
     "long_filter_volume_rolling_window": "long_filter_volume_ema_span",
-    "short_filter_noisiness_rolling_window": "short_filter_noisiness_ema_span",
+    "short_filter_noisiness_rolling_window": "short_filter_log_range_ema_span",
+    "short_filter_noisiness_ema_span": "short_filter_log_range_ema_span",
     "short_filter_volume_rolling_window": "short_filter_volume_ema_span",
 }
 
@@ -592,9 +595,9 @@ def _ensure_bot_defaults_and_bounds(result: dict, verbose: bool = True) -> None:
                 [0.01, 3.0],
             ),
             (
-                "filter_noisiness_ema_span",
+                "filter_log_range_ema_span",
                 result["bot"][pside].get(
-                    "filter_noisiness_ema_span",
+                    "filter_log_range_ema_span",
                     result["bot"][pside].get(
                         "filter_rolling_window",
                         result["live"].get("ohlcv_rolling_window", 60.0),
@@ -977,7 +980,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 "entry_trailing_grid_ratio": 0.5,
                 "entry_trailing_retracement_pct": 0.01,
                 "entry_trailing_threshold_pct": 0.05,
-                "filter_noisiness_ema_span": 60,
+                "filter_log_range_ema_span": 60,
                 "filter_volume_drop_pct": 0.95,
                 "filter_volume_ema_span": 60,
                 "n_positions": 10.0,
@@ -1007,7 +1010,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 "entry_trailing_grid_ratio": 0.5,
                 "entry_trailing_retracement_pct": 0.01,
                 "entry_trailing_threshold_pct": 0.05,
-                "filter_noisiness_ema_span": 60,
+                "filter_log_range_ema_span": 60,
                 "filter_volume_drop_pct": 0.95,
                 "filter_volume_ema_span": 60,
                 "n_positions": 10.0,
@@ -1062,7 +1065,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 "long_entry_trailing_grid_ratio": [-1.0, 1.0],
                 "long_entry_trailing_retracement_pct": [0.0, 0.1],
                 "long_entry_trailing_threshold_pct": [-0.1, 0.1],
-                "long_filter_noisiness_ema_span": [10.0, 1440.0],
+                "long_filter_log_range_ema_span": [10.0, 1440.0],
                 "long_filter_volume_drop_pct": [0.0, 1.0],
                 "long_filter_volume_ema_span": [10.0, 1440.0],
                 "long_n_positions": [1.0, 20.0],
@@ -1089,7 +1092,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 "short_entry_trailing_grid_ratio": [-1.0, 1.0],
                 "short_entry_trailing_retracement_pct": [0.0, 0.1],
                 "short_entry_trailing_threshold_pct": [-0.1, 0.1],
-                "short_filter_noisiness_ema_span": [10.0, 1440.0],
+                "short_filter_log_range_ema_span": [10.0, 1440.0],
                 "short_filter_volume_drop_pct": [0.0, 1.0],
                 "short_filter_volume_ema_span": [10.0, 1440.0],
                 "short_n_positions": [1.0, 20.0],
