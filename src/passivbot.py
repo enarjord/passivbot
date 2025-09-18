@@ -405,40 +405,28 @@ class Passivbot:
             if is_forager:
                 try:
                     lv = int(
-                        round(
-                            self.config_get(
-                                ["bot", "long", "filter_volume_ema_span"], symbol=sym
-                            )
-                        )
+                        round(self.config_get(["bot", "long", "filter_volume_ema_span"], symbol=sym))
                     )
                 except Exception:
                     lv = default_win
                 try:
                     ln = int(
                         round(
-                            self.config_get(
-                                ["bot", "long", "filter_noisiness_ema_span"], symbol=sym
-                            )
+                            self.config_get(["bot", "long", "filter_noisiness_ema_span"], symbol=sym)
                         )
                     )
                 except Exception:
                     ln = default_win
                 try:
                     sv = int(
-                        round(
-                            self.config_get(
-                                ["bot", "short", "filter_volume_ema_span"], symbol=sym
-                            )
-                        )
+                        round(self.config_get(["bot", "short", "filter_volume_ema_span"], symbol=sym))
                     )
                 except Exception:
                     sv = default_win
                 try:
                     sn = int(
                         round(
-                            self.config_get(
-                                ["bot", "short", "filter_noisiness_ema_span"], symbol=sym
-                            )
+                            self.config_get(["bot", "short", "filter_noisiness_ema_span"], symbol=sym)
                         )
                     )
                 except Exception:
