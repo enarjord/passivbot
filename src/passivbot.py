@@ -286,12 +286,12 @@ class Passivbot:
         self.cm = CandlestickManager(**cm_kwargs)
         # TTL (minutes) for EMA candles on non-traded symbols
         try:
-            ttl_min = live_cfg.get("coin_filter_candles_max_age_minutes", None)
-            self.coin_filter_candles_max_age_ms = (
+            ttl_min = live_cfg.get("inactive_coin_candle_ttl_minutes", None)
+            self.inactive_coin_candle_ttl_ms = (
                 int(float(ttl_min) * 60_000) if ttl_min is not None else 600_000
             )
         except Exception:
-            self.coin_filter_candles_max_age_ms = 600_000
+            self.inactive_coin_candle_ttl_ms = 600_000
 
     async def start_bot(self):
         logging.info(f"Starting bot {self.exchange}...")
@@ -2244,7 +2244,7 @@ class Passivbot:
                     ttl = (
                         60_000
                         if (has_pos or has_oo)
-                        else int(getattr(self, "coin_filter_candles_max_age_ms", 600_000))
+                        else int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
                     )
                 val = await self.cm.get_latest_ema_nrr(
                     symbol, span=span, timeframe=None, max_age_ms=ttl
@@ -2312,7 +2312,7 @@ class Passivbot:
                     ttl = (
                         60_000
                         if (has_pos or has_oo)
-                        else int(getattr(self, "coin_filter_candles_max_age_ms", 600_000))
+                        else int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
                     )
                 val = await self.cm.get_latest_ema_quote_volume(
                     symbol, span=span, timeframe=None, max_age_ms=ttl
