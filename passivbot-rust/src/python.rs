@@ -246,10 +246,10 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         entry_trailing_retracement_pct: extract_value(dict, "entry_trailing_retracement_pct")?,
         entry_trailing_grid_ratio: extract_value(dict, "entry_trailing_grid_ratio")?,
         entry_trailing_threshold_pct: extract_value(dict, "entry_trailing_threshold_pct")?,
-        filter_noisiness_ema_span: {
-            let filter_noisiness_ema_span_float: f64 =
-                extract_value(dict, "filter_noisiness_ema_span")?;
-            filter_noisiness_ema_span_float.round() as usize
+        filter_log_range_ema_span: {
+            let filter_log_range_ema_span_float: f64 =
+                extract_value(dict, "filter_log_range_ema_span")?;
+            filter_log_range_ema_span_float.round() as usize
         },
         filter_volume_ema_span: {
             let filter_volume_ema_span_float: f64 = extract_value(dict, "filter_volume_ema_span")?;
