@@ -8,7 +8,7 @@ API and data format. It focuses on:
 - UTC millisecond timestamps and structured NumPy dtype for candles
 - Gap standardization with synthesized zero-candles (not persisted)
 - Inclusive range selection with minute alignment
-- Latest EMA for close/volume/NRR computed lazily from cached candles
+- Latest EMA for close/volume/log range computed lazily from cached candles
 - Shard saving with atomic write and index.json maintenance
 
 Example
@@ -1890,7 +1890,7 @@ class CandlestickManager:
         cache[key] = (res, int(end_ts), int(now))
         return res
 
-    async def get_latest_ema_nrr(
+    async def get_latest_ema_log_range(
         self,
         symbol: str,
         span: int,
@@ -1905,10 +1905,10 @@ class CandlestickManager:
             max_age_ms,
             timeframe,
             tf=tf,
-            metric_key="nrr",
-            series_fn=lambda a: (
-                (np.asarray(a["h"], dtype=np.float64) - np.asarray(a["l"], dtype=np.float64))
-                / np.maximum(np.asarray(a["c"], dtype=np.float64), 1e-12)
+            metric_key="log_range",
+            series_fn=lambda a: np.log(
+                np.maximum(np.asarray(a["h"], dtype=np.float64), 1e-12)
+                / np.maximum(np.asarray(a["l"], dtype=np.float64), 1e-12)
             ),
         )
 
@@ -1964,7 +1964,7 @@ class CandlestickManager:
         out["ema"] = ema_vals.astype(np.float32, copy=False)
         return out
 
-    async def get_ema_nrr_series(
+    async def get_ema_log_range_series(
         self,
         symbol: str,
         span: int,
@@ -1981,12 +1981,10 @@ class CandlestickManager:
         )
         if arr.size == 0:
             return np.empty((0,), dtype=EMA_SERIES_DTYPE)
-        closes = np.asarray(arr["c"], dtype=np.float64)
         highs = np.asarray(arr["h"], dtype=np.float64)
         lows = np.asarray(arr["l"], dtype=np.float64)
-        denom = np.maximum(closes, 1e-12)
-        nrr = (highs - lows) / denom
-        ema_vals = self._ema_series(nrr, span)
+        log_ranges = np.log(np.maximum(highs, 1e-12) / np.maximum(lows, 1e-12))
+        ema_vals = self._ema_series(log_ranges, span)
         n = ema_vals.shape[0]
         out = np.empty((n,), dtype=EMA_SERIES_DTYPE)
         out["ts"] = np.asarray(arr["ts"], dtype=np.int64)
