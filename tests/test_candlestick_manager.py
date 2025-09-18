@@ -281,7 +281,7 @@ async def test_tf_range_cache_reuse_within_ttl(monkeypatch, tmp_path):
     assert calls["fetch"] == 1
 
     # Second: compute different metric latest, same tf and span -> reuse tf range cache, no extra fetch
-    val = await cm.get_latest_ema_nrr(symbol, span=span, timeframe=tf, max_age_ms=60_000)
+    val = await cm.get_latest_ema_log_range(symbol, span=span, timeframe=tf, max_age_ms=60_000)
     assert isinstance(val, float)
     assert calls["fetch"] == 1
 
