@@ -25,8 +25,8 @@ pub struct EmaAlphas {
     pub short: Alphas,
     pub vol_alpha_long: f64,
     pub vol_alpha_short: f64,
-    pub noise_alpha_long: f64,
-    pub noise_alpha_short: f64,
+    pub log_range_alpha_long: f64,
+    pub log_range_alpha_short: f64,
 }
 
 #[derive(Clone, Default, Copy, Debug)]
@@ -41,8 +41,8 @@ pub struct EMAs {
     pub short: [f64; 3],
     pub vol_long: f64,
     pub vol_short: f64,
-    pub noise_long: f64,
-    pub noise_short: f64,
+    pub log_range_long: f64,
+    pub log_range_short: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -138,7 +138,7 @@ pub struct TradingEnabled {
     short: bool,
 }
 
-// RollingSum (SMA) removed — volume & noisiness are now tracked via EMAs in `EMAs`.
+// RollingSum (SMA) removed — volume & log range are now tracked via EMAs in `EMAs`.
 
 pub struct Backtest<'a> {
     hlcvs: &'a ArrayView3<'a, f64>,
@@ -210,8 +210,8 @@ impl<'a> Backtest<'a> {
                     short: [close_price; 3],
                     vol_long: f64::max(0.0, hlcvs[[0, i, VOLUME]]),
                     vol_short: f64::max(0.0, hlcvs[[0, i, VOLUME]]),
-                    noise_long: 0.0,
-                    noise_short: 0.0,
+                    log_range_long: 0.0,
+                    log_range_short: 0.0,
                 }
             })
             .collect();
@@ -424,7 +424,7 @@ impl<'a> Backtest<'a> {
             return (0..self.n_coins).collect();
         }
         let volume_filtered = self.filter_by_relative_volume(pside);
-        self.rank_by_noisiness(&volume_filtered, pside)
+        self.rank_by_log_range(&volume_filtered, pside)
     }
 
     fn filter_by_relative_volume(&mut self, pside: usize) -> Vec<usize> {
@@ -452,23 +452,23 @@ impl<'a> Backtest<'a> {
             .collect()
     }
 
-    fn rank_by_noisiness(&self, candidates: &[usize], pside: usize) -> Vec<usize> {
-        // Use the EMA noisiness values computed in `update_emas` to prioritise the
+    fn rank_by_log_range(&self, candidates: &[usize], pside: usize) -> Vec<usize> {
+        // Use the EMA log range values computed in `update_emas` to prioritise the
         // most volatile coins among the remaining candidates.
-        let mut noisinesses: Vec<(f64, usize)> = candidates
+        let mut log_ranges: Vec<(f64, usize)> = candidates
             .iter()
             .map(|&idx| {
-                let noise = match pside {
-                    LONG => self.emas[idx].noise_long,
-                    SHORT => self.emas[idx].noise_short,
+                let lr = match pside {
+                    LONG => self.emas[idx].log_range_long,
+                    SHORT => self.emas[idx].log_range_short,
                     _ => 0.0,
                 };
-                (noise, idx)
+                (lr, idx)
             })
             .collect();
 
-        noisinesses.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
-        noisinesses.into_iter().map(|(_, idx)| idx).collect()
+        log_ranges.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+        log_ranges.into_iter().map(|(_, idx)| idx).collect()
     }
 
     fn create_state_params(&self, k: usize, idx: usize, pside: usize) -> StateParams {
@@ -1448,18 +1448,18 @@ impl<'a> Backtest<'a> {
             emas.vol_long = vol * vol_alpha_long + emas.vol_long * (1.0 - vol_alpha_long);
             emas.vol_short = vol * vol_alpha_short + emas.vol_short * (1.0 - vol_alpha_short);
 
-            // noisiness metric: (high - low) / close
-            let noisiness = if close_price != 0.0 {
-                (high - low) / close_price
+            // log range metric: ln(high / low)
+            let log_range = if high > 0.0 && low > 0.0 {
+                (high / low).ln()
             } else {
                 0.0
             };
-            let noise_alpha_long = self.ema_alphas[i].noise_alpha_long;
-            let noise_alpha_short = self.ema_alphas[i].noise_alpha_short;
-            emas.noise_long =
-                noisiness * noise_alpha_long + emas.noise_long * (1.0 - noise_alpha_long);
-            emas.noise_short =
-                noisiness * noise_alpha_short + emas.noise_short * (1.0 - noise_alpha_short);
+            let log_range_alpha_long = self.ema_alphas[i].log_range_alpha_long;
+            let log_range_alpha_short = self.ema_alphas[i].log_range_alpha_short;
+            emas.log_range_long = log_range * log_range_alpha_long
+                + emas.log_range_long * (1.0 - log_range_alpha_long);
+            emas.log_range_short = log_range * log_range_alpha_short
+                + emas.log_range_short * (1.0 - log_range_alpha_short);
         }
     }
 }
@@ -1541,10 +1541,10 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
             alphas: ema_alphas_short,
             alphas_inv: ema_alphas_short_inv,
         },
-        // EMA spans for the volume/noisiness filters (alphas precomputed from spans)
+        // EMA spans for the volume/log range filters (alphas precomputed from spans)
         vol_alpha_long: 2.0 / (bot_params_pair.long.filter_volume_ema_span as f64 + 1.0),
         vol_alpha_short: 2.0 / (bot_params_pair.short.filter_volume_ema_span as f64 + 1.0),
-        noise_alpha_long: 2.0 / (bot_params_pair.long.filter_noisiness_ema_span as f64 + 1.0),
-        noise_alpha_short: 2.0 / (bot_params_pair.short.filter_noisiness_ema_span as f64 + 1.0),
+        log_range_alpha_long: 2.0 / (bot_params_pair.long.filter_log_range_ema_span as f64 + 1.0),
+        log_range_alpha_short: 2.0 / (bot_params_pair.short.filter_log_range_ema_span as f64 + 1.0),
     }
 }
