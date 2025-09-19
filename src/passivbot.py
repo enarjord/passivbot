@@ -72,6 +72,7 @@ _LEADING_HEX4_RE = re.compile(r"^(?:0x)?([0-9a-fA-F]{4})", re.IGNORECASE)
 
 
 def custom_id_to_snake(custom_id) -> str:
+    """Translate a broker custom id into the snake_case order type name."""
     try:
         return snake_of(try_decode_type_id_from_custom_id(custom_id))
     except Exception as e:
@@ -80,6 +81,7 @@ def custom_id_to_snake(custom_id) -> str:
 
 
 def try_decode_type_id_from_custom_id(custom_id: str) -> int | None:
+    """Extract the 16-bit order type id encoded in a custom order id string."""
     # 1) Preferred: look for "...0x<4-hex>..." anywhere
     m = _TYPE_MARKER_RE.search(custom_id)
     if m:
@@ -94,15 +96,18 @@ def try_decode_type_id_from_custom_id(custom_id: str) -> int | None:
 
 
 def order_type_id_to_hex4(type_id: int) -> str:
+    """Return the four-hex-digit representation of an order type id."""
     return f"{type_id:04x}"
 
 
 def type_token(type_id: int, with_marker: bool = True) -> str:
+    """Return the printable order type marker, optionally prefixed with `0x`."""
     h4 = order_type_id_to_hex4(type_id)
     return ("0x" + h4) if with_marker else h4
 
 
 def snake_of(type_id: int) -> str:
+    """Map an order type id to its snake_case string representation."""
     return pbr.order_type_id_to_snake(type_id)
 
 
@@ -110,11 +115,7 @@ def snake_of(type_id: int) -> str:
 
 
 def calc_pnl(position_side, entry_price, close_price, qty, inverse, c_mult):
-    """
-    Delegates to pbr.calc_pnl_long / pbr.calc_pnl_short depending on position_side.
-    Note: the Rust bindings expect (entry_price, close_price, qty, c_mult) so we
-    omit the 'inverse' argument when calling into the pbr module.
-    """
+    """Calculate trade PnL by delegating to the appropriate Rust helper."""
     try:
         if isinstance(position_side, str):
             if position_side == "long":
@@ -154,6 +155,7 @@ ONE_MIN_MS = 60_000
 
 
 def signal_handler(sig, frame):
+    """Handle SIGINT by signalling the running bot to stop gracefully."""
     print("\nReceived shutdown signal. Stopping bot...")
     bot = globals().get("bot")
     if bot is not None:
@@ -170,14 +172,17 @@ signal.signal(signal.SIGINT, signal_handler)
 
 
 def get_function_name():
+    """Return the caller function name one frame above the current scope."""
     return inspect.currentframe().f_back.f_code.co_name
 
 
 def get_caller_name():
+    """Return the caller name two frames above the current scope."""
     return inspect.currentframe().f_back.f_back.f_code.co_name
 
 
 def or_default(f, *args, default=None, **kwargs):
+    """Execute `f` safely, returning `default` if an exception is raised."""
     try:
         return f(*args, **kwargs)
     except:
@@ -185,6 +190,7 @@ def or_default(f, *args, default=None, **kwargs):
 
 
 def orders_matching(o0, o1, tolerance_qty=0.01, tolerance_price=0.002):
+    """Return True if two orders are equivalent within the supplied tolerances."""
     for k in ["symbol", "side", "position_side"]:
         if o0[k] != o1[k]:
             return False
@@ -204,7 +210,7 @@ def orders_matching(o0, o1, tolerance_qty=0.01, tolerance_price=0.002):
 
 
 def order_has_match(order, orders, tolerance_qty=0.01, tolerance_price=0.002):
-    # if match, return matching order; otherwise return False
+    """Return the first matching order in `orders` or False if none match."""
     for elm in orders:
         if orders_matching(order, elm, tolerance_qty, tolerance_price):
             return elm
@@ -213,6 +219,7 @@ def order_has_match(order, orders, tolerance_qty=0.01, tolerance_price=0.002):
 
 class Passivbot:
     def __init__(self, config: dict):
+        """Initialise the bot with configuration, user context, and runtime caches."""
         self.config = config
         self.user = config["live"]["user"]
         self.user_info = load_user_info(self.user)
@@ -294,6 +301,7 @@ class Passivbot:
             self.inactive_coin_candle_ttl_ms = 600_000
 
     async def start_bot(self):
+        """Initialise state, warm cached data, and launch background loops."""
         logging.info(f"Starting bot {self.exchange}...")
         await format_approved_ignored_coins(self.config, self.user_info["exchange"])
         await self.init_markets()
@@ -311,6 +319,7 @@ class Passivbot:
             await self.run_execution_loop()
 
     async def init_markets(self, verbose=True):
+        """Load exchange market metadata and refresh approval lists."""
         # called at bot startup and once an hour thereafter
         self.init_markets_last_update_ms = utc_ms()
         await self.update_exchange_config()  # set hedge mode
@@ -338,10 +347,12 @@ class Passivbot:
             await self.update_first_timestamps()
 
     def debug_print(self, *args):
+        """Emit debug output only when the instance is in debug mode."""
         if hasattr(self, "debug_mode") and self.debug_mode:
             print(*args)
 
     def init_coin_overrides(self):
+        """Populate coin override map keyed by symbols for quick lookup."""
         self.coin_overrides = {
             s: v
             for k, v in self.config.get("coin_overrides", {}).items()
@@ -350,8 +361,7 @@ class Passivbot:
 
     def config_get(self, path: [str], symbol=None):
         """
-        Return value from self.coin_overrides if present,
-        otherwise return value from self.config.
+        Retrieve a configuration value, preferring per-symbol overrides when provided.
         """
         if symbol and symbol in self.coin_overrides:
             d = self.coin_overrides[symbol]
@@ -372,6 +382,12 @@ class Passivbot:
             else:
                 raise KeyError(f"Key path {'.'.join(path)} not found in config or coin overrides.")
         return d
+
+    def bp(self, pside, key, symbol=None):
+        """
+        condensed helper function (bp = bot param) for config_get(['bot', pside, key], symbol)
+        """
+        return self.config_get(["bot", pside, key], symbol)
 
     async def warmup_candles_staggered(
         self, *, concurrency: int = 8, window_candles: int | None = None, ttl_ms: int = 300_000
@@ -403,32 +419,21 @@ class Passivbot:
                 per_symbol_win[sym] = int(max(1, int(window_candles)))
                 continue
             if is_forager:
+                # Filtering uses 1m log-range EMA spans; keep notation distinct from grid log ranges.
                 try:
-                    lv = int(
-                        round(self.config_get(["bot", "long", "filter_volume_ema_span"], symbol=sym))
-                    )
+                    lv = int(round(self.bp("long", "filter_volume_ema_span", sym)))
                 except Exception:
                     lv = default_win
                 try:
-                    ln = int(
-                        round(
-                            self.config_get(["bot", "long", "filter_log_range_ema_span"], symbol=sym)
-                        )
-                    )
+                    ln = int(round(self.bp("long", "filter_log_range_ema_span", sym)))
                 except Exception:
                     ln = default_win
                 try:
-                    sv = int(
-                        round(self.config_get(["bot", "short", "filter_volume_ema_span"], symbol=sym))
-                    )
+                    sv = int(round(self.bp("short", "filter_volume_ema_span", sym)))
                 except Exception:
                     sv = default_win
                 try:
-                    sn = int(
-                        round(
-                            self.config_get(["bot", "short", "filter_log_range_ema_span"], symbol=sym)
-                        )
-                    )
+                    sn = int(round(self.bp("short", "filter_log_range_ema_span", sym)))
                 except Exception:
                     sn = default_win
                 per_symbol_win[sym] = max(1, lv, ln, sv, sn)
@@ -478,6 +483,7 @@ class Passivbot:
         await asyncio.gather(*(one(s) for s in symbols))
 
     async def update_first_timestamps(self, symbols=[]):
+        """Fetch and cache first trade timestamps for the provided symbols."""
         if not hasattr(self, "first_timestamps"):
             self.first_timestamps = {}
         symbols = sorted(set(symbols + flatten(self.approved_coins_minus_ignored_coins.values())))
@@ -497,12 +503,14 @@ class Passivbot:
                 self.first_timestamps[symbol] = 0.0
 
     def get_first_timestamp(self, symbol):
+        """Return the cached first tradable timestamp for `symbol`, populating defaults."""
         if symbol not in self.first_timestamps:
             logging.info(f"warning: {symbol} missing from first_timestamps. Setting to zero.")
             self.first_timestamps[symbol] = 0.0
         return self.first_timestamps[symbol]
 
     def coin_to_symbol(self, coin, verbose=True):
+        """Map a coin identifier to the exchange-specific trading symbol."""
         if coin == "":
             return ""
         if not hasattr(self, "coin_to_symbol_map"):
@@ -518,6 +526,7 @@ class Passivbot:
         return result
 
     def order_to_order_tuple(self, order):
+        """Convert an order dictionary into a normalized tuple for comparisons."""
         return (
             order["symbol"],
             order["side"],
@@ -527,6 +536,7 @@ class Passivbot:
         )
 
     async def run_execution_loop(self):
+        """Main execution loop coordinating order generation and exchange interaction."""
         while not self.stop_signal_received:
             try:
                 self.execution_scheduled = False
@@ -547,6 +557,7 @@ class Passivbot:
                 await asyncio.sleep(1.0)
 
     async def update_pos_oos_pnls_ohlcvs(self):
+        """Refresh positions, open orders, realised PnL, and 1m candles."""
         await self.update_positions()
         await asyncio.gather(
             self.update_open_orders(),
@@ -555,12 +566,11 @@ class Passivbot:
         await self.update_ohlcvs_1m_for_actives()
 
     def add_to_recent_order_cancellations(self, order):
-        # keeps track of latest order cancellations posted to exchange
+        """Record a recently cancelled order to throttle repeated cancellations."""
         self.recent_order_cancellations.append({**order, **{"execution_timestamp": utc_ms()}})
 
     def order_was_recently_cancelled(self, order, max_age_ms=15_000) -> float:
-        # first prune: retain only recent orders
-        # returns 0.0 if no match, delay time otherwise
+        """Return remaining throttle delay if the order was cancelled within `max_age_ms`."""
         age_limit = utc_ms() - max_age_ms
         self.recent_order_cancellations = [
             x for x in self.recent_order_cancellations if x["execution_timestamp"] > age_limit
@@ -572,12 +582,11 @@ class Passivbot:
         return 0.0
 
     def add_to_recent_order_executions(self, order):
-        # keeps track of latest orders posted to exchange
+        """Track newly created orders to limit duplicate submissions."""
         self.recent_order_executions.append({**order, **{"execution_timestamp": utc_ms()}})
 
     def order_was_recently_updated(self, order, max_age_ms=15_000) -> float:
-        # first prune: retain only recent orders
-        # returns 0.0 if no match, delay time otherwise
+        """Return throttle delay if the order was placed within `max_age_ms`."""
         age_limit = utc_ms() - max_age_ms
         self.recent_order_executions = [
             x for x in self.recent_order_executions if x["execution_timestamp"] > age_limit
@@ -587,6 +596,7 @@ class Passivbot:
         return 0.0
 
     async def execute_to_exchange(self):
+        """Run one execution cycle including config sync and order placement/cancellation."""
         await self.execution_cycle()
         # await self.update_EMAs()
         await self.update_exchange_configs()
@@ -656,6 +666,7 @@ class Passivbot:
             return to_cancel, to_create
 
     async def execute_orders_parent(self, orders: [dict]) -> [dict]:
+        """Submit a batch of orders after throttling and bookkeeping."""
         orders = orders[: self.config["live"]["max_n_creations_per_batch"]]
         for order in orders:
             self.add_to_recent_order_executions(order)
@@ -692,6 +703,7 @@ class Passivbot:
         return to_return
 
     async def execute_cancellations_parent(self, orders: [dict]) -> [dict]:
+        """Submit a batch of cancellations, prioritising reduce-only orders."""
         if len(orders) > self.config["live"]["max_n_cancellations_per_batch"]:
             # prioritize cancelling reduce-only orders
             try:
@@ -742,12 +754,14 @@ class Passivbot:
         return to_return
 
     def log_order_action(self, order, action, source="passivbot"):
+        """Log a structured message describing an order action."""
         logging.info(
             f"{action: >{self.action_str_max_len}} {self.pad_sym(order['symbol'])} {order['side']} "
             f"{order['qty']} {order['position_side']} @ {order['price']} source: {source}"
         )
 
     def did_create_order(self, executed) -> bool:
+        """Return True if the exchange acknowledged order creation."""
         try:
             return "id" in executed and executed["id"] is not None
         except:
@@ -755,6 +769,7 @@ class Passivbot:
         # further tests defined in child class
 
     def did_cancel_order(self, executed, order=None) -> bool:
+        """Return True when the exchange response confirms cancellation."""
         if isinstance(executed, list) and len(executed) == 1:
             return self.did_cancel_order(executed[0], order)
         try:
@@ -764,6 +779,7 @@ class Passivbot:
         # further tests defined in child class
 
     def is_forager_mode(self, pside=None):
+        """Return True when the configuration allows forager grid deployment for the side."""
         if pside is None:
             return self.is_forager_mode("long") or self.is_forager_mode("short")
         if self.config["bot"][pside]["total_wallet_exposure_limit"] <= 0.0:
@@ -778,9 +794,11 @@ class Passivbot:
         return True
 
     def pad_sym(self, symbol):
+        """Return the symbol left-aligned to the configured log width."""
         return f"{symbol: <{self.sym_padding}}"
 
     def stop_data_maintainers(self, verbose=True):
+        """Cancel background candle/orderbook tasks and log the outcome."""
         if not hasattr(self, "maintainers"):
             return
         res = {}
@@ -805,6 +823,7 @@ class Passivbot:
         return res
 
     def has_position(self, pside=None, symbol=None):
+        """Return True if the bot currently holds a position for the given side and symbol."""
         if pside is None:
             return self.has_position("long", symbol) or self.has_position("short", symbol)
         if symbol is None:
@@ -812,14 +831,16 @@ class Passivbot:
         return symbol in self.positions and self.positions[symbol][pside]["size"] != 0.0
 
     def is_trailing(self, symbol, pside=None):
+        """Return True when trailing logic is active for the given symbol and side."""
         if pside is None:
             return self.is_trailing(symbol, "long") or self.is_trailing(symbol, "short")
         return (
-            self.config_get(["bot", pside, "entry_trailing_grid_ratio"], symbol=symbol) != 0.0
-            or self.config_get(["bot", pside, "close_trailing_grid_ratio"], symbol=symbol) != 0.0
+            self.bp(pside, "entry_trailing_grid_ratio", symbol) != 0.0
+            or self.bp(pside, "close_trailing_grid_ratio", symbol) != 0.0
         )
 
     def get_last_position_changes(self, symbol=None):
+        """Return the most recent fill timestamp per symbol/side for trailing logic."""
         last_position_changes = defaultdict(dict)
         for symbol in self.positions:
             for pside in ["long", "short"]:
@@ -932,16 +953,16 @@ class Passivbot:
                         )
 
     def symbol_is_eligible(self, symbol):
-        # defined for each child class
+        """Return True when the symbol passes exchange-specific eligibility rules."""
         return True
 
     def set_market_specific_settings(self):
-        # set min cost, min qty, price step, qty step, c_mult
-        # defined individually for each exchange
+        """Initialise per-symbol market metadata (steps, ids, multipliers)."""
         self.symbol_ids = {symbol: self.markets_dict[symbol]["id"] for symbol in self.markets_dict}
         self.symbol_ids_inv = {v: k for k, v in self.symbol_ids.items()}
 
     def get_symbol_id(self, symbol):
+        """Return the exchange-native identifier for `symbol`, caching defaults."""
         try:
             return self.symbol_ids[symbol]
         except:
@@ -950,6 +971,7 @@ class Passivbot:
             return symbol
 
     def get_symbol_id_inv(self, symbol):
+        """Return the human-friendly symbol for an exchange-native identifier."""
         try:
             return self.symbol_ids_inv[symbol]
         except:
@@ -958,6 +980,7 @@ class Passivbot:
             return symbol
 
     def is_approved(self, pside, symbol) -> bool:
+        """Return True when a symbol is approved, not ignored, and old enough for trading."""
         if symbol not in self.approved_coins_minus_ignored_coins[pside]:
             return False
         if symbol in self.ignored_coins[pside]:
@@ -967,6 +990,7 @@ class Passivbot:
         return True
 
     async def update_exchange_configs(self):
+        """Ensure exchange-specific settings are initialised for all active symbols."""
         if not hasattr(self, "already_updated_exchange_config_symbols"):
             self.already_updated_exchange_config_symbols = set()
         symbols_not_done = [
@@ -977,14 +1001,17 @@ class Passivbot:
             self.already_updated_exchange_config_symbols.update(symbols_not_done)
 
     async def update_exchange_config_by_symbols(self, symbols):
+        """Exchange-specific hook to refresh config for the given symbols."""
         # defined by each exchange child class
         pass
 
     async def update_exchange_config(self):
+        """Exchange-specific hook to refresh global config state."""
         # defined by each exchange child class
         pass
 
     def is_old_enough(self, pside, symbol):
+        """Return True if the market age exceeds the configured minimum for forager mode."""
         if self.is_forager_mode(pside) and self.minimum_market_age_millis > 0:
             first_timestamp = self.get_first_timestamp(symbol)
             if first_timestamp:
@@ -995,6 +1022,7 @@ class Passivbot:
             return True
 
     async def update_tickers(self):
+        """Fetch latest ticker data and fill in missing bid/ask/last values."""
         if not hasattr(self, "tickers"):
             self.tickers = {}
         tickers = None
@@ -1015,6 +1043,7 @@ class Passivbot:
             logging.error(f"Error with {get_function_name()} {e}")
 
     async def execution_cycle(self):
+        """Prepare bot state before talking to the exchange in an execution loop."""
         # called before every execution to exchange
         # assumes positions, open orders are up to date
         # determine coins with position and open orders
@@ -1141,6 +1170,7 @@ class Passivbot:
         return ideal_coins
 
     def warn_on_high_effective_min_cost(self, pside):
+        """Log a warning if min effective cost filtering removes every candidate."""
         if not self.config["live"]["filter_by_min_effective_cost"]:
             return
         if not self.is_pside_enabled(pside):
@@ -1158,6 +1188,7 @@ class Passivbot:
             )
 
     def get_max_n_positions(self, pside):
+        """Return the configured maximum number of concurrent positions for a side."""
         max_n_positions = min(
             self.config["bot"][pside]["n_positions"],
             len(self.approved_coins_minus_ignored_coins[pside]),
@@ -1165,6 +1196,7 @@ class Passivbot:
         return max(0, int(round(max_n_positions)))
 
     def get_current_n_positions(self, pside):
+        """Count open positions for the side, excluding inactive forced modes."""
         n_positions = 0
         for symbol in self.positions:
             if self.positions[symbol][pside]["size"] != 0.0:
@@ -1176,7 +1208,8 @@ class Passivbot:
         return n_positions
 
     def get_forced_PB_mode(self, pside, symbol=None):
-        mode = self.config_get(["live", f"forced_mode_{pside}"], symbol=symbol)
+        """Return an explicitly forced mode for the side or symbol, if configured."""
+        mode = self.config_get(["live", f"forced_mode_{pside}"], symbol)
         if mode:
             return mode
         elif symbol and not self.markets_dict[symbol]["active"]:
@@ -1184,6 +1217,7 @@ class Passivbot:
         return None
 
     def set_wallet_exposure_limits(self):
+        """Recalculate wallet exposure limits for both sides and per-symbol overrides."""
         for pside in ["long", "short"]:
             self.config["bot"][pside]["wallet_exposure_limit"] = self.get_wallet_exposure_limit(pside)
             for symbol in self.coin_overrides:
@@ -1194,6 +1228,7 @@ class Passivbot:
                     )
 
     def get_wallet_exposure_limit(self, pside, symbol=None):
+        """Return the wallet exposure limit for a side, honoring per-symbol overrides."""
         if symbol:
             fwel = (
                 self.coin_overrides.get(symbol, {})
@@ -1212,33 +1247,39 @@ class Passivbot:
         return round(twel / n_positions, 8)
 
     def is_pside_enabled(self, pside):
+        """Return True if trading is enabled for the given side in the current config."""
         return (
             self.config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
             and self.config["bot"][pside]["n_positions"] > 0.0
         )
 
     def effective_min_cost_is_low_enough(self, pside, symbol):
+        """Check whether the symbol meets the effective minimum cost requirement."""
         if not self.config["live"]["filter_by_min_effective_cost"]:
             return True
         return (
             self.balance
             * self.get_wallet_exposure_limit(pside, symbol)
-            * self.config_get(["bot", pside, "entry_initial_qty_pct"], symbol=symbol)
+            * self.bp(pside, "entry_initial_qty_pct", symbol)
             >= self.effective_min_cost[symbol]
         )
 
     def add_new_order(self, order, source="WS"):
+        """No-op placeholder; subclasses update open orders through REST synchronisation."""
         return  # only add new orders via REST in self.update_open_orders()
 
     def remove_order(self, order: dict, source="WS", reason="cancelled"):
+        """No-op placeholder; subclasses remove open orders through REST synchronisation."""
         return  # only remove orders via REST in self.update_open_orders()
 
     def handle_order_update(self, upd_list):
+        """Mark the execution loop dirty when websocket order updates arrive."""
         if upd_list:
             self.execution_scheduled = True
         return
 
     async def handle_balance_update(self, upd, source="WS"):
+        """Process websocket balance updates and trigger execution if equity changes."""
         try:
             upd[self.quote]["total"] = round_dynamic(upd[self.quote]["total"], 10)
             equity = upd[self.quote]["total"] + (await self.calc_upnl_sum())
@@ -1255,6 +1296,7 @@ class Passivbot:
     # Legacy: handle_ohlcv_1m_update removed
 
     async def calc_upnl_sum(self):
+        """Compute unrealised PnL across fetched positions using latest prices."""
         upnl_sum = 0.0
         last_prices = await self.cm.get_last_prices(
             set([x["symbol"] for x in self.fetched_positions]), max_age_ms=60_000
@@ -1278,6 +1320,7 @@ class Passivbot:
         return upnl_sum
 
     async def init_pnls(self):
+        """Initialise historical PnL cache, loading from disk when available."""
         if not hasattr(self, "pnls"):
             self.pnls = []
         else:
@@ -1321,8 +1364,7 @@ class Passivbot:
         self.pnls = pnls_cache
 
     async def update_pnls(self):
-        # fetch latest pnls
-        # dump new pnls to cache
+        """Fetch latest fills, update the PnL cache, and persist it when changed."""
         age_limit = (
             self.get_exchange_time()
             - 1000 * 60 * 60 * 24 * self.config["live"]["pnls_max_lookback_days"]
@@ -1353,12 +1395,14 @@ class Passivbot:
         return True
 
     def log_pnls_change(self, old_pnls, new_pnls):
+        """Log differences between previous and new PnL entries for debugging."""
         keys = ["id", "timestamp", "symbol", "side", "position_side", "price", "qty"]
         old_pnls_compressed = {(x[k] for k in keys) for x in old_pnls}
         new_pnls_compressed = [(x[k] for k in keys) for x in new_pnls]
         added_pnls = [x for x in new_pnls_compressed if x not in old_pnls_compressed]
 
     async def update_open_orders(self):
+        """Refresh open orders from the exchange and reconcile the local cache."""
         if not hasattr(self, "open_orders"):
             self.open_orders = {}
         res = None
@@ -1410,10 +1454,7 @@ class Passivbot:
             return False
 
     async def determine_utc_offset(self, verbose=True):
-        # returns millis to add to utc to get exchange timestamp
-        # call some endpoint which includes timestamp for exchange's server
-        # if timestamp is not included in self.cca.fetch_balance(),
-        # implement method in exchange child class
+        """Derive the exchange server time offset in milliseconds."""
         result = await self.cca.fetch_balance()
         self.utc_offset = round((result["timestamp"] - utc_ms()) / (1000 * 60 * 60)) * (
             1000 * 60 * 60
@@ -1422,10 +1463,11 @@ class Passivbot:
             logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
 
     def get_exchange_time(self):
+        """Return current exchange time in milliseconds."""
         return utc_ms() + self.utc_offset
 
     async def log_position_changes(self, positions_old, positions_new, rd=6):
-        # Map old and new positions for easy comparison
+        """Log position transitions for debugging when differences are detected."""
         psold = {
             (x["symbol"], x["position_side"]): {k: x[k] for k in ["size", "price"]}
             for x in positions_old
@@ -1483,7 +1525,7 @@ class Passivbot:
                 else 0.0
             )
             try:
-                wel = self.config_get(["bot", pside, "wallet_exposure_limit"], symbol=symbol)
+                wel = self.bp(pside, "wallet_exposure_limit", symbol)
                 WE_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
             except:
                 WE_ratio = 0.0
@@ -1542,7 +1584,7 @@ class Passivbot:
             logging.info(line)
 
     async def update_positions(self):
-        # also updates balance
+        """Fetch positions, update balance, and reconcile local position state."""
         if not hasattr(self, "positions"):
             self.positions = {}
         res = await self.fetch_positions()
@@ -1576,6 +1618,7 @@ class Passivbot:
         return True
 
     async def update_effective_min_cost(self, symbol=None):
+        """Update the effective minimum order cost for one or all symbols."""
         if not hasattr(self, "effective_min_cost"):
             self.effective_min_cost = {}
         if symbol is None:
@@ -1598,50 +1641,75 @@ class Passivbot:
                 traceback.print_exc()
 
     async def calc_ideal_orders(self):
+        """Compute desired entry and exit orders for every active symbol."""
         # find out which symbols need fresh data
-        to_update_last_prices = set()
-        to_update_emas = {}
+        to_update_last_prices: set[str] = set()
+        to_update_emas: dict[str, set[str]] = {"long": set(), "short": set()}
+        # 1h grid-spacing log range requirements per side (symbol -> span in hours)
+        to_update_grid_log_ranges: dict[str, dict[str, int]] = {"long": {}, "short": {}}
+
         for pside in self.PB_modes:
-            to_update_emas[pside] = set()
             for symbol in self.PB_modes[pside]:
-                if self.PB_modes[pside][symbol] == "panic":
+                mode = self.PB_modes[pside][symbol]
+                if mode == "panic":
                     if self.has_position(pside, symbol):
                         to_update_last_prices.add(symbol)
-                elif self.PB_modes[pside][symbol] in [
-                    "graceful_stop",
-                    "tp_only",
-                ] and not self.has_position(pside, symbol):
-                    pass
-                elif self.PB_modes[pside][symbol] == "manual":
-                    pass
+                elif mode in {"graceful_stop", "tp_only"} and not self.has_position(pside, symbol):
+                    continue
+                elif mode == "manual":
+                    continue
                 else:
                     to_update_emas[pside].add(symbol)
                     to_update_last_prices.add(symbol)
+                    if self.bp(pside, "entry_grid_spacing_log_weight", symbol) != 0.0:
+                        grid_log_span_hours = self.bp(
+                            pside, "entry_grid_spacing_log_span_hours", symbol
+                        )
+                        if grid_log_span_hours > 0.0:
+                            to_update_grid_log_ranges[pside][symbol] = max(
+                                1, int(round(grid_log_span_hours))
+                            )
 
-        # Build span tuples per symbol for long/short based on config (allows per-symbol overrides)
-        def build_items(symbols_set, pside):
-            items = []
-            for sym in symbols_set:
-                s0 = self.config_get(["bot", pside, "ema_span_0"], symbol=sym)
-                s1 = self.config_get(["bot", pside, "ema_span_1"], symbol=sym)
-                items.append((sym, s0, s1))
-            return items
+        def build_ema_items(symbols_set: set[str], pside: str) -> list[tuple[str, float, float]]:
+            return [
+                (
+                    sym,
+                    self.bp(pside, "ema_span_0", sym),
+                    self.bp(pside, "ema_span_1", sym),
+                )
+                for sym in symbols_set
+            ]
 
-        items_long = build_items(to_update_emas["long"], "long")
-        items_short = build_items(to_update_emas["short"], "short")
-        last_prices, ema_bounds_long, ema_bounds_short = await asyncio.gather(
+        def build_grid_log_range_items(pside: str) -> list[tuple[str, int]]:
+            return list(to_update_grid_log_ranges[pside].items())
+
+        entry_grid_log_ranges: dict[str, dict[str, float]] = {"long": {}, "short": {}}
+        (
+            last_prices,
+            ema_bounds_long,
+            ema_bounds_short,
+            entry_grid_log_ranges["long"],
+            entry_grid_log_ranges["short"],
+        ) = await asyncio.gather(
             self.cm.get_last_prices(list(to_update_last_prices), max_age_ms=10_000),
-            self.cm.get_ema_bounds_many(items_long, max_age_ms=30_000),
-            self.cm.get_ema_bounds_many(items_short, max_age_ms=30_000),
+            self.cm.get_ema_bounds_many(
+                build_ema_items(to_update_emas["long"], "long"), max_age_ms=30_000
+            ),
+            self.cm.get_ema_bounds_many(
+                build_ema_items(to_update_emas["short"], "short"), max_age_ms=30_000
+            ),
+            # Grid spacing reacts to 1h log-range EMAs
+            self.cm.get_latest_ema_log_range_many(
+                build_grid_log_range_items("long"), tf="1h", max_age_ms=600_000
+            ),
+            self.cm.get_latest_ema_log_range_many(
+                build_grid_log_range_items("short"), tf="1h", max_age_ms=600_000
+            ),
         )
         # long entries take lower bound; short entries take upper bound
         ema_anchor = {
-            "long": {
-                s: ema_bounds_long.get(s, (float("nan"), float("nan")))[0] for s in ema_bounds_long
-            },
-            "short": {
-                s: ema_bounds_short.get(s, (float("nan"), float("nan")))[1] for s in ema_bounds_short
-            },
+            "long": {s: ema_bounds_long[s][0] for s in ema_bounds_long},
+            "short": {s: ema_bounds_short[s][1] for s in ema_bounds_short},
         }
 
         ideal_orders = defaultdict(list)
@@ -1674,24 +1742,17 @@ class Passivbot:
                         self.min_qtys[symbol],
                         self.min_costs[symbol],
                         self.c_mults[symbol],
-                        self.config_get(
-                            ["bot", pside, "entry_grid_double_down_factor"], symbol=symbol
-                        ),
-                        self.config_get(["bot", pside, "entry_grid_spacing_weight"], symbol=symbol),
-                        self.config_get(["bot", pside, "entry_grid_spacing_pct"], symbol=symbol),
-                        self.config_get(["bot", pside, "entry_initial_ema_dist"], symbol=symbol),
-                        self.config_get(["bot", pside, "entry_initial_qty_pct"], symbol=symbol),
-                        self.config_get(
-                            ["bot", pside, "entry_trailing_double_down_factor"], symbol=symbol
-                        ),
-                        self.config_get(["bot", pside, "entry_trailing_grid_ratio"], symbol=symbol),
-                        self.config_get(
-                            ["bot", pside, "entry_trailing_retracement_pct"], symbol=symbol
-                        ),
-                        self.config_get(
-                            ["bot", pside, "entry_trailing_threshold_pct"], symbol=symbol
-                        ),
-                        self.config_get(["bot", pside, "wallet_exposure_limit"], symbol=symbol),
+                        self.bp(pside, "entry_grid_double_down_factor", symbol),
+                        self.bp(pside, "entry_grid_spacing_log_weight", symbol),
+                        self.bp(pside, "entry_grid_spacing_weight", symbol),
+                        self.bp(pside, "entry_grid_spacing_pct", symbol),
+                        self.bp(pside, "entry_initial_ema_dist", symbol),
+                        self.bp(pside, "entry_initial_qty_pct", symbol),
+                        self.bp(pside, "entry_trailing_double_down_factor", symbol),
+                        self.bp(pside, "entry_trailing_grid_ratio", symbol),
+                        self.bp(pside, "entry_trailing_retracement_pct", symbol),
+                        self.bp(pside, "entry_trailing_threshold_pct", symbol),
+                        self.bp(pside, "wallet_exposure_limit", symbol),
                         self.balance,
                         self.positions[symbol][pside]["size"],
                         self.positions[symbol][pside]["price"],
@@ -1700,6 +1761,7 @@ class Passivbot:
                         self.trailing_prices[symbol][pside]["max_since_open"],
                         self.trailing_prices[symbol][pside]["min_since_max"],
                         ema_anchor[pside].get(symbol, last_prices.get(symbol, float("nan"))),
+                        entry_grid_log_ranges.get(pside, {}).get(symbol, 0.0),
                         last_prices[symbol],
                     )
                     closes = getattr(pbr, f"calc_closes_{pside}_py")(
@@ -1708,21 +1770,15 @@ class Passivbot:
                         self.min_qtys[symbol],
                         self.min_costs[symbol],
                         self.c_mults[symbol],
-                        self.config_get(["bot", pside, "close_grid_markup_end"], symbol=symbol),
-                        self.config_get(["bot", pside, "close_grid_markup_start"], symbol=symbol),
-                        self.config_get(["bot", pside, "close_grid_qty_pct"], symbol=symbol),
-                        self.config_get(["bot", pside, "close_trailing_grid_ratio"], symbol=symbol),
-                        self.config_get(["bot", pside, "close_trailing_qty_pct"], symbol=symbol),
-                        self.config_get(
-                            ["bot", pside, "close_trailing_retracement_pct"], symbol=symbol
-                        ),
-                        self.config_get(
-                            ["bot", pside, "close_trailing_threshold_pct"], symbol=symbol
-                        ),
-                        bool(
-                            self.config_get(["bot", pside, "enforce_exposure_limit"], symbol=symbol)
-                        ),
-                        self.config_get(["bot", pside, "wallet_exposure_limit"], symbol=symbol),
+                        self.bp(pside, "close_grid_markup_end", symbol),
+                        self.bp(pside, "close_grid_markup_start", symbol),
+                        self.bp(pside, "close_grid_qty_pct", symbol),
+                        self.bp(pside, "close_trailing_grid_ratio", symbol),
+                        self.bp(pside, "close_trailing_qty_pct", symbol),
+                        self.bp(pside, "close_trailing_retracement_pct", symbol),
+                        self.bp(pside, "close_trailing_threshold_pct", symbol),
+                        bool(self.bp(pside, "enforce_exposure_limit", symbol)),
+                        self.bp(pside, "wallet_exposure_limit", symbol),
                         self.balance,
                         self.positions[symbol][pside]["size"],
                         self.positions[symbol][pside]["price"],
@@ -1806,6 +1862,7 @@ class Passivbot:
     # Legacy calc_ema_bound removed; pricing uses CandlestickManager EMA bounds
 
     async def calc_unstucking_close(self) -> (float, float, str, int):
+        """Optionally return an emergency close order for stuck positions."""
         if len(self.pnls) == 0:
             return "", (
                 0.0,
@@ -1840,14 +1897,14 @@ class Passivbot:
                         self.positions[symbol][pside]["size"],
                         self.positions[symbol][pside]["price"],
                     )
-                    we_limit = self.config_get(["bot", pside, "wallet_exposure_limit"], symbol=symbol)
-                    if we_limit == 0.0 or wallet_exposure / we_limit > self.config_get(
-                        ["bot", pside, "unstuck_threshold"], symbol=symbol
+                    we_limit = self.bp(pside, "wallet_exposure_limit", symbol)
+                    if we_limit == 0.0 or wallet_exposure / we_limit > self.bp(
+                        pside, "unstuck_threshold", symbol
                     ):
                         # is stuck. Use CandlestickManager EMA bounds to calc target price
                         try:
-                            span_0 = self.config_get(["bot", pside, "ema_span_0"], symbol=symbol)
-                            span_1 = self.config_get(["bot", pside, "ema_span_1"], symbol=symbol)
+                            span_0 = self.bp(pside, "ema_span_0", symbol)
+                            span_1 = self.bp(pside, "ema_span_1", symbol)
                             lower, upper = await self.cm.get_ema_bounds(
                                 symbol,
                                 span_0,
@@ -1855,9 +1912,7 @@ class Passivbot:
                                 max_age_ms=30_000,
                             )
                             # Apply unstuck_ema_dist and rounding per side
-                            ema_dist = float(
-                                self.config_get(["bot", pside, "unstuck_ema_dist"], symbol=symbol)
-                            )
+                            ema_dist = float(self.bp(pside, "unstuck_ema_dist", symbol))
                             # For closes: long uses upper bound (round up), short uses lower bound (round down)
                             if pside == "long":
                                 base = float(upper)
@@ -1905,10 +1960,8 @@ class Passivbot:
                         pbr.round_dn(
                             pbr.cost_to_qty(
                                 self.balance
-                                * self.config_get(
-                                    ["bot", pside, "wallet_exposure_limit"], symbol=symbol
-                                )
-                                * self.config_get(["bot", pside, "unstuck_close_pct"], symbol=symbol),
+                                * self.bp(pside, "wallet_exposure_limit", symbol)
+                                * self.bp(pside, "unstuck_close_pct", symbol),
                                 close_price,
                                 self.c_mults[symbol],
                             ),
@@ -1956,10 +2009,8 @@ class Passivbot:
                         pbr.round_dn(
                             pbr.cost_to_qty(
                                 self.balance
-                                * self.config_get(
-                                    ["bot", pside, "wallet_exposure_limit"], symbol=symbol
-                                )
-                                * self.config_get(["bot", pside, "unstuck_close_pct"], symbol=symbol),
+                                * self.bp(pside, "wallet_exposure_limit", symbol)
+                                * self.bp(pside, "unstuck_close_pct", symbol),
                                 close_price,
                                 self.c_mults[symbol],
                             ),
@@ -1995,6 +2046,7 @@ class Passivbot:
         return "", (0.0, 0.0, "", pbr.get_order_id_type_from_string("empty"))
 
     async def calc_orders_to_cancel_and_create(self):
+        """Determine which existing orders to cancel and which new ones to place."""
         ideal_orders = await self.calc_ideal_orders()
         actual_orders = {}
         for symbol in self.active_symbols:
@@ -2085,6 +2137,7 @@ class Passivbot:
         return to_cancel, to_create
 
     async def restart_bot_on_too_many_errors(self):
+        """Restart the bot if the hourly execution error budget is exhausted."""
         if not hasattr(self, "error_counts"):
             self.error_counts = []
         now = utc_ms()
@@ -2098,10 +2151,12 @@ class Passivbot:
             raise Exception("too many errors... restarting bot.")
 
     def format_custom_id_single(self, order_type_id: int) -> str:
+        """Build a custom id embedding the order type marker and a UUID suffix."""
         token = type_token(order_type_id, with_marker=True)  # "0xABCD"
         return (token + uuid4().hex)[: self.custom_id_max_length]
 
     def debug_dump_bot_state_to_disk(self):
+        """Persist internal state snapshots to disk for debugging purposes."""
         if not hasattr(self, "tmp_debug_ts"):
             self.tmp_debug_ts = 0
             self.tmp_debug_cache = make_get_filepath(f"caches/{self.exchange}/{self.user}_debug/")
@@ -2119,12 +2174,13 @@ class Passivbot:
     # Legacy EMA maintenance (init_EMAs_single/update_EMAs) removed in favor of CandlestickManager
 
     def get_symbols_with_pos(self, pside=None):
-        # returns symbols that have position
+        """Return the set of symbols with open positions for the given side."""
         if pside is None:
             return self.get_symbols_with_pos("long") | self.get_symbols_with_pos("short")
         return set([s for s in self.positions if self.positions[s][pside]["size"] != 0.0])
 
     def get_symbols_approved_or_has_pos(self, pside=None) -> set:
+        """Return symbols that are approved for trading or currently have a position."""
         if pside is None:
             return self.get_symbols_approved_or_has_pos(
                 "long"
@@ -2138,6 +2194,7 @@ class Passivbot:
     # Legacy get_ohlcvs_1m_file_mods removed
 
     async def restart_bot(self):
+        """Stop all tasks and raise to trigger an external bot restart."""
         logging.info("Initiating bot restart...")
         self.stop_signal_received = True
         self.stop_data_maintainers()
@@ -2178,6 +2235,7 @@ class Passivbot:
             traceback.print_exc()
 
     async def maintain_hourly_cycle(self):
+        """Periodically refresh market metadata while the bot is running."""
         logging.info(f"Starting hourly_cycle...")
         while not self.stop_signal_received:
             try:
@@ -2191,7 +2249,7 @@ class Passivbot:
                 await asyncio.sleep(5)
 
     async def start_data_maintainers(self):
-        # maintains REST hourly_cycle and ohlcv_1m
+        """Spawn background tasks responsible for market metadata and order watching."""
         if hasattr(self, "maintainers"):
             self.stop_data_maintainers()
         self.maintainers = {
@@ -2227,7 +2285,7 @@ class Passivbot:
                     ttl = int(max_age_ms)
                 else:
                     # More generous TTL for non-traded symbols
-                    has_pos = self.has_position(symbol=symbol)
+                    has_pos = self.has_position(symbol)
                     has_oo = (
                         bool(self.open_orders.get(symbol)) if hasattr(self, "open_orders") else False
                     )
@@ -2295,7 +2353,7 @@ class Passivbot:
                 if max_age_ms is not None:
                     ttl = int(max_age_ms)
                 else:
-                    has_pos = self.has_position(symbol=symbol)
+                    has_pos = self.has_position(symbol)
                     has_oo = (
                         bool(self.open_orders.get(symbol)) if hasattr(self, "open_orders") else False
                     )
@@ -2342,6 +2400,7 @@ class Passivbot:
         return out
 
     async def execute_multiple(self, orders: [dict], type_: str):
+        """Execute a list of order operations sequentially while tracking failures."""
         if not orders:
             return []
         executions = []
@@ -2388,11 +2447,13 @@ class Passivbot:
     # Legacy file lock helpers removed
 
     async def close(self):
+        """Stop background tasks and close exchange clients."""
         logging.info(f"Stopped data maintainers: {self.stop_data_maintainers()}")
         await self.cca.close()
         await self.ccp.close()
 
     def add_to_coins_lists(self, content, k_coins):
+        """Update approved/ignored coin sets from configuration content."""
         symbols = None
         psides_equal = content["long"] == content["short"]
         for pside in content:
@@ -2426,6 +2487,7 @@ class Passivbot:
                 getattr(self, k_coins)[pside] = symbols
 
     def refresh_approved_ignored_coins_lists(self):
+        """Reload approved and ignored coin lists from config sources."""
         try:
             for k in ("approved_coins", "ignored_coins"):
                 if not hasattr(self, k):
@@ -2445,10 +2507,12 @@ class Passivbot:
             traceback.print_exc()
 
     def get_order_execution_params(self, order: dict) -> dict:
+        """Return exchange-specific parameters for order placement."""
         # defined for each exchange
         return {}
 
     async def execute_order(self, order: dict) -> dict:
+        """Place a single order via the exchange client."""
         params = {
             "symbol": order["symbol"],
             "type": order.get("type", "limit"),
@@ -2461,9 +2525,11 @@ class Passivbot:
         return executed
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
+        """Execute a batch of order creations using the helper pipeline."""
         return await self.execute_multiple(orders, "execute_order")
 
     async def execute_cancellation(self, order: dict) -> dict:
+        """Cancel a single order via the exchange client."""
         executed = None
         try:
             executed = await self.cca.cancel_order(order["id"], symbol=order["symbol"])
@@ -2475,11 +2541,12 @@ class Passivbot:
             return {}
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
+        """Execute a batch of cancellations using the helper pipeline."""
         return await self.execute_multiple(orders, "execute_cancellation")
 
 
 def setup_bot(config):
-    # returns bot instance
+    """Instantiate the correct exchange bot implementation based on configuration."""
     user_info = load_user_info(config["live"]["user"])
     if user_info["exchange"] == "bybit":
         from exchanges.bybit import BybitBot
@@ -2519,6 +2586,7 @@ def setup_bot(config):
 
 
 async def shutdown_bot(bot):
+    """Stop background tasks and close the exchange clients gracefully."""
     print("Shutting down bot...")
     bot.stop_data_maintainers()
     try:
@@ -2530,6 +2598,7 @@ async def shutdown_bot(bot):
 
 
 async def main():
+    """Entry point: parse CLI args, load config, and launch the bot lifecycle."""
     parser = argparse.ArgumentParser(prog="passivbot", description="run passivbot")
     parser.add_argument(
         "config_path",
