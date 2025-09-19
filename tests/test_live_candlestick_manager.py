@@ -269,21 +269,21 @@ async def test_latest_ema_metrics_per_exchange(tmp_path, ex_id, span, tf):
         highs = np.asarray(arr["h"], dtype=np.float64)
         lows = np.asarray(arr["l"], dtype=np.float64)
         denom = np.maximum(closes, 1e-12)
-        nrr = (highs - lows) / denom
+        log_ranges = np.log(np.maximum(highs, 1e-12) / np.maximum(lows, 1e-12))
 
         exp_close = _ema(closes, span)
         exp_vol = _ema(vols, span)
-        exp_nrr = _ema(nrr, span)
+        exp_log_range = _ema(log_ranges, span)
 
         # Query manager helpers
         ema_close = await cm.get_latest_ema_close(symbol, span, timeframe=tf)
         ema_vol = await cm.get_latest_ema_volume(symbol, span, timeframe=tf)
-        ema_nrr = await cm.get_latest_ema_nrr(symbol, span, timeframe=tf)
+        log_range_ema = await cm.get_latest_ema_log_range(symbol, span, timeframe=tf)
 
         # Allow small tolerance due to float handling across exchanges
         assert pytest.approx(exp_close, rel=1e-6, abs=1e-9) == ema_close
         assert pytest.approx(exp_vol, rel=1e-6, abs=1e-9) == ema_vol
-        assert pytest.approx(exp_nrr, rel=1e-6, abs=1e-9) == ema_nrr
+        assert pytest.approx(exp_log_range, rel=1e-6, abs=1e-9) == log_range_ema
     finally:
         try:
             await ex.close()
