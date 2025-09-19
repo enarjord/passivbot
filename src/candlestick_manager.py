@@ -1801,6 +1801,41 @@ class CandlestickManager:
             out[sym] = await t
         return out
 
+    async def get_latest_ema_log_range_many(
+        self,
+        items: List[Tuple[str, int]],
+        *,
+        max_age_ms: Optional[int] = 600_000,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = "1h",
+    ) -> Dict[str, float]:
+        """Return latest log-range EMA for each (symbol, span) pair.
+
+        Each span is interpreted in candle units of the provided timeframe (`tf` defaults to 1h).
+        Returns 0.0 on failures or non-finite results.
+        """
+        out: Dict[str, float] = {}
+        if not items:
+            return out
+
+        async def one(sym: str, span: int) -> float:
+            try:
+                val = await self.get_latest_ema_log_range(
+                    sym,
+                    span,
+                    max_age_ms=max_age_ms,
+                    timeframe=timeframe,
+                    tf=tf,
+                )
+                return float(val) if np.isfinite(val) else 0.0
+            except Exception:
+                return 0.0
+
+        tasks = {sym: asyncio.create_task(one(sym, span)) for (sym, span) in items}
+        for sym, t in tasks.items():
+            out[sym] = await t
+        return out
+
     async def get_latest_ema_volume(
         self,
         symbol: str,
