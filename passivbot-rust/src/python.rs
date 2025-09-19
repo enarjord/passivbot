@@ -235,8 +235,13 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         close_trailing_threshold_pct: extract_value(dict, "close_trailing_threshold_pct")?,
         enforce_exposure_limit: extract_bool_value(dict, "enforce_exposure_limit")?,
         entry_grid_double_down_factor: extract_value(dict, "entry_grid_double_down_factor")?,
+        entry_grid_spacing_log_weight: extract_value(dict, "entry_grid_spacing_log_weight")?,
         entry_grid_spacing_weight: extract_value(dict, "entry_grid_spacing_weight")?,
         entry_grid_spacing_pct: extract_value(dict, "entry_grid_spacing_pct")?,
+        entry_grid_spacing_log_span_hours: extract_value(
+            dict,
+            "entry_grid_spacing_log_span_hours",
+        )?,
         entry_initial_ema_dist: extract_value(dict, "entry_initial_ema_dist")?,
         entry_initial_qty_pct: extract_value(dict, "entry_initial_qty_pct")?,
         entry_trailing_double_down_factor: extract_value(
@@ -293,6 +298,7 @@ pub fn calc_next_entry_long_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
+    entry_grid_spacing_log_weight: f64,
     entry_grid_spacing_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
@@ -310,6 +316,7 @@ pub fn calc_next_entry_long_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_lower: f64,
+    grid_log_range: f64,
     order_book_bid: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -329,10 +336,12 @@ pub fn calc_next_entry_long_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
+        grid_log_range,
         ..Default::default()
     };
     let bot_params = BotParams {
         entry_grid_double_down_factor,
+        entry_grid_spacing_log_weight,
         entry_grid_spacing_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
@@ -453,6 +462,7 @@ pub fn calc_next_entry_short_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
+    entry_grid_spacing_log_weight: f64,
     entry_grid_spacing_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
@@ -470,6 +480,7 @@ pub fn calc_next_entry_short_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_upper: f64,
+    grid_log_range: f64,
     order_book_ask: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -489,10 +500,12 @@ pub fn calc_next_entry_short_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
+        grid_log_range,
         ..Default::default()
     };
     let bot_params = BotParams {
         entry_grid_double_down_factor,
+        entry_grid_spacing_log_weight,
         entry_grid_spacing_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
@@ -613,6 +626,7 @@ pub fn calc_entries_long_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
+    entry_grid_spacing_log_weight: f64,
     entry_grid_spacing_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
@@ -630,6 +644,7 @@ pub fn calc_entries_long_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_lower: f64,
+    grid_log_range: f64,
     order_book_bid: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -650,11 +665,13 @@ pub fn calc_entries_long_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
+        grid_log_range,
         ..Default::default()
     };
 
     let bot_params = BotParams {
         entry_grid_double_down_factor,
+        entry_grid_spacing_log_weight,
         entry_grid_spacing_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
@@ -700,6 +717,7 @@ pub fn calc_entries_short_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
+    entry_grid_spacing_log_weight: f64,
     entry_grid_spacing_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
@@ -717,6 +735,7 @@ pub fn calc_entries_short_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_upper: f64,
+    grid_log_range: f64,
     order_book_ask: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -737,11 +756,13 @@ pub fn calc_entries_short_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
+        grid_log_range,
         ..Default::default()
     };
 
     let bot_params = BotParams {
         entry_grid_double_down_factor,
+        entry_grid_spacing_log_weight,
         entry_grid_spacing_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,

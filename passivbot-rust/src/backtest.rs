@@ -27,6 +27,8 @@ pub struct EmaAlphas {
     pub vol_alpha_short: f64,
     pub log_range_alpha_long: f64,
     pub log_range_alpha_short: f64,
+    pub grid_log_range_alpha_long: f64,
+    pub grid_log_range_alpha_short: f64,
 }
 
 #[derive(Clone, Default, Copy, Debug)]
@@ -43,6 +45,8 @@ pub struct EMAs {
     pub vol_short: f64,
     pub log_range_long: f64,
     pub log_range_short: f64,
+    pub grid_log_range_long: f64,
+    pub grid_log_range_short: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -159,6 +163,7 @@ pub struct Backtest<'a> {
     last_hour_boundary_ms: u64,
     // Latest 1h bucket per coin (overwritten each new hour)
     latest_hour: Vec<HourBucket>,
+    warmup_bars: usize,
     positions: Positions,
     open_orders: OpenOrders,
     trailing_prices: TrailingPrices,
@@ -212,6 +217,8 @@ impl<'a> Backtest<'a> {
                     vol_short: f64::max(0.0, hlcvs[[0, i, VOLUME]]),
                     log_range_long: 0.0,
                     log_range_short: 0.0,
+                    grid_log_range_long: 0.0,
+                    grid_log_range_short: 0.0,
                 }
             })
             .collect();
@@ -242,6 +249,7 @@ impl<'a> Backtest<'a> {
 
         // Calculate EMA alphas for each coin
         let ema_alphas: Vec<EmaAlphas> = bot_params.iter().map(|bp| calc_ema_alphas(bp)).collect();
+        let warmup_bars = calc_warmup_bars(&bot_params);
 
         let trailing_enabled: Vec<TrailingEnabled> = bot_params
             .iter()
@@ -272,6 +280,7 @@ impl<'a> Backtest<'a> {
             first_timestamp_ms: backtest_params.first_timestamp_ms,
             last_hour_boundary_ms: (backtest_params.first_timestamp_ms / 3_600_000) * 3_600_000,
             latest_hour: vec![HourBucket::default(); n_coins],
+            warmup_bars,
             open_orders: OpenOrders::default(),
             trailing_prices: TrailingPrices::default(),
             actives: Actives::default(),
@@ -323,11 +332,15 @@ impl<'a> Backtest<'a> {
             }
         }
 
+        let warmup_bars = self.warmup_bars.max(1);
         for k in 1..(n_timesteps - 1) {
             self.check_for_fills(k);
             self.update_emas(k);
             self.update_rounded_balance(k);
             self.update_trailing_prices(k);
+            if k < warmup_bars {
+                continue;
+            }
             self.update_n_positions_and_wallet_exposure_limits(k);
             self.update_open_orders_all(k);
             self.update_equities(k);
@@ -480,6 +493,11 @@ impl<'a> Backtest<'a> {
                 ask: close_price,
             },
             ema_bands: self.emas[idx].compute_bands(pside),
+            grid_log_range: match pside {
+                LONG => self.emas[idx].grid_log_range_long,
+                SHORT => self.emas[idx].grid_log_range_short,
+                _ => 0.0,
+            },
         }
     }
 
@@ -1422,6 +1440,26 @@ impl<'a> Backtest<'a> {
                 }
             }
             self.last_hour_boundary_ms = hour_boundary;
+
+            // Update hourly log-range EMAs for grid spacing adjustments
+            for i in 0..self.n_coins {
+                let bucket = &self.latest_hour[i];
+                if bucket.high <= 0.0 || bucket.low <= 0.0 {
+                    continue;
+                }
+                let hour_log_range = (bucket.high / bucket.low).ln();
+                let grid_alpha_long = self.ema_alphas[i].grid_log_range_alpha_long;
+                let grid_alpha_short = self.ema_alphas[i].grid_log_range_alpha_short;
+                let emas = &mut self.emas[i];
+                if grid_alpha_long > 0.0 {
+                    emas.grid_log_range_long = hour_log_range * grid_alpha_long
+                        + emas.grid_log_range_long * (1.0 - grid_alpha_long);
+                }
+                if grid_alpha_short > 0.0 {
+                    emas.grid_log_range_short = hour_log_range * grid_alpha_short
+                        + emas.grid_log_range_short * (1.0 - grid_alpha_short);
+                }
+            }
         }
         for i in 0..self.n_coins {
             let close_price = self.hlcvs[[k, i, CLOSE]];
@@ -1546,5 +1584,49 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
         vol_alpha_short: 2.0 / (bot_params_pair.short.filter_volume_ema_span as f64 + 1.0),
         log_range_alpha_long: 2.0 / (bot_params_pair.long.filter_log_range_ema_span as f64 + 1.0),
         log_range_alpha_short: 2.0 / (bot_params_pair.short.filter_log_range_ema_span as f64 + 1.0),
+        grid_log_range_alpha_long: {
+            let span = bot_params_pair.long.entry_grid_spacing_log_span_hours;
+            if span > 0.0 {
+                2.0 / (span + 1.0)
+            } else {
+                0.0
+            }
+        },
+        grid_log_range_alpha_short: {
+            let span = bot_params_pair.short.entry_grid_spacing_log_span_hours;
+            if span > 0.0 {
+                2.0 / (span + 1.0)
+            } else {
+                0.0
+            }
+        },
     }
+}
+
+fn calc_warmup_bars(bot_params: &[BotParamsPair]) -> usize {
+    let mut max_span_minutes = 0.0f64;
+
+    for pair in bot_params {
+        let spans_long = [
+            pair.long.ema_span_0,
+            pair.long.ema_span_1,
+            pair.long.filter_volume_ema_span as f64,
+            pair.long.filter_log_range_ema_span as f64,
+            pair.long.entry_grid_spacing_log_span_hours * 60.0,
+        ];
+        let spans_short = [
+            pair.short.ema_span_0,
+            pair.short.ema_span_1,
+            pair.short.filter_volume_ema_span as f64,
+            pair.short.filter_log_range_ema_span as f64,
+            pair.short.entry_grid_spacing_log_span_hours * 60.0,
+        ];
+        for span in spans_long.iter().chain(spans_short.iter()) {
+            if span.is_finite() {
+                max_span_minutes = max_span_minutes.max(*span);
+            }
+        }
+    }
+
+    max_span_minutes.ceil() as usize
 }

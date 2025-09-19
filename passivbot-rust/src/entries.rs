@@ -109,12 +109,19 @@ fn calc_reentry_price_bid(
     order_book_bid: f64,
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
+    grid_log_range: f64,
 ) -> f64 {
-    let multiplier =
-        (wallet_exposure / bot_params.wallet_exposure_limit) * bot_params.entry_grid_spacing_weight;
+    let we_multiplier = if bot_params.wallet_exposure_limit > 0.0 {
+        (wallet_exposure / bot_params.wallet_exposure_limit) * bot_params.entry_grid_spacing_weight
+    } else {
+        0.0
+    };
+    let log_multiplier = grid_log_range * bot_params.entry_grid_spacing_log_weight;
+    let spacing_multiplier = 1.0 + we_multiplier + log_multiplier;
     let reentry_price = f64::min(
         round_dn(
-            position_price * (1.0 - bot_params.entry_grid_spacing_pct * (1.0 + multiplier)),
+            position_price
+                * (1.0 - bot_params.entry_grid_spacing_pct * spacing_multiplier.max(0.0)),
             exchange_params.price_step,
         ),
         order_book_bid,
@@ -132,12 +139,19 @@ fn calc_reentry_price_ask(
     order_book_ask: f64,
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
+    grid_log_range: f64,
 ) -> f64 {
-    let multiplier =
-        (wallet_exposure / bot_params.wallet_exposure_limit) * bot_params.entry_grid_spacing_weight;
+    let we_multiplier = if bot_params.wallet_exposure_limit > 0.0 {
+        (wallet_exposure / bot_params.wallet_exposure_limit) * bot_params.entry_grid_spacing_weight
+    } else {
+        0.0
+    };
+    let log_multiplier = grid_log_range * bot_params.entry_grid_spacing_log_weight;
+    let spacing_multiplier = 1.0 + we_multiplier + log_multiplier;
     let reentry_price = f64::max(
         round_up(
-            position_price * (1.0 + bot_params.entry_grid_spacing_pct * (1.0 + multiplier)),
+            position_price
+                * (1.0 + bot_params.entry_grid_spacing_pct * spacing_multiplier.max(0.0)),
             exchange_params.price_step,
         ),
         order_book_ask,
@@ -206,6 +220,7 @@ pub fn calc_grid_entry_long(
         state_params.order_book.bid,
         exchange_params,
         bot_params,
+        state_params.grid_log_range,
     );
     if reentry_price <= 0.0 {
         return Order::default();
@@ -251,6 +266,7 @@ pub fn calc_grid_entry_long(
         state_params.order_book.bid,
         exchange_params,
         bot_params,
+        state_params.grid_log_range,
     );
     let next_reentry_qty = f64::max(
         calc_reentry_qty(
@@ -585,6 +601,7 @@ pub fn calc_grid_entry_short(
         state_params.order_book.ask,
         exchange_params,
         bot_params,
+        state_params.grid_log_range,
     );
     if reentry_price <= 0.0 {
         return Order::default();
@@ -630,6 +647,7 @@ pub fn calc_grid_entry_short(
         state_params.order_book.ask,
         exchange_params,
         bot_params,
+        state_params.grid_log_range,
     );
     let next_reentry_qty = f64::max(
         calc_reentry_qty(
