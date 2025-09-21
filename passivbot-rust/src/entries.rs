@@ -112,7 +112,8 @@ fn calc_reentry_price_bid(
     grid_log_range: f64,
 ) -> f64 {
     let we_multiplier = if bot_params.wallet_exposure_limit > 0.0 {
-        (wallet_exposure / bot_params.wallet_exposure_limit) * bot_params.entry_grid_spacing_weight
+        (wallet_exposure / bot_params.wallet_exposure_limit)
+            * bot_params.entry_grid_spacing_we_weight
     } else {
         0.0
     };
@@ -142,7 +143,8 @@ fn calc_reentry_price_ask(
     grid_log_range: f64,
 ) -> f64 {
     let we_multiplier = if bot_params.wallet_exposure_limit > 0.0 {
-        (wallet_exposure / bot_params.wallet_exposure_limit) * bot_params.entry_grid_spacing_weight
+        (wallet_exposure / bot_params.wallet_exposure_limit)
+            * bot_params.entry_grid_spacing_we_weight
     } else {
         0.0
     };

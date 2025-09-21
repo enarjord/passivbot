@@ -100,7 +100,7 @@ pub struct BotParams {
     pub enforce_exposure_limit: bool,
     pub entry_grid_double_down_factor: f64,
     pub entry_grid_spacing_log_weight: f64,
-    pub entry_grid_spacing_weight: f64,
+    pub entry_grid_spacing_we_weight: f64,
     pub entry_grid_spacing_pct: f64,
     pub entry_grid_spacing_log_span_hours: f64,
     pub entry_initial_ema_dist: f64,

@@ -170,7 +170,7 @@ def get_allowed_modifications():
                 "entry_grid_spacing_pct": True,
                 "entry_grid_spacing_log_span_hours": True,
                 "entry_grid_spacing_log_weight": True,
-                "entry_grid_spacing_weight": True,
+                "entry_grid_spacing_we_weight": True,
                 "entry_initial_ema_dist": True,
                 "entry_initial_qty_pct": True,
                 "entry_trailing_double_down_factor": True,
@@ -197,7 +197,7 @@ def get_allowed_modifications():
                 "entry_grid_spacing_pct": True,
                 "entry_grid_spacing_log_span_hours": True,
                 "entry_grid_spacing_log_weight": True,
-                "entry_grid_spacing_weight": True,
+                "entry_grid_spacing_we_weight": True,
                 "entry_initial_ema_dist": True,
                 "entry_initial_qty_pct": True,
                 "entry_trailing_double_down_factor": True,
@@ -415,7 +415,7 @@ PB_MULTI_FIELD_MAP = {
     "markup_range": "close_grid_markup_range",
     "min_markup": "close_grid_min_markup",
     "rentry_pprice_dist": "entry_grid_spacing_pct",
-    "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_weight",
+    "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_we_weight",
     "ema_span_0": "ema_span_0",
     "ema_span_1": "ema_span_1",
     "filter_noisiness_rolling_window": "filter_log_range_ema_span",
@@ -500,6 +500,11 @@ LEGACY_FILTER_KEYS = {
     "filter_noisiness_ema_span": "filter_log_range_ema_span",
     "filter_volume_rolling_window": "filter_volume_ema_span",
 }
+
+LEGACY_ENTRY_GRID_KEYS = {
+    "entry_grid_spacing_weight": "entry_grid_spacing_we_weight",
+}
+
 LEGACY_BOUNDS_KEYS = {
     "long_filter_noisiness_rolling_window": "long_filter_log_range_ema_span",
     "long_filter_noisiness_ema_span": "long_filter_log_range_ema_span",
@@ -507,6 +512,8 @@ LEGACY_BOUNDS_KEYS = {
     "short_filter_noisiness_rolling_window": "short_filter_log_range_ema_span",
     "short_filter_noisiness_ema_span": "short_filter_log_range_ema_span",
     "short_filter_volume_rolling_window": "short_filter_volume_ema_span",
+    "long_entry_grid_spacing_weight": "long_entry_grid_spacing_we_weight",
+    "short_entry_grid_spacing_weight": "short_entry_grid_spacing_we_weight",
 }
 
 
@@ -517,6 +524,13 @@ def _apply_backward_compatibility_renames(result: dict, verbose: bool = True) ->
         if not isinstance(bot_cfg, dict):
             continue
         for old, new in LEGACY_FILTER_KEYS.items():
+            if old in bot_cfg:
+                if new not in bot_cfg:
+                    bot_cfg[new] = bot_cfg[old]
+                    if verbose:
+                        print(f"renaming parameter bot.{pside}.{old}: {new}")
+                del bot_cfg[old]
+        for old, new in LEGACY_ENTRY_GRID_KEYS.items():
             if old in bot_cfg:
                 if new not in bot_cfg:
                     bot_cfg[new] = bot_cfg[old]
@@ -979,7 +993,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 "entry_grid_spacing_log_span_hours": 72,
                 "entry_grid_spacing_log_weight": 0.0,
                 "entry_grid_spacing_pct": 0.04,
-                "entry_grid_spacing_weight": 0.697,
+                "entry_grid_spacing_we_weight": 0.697,
                 "entry_initial_ema_dist": -0.00738,
                 "entry_initial_qty_pct": 0.00592,
                 "entry_trailing_double_down_factor": 0.894,
@@ -1011,7 +1025,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 "entry_grid_spacing_log_span_hours": 72,
                 "entry_grid_spacing_log_weight": 0.0,
                 "entry_grid_spacing_pct": 0.04,
-                "entry_grid_spacing_weight": 0.697,
+                "entry_grid_spacing_we_weight": 0.697,
                 "entry_initial_ema_dist": -0.00738,
                 "entry_initial_qty_pct": 0.00592,
                 "entry_trailing_double_down_factor": 0.894,
@@ -1068,7 +1082,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 "long_entry_grid_spacing_pct": [0.005, 0.12],
                 "long_entry_grid_spacing_log_span_hours": [24.0, 336.0],
                 "long_entry_grid_spacing_log_weight": [0.0, 400.0],
-                "long_entry_grid_spacing_weight": [0.0, 2.0],
+                "long_entry_grid_spacing_we_weight": [0.0, 2.0],
                 "long_entry_initial_ema_dist": [-0.1, 0.002],
                 "long_entry_initial_qty_pct": [0.005, 0.1],
                 "long_entry_trailing_double_down_factor": [0.1, 3.0],
@@ -1097,7 +1111,7 @@ def get_template_live_config(passivbot_mode="v7"):
                 "short_entry_grid_spacing_pct": [0.005, 0.12],
                 "short_entry_grid_spacing_log_span_hours": [24.0, 336.0],
                 "short_entry_grid_spacing_log_weight": [0.0, 400.0],
-                "short_entry_grid_spacing_weight": [0.0, 2.0],
+                "short_entry_grid_spacing_we_weight": [0.0, 2.0],
                 "short_entry_initial_ema_dist": [-0.1, 0.002],
                 "short_entry_initial_qty_pct": [0.005, 0.1],
                 "short_entry_trailing_double_down_factor": [0.1, 3.0],

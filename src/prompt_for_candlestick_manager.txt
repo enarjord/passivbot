@@ -1,0 +1,187 @@
+---
+
+# Prompt: CandlestickManager for Passivbot
+
+Create a standalone Python script at `src/candlestick_manager.py` defining a `CandlestickManager` class for Passivbot.
+An instance will be initialized in `src/passivbot.py` to manage **1-minute OHLCV** (Open, High, Low, Close, Volume) candlesticks for multiple symbols on a single exchange.
+The goal is to maintain an **up-to-date OHLCV database** with caching, lazy fetching, and EMA updates.
+
+---
+
+## Core Requirements
+
+### 1. Data Format & Timestamps
+
+* All timestamps must be **UTC milliseconds** (Unix epoch, `int64`). Validate inputs.
+
+* Store OHLCVs in memory and on disk as **NumPy arrays** with dtype:
+
+  ```python
+  np.dtype([
+      ('ts', 'int64'),   # timestamp (ms)
+      ('o',  'float32'), # open
+      ('h',  'float32'), # high
+      ('l',  'float32'), # low
+      ('c',  'float32'), # close
+      ('bv', 'float32'), # base volume
+  ])
+  ```
+
+* Quote volume is computed on demand as `c * bv`.
+
+* log range (`ln(high / low)`) is computed on demand, guarding against `close == 0` (use `max(close, 1e-12)`).
+
+---
+
+### 2. Gap Handling
+
+* Exchanges differ:
+
+  * Some return **no candle** for minutes with no trades.
+  * Some return a **zero candle**: `(ts=prev_ts+60000, o=h=l=c=prev_close, v=0.0)`.
+* Final candle sequence used for metrics must be **standardized to always include zero candles** for gaps.
+* Implementation:
+
+  * Detect gaps by checking that consecutive candles differ by exactly `60,000 ms`.
+  * If a gap is found, insert zero candles (same close as previous candle, zero volume).
+  * Overwrite with true data if later fetched.
+
+* If no previous candle exists for a gap, keep searching backward until one is found (limit to max 3 days), or raise in `strict=True` mode.
+* Zero candles are generated in-memory for `get_candles` but not persisted to disk.
+
+---
+
+### 3. Data Access Methods
+
+* **`get_candles(symbol, start_ts=None, end_ts=None, max_age_ms=None, strict=False) -> np.ndarray`**
+
+  * Return inclusive range `[start_ts, end_ts]`.
+  * If `end_ts is None`, use `floor(now/60000)*60000 + 60000`.
+  * If `start_ts is None`, return last `default_window_candles` (default=100).
+  * If `end_ts` is given but `start_ts` is None: `start_ts = end_ts - 60_000 * default_window_candles`.
+  * Apply gap standardization.
+  * `max_age_ms`: if data is older than threshold, refresh before returning.
+  * `max_age_ms`: If 0, force refresh. If negative, raise `ValueError`. If None, use default (e.g., 10,000 ms for `get_current_close`, 60,000 ms for `get_candles`).
+  * `strict`: if True, raise if gaps exist that cannot be filled.
+  * get_candles returns all candles whose ts is between start_ts and end_ts, inclusive of both boundaries if candles exist at exactly those timestamps
+
+* **`get_current_close(symbol, max_age_ms=None) -> float`**
+
+  * Return latest close.
+  * Refresh if older than `max_age_ms` (default 10s).
+  * Always fetch with overlap (`overlap_candles`, default=30) and overwrite.
+
+* **`get_latest_ema_close(symbol, span, max_age_ms=None) -> float`**
+
+* **`get_latest_ema_volume(symbol, span, max_age_ms=None) -> float`**
+
+* **`get_latest_ema_log_range(symbol, span, max_age_ms=None) -> float`**
+
+  * Compute EMA lazily and cache results.
+  * Formula: `EMA_t = α * x_t + (1 - α) * EMA_{t-1}`, `α = 2/(span+1)`.
+  * EMA seed: **first candle of span range**.
+  * Exclude incomplete current-minute candles.
+  * Fetch and cache necessary candles for span.
+
+* **`warmup_since(symbols, since_ts)`**: backfill data into memory & cache.
+
+* **`refresh(symbol, through_ts=None)`**: force fetch/update now.
+
+---
+
+### 4. Fetching & Concurrency
+
+* Use **`ccxt.async_support.fetch_ohlcv`**.
+* Support multiple symbols, one exchange per instance.
+* Portable pagination: loop with `since` + `limit`; avoid `params.until` unless explicitly required per exchange.
+* Validate symbols via `exchange.load_markets()`.
+* Always overlap fetch by `overlap_candles` (default=30).
+* Current minute is always **incomplete**; only finalize when the next minute begins.
+* Concurrency:
+  * Use `asyncio.Lock` per symbol for all in-memory state modifications (e.g., updating `_cache` or EMA state).
+  * Use `portalocker` for all disk writes (`.npy` shards and `index.json`).
+
+---
+
+### 5. Caching & Persistence
+
+* Cache to `.npy` shards, one file per symbol per day:
+
+  ```
+  caches/ohlcv/{exchange}/{timeframe}/{symbol_sanitized}/{YYYY-MM-DD}.npy
+  ```
+
+  * `symbol_sanitized` = CCXT standardized symbol with `/` replaced by `_`.
+* Atomic writes: write `file.tmp`, `fsync`, `os.replace`.
+* Keep last `memory_days` (default 7, configurable) in RAM; evict older to disk.
+* Keep disk cache up to `disk_retention_days` (default 30); prune older files.
+* Maintain `index.json` per symbol with:
+
+  * `index.json` includes: shard map, min/max ts, known gaps, schema version, last_final_ts, EMA state, cache version (e.g., "1.0"), and CRC32 checksum per shard.
+
+---
+
+### 6. EMA Updates & State
+
+* On new complete candle arrival, update EMA state for close, volume, and log range.
+* Persist `{last_ts, last_ema}` per (symbol, span, metric) in `index.json` to avoid recompute.
+
+---
+
+### 7. Error Handling
+
+* Handle network errors, timeouts, rate limits with exponential backoff + jitter.
+* Classify errors:
+
+  * Transient (retry)
+  * Permanent (log + raise)
+* Compare local `utc_now_ms` with `exchange.fetch_time()` when available; warn if skew > 2s.
+
+---
+
+### 8. Logging & Debug
+
+* Use Python `logging`.
+* Log to console and `logs/candlestick_manager.log`.
+* Include symbol, ts range, retries, overlaps, EMA updates.
+* Debug mode = verbose logging.
+
+---
+
+### 9. Performance Optimizations
+
+* Range lookups: use `np.searchsorted` on sorted `ts`.
+* Use float32 to reduce memory.
+* Batch fetches where supported.
+* Minimize redundant disk I/O with in-memory write buffers.
+
+---
+
+### 10. Shutdown
+
+* `close()` method: flush caches, persist EMA state, close locks.
+* Support `__enter__` / `__exit__`.
+
+---
+
+### 11. Documentation & Testing
+
+* Add NumPy-style docstrings for all public methods.
+* Example usage in module docstring.
+* Unit tests in `tests/test_candlestick_manager.py` using `pytest`, covering:
+  * Gap standardization and zero-candle insertion
+  * Overlap overwrites and incomplete candle handling
+  * EMA correctness vs NumPy reference
+  * Cache atomicity under concurrent access
+  * UTC timestamp validation
+  * Edge cases: empty caches, invalid symbols, large spans
+
+---
+
+## Implementation Details
+
+* Python 3.8+
+* Dependencies: `ccxt.async_support`, `numpy`, `portalocker`, `logging`
+* Style: PEP 8
+
+---

@@ -375,6 +375,7 @@ def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timest
     sts = utc_ms()
 
     # Inject first timestamp (ms) into backtest params; default to 0 if unknown
+    print('debug run_backtest timestamps backtest.py', timestamps if timestamps else 'timestamps is None')
     try:
         first_ts_ms = int(timestamps[0]) if (timestamps is not None and len(timestamps) > 0) else 0
     except Exception:
@@ -386,6 +387,7 @@ def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timest
     with create_shared_memory_file(hlcvs) as shared_memory_file, create_shared_memory_file(
         btc_usd_prices
     ) as btc_usd_shared_memory_file:
+        print('debug run_backtest backtest.py', backtest_params)
         fills, equities_usd, equities_btc, analysis_usd, analysis_btc = pbr.run_backtest(
             shared_memory_file,
             hlcvs.shape,
@@ -538,6 +540,8 @@ async def main():
             logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
         config["backtest"]["coins"][exchange] = coins
         config["backtest"]["cache_dir"][exchange] = str(cache_dir)
+        print('combined true', timestamps if timestamps else 'timestamps is none')
+
         fills, equities, equities_btc, analysis = run_backtest(
             hlcvs, mss, config, exchange, btc_usd_prices, timestamps
         )
@@ -553,6 +557,7 @@ async def main():
             exchange,
         )
     else:
+        print('combined false')
         configs = {exchange: deepcopy(config) for exchange in config["backtest"]["exchanges"]}
         tasks = {}
         for exchange in config["backtest"]["exchanges"]:

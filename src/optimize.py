@@ -422,6 +422,7 @@ class Evaluator:
         results_queue,
         seen_hashes=None,
         duplicate_counter=None,
+        timestamps=None,
     ):
         logging.info("Initializing Evaluator...")
         self.shared_memory_files = shared_memory_files
@@ -430,6 +431,7 @@ class Evaluator:
         self.btc_usd_shared_memory_files = btc_usd_shared_memory_files
         self.btc_usd_dtypes = btc_usd_dtypes
         self.msss = msss
+        self.timestamps = timestamps or {}
         self.exchanges = list(shared_memory_files.keys())
 
         self.mmap_contexts = {}
@@ -447,6 +449,12 @@ class Evaluator:
             _, self.exchange_params[exchange], self.backtest_params[exchange] = prep_backtest_args(
                 config, self.msss[exchange], exchange
             )
+            first_ts_list = self.timestamps.get(exchange)
+            try:
+                first_ts_ms = int(first_ts_list[0]) if first_ts_list else 0
+            except Exception:
+                first_ts_ms = 0
+            self.backtest_params[exchange]["first_timestamp_ms"] = first_ts_ms
             logging.info(f"mmap_context entered successfully for {exchange}.")
 
         self.config = config
@@ -904,8 +912,9 @@ async def main():
         hlcvs_shapes = {}
         hlcvs_dtypes = {}
         msss = {}
+        timestamps_dict = {}
 
-        # NEW: Store per-exchange BTC arrays in a dict,
+        # Store per-exchange BTC arrays in a dict,
         # and store their shared-memory file names in another dict.
         btc_usd_data_dict = {}
         btc_usd_shared_memory_files = {}
@@ -914,9 +923,10 @@ async def main():
         config["backtest"]["coins"] = {}
         if config["backtest"]["combine_ohlcvs"]:
             exchange = "combined"
-            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await prepare_hlcvs_mss(
+            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = await prepare_hlcvs_mss(
                 config, exchange
             )
+            timestamps_dict[exchange] = _timestamps
             exchange_preference = defaultdict(list)
             for coin in coins:
                 exchange_preference[mss[coin]["exchange"]].append(coin)
@@ -950,7 +960,8 @@ async def main():
             for exchange in config["backtest"]["exchanges"]:
                 tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
             for exchange in config["backtest"]["exchanges"]:
-                coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await tasks[exchange]
+                coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = await tasks[exchange]
+                timestamps_dict[exchange] = _timestamps
                 config["backtest"]["coins"][exchange] = coins
                 hlcvs_dict[exchange] = hlcvs
                 hlcvs_shapes[exchange] = hlcvs.shape
@@ -1044,6 +1055,7 @@ async def main():
             results_queue=results_queue,
             seen_hashes=seen_hashes,
             duplicate_counter=duplicate_counter,
+            timestamps=timestamps_dict,
         )
 
         logging.info(f"Finished initializing evaluator...")

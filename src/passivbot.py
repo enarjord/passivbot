@@ -1744,7 +1744,7 @@ class Passivbot:
                         self.c_mults[symbol],
                         self.bp(pside, "entry_grid_double_down_factor", symbol),
                         self.bp(pside, "entry_grid_spacing_log_weight", symbol),
-                        self.bp(pside, "entry_grid_spacing_weight", symbol),
+                        self.bp(pside, "entry_grid_spacing_we_weight", symbol),
                         self.bp(pside, "entry_grid_spacing_pct", symbol),
                         self.bp(pside, "entry_initial_ema_dist", symbol),
                         self.bp(pside, "entry_initial_qty_pct", symbol),

@@ -113,6 +113,7 @@ pub fn run_backtest(
     };
 
     let backtest_params = backtest_params_from_dict(backtest_params_dict)?;
+    println!("debug backtest_params {:?}", backtest_params);
     let mut backtest = Backtest::new(
         &hlcvs_rust,
         &btc_usd_rust,
@@ -224,6 +225,14 @@ fn extract_bool_value(dict: &PyDict, key: &str) -> PyResult<bool> {
     }
 }
 
+fn extract_grid_spacing_we_weight(dict: &PyDict) -> PyResult<f64> {
+    if let Some(obj) = dict.get_item("entry_grid_spacing_we_weight")? {
+        obj.extract::<f64>()
+    } else {
+        extract_value(dict, "entry_grid_spacing_we_weight")
+    }
+}
+
 fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
     Ok(BotParams {
         close_grid_markup_end: extract_value(dict, "close_grid_markup_end")?,
@@ -236,7 +245,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         enforce_exposure_limit: extract_bool_value(dict, "enforce_exposure_limit")?,
         entry_grid_double_down_factor: extract_value(dict, "entry_grid_double_down_factor")?,
         entry_grid_spacing_log_weight: extract_value(dict, "entry_grid_spacing_log_weight")?,
-        entry_grid_spacing_weight: extract_value(dict, "entry_grid_spacing_weight")?,
+        entry_grid_spacing_we_weight: extract_grid_spacing_we_weight(dict)?,
         entry_grid_spacing_pct: extract_value(dict, "entry_grid_spacing_pct")?,
         entry_grid_spacing_log_span_hours: extract_value(
             dict,
@@ -299,7 +308,7 @@ pub fn calc_next_entry_long_py(
     c_mult: f64,
     entry_grid_double_down_factor: f64,
     entry_grid_spacing_log_weight: f64,
-    entry_grid_spacing_weight: f64,
+    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
@@ -342,7 +351,7 @@ pub fn calc_next_entry_long_py(
     let bot_params = BotParams {
         entry_grid_double_down_factor,
         entry_grid_spacing_log_weight,
-        entry_grid_spacing_weight,
+        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
@@ -463,7 +472,7 @@ pub fn calc_next_entry_short_py(
     c_mult: f64,
     entry_grid_double_down_factor: f64,
     entry_grid_spacing_log_weight: f64,
-    entry_grid_spacing_weight: f64,
+    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
@@ -506,7 +515,7 @@ pub fn calc_next_entry_short_py(
     let bot_params = BotParams {
         entry_grid_double_down_factor,
         entry_grid_spacing_log_weight,
-        entry_grid_spacing_weight,
+        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
@@ -627,7 +636,7 @@ pub fn calc_entries_long_py(
     c_mult: f64,
     entry_grid_double_down_factor: f64,
     entry_grid_spacing_log_weight: f64,
-    entry_grid_spacing_weight: f64,
+    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
@@ -672,7 +681,7 @@ pub fn calc_entries_long_py(
     let bot_params = BotParams {
         entry_grid_double_down_factor,
         entry_grid_spacing_log_weight,
-        entry_grid_spacing_weight,
+        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
@@ -718,7 +727,7 @@ pub fn calc_entries_short_py(
     c_mult: f64,
     entry_grid_double_down_factor: f64,
     entry_grid_spacing_log_weight: f64,
-    entry_grid_spacing_weight: f64,
+    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
@@ -763,7 +772,7 @@ pub fn calc_entries_short_py(
     let bot_params = BotParams {
         entry_grid_double_down_factor,
         entry_grid_spacing_log_weight,
-        entry_grid_spacing_weight,
+        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
