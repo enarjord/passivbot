@@ -199,6 +199,15 @@ def load_coins_hlcvs_from_cache(config, exchange):
             logging.info(f"{exchange} Attempting to load hlcvs data from cache {fname}...")
             with gzip.open(fname, "rb") as f:
                 hlcvs = np.load(f)
+            # Load optional timestamps if present
+            ts_fname = cache_dir / "timestamps.npy.gz"
+            timestamps = None
+            if os.path.exists(ts_fname):
+                try:
+                    with gzip.open(ts_fname, "rb") as f:
+                        timestamps = np.load(f)
+                except Exception:
+                    timestamps = None
             btc_fname = cache_dir / "btc_usd_prices.npy.gz"
             if os.path.exists(btc_fname):
                 logging.info(
@@ -214,6 +223,13 @@ def load_coins_hlcvs_from_cache(config, exchange):
             fname = cache_dir / "hlcvs.npy"
             logging.info(f"{exchange} Attempting to load hlcvs data from cache {fname}...")
             hlcvs = np.load(fname)
+            ts_fname = cache_dir / "timestamps.npy"
+            timestamps = None
+            if os.path.exists(ts_fname):
+                try:
+                    timestamps = np.load(ts_fname)
+                except Exception:
+                    timestamps = None
             btc_fname = cache_dir / "btc_usd_prices.npy"
             if os.path.exists(btc_fname):
                 logging.info(
@@ -225,17 +241,31 @@ def load_coins_hlcvs_from_cache(config, exchange):
                 logging.info(f"{exchange} No BTC/USD prices in cache, using default array of 1.0s")
                 btc_usd_prices = np.ones(hlcvs.shape[0], dtype=np.float64)
         results_path = oj(config["backtest"]["base_dir"], exchange, "")
-        return cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices
+        return cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps
     return None
 
 
-def save_coins_hlcvs_to_cache(config, coins, hlcvs, exchange, mss, btc_usd_prices):
+def save_coins_hlcvs_to_cache(
+    config,
+    coins,
+    hlcvs,
+    exchange,
+    mss,
+    btc_usd_prices,
+    timestamps=None,
+):
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
     cache_dir.mkdir(parents=True, exist_ok=True)
-    if all(
-        [os.path.exists(cache_dir / x) for x in ["coins.json", "hlcvs.npy", "btc_usd_prices.npy"]]
-    ):
+    is_compressed = config["backtest"]["compress_cache"]
+    expected_files = [
+        "coins.json",
+        "hlcvs.npy.gz" if is_compressed else "hlcvs.npy",
+        "btc_usd_prices.npy.gz" if is_compressed else "btc_usd_prices.npy",
+    ]
+    if timestamps is not None:
+        expected_files.append("timestamps.npy.gz" if is_compressed else "timestamps.npy")
+    if all((cache_dir / fname).exists() for fname in expected_files):
         return
     logging.info(f"Dumping cache...")
     json.dump(coins, open(cache_dir / "coins.json", "w"))
@@ -247,6 +277,11 @@ def save_coins_hlcvs_to_cache(config, coins, hlcvs, exchange, mss, btc_usd_price
         logging.info(f"Attempting to save hlcvs data to cache {fpath}...")
         with gzip.open(fpath, "wb", compresslevel=1) as f:
             np.save(f, hlcvs)
+        if timestamps is not None:
+            ts_fpath = cache_dir / "timestamps.npy.gz"
+            logging.info(f"Attempting to save timestamps to cache {ts_fpath}...")
+            with gzip.open(ts_fpath, "wb", compresslevel=1) as f:
+                np.save(f, timestamps)
         btc_fpath = cache_dir / "btc_usd_prices.npy.gz"
         logging.info(f"Attempting to save BTC/USD prices to cache {btc_fpath}...")
         with gzip.open(btc_fpath, "wb", compresslevel=1) as f:
@@ -262,6 +297,10 @@ def save_coins_hlcvs_to_cache(config, coins, hlcvs, exchange, mss, btc_usd_price
         fpath = cache_dir / "hlcvs.npy"
         logging.info(f"Attempting to save hlcvs data to cache {fpath}...")
         np.save(fpath, hlcvs)
+        if timestamps is not None:
+            ts_fpath = cache_dir / "timestamps.npy"
+            logging.info(f"Attempting to save timestamps to cache {ts_fpath}...")
+            np.save(ts_fpath, timestamps)
         btc_fpath = cache_dir / "btc_usd_prices.npy"
         logging.info(f"Attempting to save BTC/USD prices to cache {btc_fpath}...")
         np.save(btc_fpath, btc_usd_prices)
@@ -282,10 +321,10 @@ async def prepare_hlcvs_mss(config, exchange):
         result = load_coins_hlcvs_from_cache(config, exchange)
         if result:
             logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
-            cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices = result
+            cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = result
             logging.info(f"Successfully loaded hlcvs data from cache")
-            # No timestamps in cache; assume first timestamp at 0 for now
-            return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, None
+            # Pass through cached timestamps if they were stored; fall back to None otherwise
+            return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps
     except Exception as e:
         logging.info(f"Unable to load hlcvs data from cache: {e}. Fetching...")
     if exchange == "combined":
@@ -295,7 +334,15 @@ async def prepare_hlcvs_mss(config, exchange):
     coins = sorted(mss)
     logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")
     try:
-        cache_dir = save_coins_hlcvs_to_cache(config, coins, hlcvs, exchange, mss, btc_usd_prices)
+        cache_dir = save_coins_hlcvs_to_cache(
+            config,
+            coins,
+            hlcvs,
+            exchange,
+            mss,
+            btc_usd_prices,
+            timestamps,
+        )
     except Exception as e:
         logging.error(f"Failed to save hlcvs to cache: {e}")
         traceback.print_exc()
@@ -375,7 +422,6 @@ def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timest
     sts = utc_ms()
 
     # Inject first timestamp (ms) into backtest params; default to 0 if unknown
-    print('debug run_backtest timestamps backtest.py', timestamps if timestamps else 'timestamps is None')
     try:
         first_ts_ms = int(timestamps[0]) if (timestamps is not None and len(timestamps) > 0) else 0
     except Exception:
@@ -387,7 +433,6 @@ def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timest
     with create_shared_memory_file(hlcvs) as shared_memory_file, create_shared_memory_file(
         btc_usd_prices
     ) as btc_usd_shared_memory_file:
-        print('debug run_backtest backtest.py', backtest_params)
         fills, equities_usd, equities_btc, analysis_usd, analysis_btc = pbr.run_backtest(
             shared_memory_file,
             hlcvs.shape,
@@ -540,7 +585,6 @@ async def main():
             logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
         config["backtest"]["coins"][exchange] = coins
         config["backtest"]["cache_dir"][exchange] = str(cache_dir)
-        print('combined true', timestamps if timestamps else 'timestamps is none')
 
         fills, equities, equities_btc, analysis = run_backtest(
             hlcvs, mss, config, exchange, btc_usd_prices, timestamps
@@ -557,7 +601,7 @@ async def main():
             exchange,
         )
     else:
-        print('combined false')
+        print("combined false")
         configs = {exchange: deepcopy(config) for exchange in config["backtest"]["exchanges"]}
         tasks = {}
         for exchange in config["backtest"]["exchanges"]:
