@@ -123,7 +123,12 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         coins = {"default"}
 
     max_minutes = 0.0
-    minute_fields = ["ema_span_0", "ema_span_1", "filter_volume_ema_span", "filter_log_range_ema_span"]
+    minute_fields = [
+        "ema_span_0",
+        "ema_span_1",
+        "filter_volume_ema_span",
+        "filter_log_range_ema_span",
+    ]
 
     for coin in coins:
         overrides = coin_overrides.get(coin, {}).get("bot", {})
