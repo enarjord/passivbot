@@ -332,22 +332,17 @@ impl<'a> Backtest<'a> {
             }
         }
 
-        println!("timestamp {:?}", self.first_timestamp_ms);
         let warmup_bars = self.warmup_bars.max(1);
         for k in 1..(n_timesteps - 1) {
             self.check_for_fills(k);
             self.update_emas(k);
             self.update_rounded_balance(k);
             self.update_trailing_prices(k);
-            if k < warmup_bars {
-                continue;
+            if k > warmup_bars {
+                self.update_n_positions_and_wallet_exposure_limits(k);
+                self.update_open_orders_all(k);
             }
-            self.update_n_positions_and_wallet_exposure_limits(k);
-            self.update_open_orders_all(k);
             self.update_equities(k);
-            if k % 100000 == 0 {
-                println!("debug {:?} {:?}", self.last_hour_boundary_ms, self.emas);
-            }
         }
         (self.fills.clone(), self.equities.clone())
     }
