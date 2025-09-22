@@ -822,6 +822,53 @@ def add_extra_options(parser):
         default=None,
         help="Start with given live configs. Single json file or dir with multiple json files",
     )
+    parser.add_argument(
+        "-ft",
+        "--fine_tune_params",
+        type=str,
+        default="",
+        dest="fine_tune_params",
+        help=(
+            "Comma-separated optimize bounds keys to tune; other parameters are fixed to their current config values"
+        ),
+    )
+
+
+def apply_fine_tune_bounds(config: dict, fine_tune_params: list[str]) -> None:
+    if not fine_tune_params:
+        return
+
+    bounds = config.get("optimize", {}).get("bounds", {})
+    bot_cfg = config.get("bot", {})
+    fine_tune_set = set(fine_tune_params)
+
+    for key in list(bounds.keys()):
+        if key in fine_tune_set:
+            continue
+        try:
+            pside, param = key.split("_", 1)
+        except ValueError:
+            logging.warning(f"fine-tune bounds: unable to parse key '{key}', skipping")
+            continue
+        side_cfg = bot_cfg.get(pside)
+        if not isinstance(side_cfg, dict) or param not in side_cfg:
+            logging.warning(
+                f"fine-tune bounds: missing bot value for '{key}', leaving bounds unchanged"
+            )
+            continue
+        value = side_cfg[param]
+        try:
+            value_float = float(value)
+            bounds[key] = [value_float, value_float]
+        except (TypeError, ValueError):
+            bounds[key] = [value, value]
+
+    missing = [key for key in fine_tune_set if key not in bounds]
+    if missing:
+        logging.warning(
+            "fine-tune bounds: requested keys not found in optimize bounds: %s",
+            ",".join(sorted(missing)),
+        )
 
 
 def extract_configs(path):
@@ -904,6 +951,17 @@ async def main():
         config = load_config(args.config_path, verbose=True)
     update_config_with_args(config, args)
     config = format_config(config, verbose=True)
+    fine_tune_params = (
+        [p.strip() for p in (args.fine_tune_params or "").split(",") if p.strip()]
+        if getattr(args, "fine_tune_params", "")
+        else []
+    )
+    apply_fine_tune_bounds(config, fine_tune_params)
+    if fine_tune_params:
+        logging.info(
+            "Fine-tuning mode active for %s",
+            ", ".join(sorted(fine_tune_params)),
+        )
     await format_approved_ignored_coins(config, config["backtest"]["exchanges"])
     try:
         # Prepare data for each exchange
