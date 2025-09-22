@@ -34,6 +34,7 @@ import asyncio
 import calendar
 import json
 import logging
+import math
 import os
 import time
 import zlib
@@ -1643,14 +1644,15 @@ class CandlestickManager:
 
     # ----- EMA helpers -----
 
-    def _ema(self, values: np.ndarray, span: int) -> float:
+    def _ema(self, values: np.ndarray, span: float) -> float:
+        span = float(span)
         alpha = 2.0 / (span + 1.0)
         ema = float(values[0])
         for v in values[1:]:
             ema = alpha * float(v) + (1.0 - alpha) * ema
         return ema
 
-    def _ema_series(self, values: np.ndarray, span: int) -> np.ndarray:
+    def _ema_series(self, values: np.ndarray, span: float) -> np.ndarray:
         """Return EMA series for `values` using standard recursive definition.
 
         y[0] = x[0]; y[t] = α*x[t] + (1-α)*y[t-1]
@@ -1659,6 +1661,7 @@ class CandlestickManager:
         n = int(values.shape[0])
         if n == 0:
             return np.empty((0,), dtype=np.float64)
+        span = float(span)
         alpha = 2.0 / (span + 1.0)
         one_minus = 1.0 - alpha
         out = np.empty((n,), dtype=np.float64)
@@ -1668,19 +1671,20 @@ class CandlestickManager:
         return out
 
     async def _latest_finalized_range(
-        self, span: int, *, period_ms: int = ONE_MIN_MS
+        self, span: float, *, period_ms: int = ONE_MIN_MS
     ) -> Tuple[int, int]:
+        span_candles = max(1, int(math.ceil(float(span))))
         now = _utc_now_ms()
         # Align to timeframe buckets and exclude current in-progress bucket
         end_floor = (int(now) // int(period_ms)) * int(period_ms)
         end_ts = int(end_floor - period_ms)
-        start_ts = int(end_ts - period_ms * (span - 1))
+        start_ts = int(end_ts - period_ms * (span_candles - 1))
         return start_ts, end_ts
 
     async def get_latest_ema_close(
         self,
         symbol: str,
-        span: int,
+        span: float,
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
@@ -1696,7 +1700,7 @@ class CandlestickManager:
         # EMA result cache: reuse if end_ts unchanged and within TTL
         now = _utc_now_ms()
         tf_key = str(period_ms)
-        key = ("close", int(span), tf_key)
+        key = ("close", float(span), tf_key)
         cache = self._ema_cache.setdefault(symbol, {})
         if max_age_ms is not None and max_age_ms > 0 and key in cache:
             val, cached_end_ts, computed_at = cache[key]
@@ -1803,7 +1807,7 @@ class CandlestickManager:
 
     async def get_latest_ema_log_range_many(
         self,
-        items: List[Tuple[str, int]],
+        items: List[Tuple[str, float]],
         *,
         max_age_ms: Optional[int] = 600_000,
         timeframe: Optional[str] = None,
@@ -1818,7 +1822,7 @@ class CandlestickManager:
         if not items:
             return out
 
-        async def one(sym: str, span: int) -> float:
+        async def one(sym: str, span: float) -> float:
             try:
                 val = await self.get_latest_ema_log_range(
                     sym,
@@ -1839,7 +1843,7 @@ class CandlestickManager:
     async def get_latest_ema_volume(
         self,
         symbol: str,
-        span: int,
+        span: float,
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
@@ -1858,7 +1862,7 @@ class CandlestickManager:
     async def get_latest_ema_quote_volume(
         self,
         symbol: str,
-        span: int,
+        span: float,
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
@@ -1891,7 +1895,7 @@ class CandlestickManager:
     async def _get_latest_ema_generic(
         self,
         symbol: str,
-        span: int,
+        span: float,
         max_age_ms: Optional[int],
         timeframe: Optional[str],
         *,
@@ -1909,7 +1913,7 @@ class CandlestickManager:
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         now = _utc_now_ms()
         tf_key = str(period_ms)
-        key = (metric_key, int(span), tf_key)
+        key = (metric_key, float(span), tf_key)
         cache = self._ema_cache.setdefault(symbol, {})
         if max_age_ms is not None and max_age_ms > 0 and key in cache:
             val, cached_end_ts, computed_at = cache[key]
@@ -1928,7 +1932,7 @@ class CandlestickManager:
     async def get_latest_ema_log_range(
         self,
         symbol: str,
-        span: int,
+        span: float,
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
@@ -1952,7 +1956,7 @@ class CandlestickManager:
     async def get_ema_close_series(
         self,
         symbol: str,
-        span: int,
+        span: float,
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
@@ -1977,7 +1981,7 @@ class CandlestickManager:
     async def get_ema_volume_series(
         self,
         symbol: str,
-        span: int,
+        span: float,
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
@@ -2002,7 +2006,7 @@ class CandlestickManager:
     async def get_ema_log_range_series(
         self,
         symbol: str,
-        span: int,
+        span: float,
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
