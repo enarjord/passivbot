@@ -1662,13 +1662,11 @@ class Passivbot:
                     to_update_emas[pside].add(symbol)
                     to_update_last_prices.add(symbol)
                     if self.bp(pside, "entry_grid_spacing_log_weight", symbol) != 0.0:
-                        grid_log_span_hours = self.bp(
-                            pside, "entry_grid_spacing_log_span_hours", symbol
+                        grid_log_span_hours = float(
+                            self.bp(pside, "entry_grid_spacing_log_span_hours", symbol)
                         )
                         if grid_log_span_hours > 0.0:
-                            to_update_grid_log_ranges[pside][symbol] = max(
-                                1, int(round(grid_log_span_hours))
-                            )
+                            to_update_grid_log_ranges[pside][symbol] = max(1e-6, grid_log_span_hours)
 
         def build_ema_items(symbols_set: set[str], pside: str) -> list[tuple[str, float, float]]:
             return [
@@ -1680,7 +1678,7 @@ class Passivbot:
                 for sym in symbols_set
             ]
 
-        def build_grid_log_range_items(pside: str) -> list[tuple[str, int]]:
+        def build_grid_log_range_items(pside: str) -> list[tuple[str, float]]:
             return list(to_update_grid_log_ranges[pside].items())
 
         entry_grid_log_ranges: dict[str, dict[str, float]] = {"long": {}, "short": {}}
