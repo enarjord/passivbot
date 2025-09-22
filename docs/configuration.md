@@ -48,7 +48,7 @@ Passivbot can be configured to create a grid of entry orders, with prices and qu
     - `next_reentry_price_long = pos_price * (1 - entry_grid_spacing_pct * multiplier)`
     - `next_reentry_price_short = pos_price * (1 + entry_grid_spacing_pct * multiplier)`
   - `multiplier = 1 + (wallet_exposure / wallet_exposure_limit) * entry_grid_spacing_we_weight + log_component`
-  - Setting `entry_grid_spacing_we_weight` > 0 tightens spacing as the position approaches the wallet exposure limit; negative values compress spacing when exposure is small.
+  - Setting `entry_grid_spacing_we_weight` > 0 widens spacing as the position approaches the wallet exposure limit; negative values tighten spacing when exposure is small.
 - **entry_grid_spacing_log_weight**, **entry_grid_spacing_log_span_hours**:
   - The `log_component` in the multiplier above is derived from the EMA of the per-candle log range `ln(high/low)`.
   - `entry_grid_spacing_log_weight` controls how strongly the recent log range widens or narrows spacing. A value of `0` disables the log-based adjustment.
