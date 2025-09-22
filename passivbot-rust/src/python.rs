@@ -189,6 +189,8 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         coins: extract_value(dict, "coins").unwrap_or_default(),
         // First timestamp (ms); default to 0 if not provided
         first_timestamp_ms: extract_value(dict, "first_timestamp_ms").unwrap_or(0u64),
+        requested_start_timestamp_ms: extract_value(dict, "requested_start_timestamp_ms")
+            .unwrap_or(0u64),
     })
 }
 

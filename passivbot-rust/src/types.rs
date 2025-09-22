@@ -31,6 +31,7 @@ pub struct BacktestParams {
     pub maker_fee: f64,
     pub coins: Vec<String>,
     pub first_timestamp_ms: u64,
+    pub requested_start_timestamp_ms: u64,
 }
 
 #[derive(Default, Debug, Clone, Copy)]

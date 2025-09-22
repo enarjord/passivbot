@@ -450,11 +450,52 @@ class Evaluator:
                 config, self.msss[exchange], exchange
             )
             first_ts_list = self.timestamps.get(exchange)
-            try:
-                first_ts_ms = int(first_ts_list[0]) if first_ts_list else 0
-            except Exception:
-                first_ts_ms = 0
+            first_ts_ms = 0
+            if first_ts_list is not None and len(first_ts_list) > 0:
+                try:
+                    first_ts_ms = int(first_ts_list[0])
+                except Exception:
+                    logging.warning(
+                        "Evaluator: unable to parse first timestamp for %s from timestamps array",
+                        exchange,
+                    )
+                    first_ts_ms = 0
+            exchange_mss = self.msss.get(exchange, {}) if isinstance(self.msss, dict) else {}
+            meta = exchange_mss.get("__meta__", {}) if isinstance(exchange_mss, dict) else {}
+            if first_ts_ms == 0:
+                candidate_ts = (
+                    meta.get("requested_start_ts")
+                    or meta.get("effective_start_ts")
+                    or config.get("backtest", {}).get("start_date")
+                )
+                if isinstance(candidate_ts, (int, float)):
+                    first_ts_ms = int(candidate_ts)
+                elif isinstance(candidate_ts, str):
+                    try:
+                        first_ts_ms = int(date_to_ts(candidate_ts))
+                    except Exception:
+                        first_ts_ms = 0
+                if first_ts_ms:
+                    logging.info(
+                        "Evaluator: using fallback first timestamp %s for %s",
+                        first_ts_ms,
+                        exchange,
+                    )
+                else:
+                    logging.warning(
+                        "Evaluator: falling back to 0 first_timestamp_ms for %s; timestamps unavailable",
+                        exchange,
+                    )
             self.backtest_params[exchange]["first_timestamp_ms"] = first_ts_ms
+            candidate_start = meta.get("requested_start_ts") or config["backtest"].get("start_date")
+            try:
+                if isinstance(candidate_start, str):
+                    requested_start_ts = int(date_to_ts(candidate_start))
+                else:
+                    requested_start_ts = int(candidate_start or 0)
+            except Exception:
+                requested_start_ts = int(date_to_ts(config["backtest"]["start_date"]))
+            self.backtest_params[exchange]["requested_start_timestamp_ms"] = requested_start_ts
             logging.info(f"mmap_context entered successfully for {exchange}.")
 
         self.config = config

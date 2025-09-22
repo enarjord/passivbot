@@ -333,12 +333,17 @@ impl<'a> Backtest<'a> {
         }
 
         let warmup_bars = self.warmup_bars.max(1);
+        let guard_timestamp_ms = self
+            .backtest_params
+            .requested_start_timestamp_ms
+            .max(self.first_timestamp_ms);
         for k in 1..(n_timesteps - 1) {
             self.check_for_fills(k);
             self.update_emas(k);
             self.update_rounded_balance(k);
             self.update_trailing_prices(k);
-            if k > warmup_bars {
+            let current_ts = self.first_timestamp_ms + (k as u64) * 60_000u64;
+            if k > warmup_bars && current_ts >= guard_timestamp_ms {
                 self.update_n_positions_and_wallet_exposure_limits(k);
                 self.update_open_orders_all(k);
             }

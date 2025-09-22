@@ -24,6 +24,7 @@ from utils import (
     load_markets,
     format_end_date,
     format_approved_ignored_coins,
+    date_to_ts,
 )
 from pure_funcs import (
     ts_to_date,
@@ -385,6 +386,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "maker_fee": mss[coins[0]]["maker"],
             "coins": coins,
             "use_btc_collateral": config["backtest"].get("use_btc_collateral", False),
+            "requested_start_timestamp_ms": 0,
         }
     return bot_params_list, exchange_params, backtest_params
 
@@ -430,6 +432,16 @@ def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timest
         first_ts_ms = 0
     backtest_params = dict(backtest_params)
     backtest_params["first_timestamp_ms"] = first_ts_ms
+    meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
+    candidate_start = meta.get("requested_start_ts", config["backtest"].get("start_date"))
+    try:
+        if isinstance(candidate_start, str):
+            requested_start_ts = int(date_to_ts(candidate_start))
+        else:
+            requested_start_ts = int(candidate_start)
+    except Exception:
+        requested_start_ts = int(date_to_ts(config["backtest"]["start_date"]))
+    backtest_params["requested_start_timestamp_ms"] = requested_start_ts
 
     # Use context managers for both HLCV and BTC/USD shared memory files
     with create_shared_memory_file(hlcvs) as shared_memory_file, create_shared_memory_file(
