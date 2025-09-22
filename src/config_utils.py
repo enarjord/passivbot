@@ -920,6 +920,8 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             elif type_ == bool:
                 type_ = str2bool
                 appendix = "[y/n]"
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                type_ = float
             if "combine_ohlcvs" in full_name:
                 appendix = (
                     "If true, combine ohlcvs data from all exchanges into single numpy array, otherwise backtest each exchange separately. "
@@ -943,11 +945,23 @@ def recursive_config_update(config, key, value, path=None):
     if path is None:
         path = []
 
+    def _coerce_value(original, new_value):
+        if isinstance(original, bool):
+            return bool(new_value)
+        if isinstance(original, int) and not isinstance(original, bool):
+            if isinstance(new_value, (int, float)):
+                return int(round(new_value))
+        if isinstance(original, float):
+            if isinstance(new_value, (int, float)):
+                return float(new_value)
+        return new_value
+
     if key in config:
-        if value != config[key]:
+        coerced_value = _coerce_value(config[key], value)
+        if coerced_value != config[key]:
             full_path = ".".join(path + [key])
-            print(f"changed {full_path} {config[key]} -> {value}")
-            config[key] = value
+            print(f"changed {full_path} {config[key]} -> {coerced_value}")
+            config[key] = coerced_value
         return True
 
     key_split = key.split(".")
@@ -1000,9 +1014,9 @@ def get_template_live_config(passivbot_mode="v7"):
                 "entry_trailing_grid_ratio": 0.5,
                 "entry_trailing_retracement_pct": 0.01,
                 "entry_trailing_threshold_pct": 0.05,
-                "filter_log_range_ema_span": 60,
+                "filter_log_range_ema_span": 60.0,
                 "filter_volume_drop_pct": 0.95,
-                "filter_volume_ema_span": 60,
+                "filter_volume_ema_span": 60.0,
                 "n_positions": 10.0,
                 "total_wallet_exposure_limit": 1.7,
                 "unstuck_close_pct": 0.001,
@@ -1032,9 +1046,9 @@ def get_template_live_config(passivbot_mode="v7"):
                 "entry_trailing_grid_ratio": 0.5,
                 "entry_trailing_retracement_pct": 0.01,
                 "entry_trailing_threshold_pct": 0.05,
-                "filter_log_range_ema_span": 60,
+                "filter_log_range_ema_span": 60.0,
                 "filter_volume_drop_pct": 0.95,
-                "filter_volume_ema_span": 60,
+                "filter_volume_ema_span": 60.0,
                 "n_positions": 10.0,
                 "total_wallet_exposure_limit": 1.7,
                 "unstuck_close_pct": 0.001,
