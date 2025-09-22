@@ -923,8 +923,8 @@ async def main():
         config["backtest"]["coins"] = {}
         if config["backtest"]["combine_ohlcvs"]:
             exchange = "combined"
-            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = await prepare_hlcvs_mss(
-                config, exchange
+            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = (
+                await prepare_hlcvs_mss(config, exchange)
             )
             timestamps_dict[exchange] = _timestamps
             exchange_preference = defaultdict(list)
@@ -960,7 +960,9 @@ async def main():
             for exchange in config["backtest"]["exchanges"]:
                 tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
             for exchange in config["backtest"]["exchanges"]:
-                coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = await tasks[exchange]
+                coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = await tasks[
+                    exchange
+                ]
                 timestamps_dict[exchange] = _timestamps
                 config["backtest"]["coins"][exchange] = coins
                 hlcvs_dict[exchange] = hlcvs

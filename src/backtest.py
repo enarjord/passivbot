@@ -35,6 +35,7 @@ from copy import deepcopy
 from downloader import (
     prepare_hlcvs,
     prepare_hlcvs_combined,
+    compute_backtest_warmup_minutes,
 )
 from pathlib import Path
 from plotting import plot_fills_forager
@@ -180,6 +181,7 @@ def get_cache_hash(config, exchange):
         "exchange": config["backtest"]["exchanges"] if exchange == "combined" else exchange,
         "minimum_coin_age_days": config["live"]["minimum_coin_age_days"],
         "gap_tolerance_ohlcvs_minutes": config["backtest"]["gap_tolerance_ohlcvs_minutes"],
+        "warmup_minutes": compute_backtest_warmup_minutes(config),
         "config_has_max_memory_candles_per_symbol": "max_memory_candles_per_symbol"
         in config[
             "live"
@@ -331,7 +333,7 @@ async def prepare_hlcvs_mss(config, exchange):
         mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs_combined(config)
     else:
         mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(config, exchange)
-    coins = sorted(mss)
+    coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
     logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")
     try:
         cache_dir = save_coins_hlcvs_to_cache(

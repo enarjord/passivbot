@@ -5,6 +5,7 @@ import gzip
 import json
 import logging
 import inspect
+import math
 import os
 import shutil
 import sys
@@ -79,6 +80,86 @@ def is_valid_date(date):
 
 def get_function_name():
     return inspect.currentframe().f_back.f_code.co_name
+
+
+def compute_backtest_warmup_minutes(config: dict) -> int:
+    """Mirror Rust warmup span calculation (see calc_warmup_bars)."""
+
+    def _to_float(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _merge_params(base: dict, override: dict) -> dict:
+        merged = dict(base or {})
+        merged.update(override or {})
+        return merged
+
+    def _extract_bound_max(bounds: dict, key: str) -> float:
+        if key not in bounds:
+            return 0.0
+        entry = bounds[key]
+        candidates = []
+        if isinstance(entry, (list, tuple)):
+            candidates = [entry]
+        else:
+            candidates = [[entry]]
+        max_val = 0.0
+        for candidate in candidates:
+            for val in candidate:
+                max_val = max(max_val, _to_float(val))
+        return max_val
+
+    bot_cfg = config.get("bot", {})
+    base_long = bot_cfg.get("long", {})
+    base_short = bot_cfg.get("short", {})
+    coin_overrides = config.get("coin_overrides", {})
+
+    approved = config.get("live", {}).get("approved_coins", {})
+    coins = set(approved.get("long", [])) | set(approved.get("short", []))
+    coins |= set(coin_overrides.keys())
+    if not coins:
+        coins = {"default"}
+
+    max_minutes = 0.0
+    minute_fields = ["ema_span_0", "ema_span_1", "filter_volume_ema_span", "filter_log_range_ema_span"]
+
+    for coin in coins:
+        overrides = coin_overrides.get(coin, {}).get("bot", {})
+        long_params = _merge_params(base_long, overrides.get("long", {}))
+        short_params = _merge_params(base_short, overrides.get("short", {}))
+
+        for params in (long_params, short_params):
+            for field in minute_fields:
+                max_minutes = max(max_minutes, _to_float(params.get(field)))
+            log_span_minutes = _to_float(params.get("entry_grid_spacing_log_span_hours")) * 60.0
+            max_minutes = max(max_minutes, log_span_minutes)
+
+    bounds = config.get("optimize", {}).get("bounds", {})
+    bound_keys_minutes = [
+        "long_ema_span_0",
+        "long_ema_span_1",
+        "long_filter_volume_ema_span",
+        "long_filter_log_range_ema_span",
+        "short_ema_span_0",
+        "short_ema_span_1",
+        "short_filter_volume_ema_span",
+        "short_filter_log_range_ema_span",
+    ]
+    bound_keys_hours = [
+        "long_entry_grid_spacing_log_span_hours",
+        "short_entry_grid_spacing_log_span_hours",
+    ]
+
+    for key in bound_keys_minutes:
+        max_minutes = max(max_minutes, _extract_bound_max(bounds, key))
+    for key in bound_keys_hours:
+        max_minutes = max(max_minutes, _extract_bound_max(bounds, key) * 60.0)
+
+    if not math.isfinite(max_minutes):
+        return 0
+    return int(math.ceil(max_minutes)) if max_minutes > 0.0 else 0
 
 
 def dump_ohlcv_data(data, filepath):
@@ -1124,13 +1205,28 @@ async def prepare_hlcvs(config: dict, exchange: str):
         | set([symbol_to_coin(c) for c in config["live"]["approved_coins"]["short"]])
     )
     exchange = normalize_exchange_name(exchange)
-    start_date = config["backtest"]["start_date"]
+    requested_start_date = config["backtest"]["start_date"]
+    requested_start_ts = int(date_to_ts(requested_start_date))
     end_date = format_end_date(config["backtest"]["end_date"])
+    end_ts = int(date_to_ts(end_date))
 
-    # Initialize OHLCVManager for the exchange
+    warmup_minutes = compute_backtest_warmup_minutes(config)
+    minute_ms = 60_000
+    warmup_ms = warmup_minutes * minute_ms
+    effective_start_ts = max(0, requested_start_ts - warmup_ms)
+    effective_start_ts = (effective_start_ts // minute_ms) * minute_ms
+    effective_start_date = ts_to_date(effective_start_ts)
+
+    if warmup_minutes > 0:
+        logging.info(
+            f"{exchange} applying warmup: {warmup_minutes} minutes -> fetch start {effective_start_date}, "
+            f"requested start {requested_start_date}"
+        )
+
+    # Initialize OHLCVManager for the exchange using the extended warmup range
     om = OHLCVManager(
         exchange,
-        start_date,
+        effective_start_date,
         end_date,
         gap_tolerance_ohlcvs_minutes=config["backtest"]["gap_tolerance_ohlcvs_minutes"],
     )
@@ -1138,7 +1234,13 @@ async def prepare_hlcvs(config: dict, exchange: str):
     try:
         # Prepare HLCV data
         mss, timestamps, hlcvs = await prepare_hlcvs_internal(
-            config, coins, exchange, start_date, end_date, om
+            config,
+            coins,
+            exchange,
+            effective_start_ts,
+            requested_start_ts,
+            end_ts,
+            om,
         )
 
         om.update_date_range(timestamps[0], timestamps[-1])
@@ -1150,14 +1252,31 @@ async def prepare_hlcvs(config: dict, exchange: str):
         btc_df = btc_df.set_index("timestamp").reindex(timestamps, method="ffill").reset_index()
         btc_usd_prices = btc_df["close"].values  # Extract 1D array of closing prices
 
+        warmup_provided = max(0, int(max(0, requested_start_ts - int(timestamps[0])) // minute_ms))
+        mss["__meta__"] = {
+            "requested_start_ts": int(requested_start_ts),
+            "requested_start_date": ts_to_date(requested_start_ts),
+            "effective_start_ts": int(timestamps[0]),
+            "effective_start_date": ts_to_date(int(timestamps[0])),
+            "warmup_minutes_requested": int(warmup_minutes),
+            "warmup_minutes_provided": int(warmup_provided),
+        }
+
         return mss, timestamps, hlcvs, btc_usd_prices
     finally:
         if om.cc:
             await om.cc.close()
 
 
-async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, om):
-    end_ts = date_to_ts(end_date)
+async def prepare_hlcvs_internal(
+    config,
+    coins,
+    exchange,
+    effective_start_ts,
+    requested_start_ts,
+    end_ts,
+    om,
+):
     minimum_coin_age_days = config["live"]["minimum_coin_age_days"]
     interval_ms = 60000
 
@@ -1178,7 +1297,7 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
 
     # First pass: Download and save data, collect metadata
     for coin in coins:
-        adjusted_start_ts = date_to_ts(start_date)
+        adjusted_start_ts = effective_start_ts
         if not om.has_coin(coin):
             logging.info(f"{exchange} coin {coin} missing, skipping")
             continue
@@ -1209,7 +1328,7 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
             new_adjusted_start_ts = max(first_timestamps_unified[coin] + min_coin_age_ms, first_ts)
             if new_adjusted_start_ts > adjusted_start_ts:
                 logging.info(
-                    f"{exchange} Coin {coin}: Adjusting start date from {start_date} "
+                    f"{exchange} Coin {coin}: Adjusting start date from {ts_to_date(adjusted_start_ts)} "
                     f"to {ts_to_date(new_adjusted_start_ts)}"
                 )
                 adjusted_start_ts = new_adjusted_start_ts
@@ -1294,25 +1413,50 @@ async def prepare_hlcvs_internal(config, coins, exchange, start_date, end_date, 
 
 async def prepare_hlcvs_combined(config):
     exchanges_to_consider = [normalize_exchange_name(e) for e in config["backtest"]["exchanges"]]
+
+    requested_start_date = config["backtest"]["start_date"]
+    requested_start_ts = int(date_to_ts(requested_start_date))
+    end_date = format_end_date(config["backtest"]["end_date"])
+    end_ts = int(date_to_ts(end_date))
+
+    warmup_minutes = compute_backtest_warmup_minutes(config)
+    minute_ms = 60_000
+    warmup_ms = warmup_minutes * minute_ms
+    effective_start_ts = max(0, requested_start_ts - warmup_ms)
+    effective_start_ts = (effective_start_ts // minute_ms) * minute_ms
+    effective_start_date = ts_to_date(effective_start_ts)
+
+    if warmup_minutes > 0:
+        logging.info(
+            f"combined applying warmup: {warmup_minutes} minutes -> fetch start {effective_start_date}, "
+            f"requested start {requested_start_date}"
+        )
+
     om_dict = {}
     for ex in exchanges_to_consider:
         om_dict[ex] = OHLCVManager(
             ex,
-            config["backtest"]["start_date"],
-            config["backtest"]["end_date"],
+            effective_start_date,
+            end_date,
             gap_tolerance_ohlcvs_minutes=config["backtest"]["gap_tolerance_ohlcvs_minutes"],
         )
     btc_om = None
 
     try:
-        mss, timestamps, unified_array = await _prepare_hlcvs_combined_impl(config, om_dict)
+        mss, timestamps, unified_array = await _prepare_hlcvs_combined_impl(
+            config,
+            om_dict,
+            effective_start_ts,
+            requested_start_ts,
+            end_ts,
+        )
 
         # Always fetch BTC/USD prices
         btc_exchange = exchanges_to_consider[0] if len(exchanges_to_consider) == 1 else "binanceusdm"
         btc_om = OHLCVManager(
             btc_exchange,
-            config["backtest"]["start_date"],
-            config["backtest"]["end_date"],
+            effective_start_date,
+            end_date,
             gap_tolerance_ohlcvs_minutes=config["backtest"]["gap_tolerance_ohlcvs_minutes"],
         )
         btc_df = await btc_om.get_ohlcvs("BTC")
@@ -1323,6 +1467,16 @@ async def prepare_hlcvs_combined(config):
         btc_df = btc_df.set_index("timestamp").reindex(timestamps, method="ffill").reset_index()
         btc_usd_prices = btc_df["close"].values
 
+        warmup_provided = max(0, int(max(0, requested_start_ts - int(timestamps[0])) // minute_ms))
+        mss["__meta__"] = {
+            "requested_start_ts": int(requested_start_ts),
+            "requested_start_date": ts_to_date(requested_start_ts),
+            "effective_start_ts": int(timestamps[0]),
+            "effective_start_date": ts_to_date(int(timestamps[0])),
+            "warmup_minutes_requested": int(warmup_minutes),
+            "warmup_minutes_provided": int(warmup_provided),
+        }
+
         return mss, timestamps, unified_array, btc_usd_prices
     finally:
         for om in om_dict.values():
@@ -1332,7 +1486,13 @@ async def prepare_hlcvs_combined(config):
             await btc_om.cc.close()
 
 
-async def _prepare_hlcvs_combined_impl(config, om_dict):
+async def _prepare_hlcvs_combined_impl(
+    config,
+    om_dict,
+    base_start_ts,
+    _requested_start_ts,
+    end_ts,
+):
     """
     Amalgamates data from different exchanges for each coin in config, then unifies them into a single
     numpy array with shape (n_timestamps, n_coins, 4). The final data per coin is chosen using:
@@ -1351,11 +1511,6 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
     # ---------------------------------------------------------------
     # 0) Define or load relevant info from config
     # ---------------------------------------------------------------
-    start_date = config["backtest"]["start_date"]
-    end_date = format_end_date(config["backtest"]["end_date"])
-    start_ts = date_to_ts(start_date)
-    end_ts = date_to_ts(end_date)
-
     # Pull out all coins from config:
     coins = sorted(
         set([symbol_to_coin(c) for c in config["live"]["approved_coins"]["long"]])
@@ -1401,7 +1556,7 @@ async def _prepare_hlcvs_combined_impl(config, om_dict):
             continue
 
         # The earliest time we can start from, given coin's first trade time plus coin age
-        effective_start_ts = max(start_ts, coin_fts + min_coin_age_ms)
+        effective_start_ts = max(base_start_ts, coin_fts + min_coin_age_ms)
         if effective_start_ts >= end_ts:
             # No coverage needed or possible
             continue
