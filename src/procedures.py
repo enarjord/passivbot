@@ -12,7 +12,7 @@ import argparse
 import re
 from collections import defaultdict
 from collections.abc import Sized
-from utils import coin_to_symbol, symbol_to_coin, make_get_filepath, load_markets
+from utils import coin_to_symbol, symbol_to_coin, make_get_filepath, load_markets, get_file_mod_ms
 import sys
 import passivbot_rust as pbr
 from typing import Union, Optional, Set, Any, List
@@ -60,7 +60,7 @@ def get_all_eligible_symbols(exchange="binance"):
     loaded_json = None
     try:
         loaded_json = json.load(open(filepath))
-        if utc_ms() - get_file_mod_utc(filepath) > 1000 * 60 * 60 * 24:
+        if utc_ms() - get_file_mod_ms(filepath) > 1000 * 60 * 60 * 24:
             print(f"Eligible_symbols cache more than 24h old. Fetching new.")
         else:
             return loaded_json
