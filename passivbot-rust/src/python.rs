@@ -113,7 +113,6 @@ pub fn run_backtest(
     };
 
     let backtest_params = backtest_params_from_dict(backtest_params_dict)?;
-    println!("debug backtest_params {:?}", backtest_params);
     let mut backtest = Backtest::new(
         &hlcvs_rust,
         &btc_usd_rust,
@@ -260,15 +259,8 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         entry_trailing_retracement_pct: extract_value(dict, "entry_trailing_retracement_pct")?,
         entry_trailing_grid_ratio: extract_value(dict, "entry_trailing_grid_ratio")?,
         entry_trailing_threshold_pct: extract_value(dict, "entry_trailing_threshold_pct")?,
-        filter_log_range_ema_span: {
-            let filter_log_range_ema_span_float: f64 =
-                extract_value(dict, "filter_log_range_ema_span")?;
-            filter_log_range_ema_span_float.round() as usize
-        },
-        filter_volume_ema_span: {
-            let filter_volume_ema_span_float: f64 = extract_value(dict, "filter_volume_ema_span")?;
-            filter_volume_ema_span_float.round() as usize
-        },
+        filter_log_range_ema_span: extract_value(dict, "filter_log_range_ema_span")?,
+        filter_volume_ema_span: extract_value(dict, "filter_volume_ema_span")?,
         filter_volume_drop_pct: extract_value(dict, "filter_volume_drop_pct")?,
         ema_span_0: extract_value(dict, "ema_span_0")?,
         ema_span_1: extract_value(dict, "ema_span_1")?,
