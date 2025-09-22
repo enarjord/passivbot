@@ -18,6 +18,22 @@ python3 src/optimize.py configs/template.json --start configs/starting_pool/
 
 Most config parameters can be modified via CLI. `python3 src/optimize.py -h` for more info.
 
+### Fine-Tuning Specific Parameters
+
+When you only want to adjust a handful of parameters and keep everything else fixed, use
+`--fine_tune_params` (short: `-ft`). Provide a comma-separated list of `optimize.bounds`
+keys to keep tunable; all other bounds are locked to their current config values before
+the run starts.
+
+```bash
+python3 src/optimize.py configs/template.json \
+  --fine_tune_params long_entry_grid_spacing_pct,long_entry_initial_qty_pct
+```
+
+Behind the scenes the optimizer sets every unlisted bound to `[value, value]`, so the GA
+can mutate only the parameters you specified. Bounds for the listed parameters remain as
+configured.
+
 ## Optimization Process
 
 - Uses NSGA-II genetic algorithm to evolve configurations
@@ -134,4 +150,3 @@ from opt_utils import load_results
 for config in load_results("optimize_results/.../all_results.bin"):
     # Work with config
 ```
-
