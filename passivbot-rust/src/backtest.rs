@@ -157,6 +157,8 @@ pub struct Backtest<'a> {
     n_coins: usize,
     ema_alphas: Vec<EmaAlphas>,
     emas: Vec<EMAs>,
+    coin_first_valid_idx: Vec<usize>,
+    coin_last_valid_idx: Vec<usize>,
     // Wall-clock timestamp (ms) of the first candle; assumes 1m spacing
     first_timestamp_ms: u64,
     // Latest computed hourly boundary (aligned to whole hours)
@@ -206,15 +208,41 @@ impl<'a> Backtest<'a> {
         balance.usd_total = backtest_params.starting_balance;
         balance.usd_total_rounded = balance.usd_total;
 
+        let n_timesteps = hlcvs.shape()[0];
         let n_coins = hlcvs.shape()[1];
+        let mut first_valid_idx = backtest_params.first_valid_indices.clone();
+        if first_valid_idx.len() != n_coins {
+            first_valid_idx = vec![0usize; n_coins];
+        }
+        let mut last_valid_idx = backtest_params.last_valid_indices.clone();
+        if last_valid_idx.len() != n_coins {
+            last_valid_idx = vec![n_timesteps.saturating_sub(1); n_coins];
+        }
+
         let initial_emas = (0..n_coins)
             .map(|i| {
-                let close_price = hlcvs[[0, i, CLOSE]];
+                let start_idx = first_valid_idx
+                    .get(i)
+                    .copied()
+                    .unwrap_or(0)
+                    .min(n_timesteps.saturating_sub(1));
+                let close_price = hlcvs[[start_idx, i, CLOSE]];
+                let base_close = if close_price.is_finite() {
+                    close_price
+                } else {
+                    0.0
+                };
+                let volume = hlcvs[[start_idx, i, VOLUME]];
+                let base_volume = if volume.is_finite() {
+                    volume.max(0.0)
+                } else {
+                    0.0
+                };
                 EMAs {
-                    long: [close_price; 3],
-                    short: [close_price; 3],
-                    vol_long: f64::max(0.0, hlcvs[[0, i, VOLUME]]),
-                    vol_short: f64::max(0.0, hlcvs[[0, i, VOLUME]]),
+                    long: [base_close; 3],
+                    short: [base_close; 3],
+                    vol_long: base_volume,
+                    vol_short: base_volume,
                     log_range_long: 0.0,
                     log_range_short: 0.0,
                     grid_log_range_long: 0.0,
@@ -276,6 +304,8 @@ impl<'a> Backtest<'a> {
             n_coins,
             ema_alphas,
             emas: initial_emas,
+            coin_first_valid_idx: first_valid_idx,
+            coin_last_valid_idx: last_valid_idx,
             positions: Positions::default(),
             first_timestamp_ms: backtest_params.first_timestamp_ms,
             last_hour_boundary_ms: (backtest_params.first_timestamp_ms / 3_600_000) * 3_600_000,
@@ -322,13 +352,14 @@ impl<'a> Backtest<'a> {
                 .insert(idx, TrailingPriceBundle::default());
         }
 
-        // --- find first & last valid candle for every coin (binary-search) ---
-        let (first_valid, last_valid) = find_valid_timestamp_bounds(&self.hlcvs);
+        // --- register first & last valid candle for every coin ---
         for idx in 0..self.n_coins {
-            self.first_valid_timestamps.insert(idx, first_valid[idx]);
-            if n_timesteps - last_valid[idx] > 1400 {
-                // add only if delisted more than one day before last timestamp
-                self.last_valid_timestamps.insert(idx, last_valid[idx]); // keep same name for callers
+            if let Some((start, end)) = self.coin_valid_range(idx) {
+                self.first_valid_timestamps.insert(idx, start);
+                if end.saturating_add(1400) < n_timesteps {
+                    // add only if delisted more than one day before last timestamp
+                    self.last_valid_timestamps.insert(idx, end);
+                }
             }
         }
 
@@ -430,6 +461,27 @@ impl<'a> Backtest<'a> {
         }
     }
 
+    #[inline(always)]
+    fn coin_valid_range(&self, idx: usize) -> Option<(usize, usize)> {
+        if idx >= self.coin_first_valid_idx.len() {
+            return None;
+        }
+        let start = self.coin_first_valid_idx[idx];
+        let end = self.coin_last_valid_idx[idx];
+        if start > end {
+            None
+        } else {
+            Some((start, end))
+        }
+    }
+
+    #[inline(always)]
+    fn coin_is_valid_at(&self, idx: usize, k: usize) -> bool {
+        self.coin_valid_range(idx)
+            .map(|(start, end)| k >= start && k <= end)
+            .unwrap_or(false)
+    }
+
     pub fn calc_preferred_coins(&mut self, pside: usize) -> Vec<usize> {
         let n_positions = match pside {
             LONG => self.effective_n_positions.long,
@@ -489,7 +541,10 @@ impl<'a> Backtest<'a> {
     }
 
     fn create_state_params(&self, k: usize, idx: usize, pside: usize) -> StateParams {
-        let close_price = self.hlcvs[[k, idx, CLOSE]];
+        let mut close_price = self.hlcvs[[k, idx, CLOSE]];
+        if !close_price.is_finite() {
+            close_price = 0.0;
+        }
         StateParams {
             balance: self.balance.usd_total_rounded,
             order_book: OrderBook {
@@ -551,7 +606,15 @@ impl<'a> Backtest<'a> {
         long_keys.sort();
         for idx in long_keys {
             let position = &self.positions.long[&idx];
+            if !self.coin_is_valid_at(idx, k) {
+                println!("equity skip long coin {} at k {} (invalid)", idx, k);
+                continue;
+            }
             let current_price = self.hlcvs[[k, idx, CLOSE]];
+            if !current_price.is_finite() {
+                println!("equity skip long coin {} at k {} (NaN close)", idx, k);
+                continue;
+            }
             let upnl = calc_pnl_long(
                 position.price,
                 current_price,
@@ -566,7 +629,15 @@ impl<'a> Backtest<'a> {
         short_keys.sort();
         for idx in short_keys {
             let position = &self.positions.short[&idx];
+            if !self.coin_is_valid_at(idx, k) {
+                println!("equity skip short coin {} at k {} (invalid)", idx, k);
+                continue;
+            }
             let current_price = self.hlcvs[[k, idx, CLOSE]];
+            if !current_price.is_finite() {
+                println!("equity skip short coin {} at k {} (NaN close)", idx, k);
+                continue;
+            }
             let upnl = calc_pnl_short(
                 position.price,
                 current_price,
@@ -921,6 +992,9 @@ impl<'a> Backtest<'a> {
                 if !self.trailing_enabled[idx].long {
                     continue;
                 }
+                if !self.coin_is_valid_at(idx, k) {
+                    continue;
+                }
                 let bundle = self.trailing_prices.long.entry(idx).or_default();
                 if self.did_fill_long.contains(&idx) {
                     *bundle = TrailingPriceBundle::default();
@@ -952,6 +1026,9 @@ impl<'a> Backtest<'a> {
                 if !self.trailing_enabled[idx].short {
                     continue;
                 }
+                if !self.coin_is_valid_at(idx, k) {
+                    continue;
+                }
                 let bundle = self.trailing_prices.short.entry(idx).or_default();
                 if self.did_fill_short.contains(&idx) {
                     *bundle = TrailingPriceBundle::default();
@@ -979,6 +1056,9 @@ impl<'a> Backtest<'a> {
     }
 
     fn update_open_orders_long_single(&mut self, k: usize, idx: usize) {
+        if !self.coin_is_valid_at(idx, k) {
+            return;
+        }
         let state_params = self.create_state_params(k, idx, LONG);
         let position = self
             .positions
@@ -1056,6 +1136,9 @@ impl<'a> Backtest<'a> {
     }
 
     fn update_open_orders_short_single(&mut self, k: usize, idx: usize) {
+        if !self.coin_is_valid_at(idx, k) {
+            return;
+        }
         let state_params = self.create_state_params(k, idx, SHORT);
         let position = self
             .positions
@@ -1132,6 +1215,10 @@ impl<'a> Backtest<'a> {
     }
 
     fn order_filled(&self, k: usize, idx: usize, order: &Order) -> bool {
+        if !self.coin_is_valid_at(idx, k) {
+            println!("order_filled skip coin {} at k {} (invalid)", idx, k);
+            return false;
+        }
         // check if filled in current candle (pass k+1 to check if will fill in next candle)
         if order.qty > 0.0 {
             self.hlcvs[[k, idx, LOW]] < order.price
@@ -1160,6 +1247,10 @@ impl<'a> Backtest<'a> {
 
         if long_allowance > 0.0 {
             for (&idx, position) in &self.positions.long {
+                if !self.coin_is_valid_at(idx, k) {
+                    println!("unstuck long skip coin {} at k {} (invalid)", idx, k);
+                    continue;
+                }
                 let wallet_exposure = calc_wallet_exposure(
                     self.exchange_params_list[idx].c_mult,
                     self.balance.usd_total_rounded,
@@ -1201,6 +1292,10 @@ impl<'a> Backtest<'a> {
 
         if short_allowance > 0.0 {
             for (&idx, position) in &self.positions.short {
+                if !self.coin_is_valid_at(idx, k) {
+                    println!("unstuck short skip coin {} at k {} (invalid)", idx, k);
+                    continue;
+                }
                 let wallet_exposure = calc_wallet_exposure(
                     self.exchange_params_list[idx].c_mult,
                     self.balance.usd_total_rounded,
@@ -1416,30 +1511,48 @@ impl<'a> Backtest<'a> {
                 let end_idx = if k == 0 { 0usize } else { k - 1 };
                 if end_idx >= start_idx {
                     for i in 0..self.n_coins {
-                        let mut h = f64::MIN;
-                        let mut l = f64::MAX;
-                        let mut qv = 0.0f64;
-                        for j in start_idx..=end_idx {
-                            let high = self.hlcvs[[j, i, HIGH]];
-                            let low = self.hlcvs[[j, i, LOW]];
-                            let close = self.hlcvs[[j, i, CLOSE]];
-                            // VOLUME column represents quote volume already
-                            let qvol = f64::max(0.0, self.hlcvs[[j, i, VOLUME]]);
-                            if high > h {
-                                h = high;
+                        if let Some((coin_start, coin_end)) = self.coin_valid_range(i) {
+                            let start = start_idx.max(coin_start);
+                            let end = end_idx.min(coin_end);
+                            if start > end {
+                                continue;
                             }
-                            if low < l {
-                                l = low;
+                            let mut h = f64::MIN;
+                            let mut l = f64::MAX;
+                            let mut qv = 0.0f64;
+                            let mut seen = false;
+                            for j in start..=end {
+                                let high = self.hlcvs[[j, i, HIGH]];
+                                let low = self.hlcvs[[j, i, LOW]];
+                                let close = self.hlcvs[[j, i, CLOSE]];
+                                if !(high.is_finite() && low.is_finite() && close.is_finite()) {
+                                    continue;
+                                }
+                                let mut qvol = self.hlcvs[[j, i, VOLUME]];
+                                if !qvol.is_finite() || qvol < 0.0 {
+                                    qvol = 0.0;
+                                }
+                                if high > h {
+                                    h = high;
+                                }
+                                if low < l {
+                                    l = low;
+                                }
+                                qv += qvol;
+                                seen = true;
                             }
-                            qv += qvol;
+                            if !seen {
+                                continue;
+                            }
+                            let close = self.hlcvs[[end, i, CLOSE]];
+                            let close = if close.is_finite() { close } else { 0.0 };
+                            self.latest_hour[i] = HourBucket {
+                                high: h,
+                                low: l,
+                                close,
+                                quote_volume: qv.max(0.0),
+                            };
                         }
-                        let close = self.hlcvs[[end_idx, i, CLOSE]];
-                        self.latest_hour[i] = HourBucket {
-                            high: if h.is_finite() { h } else { 0.0 },
-                            low: if l.is_finite() { l } else { 0.0 },
-                            close,
-                            quote_volume: qv.max(0.0),
-                        };
                     }
                 }
             }
@@ -1447,8 +1560,15 @@ impl<'a> Backtest<'a> {
 
             // Update hourly log-range EMAs for grid spacing adjustments
             for i in 0..self.n_coins {
+                if self.coin_valid_range(i).is_none() {
+                    continue;
+                }
                 let bucket = &self.latest_hour[i];
-                if bucket.high <= 0.0 || bucket.low <= 0.0 {
+                if bucket.high <= 0.0
+                    || bucket.low <= 0.0
+                    || !bucket.high.is_finite()
+                    || !bucket.low.is_finite()
+                {
                     continue;
                 }
                 let hour_log_range = (bucket.high / bucket.low).ln();
@@ -1466,10 +1586,24 @@ impl<'a> Backtest<'a> {
             }
         }
         for i in 0..self.n_coins {
+            if !self.coin_is_valid_at(i, k) {
+                continue;
+            }
             let close_price = self.hlcvs[[k, i, CLOSE]];
-            let vol = f64::max(0.0, self.hlcvs[[k, i, VOLUME]]);
+            if !close_price.is_finite() {
+                continue;
+            }
+            let vol_raw = self.hlcvs[[k, i, VOLUME]];
+            let vol = if vol_raw.is_finite() {
+                f64::max(0.0, vol_raw)
+            } else {
+                0.0
+            };
             let high = self.hlcvs[[k, i, HIGH]];
             let low = self.hlcvs[[k, i, LOW]];
+            if !high.is_finite() || !low.is_finite() {
+                continue;
+            }
 
             let long_alphas = &self.ema_alphas[i].long.alphas;
             let long_alphas_inv = &self.ema_alphas[i].long.alphas_inv;
@@ -1504,53 +1638,6 @@ impl<'a> Backtest<'a> {
                 + emas.log_range_short * (1.0 - log_range_alpha_short);
         }
     }
-}
-
-/// Binary-search the **first** and **last** valid candle index for every coin.
-/// A candle is *invalid* when `high == low == close` **and** `volume <= 0.0`
-/// (volume is -1.0 in new data, 0.0 in older back/front-filled data).
-fn find_valid_timestamp_bounds(hlcvs: &ArrayView3<f64>) -> (Vec<usize>, Vec<usize>) {
-    let n_ts = hlcvs.shape()[0];
-    let n_coins = hlcvs.shape()[1];
-    let mut firsts = vec![0; n_coins];
-    let mut lasts = vec![0; n_coins];
-
-    for idx in 0..n_coins {
-        // helper closure to keep the predicate in one place
-        let is_invalid = |k: usize| hlcvs[[k, idx, VOLUME]] < 0.0;
-
-        /* ---------- first valid ---------- */
-        let (mut lo, mut hi) = (0usize, n_ts - 1);
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            if is_invalid(mid) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-
-        // market never became valid
-        if is_invalid(lo) {
-            firsts[idx] = n_ts; // or usize::MAX – choose a sentinel
-            lasts[idx] = n_ts;
-            continue; // next coin
-        }
-        firsts[idx] = lo;
-
-        /* ---------- last valid ---------- */
-        let (mut lo2, mut hi2) = (lo, n_ts - 1); // <-- start at first_valid
-        while lo2 < hi2 {
-            let mid = (lo2 + hi2 + 1) / 2; // bias to upper half
-            if is_invalid(mid) {
-                hi2 = mid - 1;
-            } else {
-                lo2 = mid;
-            }
-        }
-        lasts[idx] = lo2;
-    }
-    (firsts, lasts)
 }
 
 fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {

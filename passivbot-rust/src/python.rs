@@ -191,6 +191,16 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         first_timestamp_ms: extract_value(dict, "first_timestamp_ms").unwrap_or(0u64),
         requested_start_timestamp_ms: extract_value(dict, "requested_start_timestamp_ms")
             .unwrap_or(0u64),
+        first_valid_indices: dict
+            .get_item("first_valid_indices")?
+            .map(|item| item.extract::<Vec<usize>>())
+            .transpose()?
+            .unwrap_or_default(),
+        last_valid_indices: dict
+            .get_item("last_valid_indices")?
+            .map(|item| item.extract::<Vec<usize>>())
+            .transpose()?
+            .unwrap_or_default(),
     })
 }
 

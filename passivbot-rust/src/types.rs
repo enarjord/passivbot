@@ -32,6 +32,8 @@ pub struct BacktestParams {
     pub coins: Vec<String>,
     pub first_timestamp_ms: u64,
     pub requested_start_timestamp_ms: u64,
+    pub first_valid_indices: Vec<usize>,
+    pub last_valid_indices: Vec<usize>,
 }
 
 #[derive(Default, Debug, Clone, Copy)]

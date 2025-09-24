@@ -496,6 +496,23 @@ class Evaluator:
             except Exception:
                 requested_start_ts = int(date_to_ts(config["backtest"]["start_date"]))
             self.backtest_params[exchange]["requested_start_timestamp_ms"] = requested_start_ts
+            coins_order = self.backtest_params[exchange].get("coins", [])
+            hlcvs_arr = self.shared_hlcvs_np[exchange]
+            total_steps = hlcvs_arr.shape[0]
+            first_valid_indices = []
+            last_valid_indices = []
+            for idx, coin in enumerate(coins_order):
+                meta_coin = exchange_mss.get(coin, {}) if isinstance(exchange_mss, dict) else {}
+                first_idx = int(meta_coin.get("first_valid_index", 0))
+                last_idx = int(meta_coin.get("last_valid_index", total_steps - 1))
+                if first_idx >= total_steps:
+                    first_idx = total_steps
+                if last_idx >= total_steps:
+                    last_idx = total_steps - 1
+                first_valid_indices.append(first_idx)
+                last_valid_indices.append(last_idx)
+            self.backtest_params[exchange]["first_valid_indices"] = first_valid_indices
+            self.backtest_params[exchange]["last_valid_indices"] = last_valid_indices
             logging.info(f"mmap_context entered successfully for {exchange}.")
 
         self.config = config

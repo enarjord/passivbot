@@ -1376,7 +1376,8 @@ async def prepare_hlcvs_internal(
     timestamps = np.arange(global_start_time, global_end_time + interval_ms, interval_ms)
 
     # Pre-allocate the unified array
-    unified_array = np.full((n_timesteps, n_coins, 4), -1.0, dtype=np.float64)
+    unified_array = np.full((n_timesteps, n_coins, 4), np.nan, dtype=np.float64)
+    valid_index_ranges = {}
 
     # Second pass: Load data from disk and populate the unified array
     logging.info(
@@ -1395,14 +1396,7 @@ async def prepare_hlcvs_internal(
 
         # Place the data in the unified array
         unified_array[start_idx:end_idx, i, :] = coin_data
-
-        # Front-fill
-        if start_idx > 0:
-            unified_array[:start_idx, i, :3] = coin_data[0, 2]
-
-        # Back-fill
-        if end_idx < n_timesteps:
-            unified_array[end_idx:, i, :3] = coin_data[-1, 2]
+        valid_index_ranges[coin] = (int(start_idx), int(end_idx - 1))
 
         # Clean up temporary file
         os.remove(file_path)
@@ -1412,7 +1406,14 @@ async def prepare_hlcvs_internal(
         os.rmdir(cache_dir)
     except OSError:
         pass
-    mss = {coin: om.get_market_specific_settings(coin) for coin in sorted(valid_coins)}
+    mss = {}
+    for coin in sorted(valid_coins):
+        meta = om.get_market_specific_settings(coin)
+        if coin in valid_index_ranges:
+            first_idx, last_idx = valid_index_ranges[coin]
+            meta["first_valid_index"] = first_idx
+            meta["last_valid_index"] = last_idx
+        mss[coin] = meta
     return mss, timestamps, unified_array
 
 
@@ -1651,7 +1652,7 @@ async def _prepare_hlcvs_combined_impl(
     pprint.pprint(dict(exchange_volume_ratios_mapped))
 
     # We'll store [high, low, close, volume] in the last dimension
-    unified_array = np.full((n_timesteps, n_coins, 4), -1.0, dtype=np.float64)
+    unified_array = np.full((n_timesteps, n_coins, 4), np.nan, dtype=np.float64)
 
     # For each coin i, reindex its DataFrame onto the full timestamps
     for i, coin in enumerate(valid_coins):
@@ -1659,24 +1660,18 @@ async def _prepare_hlcvs_combined_impl(
 
         # Reindex on the global minute timestamps
         df = df.set_index("timestamp").reindex(timestamps)
-
-        # Forward fill 'close' for all missing rows, then backward fill any leading edge
-        df["close"] = df["close"].ffill().bfill()
-
-        # For O/H/L, fill with whatever the 'close' ended up being
-        df["open"] = df["open"].fillna(df["close"])
-        df["high"] = df["high"].fillna(df["close"])
-        df["low"] = df["low"].fillna(df["close"])
-
-        # Apply scaling factor, then fill volume with -1.0 for missing bars
+        # Apply scaling factor to available volume data; missing rows remain NaN
         exchange_for_this_coin = chosen_mss_per_coin[coin]["exchange"]
         scaling_factor = exchange_volume_ratios_mapped[exchange_for_this_coin][reference_exchange]
         df["volume"] *= scaling_factor
-        df["volume"] = df["volume"].fillna(-1.0)
 
         # Now extract columns in correct order
         coin_data = df[["high", "low", "close", "volume"]].values
         unified_array[:, i, :] = coin_data
+        start_idx = int((chosen_data_per_coin[coin].timestamp.iloc[0] - global_start_time) / 60000)
+        end_idx = start_idx + len(chosen_data_per_coin[coin]) - 1
+        chosen_mss_per_coin[coin]["first_valid_index"] = start_idx
+        chosen_mss_per_coin[coin]["last_valid_index"] = end_idx
 
     # ---------------------------------------------------------------
     # 7) Cleanup: close all ccxt clients if needed

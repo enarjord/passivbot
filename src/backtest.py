@@ -317,6 +317,22 @@ def save_coins_hlcvs_to_cache(
     return cache_dir
 
 
+def ensure_valid_index_metadata(mss, hlcvs, coins):
+    for idx, coin in enumerate(coins):
+        meta = mss.setdefault(coin, {})
+        if "first_valid_index" in meta and "last_valid_index" in meta:
+            continue
+        close_series = hlcvs[:, idx, 2]
+        finite = np.isfinite(close_series)
+        if finite.any():
+            valid_indices = np.where(finite)[0]
+            meta["first_valid_index"] = int(valid_indices[0])
+            meta["last_valid_index"] = int(valid_indices[-1])
+        else:
+            meta["first_valid_index"] = int(hlcvs.shape[0])
+            meta["last_valid_index"] = int(hlcvs.shape[0])
+
+
 async def prepare_hlcvs_mss(config, exchange):
     results_path = oj(config["backtest"]["base_dir"], exchange, "")
     try:
@@ -326,6 +342,7 @@ async def prepare_hlcvs_mss(config, exchange):
             logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
             cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = result
             logging.info(f"Successfully loaded hlcvs data from cache")
+            ensure_valid_index_metadata(mss, hlcvs, coins)
             # Pass through cached timestamps if they were stored; fall back to None otherwise
             return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps
     except Exception as e:
@@ -335,6 +352,7 @@ async def prepare_hlcvs_mss(config, exchange):
     else:
         mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(config, exchange)
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
+    ensure_valid_index_metadata(mss, hlcvs, coins)
     logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")
     try:
         cache_dir = save_coins_hlcvs_to_cache(
@@ -432,6 +450,22 @@ def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timest
         first_ts_ms = 0
     backtest_params = dict(backtest_params)
     backtest_params["first_timestamp_ms"] = first_ts_ms
+    coins_order = backtest_params.get("coins", [])
+    first_valid_indices = []
+    last_valid_indices = []
+    total_steps = hlcvs.shape[0]
+    for idx, coin in enumerate(coins_order):
+        meta = mss.get(coin, {})
+        first_idx = int(meta.get("first_valid_index", 0))
+        last_idx = int(meta.get("last_valid_index", total_steps - 1))
+        if first_idx >= total_steps:
+            first_idx = total_steps
+        if last_idx >= total_steps:
+            last_idx = total_steps - 1
+        first_valid_indices.append(first_idx)
+        last_valid_indices.append(last_idx)
+    backtest_params["first_valid_indices"] = first_valid_indices
+    backtest_params["last_valid_indices"] = last_valid_indices
     meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
     candidate_start = meta.get("requested_start_ts", config["backtest"].get("start_date"))
     try:
