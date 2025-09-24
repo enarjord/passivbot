@@ -129,7 +129,7 @@
                          "short_ema_span_1": [200, 1440],
                          "short_entry_grid_double_down_factor": [0.01, 4],
                          "short_entry_grid_spacing_log_span_hours": [168, 1344],
-                         "short_entry_grid_spacing_log_weight": [0, 400],
+                         "short_entry_grid_spacing_log_weight": [0, 500],
                          "short_entry_grid_spacing_pct": [0.001, 0.06],
                          "short_entry_grid_spacing_we_weight": [0, 10],
                          "short_entry_initial_ema_dist": [-0.1, 0.003],
