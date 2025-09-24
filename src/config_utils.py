@@ -689,9 +689,17 @@ def _sync_with_template(
     add_missing_keys_recursively(template, result, verbose=verbose)
     if base_config_path or "base_config_path" not in result["live"]:
         result["live"]["base_config_path"] = base_config_path
+    template_with_extras = deepcopy(template)
+    template_with_extras.setdefault("live", {})["base_config_path"] = ""
+    remove_unused_keys_recursively(template_with_extras, result, verbose=verbose)
     remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose)
     remove_unused_keys_recursively(
         template["optimize"]["bounds"], result["optimize"]["bounds"], verbose=verbose
+    )
+    remove_unused_keys_recursively(
+        template.get("optimize", {}).get("limits", {}),
+        result["optimize"].setdefault("limits", {}),
+        verbose=verbose,
     )
 
 
@@ -838,14 +846,18 @@ def add_missing_keys_recursively(src, dst, parent=None, verbose=True):
 def remove_unused_keys_recursively(src, dst, parent=None, verbose=True):
     if parent is None:
         parent = []
+    if not isinstance(dst, dict) or not isinstance(src, dict):
+        return
     for k in sorted(list(dst.keys())):
-        if k in src:
-            if isinstance(dst[k], dict):
-                remove_unused_keys_recursively(src[k], dst[k], parent + [k], verbose=verbose)
-        else:
+        if k not in src:
             del dst[k]
             if verbose:
                 logging.info("Removed unused key from config: %s", ".".join(parent + [k]))
+            continue
+        src_val = src[k]
+        dst_val = dst[k]
+        if isinstance(dst_val, dict) and isinstance(src_val, dict):
+            remove_unused_keys_recursively(src_val, dst_val, parent + [k], verbose=verbose)
 
 
 def comma_separated_values_float(x):
@@ -893,7 +905,25 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
         full_name = f"{prefix}{key}"
 
         if isinstance(value, dict):
+            if any(full_name.endswith(x) for x in ["approved_coins", "ignored_coins"]):
+                acronym = "s" if full_name.endswith("approved_coins") else "i"
+                if acronym in acronyms:
+                    acronym = create_acronym(full_name, acronyms)
+                parser.add_argument(
+                    f"--{full_name}",
+                    f"--{full_name.replace('.', '_')}",
+                    f"-{acronym}",
+                    type=comma_separated_values,
+                    dest=full_name,
+                    required=False,
+                    default=None,
+                    metavar="",
+                    help=f"Override {full_name}: comma_separated_values",
+                )
+                acronyms.add(acronym)
+                continue
             add_arguments_recursively(parser, value, f"{full_name}.", acronyms=acronyms)
+            continue
         else:
             acronym = create_acronym(full_name, acronyms)
             appendix = ""
@@ -974,8 +1004,13 @@ def recursive_config_update(config, key, value, path=None):
 
 def update_config_with_args(config, args):
     for key, value in vars(args).items():
-        if value is not None:
-            recursive_config_update(config, key, value)
+        if value is None:
+            continue
+        if key in {"live.approved_coins", "live.ignored_coins"}:
+            normalized = normalize_coins_source(value)
+            recursive_config_update(config, key, normalized)
+            continue
+        recursive_config_update(config, key, value)
 
 
 def get_template_live_config(passivbot_mode="v7"):
@@ -1059,7 +1094,7 @@ def get_template_live_config(passivbot_mode="v7"):
         },
         "coin_overrides": {},
         "live": {
-            "approved_coins": [],
+            "approved_coins": {"long": [], "short": []},
             "auto_gs": True,
             "inactive_coin_candle_ttl_minutes": 10.0,
             "empty_means_all_approved": False,
