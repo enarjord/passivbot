@@ -866,6 +866,7 @@ def add_extra_options(parser):
     parser.add_argument(
         "-ft",
         "--fine_tune_params",
+        "--fine-tune-params",
         type=str,
         default="",
         dest="fine_tune_params",
