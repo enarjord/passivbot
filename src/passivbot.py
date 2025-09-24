@@ -1646,7 +1646,7 @@ class Passivbot:
         to_update_last_prices: set[str] = set()
         to_update_emas: dict[str, set[str]] = {"long": set(), "short": set()}
         # 1h grid-spacing log range requirements per side (symbol -> span in hours)
-        to_update_grid_log_ranges: dict[str, dict[str, int]] = {"long": {}, "short": {}}
+        to_update_grid_log_ranges: dict[str, dict[str, float]] = {"long": {}, "short": {}}
 
         for pside in self.PB_modes:
             for symbol in self.PB_modes[pside]:
