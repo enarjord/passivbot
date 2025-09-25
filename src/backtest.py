@@ -37,6 +37,7 @@ from downloader import (
     prepare_hlcvs,
     prepare_hlcvs_combined,
     compute_backtest_warmup_minutes,
+    compute_per_coin_warmup_minutes,
 )
 from pathlib import Path
 from plotting import plot_fills_forager
@@ -183,10 +184,6 @@ def get_cache_hash(config, exchange):
         "minimum_coin_age_days": config["live"]["minimum_coin_age_days"],
         "gap_tolerance_ohlcvs_minutes": config["backtest"]["gap_tolerance_ohlcvs_minutes"],
         "warmup_minutes": compute_backtest_warmup_minutes(config),
-        "config_has_max_memory_candles_per_symbol": "max_memory_candles_per_symbol"
-        in config[
-            "live"
-        ],  # inclusion purpose is to trigger rewrite of cache if PB version sets hlcv.volume for missing candles as negative
     }
     return calc_hash(to_hash)
 
@@ -317,24 +314,40 @@ def save_coins_hlcvs_to_cache(
     return cache_dir
 
 
-def ensure_valid_index_metadata(mss, hlcvs, coins):
+def ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map=None):
+    total_steps = hlcvs.shape[0]
+    warmup_map = warmup_map or {}
+    default_warm = int(warmup_map.get("__default__", 0))
     for idx, coin in enumerate(coins):
         meta = mss.setdefault(coin, {})
         if "first_valid_index" in meta and "last_valid_index" in meta:
-            continue
-        close_series = hlcvs[:, idx, 2]
-        finite = np.isfinite(close_series)
-        if finite.any():
-            valid_indices = np.where(finite)[0]
-            meta["first_valid_index"] = int(valid_indices[0])
-            meta["last_valid_index"] = int(valid_indices[-1])
+            first_idx = int(meta["first_valid_index"])
+            last_idx = int(meta["last_valid_index"])
         else:
-            meta["first_valid_index"] = int(hlcvs.shape[0])
-            meta["last_valid_index"] = int(hlcvs.shape[0])
+            close_series = hlcvs[:, idx, 2]
+            finite = np.isfinite(close_series)
+            if finite.any():
+                valid_indices = np.where(finite)[0]
+                first_idx = int(valid_indices[0])
+                last_idx = int(valid_indices[-1])
+            else:
+                first_idx = int(total_steps)
+                last_idx = int(total_steps)
+        meta["first_valid_index"] = first_idx
+        meta["last_valid_index"] = last_idx
+        warm_minutes = int(meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
+        meta["warmup_minutes"] = warm_minutes
+        if first_idx > last_idx:
+            trade_start_idx = first_idx
+        else:
+            trade_start_idx = min(last_idx, first_idx + warm_minutes)
+        meta["trade_start_index"] = trade_start_idx
 
 
 async def prepare_hlcvs_mss(config, exchange):
     results_path = oj(config["backtest"]["base_dir"], exchange, "")
+    warmup_map = compute_per_coin_warmup_minutes(config)
+    default_warm = int(warmup_map.get("__default__", 0))
     try:
         sts = utc_ms()
         result = load_coins_hlcvs_from_cache(config, exchange)
@@ -342,7 +355,7 @@ async def prepare_hlcvs_mss(config, exchange):
             logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
             cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = result
             logging.info(f"Successfully loaded hlcvs data from cache")
-            ensure_valid_index_metadata(mss, hlcvs, coins)
+            ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
             # Pass through cached timestamps if they were stored; fall back to None otherwise
             return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps
     except Exception as e:
@@ -352,7 +365,7 @@ async def prepare_hlcvs_mss(config, exchange):
     else:
         mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(config, exchange)
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
-    ensure_valid_index_metadata(mss, hlcvs, coins)
+    ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
     logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")
     try:
         cache_dir = save_coins_hlcvs_to_cache(
@@ -405,6 +418,11 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "coins": coins,
             "use_btc_collateral": config["backtest"].get("use_btc_collateral", False),
             "requested_start_timestamp_ms": 0,
+            "first_valid_indices": [],
+            "last_valid_indices": [],
+            "warmup_minutes": [],
+            "trade_start_indices": [],
+            "global_warmup_bars": 0,
         }
     return bot_params_list, exchange_params, backtest_params
 
@@ -451,8 +469,12 @@ def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timest
     backtest_params = dict(backtest_params)
     backtest_params["first_timestamp_ms"] = first_ts_ms
     coins_order = backtest_params.get("coins", [])
+    warmup_map = compute_per_coin_warmup_minutes(config)
+    default_warm = int(warmup_map.get("__default__", 0))
     first_valid_indices = []
     last_valid_indices = []
+    warmup_minutes = []
+    trade_start_indices = []
     total_steps = hlcvs.shape[0]
     for idx, coin in enumerate(coins_order):
         meta = mss.get(coin, {})
@@ -464,8 +486,18 @@ def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timest
             last_idx = total_steps - 1
         first_valid_indices.append(first_idx)
         last_valid_indices.append(last_idx)
+        warm = int(meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
+        warmup_minutes.append(warm)
+        if first_idx > last_idx:
+            trade_idx = first_idx
+        else:
+            trade_idx = min(last_idx, first_idx + warm)
+        trade_start_indices.append(trade_idx)
     backtest_params["first_valid_indices"] = first_valid_indices
     backtest_params["last_valid_indices"] = last_valid_indices
+    backtest_params["warmup_minutes"] = warmup_minutes
+    backtest_params["trade_start_indices"] = trade_start_indices
+    backtest_params["global_warmup_bars"] = compute_backtest_warmup_minutes(config)
     meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
     candidate_start = meta.get("requested_start_ts", config["backtest"].get("start_date"))
     try:

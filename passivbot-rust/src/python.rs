@@ -201,6 +201,17 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<Vec<usize>>())
             .transpose()?
             .unwrap_or_default(),
+        warmup_minutes: dict
+            .get_item("warmup_minutes")?
+            .map(|item| item.extract::<Vec<usize>>())
+            .transpose()?
+            .unwrap_or_default(),
+        trade_start_indices: dict
+            .get_item("trade_start_indices")?
+            .map(|item| item.extract::<Vec<usize>>())
+            .transpose()?
+            .unwrap_or_default(),
+        global_warmup_bars: extract_value(dict, "global_warmup_bars").unwrap_or(0usize),
     })
 }
 

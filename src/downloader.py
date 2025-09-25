@@ -82,19 +82,31 @@ def get_function_name():
     return inspect.currentframe().f_back.f_code.co_name
 
 
+def _to_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _iter_param_sets(config: dict):
+    bot_cfg = config.get("bot", {})
+    base_long = dict(bot_cfg.get("long", {}) or {})
+    base_short = dict(bot_cfg.get("short", {}) or {})
+    yield "__default__", base_long, base_short
+
+    coin_overrides = config.get("coin_overrides", {})
+    for coin, overrides in coin_overrides.items():
+        bot_overrides = overrides.get("bot", {})
+        long_params = dict(base_long)
+        short_params = dict(base_short)
+        long_params.update(bot_overrides.get("long", {}))
+        short_params.update(bot_overrides.get("short", {}))
+        yield coin, long_params, short_params
+
+
 def compute_backtest_warmup_minutes(config: dict) -> int:
     """Mirror Rust warmup span calculation (see calc_warmup_bars)."""
-
-    def _to_float(value):
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return 0.0
-
-    def _merge_params(base: dict, override: dict) -> dict:
-        merged = dict(base or {})
-        merged.update(override or {})
-        return merged
 
     def _extract_bound_max(bounds: dict, key: str) -> float:
         if key not in bounds:
@@ -111,17 +123,6 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
                 max_val = max(max_val, _to_float(val))
         return max_val
 
-    bot_cfg = config.get("bot", {})
-    base_long = bot_cfg.get("long", {})
-    base_short = bot_cfg.get("short", {})
-    coin_overrides = config.get("coin_overrides", {})
-
-    approved = config.get("live", {}).get("approved_coins", {})
-    coins = set(approved.get("long", [])) | set(approved.get("short", []))
-    coins |= set(coin_overrides.keys())
-    if not coins:
-        coins = {"default"}
-
     max_minutes = 0.0
     minute_fields = [
         "ema_span_0",
@@ -130,11 +131,7 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         "filter_log_range_ema_span",
     ]
 
-    for coin in coins:
-        overrides = coin_overrides.get(coin, {}).get("bot", {})
-        long_params = _merge_params(base_long, overrides.get("long", {}))
-        short_params = _merge_params(base_short, overrides.get("short", {}))
-
+    for _, long_params, short_params in _iter_param_sets(config):
         for params in (long_params, short_params):
             for field in minute_fields:
                 max_minutes = max(max_minutes, _to_float(params.get(field)))
@@ -162,9 +159,44 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     for key in bound_keys_hours:
         max_minutes = max(max_minutes, _extract_bound_max(bounds, key) * 60.0)
 
+    warmup_ratio = float(config.get("backtest", {}).get("warmup_ratio", 0.1))
+    limit = config.get("backtest", {}).get("max_warmup_minutes", None)
+
     if not math.isfinite(max_minutes):
         return 0
-    return int(math.ceil(max_minutes)) if max_minutes > 0.0 else 0
+    warmup_minutes = max_minutes * max(0.0, warmup_ratio)
+    if isinstance(limit, (int, float)) and limit > 0:
+        warmup_minutes = min(warmup_minutes, limit)
+    return int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
+
+
+def compute_per_coin_warmup_minutes(config: dict) -> dict:
+    warmup_ratio = float(config.get("backtest", {}).get("warmup_ratio", 0.1))
+    limit = config.get("backtest", {}).get("max_warmup_minutes", None)
+    per_coin = {}
+    minute_fields = [
+        "ema_span_0",
+        "ema_span_1",
+        "filter_volume_ema_span",
+        "filter_log_range_ema_span",
+    ]
+    for coin, long_params, short_params in _iter_param_sets(config):
+        max_minutes = 0.0
+        for params in (long_params, short_params):
+            for field in minute_fields:
+                max_minutes = max(max_minutes, _to_float(params.get(field)))
+            max_minutes = max(
+                max_minutes,
+                _to_float(params.get("entry_grid_spacing_log_span_hours")) * 60.0,
+            )
+        if not math.isfinite(max_minutes):
+            per_coin[coin] = 0
+            continue
+        warmup_minutes = max_minutes * max(0.0, warmup_ratio)
+        if isinstance(limit, (int, float)) and limit > 0:
+            warmup_minutes = min(warmup_minutes, limit)
+        per_coin[coin] = int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
+    return per_coin
 
 
 def dump_ohlcv_data(data, filepath):
@@ -1286,6 +1318,8 @@ async def prepare_hlcvs_internal(
     interval_ms = 60000
 
     first_timestamps_unified = await get_first_timestamps_unified(coins)
+    per_coin_warmups = compute_per_coin_warmup_minutes(config)
+    default_warm = int(per_coin_warmups.get("__default__", 0))
 
     # Create cache directory if it doesn't exist
     cache_dir = Path(f"./caches/hlcvs_data/{uuid4().hex[:16]}")
@@ -1396,7 +1430,13 @@ async def prepare_hlcvs_internal(
 
         # Place the data in the unified array
         unified_array[start_idx:end_idx, i, :] = coin_data
-        valid_index_ranges[coin] = (int(start_idx), int(end_idx - 1))
+        first_idx = int(start_idx)
+        last_idx = int(end_idx - 1)
+        warm_minutes = int(per_coin_warmups.get(coin, default_warm))
+        trade_start_idx = first_idx + warm_minutes
+        if trade_start_idx > last_idx:
+            trade_start_idx = last_idx
+        valid_index_ranges[coin] = (first_idx, last_idx)
 
         # Clean up temporary file
         os.remove(file_path)
@@ -1409,10 +1449,15 @@ async def prepare_hlcvs_internal(
     mss = {}
     for coin in sorted(valid_coins):
         meta = om.get_market_specific_settings(coin)
-        if coin in valid_index_ranges:
-            first_idx, last_idx = valid_index_ranges[coin]
-            meta["first_valid_index"] = first_idx
-            meta["last_valid_index"] = last_idx
+        first_idx, last_idx = valid_index_ranges.get(coin, (hlcvs.shape[0], hlcvs.shape[0]))
+        meta["first_valid_index"] = first_idx
+        meta["last_valid_index"] = last_idx
+        warm_minutes = int(per_coin_warmups.get(coin, default_warm))
+        meta["warmup_minutes"] = warm_minutes
+        trade_start_idx = first_idx + warm_minutes
+        if trade_start_idx > last_idx:
+            trade_start_idx = last_idx
+        meta["trade_start_index"] = trade_start_idx
         mss[coin] = meta
     return mss, timestamps, unified_array
 

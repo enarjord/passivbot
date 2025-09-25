@@ -34,6 +34,9 @@ pub struct BacktestParams {
     pub requested_start_timestamp_ms: u64,
     pub first_valid_indices: Vec<usize>,
     pub last_valid_indices: Vec<usize>,
+    pub warmup_minutes: Vec<usize>,
+    pub trade_start_indices: Vec<usize>,
+    pub global_warmup_bars: usize,
 }
 
 #[derive(Default, Debug, Clone, Copy)]

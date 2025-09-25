@@ -41,7 +41,7 @@ import zlib
 import inspect
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Optional, Tuple, List, Callable
 from collections import OrderedDict
 
 import numpy as np
@@ -716,6 +716,78 @@ class CandlestickManager:
             total += len(bucket)
             self._log("debug", "saved_range", symbol=symbol, rows=total)
 
+    def _save_range_incremental(
+        self,
+        symbol: str,
+        arr: np.ndarray,
+        *,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
+    ) -> None:
+        """Persist candles by merging with existing shards on disk."""
+        if arr.size == 0:
+            return
+        arr = np.sort(_ensure_dtype(arr), order="ts")
+        tf_norm = self._normalize_timeframe_arg(timeframe, tf)
+        shard_paths = self._iter_shard_paths(symbol, tf=tf_norm)
+
+        def flush_bucket(key: Optional[str], bucket: List[Tuple]) -> None:
+            if key is None or not bucket:
+                return
+            chunk = np.array(bucket, dtype=CANDLE_DTYPE)
+            existing = np.empty((0,), dtype=CANDLE_DTYPE)
+            path = shard_paths.get(key)
+            if path and os.path.exists(path):
+                existing = self._load_shard(path)
+            merged = self._merge_overwrite(existing, chunk)
+            self._save_shard(symbol, key, merged, tf=tf_norm)
+            shard_paths[key] = self._shard_path(symbol, key, tf=tf_norm)
+
+        current_key: Optional[str] = None
+        bucket: List[Tuple] = []
+        for row in arr:
+            key = self._date_key(int(row["ts"]))
+            if current_key is None:
+                current_key = key
+            if key != current_key:
+                flush_bucket(current_key, bucket)
+                bucket = []
+                current_key = key
+            bucket.append(tuple(row.tolist()))
+        flush_bucket(current_key, bucket)
+
+    def _persist_batch(
+        self,
+        symbol: str,
+        batch: np.ndarray,
+        *,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
+        merge_cache: bool = False,
+        last_refresh_ms: Optional[int] = None,
+    ) -> None:
+        """Merge `batch` into memory (optional) and persist incrementally to disk."""
+        if batch.size == 0:
+            return
+        arr = np.sort(_ensure_dtype(batch), order="ts")
+        tf_norm = self._normalize_timeframe_arg(timeframe, tf)
+
+        if merge_cache or tf_norm == "1m":
+            merged_cache = self._merge_overwrite(self._ensure_symbol_cache(symbol), arr)
+            self._cache[symbol] = merged_cache
+            try:
+                self._enforce_memory_retention(symbol)
+            except Exception:
+                pass
+            if last_refresh_ms is not None and merged_cache.size:
+                self._set_last_refresh_meta(
+                    symbol,
+                    last_refresh_ms=last_refresh_ms,
+                    last_final_ts=int(merged_cache[-1]["ts"]),
+                )
+
+        self._save_range_incremental(symbol, arr, timeframe=tf_norm)
+
     def _merge_overwrite(self, existing: np.ndarray, new: np.ndarray) -> np.ndarray:
         """Merge two candle arrays by ts, preferring values from `new` on conflict."""
         if existing.size == 0:
@@ -959,6 +1031,7 @@ class CandlestickManager:
         *,
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
+        on_batch: Optional[Callable[[np.ndarray], None]] = None,
     ) -> np.ndarray:
         """Fetch OHLCV from `since_ms` up to but excluding `end_exclusive_ms`.
 
@@ -1004,6 +1077,19 @@ class CandlestickManager:
             except Exception:
                 first_ts = last_ts = 0
             all_rows.append(arr)
+            if on_batch is not None:
+                try:
+                    on_batch(arr)
+                except Exception as on_batch_err:
+                    self.log.error(
+                        "on_batch callback failed; stopping pagination",
+                        extra={
+                            "symbol": symbol,
+                            "timeframe": tf_norm,
+                            "error": str(on_batch_err),
+                        },
+                    )
+                    break
             last_ts = int(arr[-1]["ts"])  # inclusive last
             new_since = last_ts + period_ms
             # Safety to avoid infinite loops if exchange returns overlapping data
@@ -1215,9 +1301,28 @@ class CandlestickManager:
                             return out_disk
 
                 end_excl = int(end_ts) + period_ms
-                fetched = await self._fetch_ohlcv_paginated(
-                    symbol, int(start_ts), int(end_excl), timeframe=out_tf
-                )
+                persisted_batches = False
+
+                def _persist_tf_batch(batch: np.ndarray) -> None:
+                    nonlocal persisted_batches
+                    persisted_batches = True
+                    self._persist_batch(symbol, batch, timeframe=out_tf)
+
+                try:
+                    fetched = await self._fetch_ohlcv_paginated(
+                        symbol,
+                        int(start_ts),
+                        int(end_excl),
+                        timeframe=out_tf,
+                        on_batch=_persist_tf_batch,
+                    )
+                except TypeError:
+                    fetched = await self._fetch_ohlcv_paginated(
+                        symbol,
+                        int(start_ts),
+                        int(end_excl),
+                        timeframe=out_tf,
+                    )
                 if fetched.size == 0:
                     # If network yields nothing, return disk slice if available
                     if isinstance(disk_arr, np.ndarray) and disk_arr.size:
@@ -1235,8 +1340,9 @@ class CandlestickManager:
                     return fetched
                 # Clip to inclusive [start_ts, end_ts] in bucket space
                 out = self._slice_ts_range(fetched, start_ts, end_ts)
-                # Persist TF shards
-                self._save_range(symbol, out, timeframe=out_tf)
+                # Persist TF shards if streaming callback was not triggered
+                if out.size and not persisted_batches:
+                    self._persist_batch(symbol, out, timeframe=out_tf)
                 # Store in TF range cache
                 sym_cache[cache_key] = (out, int(now))
                 try:
@@ -1346,19 +1452,43 @@ class CandlestickManager:
                 if unknown_missing:
                     end_excl = min(end_ts + ONE_MIN_MS, end_finalized + ONE_MIN_MS)
                     if adj_start_ts < end_excl:
-                        fetched = await self._fetch_ohlcv_paginated(symbol, adj_start_ts, end_excl)
+                        persisted_batches = False
+
+                        def _persist_hist_batch(batch: np.ndarray) -> None:
+                            nonlocal persisted_batches
+                            persisted_batches = True
+                            self._persist_batch(
+                                symbol,
+                                batch,
+                                timeframe="1m",
+                                merge_cache=True,
+                                last_refresh_ms=now,
+                            )
+
+                        try:
+                            fetched = await self._fetch_ohlcv_paginated(
+                                symbol,
+                                adj_start_ts,
+                                end_excl,
+                                on_batch=_persist_hist_batch,
+                            )
+                        except TypeError:
+                            fetched = await self._fetch_ohlcv_paginated(
+                                symbol,
+                                adj_start_ts,
+                                end_excl,
+                            )
                         if fetched.size:
-                            merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), fetched)
-                            self._cache[symbol] = merged
-                            self._enforce_memory_retention(symbol)
-                            self._save_range(symbol, fetched, timeframe="1m")
-                            # Re-slice after fetch
+                            if not persisted_batches:
+                                self._persist_batch(
+                                    symbol,
+                                    fetched,
+                                    timeframe="1m",
+                                    merge_cache=True,
+                                    last_refresh_ms=now,
+                                )
                             arr = np.sort(self._cache[symbol], order="ts")
                             sub = self._slice_ts_range(arr, start_ts, end_ts)
-                            # update refresh metadata on successful fetch
-                            self._set_last_refresh_meta(
-                                symbol, last_refresh_ms=now, last_final_ts=int(arr[-1]["ts"])
-                            )
                         # Mark any remaining unknown spans as known gaps to avoid repeated calls
                         still_missing = self._missing_spans(sub, start_ts, end_ts)
                         for s, e in still_missing:
@@ -1379,18 +1509,43 @@ class CandlestickManager:
                         need_fetch = True
                         fetch_start = max(start_ts, last_have + ONE_MIN_MS)
                 if need_fetch:
-                    fetched = await self._fetch_ohlcv_paginated(symbol, fetch_start, end_excl)
+                    persisted_batches = False
+
+                    def _persist_present_batch(batch: np.ndarray) -> None:
+                        nonlocal persisted_batches
+                        persisted_batches = True
+                        self._persist_batch(
+                            symbol,
+                            batch,
+                            timeframe="1m",
+                            merge_cache=True,
+                            last_refresh_ms=now,
+                        )
+
+                    try:
+                        fetched = await self._fetch_ohlcv_paginated(
+                            symbol,
+                            fetch_start,
+                            end_excl,
+                            on_batch=_persist_present_batch,
+                        )
+                    except TypeError:
+                        fetched = await self._fetch_ohlcv_paginated(
+                            symbol,
+                            fetch_start,
+                            end_excl,
+                        )
                     if fetched.size:
-                        merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), fetched)
-                        self._cache[symbol] = merged
-                        self._enforce_memory_retention(symbol)
-                        self._save_range(symbol, fetched, timeframe="1m")
-                        # Re-slice after fetch
+                        if not persisted_batches:
+                            self._persist_batch(
+                                symbol,
+                                fetched,
+                                timeframe="1m",
+                                merge_cache=True,
+                                last_refresh_ms=now,
+                            )
                         arr = np.sort(self._cache[symbol], order="ts")
                         sub = self._slice_ts_range(arr, start_ts, end_ts)
-                        self._set_last_refresh_meta(
-                            symbol, last_refresh_ms=now, last_final_ts=int(arr[-1]["ts"])
-                        )
 
         # Best-effort tail completion (present-only): if we still miss trailing
         # minutes within the requested window, attempt one more fetch from the
@@ -1412,19 +1567,44 @@ class CandlestickManager:
                 fetch_start = last_have + ONE_MIN_MS
                 if fetch_start >= end_excl_range:
                     break
-                fetched = await self._fetch_ohlcv_paginated(symbol, fetch_start, end_excl_range)
+                persisted_batches = False
+
+                def _persist_tail_batch(batch: np.ndarray) -> None:
+                    nonlocal persisted_batches
+                    persisted_batches = True
+                    self._persist_batch(
+                        symbol,
+                        batch,
+                        timeframe="1m",
+                        merge_cache=True,
+                        last_refresh_ms=now,
+                    )
+
+                try:
+                    fetched = await self._fetch_ohlcv_paginated(
+                        symbol,
+                        fetch_start,
+                        end_excl_range,
+                        on_batch=_persist_tail_batch,
+                    )
+                except TypeError:
+                    fetched = await self._fetch_ohlcv_paginated(
+                        symbol,
+                        fetch_start,
+                        end_excl_range,
+                    )
                 if fetched.size == 0:
                     break
-                merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), fetched)
-                self._cache[symbol] = merged
-                self._enforce_memory_retention(symbol)
-                self._save_range(symbol, fetched, timeframe="1m")
-                # Re-slice after fetch
+                if not persisted_batches:
+                    self._persist_batch(
+                        symbol,
+                        fetched,
+                        timeframe="1m",
+                        merge_cache=True,
+                        last_refresh_ms=now,
+                    )
                 arr = np.sort(self._cache[symbol], order="ts")
                 sub = self._slice_ts_range(arr, start_ts, end_ts)
-                self._set_last_refresh_meta(
-                    symbol, last_refresh_ms=now, last_final_ts=int(arr[-1]["ts"])
-                )
 
         # Gap-oriented fetch and tagging (present-only): try filling internal
         # gaps once; mark remaining as known gaps. Skip for pure historical
@@ -1453,20 +1633,45 @@ class CandlestickManager:
                     if span_in_known(s, e):
                         continue
                     end_excl_gap = e + ONE_MIN_MS
-                    fetched = await self._fetch_ohlcv_paginated(symbol, s, end_excl_gap)
+                    persisted_batches = False
+
+                    def _persist_gap_batch(batch: np.ndarray) -> None:
+                        nonlocal persisted_batches
+                        persisted_batches = True
+                        self._persist_batch(
+                            symbol,
+                            batch,
+                            timeframe="1m",
+                            merge_cache=True,
+                            last_refresh_ms=now,
+                        )
+
+                    try:
+                        fetched = await self._fetch_ohlcv_paginated(
+                            symbol,
+                            s,
+                            end_excl_gap,
+                            on_batch=_persist_gap_batch,
+                        )
+                    except TypeError:
+                        fetched = await self._fetch_ohlcv_paginated(
+                            symbol,
+                            s,
+                            end_excl_gap,
+                        )
                     attempts += 1
                     attempted.append((s, e))
                     if fetched.size:
-                        merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), fetched)
-                        self._cache[symbol] = merged
-                        self._enforce_memory_retention(symbol)
-                        self._save_range(symbol, fetched, timeframe="1m")
-                        # Re-slice after fetch
+                        if not persisted_batches:
+                            self._persist_batch(
+                                symbol,
+                                fetched,
+                                timeframe="1m",
+                                merge_cache=True,
+                                last_refresh_ms=now,
+                            )
                         arr = np.sort(self._cache[symbol], order="ts")
                         sub = self._slice_ts_range(arr, start_ts, end_ts)
-                        self._set_last_refresh_meta(
-                            symbol, last_refresh_ms=now, last_final_ts=int(arr[-1]["ts"])
-                        )
                     else:
                         noresult.append((s, e))
                 # After attempts, recompute missing and tag remaining as known gaps
@@ -2066,18 +2271,38 @@ class CandlestickManager:
             if since >= end_exclusive:
                 return None
 
-            new_arr = await self._fetch_ohlcv_paginated(symbol, since, end_exclusive)
+            persisted_batches = False
+
+            def _persist_refresh_batch(batch: np.ndarray) -> None:
+                nonlocal persisted_batches
+                persisted_batches = True
+                self._persist_batch(
+                    symbol,
+                    batch,
+                    timeframe="1m",
+                    merge_cache=True,
+                    last_refresh_ms=now,
+                )
+
+            try:
+                new_arr = await self._fetch_ohlcv_paginated(
+                    symbol,
+                    since,
+                    end_exclusive,
+                    on_batch=_persist_refresh_batch,
+                )
+            except TypeError:
+                new_arr = await self._fetch_ohlcv_paginated(symbol, since, end_exclusive)
             if new_arr.size == 0:
                 return None
-            # Merge and store
-            merged = self._merge_overwrite(existing, new_arr)
-            self._cache[symbol] = merged
-            # Update refresh metadata
-            try:
-                last_final_ts = int(np.sort(merged, order="ts")[-1]["ts"]) if merged.size else 0
-            except Exception:
-                last_final_ts = 0
-            self._set_last_refresh_meta(symbol, last_refresh_ms=now, last_final_ts=last_final_ts)
+            if not persisted_batches:
+                self._persist_batch(
+                    symbol,
+                    new_arr,
+                    timeframe="1m",
+                    merge_cache=True,
+                    last_refresh_ms=now,
+                )
             return None
 
     # ----- Persistence -----

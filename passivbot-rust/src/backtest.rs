@@ -159,6 +159,8 @@ pub struct Backtest<'a> {
     emas: Vec<EMAs>,
     coin_first_valid_idx: Vec<usize>,
     coin_last_valid_idx: Vec<usize>,
+    coin_trade_start_idx: Vec<usize>,
+    trade_activation_logged: Vec<bool>,
     // Wall-clock timestamp (ms) of the first candle; assumes 1m spacing
     first_timestamp_ms: u64,
     // Latest computed hourly boundary (aligned to whole hours)
@@ -217,6 +219,58 @@ impl<'a> Backtest<'a> {
         let mut last_valid_idx = backtest_params.last_valid_indices.clone();
         if last_valid_idx.len() != n_coins {
             last_valid_idx = vec![n_timesteps.saturating_sub(1); n_coins];
+        }
+        let warmup_minutes = if backtest_params.warmup_minutes.len() == n_coins {
+            backtest_params.warmup_minutes.clone()
+        } else {
+            vec![0usize; n_coins]
+        };
+        let mut trade_start_idx = if backtest_params.trade_start_indices.len() == n_coins {
+            backtest_params.trade_start_indices.clone()
+        } else {
+            vec![0usize; n_coins]
+        };
+        let mut trade_activation_logged = vec![false; n_coins];
+
+        for i in 0..n_coins {
+            let mut first = first_valid_idx[i];
+            if first >= n_timesteps {
+                first = n_timesteps.saturating_sub(1);
+            }
+            let mut last = last_valid_idx[i];
+            if last >= n_timesteps {
+                last = n_timesteps.saturating_sub(1);
+            }
+            if last < first {
+                last = first;
+            }
+            first_valid_idx[i] = first;
+            last_valid_idx[i] = last;
+            let warm = warmup_minutes.get(i).copied().unwrap_or(0);
+            let mut trade_idx = first.saturating_add(warm);
+            if trade_idx > last {
+                trade_idx = last;
+            }
+            trade_start_idx[i] = trade_idx;
+
+            let expected_trade_idx = first.saturating_add(warm).min(last);
+            debug_assert_eq!(
+                trade_idx, expected_trade_idx,
+                "trade start index mismatch for coin {}: expected {} but got {}",
+                i, expected_trade_idx, trade_idx
+            );
+            let coin_name = backtest_params
+                .coins
+                .get(i)
+                .map(|s| s.as_str())
+                .unwrap_or("<unknown>");
+            /*
+            println!(
+                "[warmup-debug] init coin {} (idx {}): first={} last={} warm_minutes={} trade_start={}",
+                coin_name, i, first, last, warm, trade_idx
+            );
+            */
+            trade_activation_logged[i] = false;
         }
 
         let initial_emas = (0..n_coins)
@@ -277,7 +331,10 @@ impl<'a> Backtest<'a> {
 
         // Calculate EMA alphas for each coin
         let ema_alphas: Vec<EmaAlphas> = bot_params.iter().map(|bp| calc_ema_alphas(bp)).collect();
-        let warmup_bars = calc_warmup_bars(&bot_params);
+        let mut warmup_bars = backtest_params.global_warmup_bars;
+        if warmup_bars == 0 {
+            warmup_bars = calc_warmup_bars(&bot_params);
+        }
 
         let trailing_enabled: Vec<TrailingEnabled> = bot_params
             .iter()
@@ -306,6 +363,8 @@ impl<'a> Backtest<'a> {
             emas: initial_emas,
             coin_first_valid_idx: first_valid_idx,
             coin_last_valid_idx: last_valid_idx,
+            coin_trade_start_idx: trade_start_idx,
+            trade_activation_logged,
             positions: Positions::default(),
             first_timestamp_ms: backtest_params.first_timestamp_ms,
             last_hour_boundary_ms: (backtest_params.first_timestamp_ms / 3_600_000) * 3_600_000,
@@ -369,6 +428,37 @@ impl<'a> Backtest<'a> {
             .requested_start_timestamp_ms
             .max(self.first_timestamp_ms);
         for k in 1..(n_timesteps - 1) {
+            for idx in 0..self.n_coins {
+                if !self.trade_activation_logged[idx] && self.coin_is_tradeable_at(idx, k) {
+                    let coin_name = self
+                        .backtest_params
+                        .coins
+                        .get(idx)
+                        .map(|s| s.as_str())
+                        .unwrap_or("<unknown>");
+                    let first = self.coin_first_valid_idx[idx];
+                    let trade_start = self.coin_trade_start_idx[idx];
+                    println!(
+                        "[warmup-debug] coin {} (idx {}) became tradeable at k={} (first={}, trade_start={}, warmup={})",
+                        coin_name,
+                        idx,
+                        k,
+                        first,
+                        trade_start,
+                        trade_start.saturating_sub(first)
+                    );
+                    self.trade_activation_logged[idx] = true;
+                }
+                if k < self.coin_trade_start_idx[idx] && self.coin_is_valid_at(idx, k) {
+                    debug_assert!(
+                        !self.coin_is_tradeable_at(idx, k),
+                        "coin {} flagged tradeable too early at k {} (trade_start {})",
+                        idx,
+                        k,
+                        self.coin_trade_start_idx[idx]
+                    );
+                }
+            }
             self.check_for_fills(k);
             self.update_emas(k);
             self.update_rounded_balance(k);
@@ -384,13 +474,8 @@ impl<'a> Backtest<'a> {
     }
 
     fn update_n_positions_and_wallet_exposure_limits(&mut self, k: usize) {
-        let last_ts = self.hlcvs.shape()[0] - 1;
         let eligible: Vec<usize> = (0..self.n_coins)
-            .filter(|&idx| {
-                let first = *self.first_valid_timestamps.get(&idx).unwrap_or(&0);
-                let last = *self.last_valid_timestamps.get(&idx).unwrap_or(&last_ts);
-                k >= first && k <= last
-            })
+            .filter(|&idx| self.coin_is_tradeable_at(idx, k))
             .collect();
 
         if eligible.is_empty() {
@@ -480,6 +565,15 @@ impl<'a> Backtest<'a> {
         self.coin_valid_range(idx)
             .map(|(start, end)| k >= start && k <= end)
             .unwrap_or(false)
+    }
+
+    #[inline(always)]
+    fn coin_is_tradeable_at(&self, idx: usize, k: usize) -> bool {
+        if idx >= self.coin_trade_start_idx.len() {
+            return false;
+        }
+        let trade_start = self.coin_trade_start_idx[idx];
+        self.coin_is_valid_at(idx, k) && k >= trade_start
     }
 
     pub fn calc_preferred_coins(&mut self, pside: usize) -> Vec<usize> {
@@ -607,12 +701,10 @@ impl<'a> Backtest<'a> {
         for idx in long_keys {
             let position = &self.positions.long[&idx];
             if !self.coin_is_valid_at(idx, k) {
-                println!("equity skip long coin {} at k {} (invalid)", idx, k);
                 continue;
             }
             let current_price = self.hlcvs[[k, idx, CLOSE]];
             if !current_price.is_finite() {
-                println!("equity skip long coin {} at k {} (NaN close)", idx, k);
                 continue;
             }
             let upnl = calc_pnl_long(
@@ -630,12 +722,10 @@ impl<'a> Backtest<'a> {
         for idx in short_keys {
             let position = &self.positions.short[&idx];
             if !self.coin_is_valid_at(idx, k) {
-                println!("equity skip short coin {} at k {} (invalid)", idx, k);
                 continue;
             }
             let current_price = self.hlcvs[[k, idx, CLOSE]];
             if !current_price.is_finite() {
-                println!("equity skip short coin {} at k {} (NaN close)", idx, k);
                 continue;
             }
             let upnl = calc_pnl_short(
@@ -1215,8 +1305,7 @@ impl<'a> Backtest<'a> {
     }
 
     fn order_filled(&self, k: usize, idx: usize, order: &Order) -> bool {
-        if !self.coin_is_valid_at(idx, k) {
-            println!("order_filled skip coin {} at k {} (invalid)", idx, k);
+        if !self.coin_is_tradeable_at(idx, k) {
             return false;
         }
         // check if filled in current candle (pass k+1 to check if will fill in next candle)
@@ -1247,8 +1336,7 @@ impl<'a> Backtest<'a> {
 
         if long_allowance > 0.0 {
             for (&idx, position) in &self.positions.long {
-                if !self.coin_is_valid_at(idx, k) {
-                    println!("unstuck long skip coin {} at k {} (invalid)", idx, k);
+                if !self.coin_is_tradeable_at(idx, k) {
                     continue;
                 }
                 let wallet_exposure = calc_wallet_exposure(
@@ -1292,8 +1380,7 @@ impl<'a> Backtest<'a> {
 
         if short_allowance > 0.0 {
             for (&idx, position) in &self.positions.short {
-                if !self.coin_is_valid_at(idx, k) {
-                    println!("unstuck short skip coin {} at k {} (invalid)", idx, k);
+                if !self.coin_is_tradeable_at(idx, k) {
                     continue;
                 }
                 let wallet_exposure = calc_wallet_exposure(
@@ -1460,7 +1547,9 @@ impl<'a> Backtest<'a> {
             }
             active_long_indices.sort();
             for &idx in &active_long_indices {
-                self.update_open_orders_long_single(k, idx);
+                if self.coin_is_tradeable_at(idx, k) {
+                    self.update_open_orders_long_single(k, idx);
+                }
             }
         }
         if self.trading_enabled.short {
@@ -1472,7 +1561,9 @@ impl<'a> Backtest<'a> {
             }
             active_short_indices.sort();
             for &idx in &active_short_indices {
-                self.update_open_orders_short_single(k, idx);
+                if self.coin_is_tradeable_at(idx, k) {
+                    self.update_open_orders_short_single(k, idx);
+                }
             }
         }
 

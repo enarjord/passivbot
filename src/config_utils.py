@@ -1025,6 +1025,8 @@ def get_template_live_config(passivbot_mode="v7"):
             "start_date": "2021-04-01",
             "starting_balance": 100000.0,
             "use_btc_collateral": False,
+            "warmup_ratio": 0.1,
+            "max_warmup_minutes": 0.0,
         },
         "bot": {
             "long": {

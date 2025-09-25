@@ -35,6 +35,7 @@ from backtest import (
     prep_backtest_args,
     expand_analysis,
 )
+from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from config_utils import (
     get_template_live_config,
     load_hjson_config,
@@ -501,6 +502,10 @@ class Evaluator:
             total_steps = hlcvs_arr.shape[0]
             first_valid_indices = []
             last_valid_indices = []
+            warmup_minutes = []
+            trade_start_indices = []
+            warmup_map = compute_per_coin_warmup_minutes(config)
+            default_warm = int(warmup_map.get("__default__", 0))
             for idx, coin in enumerate(coins_order):
                 meta_coin = exchange_mss.get(coin, {}) if isinstance(exchange_mss, dict) else {}
                 first_idx = int(meta_coin.get("first_valid_index", 0))
@@ -511,8 +516,20 @@ class Evaluator:
                     last_idx = total_steps - 1
                 first_valid_indices.append(first_idx)
                 last_valid_indices.append(last_idx)
+                warm = int(meta_coin.get("warmup_minutes", warmup_map.get(coin, default_warm)))
+                warmup_minutes.append(warm)
+                if first_idx > last_idx:
+                    trade_idx = first_idx
+                else:
+                    trade_idx = min(last_idx, first_idx + warm)
+                trade_start_indices.append(trade_idx)
             self.backtest_params[exchange]["first_valid_indices"] = first_valid_indices
             self.backtest_params[exchange]["last_valid_indices"] = last_valid_indices
+            self.backtest_params[exchange]["warmup_minutes"] = warmup_minutes
+            self.backtest_params[exchange]["trade_start_indices"] = trade_start_indices
+            self.backtest_params[exchange]["global_warmup_bars"] = compute_backtest_warmup_minutes(
+                config
+            )
             logging.info(f"mmap_context entered successfully for {exchange}.")
 
         self.config = config
