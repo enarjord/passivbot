@@ -15,8 +15,10 @@ from config_utils import (
     add_arguments_recursively,
     update_config_with_args,
     format_config,
-    get_template_live_config,
+    get_template_config,
     parse_overrides,
+    require_config_value,
+    require_live_value,
 )
 from utils import (
     utc_ms,
@@ -176,13 +178,18 @@ def check_keys(dict0, dict1):
 
 
 def get_cache_hash(config, exchange):
+    exchanges_cfg = require_config_value(config, "backtest.exchanges")
+    approved_coins = require_live_value(config, "approved_coins")
+    minimum_coin_age = require_live_value(config, "minimum_coin_age_days")
     to_hash = {
-        "coins": config["live"]["approved_coins"],
-        "end_date": format_end_date(config["backtest"]["end_date"]),
-        "start_date": config["backtest"]["start_date"],
-        "exchange": config["backtest"]["exchanges"] if exchange == "combined" else exchange,
-        "minimum_coin_age_days": config["live"]["minimum_coin_age_days"],
-        "gap_tolerance_ohlcvs_minutes": config["backtest"]["gap_tolerance_ohlcvs_minutes"],
+        "coins": approved_coins,
+        "end_date": format_end_date(require_config_value(config, "backtest.end_date")),
+        "start_date": require_config_value(config, "backtest.start_date"),
+        "exchange": exchanges_cfg if exchange == "combined" else exchange,
+        "minimum_coin_age_days": minimum_coin_age,
+        "gap_tolerance_ohlcvs_minutes": require_config_value(
+            config, "backtest.gap_tolerance_ohlcvs_minutes"
+        ),
         "warmup_minutes": compute_backtest_warmup_minutes(config),
     }
     return calc_hash(to_hash)
@@ -191,10 +198,11 @@ def get_cache_hash(config, exchange):
 def load_coins_hlcvs_from_cache(config, exchange):
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
+    compress_cache = bool(require_config_value(config, "backtest.compress_cache"))
     if os.path.exists(cache_dir):
         coins = json.load(open(cache_dir / "coins.json"))
         mss = json.load(open(cache_dir / "market_specific_settings.json"))
-        if config["backtest"]["compress_cache"]:
+        if compress_cache:
             fname = cache_dir / "hlcvs.npy.gz"
             logging.info(f"{exchange} Attempting to load hlcvs data from cache {fname}...")
             with gzip.open(fname, "rb") as f:
@@ -238,9 +246,11 @@ def load_coins_hlcvs_from_cache(config, exchange):
                 btc_usd_prices = np.load(btc_fname)
             else:
                 # Backward compatibility: default to 1.0s if not cached
-                logging.info(f"{exchange} No BTC/USD prices in cache, using default array of 1.0s")
+                logging.info(
+                    f"{exchange} No BTC/USD prices in cache, using default array of 1.0s"
+                )
                 btc_usd_prices = np.ones(hlcvs.shape[0], dtype=np.float64)
-        results_path = oj(config["backtest"]["base_dir"], exchange, "")
+        results_path = oj(require_config_value(config, "backtest.base_dir"), exchange, "")
         return cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps
     return None
 
@@ -257,7 +267,7 @@ def save_coins_hlcvs_to_cache(
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = Path("caches") / "hlcvs_data" / cache_hash[:16]
     cache_dir.mkdir(parents=True, exist_ok=True)
-    is_compressed = config["backtest"]["compress_cache"]
+    is_compressed = bool(require_config_value(config, "backtest.compress_cache"))
     expected_files = [
         "coins.json",
         "hlcvs.npy.gz" if is_compressed else "hlcvs.npy",
@@ -272,7 +282,7 @@ def save_coins_hlcvs_to_cache(
     json.dump(mss, open(cache_dir / "market_specific_settings.json", "w"))
     uncompressed_size = hlcvs.nbytes
     sts = utc_ms()
-    if config["backtest"]["compress_cache"]:
+    if is_compressed:
         fpath = cache_dir / "hlcvs.npy.gz"
         logging.info(f"Attempting to save hlcvs data to cache {fpath}...")
         with gzip.open(fpath, "wb", compresslevel=1) as f:
@@ -345,7 +355,8 @@ def ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map=None):
 
 
 async def prepare_hlcvs_mss(config, exchange):
-    results_path = oj(config["backtest"]["base_dir"], exchange, "")
+    base_dir = require_config_value(config, "backtest.base_dir")
+    results_path = oj(base_dir, exchange, "")
     warmup_map = compute_per_coin_warmup_minutes(config)
     default_warm = int(warmup_map.get("__default__", 0))
     try:
@@ -385,7 +396,7 @@ async def prepare_hlcvs_mss(config, exchange):
 
 
 def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_params=None):
-    coins = sorted(set(config["backtest"]["coins"][exchange]))
+    coins = sorted(set(require_config_value(config, f"backtest.coins.{exchange}")))
     bot_params_list = []
     bot_params_template = deepcopy(config["bot"])
     for coin in coins:
@@ -413,10 +424,10 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
         ]
     if backtest_params is None:
         backtest_params = {
-            "starting_balance": config["backtest"]["starting_balance"],
+            "starting_balance": require_config_value(config, "backtest.starting_balance"),
             "maker_fee": mss[coins[0]]["maker"],
             "coins": coins,
-            "use_btc_collateral": config["backtest"].get("use_btc_collateral", False),
+            "use_btc_collateral": bool(require_config_value(config, "backtest.use_btc_collateral")),
             "requested_start_timestamp_ms": 0,
             "first_valid_indices": [],
             "last_valid_indices": [],
@@ -442,7 +453,7 @@ def expand_analysis(analysis_usd, analysis_btc, fills, config):
                 if analysis_btc[key] is not None
                 else None
             )
-    if not config["backtest"]["use_btc_collateral"]:
+    if not bool(require_config_value(config, "backtest.use_btc_collateral")):
         return analysis_usd
     return {
         **{
@@ -456,7 +467,7 @@ def expand_analysis(analysis_usd, analysis_btc, fills, config):
 
 def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timestamps=None):
     bot_params_list, exchange_params, backtest_params = prep_backtest_args(config, mss, exchange)
-    if not config["backtest"]["use_btc_collateral"]:
+    if not bool(require_config_value(config, "backtest.use_btc_collateral")):
         btc_usd_prices = np.ones(len(btc_usd_prices))
     logging.info(f"Backtesting {exchange}...")
     sts = utc_ms()
@@ -499,14 +510,16 @@ def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timest
     backtest_params["trade_start_indices"] = trade_start_indices
     backtest_params["global_warmup_bars"] = compute_backtest_warmup_minutes(config)
     meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
-    candidate_start = meta.get("requested_start_ts", config["backtest"].get("start_date"))
+    candidate_start = meta.get(
+        "requested_start_ts", require_config_value(config, "backtest.start_date")
+    )
     try:
         if isinstance(candidate_start, str):
             requested_start_ts = int(date_to_ts(candidate_start))
         else:
             requested_start_ts = int(candidate_start)
     except Exception:
-        requested_start_ts = int(date_to_ts(config["backtest"]["start_date"]))
+        requested_start_ts = int(date_to_ts(require_config_value(config, "backtest.start_date")))
     backtest_params["requested_start_timestamp_ms"] = requested_start_ts
 
     # Use context managers for both HLCV and BTC/USD shared memory files
@@ -548,7 +561,11 @@ def post_process(
     equities = pd.Series(equities)
     equities_btc = pd.Series(equities_btc)
     fdf, analysis_py, bal_eq = process_forager_fills(
-        fills, config["backtest"]["coins"][exchange], hlcvs, equities, equities_btc
+        fills,
+        require_config_value(config, f"backtest.coins.{exchange}"),
+        hlcvs,
+        equities,
+        equities_btc,
     )
     for k in analysis_py:
         if k not in analysis:
@@ -589,7 +606,7 @@ def plot_forager(
     bal_eq[["balance", "equity"]].plot(logy=True)
     plt.savefig(oj(results_path, "balance_and_equity_logy.png"))
     plt.clf()
-    if config["backtest"]["use_btc_collateral"]:
+    if bool(require_config_value(config, "backtest.use_btc_collateral")):
         plt.clf()
         bal_eq[["balance_btc", "equity_btc"]].plot(logy=False)
         plt.savefig(oj(results_path, "balance_and_equity_btc.png"))
@@ -598,7 +615,7 @@ def plot_forager(
         plt.savefig(oj(results_path, "balance_and_equity_btc_logy.png"))
 
     if not config["disable_plotting"]:
-        for i, coin in enumerate(config["backtest"]["coins"][exchange]):
+        for i, coin in enumerate(require_config_value(config, f"backtest.coins.{exchange}")):
             try:
                 logging.info(f"Plotting fills for {coin}")
                 hlcvs_df = pd.DataFrame(hlcvs[:, i, :3], columns=["high", "low", "close"])
@@ -626,7 +643,7 @@ async def main():
         action="store_true",
         help="disable plotting",
     )
-    template_config = get_template_live_config("v7")
+    template_config = get_template_config("v7")
     del template_config["optimize"]
     keep_live_keys = {
         "approved_coins",
@@ -646,14 +663,15 @@ async def main():
         config = load_config(args.config_path)
     update_config_with_args(config, args)
     config = format_config(config, verbose=False)
-    for ex in config["backtest"]["exchanges"]:
+    backtest_exchanges = require_config_value(config, "backtest.exchanges")
+    for ex in backtest_exchanges:
         await load_markets(ex)
     config = parse_overrides(config, verbose=True)
-    await format_approved_ignored_coins(config, config["backtest"]["exchanges"])
+    await format_approved_ignored_coins(config, backtest_exchanges)
     config["disable_plotting"] = args.disable_plotting
     config["backtest"]["cache_dir"] = {}
     config["backtest"]["coins"] = {}
-    if config["backtest"]["combine_ohlcvs"]:
+    if bool(require_config_value(config, "backtest.combine_ohlcvs")):
         exchange = "combined"
         coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps = (
             await prepare_hlcvs_mss(config, exchange)
@@ -682,9 +700,9 @@ async def main():
         )
     else:
         print("combined false")
-        configs = {exchange: deepcopy(config) for exchange in config["backtest"]["exchanges"]}
+        configs = {exchange: deepcopy(config) for exchange in backtest_exchanges}
         tasks = {}
-        for exchange in config["backtest"]["exchanges"]:
+        for exchange in backtest_exchanges:
             tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(configs[exchange], exchange))
         for exchange in tasks:
             coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps = await tasks[

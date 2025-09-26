@@ -8,12 +8,12 @@ from config_utils import (
     _normalize_position_counts,
     _rename_config_keys,
     _sync_with_template,
-    get_template_live_config,
+    get_template_config,
 )
 
 
 def test_ensure_bot_defaults_and_bounds_adds_missing_values():
-    config = get_template_live_config("v7")
+    config = get_template_config("v7")
     config["bot"]["long"].pop("close_trailing_qty_pct", None)
     config["optimize"]["bounds"].pop("long_close_trailing_qty_pct", None)
 
@@ -42,7 +42,7 @@ def test_rename_config_keys_moves_legacy_fields():
 
 
 def test_sync_with_template_adds_missing_and_removes_extras():
-    template = get_template_live_config("v7")
+    template = get_template_config("v7")
     result = {
         "live": {},
         "backtest": {},
@@ -74,7 +74,7 @@ def test_normalize_position_counts_rounds_values():
 
 
 def test_apply_non_live_adjustments_sorts_and_filters():
-    config = get_template_live_config("v7")
+    config = get_template_config("v7")
     config["live"]["approved_coins"] = "btc,eth"
     config["live"]["ignored_coins"] = {"long": ["eth"], "short": []}
     config["backtest"]["end_date"] = "2023-01-01"

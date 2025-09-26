@@ -25,6 +25,15 @@ _COIN_TO_SYMBOL_CACHE = {}  # {exchange: {"map": dict, "mtime_ns": int, "size": 
 _SYMBOL_TO_COIN_CACHE = {"map": None, "mtime_ns": None, "size": None}
 
 
+def _require_live_value(config: Dict[str, Any], key: str):
+    if "live" not in config or not isinstance(config["live"], dict):
+        raise KeyError("config missing required key 'live'")
+    live = config["live"]
+    if key not in live:
+        raise KeyError(f"config missing required key 'live.{key}'")
+    return live[key]
+
+
 def ts_to_date(timestamp: Union[float, str, int]) -> str:
     """
     Convert a timestamp to UTC date string in ISO format.
@@ -525,7 +534,7 @@ def symbol_to_coin(symbol):
 async def format_approved_ignored_coins(config, exchanges: [str]):
     if isinstance(exchanges, str):
         exchanges = [exchanges]
-    path = config["live"]["approved_coins"]
+    path = _require_live_value(config, "approved_coins")
     if path in [
         [""],
         [],
@@ -537,7 +546,7 @@ async def format_approved_ignored_coins(config, exchanges: [str]):
         {"long": "", "short": ""},
         {"long": [""], "short": [""]},
     ]:
-        if config["live"]["empty_means_all_approved"]:
+        if bool(_require_live_value(config, "empty_means_all_approved")):
             marketss = await asyncio.gather(*[load_markets(ex, verbose=False) for ex in exchanges])
             marketss = [filter_markets(m, ex)[0] for m, ex in zip(marketss, exchanges)]
             approved_coins = set()
@@ -553,12 +562,12 @@ async def format_approved_ignored_coins(config, exchanges: [str]):
             # leave empty
             config["live"]["approved_coins"] = {"long": [], "short": []}
     else:
-        ac = normalize_coins_source(config["live"]["approved_coins"])
+        ac = normalize_coins_source(_require_live_value(config, "approved_coins"))
         config["live"]["approved_coins"] = {
             pside: [cf for x in ac[pside] if (cf := symbol_to_coin(x))] for pside in ac
         }
 
-    ic = normalize_coins_source(config["live"]["ignored_coins"])
+    ic = normalize_coins_source(_require_live_value(config, "ignored_coins"))
     config["live"]["ignored_coins"] = {
         pside: [cf for x in ic[pside] if (cf := symbol_to_coin(x))] for pside in ic
     }

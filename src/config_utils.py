@@ -762,7 +762,7 @@ def _ensure_enforce_exposure_limit_bool(result: dict) -> None:
 
 def format_config(config: dict, verbose=True, live_only=False, base_config_path: str = "") -> dict:
     # attempts to format a config to v7 config
-    template = get_template_live_config("v7")
+    template = get_template_config("v7")
     flavor = detect_flavor(config, template)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
     _apply_backward_compatibility_renames(result, verbose=verbose)
@@ -1013,7 +1013,45 @@ def update_config_with_args(config, args):
         recursive_config_update(config, key, value)
 
 
-def get_template_live_config(passivbot_mode="v7"):
+def require_config_value(config: dict, dotted_path: str):
+    parts = dotted_path.split(".")
+    if not parts:
+        raise KeyError("empty dotted_path")
+    current = config
+    traversed = []
+    for part in parts:
+        traversed.append(part)
+        if not isinstance(current, dict):
+            raise KeyError(
+                f"config path {'/'.join(traversed[:-1])} is not a dict (required for '{dotted_path}')"
+            )
+        if part not in current:
+            raise KeyError(f"config missing required key '{'.'.join(traversed)}'")
+        current = current[part]
+    return current
+
+
+def get_optional_config_value(config: dict, dotted_path: str, default=None):
+    parts = dotted_path.split(".")
+    if not parts:
+        return default
+    current = config
+    for part in parts:
+        if not isinstance(current, dict) or part not in current:
+            return default
+        current = current[part]
+    return current
+
+
+def require_live_value(config: dict, key: str):
+    return require_config_value(config, f"live.{key}")
+
+
+def get_optional_live_value(config: dict, key: str, default=None):
+    return get_optional_config_value(config, f"live.{key}", default)
+
+
+def get_template_config(passivbot_mode="v7"):
     return {
         "backtest": {
             "base_dir": "backtests",

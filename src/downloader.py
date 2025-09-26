@@ -32,8 +32,10 @@ from tqdm import tqdm
 from config_utils import (
     add_arguments_recursively,
     load_config,
-    get_template_live_config,
+    get_template_config,
     update_config_with_args,
+    require_config_value,
+    require_live_value,
 )
 from pure_funcs import (
     safe_filename,
@@ -159,8 +161,8 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     for key in bound_keys_hours:
         max_minutes = max(max_minutes, _extract_bound_max(bounds, key) * 60.0)
 
-    warmup_ratio = float(config.get("backtest", {}).get("warmup_ratio", 0.1))
-    limit = config.get("backtest", {}).get("max_warmup_minutes", None)
+    warmup_ratio = float(require_config_value(config, "backtest.warmup_ratio"))
+    limit = require_config_value(config, "backtest.max_warmup_minutes")
 
     if not math.isfinite(max_minutes):
         return 0
@@ -171,8 +173,8 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
 
 
 def compute_per_coin_warmup_minutes(config: dict) -> dict:
-    warmup_ratio = float(config.get("backtest", {}).get("warmup_ratio", 0.1))
-    limit = config.get("backtest", {}).get("max_warmup_minutes", None)
+    warmup_ratio = float(require_config_value(config, "backtest.warmup_ratio"))
+    limit = require_config_value(config, "backtest.max_warmup_minutes")
     per_coin = {}
     minute_fields = [
         "ema_span_0",
@@ -1237,14 +1239,15 @@ class OHLCVManager:
 
 
 async def prepare_hlcvs(config: dict, exchange: str):
+    approved = require_live_value(config, "approved_coins")
     coins = sorted(
-        set([symbol_to_coin(c) for c in config["live"]["approved_coins"]["long"]])
-        | set([symbol_to_coin(c) for c in config["live"]["approved_coins"]["short"]])
+        set(symbol_to_coin(c) for c in approved["long"])
+        | set(symbol_to_coin(c) for c in approved["short"])
     )
     exchange = normalize_exchange_name(exchange)
-    requested_start_date = config["backtest"]["start_date"]
+    requested_start_date = require_config_value(config, "backtest.start_date")
     requested_start_ts = int(date_to_ts(requested_start_date))
-    end_date = format_end_date(config["backtest"]["end_date"])
+    end_date = format_end_date(require_config_value(config, "backtest.end_date"))
     end_ts = int(date_to_ts(end_date))
 
     warmup_minutes = compute_backtest_warmup_minutes(config)
@@ -1265,7 +1268,9 @@ async def prepare_hlcvs(config: dict, exchange: str):
         exchange,
         effective_start_date,
         end_date,
-        gap_tolerance_ohlcvs_minutes=config["backtest"]["gap_tolerance_ohlcvs_minutes"],
+        gap_tolerance_ohlcvs_minutes=require_config_value(
+            config, "backtest.gap_tolerance_ohlcvs_minutes"
+        ),
     )
 
     try:
@@ -1314,7 +1319,7 @@ async def prepare_hlcvs_internal(
     end_ts,
     om,
 ):
-    minimum_coin_age_days = config["live"]["minimum_coin_age_days"]
+    minimum_coin_age_days = float(require_live_value(config, "minimum_coin_age_days"))
     interval_ms = 60000
 
     first_timestamps_unified = await get_first_timestamps_unified(coins)
@@ -1463,11 +1468,12 @@ async def prepare_hlcvs_internal(
 
 
 async def prepare_hlcvs_combined(config):
-    exchanges_to_consider = [normalize_exchange_name(e) for e in config["backtest"]["exchanges"]]
+    backtest_exchanges = require_config_value(config, "backtest.exchanges")
+    exchanges_to_consider = [normalize_exchange_name(e) for e in backtest_exchanges]
 
-    requested_start_date = config["backtest"]["start_date"]
+    requested_start_date = require_config_value(config, "backtest.start_date")
     requested_start_ts = int(date_to_ts(requested_start_date))
-    end_date = format_end_date(config["backtest"]["end_date"])
+    end_date = format_end_date(require_config_value(config, "backtest.end_date"))
     end_ts = int(date_to_ts(end_date))
 
     warmup_minutes = compute_backtest_warmup_minutes(config)
@@ -1489,7 +1495,9 @@ async def prepare_hlcvs_combined(config):
             ex,
             effective_start_date,
             end_date,
-            gap_tolerance_ohlcvs_minutes=config["backtest"]["gap_tolerance_ohlcvs_minutes"],
+            gap_tolerance_ohlcvs_minutes=require_config_value(
+                config, "backtest.gap_tolerance_ohlcvs_minutes"
+            ),
         )
     btc_om = None
 
@@ -1508,7 +1516,9 @@ async def prepare_hlcvs_combined(config):
             btc_exchange,
             effective_start_date,
             end_date,
-            gap_tolerance_ohlcvs_minutes=config["backtest"]["gap_tolerance_ohlcvs_minutes"],
+            gap_tolerance_ohlcvs_minutes=require_config_value(
+                config, "backtest.gap_tolerance_ohlcvs_minutes"
+            ),
         )
         btc_df = await btc_om.get_ohlcvs("BTC")
         if btc_df.empty:
@@ -1563,18 +1573,20 @@ async def _prepare_hlcvs_combined_impl(
     # 0) Define or load relevant info from config
     # ---------------------------------------------------------------
     # Pull out all coins from config:
+    approved = require_live_value(config, "approved_coins")
     coins = sorted(
-        set([symbol_to_coin(c) for c in config["live"]["approved_coins"]["long"]])
-        | set([symbol_to_coin(c) for c in config["live"]["approved_coins"]["short"]])
+        set(symbol_to_coin(c) for c in approved["long"])
+        | set(symbol_to_coin(c) for c in approved["short"])
     )
 
     # If your config includes a list of exchanges, grab it; else pick a default set:
     exchanges_to_consider = [
-        "binanceusdm" if e == "binance" else e for e in config["backtest"]["exchanges"]
+        "binanceusdm" if e == "binance" else e
+        for e in require_config_value(config, "backtest.exchanges")
     ]
 
     # Minimum coin age handling (same approach as prepare_hlcvs)
-    min_coin_age_days = config["live"].get("minimum_coin_age_days", 0.0)
+    min_coin_age_days = float(require_live_value(config, "minimum_coin_age_days"))
     min_coin_age_ms = int(min_coin_age_days * 24 * 60 * 60 * 1000)
 
     # First timestamps from your pre-cached or dynamically fetched data
@@ -1932,7 +1944,7 @@ async def main():
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )
-    template_config = get_template_live_config("v7")
+    template_config = get_template_config("v7")
     del template_config["optimize"]
     del template_config["bot"]
     template_config["live"] = {
@@ -1964,16 +1976,21 @@ async def main():
         logging.info(f"loading config {args.config_path}")
         config = load_config(args.config_path)
     update_config_with_args(config, args)
-    await format_approved_ignored_coins(config, config["backtest"]["exchanges"])
+    await format_approved_ignored_coins(config, require_config_value(config, "backtest.exchanges"))
     oms = {}
     try:
-        for ex in config["backtest"]["exchanges"]:
+        for ex in require_config_value(config, "backtest.exchanges"):
             oms[ex] = OHLCVManager(
-                ex, config["backtest"]["start_date"], config["backtest"]["end_date"]
+                ex,
+                require_config_value(config, "backtest.start_date"),
+                require_config_value(config, "backtest.end_date"),
             )
-        logging.info(f"loading markets for {config['backtest']['exchanges']}")
+        logging.info(
+            f"loading markets for {require_config_value(config, 'backtest.exchanges')}"
+        )
         await asyncio.gather(*[oms[ex].load_markets() for ex in oms])
-        coins = [x for y in config["live"]["approved_coins"].values() for x in y]
+        approved = require_live_value(config, "approved_coins")
+        coins = [x for y in approved.values() for x in y]
         for coin in sorted(set(coins)):
             tasks = {}
             for ex in oms:

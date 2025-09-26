@@ -145,16 +145,16 @@ def get_xk_keys(passivbot_mode="neat_grid"):
 
 def determine_passivbot_mode(config: dict, skip=[]) -> str:
     # print('dpm devbug',config)
-    if all(k in config["long"] for k in get_template_live_config("clock")["long"] if k not in skip):
+    if all(k in config["long"] for k in get_template_config("clock")["long"] if k not in skip):
         return "clock"
     elif all(
         k in config["long"]
-        for k in get_template_live_config("recursive_grid")["long"]
+        for k in get_template_config("recursive_grid")["long"]
         if k not in skip
     ):
         return "recursive_grid"
     elif all(
-        k in config["long"] for k in get_template_live_config("neat_grid")["long"] if k not in skip
+        k in config["long"] for k in get_template_config("neat_grid")["long"] if k not in skip
     ):
         return "neat_grid"
     else:
@@ -290,7 +290,7 @@ def candidate_to_live_config(candidate_: dict) -> dict:
     result_dict = candidate_["result"] if "result" in candidate_ else candidate_
     candidate = make_compatible(candidate_)
     passivbot_mode = name = determine_passivbot_mode(candidate)
-    live_config = get_template_live_config(passivbot_mode)
+    live_config = get_template_config(passivbot_mode)
     sides = ["long", "short"]
     for side in sides:
         live_config[side]["n_close_orders"] = int(round(live_config[side]["n_close_orders"]))
@@ -434,7 +434,7 @@ def filter_orders(
 
 
 def get_dummy_settings(config: dict):
-    dummy_settings = get_template_live_config()
+    dummy_settings = get_template_config()
     dummy_settings.update({k: 1.0 for k in get_xk_keys()})
     dummy_settings.update(
         {
@@ -1405,7 +1405,7 @@ def make_compatible(live_config_: dict) -> dict:
 
 def strip_config(cfg: dict) -> dict:
     pm = determine_passivbot_mode(cfg)
-    template = get_template_live_config(pm)
+    template = get_template_config(pm)
     for k in template["long"]:
         template["long"][k] = cfg["long"][k]
         template["short"][k] = cfg["short"][k]
@@ -1941,7 +1941,7 @@ def determine_side_from_order_tuple(order_tuple):
 
 
 def backtested_multiconfig2singleconfig(backtested_config: dict) -> dict:
-    template = get_template_live_config("recursive_grid")
+    template = get_template_config("recursive_grid")
     for pside in ["long", "short"]:
         for key, val in [
             ("auto_unstuck_delay_minutes", 0.0),
@@ -1960,7 +1960,7 @@ def backtested_multiconfig2singleconfig(backtested_config: dict) -> dict:
 
 
 def backtested_multiconfig2live_multiconfig(backtested_config: dict) -> dict:
-    template = get_template_live_config("multi_hjson")
+    template = get_template_config("multi_hjson")
     template["long_enabled"] = backtested_config["args"]["long_enabled"]
     template["short_enabled"] = backtested_config["args"]["short_enabled"]
     template["approved_symbols"] = backtested_config["args"]["symbols"]
@@ -1990,7 +1990,7 @@ def add_missing_params_to_hjson_live_multi_config(config: dict) -> (dict, [str])
         logging_lines.append(f"changed 'minimum_market_age_days' -> 'minimum_coin_age_days'")
         config_copy["minimum_coin_age_days"] = config_copy["minimum_market_age_days"]
 
-    template = get_template_live_config("multi_hjson")
+    template = get_template_config("multi_hjson")
     for key, val in template.items():
         if key not in config_copy:
             logging_lines.append(f"adding missing config param: {key}: {val}")

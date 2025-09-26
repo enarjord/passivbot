@@ -44,7 +44,7 @@ from config_utils import (
     format_config,
     normalize_coins_source,
     expand_PB_mode,
-    get_template_live_config,
+    get_template_config,
     parse_overrides,
 )
 from procedures import (
@@ -2606,7 +2606,7 @@ async def main():
         help="path to hjson passivbot config",
     )
 
-    template_config = get_template_live_config("v7")
+    template_config = get_template_config("v7")
     del template_config["optimize"]
     del template_config["backtest"]
     add_arguments_recursively(parser, template_config)

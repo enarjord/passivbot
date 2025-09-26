@@ -37,12 +37,13 @@ from backtest import (
 )
 from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from config_utils import (
-    get_template_live_config,
+    get_template_config,
     load_hjson_config,
     load_config,
     format_config,
     add_arguments_recursively,
     update_config_with_args,
+    require_config_value,
 )
 from pure_funcs import (
     denumpyize,
@@ -122,7 +123,7 @@ def extract_bounds_tuple_list_from_config(config) -> [Bound]:
                 return tuple(sorted([val[0], val[1]]))
         raise Exception(f"malformed bound {key}: {val}")
 
-    template_config = get_template_live_config(
+    template_config = get_template_config(
         TEMPLATE_CONFIG_MODE
     )  # single source of truth for key names
     keys_ignored = get_bound_keys_ignored()
@@ -467,7 +468,7 @@ class Evaluator:
                 candidate_ts = (
                     meta.get("requested_start_ts")
                     or meta.get("effective_start_ts")
-                    or config.get("backtest", {}).get("start_date")
+                    or require_config_value(config, "backtest.start_date")
                 )
                 if isinstance(candidate_ts, (int, float)):
                     first_ts_ms = int(candidate_ts)
@@ -488,14 +489,16 @@ class Evaluator:
                         exchange,
                     )
             self.backtest_params[exchange]["first_timestamp_ms"] = first_ts_ms
-            candidate_start = meta.get("requested_start_ts") or config["backtest"].get("start_date")
+            candidate_start = meta.get("requested_start_ts") or require_config_value(
+                config, "backtest.start_date"
+            )
             try:
                 if isinstance(candidate_start, str):
                     requested_start_ts = int(date_to_ts(candidate_start))
                 else:
                     requested_start_ts = int(candidate_start or 0)
             except Exception:
-                requested_start_ts = int(date_to_ts(config["backtest"]["start_date"]))
+                requested_start_ts = int(date_to_ts(require_config_value(config, "backtest.start_date")))
             self.backtest_params[exchange]["requested_start_timestamp_ms"] = requested_start_ts
             coins_order = self.backtest_params[exchange].get("coins", [])
             hlcvs_arr = self.shared_hlcvs_np[exchange]
@@ -1007,7 +1010,7 @@ async def main():
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )
-    template_config = get_template_live_config(TEMPLATE_CONFIG_MODE)
+    template_config = get_template_config(TEMPLATE_CONFIG_MODE)
     del template_config["bot"]
     keep_live_keys = {
         "approved_coins",
@@ -1038,7 +1041,8 @@ async def main():
             "Fine-tuning mode active for %s",
             ", ".join(sorted(fine_tune_params)),
         )
-    await format_approved_ignored_coins(config, config["backtest"]["exchanges"])
+    backtest_exchanges = require_config_value(config, "backtest.exchanges")
+    await format_approved_ignored_coins(config, backtest_exchanges)
     try:
         # Prepare data for each exchange
         hlcvs_dict = {}
@@ -1055,7 +1059,7 @@ async def main():
         btc_usd_dtypes = {}
 
         config["backtest"]["coins"] = {}
-        if config["backtest"]["combine_ohlcvs"]:
+        if bool(require_config_value(config, "backtest.combine_ohlcvs")):
             exchange = "combined"
             coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = (
                 await prepare_hlcvs_mss(config, exchange)
@@ -1077,7 +1081,7 @@ async def main():
             validate_array(hlcvs, "hlcvs")
             shared_memory_file = create_shared_memory_file(hlcvs)
             shared_memory_files[exchange] = shared_memory_file
-            if config["backtest"].get("use_btc_collateral", False):
+            if bool(require_config_value(config, "backtest.use_btc_collateral")):
                 # Use the fetched array
                 btc_usd_data_dict[exchange] = btc_usd_prices
             else:
@@ -1091,9 +1095,9 @@ async def main():
             logging.info(f"Finished creating shared memory file for {exchange}: {shared_memory_file}")
         else:
             tasks = {}
-            for exchange in config["backtest"]["exchanges"]:
+            for exchange in backtest_exchanges:
                 tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
-            for exchange in config["backtest"]["exchanges"]:
+            for exchange in backtest_exchanges:
                 coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = await tasks[
                     exchange
                 ]
@@ -1110,7 +1114,7 @@ async def main():
                 shared_memory_file = create_shared_memory_file(hlcvs)
                 shared_memory_files[exchange] = shared_memory_file
                 # Create the BTC array for this exchange
-                if config["backtest"].get("use_btc_collateral", False):
+                if bool(require_config_value(config, "backtest.use_btc_collateral")):
                     btc_usd_data_dict[exchange] = btc_usd_prices
                 else:
                     btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
@@ -1123,8 +1127,12 @@ async def main():
                 logging.info(
                     f"Finished creating shared memory file for {exchange}: {shared_memory_file}"
                 )
-        exchanges = config["backtest"]["exchanges"]
-        exchanges_fname = "combined" if config["backtest"]["combine_ohlcvs"] else "_".join(exchanges)
+        exchanges = backtest_exchanges
+        exchanges_fname = (
+            "combined"
+            if bool(require_config_value(config, "backtest.combine_ohlcvs"))
+            else "_".join(exchanges)
+        )
         date_fname = ts_to_date(utc_ms())[:19].replace(":", "_")
         coins = sorted(set([x for y in config["backtest"]["coins"].values() for x in y]))
         coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
@@ -1132,8 +1140,8 @@ async def main():
         n_days = int(
             round(
                 (
-                    date_to_ts(config["backtest"]["end_date"])
-                    - date_to_ts(config["backtest"]["start_date"])
+                    date_to_ts(require_config_value(config, "backtest.end_date"))
+                    - date_to_ts(require_config_value(config, "backtest.start_date"))
                 )
                 / (1000 * 60 * 60 * 24)
             )
@@ -1169,7 +1177,7 @@ async def main():
         # For optimization, use the BTC/USD prices from the first exchange (or combined)
         # Since all exchanges should align in timesteps, this should be consistent
         btc_usd_data = btc_usd_prices  # Use the fetched btc_usd_prices from prepare_hlcvs_mss
-        if config["backtest"].get("use_btc_collateral", False):
+        if bool(require_config_value(config, "backtest.use_btc_collateral")):
             logging.info("Using fetched BTC/USD prices for collateral")
         else:
             logging.info("Using default BTC/USD prices (all 1.0s) as use_btc_collateral is False")
