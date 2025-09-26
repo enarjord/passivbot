@@ -9,6 +9,7 @@ import json
 import numpy as np
 from downloader import coin_to_symbol
 from utils import ts_to_date, utc_ms
+from config_utils import require_live_value
 from pure_funcs import (
     multi_replace,
     floatify,
@@ -37,12 +38,10 @@ class GateIOBot(Passivbot):
             120  # gateio has stricter rate limiting on fetching ohlcvs
         )
         self.hedge_mode = False
-        self.config["live"]["max_n_cancellations_per_batch"] = min(
-            self.config["live"]["max_n_cancellations_per_batch"], 20
-        )
-        self.config["live"]["max_n_creations_per_batch"] = min(
-            self.config["live"]["max_n_creations_per_batch"], 10
-        )
+        max_cancel = int(require_live_value(config, "max_n_cancellations_per_batch"))
+        self.config["live"]["max_n_cancellations_per_batch"] = min(max_cancel, 20)
+        max_create = int(require_live_value(config, "max_n_creations_per_batch"))
+        self.config["live"]["max_n_creations_per_batch"] = min(max_create, 10)
         self.custom_id_max_length = 28
 
     def create_ccxt_sessions(self):
@@ -270,7 +269,7 @@ class GateIOBot(Passivbot):
         }
         if order_type == "limit":
             params["timeInForce"] = (
-                "poc" if self.config["live"]["time_in_force"] == "post_only" else "gtc"
+                "poc" if require_live_value(self.config, "time_in_force") == "post_only" else "gtc"
             )
         return params
 

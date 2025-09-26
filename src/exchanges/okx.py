@@ -9,6 +9,7 @@ import asyncio
 import traceback
 import numpy as np
 from utils import ts_to_date, utc_ms
+from config_utils import require_live_value
 from pure_funcs import (
     multi_replace,
     floatify,
@@ -254,7 +255,7 @@ class OKXBot(Passivbot):
     def get_order_execution_params(self, order: dict) -> dict:
         # defined for each exchange
         return {
-            "postOnly": self.config["live"]["time_in_force"] == "post_only",
+            "postOnly": require_live_value(self.config, "time_in_force") == "post_only",
             "positionSide": order["position_side"],
             "reduceOnly": order["reduce_only"],
             "hedged": True,

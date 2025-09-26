@@ -9,6 +9,7 @@ import numpy as np
 import passivbot_rust as pbr
 from collections import defaultdict
 from utils import ts_to_date, utc_ms
+from config_utils import require_live_value
 from pure_funcs import (
     multi_replace,
     floatify,
@@ -345,7 +346,9 @@ class BybitBot(Passivbot):
         return {
             "positionIdx": 1 if order["position_side"] == "long" else 2,
             "timeInForce": (
-                "postOnly" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
+                "postOnly"
+                if require_live_value(self.config, "time_in_force") == "post_only"
+                else "GTC"
             ),
             "orderLinkId": order["custom_id"],
         }

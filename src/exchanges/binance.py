@@ -21,6 +21,7 @@ from pure_funcs import (
     shorten_custom_id,
 )
 from procedures import print_async_exception, assert_correct_ccxt_version, load_broker_code
+from config_utils import require_live_value
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
@@ -421,9 +422,8 @@ class BinanceBot(Passivbot):
             "newClientOrderId": order["custom_id"],
         }
         if order_type == "limit":
-            params["timeInForce"] = (
-                "GTX" if self.config["live"]["time_in_force"] == "post_only" else "GTC"
-            )
+            tif = require_live_value(self.config, "time_in_force")
+            params["timeInForce"] = "GTX" if tif == "post_only" else "GTC"
         return params
 
     async def update_exchange_config_by_symbols(self, symbols):

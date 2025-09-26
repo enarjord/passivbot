@@ -9,6 +9,7 @@ import json
 import numpy as np
 import passivbot_rust as pbr
 from utils import ts_to_date, symbol_to_coin, coin_to_symbol, utc_ms
+from config_utils import require_live_value
 from pure_funcs import (
     multi_replace,
     floatify,
@@ -295,7 +296,9 @@ class HyperliquidBot(Passivbot):
         # defined for each exchange
         params = {
             "reduceOnly": order["reduce_only"],
-            "timeInForce": ("Alo" if self.config["live"]["time_in_force"] == "post_only" else "Gtc"),
+            "timeInForce": (
+                "Alo" if require_live_value(self.config, "time_in_force") == "post_only" else "Gtc"
+            ),
             "clientOrderId": order["custom_id"],  # TODO
         }
         if self.user_info["is_vault"]:

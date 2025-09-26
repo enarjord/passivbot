@@ -46,6 +46,8 @@ from config_utils import (
     expand_PB_mode,
     get_template_config,
     parse_overrides,
+    require_config_value,
+    require_live_value,
 )
 from procedures import (
     load_broker_code,
@@ -221,7 +223,7 @@ class Passivbot:
     def __init__(self, config: dict):
         """Initialise the bot with configuration, user context, and runtime caches."""
         self.config = config
-        self.user = config["live"]["user"]
+        self.user = require_live_value(config, "user")
         self.user_info = load_user_info(self.user)
         self.exchange = self.user_info["exchange"]
         self.broker_code = load_broker_code(self.user_info["exchange"])
@@ -258,15 +260,11 @@ class Passivbot:
         self.quote = "USDT"
 
         self.minimum_market_age_millis = (
-            self.config["live"]["minimum_coin_age_days"] * 24 * 60 * 60 * 1000
+            float(require_live_value(config, "minimum_coin_age_days")) * 24 * 60 * 60 * 1000
         )
         # Legacy EMA caches removed; use CandlestickManager EMA helpers
         # Legacy ohlcvs_1m fields removed in favor of CandlestickManager
         self.stop_signal_received = False
-        self.PB_mode_stop = {
-            "long": "graceful_stop" if self.config["live"]["auto_gs"] else "manual",
-            "short": "graceful_stop" if self.config["live"]["auto_gs"] else "manual",
-        }
         self.create_ccxt_sessions()
         self.debug_mode = False
         self.balance_threshold = 1.0  # don't create orders if balance is less than threshold
@@ -275,30 +273,29 @@ class Passivbot:
         self.state_change_detected_by_symbol = set()
         self.recent_order_executions = []
         self.recent_order_cancellations = []
-        # CandlestickManager settings from config.live (renamed from legacy fields)
-        live_cfg = self.config.get("live", {}) if hasattr(self, "config") else {}
+        # CandlestickManager settings from config.live
         cm_kwargs = {"exchange": self.cca, "debug": 0}
-        try:
-            mem_cap = live_cfg.get("max_memory_candles_per_symbol", None)
-            if mem_cap is not None:
-                cm_kwargs["max_memory_candles_per_symbol"] = int(mem_cap)
-        except Exception:
-            pass
-        try:
-            disk_cap = live_cfg.get("max_disk_candles_per_symbol_per_tf", None)
-            if disk_cap is not None:
-                cm_kwargs["max_disk_candles_per_symbol_per_tf"] = int(disk_cap)
-        except Exception:
-            pass
+        mem_cap = require_live_value(config, "max_memory_candles_per_symbol")
+        if mem_cap is not None:
+            cm_kwargs["max_memory_candles_per_symbol"] = int(mem_cap)
+        disk_cap = require_live_value(config, "max_disk_candles_per_symbol_per_tf")
+        if disk_cap is not None:
+            cm_kwargs["max_disk_candles_per_symbol_per_tf"] = int(disk_cap)
         self.cm = CandlestickManager(**cm_kwargs)
         # TTL (minutes) for EMA candles on non-traded symbols
-        try:
-            ttl_min = live_cfg.get("inactive_coin_candle_ttl_minutes", None)
-            self.inactive_coin_candle_ttl_ms = (
-                int(float(ttl_min) * 60_000) if ttl_min is not None else 600_000
-            )
-        except Exception:
-            self.inactive_coin_candle_ttl_ms = 600_000
+        ttl_min = require_live_value(config, "inactive_coin_candle_ttl_minutes")
+        self.inactive_coin_candle_ttl_ms = int(float(ttl_min) * 60_000)
+        auto_gs = bool(self.live_value("auto_gs"))
+        self.PB_mode_stop = {
+            "long": "graceful_stop" if auto_gs else "manual",
+            "short": "graceful_stop" if auto_gs else "manual",
+        }
+
+    def live_value(self, key: str):
+        return require_live_value(self.config, key)
+
+    def bot_value(self, pside: str, key: str):
+        return require_config_value(self.config, f"bot.{pside}.{key}")
 
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""
@@ -545,7 +542,7 @@ class Passivbot:
                 res = await self.execute_to_exchange()
                 if self.debug_mode:
                     return res
-                await asyncio.sleep(self.config["live"]["execution_delay_seconds"])
+                await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
                 sleep_duration = 30
                 for i in range(sleep_duration * 10):
                     if self.execution_scheduled:
@@ -667,7 +664,7 @@ class Passivbot:
 
     async def execute_orders_parent(self, orders: [dict]) -> [dict]:
         """Submit a batch of orders after throttling and bookkeeping."""
-        orders = orders[: self.config["live"]["max_n_creations_per_batch"]]
+        orders = orders[: int(self.live_value("max_n_creations_per_batch"))]
         for order in orders:
             self.add_to_recent_order_executions(order)
             self.log_order_action(order, "posting order")
@@ -704,19 +701,18 @@ class Passivbot:
 
     async def execute_cancellations_parent(self, orders: [dict]) -> [dict]:
         """Submit a batch of cancellations, prioritising reduce-only orders."""
-        if len(orders) > self.config["live"]["max_n_cancellations_per_batch"]:
+        max_cancellations = int(self.live_value("max_n_cancellations_per_batch"))
+        if len(orders) > max_cancellations:
             # prioritize cancelling reduce-only orders
             try:
                 reduce_only_orders = [
                     x for x in orders if x.get("reduce_only") or x.get("reduceOnly")
                 ]
                 rest = [x for x in orders if not x["reduce_only"]]
-                orders = (reduce_only_orders + rest)[
-                    : self.config["live"]["max_n_cancellations_per_batch"]
-                ]
+                orders = (reduce_only_orders + rest)[:max_cancellations]
             except Exception as e:
                 logging.error(f"debug filter cancellations {e}")
-                orders = orders[: self.config["live"]["max_n_cancellations_per_batch"]]
+                orders = orders[:max_cancellations]
         for order in orders:
             self.add_to_recent_order_cancellations(order)
             self.log_order_action(order, "cancelling order")
@@ -782,9 +778,9 @@ class Passivbot:
         """Return True when the configuration allows forager grid deployment for the side."""
         if pside is None:
             return self.is_forager_mode("long") or self.is_forager_mode("short")
-        if self.config["bot"][pside]["total_wallet_exposure_limit"] <= 0.0:
+        if self.bot_value(pside, "total_wallet_exposure_limit") <= 0.0:
             return False
-        if self.config["live"][f"forced_mode_{pside}"]:
+        if self.live_value(f"forced_mode_{pside}"):
             return False
         n_positions = self.get_max_n_positions(pside)
         if n_positions == 0:
@@ -1150,7 +1146,7 @@ class Passivbot:
             self.warn_on_high_effective_min_cost(pside)
         if self.is_forager_mode(pside):
             # filter coins by relative volume and log range
-            clip_pct = self.config["bot"][pside]["filter_volume_drop_pct"]
+            clip_pct = self.bot_value(pside, "filter_volume_drop_pct")
             max_n_positions = self.get_max_n_positions(pside)
             if clip_pct > 0.0:
                 volumes = await self.calc_volumes(pside, symbols=candidates)
@@ -1171,7 +1167,7 @@ class Passivbot:
 
     def warn_on_high_effective_min_cost(self, pside):
         """Log a warning if min effective cost filtering removes every candidate."""
-        if not self.config["live"]["filter_by_min_effective_cost"]:
+        if not self.live_value("filter_by_min_effective_cost"):
             return
         if not self.is_pside_enabled(pside):
             return
@@ -1190,7 +1186,7 @@ class Passivbot:
     def get_max_n_positions(self, pside):
         """Return the configured maximum number of concurrent positions for a side."""
         max_n_positions = min(
-            self.config["bot"][pside]["n_positions"],
+            self.bot_value(pside, "n_positions"),
             len(self.approved_coins_minus_ignored_coins[pside]),
         )
         return max(0, int(round(max_n_positions)))
@@ -1238,7 +1234,7 @@ class Passivbot:
             )
             if fwel is not None:
                 return fwel
-        twel = self.config["bot"][pside]["total_wallet_exposure_limit"]
+        twel = self.bot_value(pside, "total_wallet_exposure_limit")
         if twel <= 0.0:
             return 0.0
         n_positions = max(self.get_max_n_positions(pside), self.get_current_n_positions(pside))
@@ -1248,14 +1244,13 @@ class Passivbot:
 
     def is_pside_enabled(self, pside):
         """Return True if trading is enabled for the given side in the current config."""
-        return (
-            self.config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
-            and self.config["bot"][pside]["n_positions"] > 0.0
-        )
+        return self.bot_value(pside, "total_wallet_exposure_limit") > 0.0 and self.bot_value(
+            pside, "n_positions"
+        ) > 0.0
 
     def effective_min_cost_is_low_enough(self, pside, symbol):
         """Check whether the symbol meets the effective minimum cost requirement."""
-        if not self.config["live"]["filter_by_min_effective_cost"]:
+        if not self.live_value("filter_by_min_effective_cost"):
             return True
         return (
             self.balance
@@ -1328,7 +1323,7 @@ class Passivbot:
         logging.info(f"initiating pnls...")
         age_limit = (
             self.get_exchange_time()
-            - 1000 * 60 * 60 * 24 * self.config["live"]["pnls_max_lookback_days"]
+            - 1000 * 60 * 60 * 24 * float(self.live_value("pnls_max_lookback_days"))
         )
         pnls_cache = []
         if os.path.exists(self.pnls_cache_filepath):
@@ -1367,7 +1362,7 @@ class Passivbot:
         """Fetch latest fills, update the PnL cache, and persist it when changed."""
         age_limit = (
             self.get_exchange_time()
-            - 1000 * 60 * 60 * 24 * self.config["live"]["pnls_max_lookback_days"]
+            - 1000 * 60 * 60 * 24 * float(self.live_value("pnls_max_lookback_days"))
         )
         await self.init_pnls()  # will do nothing if already initiated
         old_ids = {elm["id"] for elm in self.pnls}
@@ -1808,7 +1803,7 @@ class Passivbot:
                 position_side = "long" if "long" in order[2] else "short"
                 if order[0] == 0.0:
                     continue
-                if mprice_diff > self.config["live"]["price_distance_threshold"]:
+                if mprice_diff > float(self.live_value("price_distance_threshold")):
                     if any_partial and "entry" in order[2]:
                         continue
                     if any([x in order[2] for x in ["initial", "unstuck"]]):
@@ -1821,7 +1816,7 @@ class Passivbot:
                     continue
                 order_side = determine_side_from_order_tuple(order)
                 order_type = "limit"
-                if self.config["live"]["market_orders_allowed"] and (
+                if self.live_value("market_orders_allowed") and (
                     ("grid" in order[2] and mprice_diff < 0.0001)
                     or ("trailing" in order[2] and mprice_diff < 0.001)
                     or ("auto_reduce" in order[2] and mprice_diff < 0.001)
@@ -1877,12 +1872,12 @@ class Passivbot:
             unstuck_allowances[pside] = (
                 pbr.calc_auto_unstuck_allowance(
                     self.balance,
-                    self.config["bot"][pside]["unstuck_loss_allowance_pct"]
-                    * self.config["bot"][pside]["total_wallet_exposure_limit"],
+                    self.bot_value(pside, "unstuck_loss_allowance_pct")
+                    * self.bot_value(pside, "total_wallet_exposure_limit"),
                     pnls_cumsum_max,
                     pnls_cumsum_last,
                 )
-                if self.config["bot"][pside]["unstuck_loss_allowance_pct"] > 0.0
+                if self.bot_value(pside, "unstuck_loss_allowance_pct") > 0.0
                 else 0.0
             )
             if unstuck_allowances[pside] <= 0.0:
@@ -2273,7 +2268,7 @@ class Passivbot:
         """
         if eligible_symbols is None:
             eligible_symbols = self.eligible_symbols
-        span = int(round(self.config["bot"][pside]["filter_log_range_ema_span"]))
+        span = int(round(self.bot_value(pside, "filter_log_range_ema_span")))
 
         # Compute EMA of log range on 1m candles: ln(high/low)
         async def one(symbol: str):
@@ -2341,7 +2336,7 @@ class Passivbot:
 
         Returns mapping symbol -> ema_quote_volume; non-finite/failed computations yield 0.0.
         """
-        span = int(round(self.config["bot"][pside]["filter_volume_ema_span"]))
+        span = int(round(self.bot_value(pside, "filter_volume_ema_span")))
         if symbols is None:
             symbols = self.get_symbols_approved_or_has_pos(pside)
 
@@ -2490,11 +2485,11 @@ class Passivbot:
             for k in ("approved_coins", "ignored_coins"):
                 if not hasattr(self, k):
                     setattr(self, k, {"long": set(), "short": set()})
-                parsed = normalize_coins_source(self.config["live"][k])
+                parsed = normalize_coins_source(self.live_value(k))
                 self.add_to_coins_lists(parsed, k)
             self.approved_coins_minus_ignored_coins = {}
             for pside in self.approved_coins:
-                if self.config["live"]["empty_means_all_approved"] and not self.approved_coins[pside]:
+                if self.live_value("empty_means_all_approved") and not self.approved_coins[pside]:
                     # if approved_coins is empty, all coins are approved
                     self.approved_coins[pside] = self.eligible_symbols
                 self.approved_coins_minus_ignored_coins[pside] = (
@@ -2545,7 +2540,7 @@ class Passivbot:
 
 def setup_bot(config):
     """Instantiate the correct exchange bot implementation based on configuration."""
-    user_info = load_user_info(config["live"]["user"])
+    user_info = load_user_info(require_live_value(config, "user"))
     if user_info["exchange"] == "bybit":
         from exchanges.bybit import BybitBot
 
@@ -2614,7 +2609,7 @@ async def main():
     config = load_config(args.config_path, live_only=True)
     update_config_with_args(config, args)
     config = format_config(config, live_only=True)
-    user_info = load_user_info(config["live"]["user"])
+    user_info = load_user_info(require_live_value(config, "user"))
     await load_markets(user_info["exchange"], verbose=True)
 
     config = parse_overrides(config, verbose=True)
@@ -2644,10 +2639,9 @@ async def main():
 
         restarts.append(utc_ms())
         restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]
-        if len(restarts) > bot.config["live"]["max_n_restarts_per_day"]:
-            logging.info(
-                f"n restarts exceeded {bot.config['live']['max_n_restarts_per_day']} last 24h"
-            )
+        max_restarts = int(require_live_value(bot.config, "max_n_restarts_per_day"))
+        if len(restarts) > max_restarts:
+            logging.info(f"n restarts exceeded {max_restarts} last 24h")
             break
 
 

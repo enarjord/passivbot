@@ -398,7 +398,7 @@ async def prepare_hlcvs_mss(config, exchange):
 def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_params=None):
     coins = sorted(set(require_config_value(config, f"backtest.coins.{exchange}")))
     bot_params_list = []
-    bot_params_template = deepcopy(config["bot"])
+    bot_params_template = deepcopy(require_config_value(config, "bot"))
     for coin in coins:
         coin_specific_bot_params = deepcopy(bot_params_template)
         if coin in config.get("coin_overrides", {}):
@@ -441,7 +441,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
 def expand_analysis(analysis_usd, analysis_btc, fills, config):
     keys = ["adg", "adg_w", "mdg", "mdg_w", "gain"]
     for pside in ["long", "short"]:
-        twel = config["bot"][pside]["total_wallet_exposure_limit"]
+        twel = float(require_config_value(config, f"bot.{pside}.total_wallet_exposure_limit"))
         for key in keys:
             analysis_usd[f"{key}_per_exposure_{pside}"] = (
                 (analysis_usd[key] / twel if twel > 0.0 else 0.0)
