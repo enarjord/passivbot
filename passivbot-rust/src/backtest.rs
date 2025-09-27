@@ -40,13 +40,29 @@ pub struct Alphas {
 #[derive(Debug)]
 pub struct EMAs {
     pub long: [f64; 3],
+    pub long_num: [f64; 3],
+    pub long_den: [f64; 3],
     pub short: [f64; 3],
+    pub short_num: [f64; 3],
+    pub short_den: [f64; 3],
     pub vol_long: f64,
+    pub vol_long_num: f64,
+    pub vol_long_den: f64,
     pub vol_short: f64,
+    pub vol_short_num: f64,
+    pub vol_short_den: f64,
     pub log_range_long: f64,
+    pub log_range_long_num: f64,
+    pub log_range_long_den: f64,
     pub log_range_short: f64,
+    pub log_range_short_num: f64,
+    pub log_range_short_den: f64,
     pub grid_log_range_long: f64,
+    pub grid_log_range_long_num: f64,
+    pub grid_log_range_long_den: f64,
     pub grid_log_range_short: f64,
+    pub grid_log_range_short_num: f64,
+    pub grid_log_range_short_den: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -105,6 +121,35 @@ impl EMAs {
         };
         EMABands { upper, lower }
     }
+}
+
+#[inline(always)]
+fn update_adjusted_ema(value: f64, alpha: f64, numerator: &mut f64, denominator: &mut f64) -> f64 {
+    if !value.is_finite() {
+        return if *denominator > 0.0 {
+            *numerator / *denominator
+        } else {
+            value
+        };
+    }
+    if alpha <= 0.0 || !alpha.is_finite() {
+        return if *denominator > 0.0 {
+            *numerator / *denominator
+        } else {
+            value
+        };
+    }
+    let one_minus_alpha = 1.0 - alpha;
+    let new_num = alpha * value + one_minus_alpha * *numerator;
+    let new_den = alpha + one_minus_alpha * *denominator;
+    if !new_den.is_finite() || new_den <= f64::MIN_POSITIVE {
+        *numerator = alpha * value;
+        *denominator = alpha;
+        return value;
+    }
+    *numerator = new_num;
+    *denominator = new_den;
+    new_num / new_den
 }
 
 #[derive(Debug, Default)]
@@ -294,13 +339,29 @@ impl<'a> Backtest<'a> {
                 };
                 EMAs {
                     long: [base_close; 3],
+                    long_num: [base_close; 3],
+                    long_den: [1.0; 3],
                     short: [base_close; 3],
+                    short_num: [base_close; 3],
+                    short_den: [1.0; 3],
                     vol_long: base_volume,
+                    vol_long_num: base_volume,
+                    vol_long_den: 1.0,
                     vol_short: base_volume,
+                    vol_short_num: base_volume,
+                    vol_short_den: 1.0,
                     log_range_long: 0.0,
+                    log_range_long_num: 0.0,
+                    log_range_long_den: 1.0,
                     log_range_short: 0.0,
+                    log_range_short_num: 0.0,
+                    log_range_short_den: 1.0,
                     grid_log_range_long: 0.0,
+                    grid_log_range_long_num: 0.0,
+                    grid_log_range_long_den: 1.0,
                     grid_log_range_short: 0.0,
+                    grid_log_range_short_num: 0.0,
+                    grid_log_range_short_den: 1.0,
                 }
             })
             .collect();
@@ -1667,12 +1728,20 @@ impl<'a> Backtest<'a> {
                 let grid_alpha_short = self.ema_alphas[i].grid_log_range_alpha_short;
                 let emas = &mut self.emas[i];
                 if grid_alpha_long > 0.0 {
-                    emas.grid_log_range_long = hour_log_range * grid_alpha_long
-                        + emas.grid_log_range_long * (1.0 - grid_alpha_long);
+                    emas.grid_log_range_long = update_adjusted_ema(
+                        hour_log_range,
+                        grid_alpha_long,
+                        &mut emas.grid_log_range_long_num,
+                        &mut emas.grid_log_range_long_den,
+                    );
                 }
                 if grid_alpha_short > 0.0 {
-                    emas.grid_log_range_short = hour_log_range * grid_alpha_short
-                        + emas.grid_log_range_short * (1.0 - grid_alpha_short);
+                    emas.grid_log_range_short = update_adjusted_ema(
+                        hour_log_range,
+                        grid_alpha_short,
+                        &mut emas.grid_log_range_short_num,
+                        &mut emas.grid_log_range_short_den,
+                    );
                 }
             }
         }
@@ -1697,23 +1766,41 @@ impl<'a> Backtest<'a> {
             }
 
             let long_alphas = &self.ema_alphas[i].long.alphas;
-            let long_alphas_inv = &self.ema_alphas[i].long.alphas_inv;
             let short_alphas = &self.ema_alphas[i].short.alphas;
-            let short_alphas_inv = &self.ema_alphas[i].short.alphas_inv;
 
             let emas = &mut self.emas[i];
 
             // price EMAs (3 levels)
             for z in 0..3 {
-                emas.long[z] = close_price * long_alphas[z] + emas.long[z] * long_alphas_inv[z];
-                emas.short[z] = close_price * short_alphas[z] + emas.short[z] * short_alphas_inv[z];
+                emas.long[z] = update_adjusted_ema(
+                    close_price,
+                    long_alphas[z],
+                    &mut emas.long_num[z],
+                    &mut emas.long_den[z],
+                );
+                emas.short[z] = update_adjusted_ema(
+                    close_price,
+                    short_alphas[z],
+                    &mut emas.short_num[z],
+                    &mut emas.short_den[z],
+                );
             }
 
             // volume EMAs (single value per pside)
             let vol_alpha_long = self.ema_alphas[i].vol_alpha_long;
             let vol_alpha_short = self.ema_alphas[i].vol_alpha_short;
-            emas.vol_long = vol * vol_alpha_long + emas.vol_long * (1.0 - vol_alpha_long);
-            emas.vol_short = vol * vol_alpha_short + emas.vol_short * (1.0 - vol_alpha_short);
+            emas.vol_long = update_adjusted_ema(
+                vol,
+                vol_alpha_long,
+                &mut emas.vol_long_num,
+                &mut emas.vol_long_den,
+            );
+            emas.vol_short = update_adjusted_ema(
+                vol,
+                vol_alpha_short,
+                &mut emas.vol_short_num,
+                &mut emas.vol_short_den,
+            );
 
             // log range metric: ln(high / low)
             let log_range = if high > 0.0 && low > 0.0 {
@@ -1721,12 +1808,18 @@ impl<'a> Backtest<'a> {
             } else {
                 0.0
             };
-            let log_range_alpha_long = self.ema_alphas[i].log_range_alpha_long;
-            let log_range_alpha_short = self.ema_alphas[i].log_range_alpha_short;
-            emas.log_range_long = log_range * log_range_alpha_long
-                + emas.log_range_long * (1.0 - log_range_alpha_long);
-            emas.log_range_short = log_range * log_range_alpha_short
-                + emas.log_range_short * (1.0 - log_range_alpha_short);
+            emas.log_range_long = update_adjusted_ema(
+                log_range,
+                self.ema_alphas[i].log_range_alpha_long,
+                &mut emas.log_range_long_num,
+                &mut emas.log_range_long_den,
+            );
+            emas.log_range_short = update_adjusted_ema(
+                log_range,
+                self.ema_alphas[i].log_range_alpha_short,
+                &mut emas.log_range_short_num,
+                &mut emas.log_range_short_den,
+            );
         }
     }
 }
