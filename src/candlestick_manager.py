@@ -1850,19 +1850,11 @@ class CandlestickManager:
     # ----- EMA helpers -----
 
     def _ema(self, values: np.ndarray, span: float) -> float:
-        span = float(span)
-        alpha = 2.0 / (span + 1.0)
-        ema = float(values[0])
-        for v in values[1:]:
-            ema = alpha * float(v) + (1.0 - alpha) * ema
-        return ema
+        return float(self._ema_series(values, span)[-1])
 
     def _ema_series(self, values: np.ndarray, span: float) -> np.ndarray:
-        """Return EMA series for `values` using standard recursive definition.
+        """Return bias-corrected EMA (pandas ewm adjust=True) over `values`."""
 
-        y[0] = x[0]; y[t] = α*x[t] + (1-α)*y[t-1]
-        Returns float64 array of same length as `values`.
-        """
         n = int(values.shape[0])
         if n == 0:
             return np.empty((0,), dtype=np.float64)
@@ -1870,9 +1862,20 @@ class CandlestickManager:
         alpha = 2.0 / (span + 1.0)
         one_minus = 1.0 - alpha
         out = np.empty((n,), dtype=np.float64)
-        out[0] = float(values[0])
+        num = float(values[0])
+        den = 1.0
+        out[0] = num / den
         for i in range(1, n):
-            out[i] = one_minus * out[i - 1] + alpha * float(values[i])
+            v = float(values[i])
+            if not np.isfinite(v):
+                out[i] = out[i - 1]
+                continue
+            num = alpha * v + one_minus * num
+            den = alpha + one_minus * den
+            if den <= np.finfo(np.float64).tiny:
+                num = alpha * v
+                den = alpha
+            out[i] = num / den
         return out
 
     async def _latest_finalized_range(
