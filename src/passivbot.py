@@ -20,6 +20,7 @@ import numpy as np
 import inspect
 import passivbot_rust as pbr
 import logging
+import math
 from candlestick_manager import CandlestickManager
 from typing import Dict, Iterable, Tuple, List, Optional
 from utils import (
@@ -56,6 +57,7 @@ from procedures import (
     print_async_exception,
 )
 from utils import get_file_mod_ms
+from downloader import compute_per_coin_warmup_minutes
 import passivbot_rust as pbr
 import re
 
@@ -409,12 +411,24 @@ class Passivbot:
         # Determine window per symbol. For forager mode, use max EMA spans required for
         # volume/log-range across both sides; otherwise use provided/default window.
         default_win = int(getattr(self.cm, "default_window_candles", 120))
+        warmup_map = {}
+        try:
+            warmup_map = compute_per_coin_warmup_minutes(self.config)
+        except Exception:
+            warmup_map = {}
+        default_warm_minutes = warmup_map.get("__default__", default_win)
+        if default_warm_minutes is None:
+            default_warm_minutes = default_win
         is_forager = self.is_forager_mode()
         per_symbol_win: Dict[str, int] = {}
         for sym in symbols:
             if window_candles is not None:
                 per_symbol_win[sym] = int(max(1, int(window_candles)))
                 continue
+            warm_minutes_val = warmup_map.get(sym, default_warm_minutes)
+            warm_minutes = int(math.ceil(float(warm_minutes_val)))
+            if warm_minutes <= 0:
+                warm_minutes = 1
             if is_forager:
                 # Filtering uses 1m log-range EMA spans; keep notation distinct from grid log ranges.
                 try:
@@ -433,9 +447,9 @@ class Passivbot:
                     sn = int(round(self.bp("short", "filter_log_range_ema_span", sym)))
                 except Exception:
                     sn = default_win
-                per_symbol_win[sym] = max(1, lv, ln, sv, sn)
+                per_symbol_win[sym] = max(1, lv, ln, sv, sn, warm_minutes)
             else:
-                per_symbol_win[sym] = default_win
+                per_symbol_win[sym] = max(1, warm_minutes)
 
         sem = asyncio.Semaphore(max(1, int(concurrency)))
         completed = 0
@@ -478,6 +492,32 @@ class Passivbot:
                             last_log_ms = now_ms
 
         await asyncio.gather(*(one(s) for s in symbols))
+
+        # Warm 1h candles for grid log-range EMAs
+        hour_sem = asyncio.Semaphore(max(1, int(concurrency)))
+        end_final_hour = (now // (60 * ONE_MIN_MS)) * (60 * ONE_MIN_MS) - 60 * ONE_MIN_MS
+
+        async def warm_hour(sym: str):
+            async with hour_sem:
+                warm_minutes_val = warmup_map.get(sym, default_warm_minutes)
+                warm_minutes = int(math.ceil(float(warm_minutes_val)))
+                if warm_minutes <= 0:
+                    return
+                warm_hours = max(1, int(math.ceil(warm_minutes / 60.0)))
+                start_ts = int(end_final_hour - warm_hours * 60 * ONE_MIN_MS)
+                try:
+                    await self.cm.get_candles(
+                        sym,
+                        start_ts=start_ts,
+                        end_ts=None,
+                        max_age_ms=ttl_ms,
+                        timeframe="1h",
+                        strict=False,
+                    )
+                except Exception:
+                    pass
+
+        await asyncio.gather(*(warm_hour(s) for s in symbols))
 
     async def update_first_timestamps(self, symbols=[]):
         """Fetch and cache first trade timestamps for the provided symbols."""
