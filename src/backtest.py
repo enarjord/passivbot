@@ -246,9 +246,7 @@ def load_coins_hlcvs_from_cache(config, exchange):
                 btc_usd_prices = np.load(btc_fname)
             else:
                 # Backward compatibility: default to 1.0s if not cached
-                logging.info(
-                    f"{exchange} No BTC/USD prices in cache, using default array of 1.0s"
-                )
+                logging.info(f"{exchange} No BTC/USD prices in cache, using default array of 1.0s")
                 btc_usd_prices = np.ones(hlcvs.shape[0], dtype=np.float64)
         results_path = oj(require_config_value(config, "backtest.base_dir"), exchange, "")
         return cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps
