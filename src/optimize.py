@@ -498,7 +498,9 @@ class Evaluator:
                 else:
                     requested_start_ts = int(candidate_start or 0)
             except Exception:
-                requested_start_ts = int(date_to_ts(require_config_value(config, "backtest.start_date")))
+                requested_start_ts = int(
+                    date_to_ts(require_config_value(config, "backtest.start_date"))
+                )
             self.backtest_params[exchange]["requested_start_timestamp_ms"] = requested_start_ts
             coins_order = self.backtest_params[exchange].get("coins", [])
             hlcvs_arr = self.shared_hlcvs_np[exchange]

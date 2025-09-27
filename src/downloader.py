@@ -1985,9 +1985,7 @@ async def main():
                 require_config_value(config, "backtest.start_date"),
                 require_config_value(config, "backtest.end_date"),
             )
-        logging.info(
-            f"loading markets for {require_config_value(config, 'backtest.exchanges')}"
-        )
+        logging.info(f"loading markets for {require_config_value(config, 'backtest.exchanges')}")
         await asyncio.gather(*[oms[ex].load_markets() for ex in oms])
         approved = require_live_value(config, "approved_coins")
         coins = [x for y in approved.values() for x in y]

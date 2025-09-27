@@ -311,9 +311,9 @@ class BitgetBot(Passivbot):
     def get_order_execution_params(self, order: dict) -> dict:
         # defined for each exchange
         return {
-            "timeInForce": "PO"
-            if require_live_value(self.config, "time_in_force") == "post_only"
-            else "GTC",
+            "timeInForce": (
+                "PO" if require_live_value(self.config, "time_in_force") == "post_only" else "GTC"
+            ),
             "holdSide": order["position_side"],
             "reduceOnly": order["reduce_only"],
             "oneWayMode": False,

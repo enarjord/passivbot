@@ -148,14 +148,10 @@ def determine_passivbot_mode(config: dict, skip=[]) -> str:
     if all(k in config["long"] for k in get_template_config("clock")["long"] if k not in skip):
         return "clock"
     elif all(
-        k in config["long"]
-        for k in get_template_config("recursive_grid")["long"]
-        if k not in skip
+        k in config["long"] for k in get_template_config("recursive_grid")["long"] if k not in skip
     ):
         return "recursive_grid"
-    elif all(
-        k in config["long"] for k in get_template_config("neat_grid")["long"] if k not in skip
-    ):
+    elif all(k in config["long"] for k in get_template_config("neat_grid")["long"] if k not in skip):
         return "neat_grid"
     else:
         raise Exception("unable to determine passivbot mode")

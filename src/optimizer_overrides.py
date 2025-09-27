@@ -10,12 +10,8 @@ def optimizer_overrides(overrides_list, config, pside):
         if override == "lossless_close_trailing":
 
             # Logic for lossless close
-            threshold = require_config_value(
-                config, f"bot.{pside}.close_trailing_threshold_pct"
-            )
-            retracement = require_config_value(
-                config, f"bot.{pside}.close_trailing_retracement_pct"
-            )
+            threshold = require_config_value(config, f"bot.{pside}.close_trailing_threshold_pct")
+            retracement = require_config_value(config, f"bot.{pside}.close_trailing_retracement_pct")
             config["bot"][pside]["close_trailing_threshold_pct"] = max(threshold, retracement)
 
         elif override == "example":

@@ -1244,9 +1244,10 @@ class Passivbot:
 
     def is_pside_enabled(self, pside):
         """Return True if trading is enabled for the given side in the current config."""
-        return self.bot_value(pside, "total_wallet_exposure_limit") > 0.0 and self.bot_value(
-            pside, "n_positions"
-        ) > 0.0
+        return (
+            self.bot_value(pside, "total_wallet_exposure_limit") > 0.0
+            and self.bot_value(pside, "n_positions") > 0.0
+        )
 
     def effective_min_cost_is_low_enough(self, pside, symbol):
         """Check whether the symbol meets the effective minimum cost requirement."""
@@ -1321,9 +1322,8 @@ class Passivbot:
         else:
             return  # pnls already initiated; abort
         logging.info(f"initiating pnls...")
-        age_limit = (
-            self.get_exchange_time()
-            - 1000 * 60 * 60 * 24 * float(self.live_value("pnls_max_lookback_days"))
+        age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * float(
+            self.live_value("pnls_max_lookback_days")
         )
         pnls_cache = []
         if os.path.exists(self.pnls_cache_filepath):
@@ -1360,9 +1360,8 @@ class Passivbot:
 
     async def update_pnls(self):
         """Fetch latest fills, update the PnL cache, and persist it when changed."""
-        age_limit = (
-            self.get_exchange_time()
-            - 1000 * 60 * 60 * 24 * float(self.live_value("pnls_max_lookback_days"))
+        age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * float(
+            self.live_value("pnls_max_lookback_days")
         )
         await self.init_pnls()  # will do nothing if already initiated
         old_ids = {elm["id"] for elm in self.pnls}
