@@ -404,11 +404,13 @@ def managed_mmap(filename, dtype, shape):
             del mmap
 
 
-def validate_array(arr, name):
-    if np.any(np.isnan(arr)):
+def validate_array(arr, name, allow_nan=True):
+    if not allow_nan and np.isnan(arr).any():
         raise ValueError(f"{name} contains NaN values")
-    if np.any(np.isinf(arr)):
+    if np.isinf(arr).any():
         raise ValueError(f"{name} contains inf values")
+    if allow_nan and np.isnan(arr).all():
+        raise ValueError(f"{name} is entirely NaN")
 
 
 class Evaluator:
@@ -1089,7 +1091,9 @@ async def main():
             else:
                 # Fall back to all ones
                 btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
-            validate_array(btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}")
+            validate_array(
+                btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}", allow_nan=False
+            )
             btc_usd_shared_memory_files[exchange] = create_shared_memory_file(
                 btc_usd_data_dict[exchange]
             )
@@ -1121,7 +1125,11 @@ async def main():
                 else:
                     btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
 
-                validate_array(btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}")
+                validate_array(
+                    btc_usd_data_dict[exchange],
+                    f"btc_usd_data for {exchange}",
+                    allow_nan=False,
+                )
                 btc_usd_shared_memory_files[exchange] = create_shared_memory_file(
                     btc_usd_data_dict[exchange]
                 )
@@ -1185,7 +1193,7 @@ async def main():
             logging.info("Using default BTC/USD prices (all 1.0s) as use_btc_collateral is False")
             btc_usd_data = np.ones(hlcvs_dict[next(iter(hlcvs_dict))].shape[0], dtype=np.float64)
 
-        validate_array(btc_usd_data, "btc_usd_data")
+        validate_array(btc_usd_data, "btc_usd_data", allow_nan=False)
         btc_usd_shared_memory_file = create_shared_memory_file(btc_usd_data)
 
         # Initialize evaluator with results queue and BTC/USD shared memory

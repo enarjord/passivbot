@@ -499,6 +499,7 @@ impl<'a> Backtest<'a> {
                         .unwrap_or("<unknown>");
                     let first = self.coin_first_valid_idx[idx];
                     let trade_start = self.coin_trade_start_idx[idx];
+                    /*
                     println!(
                         "[warmup-debug] coin {} (idx {}) became tradeable at k={} (first={}, trade_start={}, warmup={})",
                         coin_name,
@@ -508,6 +509,7 @@ impl<'a> Backtest<'a> {
                         trade_start,
                         trade_start.saturating_sub(first)
                     );
+                    */
                     self.trade_activation_logged[idx] = true;
                 }
                 if k < self.coin_trade_start_idx[idx] && self.coin_is_valid_at(idx, k) {

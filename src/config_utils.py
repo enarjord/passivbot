@@ -980,6 +980,8 @@ def recursive_config_update(config, key, value, path=None):
             return bool(new_value)
         if isinstance(original, int) and not isinstance(original, bool):
             if isinstance(new_value, (int, float)):
+                if isinstance(new_value, float) and not float(new_value).is_integer():
+                    return float(new_value)
                 return int(round(new_value))
         if isinstance(original, float):
             if isinstance(new_value, (int, float)):
@@ -1063,7 +1065,6 @@ def get_template_config(passivbot_mode="v7"):
             "start_date": "2021-04-01",
             "starting_balance": 100000.0,
             "use_btc_collateral": False,
-            "warmup_ratio": 0.1,
             "max_warmup_minutes": 0.0,
         },
         "bot": {
@@ -1154,6 +1155,7 @@ def get_template_config(passivbot_mode="v7"):
             "pnls_max_lookback_days": 30.0,
             "price_distance_threshold": 0.002,
             "time_in_force": "good_till_cancelled",
+            "warmup_ratio": 0.2,
             "user": "bybit_01",
         },
         "optimize": {

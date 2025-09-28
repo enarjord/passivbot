@@ -373,7 +373,7 @@ class BitgetBot(Passivbot):
                         {**x, **{"symbol": s}},
                     )
                 )
-        ideal_orders_tmp = [x[1] for x in sorted(ideal_orders_tmp)][:100]
+        ideal_orders_tmp = [x[1] for x in sorted(ideal_orders_tmp, key=lambda item: item[0])][:100]
         ideal_orders = {symbol: [] for symbol in self.active_symbols}
         for x in ideal_orders_tmp:
             ideal_orders[x["symbol"]].append(x)

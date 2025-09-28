@@ -465,7 +465,7 @@ class Passivbot:
             )
 
         async def one(sym: str):
-            nonlocal completed
+            nonlocal completed, last_log_ms
             async with sem:
                 try:
                     win = int(per_symbol_win.get(sym, default_win))

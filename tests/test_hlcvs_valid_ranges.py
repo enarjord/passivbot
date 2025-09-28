@@ -87,7 +87,8 @@ def test_ensure_valid_index_metadata_default_warmup_fallback():
 
 def test_compute_per_coin_warmup_minutes_handles_overrides():
     config = {
-        "backtest": {"warmup_ratio": 0.1, "max_warmup_minutes": 0.0},
+        "backtest": {"max_warmup_minutes": 0.0},
+        "live": {"warmup_ratio": 0.1},
         "bot": {
             "long": {"ema_span_0": 50},
             "short": {},

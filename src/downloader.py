@@ -161,7 +161,7 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     for key in bound_keys_hours:
         max_minutes = max(max_minutes, _extract_bound_max(bounds, key) * 60.0)
 
-    warmup_ratio = float(require_config_value(config, "backtest.warmup_ratio"))
+    warmup_ratio = float(require_config_value(config, "live.warmup_ratio"))
     limit = require_config_value(config, "backtest.max_warmup_minutes")
 
     if not math.isfinite(max_minutes):
@@ -173,7 +173,7 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
 
 
 def compute_per_coin_warmup_minutes(config: dict) -> dict:
-    warmup_ratio = float(require_config_value(config, "backtest.warmup_ratio"))
+    warmup_ratio = float(require_config_value(config, "live.warmup_ratio"))
     limit = require_config_value(config, "backtest.max_warmup_minutes")
     per_coin = {}
     minute_fields = [
