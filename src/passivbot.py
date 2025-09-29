@@ -49,6 +49,7 @@ from config_utils import (
     parse_overrides,
     require_config_value,
     require_live_value,
+    merge_negative_cli_values,
 )
 from procedures import (
     load_broker_code,
@@ -2652,7 +2653,8 @@ async def main():
     del template_config["optimize"]
     del template_config["backtest"]
     add_arguments_recursively(parser, template_config)
-    args = parser.parse_args()
+    raw_args = merge_negative_cli_values(sys.argv[1:])
+    args = parser.parse_args(raw_args)
     config = load_config(args.config_path, live_only=True)
     update_config_with_args(config, args)
     config = format_config(config, live_only=True)

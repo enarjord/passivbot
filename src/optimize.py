@@ -44,6 +44,7 @@ from config_utils import (
     add_arguments_recursively,
     update_config_with_args,
     require_config_value,
+    merge_negative_cli_values,
 )
 from pure_funcs import (
     denumpyize,
@@ -1025,7 +1026,8 @@ async def main():
             del template_config["live"][key]
     add_arguments_recursively(parser, template_config)
     add_extra_options(parser)
-    args = parser.parse_args()
+    raw_args = merge_negative_cli_values(sys.argv[1:])
+    args = parser.parse_args(raw_args)
     if args.config_path is None:
         logging.info(f"loading default template config configs/template.json")
         config = load_config("configs/template.json", verbose=True)

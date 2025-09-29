@@ -868,6 +868,26 @@ def comma_separated_values(x):
     return x.split(",")
 
 
+def merge_negative_cli_values(argv):
+    """Allow comma-separated values that begin with '-' to be parsed as option values."""
+    out = []
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        if token == "--":
+            out.extend(argv[i:])
+            break
+        if token.startswith("-") and "=" not in token and i + 1 < len(argv):
+            nxt = argv[i + 1]
+            if nxt.startswith("-") and "," in nxt:
+                out.append(f"{token}={nxt}")
+                i += 2
+                continue
+        out.append(token)
+        i += 1
+    return out
+
+
 def create_acronym(full_name, acronyms=set()):
     i = 1
     while True:
