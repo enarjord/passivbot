@@ -413,9 +413,9 @@ class HyperliquidBot(Passivbot):
     async def update_exchange_config(self):
         pass
 
-    def calc_ideal_orders(self):
+    async def calc_ideal_orders(self):
         # hyperliquid needs custom price rounding
-        ideal_orders = super().calc_ideal_orders()
+        ideal_orders = await super().calc_ideal_orders()
         for sym in ideal_orders:
             for i in range(len(ideal_orders[sym])):
                 if ideal_orders[sym][i]["side"] == "sell":
