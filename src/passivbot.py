@@ -2353,7 +2353,11 @@ class Passivbot:
             completed += 1
             if n > 20:
                 now_ms = utc_ms()
-                if (completed == n) or (now_ms - last_log_ms >= 2000) or completed == 1:
+                elapsed_ms = now_ms - started_ms
+                if (
+                    elapsed_ms >= 2000
+                    and ((completed == n) or (now_ms - last_log_ms >= 2000))
+                ):
                     elapsed_s = max(0.001, (now_ms - started_ms) / 1000.0)
                     rate = completed / elapsed_s
                     pct = int(100 * completed / n)
@@ -2420,7 +2424,11 @@ class Passivbot:
             completed += 1
             if n > 20:
                 now_ms = utc_ms()
-                if (completed == n) or (now_ms - last_log_ms >= 2000) or completed == 1:
+                elapsed_ms = now_ms - started_ms
+                if (
+                    elapsed_ms >= 2000
+                    and ((completed == n) or (now_ms - last_log_ms >= 2000))
+                ):
                     elapsed_s = max(0.001, (now_ms - started_ms) / 1000.0)
                     rate = completed / elapsed_s
                     pct = int(100 * completed / n)
