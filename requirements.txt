@@ -6,7 +6,6 @@ colorama==0.4.4
 mkdocs==1.4.0
 mkdocs-material==8.1.8
 pymdown-extensions==9.1
-tqdm==4.62.3
 PyYAML==6.0
 pyecharts==1.9.1
 deap==1.4.1

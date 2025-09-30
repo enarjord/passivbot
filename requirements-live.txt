@@ -10,3 +10,4 @@ hjson==3.0.2
 prettytable==3.0.0
 sortedcontainers==2.4.0
 portalocker==3.2.0
+tqdm==4.62.3
