@@ -316,7 +316,6 @@ class GateIOBot(Passivbot):
     async def update_exchange_config(self):
         pass
 
-    def calc_ideal_orders(self):
-        # hyperliquid needs custom price rounding
-        ideal_orders = super().calc_ideal_orders()
+    async def calc_ideal_orders(self, allow_unstuck: bool = True):
+        ideal_orders = await super().calc_ideal_orders(allow_unstuck=allow_unstuck)
         return ideal_orders

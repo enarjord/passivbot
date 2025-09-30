@@ -308,6 +308,28 @@ class BitgetBot(Passivbot):
         all_res_list = sorted(all_res.values(), key=lambda x: x["timestamp"])
         return all_res_list
 
+    async def fetch_fills_with_types(self, start_time=None, end_time=None):
+        fills = await self.fetch_pnls(start_time=start_time, end_time=end_time)
+        print("n fills", len(fills))
+        order_details_tasks = []
+        for fill in fills:
+            order_details_tasks.append(
+                asyncio.create_task(
+                    self.cca.fetch_order(fill.get("orderId", fill.get("id")), fill["symbol"])
+                )
+            )
+        order_details_results = {}
+        for task in order_details_tasks:
+            result = await task
+            order_details_results[result.get("orderId", result.get("id"))] = result
+        fills_by_id = {fill.get("orderId", result.get("id")): fill for fill in fills}
+        for id_ in order_details_results:
+            if id_ in fills_by_id:
+                fills_by_id[id_].update(order_details_results[id_])
+            else:
+                logging.warning(f"fetch_fills_with_types id missing {id_}")
+        return sorted(fills_by_id.values(), key=lambda x: x["timestamp"])
+
     def get_order_execution_params(self, order: dict) -> dict:
         # defined for each exchange
         return {
@@ -357,11 +379,11 @@ class BitgetBot(Passivbot):
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 
-    async def calc_ideal_orders(self):
+    async def calc_ideal_orders(self, allow_unstuck: bool = True):
         # Bitget returns max 100 open orders per fetch_open_orders.
         # Only create 100 open orders.
         # Drop orders whose pprice diff is greatest.
-        ideal_orders = await super().calc_ideal_orders()
+        ideal_orders = await super().calc_ideal_orders(allow_unstuck=allow_unstuck)
         ideal_orders_tmp = []
         for s in ideal_orders:
             for x in ideal_orders[s]:

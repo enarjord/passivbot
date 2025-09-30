@@ -573,6 +573,21 @@ class Passivbot:
             round(float(order["price"]), 12),
         )
 
+    def has_open_unstuck_order(self) -> bool:
+        """Return True if an unstuck order is currently live on the exchange."""
+        for orders in getattr(self, "open_orders", {}).values():
+            for order in orders or []:
+                custom_id = order.get("custom_id") if isinstance(order, dict) else None
+                if not custom_id:
+                    continue
+                type_id = try_decode_type_id_from_custom_id(custom_id)
+                if type_id is None:
+                    continue
+                order_type = snake_of(type_id)
+                if order_type in ("close_unstuck_long", "close_unstuck_short"):
+                    return True
+        return False
+
     async def run_execution_loop(self):
         """Main execution loop coordinating order generation and exchange interaction."""
         while not self.stop_signal_received:
@@ -1675,7 +1690,7 @@ class Passivbot:
                 logging.error(f"error with {get_function_name()} for {symbol}: {e}")
                 traceback.print_exc()
 
-    async def calc_ideal_orders(self):
+    async def calc_ideal_orders(self, allow_unstuck: bool = True):
         """Compute desired entry and exit orders for every active symbol."""
         # find out which symbols need fresh data
         to_update_last_prices: set[str] = set()
@@ -1825,7 +1840,9 @@ class Passivbot:
                         (x[0], x[1], snake_of(x[2]), x[2]) for x in entries + closes
                     ]
 
-        unstucking_symbol, unstucking_close = await self.calc_unstucking_close()
+        unstucking_symbol, unstucking_close = await self.calc_unstucking_close(
+            allow_new_unstuck=allow_unstuck
+        )
         if unstucking_close[0] != 0.0:
             ideal_orders[unstucking_symbol] = [
                 x for x in ideal_orders[unstucking_symbol] if not "close" in x[2]
@@ -1894,9 +1911,9 @@ class Passivbot:
 
     # Legacy calc_ema_bound removed; pricing uses CandlestickManager EMA bounds
 
-    async def calc_unstucking_close(self) -> (float, float, str, int):
+    async def calc_unstucking_close(self, allow_new_unstuck: bool = True) -> (float, float, str, int):
         """Optionally return an emergency close order for stuck positions."""
-        if len(self.pnls) == 0:
+        if not allow_new_unstuck or len(self.pnls) == 0:
             return "", (
                 0.0,
                 0.0,
@@ -2080,7 +2097,42 @@ class Passivbot:
 
     async def calc_orders_to_cancel_and_create(self):
         """Determine which existing orders to cancel and which new ones to place."""
-        ideal_orders = await self.calc_ideal_orders()
+        allow_new_unstuck = not self.has_open_unstuck_order()
+        ideal_orders = await self.calc_ideal_orders(allow_unstuck=allow_new_unstuck)
+
+        # Sanity check: ideal orders should contain at most one unstuck order
+        unstuck_ideal_count = 0
+        for orders in ideal_orders.values():
+            for order in orders:
+                custom_id = order.get("custom_id", "")
+                order_type_id = try_decode_type_id_from_custom_id(custom_id)
+                if order_type_id is None:
+                    continue
+                if snake_of(order_type_id) in {"close_unstuck_long", "close_unstuck_short"}:
+                    unstuck_ideal_count += 1
+        if unstuck_ideal_count > 1:
+            logging.warning(
+                "ideal_orders contains %s unstuck orders; trimming to one", unstuck_ideal_count
+            )
+            # keep the first encountered order, drop the rest
+            keep_one = True
+            for orders in ideal_orders.values():
+                new_orders = []
+                for order in orders:
+                    custom_id = order.get("custom_id", "")
+                    order_type_id = try_decode_type_id_from_custom_id(custom_id)
+                    if order_type_id is not None and snake_of(order_type_id) in {
+                        "close_unstuck_long",
+                        "close_unstuck_short",
+                    }:
+                        if keep_one:
+                            new_orders.append(order)
+                            keep_one = False
+                        else:
+                            continue
+                    else:
+                        new_orders.append(order)
+                orders[:] = new_orders
         actual_orders = {}
         for symbol in self.active_symbols:
             actual_orders[symbol] = []
@@ -2355,10 +2407,7 @@ class Passivbot:
             if n > 20:
                 now_ms = utc_ms()
                 elapsed_ms = now_ms - started_ms
-                if (
-                    elapsed_ms >= 2000
-                    and ((completed == n) or (now_ms - last_log_ms >= 2000))
-                ):
+                if elapsed_ms >= 2000 and ((completed == n) or (now_ms - last_log_ms >= 2000)):
                     elapsed_s = max(0.001, (now_ms - started_ms) / 1000.0)
                     rate = completed / elapsed_s
                     pct = int(100 * completed / n)
@@ -2426,10 +2475,7 @@ class Passivbot:
             if n > 20:
                 now_ms = utc_ms()
                 elapsed_ms = now_ms - started_ms
-                if (
-                    elapsed_ms >= 2000
-                    and ((completed == n) or (now_ms - last_log_ms >= 2000))
-                ):
+                if elapsed_ms >= 2000 and ((completed == n) or (now_ms - last_log_ms >= 2000)):
                     elapsed_s = max(0.001, (now_ms - started_ms) / 1000.0)
                     rate = completed / elapsed_s
                     pct = int(100 * completed / n)
