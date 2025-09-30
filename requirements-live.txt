@@ -1,3 +1,4 @@
+-r requirements-rust.txt
 python-dateutil==2.8.2
 numba==0.59.1; python_version>='3.9'
 numba==0.58.1; python_version<'3.9'
