@@ -2407,8 +2407,13 @@ class Passivbot:
             if n > 20:
                 now_ms = utc_ms()
                 elapsed_ms = now_ms - started_ms
-                if elapsed_ms >= 2000 and ((completed == n) or (now_ms - last_log_ms >= 2000)):
-                    elapsed_s = max(0.001, (now_ms - started_ms) / 1000.0)
+                should_log = False
+                if completed == n and elapsed_ms >= 5000:
+                    should_log = True
+                elif elapsed_ms >= 5000 and (now_ms - last_log_ms) >= 5000:
+                    should_log = True
+                if should_log:
+                    elapsed_s = max(0.001, elapsed_ms / 1000.0)
                     rate = completed / elapsed_s
                     pct = int(100 * completed / n)
                     eta_s = int((n - completed) / max(1e-6, rate))
@@ -2475,8 +2480,13 @@ class Passivbot:
             if n > 20:
                 now_ms = utc_ms()
                 elapsed_ms = now_ms - started_ms
-                if elapsed_ms >= 2000 and ((completed == n) or (now_ms - last_log_ms >= 2000)):
-                    elapsed_s = max(0.001, (now_ms - started_ms) / 1000.0)
+                should_log = False
+                if completed == n and elapsed_ms >= 5000:
+                    should_log = True
+                elif elapsed_ms >= 5000 and (now_ms - last_log_ms) >= 5000:
+                    should_log = True
+                if should_log:
+                    elapsed_s = max(0.001, elapsed_ms / 1000.0)
                     rate = completed / elapsed_s
                     pct = int(100 * completed / n)
                     eta_s = int((n - completed) / max(1e-6, rate))
