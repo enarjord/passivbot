@@ -89,6 +89,32 @@ def oj(*x):
     return os.path.join(*x)
 
 
+def calculate_longest_static_balance_btc_minutes(fills):
+    if fills is None or len(fills) == 0:
+        return 0.0
+
+    change_minutes = []
+    last_balance_btc = None
+    for fill in fills:
+        try:
+            minute = float(fill[0])
+            balance_btc = float(fill[5])
+        except (IndexError, TypeError, ValueError):
+            return 0.0
+
+        if last_balance_btc is None or balance_btc != last_balance_btc:
+            change_minutes.append(minute)
+            last_balance_btc = balance_btc
+
+    if len(change_minutes) >= 2:
+        longest = max(
+            change_minutes[i] - change_minutes[i - 1] for i in range(1, len(change_minutes))
+        )
+        return float(longest)
+
+    return 0.0
+
+
 def process_forager_fills(fills, coins, hlcvs, equities, equities_btc):
     fdf = pd.DataFrame(
         fills,
@@ -109,6 +135,7 @@ def process_forager_fills(fills, coins, hlcvs, equities, equities_btc):
         ],
     )
     analysis_appendix = {}
+
     pnls = {}
     for pside in ["long", "short"]:
         fdfc = fdf[fdf.type.str.contains(pside)]
@@ -120,7 +147,6 @@ def process_forager_fills(fills, coins, hlcvs, equities, equities_btc):
             continue
         pnls[pside] = profit + loss
         analysis_appendix[f"loss_profit_ratio_{pside}"] = abs(loss / profit)
-
     div_by = 60  # save some disk space. Set to 1 to dump uncropped
     analysis_appendix["pnl_ratio_long_short"] = pnls["long"] / (pnls["long"] + pnls["short"])
     bdf = fdf.groupby((fdf.minute // div_by) * div_by).balance.last()
@@ -437,6 +463,9 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
 
 
 def expand_analysis(analysis_usd, analysis_btc, fills, config):
+    analysis_usd["longest_static_balance_btc_hours"] = (
+        calculate_longest_static_balance_btc_minutes(fills) / 60.0
+    )
     keys = ["adg", "adg_w", "mdg", "mdg_w", "gain"]
     for pside in ["long", "short"]:
         twel = float(require_config_value(config, f"bot.{pside}.total_wallet_exposure_limit"))
