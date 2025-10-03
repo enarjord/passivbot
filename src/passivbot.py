@@ -389,6 +389,59 @@ class Passivbot:
         """
         return self.config_get(["bot", pside, key], symbol)
 
+    def maybe_log_ema_debug(
+        self,
+        ema_bounds_long: Dict[str, Tuple[float, float]],
+        ema_bounds_short: Dict[str, Tuple[float, float]],
+        entry_grid_log_ranges: Dict[str, Dict[str, float]],
+    ) -> None:
+
+        if not hasattr(self, "ema_debug_logging_enabled"):
+            self.ema_debug_logging_enabled = False
+
+        """Emit a throttled log of EMA inputs so toggling visibility stays simple."""
+        if not ema_debug_logging_enabled:
+            return
+        self._ema_debug_log_interval_ms = 30_000
+        self._last_ema_debug_log_ms = 0
+        now = utc_ms()
+        if now - getattr(self, "_last_ema_debug_log_ms", 0) < self._ema_debug_log_interval_ms:
+            return
+        self._last_ema_debug_log_ms = now
+
+        def _safe_span(pside: str, key: str, symbol: str) -> Optional[int]:
+            try:
+                val = self.bp(pside, key, symbol)
+                return int(val) if val is not None else None
+            except Exception:
+                return None
+
+        logs: List[str] = []
+        for pside, bounds in ("long", ema_bounds_long), ("short", ema_bounds_short):
+            if not bounds:
+                continue
+            side_entries: List[str] = []
+            for symbol, (lower, upper) in sorted(bounds.items()):
+                span0 = _safe_span(pside, "ema_span_0", symbol)
+                span1 = _safe_span(pside, "ema_span_1", symbol)
+                grid_lr = (entry_grid_log_ranges or {}).get(pside, {}).get(symbol)
+                parts = [f"{symbol}"]
+                if span0 is not None or span1 is not None:
+                    parts.append(
+                        f"spans=({span0 if span0 is not None else '?'}"
+                        f", {span1 if span1 is not None else '?'})"
+                    )
+                parts.append(f"lower={lower:.6g}")
+                parts.append(f"upper={upper:.6g}")
+                if grid_lr is not None:
+                    parts.append(f"log_range_ema={grid_lr:.6g}")
+                side_entries.append(" ".join(parts))
+            if side_entries:
+                logs.append(f"{pside} -> " + "; ".join(side_entries))
+
+        if logs:
+            logging.info("EMA debug | " + " | ".join(logs))
+
     async def warmup_candles_staggered(
         self, *, concurrency: int = 8, window_candles: int | None = None, ttl_ms: int = 300_000
     ) -> None:
@@ -1754,6 +1807,11 @@ class Passivbot:
                 build_grid_log_range_items("short"), tf="1h", max_age_ms=600_000
             ),
         )
+        self.maybe_log_ema_debug(
+            ema_bounds_long,
+            ema_bounds_short,
+            entry_grid_log_ranges,
+        )
         # long entries take lower bound; short entries take upper bound
         ema_anchor = {
             "long": {s: ema_bounds_long[s][0] for s in ema_bounds_long},
@@ -2394,11 +2452,9 @@ class Passivbot:
         completed = 0
         started_ms = utc_ms()
         last_log_ms = started_ms
-        for t in asyncio.as_completed(tasks.values()):
-            # find which symbol this task corresponds to
-            sym = next((k for k, v in tasks.items() if v is t), None)
+        for sym in tasks:
             try:
-                val = await t
+                val = await tasks[sym]
             except Exception:
                 val = 0.0
             if sym is not None:
@@ -2468,10 +2524,9 @@ class Passivbot:
         completed = 0
         started_ms = utc_ms()
         last_log_ms = started_ms
-        for t in asyncio.as_completed(tasks.values()):
-            sym = next((k for k, v in tasks.items() if v is t), None)
+        for sym in tasks:
             try:
-                val = await t
+                val = await tasks[sym]
             except Exception:
                 val = 0.0
             if sym is not None:
