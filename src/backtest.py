@@ -463,9 +463,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
 
 
 def expand_analysis(analysis_usd, analysis_btc, fills, config):
-    analysis_usd["flat_btc_balance_hours"] = (
-        calculate_flat_btc_balance_minutes(fills) / 60.0
-    )
+    analysis_usd["flat_btc_balance_hours"] = calculate_flat_btc_balance_minutes(fills) / 60.0
     keys = ["adg", "adg_w", "mdg", "mdg_w", "gain"]
     for pside in ["long", "short"]:
         twel = float(require_config_value(config, f"bot.{pside}.total_wallet_exposure_limit"))
