@@ -89,7 +89,7 @@ def oj(*x):
     return os.path.join(*x)
 
 
-def calculate_longest_static_balance_btc_minutes(fills):
+def calculate_flat_btc_balance_minutes(fills):
     if fills is None or len(fills) == 0:
         return 0.0
 
@@ -463,8 +463,8 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
 
 
 def expand_analysis(analysis_usd, analysis_btc, fills, config):
-    analysis_usd["longest_static_balance_btc_hours"] = (
-        calculate_longest_static_balance_btc_minutes(fills) / 60.0
+    analysis_usd["flat_btc_balance_hours"] = (
+        calculate_flat_btc_balance_minutes(fills) / 60.0
     )
     keys = ["adg", "adg_w", "mdg", "mdg_w", "gain"]
     for pside in ["long", "short"]:

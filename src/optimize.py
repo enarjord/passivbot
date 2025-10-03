@@ -609,6 +609,7 @@ class Evaluator:
             "expected_shortfall_1pct": 1.0,
             "exponential_fit_error": 1.0,
             "exponential_fit_error_w": 1.0,
+            "flat_btc_balance_hours": 1.0,
             "gain": -1.0,
             "gain_per_exposure_long": -1.0,
             "gain_per_exposure_short": -1.0,
