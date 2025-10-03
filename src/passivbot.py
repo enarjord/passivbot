@@ -396,8 +396,7 @@ class Passivbot:
         entry_grid_log_ranges: Dict[str, Dict[str, float]],
     ) -> None:
 
-        if not hasattr(self, "ema_debug_logging_enabled"):
-            self.ema_debug_logging_enabled = False
+        ema_debug_logging_enabled = False
 
         """Emit a throttled log of EMA inputs so toggling visibility stays simple."""
         if not ema_debug_logging_enabled:
