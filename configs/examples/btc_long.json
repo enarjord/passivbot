@@ -37,7 +37,7 @@
                   "unstuck_close_pct": 0.08528,
                   "unstuck_ema_dist": -0.07824,
                   "unstuck_loss_allowance_pct": 0.001001,
-                  "unstuck_threshold": 0.7144},
+                  "unstuck_threshold": 0.7318},
          "short": {"close_grid_markup_end": 0.001,
                    "close_grid_markup_start": 0.001,
                    "close_grid_qty_pct": 0.05,
