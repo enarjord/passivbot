@@ -38,6 +38,15 @@ from uuid import uuid4
 from copy import deepcopy
 from collections import defaultdict
 from sortedcontainers import SortedDict
+try:
+    import psutil  # type: ignore
+except Exception:
+    psutil = None
+
+try:
+    import resource  # type: ignore
+except Exception:
+    resource = None
 from config_utils import (
     load_config,
     add_arguments_recursively,
@@ -59,7 +68,6 @@ from procedures import (
 )
 from utils import get_file_mod_ms
 from downloader import compute_per_coin_warmup_minutes
-import passivbot_rust as pbr
 import re
 
 
@@ -70,10 +78,32 @@ round_up = pbr.round_up
 round_dn = pbr.round_dn
 round_dynamic = pbr.round_dynamic
 
+DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL = 20_000
+
 # Match "...0xABCD..." anywhere (case-insensitive)
 _TYPE_MARKER_RE = re.compile(r"0x([0-9a-fA-F]{4})", re.IGNORECASE)
 # Leading pure-hex fallback: optional 0x then 4 hex at the very start
 _LEADING_HEX4_RE = re.compile(r"^(?:0x)?([0-9a-fA-F]{4})", re.IGNORECASE)
+
+
+def _get_process_rss_bytes() -> Optional[int]:
+    """Return current process RSS in bytes or None if unavailable."""
+    try:
+        if psutil is not None:
+            return int(psutil.Process(os.getpid()).memory_info().rss)
+    except Exception:
+        pass
+    if resource is not None:
+        try:
+            usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            if sys.platform.startswith("linux"):
+                usage = int(usage) * 1024
+            else:
+                usage = int(usage)
+            return int(usage)
+        except Exception:
+            pass
+    return None
 
 
 def custom_id_to_snake(custom_id) -> str:
@@ -278,9 +308,26 @@ class Passivbot:
         self.recent_order_cancellations = []
         # CandlestickManager settings from config.live
         cm_kwargs = {"exchange": self.cca, "debug": 0}
-        mem_cap = require_live_value(config, "max_memory_candles_per_symbol")
-        if mem_cap is not None:
-            cm_kwargs["max_memory_candles_per_symbol"] = int(mem_cap)
+        mem_cap_raw = require_live_value(config, "max_memory_candles_per_symbol")
+        mem_cap_effective = DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL
+        try:
+            if mem_cap_raw is not None:
+                mem_cap_effective = int(float(mem_cap_raw))
+        except Exception:
+            logging.warning(
+                "Unable to parse live.max_memory_candles_per_symbol=%r, using default %d",
+                mem_cap_raw,
+                DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL,
+            )
+            mem_cap_effective = DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL
+        if mem_cap_effective <= 0:
+            logging.warning(
+                "live.max_memory_candles_per_symbol=%r is non-positive; using default %d",
+                mem_cap_raw,
+                DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL,
+            )
+            mem_cap_effective = DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL
+        cm_kwargs["max_memory_candles_per_symbol"] = mem_cap_effective
         disk_cap = require_live_value(config, "max_disk_candles_per_symbol_per_tf")
         if disk_cap is not None:
             cm_kwargs["max_disk_candles_per_symbol_per_tf"] = int(disk_cap)
@@ -350,6 +397,50 @@ class Passivbot:
         """Emit debug output only when the instance is in debug mode."""
         if hasattr(self, "debug_mode") and self.debug_mode:
             print(*args)
+
+    def _log_memory_snapshot(self, *, now_ms: Optional[int] = None) -> None:
+        """Log process RSS and key cache metrics for observability."""
+        if now_ms is None:
+            now_ms = utc_ms()
+        rss = _get_process_rss_bytes()
+        if rss is None:
+            return
+        cache_bytes = None
+        cache_candles = None
+        cache_symbols = None
+        try:
+            cache = getattr(self.cm, "_cache", {}) if hasattr(self, "cm") else {}
+            cache_symbols = len(cache)
+            cache_bytes = sum(
+                int(getattr(arr, "nbytes", 0)) for arr in cache.values() if arr is not None
+            )
+            cache_candles = sum(
+                int(arr.shape[0]) for arr in cache.values() if hasattr(arr, "shape")
+            )
+        except Exception:
+            cache_bytes = None
+        prev = getattr(self, "_mem_log_prev", None)
+        pct_change = None
+        if prev and prev.get("rss"):
+            prev_rss = prev["rss"]
+            if prev_rss:
+                pct_change = 100.0 * (rss - prev_rss) / prev_rss
+        parts = [f"Memory usage rss={rss / (1024 * 1024):.2f} MiB"]
+        if pct_change is not None:
+            parts.append(f"Δ={pct_change:+.2f}% vs previous snapshot")
+        if cache_bytes is not None:
+            cache_mib = cache_bytes / (1024 * 1024)
+            cache_desc = f"cm_cache={cache_mib:.2f} MiB"
+            if cache_candles is not None:
+                detail = f"{cache_candles} candles"
+                if cache_symbols is not None:
+                    detail += f" across {cache_symbols} symbols"
+                cache_desc += f" ({detail})"
+            parts.append(cache_desc)
+        logging.info("; ".join(parts))
+        self._mem_log_prev = {"timestamp": now_ms, "rss": rss}
+        if cache_bytes is not None:
+            self._mem_log_prev["cm_cache_bytes"] = cache_bytes
 
     def init_coin_overrides(self):
         """Populate coin override map keyed by symbols for quick lookup."""
@@ -2381,8 +2472,15 @@ class Passivbot:
         logging.info(f"Starting hourly_cycle...")
         while not self.stop_signal_received:
             try:
+                now = utc_ms()
+                mem_prev = getattr(self, "_mem_log_prev", None)
+                last_mem_log_ts = None
+                if isinstance(mem_prev, dict):
+                    last_mem_log_ts = mem_prev.get("timestamp")
+                if last_mem_log_ts is None or now - last_mem_log_ts >= 1000 * 60 * 60:
+                    self._log_memory_snapshot(now_ms=now)
                 # update markets dict once every hour
-                if utc_ms() - self.init_markets_last_update_ms > 1000 * 60 * 60:
+                if now - self.init_markets_last_update_ms > 1000 * 60 * 60:
                     await self.init_markets(verbose=False)
                 await asyncio.sleep(1)
             except Exception as e:
