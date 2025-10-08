@@ -1166,7 +1166,7 @@ def get_template_config(passivbot_mode="v7"):
             "ignored_coins": {"long": [], "short": []},
             "leverage": 10.0,
             "market_orders_allowed": True,
-            "max_memory_candles_per_symbol": 200000,
+            "max_memory_candles_per_symbol": 20000,
             "max_disk_candles_per_symbol_per_tf": 2000000,
             "max_n_cancellations_per_batch": 5,
             "max_n_creations_per_batch": 3,
