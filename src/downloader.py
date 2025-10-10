@@ -302,6 +302,9 @@ async def fetch_url(session, url, retries=5, backoff=1.5):
                 response.raise_for_status()
                 return await response.read()
         except Exception as e:
+            if isinstance(e, aiohttp.ClientResponseError) and getattr(e, "status", None) == 404:
+                logging.warning(f"{url} returned 404; skipping retries.")
+                return None
             last_exc = e
             wait_time = backoff**attempt
             logging.warning(
@@ -316,6 +319,8 @@ async def fetch_zips(url):
     async with aiohttp.ClientSession() as session:
         try:
             content = await fetch_url(session, url)
+            if content is None:
+                return []
             zips = []
             with zipfile.ZipFile(BytesIO(content), "r") as z:
                 for f in z.namelist():
@@ -772,27 +777,49 @@ class OHLCVManager:
         symbolf = self.get_symbol(coin).replace("/USDT:", "")
         dirpath = make_get_filepath(os.path.join(self.cache_filepaths["ohlcvs"], coin, ""))
         base_url = "https://data.binance.vision/data/futures/um/"
-        missing_days = await self.get_missing_days_ohlcvs(coin)
+        fts = await self.get_first_timestamp(coin)
+        archive_start_day = ts_to_date(int(fts))[:10] if fts and fts > 0 else None
+        archive_start_month = archive_start_day[:7] if archive_start_day else None
+
+        def filter_missing_days(days: List[str]) -> List[str]:
+            if not days:
+                return []
+            if archive_start_day:
+                return [d for d in days if d >= archive_start_day]
+            return days
+
+        missing_days = filter_missing_days(await self.get_missing_days_ohlcvs(coin))
 
         # Copy from old directory first
         old_dirpath = f"historical_data/ohlcvs_futures/{symbolf}/"
         if self.copy_ohlcvs_from_old_dir(dirpath, old_dirpath, missing_days, coin):
-            missing_days = await self.get_missing_days_ohlcvs(coin)
+            missing_days = filter_missing_days(await self.get_missing_days_ohlcvs(coin))
             if not missing_days:
                 return
 
         # Download monthy first (there may be gaps)
         month_now = ts_to_date(utc_ms())[:7]
         missing_months = sorted({x[:7] for x in missing_days if x[:7] != month_now})
-        tasks = []
+        if archive_start_month:
+            missing_months = [m for m in missing_months if m >= archive_start_month]
+        month_download_success = {}
+        month_tasks: list[tuple[str, asyncio.Task]] = []
         for month in missing_months:
             fpath = os.path.join(dirpath, month + ".npy")
             if not os.path.exists(fpath):
                 url = f"{base_url}monthly/klines/{symbolf}/1m/{symbolf}-1m-{month}.zip"
                 await self.check_rate_limit()
-                tasks.append(asyncio.create_task(self.download_single_binance(url, fpath)))
-        for task in tasks:
-            await task
+                month_tasks.append(
+                    (
+                        month,
+                        asyncio.create_task(self.download_single_binance(url, fpath)),
+                    )
+                )
+        for month, task in month_tasks:
+            try:
+                month_download_success[month] = bool(await task)
+            except Exception:
+                month_download_success[month] = False
 
         # Convert any monthly data to daily data
         for f in os.listdir(dirpath):
@@ -822,9 +849,21 @@ class OHLCVManager:
                 os.remove(m_fpath)
 
         # Download missing daily
-        missing_days = await self.get_missing_days_ohlcvs(coin)
+        missing_days = filter_missing_days(await self.get_missing_days_ohlcvs(coin))
+        now_dt = datetime.datetime.utcnow().replace(day=1)
+        prev_month_dt = (now_dt - datetime.timedelta(days=1)).replace(day=1)
+        recent_months = {
+            now_dt.strftime("%Y-%m"),
+            prev_month_dt.strftime("%Y-%m"),
+        }
+        skip_daily_months = {
+            month for month, success in month_download_success.items() if not success and month not in recent_months
+        }
         tasks = []
         for day in missing_days:
+            month = day[:7]
+            if month in skip_daily_months:
+                continue
             fpath = os.path.join(dirpath, day + ".npy")
             if not os.path.exists(fpath):
                 url = base_url + f"daily/klines/{symbolf}/1m/{symbolf}-1m-{day}.zip"
@@ -840,9 +879,12 @@ class OHLCVManager:
                 dump_ohlcv_data(ensure_millis(csv), fpath)
                 if self.verbose:
                     logging.info(f"binanceusdm Dumped data {fpath}")
+                return True
+            return False
         except Exception as e:
             logging.error(f"binanceusdm Failed to download {url}: {e}")
             traceback.print_exc()
+            return False
 
     async def download_ohlcvs_bybit(self, coin: str):
         # Bybit has public data archives
