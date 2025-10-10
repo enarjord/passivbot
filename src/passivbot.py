@@ -2701,8 +2701,10 @@ class Passivbot:
         await self.cca.close()
         await self.ccp.close()
 
-    def add_to_coins_lists(self, content, k_coins):
+    def add_to_coins_lists(self, content, k_coins, log_psides=None):
         """Update approved/ignored coin sets from configuration content."""
+        if log_psides is None:
+            log_psides = set(content.keys())
         symbols = None
         psides_equal = content["long"] == content["short"]
         for pside in content:
@@ -2727,12 +2729,14 @@ class Passivbot:
             if symbols and symbols_already != symbols:
                 added = symbols - symbols_already
                 if added:
-                    cstr = ",".join([symbol_to_coin(x) for x in sorted(added)])
-                    logging.info(f"added {cstr} to {k_coins} {pside}")
+                    if pside in log_psides:
+                        cstr = ",".join([symbol_to_coin(x) for x in sorted(added)])
+                        logging.info(f"added {cstr} to {k_coins} {pside}")
                 removed = symbols_already - symbols
                 if removed:
-                    cstr = ",".join([symbol_to_coin(x) for x in sorted(removed)])
-                    logging.info(f"removed {cstr} from {k_coins} {pside}")
+                    if pside in log_psides:
+                        cstr = ",".join([symbol_to_coin(x) for x in sorted(removed)])
+                        logging.info(f"removed {cstr} from {k_coins} {pside}")
                 getattr(self, k_coins)[pside] = symbols
 
     def refresh_approved_ignored_coins_lists(self):
@@ -2742,7 +2746,11 @@ class Passivbot:
                 if not hasattr(self, k):
                     setattr(self, k, {"long": set(), "short": set()})
                 parsed = normalize_coins_source(self.live_value(k))
-                self.add_to_coins_lists(parsed, k)
+                if k == "approved_coins":
+                    log_psides = {ps for ps in parsed if self.is_pside_enabled(ps)}
+                else:
+                    log_psides = set(parsed.keys())
+                self.add_to_coins_lists(parsed, k, log_psides=log_psides)
             self.approved_coins_minus_ignored_coins = {}
             for pside in self.approved_coins:
                 if not self.is_pside_enabled(pside):
