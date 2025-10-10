@@ -3,7 +3,6 @@ import json
 import ccxt.async_support as ccxt
 import os
 import datetime
-import logging
 import dateutil.parser
 import asyncio
 import hjson
@@ -12,6 +11,7 @@ import time
 from collections import defaultdict
 from typing import Dict, Any, List, Union, Optional
 import re
+import logging
 
 
 logging.basicConfig(
@@ -692,3 +692,75 @@ def read_external_coins_lists(filepath) -> dict:
         # Split by newline, comma, and/or space, and filter out empty strings
         items = [item.strip() for item in content.replace(",", " ").split() if item.strip()]
     return {"long": items, "short": items}
+
+
+async def get_first_ohlcv_iteratively(cc, symbol):
+    """Return the earliest OHLCV candle for a Bitget market.
+
+    Bitget does not accept a conventional ``since`` parameter for swap OHLCV
+    queries. Instead we page backwards using ``params={"until": ms}``, where an
+    empty response indicates that ``until`` predates the instrument listing.  We
+    leverage that behaviour to binary-search over monthly candles and then
+    refine the result with a daily fetch.  The returned value is the first full
+    candle ``[timestamp, open, high, low, close, volume]`` if available, else
+    ``None``."""
+
+    DAY_MS = 86_400_000
+    MONTH_MS = 30 * DAY_MS
+
+    async def fetch_month(until: Optional[int] = None):
+        params = {"limit": 200}
+        if until is not None:
+            params["until"] = int(until)
+        return await cc.fetch_ohlcv(symbol, timeframe="1M", params=params)
+
+    async def fetch_day(until: int):
+        return await cc.fetch_ohlcv(
+            symbol, timeframe="1d", params={"until": int(until), "limit": 200}
+        )
+
+    month_chunk = await fetch_month()
+    if not month_chunk:
+        return None
+
+    best_candle = month_chunk[0]
+    first_month_ts = int(best_candle[0])
+
+    # Initial bounds for binary search: start near zero, clamp upper bound to now.
+    now_ms = int(getattr(cc, "milliseconds")())
+    lo = 0
+    hi = max(now_ms, int(month_chunk[-1][0]) + MONTH_MS)
+
+    while hi - lo > MONTH_MS:
+        mid = (lo + hi) // 2
+        candles = await fetch_month(mid)
+        if candles:
+            new_first = int(candles[0][0])
+            if new_first >= hi:
+                break
+            best_candle = candles[0]
+            hi = new_first
+            first_month_ts = new_first
+        else:
+            lo = mid
+
+    # Sequentially step back in case the monthly page was capped by the limit.
+    while True:
+        prev_until = max(0, first_month_ts - 1)
+        if prev_until <= 0:
+            break
+        prev_chunk = await fetch_month(prev_until)
+        if not prev_chunk:
+            break
+        prev_first = int(prev_chunk[0][0])
+        if prev_first >= first_month_ts:
+            break
+        first_month_ts = prev_first
+        best_candle = prev_chunk[0]
+
+    # Refine with daily candles near the discovered month boundary.
+    daily_chunk = await fetch_day(first_month_ts + 32 * DAY_MS)
+    if daily_chunk:
+        return daily_chunk[0]
+
+    return best_candle
