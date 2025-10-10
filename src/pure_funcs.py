@@ -247,13 +247,6 @@ def ts_to_date(timestamp: float) -> str:
     return str(datetime.datetime.utcfromtimestamp(timestamp)).replace(" ", "T")
 
 
-def date2ts_utc(datetime_string):
-    return (
-        dateutil.parser.parse(datetime_string).replace(tzinfo=datetime.timezone.utc).timestamp()
-        * 1000
-    )
-
-
 def get_day(date):
     # date can be str datetime or float/int timestamp
     try:
