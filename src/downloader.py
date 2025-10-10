@@ -857,7 +857,9 @@ class OHLCVManager:
             prev_month_dt.strftime("%Y-%m"),
         }
         skip_daily_months = {
-            month for month, success in month_download_success.items() if not success and month not in recent_months
+            month
+            for month, success in month_download_success.items()
+            if not success and month not in recent_months
         }
         tasks = []
         for day in missing_days:
