@@ -407,7 +407,7 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
 
             # Gather all results for this batch
             batch_results = {}
-            fast_exchanges = [ex for ex in exchange_map if ex in cheap_exchanges]
+            fast_exchanges = [ex for ex in exchange_map if ex != "bitget"]
             for coin in batch:
                 batch_results[coin] = {}
                 for ex_name in fast_exchanges:
@@ -429,6 +429,8 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
                     continue
                 has_valid = False
                 for ex_name, arr in batch_results[coin].items():
+                    if ex_name not in cheap_exchanges:
+                        continue
                     if arr and arr[0][0] > 1262304000000.0:
                         has_valid = True
                         break
