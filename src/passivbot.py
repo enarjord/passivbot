@@ -307,6 +307,7 @@ class Passivbot:
         self.state_change_detected_by_symbol = set()
         self.recent_order_executions = []
         self.recent_order_cancellations = []
+        self._disabled_psides_logged = set()
         # CandlestickManager settings from config.live
         cm_kwargs = {"exchange": self.cca, "debug": 0}
         mem_cap_raw = require_live_value(config, "max_memory_candles_per_symbol")
@@ -2745,13 +2746,23 @@ class Passivbot:
             self.approved_coins_minus_ignored_coins = {}
             for pside in self.approved_coins:
                 if not self.is_pside_enabled(pside):
-                    if self.approved_coins[pside]:
-                        logging.info(
-                            f"{pside} side disabled (zero exposure or positions); clearing approved list."
-                        )
+                    if pside not in self._disabled_psides_logged:
+                        if self.approved_coins[pside]:
+                            logging.info(
+                                f"{pside} side disabled (zero exposure or positions); clearing approved list."
+                            )
+                        else:
+                            logging.info(
+                                f"{pside} side disabled (zero exposure or positions); approved list already empty."
+                            )
+                        self._disabled_psides_logged.add(pside)
                     self.approved_coins[pside] = set()
                     self.approved_coins_minus_ignored_coins[pside] = set()
                     continue
+                else:
+                    if pside in self._disabled_psides_logged:
+                        logging.info(f"{pside} side re-enabled; restoring approved coin handling.")
+                        self._disabled_psides_logged.discard(pside)
                 if self.live_value("empty_means_all_approved") and not self.approved_coins[pside]:
                     # if approved_coins is empty, all coins are approved
                     self.approved_coins[pside] = self.eligible_symbols
