@@ -38,6 +38,7 @@ from uuid import uuid4
 from copy import deepcopy
 from collections import defaultdict
 from sortedcontainers import SortedDict
+
 try:
     import psutil  # type: ignore
 except Exception:
@@ -414,9 +415,7 @@ class Passivbot:
             cache_bytes = sum(
                 int(getattr(arr, "nbytes", 0)) for arr in cache.values() if arr is not None
             )
-            cache_candles = sum(
-                int(arr.shape[0]) for arr in cache.values() if hasattr(arr, "shape")
-            )
+            cache_candles = sum(int(arr.shape[0]) for arr in cache.values() if hasattr(arr, "shape"))
         except Exception:
             cache_bytes = None
         prev = getattr(self, "_mem_log_prev", None)
