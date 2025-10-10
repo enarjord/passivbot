@@ -2745,6 +2745,14 @@ class Passivbot:
                 self.add_to_coins_lists(parsed, k)
             self.approved_coins_minus_ignored_coins = {}
             for pside in self.approved_coins:
+                if not self.is_pside_enabled(pside):
+                    if self.approved_coins[pside]:
+                        logging.info(
+                            f"{pside} side disabled (zero exposure or positions); clearing approved list."
+                        )
+                    self.approved_coins[pside] = set()
+                    self.approved_coins_minus_ignored_coins[pside] = set()
+                    continue
                 if self.live_value("empty_means_all_approved") and not self.approved_coins[pside]:
                     # if approved_coins is empty, all coins are approved
                     self.approved_coins[pside] = self.eligible_symbols
