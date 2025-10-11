@@ -35,13 +35,16 @@ from backtest import (
     prep_backtest_args,
     expand_analysis,
 )
+from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from config_utils import (
-    get_template_live_config,
+    get_template_config,
     load_hjson_config,
     load_config,
     format_config,
     add_arguments_recursively,
     update_config_with_args,
+    require_config_value,
+    merge_negative_cli_values,
 )
 from pure_funcs import (
     denumpyize,
@@ -49,7 +52,7 @@ from pure_funcs import (
     calc_hash,
     flatten,
 )
-from utils import date_to_ts, ts_to_date_utc, utc_ms, make_get_filepath, format_approved_ignored_coins
+from utils import date_to_ts, ts_to_date, utc_ms, make_get_filepath, format_approved_ignored_coins
 from copy import deepcopy
 from main import manage_rust_compilation
 import numpy as np
@@ -121,7 +124,7 @@ def extract_bounds_tuple_list_from_config(config) -> [Bound]:
                 return tuple(sorted([val[0], val[1]]))
         raise Exception(f"malformed bound {key}: {val}")
 
-    template_config = get_template_live_config(
+    template_config = get_template_config(
         TEMPLATE_CONFIG_MODE
     )  # single source of truth for key names
     keys_ignored = get_bound_keys_ignored()
@@ -402,11 +405,13 @@ def managed_mmap(filename, dtype, shape):
             del mmap
 
 
-def validate_array(arr, name):
-    if np.any(np.isnan(arr)):
+def validate_array(arr, name, allow_nan=True):
+    if not allow_nan and np.isnan(arr).any():
         raise ValueError(f"{name} contains NaN values")
-    if np.any(np.isinf(arr)):
+    if np.isinf(arr).any():
         raise ValueError(f"{name} contains inf values")
+    if allow_nan and np.isnan(arr).all():
+        raise ValueError(f"{name} is entirely NaN")
 
 
 class Evaluator:
@@ -422,6 +427,7 @@ class Evaluator:
         results_queue,
         seen_hashes=None,
         duplicate_counter=None,
+        timestamps=None,
     ):
         logging.info("Initializing Evaluator...")
         self.shared_memory_files = shared_memory_files
@@ -430,6 +436,7 @@ class Evaluator:
         self.btc_usd_shared_memory_files = btc_usd_shared_memory_files
         self.btc_usd_dtypes = btc_usd_dtypes
         self.msss = msss
+        self.timestamps = timestamps or {}
         self.exchanges = list(shared_memory_files.keys())
 
         self.mmap_contexts = {}
@@ -446,6 +453,90 @@ class Evaluator:
             self.shared_hlcvs_np[exchange] = self.mmap_contexts[exchange].__enter__()
             _, self.exchange_params[exchange], self.backtest_params[exchange] = prep_backtest_args(
                 config, self.msss[exchange], exchange
+            )
+            first_ts_list = self.timestamps.get(exchange)
+            first_ts_ms = 0
+            if first_ts_list is not None and len(first_ts_list) > 0:
+                try:
+                    first_ts_ms = int(first_ts_list[0])
+                except Exception:
+                    logging.warning(
+                        "Evaluator: unable to parse first timestamp for %s from timestamps array",
+                        exchange,
+                    )
+                    first_ts_ms = 0
+            exchange_mss = self.msss.get(exchange, {}) if isinstance(self.msss, dict) else {}
+            meta = exchange_mss.get("__meta__", {}) if isinstance(exchange_mss, dict) else {}
+            if first_ts_ms == 0:
+                candidate_ts = (
+                    meta.get("requested_start_ts")
+                    or meta.get("effective_start_ts")
+                    or require_config_value(config, "backtest.start_date")
+                )
+                if isinstance(candidate_ts, (int, float)):
+                    first_ts_ms = int(candidate_ts)
+                elif isinstance(candidate_ts, str):
+                    try:
+                        first_ts_ms = int(date_to_ts(candidate_ts))
+                    except Exception:
+                        first_ts_ms = 0
+                if first_ts_ms:
+                    logging.info(
+                        "Evaluator: using fallback first timestamp %s for %s",
+                        first_ts_ms,
+                        exchange,
+                    )
+                else:
+                    logging.warning(
+                        "Evaluator: falling back to 0 first_timestamp_ms for %s; timestamps unavailable",
+                        exchange,
+                    )
+            self.backtest_params[exchange]["first_timestamp_ms"] = first_ts_ms
+            candidate_start = meta.get("requested_start_ts") or require_config_value(
+                config, "backtest.start_date"
+            )
+            try:
+                if isinstance(candidate_start, str):
+                    requested_start_ts = int(date_to_ts(candidate_start))
+                else:
+                    requested_start_ts = int(candidate_start or 0)
+            except Exception:
+                requested_start_ts = int(
+                    date_to_ts(require_config_value(config, "backtest.start_date"))
+                )
+            self.backtest_params[exchange]["requested_start_timestamp_ms"] = requested_start_ts
+            coins_order = self.backtest_params[exchange].get("coins", [])
+            hlcvs_arr = self.shared_hlcvs_np[exchange]
+            total_steps = hlcvs_arr.shape[0]
+            first_valid_indices = []
+            last_valid_indices = []
+            warmup_minutes = []
+            trade_start_indices = []
+            warmup_map = compute_per_coin_warmup_minutes(config)
+            default_warm = int(warmup_map.get("__default__", 0))
+            for idx, coin in enumerate(coins_order):
+                meta_coin = exchange_mss.get(coin, {}) if isinstance(exchange_mss, dict) else {}
+                first_idx = int(meta_coin.get("first_valid_index", 0))
+                last_idx = int(meta_coin.get("last_valid_index", total_steps - 1))
+                if first_idx >= total_steps:
+                    first_idx = total_steps
+                if last_idx >= total_steps:
+                    last_idx = total_steps - 1
+                first_valid_indices.append(first_idx)
+                last_valid_indices.append(last_idx)
+                warm = int(meta_coin.get("warmup_minutes", warmup_map.get(coin, default_warm)))
+                warmup_minutes.append(warm)
+                if first_idx > last_idx:
+                    trade_idx = first_idx
+                else:
+                    trade_idx = min(last_idx, first_idx + warm)
+                trade_start_indices.append(trade_idx)
+            self.backtest_params[exchange]["first_valid_indices"] = first_valid_indices
+            self.backtest_params[exchange]["last_valid_indices"] = last_valid_indices
+            self.backtest_params[exchange]["warmup_minutes"] = warmup_minutes
+            self.backtest_params[exchange]["trade_start_indices"] = trade_start_indices
+            self.backtest_params[exchange]["global_warmup_bars"] = compute_backtest_warmup_minutes(
+                config
             )
             logging.info(f"mmap_context entered successfully for {exchange}.")
 
@@ -518,6 +609,7 @@ class Evaluator:
             "expected_shortfall_1pct": 1.0,
             "exponential_fit_error": 1.0,
             "exponential_fit_error_w": 1.0,
+            "flat_btc_balance_hours": 1.0,
             "gain": -1.0,
             "gain_per_exposure_long": -1.0,
             "gain_per_exposure_short": -1.0,
@@ -814,6 +906,54 @@ def add_extra_options(parser):
         default=None,
         help="Start with given live configs. Single json file or dir with multiple json files",
     )
+    parser.add_argument(
+        "-ft",
+        "--fine_tune_params",
+        "--fine-tune-params",
+        type=str,
+        default="",
+        dest="fine_tune_params",
+        help=(
+            "Comma-separated optimize bounds keys to tune; other parameters are fixed to their current config values"
+        ),
+    )
+
+
+def apply_fine_tune_bounds(config: dict, fine_tune_params: list[str]) -> None:
+    if not fine_tune_params:
+        return
+
+    bounds = config.get("optimize", {}).get("bounds", {})
+    bot_cfg = config.get("bot", {})
+    fine_tune_set = set(fine_tune_params)
+
+    for key in list(bounds.keys()):
+        if key in fine_tune_set:
+            continue
+        try:
+            pside, param = key.split("_", 1)
+        except ValueError:
+            logging.warning(f"fine-tune bounds: unable to parse key '{key}', skipping")
+            continue
+        side_cfg = bot_cfg.get(pside)
+        if not isinstance(side_cfg, dict) or param not in side_cfg:
+            logging.warning(
+                f"fine-tune bounds: missing bot value for '{key}', leaving bounds unchanged"
+            )
+            continue
+        value = side_cfg[param]
+        try:
+            value_float = float(value)
+            bounds[key] = [value_float, value_float]
+        except (TypeError, ValueError):
+            bounds[key] = [value, value]
+
+    missing = [key for key in fine_tune_set if key not in bounds]
+    if missing:
+        logging.warning(
+            "fine-tune bounds: requested keys not found in optimize bounds: %s",
+            ",".join(sorted(missing)),
+        )
 
 
 def extract_configs(path):
@@ -876,20 +1016,19 @@ async def main():
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )
-    template_config = get_template_live_config(TEMPLATE_CONFIG_MODE)
+    template_config = get_template_config(TEMPLATE_CONFIG_MODE)
     del template_config["bot"]
     keep_live_keys = {
         "approved_coins",
         "minimum_coin_age_days",
-        "ohlcv_rolling_window",
-        "relative_volume_filter_clip_pct",
     }
     for key in sorted(template_config["live"]):
         if key not in keep_live_keys:
             del template_config["live"][key]
     add_arguments_recursively(parser, template_config)
     add_extra_options(parser)
-    args = parser.parse_args()
+    raw_args = merge_negative_cli_values(sys.argv[1:])
+    args = parser.parse_args(raw_args)
     if args.config_path is None:
         logging.info(f"loading default template config configs/template.json")
         config = load_config("configs/template.json", verbose=True)
@@ -898,7 +1037,19 @@ async def main():
         config = load_config(args.config_path, verbose=True)
     update_config_with_args(config, args)
     config = format_config(config, verbose=True)
-    await format_approved_ignored_coins(config, config["backtest"]["exchanges"])
+    fine_tune_params = (
+        [p.strip() for p in (args.fine_tune_params or "").split(",") if p.strip()]
+        if getattr(args, "fine_tune_params", "")
+        else []
+    )
+    apply_fine_tune_bounds(config, fine_tune_params)
+    if fine_tune_params:
+        logging.info(
+            "Fine-tuning mode active for %s",
+            ", ".join(sorted(fine_tune_params)),
+        )
+    backtest_exchanges = require_config_value(config, "backtest.exchanges")
+    await format_approved_ignored_coins(config, backtest_exchanges)
     try:
         # Prepare data for each exchange
         hlcvs_dict = {}
@@ -906,19 +1057,21 @@ async def main():
         hlcvs_shapes = {}
         hlcvs_dtypes = {}
         msss = {}
+        timestamps_dict = {}
 
-        # NEW: Store per-exchange BTC arrays in a dict,
+        # Store per-exchange BTC arrays in a dict,
         # and store their shared-memory file names in another dict.
         btc_usd_data_dict = {}
         btc_usd_shared_memory_files = {}
         btc_usd_dtypes = {}
 
         config["backtest"]["coins"] = {}
-        if config["backtest"]["combine_ohlcvs"]:
+        if bool(require_config_value(config, "backtest.combine_ohlcvs")):
             exchange = "combined"
-            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await prepare_hlcvs_mss(
-                config, exchange
+            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = (
+                await prepare_hlcvs_mss(config, exchange)
             )
+            timestamps_dict[exchange] = _timestamps
             exchange_preference = defaultdict(list)
             for coin in coins:
                 exchange_preference[mss[coin]["exchange"]].append(coin)
@@ -935,13 +1088,15 @@ async def main():
             validate_array(hlcvs, "hlcvs")
             shared_memory_file = create_shared_memory_file(hlcvs)
             shared_memory_files[exchange] = shared_memory_file
-            if config["backtest"].get("use_btc_collateral", False):
+            if bool(require_config_value(config, "backtest.use_btc_collateral")):
                 # Use the fetched array
                 btc_usd_data_dict[exchange] = btc_usd_prices
             else:
                 # Fall back to all ones
                 btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
-            validate_array(btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}")
+            validate_array(
+                btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}", allow_nan=False
+            )
             btc_usd_shared_memory_files[exchange] = create_shared_memory_file(
                 btc_usd_data_dict[exchange]
             )
@@ -949,10 +1104,13 @@ async def main():
             logging.info(f"Finished creating shared memory file for {exchange}: {shared_memory_file}")
         else:
             tasks = {}
-            for exchange in config["backtest"]["exchanges"]:
+            for exchange in backtest_exchanges:
                 tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
-            for exchange in config["backtest"]["exchanges"]:
-                coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices = await tasks[exchange]
+            for exchange in backtest_exchanges:
+                coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = await tasks[
+                    exchange
+                ]
+                timestamps_dict[exchange] = _timestamps
                 config["backtest"]["coins"][exchange] = coins
                 hlcvs_dict[exchange] = hlcvs
                 hlcvs_shapes[exchange] = hlcvs.shape
@@ -965,12 +1123,16 @@ async def main():
                 shared_memory_file = create_shared_memory_file(hlcvs)
                 shared_memory_files[exchange] = shared_memory_file
                 # Create the BTC array for this exchange
-                if config["backtest"].get("use_btc_collateral", False):
+                if bool(require_config_value(config, "backtest.use_btc_collateral")):
                     btc_usd_data_dict[exchange] = btc_usd_prices
                 else:
                     btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
 
-                validate_array(btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}")
+                validate_array(
+                    btc_usd_data_dict[exchange],
+                    f"btc_usd_data for {exchange}",
+                    allow_nan=False,
+                )
                 btc_usd_shared_memory_files[exchange] = create_shared_memory_file(
                     btc_usd_data_dict[exchange]
                 )
@@ -978,17 +1140,21 @@ async def main():
                 logging.info(
                     f"Finished creating shared memory file for {exchange}: {shared_memory_file}"
                 )
-        exchanges = config["backtest"]["exchanges"]
-        exchanges_fname = "combined" if config["backtest"]["combine_ohlcvs"] else "_".join(exchanges)
-        date_fname = ts_to_date_utc(utc_ms())[:19].replace(":", "_")
+        exchanges = backtest_exchanges
+        exchanges_fname = (
+            "combined"
+            if bool(require_config_value(config, "backtest.combine_ohlcvs"))
+            else "_".join(exchanges)
+        )
+        date_fname = ts_to_date(utc_ms())[:19].replace(":", "_")
         coins = sorted(set([x for y in config["backtest"]["coins"].values() for x in y]))
         coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
         hash_snippet = uuid4().hex[:8]
         n_days = int(
             round(
                 (
-                    date_to_ts(config["backtest"]["end_date"])
-                    - date_to_ts(config["backtest"]["start_date"])
+                    date_to_ts(require_config_value(config, "backtest.end_date"))
+                    - date_to_ts(require_config_value(config, "backtest.start_date"))
                 )
                 / (1000 * 60 * 60 * 24)
             )
@@ -1024,13 +1190,13 @@ async def main():
         # For optimization, use the BTC/USD prices from the first exchange (or combined)
         # Since all exchanges should align in timesteps, this should be consistent
         btc_usd_data = btc_usd_prices  # Use the fetched btc_usd_prices from prepare_hlcvs_mss
-        if config["backtest"].get("use_btc_collateral", False):
+        if bool(require_config_value(config, "backtest.use_btc_collateral")):
             logging.info("Using fetched BTC/USD prices for collateral")
         else:
             logging.info("Using default BTC/USD prices (all 1.0s) as use_btc_collateral is False")
             btc_usd_data = np.ones(hlcvs_dict[next(iter(hlcvs_dict))].shape[0], dtype=np.float64)
 
-        validate_array(btc_usd_data, "btc_usd_data")
+        validate_array(btc_usd_data, "btc_usd_data", allow_nan=False)
         btc_usd_shared_memory_file = create_shared_memory_file(btc_usd_data)
 
         # Initialize evaluator with results queue and BTC/USD shared memory
@@ -1046,6 +1212,7 @@ async def main():
             results_queue=results_queue,
             seen_hashes=seen_hashes,
             duplicate_counter=duplicate_counter,
+            timestamps=timestamps_dict,
         )
 
         logging.info(f"Finished initializing evaluator...")

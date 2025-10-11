@@ -6,7 +6,8 @@ import pprint
 import asyncio
 import traceback
 import numpy as np
-from utils import utc_ms, ts_to_date_utc
+from utils import utc_ms, ts_to_date
+from config_utils import require_live_value
 from pure_funcs import (
     multi_replace,
     floatify,
@@ -229,7 +230,7 @@ class BitgetBot(Passivbot):
                 data_d[h]["amount"] = float(x["baseVolume"])
                 data_d[h]["id"] = x["tradeId"]
                 data_d[h]["timestamp"] = float(x["cTime"])
-                data_d[h]["datetime"] = ts_to_date_utc(data_d[h]["timestamp"])
+                data_d[h]["datetime"] = ts_to_date(data_d[h]["timestamp"])
                 data_d[h]["position_side"] = side_pos_side_map[x["side"]]
                 data_d[h]["symbol"] = self.get_symbol_id_inv(x["symbol"])
             if start_time is None:
@@ -239,7 +240,7 @@ class BitgetBot(Passivbot):
             if last_ts < start_time:
                 # print("debug e")
                 break
-            logging.info(f"fetched {len(data)} fills until {ts_to_date_utc(last_ts)[:19]}")
+            logging.info(f"fetched {len(data)} fills until {ts_to_date(last_ts)[:19]}")
             params["endTime"] = int(last_ts)
         return sorted(data_d.values(), key=lambda x: x["timestamp"])
 
@@ -307,10 +308,34 @@ class BitgetBot(Passivbot):
         all_res_list = sorted(all_res.values(), key=lambda x: x["timestamp"])
         return all_res_list
 
+    async def fetch_fills_with_types(self, start_time=None, end_time=None):
+        fills = await self.fetch_pnls(start_time=start_time, end_time=end_time)
+        print("n fills", len(fills))
+        order_details_tasks = []
+        for fill in fills:
+            order_details_tasks.append(
+                asyncio.create_task(
+                    self.cca.fetch_order(fill.get("orderId", fill.get("id")), fill["symbol"])
+                )
+            )
+        order_details_results = {}
+        for task in order_details_tasks:
+            result = await task
+            order_details_results[result.get("orderId", result.get("id"))] = result
+        fills_by_id = {fill.get("orderId", result.get("id")): fill for fill in fills}
+        for id_ in order_details_results:
+            if id_ in fills_by_id:
+                fills_by_id[id_].update(order_details_results[id_])
+            else:
+                logging.warning(f"fetch_fills_with_types id missing {id_}")
+        return sorted(fills_by_id.values(), key=lambda x: x["timestamp"])
+
     def get_order_execution_params(self, order: dict) -> dict:
         # defined for each exchange
         return {
-            "timeInForce": "PO" if self.config["live"]["time_in_force"] == "post_only" else "GTC",
+            "timeInForce": (
+                "PO" if require_live_value(self.config, "time_in_force") == "post_only" else "GTC"
+            ),
             "holdSide": order["position_side"],
             "reduceOnly": order["reduce_only"],
             "oneWayMode": False,
@@ -354,19 +379,23 @@ class BitgetBot(Passivbot):
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 
-    def calc_ideal_orders(self):
+    async def calc_ideal_orders(self, allow_unstuck: bool = True):
         # Bitget returns max 100 open orders per fetch_open_orders.
         # Only create 100 open orders.
         # Drop orders whose pprice diff is greatest.
-        ideal_orders = super().calc_ideal_orders()
+        ideal_orders = await super().calc_ideal_orders(allow_unstuck=allow_unstuck)
         ideal_orders_tmp = []
         for s in ideal_orders:
             for x in ideal_orders[s]:
-                ideal_orders_tmp.append({**x, **{"symbol": s}})
-        ideal_orders_tmp = sorted(
-            ideal_orders_tmp,
-            key=lambda x: calc_diff(x["price"], self.get_last_price(x["symbol"])),
-        )[:100]
+                ideal_orders_tmp.append(
+                    (
+                        calc_diff(
+                            x["price"], (await self.cm.get_current_close(s, max_age_ms=10_000))
+                        ),
+                        {**x, **{"symbol": s}},
+                    )
+                )
+        ideal_orders_tmp = [x[1] for x in sorted(ideal_orders_tmp, key=lambda item: item[0])][:100]
         ideal_orders = {symbol: [] for symbol in self.active_symbols}
         for x in ideal_orders_tmp:
             ideal_orders[x["symbol"]].append(x)

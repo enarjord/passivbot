@@ -12,7 +12,15 @@ import argparse
 import re
 from collections import defaultdict
 from collections.abc import Sized
-from utils import coin_to_symbol, symbol_to_coin, make_get_filepath, load_markets
+from utils import (
+    coin_to_symbol,
+    symbol_to_coin,
+    make_get_filepath,
+    load_markets,
+    get_file_mod_ms,
+    date_to_ts,
+    get_first_ohlcv_iteratively,
+)
 import sys
 import passivbot_rust as pbr
 from typing import Union, Optional, Set, Any, List
@@ -39,7 +47,6 @@ from pure_funcs import (
     sort_dict_keys,
     make_compatible,
     determine_passivbot_mode,
-    date2ts_utc,
     flatten,
 )
 
@@ -60,7 +67,7 @@ def get_all_eligible_symbols(exchange="binance"):
     loaded_json = None
     try:
         loaded_json = json.load(open(filepath))
-        if utc_ms() - get_file_mod_utc(filepath) > 1000 * 60 * 60 * 24:
+        if utc_ms() - get_file_mod_ms(filepath) > 1000 * 60 * 60 * 24:
             print(f"Eligible_symbols cache more than 24h old. Fetching new.")
         else:
             return loaded_json
@@ -248,6 +255,9 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
              only entries for the specified exchange are returned.
     """
 
+    # cheap_exchanges = {"binanceusdm", "bybit", "okx", "gateio", "hyperliquid"}
+    cheap_exchanges = {"binanceusdm", "bybit", "okx"}
+
     async def fetch_ohlcv_with_start(exchange_name, symbol, cc):
         """
         Fetch OHLCV data for `symbol` on `exchange_name`, starting from a
@@ -260,19 +270,19 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
 
         elif exchange_name in ["bybit", "gateio"]:
             # Data since 2018
-            return await cc.fetch_ohlcv(symbol, since=int(date2ts_utc("2018-01-01")), timeframe="1d")
+            return await cc.fetch_ohlcv(symbol, since=int(date_to_ts("2018-01-01")), timeframe="1d")
 
         elif exchange_name == "okx":
             # Monthly timeframe; data since 2018
-            return await cc.fetch_ohlcv(symbol, since=int(date2ts_utc("2018-01-01")), timeframe="1M")
+            return await cc.fetch_ohlcv(symbol, since=int(date_to_ts("2018-01-01")), timeframe="1M")
 
         elif exchange_name == "bitget":
-            # Weekly timeframe; data since 2018
-            return await cc.fetch_ohlcv(symbol, since=int(date2ts_utc("2018-01-01")), timeframe="1w")
+            first_candle = await get_first_ohlcv_iteratively(cc, symbol)
+            return [first_candle] if first_candle else []
 
         else:  # e.g., 'hyperliquid'
             # Weekly timeframe; data since 2021
-            return await cc.fetch_ohlcv(symbol, since=int(date2ts_utc("2021-01-01")), timeframe="1w")
+            return await cc.fetch_ohlcv(symbol, since=int(date_to_ts("2021-01-01")), timeframe="1w")
 
     # Remove duplicates and sort the input coins for consistency
     coins = sorted(set(symbol_to_coin(coin) for coin in coins))
@@ -380,25 +390,27 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
 
             # Create tasks for every coin/exchange pair in this batch
             tasks = {}
+            bitget_symbols = {}
             for coin in batch:
                 tasks[coin] = {}
                 for ex_name, quote in exchange_map.items():
-                    # Build list of eligible swap symbols on this exchange
-                    eligible_symbols = [
-                        s for s in all_markets[ex_name] if all_markets[ex_name][s]["swap"]
-                    ]
                     # Convert coin to a symbol recognized by the exchange, e.g. "BTC/USDT:USDT"
                     symbol = coin_to_symbol(coin, ex_name)
-                    if symbol:
-                        tasks[coin][ex_name] = asyncio.create_task(
-                            fetch_ohlcv_with_start(ex_name, symbol, ccxt_clients[ex_name])
-                        )
+                    if not symbol:
+                        continue
+                    if ex_name == "bitget":
+                        bitget_symbols[coin] = symbol
+                        continue
+                    tasks[coin][ex_name] = asyncio.create_task(
+                        fetch_ohlcv_with_start(ex_name, symbol, ccxt_clients[ex_name])
+                    )
 
             # Gather all results for this batch
             batch_results = {}
+            fast_exchanges = [ex for ex in exchange_map if ex != "bitget"]
             for coin in batch:
                 batch_results[coin] = {}
-                for ex_name in exchange_map:
+                for ex_name in fast_exchanges:
                     if ex_name in tasks[coin]:
                         try:
                             data = await tasks[coin][ex_name]
@@ -409,6 +421,30 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
                                 )
                         except Exception as e:
                             print(f"Warning: failed to fetch OHLCV for {coin} on {ex_name}: {e}")
+
+            # Second pass: issue expensive Bitget fetch only for unresolved coins.
+            for coin in batch:
+                symbol = bitget_symbols.get(coin)
+                if not symbol:
+                    continue
+                has_valid = False
+                for ex_name, arr in batch_results[coin].items():
+                    if ex_name not in cheap_exchanges:
+                        continue
+                    if arr and arr[0][0] > 1262304000000.0:
+                        has_valid = True
+                        break
+                if has_valid:
+                    continue
+                try:
+                    data = await fetch_ohlcv_with_start("bitget", symbol, ccxt_clients["bitget"])
+                    if data:
+                        batch_results[coin]["bitget"] = data
+                        print(
+                            f"Fetched bitget {coin} => first candle: {data[0] if data else 'no data'}"
+                        )
+                except Exception as e:
+                    print(f"Warning: failed to fetch OHLCV for {coin} on bitget: {e}")
 
             # Process results for each coin in this batch
             for coin in batch:

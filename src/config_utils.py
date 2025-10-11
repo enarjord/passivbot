@@ -168,7 +168,9 @@ def get_allowed_modifications():
                 "enforce_exposure_limit": True,
                 "entry_grid_double_down_factor": True,
                 "entry_grid_spacing_pct": True,
-                "entry_grid_spacing_weight": True,
+                "entry_grid_spacing_log_span_hours": True,
+                "entry_grid_spacing_log_weight": True,
+                "entry_grid_spacing_we_weight": True,
                 "entry_initial_ema_dist": True,
                 "entry_initial_qty_pct": True,
                 "entry_trailing_double_down_factor": True,
@@ -193,7 +195,9 @@ def get_allowed_modifications():
                 "enforce_exposure_limit": True,
                 "entry_grid_double_down_factor": True,
                 "entry_grid_spacing_pct": True,
-                "entry_grid_spacing_weight": True,
+                "entry_grid_spacing_log_span_hours": True,
+                "entry_grid_spacing_log_weight": True,
+                "entry_grid_spacing_we_weight": True,
                 "entry_initial_ema_dist": True,
                 "entry_initial_qty_pct": True,
                 "entry_trailing_double_down_factor": True,
@@ -404,104 +408,203 @@ def _build_flag_argparser() -> argparse.ArgumentParser:
     return p
 
 
-def format_config(config: dict, verbose=True, live_only=False, base_config_path: str = "") -> dict:
-    # attempts to format a config to v7 config
-    template = get_template_live_config("v7")
-    # renamings
-    cmap = {
-        "ddown_factor": "entry_grid_double_down_factor",
-        "initial_eprice_ema_dist": "entry_initial_ema_dist",
-        "initial_qty_pct": "entry_initial_qty_pct",
-        "markup_range": "close_grid_markup_range",
-        "min_markup": "close_grid_min_markup",
-        "rentry_pprice_dist": "entry_grid_spacing_pct",
-        "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_weight",
-        "ema_span_0": "ema_span_0",
-        "ema_span_1": "ema_span_1",
+PB_MULTI_FIELD_MAP = {
+    "ddown_factor": "entry_grid_double_down_factor",
+    "initial_eprice_ema_dist": "entry_initial_ema_dist",
+    "initial_qty_pct": "entry_initial_qty_pct",
+    "markup_range": "close_grid_markup_range",
+    "min_markup": "close_grid_min_markup",
+    "rentry_pprice_dist": "entry_grid_spacing_pct",
+    "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_we_weight",
+    "ema_span_0": "ema_span_0",
+    "ema_span_1": "ema_span_1",
+    "filter_noisiness_rolling_window": "filter_log_range_ema_span",
+    "filter_volume_rolling_window": "filter_volume_ema_span",
+}
+PB_MULTI_FIELD_MAP_INV = {v: k for k, v in PB_MULTI_FIELD_MAP.items()}
+
+
+def _build_from_pb_multi(config: dict, template: dict) -> dict:
+    result = deepcopy(template)
+    for key1 in result["live"]:
+        if key1 in config:
+            result["live"][key1] = config[key1]
+    if config.get("approved_symbols") and isinstance(config["approved_symbols"], dict):
+        result["live"]["coin_flags"] = config["approved_symbols"]
+    result["live"]["approved_coins"] = sorted(set(config.get("approved_symbols", [])))
+    result["live"]["ignored_coins"] = sorted(set(config.get("ignored_symbols", [])))
+    for pside in ("long", "short"):
+        universal_cfg = config.get("universal_live_config", {}).get(pside, {})
+        for key in result["bot"][pside]:
+            inverse_key = PB_MULTI_FIELD_MAP_INV.get(key)
+            if inverse_key and inverse_key in universal_cfg:
+                result["bot"][pside][key] = universal_cfg[inverse_key]
+        try:
+            result["bot"][pside]["close_grid_qty_pct"] = 1.0 / round(
+                universal_cfg.get("n_close_orders", 0)
+            )
+        except Exception:
+            pass
+        for key in (
+            "close_trailing_grid_ratio",
+            "close_trailing_retracement_pct",
+            "close_trailing_threshold_pct",
+            "entry_trailing_grid_ratio",
+            "entry_trailing_retracement_pct",
+            "entry_trailing_threshold_pct",
+            "unstuck_ema_dist",
+        ):
+            result["bot"][pside][key] = 0.0
+        if config.get("n_longs", 0) == 0 and config.get("n_shorts", 0) == 0:
+            n_positions = len(result["live"].get("coin_flags", {}))
+        else:
+            n_positions = config.get(f"n_{pside}s", 0)
+        result["bot"][pside]["n_positions"] = n_positions
+        result["bot"][pside]["unstuck_close_pct"] = config.get("unstuck_close_pct", 0.0)
+        result["bot"][pside]["unstuck_loss_allowance_pct"] = config.get("loss_allowance_pct", 0.0)
+        result["bot"][pside]["unstuck_threshold"] = config.get("stuck_threshold", 0.0)
+        twe_key = f"TWE_{pside}"
+        if config.get(f"{pside}_enabled", True):
+            result["bot"][pside]["total_wallet_exposure_limit"] = config.get(twe_key, 0.0)
+        else:
+            result["bot"][pside]["total_wallet_exposure_limit"] = 0.0
+    return result
+
+
+def _build_from_v7_legacy(config: dict, template: dict) -> dict:
+    result = deepcopy(template)
+    for section in ("backtest", "live", "optimize", "bot"):
+        source_section = config.get(section, {})
+        for key, value in source_section.items():
+            if key in result[section]:
+                result[section][key] = value
+    common = config.get("common", {})
+    for key, value in common.items():
+        if key in result["live"]:
+            result["live"][key] = value
+    result["live"]["approved_coins"] = common.get("approved_symbols", [])
+    result["live"]["coin_flags"] = common.get("symbol_flags", {})
+    return result
+
+
+def _build_from_live_only(config: dict, template: dict) -> dict:
+    result = deepcopy(config)
+    for section in ("optimize", "backtest"):
+        if section not in result:
+            result[section] = deepcopy(template[section])
+    return result
+
+
+LEGACY_FILTER_KEYS = {
+    "filter_noisiness_rolling_window": "filter_log_range_ema_span",
+    "filter_noisiness_ema_span": "filter_log_range_ema_span",
+    "filter_volume_rolling_window": "filter_volume_ema_span",
+}
+
+LEGACY_ENTRY_GRID_KEYS = {
+    "entry_grid_spacing_weight": "entry_grid_spacing_we_weight",
+}
+
+LEGACY_BOUNDS_KEYS = {
+    "long_filter_noisiness_rolling_window": "long_filter_log_range_ema_span",
+    "long_filter_noisiness_ema_span": "long_filter_log_range_ema_span",
+    "long_filter_volume_rolling_window": "long_filter_volume_ema_span",
+    "short_filter_noisiness_rolling_window": "short_filter_log_range_ema_span",
+    "short_filter_noisiness_ema_span": "short_filter_log_range_ema_span",
+    "short_filter_volume_rolling_window": "short_filter_volume_ema_span",
+    "long_entry_grid_spacing_weight": "long_entry_grid_spacing_we_weight",
+    "short_entry_grid_spacing_weight": "short_entry_grid_spacing_we_weight",
+}
+
+
+def _apply_backward_compatibility_renames(result: dict, verbose: bool = True) -> None:
+    """Translate legacy rolling_window keys to their EMA-span counterparts."""
+
+    for pside, bot_cfg in result.get("bot", {}).items():
+        if not isinstance(bot_cfg, dict):
+            continue
+        for old, new in LEGACY_FILTER_KEYS.items():
+            if old in bot_cfg:
+                if new not in bot_cfg:
+                    bot_cfg[new] = bot_cfg[old]
+                    if verbose:
+                        print(f"renaming parameter bot.{pside}.{old}: {new}")
+                del bot_cfg[old]
+        for old, new in LEGACY_ENTRY_GRID_KEYS.items():
+            if old in bot_cfg:
+                if new not in bot_cfg:
+                    bot_cfg[new] = bot_cfg[old]
+                    if verbose:
+                        print(f"renaming parameter bot.{pside}.{old}: {new}")
+                del bot_cfg[old]
+
+    bounds = result.get("optimize", {}).get("bounds", {})
+    for old, new in LEGACY_BOUNDS_KEYS.items():
+        if old in bounds:
+            if new not in bounds:
+                bounds[new] = bounds[old]
+                if verbose:
+                    print(f"renaming parameter optimize.bounds.{old}: {new}")
+            del bounds[old]
+
+
+def detect_flavor(config: dict, template: dict) -> str:
+    """Detect incoming config flavor to drive the builder.
+
+    Returns one of: "pb_multi", "v7_legacy", "current", "nested_current", "live_only", or "unknown".
+    """
+    # PB multi live config signature
+    pb_keys = {
+        "user",
+        "pnls_max_lookback_days",
+        "loss_allowance_pct",
+        "stuck_threshold",
+        "unstuck_close_pct",
+        "TWE_long",
+        "TWE_short",
+        "universal_live_config",
     }
-    cmap_inv = {v: k for k, v in cmap.items()}
-    if all(
-        [
-            x in config
-            for x in [
-                "user",
-                "pnls_max_lookback_days",
-                "loss_allowance_pct",
-                "stuck_threshold",
-                "unstuck_close_pct",
-                "TWE_long",
-                "TWE_short",
-                "universal_live_config",
-            ]
-        ]
-    ):
-        # PB multi live config
-        for key1 in template["live"]:
-            if key1 in config:
-                template["live"][key1] = config[key1]
-        if config["approved_symbols"] and isinstance(config["approved_symbols"], dict):
-            template["live"]["coin_flags"] = config["approved_symbols"]
-        template["live"]["approved_coins"] = sorted(set(config["approved_symbols"]))
-        template["live"]["ignored_coins"] = sorted(set(config["ignored_symbols"]))
-        for pside in ["long", "short"]:
-            for key in template["bot"][pside]:
-                if key in cmap_inv and cmap_inv[key] in config["universal_live_config"][pside]:
-                    template["bot"][pside][key] = config["universal_live_config"][pside][
-                        cmap_inv[key]
-                    ]
-            close_grid_qty_pct = 1.0 / round(config["universal_live_config"][pside]["n_close_orders"])
-            template["bot"][pside]["close_grid_qty_pct"] = 1.0 / round(
-                config["universal_live_config"][pside]["n_close_orders"]
-            )
-            for key in [
-                "close_trailing_grid_ratio",
-                "close_trailing_retracement_pct",
-                "close_trailing_threshold_pct",
-                "entry_trailing_grid_ratio",
-                "entry_trailing_retracement_pct",
-                "entry_trailing_threshold_pct",
-                "unstuck_ema_dist",
-            ]:
-                template["bot"][pside][key] = 0.0
-            if config[f"n_longs"] == 0 and config[f"n_shorts"] == 0:
-                forager_mode = False
-                # not forager mode
-                n_positions = len(template["live"]["coin_flags"])
-            else:
-                n_positions = config[f"n_{pside}s"]
-            template["bot"][pside]["n_positions"] = n_positions
-            template["bot"][pside]["unstuck_close_pct"] = config["unstuck_close_pct"]
-            template["bot"][pside]["unstuck_loss_allowance_pct"] = config["loss_allowance_pct"]
-            template["bot"][pside]["unstuck_threshold"] = config["stuck_threshold"]
-            template["bot"][pside]["total_wallet_exposure_limit"] = (
-                config[f"TWE_{pside}"] if config[f"{pside}_enabled"] else 0.0
-            )
-        result = template
-    elif "common" in config:
-        # older v7 config type
-        for k0 in ["backtest", "live", "optimize", "bot"]:
-            for k1 in config[k0]:
-                if k1 in template[k0]:
-                    template[k0][k1] = config[k0][k1]
-        for key in config["common"]:
-            if key in template["live"]:
-                template["live"][key] = config["common"][key]
-        template["live"]["approved_coins"] = config["common"]["approved_symbols"]
-        template["live"]["coin_flags"] = config["common"]["symbol_flags"]
-        result = template
-    elif all([k in config for k in template]):
-        result = deepcopy(config)
-    elif "config" in config and all([k in config["config"] for k in template]):
-        result = deepcopy(config["config"])
-    elif "bot" in config and "live" in config:
-        # live only config
-        result = deepcopy(config)
-        for key in ["optimize", "backtest"]:
-            if key not in result:
-                result[key] = deepcopy(template[key])
-    else:
-        raise Exception(f"failed to format config")
-    for pside in ["long", "short"]:
+    if all(k in config for k in pb_keys):
+        return "pb_multi"
+    if "common" in config:
+        return "v7_legacy"
+    if all(k in config for k in template):
+        return "current"
+    if "config" in config and all(k in config["config"] for k in template):
+        return "nested_current"
+    if "bot" in config and "live" in config:
+        return "live_only"
+    return "unknown"
+
+
+def build_base_config_from_flavor(config: dict, template: dict, flavor: str, verbose: bool) -> dict:
+    """Return a base v7-shaped config based on detected flavor.
+
+    This function only assembles the skeleton and copies values.
+    It intentionally avoids broader migrations/renames.
+    """
+
+    if flavor == "pb_multi":
+        return _build_from_pb_multi(config, template)
+
+    if flavor == "v7_legacy":
+        return _build_from_v7_legacy(config, template)
+
+    if flavor == "current":
+        return deepcopy(config)
+
+    if flavor == "nested_current":
+        return deepcopy(config["config"])
+
+    if flavor == "live_only":
+        return _build_from_live_only(config, template)
+
+    raise Exception("failed to format config: unknown flavor")
+
+
+def _ensure_bot_defaults_and_bounds(result: dict, verbose: bool = True) -> None:
+    """Ensure required bot defaults and optimize bounds exist for each position side."""
+    for pside in ("long", "short"):
         for k0, v_bt, v_opt in [
             ("close_trailing_qty_pct", 1.0, [0.05, 1.0]),
             (
@@ -510,16 +613,24 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
                 [0.01, 3.0],
             ),
             (
-                "filter_noisiness_rolling_window",
+                "filter_log_range_ema_span",
                 result["bot"][pside].get(
-                    "filter_rolling_window", result["live"].get("ohlcv_rolling_window", 60.0)
+                    "filter_log_range_ema_span",
+                    result["bot"][pside].get(
+                        "filter_rolling_window",
+                        result["live"].get("ohlcv_rolling_window", 60.0),
+                    ),
                 ),
                 [10.0, 1440.0],
             ),
             (
-                "filter_volume_rolling_window",
+                "filter_volume_ema_span",
                 result["bot"][pside].get(
-                    "filter_rolling_window", result["live"].get("ohlcv_rolling_window", 60.0)
+                    "filter_volume_ema_span",
+                    result["bot"][pside].get(
+                        "filter_rolling_window",
+                        result["live"].get("ohlcv_rolling_window", 60.0),
+                    ),
                 ),
                 [10.0, 1440.0],
             ),
@@ -549,84 +660,126 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
                 result["optimize"]["bounds"][opt_key] = v_opt
                 if verbose:
                     print(f"adding missing optimize parameter {pside} {opt_key}: {v_opt}")
-    result["bot"] = sort_dict_keys(result["bot"])
 
-    for k0, src, dst in [
+
+def _rename_config_keys(result: dict, verbose: bool = True) -> None:
+    """Rename legacy keys to their current names."""
+    for section, src, dst in [
         ("live", "minimum_market_age_days", "minimum_coin_age_days"),
         ("live", "noisiness_rolling_mean_window_size", "ohlcv_rolling_window"),
+        ("live", "ohlcvs_1m_update_after_minutes", "inactive_coin_candle_ttl_minutes"),
     ]:
-        if src in result[k0]:
-            result[k0][dst] = deepcopy(result[k0][src])
+        if src in result[section]:
+            result[section][dst] = deepcopy(result[section][src])
             if verbose:
-                print(f"renaming parameter {k0} {src}: {dst}")
-            del result[k0][src]
+                print(f"renaming parameter {section} {src}: {dst}")
+            del result[section][src]
     if "exchange" in result["backtest"] and isinstance(result["backtest"]["exchange"], str):
-        result["backtest"]["exchanges"] = [result["backtest"]["exchange"]]
+        exchange = result["backtest"]["exchange"]
+        result["backtest"]["exchanges"] = [exchange]
         if verbose:
-            print(
-                f"changed backtest.exchange: {result['backtest']['exchange']} -> backtest.exchanges: [{result['backtest']['exchange']}]"
-            )
+            print(f"changed backtest.exchange: {exchange} -> backtest.exchanges: [{exchange}]")
         del result["backtest"]["exchange"]
 
+
+def _sync_with_template(
+    template: dict, result: dict, base_config_path: str, verbose: bool = True
+) -> None:
+    """Synchronize the config with the template structure and prune unused keys."""
     add_missing_keys_recursively(template, result, verbose=verbose)
     if base_config_path or "base_config_path" not in result["live"]:
         result["live"]["base_config_path"] = base_config_path
+    template_with_extras = deepcopy(template)
+    template_with_extras.setdefault("live", {})["base_config_path"] = ""
+    remove_unused_keys_recursively(template_with_extras, result, verbose=verbose)
     remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose)
     remove_unused_keys_recursively(
         template["optimize"]["bounds"], result["optimize"]["bounds"], verbose=verbose
     )
+    remove_unused_keys_recursively(
+        template.get("optimize", {}).get("limits", {}),
+        result["optimize"].setdefault("limits", {}),
+        verbose=verbose,
+    )
 
+
+def _normalize_position_counts(result: dict) -> None:
+    """Round position counts to integers for each side."""
     for pside in result["bot"]:
         result["bot"][pside]["n_positions"] = int(round(result["bot"][pside]["n_positions"]))
 
-    if not live_only:
-        # unneeded adjustments if running live
-        for k in ("approved_coins", "ignored_coins"):
-            result["live"][k] = normalize_coins_source(result["live"].get(k, ""))
-        for pside in result["live"]["approved_coins"]:
-            result["live"]["approved_coins"][pside] = [
-                c
-                for c in result["live"]["approved_coins"][pside]
-                if c not in result["live"]["ignored_coins"][pside]
-            ]
-        result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
-        result["optimize"]["scoring"] = sorted(result["optimize"]["scoring"])
-        result["optimize"]["limits"] = parse_limits_string(result["optimize"]["limits"])
-        for k, v in sorted(result["optimize"]["limits"].items()):
-            if k.startswith("lower_bound_"):
-                new_k = k.replace("lower_bound_", "penalize_if_greater_than_")
-                result["optimize"]["limits"][new_k] = v
-                if verbose:
-                    print(f"changed config.optimize.limits.{k} -> {new_k}")
-                del result["optimize"]["limits"][k]
-        if not result["backtest"]["use_btc_collateral"]:
-            for i in range(len(result["optimize"]["scoring"])):
-                val = result["optimize"]["scoring"][i]
-                if val.startswith("btc_"):
-                    new_val = val[len("btc_") :]
-                    if verbose:
-                        print(f"changed config.optimize.scoring.{val} -> {new_val}")
-                    result["optimize"]["scoring"][i] = new_val
-            for key in sorted(result["optimize"]["limits"]):
-                if key.startswith("btc_"):
-                    new_key = key[len("btc_") :]
-                    val = result["optimize"]["limits"][key]
-                    if verbose:
-                        print(f"changed config.optimize.limits.{key} -> {new_key}")
-                    result["optimize"]["limits"][new_key] = val
-                    del result["optimize"]["limits"][key]
-        for k, v in sorted(result["optimize"]["bounds"].items()):
-            # sort all bounds, low -> high
-            if isinstance(v, list):
-                if len(v) == 1:
-                    result["optimize"]["bounds"][k] = [v[0], v[0]]
-                elif len(v) == 2:
-                    result["optimize"]["bounds"][k] = sorted(v)
 
+def _apply_non_live_adjustments(result: dict, verbose: bool = True) -> None:
+    """Adjust live/backtest/optimize fields when not running in live-only mode."""
+    for key in ("approved_coins", "ignored_coins"):
+        result["live"][key] = normalize_coins_source(result["live"].get(key, ""))
+    for pside in result["live"]["approved_coins"]:
+        result["live"]["approved_coins"][pside] = [
+            coin
+            for coin in result["live"]["approved_coins"][pside]
+            if coin not in result["live"]["ignored_coins"][pside]
+        ]
+    result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
+    result["optimize"]["scoring"] = sorted(result["optimize"]["scoring"])
+    result["optimize"]["limits"] = parse_limits_string(result["optimize"]["limits"])
+    for key, value in sorted(result["optimize"]["limits"].items()):
+        if key.startswith("lower_bound_"):
+            new_key = key.replace("lower_bound_", "penalize_if_greater_than_")
+            result["optimize"]["limits"][new_key] = value
+            if verbose:
+                print(f"changed config.optimize.limits.{key} -> {new_key}")
+            del result["optimize"]["limits"][key]
+    if not result["backtest"]["use_btc_collateral"]:
+        for idx, value in enumerate(result["optimize"]["scoring"]):
+            if value.startswith("btc_"):
+                new_value = value[len("btc_") :]
+                if verbose:
+                    print(f"changed config.optimize.scoring.{value} -> {new_value}")
+                result["optimize"]["scoring"][idx] = new_value
+        for key in sorted(result["optimize"]["limits"]):
+            if key.startswith("btc_"):
+                new_key = key[len("btc_") :]
+                limit_value = result["optimize"]["limits"][key]
+                if verbose:
+                    print(f"changed config.optimize.limits.{key} -> {new_key}")
+                result["optimize"]["limits"][new_key] = limit_value
+                del result["optimize"]["limits"][key]
+    for key, value in sorted(result["optimize"]["bounds"].items()):
+        if isinstance(value, list):
+            if len(value) == 1:
+                result["optimize"]["bounds"][key] = [value[0], value[0]]
+            elif len(value) == 2:
+                result["optimize"]["bounds"][key] = sorted(value)
+
+
+def _ensure_enforce_exposure_limit_bool(result: dict) -> None:
+    """Ensure enforce_exposure_limit is a bool for each side."""
     for pside in result["bot"]:
         result["bot"][pside]["enforce_exposure_limit"] = bool(
             result["bot"][pside]["enforce_exposure_limit"]
         )
+
+
+def format_config(config: dict, verbose=True, live_only=False, base_config_path: str = "") -> dict:
+    # attempts to format a config to v7 config
+    template = get_template_config("v7")
+    flavor = detect_flavor(config, template)
+    result = build_base_config_from_flavor(config, template, flavor, verbose)
+    _apply_backward_compatibility_renames(result, verbose=verbose)
+    _ensure_bot_defaults_and_bounds(result, verbose=verbose)
+    result["bot"] = sort_dict_keys(result["bot"])
+
+    _rename_config_keys(result, verbose=verbose)
+
+    _sync_with_template(template, result, base_config_path, verbose=verbose)
+
+    _normalize_position_counts(result)
+
+    if not live_only:
+        # unneeded adjustments if running live
+        _apply_non_live_adjustments(result, verbose=verbose)
+
+    _ensure_enforce_exposure_limit_bool(result)
     return result
 
 
@@ -693,14 +846,18 @@ def add_missing_keys_recursively(src, dst, parent=None, verbose=True):
 def remove_unused_keys_recursively(src, dst, parent=None, verbose=True):
     if parent is None:
         parent = []
+    if not isinstance(dst, dict) or not isinstance(src, dict):
+        return
     for k in sorted(list(dst.keys())):
-        if k in src:
-            if isinstance(dst[k], dict):
-                remove_unused_keys_recursively(src[k], dst[k], parent + [k], verbose=verbose)
-        else:
+        if k not in src:
             del dst[k]
             if verbose:
                 logging.info("Removed unused key from config: %s", ".".join(parent + [k]))
+            continue
+        src_val = src[k]
+        dst_val = dst[k]
+        if isinstance(dst_val, dict) and isinstance(src_val, dict):
+            remove_unused_keys_recursively(src_val, dst_val, parent + [k], verbose=verbose)
 
 
 def comma_separated_values_float(x):
@@ -709,6 +866,26 @@ def comma_separated_values_float(x):
 
 def comma_separated_values(x):
     return x.split(",")
+
+
+def merge_negative_cli_values(argv):
+    """Allow comma-separated values that begin with '-' to be parsed as option values."""
+    out = []
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        if token == "--":
+            out.extend(argv[i:])
+            break
+        if token.startswith("-") and "=" not in token and i + 1 < len(argv):
+            nxt = argv[i + 1]
+            if nxt.startswith("-") and "," in nxt:
+                out.append(f"{token}={nxt}")
+                i += 2
+                continue
+        out.append(token)
+        i += 1
+    return out
 
 
 def create_acronym(full_name, acronyms=set()):
@@ -748,7 +925,25 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
         full_name = f"{prefix}{key}"
 
         if isinstance(value, dict):
+            if any(full_name.endswith(x) for x in ["approved_coins", "ignored_coins"]):
+                acronym = "s" if full_name.endswith("approved_coins") else "i"
+                if acronym in acronyms:
+                    acronym = create_acronym(full_name, acronyms)
+                parser.add_argument(
+                    f"--{full_name}",
+                    f"--{full_name.replace('.', '_')}",
+                    f"-{acronym}",
+                    type=comma_separated_values,
+                    dest=full_name,
+                    required=False,
+                    default=None,
+                    metavar="",
+                    help=f"Override {full_name}: comma_separated_values",
+                )
+                acronyms.add(acronym)
+                continue
             add_arguments_recursively(parser, value, f"{full_name}.", acronyms=acronyms)
+            continue
         else:
             acronym = create_acronym(full_name, acronyms)
             appendix = ""
@@ -775,6 +970,8 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             elif type_ == bool:
                 type_ = str2bool
                 appendix = "[y/n]"
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                type_ = float
             if "combine_ohlcvs" in full_name:
                 appendix = (
                     "If true, combine ohlcvs data from all exchanges into single numpy array, otherwise backtest each exchange separately. "
@@ -798,11 +995,25 @@ def recursive_config_update(config, key, value, path=None):
     if path is None:
         path = []
 
+    def _coerce_value(original, new_value):
+        if isinstance(original, bool):
+            return bool(new_value)
+        if isinstance(original, int) and not isinstance(original, bool):
+            if isinstance(new_value, (int, float)):
+                if isinstance(new_value, float) and not float(new_value).is_integer():
+                    return float(new_value)
+                return int(round(new_value))
+        if isinstance(original, float):
+            if isinstance(new_value, (int, float)):
+                return float(new_value)
+        return new_value
+
     if key in config:
-        if value != config[key]:
+        coerced_value = _coerce_value(config[key], value)
+        if coerced_value != config[key]:
             full_path = ".".join(path + [key])
-            print(f"changed {full_path} {config[key]} -> {value}")
-            config[key] = value
+            print(f"changed {full_path} {config[key]} -> {coerced_value}")
+            config[key] = coerced_value
         return True
 
     key_split = key.split(".")
@@ -815,11 +1026,54 @@ def recursive_config_update(config, key, value, path=None):
 
 def update_config_with_args(config, args):
     for key, value in vars(args).items():
-        if value is not None:
-            recursive_config_update(config, key, value)
+        if value is None:
+            continue
+        if key in {"live.approved_coins", "live.ignored_coins"}:
+            normalized = normalize_coins_source(value)
+            recursive_config_update(config, key, normalized)
+            continue
+        recursive_config_update(config, key, value)
 
 
-def get_template_live_config(passivbot_mode="v7"):
+def require_config_value(config: dict, dotted_path: str):
+    parts = dotted_path.split(".")
+    if not parts:
+        raise KeyError("empty dotted_path")
+    current = config
+    traversed = []
+    for part in parts:
+        traversed.append(part)
+        if not isinstance(current, dict):
+            raise KeyError(
+                f"config path {'/'.join(traversed[:-1])} is not a dict (required for '{dotted_path}')"
+            )
+        if part not in current:
+            raise KeyError(f"config missing required key '{'.'.join(traversed)}'")
+        current = current[part]
+    return current
+
+
+def get_optional_config_value(config: dict, dotted_path: str, default=None):
+    parts = dotted_path.split(".")
+    if not parts:
+        return default
+    current = config
+    for part in parts:
+        if not isinstance(current, dict) or part not in current:
+            return default
+        current = current[part]
+    return current
+
+
+def require_live_value(config: dict, key: str):
+    return require_config_value(config, f"live.{key}")
+
+
+def get_optional_live_value(config: dict, key: str, default=None):
+    return get_optional_config_value(config, f"live.{key}", default)
+
+
+def get_template_config(passivbot_mode="v7"):
     return {
         "backtest": {
             "base_dir": "backtests",
@@ -831,6 +1085,7 @@ def get_template_live_config(passivbot_mode="v7"):
             "start_date": "2021-04-01",
             "starting_balance": 100000.0,
             "use_btc_collateral": False,
+            "max_warmup_minutes": 0.0,
         },
         "bot": {
             "long": {
@@ -845,17 +1100,19 @@ def get_template_live_config(passivbot_mode="v7"):
                 "ema_span_1": 1435.0,
                 "enforce_exposure_limit": True,
                 "entry_grid_double_down_factor": 0.894,
+                "entry_grid_spacing_log_span_hours": 72,
+                "entry_grid_spacing_log_weight": 0.0,
                 "entry_grid_spacing_pct": 0.04,
-                "entry_grid_spacing_weight": 0.697,
+                "entry_grid_spacing_we_weight": 0.697,
                 "entry_initial_ema_dist": -0.00738,
                 "entry_initial_qty_pct": 0.00592,
                 "entry_trailing_double_down_factor": 0.894,
                 "entry_trailing_grid_ratio": 0.5,
                 "entry_trailing_retracement_pct": 0.01,
                 "entry_trailing_threshold_pct": 0.05,
-                "filter_noisiness_rolling_window": 60,
+                "filter_log_range_ema_span": 60.0,
                 "filter_volume_drop_pct": 0.95,
-                "filter_volume_rolling_window": 60,
+                "filter_volume_ema_span": 60.0,
                 "n_positions": 10.0,
                 "total_wallet_exposure_limit": 1.7,
                 "unstuck_close_pct": 0.001,
@@ -875,17 +1132,19 @@ def get_template_live_config(passivbot_mode="v7"):
                 "ema_span_1": 1435.0,
                 "enforce_exposure_limit": True,
                 "entry_grid_double_down_factor": 0.894,
+                "entry_grid_spacing_log_span_hours": 72,
+                "entry_grid_spacing_log_weight": 0.0,
                 "entry_grid_spacing_pct": 0.04,
-                "entry_grid_spacing_weight": 0.697,
+                "entry_grid_spacing_we_weight": 0.697,
                 "entry_initial_ema_dist": -0.00738,
                 "entry_initial_qty_pct": 0.00592,
                 "entry_trailing_double_down_factor": 0.894,
                 "entry_trailing_grid_ratio": 0.5,
                 "entry_trailing_retracement_pct": 0.01,
                 "entry_trailing_threshold_pct": 0.05,
-                "filter_noisiness_rolling_window": 60,
+                "filter_log_range_ema_span": 60.0,
                 "filter_volume_drop_pct": 0.95,
-                "filter_volume_rolling_window": 60,
+                "filter_volume_ema_span": 60.0,
                 "n_positions": 10.0,
                 "total_wallet_exposure_limit": 1.7,
                 "unstuck_close_pct": 0.001,
@@ -896,8 +1155,9 @@ def get_template_live_config(passivbot_mode="v7"):
         },
         "coin_overrides": {},
         "live": {
-            "approved_coins": [],
+            "approved_coins": {"long": [], "short": []},
             "auto_gs": True,
+            "inactive_coin_candle_ttl_minutes": 10.0,
             "empty_means_all_approved": False,
             "execution_delay_seconds": 2.0,
             "filter_by_min_effective_cost": True,
@@ -906,16 +1166,16 @@ def get_template_live_config(passivbot_mode="v7"):
             "ignored_coins": {"long": [], "short": []},
             "leverage": 10.0,
             "market_orders_allowed": True,
+            "max_memory_candles_per_symbol": 20000,
+            "max_disk_candles_per_symbol_per_tf": 2000000,
             "max_n_cancellations_per_batch": 5,
             "max_n_creations_per_batch": 3,
             "max_n_restarts_per_day": 10,
-            "mimic_backtest_1m_delay": False,
             "minimum_coin_age_days": 7.0,
-            "ohlcvs_1m_rolling_window_days": 7.0,
-            "ohlcvs_1m_update_after_minutes": 10.0,
             "pnls_max_lookback_days": 30.0,
             "price_distance_threshold": 0.002,
             "time_in_force": "good_till_cancelled",
+            "warmup_ratio": 0.2,
             "user": "bybit_01",
         },
         "optimize": {
@@ -931,16 +1191,18 @@ def get_template_live_config(passivbot_mode="v7"):
                 "long_ema_span_1": [200.0, 1440.0],
                 "long_entry_grid_double_down_factor": [0.1, 3.0],
                 "long_entry_grid_spacing_pct": [0.005, 0.12],
-                "long_entry_grid_spacing_weight": [0.0, 2.0],
+                "long_entry_grid_spacing_log_span_hours": [24.0, 336.0],
+                "long_entry_grid_spacing_log_weight": [0.0, 400.0],
+                "long_entry_grid_spacing_we_weight": [0.0, 2.0],
                 "long_entry_initial_ema_dist": [-0.1, 0.002],
                 "long_entry_initial_qty_pct": [0.005, 0.1],
                 "long_entry_trailing_double_down_factor": [0.1, 3.0],
                 "long_entry_trailing_grid_ratio": [-1.0, 1.0],
                 "long_entry_trailing_retracement_pct": [0.0, 0.1],
                 "long_entry_trailing_threshold_pct": [-0.1, 0.1],
-                "long_filter_noisiness_rolling_window": [10.0, 1440.0],
+                "long_filter_log_range_ema_span": [10.0, 1440.0],
                 "long_filter_volume_drop_pct": [0.0, 1.0],
-                "long_filter_volume_rolling_window": [10.0, 1440.0],
+                "long_filter_volume_ema_span": [10.0, 1440.0],
                 "long_n_positions": [1.0, 20.0],
                 "long_total_wallet_exposure_limit": [0.0, 2.0],
                 "long_unstuck_close_pct": [0.001, 0.1],
@@ -958,16 +1220,18 @@ def get_template_live_config(passivbot_mode="v7"):
                 "short_ema_span_1": [200.0, 1440.0],
                 "short_entry_grid_double_down_factor": [0.1, 3.0],
                 "short_entry_grid_spacing_pct": [0.005, 0.12],
-                "short_entry_grid_spacing_weight": [0.0, 2.0],
+                "short_entry_grid_spacing_log_span_hours": [24.0, 336.0],
+                "short_entry_grid_spacing_log_weight": [0.0, 400.0],
+                "short_entry_grid_spacing_we_weight": [0.0, 2.0],
                 "short_entry_initial_ema_dist": [-0.1, 0.002],
                 "short_entry_initial_qty_pct": [0.005, 0.1],
                 "short_entry_trailing_double_down_factor": [0.1, 3.0],
                 "short_entry_trailing_grid_ratio": [-1.0, 1.0],
                 "short_entry_trailing_retracement_pct": [0.0, 0.1],
                 "short_entry_trailing_threshold_pct": [-0.1, 0.1],
-                "short_filter_noisiness_rolling_window": [10.0, 1440.0],
+                "short_filter_log_range_ema_span": [10.0, 1440.0],
                 "short_filter_volume_drop_pct": [0.0, 1.0],
-                "short_filter_volume_rolling_window": [10.0, 1440.0],
+                "short_filter_volume_ema_span": [10.0, 1440.0],
                 "short_n_positions": [1.0, 20.0],
                 "short_total_wallet_exposure_limit": [0.0, 2.0],
                 "short_unstuck_close_pct": [0.001, 0.1],

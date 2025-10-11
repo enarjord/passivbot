@@ -43,11 +43,16 @@ Passivbot can be configured to create a grid of entry orders, with prices and qu
   - Quantity of the next grid entry is position size times the double down factor.
   - Example: If position size is `1.4` and `double_down_factor` is `0.9`, then the next entry quantity is `1.4 * 0.9 = 1.26`.
   - Also applies to trailing entries.
-- **entry_grid_spacing_pct**, **entry_grid_spacing_weight**:
+- **entry_grid_spacing_pct**, **entry_grid_spacing_we_weight** *(formerly `entry_grid_spacing_weight`)*:
   - Grid re-entry prices are determined as follows:
-    - `next_reentry_price_long = pos_price * (1 - entry_grid_spacing_pct * modifier)`
-    - `next_reentry_price_short = pos_price * (1 + entry_grid_spacing_pct * modifier)`
-  - Where `modifier = (1 + ratio * entry_grid_spacing_weight)` and `ratio = wallet_exposure / wallet_exposure_limit`.
+    - `next_reentry_price_long = pos_price * (1 - entry_grid_spacing_pct * multiplier)`
+    - `next_reentry_price_short = pos_price * (1 + entry_grid_spacing_pct * multiplier)`
+  - `multiplier = 1 + (wallet_exposure / wallet_exposure_limit) * entry_grid_spacing_we_weight + log_component`
+  - Setting `entry_grid_spacing_we_weight` > 0 widens spacing as the position approaches the wallet exposure limit; negative values tighten spacing when exposure is small.
+- **entry_grid_spacing_log_weight**, **entry_grid_spacing_log_span_hours**:
+  - The `log_component` in the multiplier above is derived from the EMA of the per-candle log range `ln(high/low)`.
+  - `entry_grid_spacing_log_weight` controls how strongly the recent log range widens or narrows spacing. A value of `0` disables the log-based adjustment.
+  - `entry_grid_spacing_log_span_hours` sets the EMA span (in hours) used when smoothing the log-range signal before applying the weight.
 - **entry_initial_ema_dist**:
   - Offset from lower/upper EMA band.
   - Long initial entry/short unstuck close prices are lower EMA band minus offset.
@@ -129,13 +134,13 @@ If a position is stuck, the bot uses profits from other positions to realize los
 
 ### Filter Parameters
 
-Coins selected for trading are filtered by volume and noisiness. First, filter coins by volume, dropping a percentage of the lowest volume coins. Then, sort eligible coins by noisiness and select the top noisiest coins for trading.
+Coins selected for trading are filtered by volume and log range. First, filter coins by volume, dropping a percentage of the lowest volume coins. Then, sort eligible coins by log range and select the most volatile coins for trading.
 
 - **filter_volume_drop_pct**: Volume filter. Disapproves the lowest relative volume coins.
   - Example: `filter_volume_drop_pct = 0.1` drops the 10% lowest volume coins. Set to `0` to allow all.
-- **filter_noisiness_rolling_window/filter_volume_rolling_window**: Number of minutes to look into the past to compute volume and noisiness, used for dynamic coin selection in forager mode.
-  - Noisiness is normalized relative range of 1m OHLCVs: `mean((high - low) / close)`.
-  - In forager mode, the bot selects coins with the highest noisiness for opening positions.
+- **filter_log_range_rolling_window/filter_volume_rolling_window**: Number of minutes to look into the past to compute volume and log range, used for dynamic coin selection in forager mode.
+  - Log range is computed from 1m OHLCVs as `mean(ln(high / low))`.
+  - In forager mode, the bot selects coins with the highest log-range values for opening positions.
 
 ## Coin Overrides
 - **coin_overrides**:
@@ -149,7 +154,8 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
       [
         close_grid_markup_end, close_grid_markup_start, close_grid_qty_pct, close_trailing_grid_ratio, close_trailing_qty_pct,
         close_trailing_retracement_pct, close_trailing_threshold_pct, ema_span_0, ema_span_1, enforce_exposure_limit,
-        entry_grid_double_down_factor, entry_grid_spacing_pct, entry_grid_spacing_weight, entry_initial_ema_dist,
+        entry_grid_double_down_factor, entry_grid_spacing_pct, entry_grid_spacing_we_weight,
+        entry_grid_spacing_log_weight, entry_grid_spacing_log_span_hours, entry_initial_ema_dist,
         entry_initial_qty_pct, entry_trailing_double_down_factor, entry_trailing_grid_ratio, entry_trailing_retracement_pct,
         entry_trailing_threshold_pct, unstuck_close_pct, unstuck_ema_dist, unstuck_threshold, wallet_exposure_limit
       ]
@@ -201,8 +207,7 @@ Coins selected for trading are filtered by volume and noisiness. First, filter c
 - **max_n_restarts_per_day**: If the bot crashes, restart up to `n` times per day before stopping completely.
 - **mimic_backtest_1m_delay**: If `true`, the bot will only update and evaluate open orders once per full minute, synchronized to the clock (e.g., 12:01:00, 12:02:00, etc.). This mimics the backtester's timestep logic and avoids intraminute updates. Useful for achieving higher fidelity between backtest and live performance.
 - **minimum_coin_age_days**: Disallows coins younger than a given number of days.
-- **ohlcvs_1m_rolling_window_days**: How many days of OHLCVs the bot keeps in memory. Reduce if RAM consumption is an issue.
-- **ohlcvs_1m_update_after_minutes**: How many minutes old OHLCVs for a coin may be before fetching fresh ones from the exchange. Increase if rate limiting is an issue.
+- Candlestick management is handled by the CandlestickManager with on-disk caching and TTL-based refresh. Legacy settings `ohlcvs_1m_rolling_window_days` and `ohlcvs_1m_update_after_minutes` are no longer used. Use `inactive_coin_candle_ttl_minutes` to control how long 1m candles for inactive symbols are kept in RAM before being refreshed.
 - **pnls_max_lookback_days**: How far into the past to fetch PnL history.
 - **price_distance_threshold**: Minimum distance to current price action required for EMA-based limit orders.
 - **time_in_force**: Default is Good-Till-Cancelled.

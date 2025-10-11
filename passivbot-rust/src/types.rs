@@ -30,6 +30,13 @@ pub struct BacktestParams {
     pub starting_balance: f64,
     pub maker_fee: f64,
     pub coins: Vec<String>,
+    pub first_timestamp_ms: u64,
+    pub requested_start_timestamp_ms: u64,
+    pub first_valid_indices: Vec<usize>,
+    pub last_valid_indices: Vec<usize>,
+    pub warmup_minutes: Vec<usize>,
+    pub trade_start_indices: Vec<usize>,
+    pub global_warmup_bars: usize,
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -78,6 +85,7 @@ pub struct StateParams {
     pub balance: f64,
     pub order_book: OrderBook,
     pub ema_bands: EMABands,
+    pub grid_log_range: f64,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -97,16 +105,18 @@ pub struct BotParams {
     pub close_trailing_threshold_pct: f64,
     pub enforce_exposure_limit: bool,
     pub entry_grid_double_down_factor: f64,
-    pub entry_grid_spacing_weight: f64,
+    pub entry_grid_spacing_log_weight: f64,
+    pub entry_grid_spacing_we_weight: f64,
     pub entry_grid_spacing_pct: f64,
+    pub entry_grid_spacing_log_span_hours: f64,
     pub entry_initial_ema_dist: f64,
     pub entry_initial_qty_pct: f64,
     pub entry_trailing_double_down_factor: f64,
     pub entry_trailing_retracement_pct: f64,
     pub entry_trailing_grid_ratio: f64,
     pub entry_trailing_threshold_pct: f64,
-    pub filter_noisiness_rolling_window: usize,
-    pub filter_volume_rolling_window: usize,
+    pub filter_log_range_ema_span: f64,
+    pub filter_volume_ema_span: f64,
     pub filter_volume_drop_pct: f64,
     pub ema_span_0: f64,
     pub ema_span_1: f64,

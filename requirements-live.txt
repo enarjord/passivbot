@@ -1,3 +1,4 @@
+-r requirements-rust.txt
 python-dateutil==2.8.2
 numba==0.59.1; python_version>='3.9'
 numba==0.58.1; python_version<'3.9'
@@ -8,3 +9,5 @@ ccxt==4.4.99
 hjson==3.0.2
 prettytable==3.0.0
 sortedcontainers==2.4.0
+portalocker==3.2.0
+tqdm==4.62.3

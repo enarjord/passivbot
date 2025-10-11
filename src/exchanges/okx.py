@@ -8,7 +8,8 @@ import pprint
 import asyncio
 import traceback
 import numpy as np
-from utils import ts_to_date_utc, utc_ms
+from utils import ts_to_date, utc_ms
+from config_utils import require_live_value
 from pure_funcs import (
     multi_replace,
     floatify,
@@ -116,7 +117,11 @@ class OKXBot(Passivbot):
                     for elm2 in elm["details"]:
                         if elm2["collateralEnabled"]:
                             balance += float(elm2["cashBal"]) * (
-                                self.get_last_price(self.coin_to_symbol(elm2["ccy"]))
+                                (
+                                    await self.cm.get_current_close(
+                                        self.coin_to_symbol(elm2["ccy"]), max_age_ms=10_000
+                                    )
+                                )
                                 if elm2["ccy"] != self.quote
                                 else 1.0
                             )
@@ -201,7 +206,7 @@ class OKXBot(Passivbot):
                 all_fetched[elm["id"]] = elm
             if len(fetched) < limit:
                 break
-            logging.info(f"debug fetching income {ts_to_date_utc(fetched[-1]['timestamp'])}")
+            logging.info(f"debug fetching income {ts_to_date(fetched[-1]['timestamp'])}")
             end_time = fetched[0]["timestamp"]
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
         return sorted(
@@ -250,7 +255,7 @@ class OKXBot(Passivbot):
     def get_order_execution_params(self, order: dict) -> dict:
         # defined for each exchange
         return {
-            "postOnly": self.config["live"]["time_in_force"] == "post_only",
+            "postOnly": require_live_value(self.config, "time_in_force") == "post_only",
             "positionSide": order["position_side"],
             "reduceOnly": order["reduce_only"],
             "hedged": True,
@@ -296,17 +301,21 @@ class OKXBot(Passivbot):
             else:
                 logging.error(f"error setting hedge mode {e}")
 
-    def calc_ideal_orders(self):
+    async def calc_ideal_orders(self, allow_unstuck: bool = True):
         # okx has max 100 open orders. Drop orders whose pprice diff is greatest.
-        ideal_orders = super().calc_ideal_orders()
+        ideal_orders = await super().calc_ideal_orders(allow_unstuck=allow_unstuck)
         ideal_orders_tmp = []
         for s in ideal_orders:
             for x in ideal_orders[s]:
-                ideal_orders_tmp.append({**x, **{"symbol": s}})
-        ideal_orders_tmp = sorted(
-            ideal_orders_tmp,
-            key=lambda x: calc_diff(x["price"], self.get_last_price(x["symbol"])),
-        )[:100]
+                ideal_orders_tmp.append(
+                    (
+                        calc_diff(
+                            x["price"], (await self.cm.get_current_close(s, max_age_ms=10_000))
+                        ),
+                        {**x, **{"symbol": s}},
+                    )
+                )
+        ideal_orders_tmp = [x[1] for x in sorted(ideal_orders_tmp, key=lambda x: x[0])][:100]
         ideal_orders = {symbol: [] for symbol in self.active_symbols}
         for x in ideal_orders_tmp:
             ideal_orders[x["symbol"]].append(x)

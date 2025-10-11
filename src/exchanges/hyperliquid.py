@@ -8,7 +8,8 @@ import traceback
 import json
 import numpy as np
 import passivbot_rust as pbr
-from utils import ts_to_date_utc, symbol_to_coin, coin_to_symbol, utc_ms
+from utils import ts_to_date, symbol_to_coin, coin_to_symbol, utc_ms
+from config_utils import require_live_value
 from pure_funcs import (
     multi_replace,
     floatify,
@@ -235,7 +236,7 @@ class HyperliquidBot(Passivbot):
                 break
             prev_hash = new_hash
             logging.info(
-                f"debug fetching pnls {ts_to_date_utc(fetched[-1]['timestamp'])} len {len(fetched)}"
+                f"debug fetching pnls {ts_to_date(fetched[-1]['timestamp'])} len {len(fetched)}"
             )
             start_time = fetched[-1]["timestamp"] - 1000
             limit = 2000
@@ -295,7 +296,9 @@ class HyperliquidBot(Passivbot):
         # defined for each exchange
         params = {
             "reduceOnly": order["reduce_only"],
-            "timeInForce": ("Alo" if self.config["live"]["time_in_force"] == "post_only" else "Gtc"),
+            "timeInForce": (
+                "Alo" if require_live_value(self.config, "time_in_force") == "post_only" else "Gtc"
+            ),
             "clientOrderId": order["custom_id"],  # TODO
         }
         if self.user_info["is_vault"]:
@@ -410,9 +413,9 @@ class HyperliquidBot(Passivbot):
     async def update_exchange_config(self):
         pass
 
-    def calc_ideal_orders(self):
+    async def calc_ideal_orders(self, allow_unstuck: bool = True):
         # hyperliquid needs custom price rounding
-        ideal_orders = super().calc_ideal_orders()
+        ideal_orders = await super().calc_ideal_orders(allow_unstuck=allow_unstuck)
         for sym in ideal_orders:
             for i in range(len(ideal_orders[sym])):
                 if ideal_orders[sym][i]["side"] == "sell":

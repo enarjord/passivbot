@@ -145,17 +145,13 @@ def get_xk_keys(passivbot_mode="neat_grid"):
 
 def determine_passivbot_mode(config: dict, skip=[]) -> str:
     # print('dpm devbug',config)
-    if all(k in config["long"] for k in get_template_live_config("clock")["long"] if k not in skip):
+    if all(k in config["long"] for k in get_template_config("clock")["long"] if k not in skip):
         return "clock"
     elif all(
-        k in config["long"]
-        for k in get_template_live_config("recursive_grid")["long"]
-        if k not in skip
+        k in config["long"] for k in get_template_config("recursive_grid")["long"] if k not in skip
     ):
         return "recursive_grid"
-    elif all(
-        k in config["long"] for k in get_template_live_config("neat_grid")["long"] if k not in skip
-    ):
+    elif all(k in config["long"] for k in get_template_config("neat_grid")["long"] if k not in skip):
         return "neat_grid"
     else:
         raise Exception("unable to determine passivbot mode")
@@ -251,13 +247,6 @@ def ts_to_date(timestamp: float) -> str:
     return str(datetime.datetime.utcfromtimestamp(timestamp)).replace(" ", "T")
 
 
-def date2ts_utc(datetime_string):
-    return (
-        dateutil.parser.parse(datetime_string).replace(tzinfo=datetime.timezone.utc).timestamp()
-        * 1000
-    )
-
-
 def get_day(date):
     # date can be str datetime or float/int timestamp
     try:
@@ -290,7 +279,7 @@ def candidate_to_live_config(candidate_: dict) -> dict:
     result_dict = candidate_["result"] if "result" in candidate_ else candidate_
     candidate = make_compatible(candidate_)
     passivbot_mode = name = determine_passivbot_mode(candidate)
-    live_config = get_template_live_config(passivbot_mode)
+    live_config = get_template_config(passivbot_mode)
     sides = ["long", "short"]
     for side in sides:
         live_config[side]["n_close_orders"] = int(round(live_config[side]["n_close_orders"]))
@@ -434,7 +423,7 @@ def filter_orders(
 
 
 def get_dummy_settings(config: dict):
-    dummy_settings = get_template_live_config()
+    dummy_settings = get_template_config()
     dummy_settings.update({k: 1.0 for k in get_xk_keys()})
     dummy_settings.update(
         {
@@ -1405,7 +1394,7 @@ def make_compatible(live_config_: dict) -> dict:
 
 def strip_config(cfg: dict) -> dict:
     pm = determine_passivbot_mode(cfg)
-    template = get_template_live_config(pm)
+    template = get_template_config(pm)
     for k in template["long"]:
         template["long"][k] = cfg["long"][k]
         template["short"][k] = cfg["short"][k]
@@ -1941,7 +1930,7 @@ def determine_side_from_order_tuple(order_tuple):
 
 
 def backtested_multiconfig2singleconfig(backtested_config: dict) -> dict:
-    template = get_template_live_config("recursive_grid")
+    template = get_template_config("recursive_grid")
     for pside in ["long", "short"]:
         for key, val in [
             ("auto_unstuck_delay_minutes", 0.0),
@@ -1960,7 +1949,7 @@ def backtested_multiconfig2singleconfig(backtested_config: dict) -> dict:
 
 
 def backtested_multiconfig2live_multiconfig(backtested_config: dict) -> dict:
-    template = get_template_live_config("multi_hjson")
+    template = get_template_config("multi_hjson")
     template["long_enabled"] = backtested_config["args"]["long_enabled"]
     template["short_enabled"] = backtested_config["args"]["short_enabled"]
     template["approved_symbols"] = backtested_config["args"]["symbols"]
@@ -1990,7 +1979,7 @@ def add_missing_params_to_hjson_live_multi_config(config: dict) -> (dict, [str])
         logging_lines.append(f"changed 'minimum_market_age_days' -> 'minimum_coin_age_days'")
         config_copy["minimum_coin_age_days"] = config_copy["minimum_market_age_days"]
 
-    template = get_template_live_config("multi_hjson")
+    template = get_template_config("multi_hjson")
     for key, val in template.items():
         if key not in config_copy:
             logging_lines.append(f"adding missing config param: {key}: {val}")
@@ -2029,48 +2018,6 @@ def extract_and_sort_by_keys_recursive(nested_dict):
         sorted_values.append(extract_and_sort_by_keys_recursive(value))
 
     return sorted_values
-
-
-def v7_to_v6(config):
-    template = get_template_live_config("multi_hjson")
-    live_map = {"approved_coins": "approved_symbols"}
-    bot_map = {
-        "entry_grid_double_down_factor": "ddown_factor",
-        "entry_initial_ema_dist": "initial_eprice_ema_dist",
-        "entry_initial_qty_pct": "initial_qty_pct",
-        "close_grid_markup_range": "markup_range",
-        "close_grid_min_markup": "min_markup",
-        "entry_grid_spacing_pct": "rentry_pprice_dist",
-        "entry_grid_spacing_weight": "rentry_pprice_dist_wallet_exposure_weighting",
-        "ema_span_0": "ema_span_0",
-        "ema_span_1": "ema_span_1",
-    }
-    for k, v in config["live"].items():
-        if k in template:
-            template[k] = v
-        elif k in live_map and live_map[k] in template:
-            template[live_map[k]] = v
-    for pside in ["long", "short"]:
-        for k, v in config["bot"][pside].items():
-            if k in template["universal_live_config"][pside]:
-                template["universal_live_config"][pside][k] = v
-            elif k in bot_map and bot_map[k] in template["universal_live_config"][pside]:
-                template["universal_live_config"][pside][bot_map[k]] = v
-            elif "total_wallet_exposure" in k:
-                template[f"TWE_{pside}"] = v
-        template["universal_live_config"][pside]["n_close_orders"] = 1.0 / max(
-            config["bot"][pside]["close_grid_qty_pct"], 0.05
-        )
-        template[f"{pside}_enabled"] = (
-            config["bot"][pside]["n_positions"] > 0.0
-            and config["bot"][pside]["total_wallet_exposure_limit"] > 0.0
-        )
-        template[f"n_{pside}s"] = config["bot"][pside]["n_positions"]
-    template["loss_allowance_pct"] = config["bot"]["long"]["unstuck_loss_allowance_pct"]
-    template["unstuck_close_pct"] = config["bot"]["long"]["unstuck_close_pct"]
-    template["stuck_threshold"] = config["bot"]["long"]["unstuck_threshold"]
-
-    return template
 
 
 def hysteresis_rounding(balance, last_rounded_balance, percentage=0.02, h=0.5):

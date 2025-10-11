@@ -88,7 +88,7 @@ async def test_load_markets_uses_fresh_cache(tmp_path, monkeypatch):
     json.dump(markets, open(markets_path, "w"))
 
     # Ensure cache is considered fresh by controlling utc_ms
-    fresh_now = utils.get_file_mod_utc(markets_path) + 100.0
+    fresh_now = utils.get_file_mod_ms(markets_path) + 100.0
     monkeypatch.setattr(utils, "utc_ms", lambda: fresh_now, raising=False)
 
     # Should read from cache (no ccxt stub needed) and also populate maps

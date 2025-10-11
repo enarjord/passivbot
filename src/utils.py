@@ -3,13 +3,15 @@ import json
 import ccxt.async_support as ccxt
 import os
 import datetime
-import logging
 import dateutil.parser
 import asyncio
 import hjson
 import inspect
+import time
 from collections import defaultdict
 from typing import Dict, Any, List, Union, Optional
+import re
+import logging
 
 
 logging.basicConfig(
@@ -23,42 +25,100 @@ _COIN_TO_SYMBOL_CACHE = {}  # {exchange: {"map": dict, "mtime_ns": int, "size": 
 _SYMBOL_TO_COIN_CACHE = {"map": None, "mtime_ns": None, "size": None}
 
 
-def get_file_mod_utc(filepath):
+def _require_live_value(config: Dict[str, Any], key: str):
+    if "live" not in config or not isinstance(config["live"], dict):
+        raise KeyError("config missing required key 'live'")
+    live = config["live"]
+    if key not in live:
+        raise KeyError(f"config missing required key 'live.{key}'")
+    return live[key]
+
+
+def ts_to_date(timestamp: Union[float, str, int]) -> str:
     """
-    Get the UTC timestamp of the last modification of a file.
+    Convert a timestamp to UTC date string in ISO format.
 
     Args:
-        filepath (str): The path to the file.
+        timestamp: Timestamp as float, str, or int - may be seconds, milliseconds, or nanoseconds
 
+    Returns:
+        UTC date string in ISO format (e.g., "2025-03-12T12:43:22.123")
+    """
+    # Convert to float if string or int
+    if isinstance(timestamp, (str, int)):
+        timestamp = float(timestamp)
+
+    # Detect timestamp precision and convert to seconds
+    if timestamp > 1e15:  # Likely nanoseconds (> ~2033 in milliseconds)
+        # Nanoseconds
+        timestamp_seconds = timestamp / 1_000_000_000
+    elif timestamp > 1e10:  # Likely milliseconds (> ~2001 in seconds)
+        # Milliseconds
+        timestamp_seconds = timestamp / 1000
+    else:
+        # Seconds
+        timestamp_seconds = timestamp
+
+    # Convert to UTC datetime
+    dt = datetime.datetime.fromtimestamp(timestamp_seconds, tz=datetime.timezone.utc)
+
+    # Return ISO format without timezone suffix
+    return dt.isoformat().replace("+00:00", "")
+
+
+def date_to_ts(date_str: str) -> float:
+    """
+    Convert a flexible date string to UTC timestamp in milliseconds.
+
+    Args:
+        date_str: Date string in various formats:
+                 - "2020" -> "2020-01-01T00:00:00"
+                 - "2024-04" -> "2024-04-01T00:00:00"
+                 - "2022-04-23" -> "2022-04-23T00:00:00"
+                 - "2021-11-13T03:23:12" (full ISO format)
+                 - And other common variants
+
+    Returns:
+        UTC timestamp in milliseconds as float
+    """
+    date_str = date_str.strip()
+
+    # Use dateutil.parser with default date of Jan 1, 2000 for missing components
+    default_date = datetime.datetime(2000, 1, 1)
+
+    try:
+        dt = dateutil.parser.parse(date_str, default=default_date)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Unable to parse date string '{date_str}': {e}")
+
+    # If the datetime is naive (no timezone info), treat it as UTC
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+
+    # Convert to UTC timestamp in milliseconds
+    return dt.timestamp() * 1000
+
+
+def get_file_mod_ms(filepath):
+    """
+    Get the UTC timestamp of the last modification of a file.
+    Args:
+        filepath (str): The path to the file.
     Returns:
         float: The UTC timestamp in milliseconds of the last modification of the file.
     """
-    # Get the last modification time of the file in seconds since the epoch
+    # Get the last modification time in seconds since epoch (already UTC-based)
     mod_time_epoch = os.path.getmtime(filepath)
-
-    # Convert the timestamp to a UTC datetime object
-    mod_time_utc = datetime.datetime.utcfromtimestamp(mod_time_epoch)
-
-    # Return the UTC timestamp
-    return mod_time_utc.timestamp() * 1000
-
-
-def ts_to_date_utc(timestamp: float) -> str:
-    if timestamp > 253402297199:
-        return str(datetime.datetime.utcfromtimestamp(timestamp / 1000)).replace(" ", "T")
-    return str(datetime.datetime.utcfromtimestamp(timestamp)).replace(" ", "T")
-
-
-def date_to_ts(d):
-    return int(dateutil.parser.parse(d).replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
+    # Convert to milliseconds
+    return mod_time_epoch * 1000
 
 
 def format_end_date(end_date) -> str:
     if end_date in ["today", "now", "", None]:
         ms2day = 1000 * 60 * 60 * 24
-        end_date = ts_to_date_utc((utc_ms() - ms2day * 2) // ms2day * ms2day)
+        end_date = ts_to_date((utc_ms() - ms2day * 2) // ms2day * ms2day)
     else:
-        end_date = ts_to_date_utc(date_to_ts(end_date))
+        end_date = ts_to_date(date_to_ts(end_date))
     return end_date[:10]
 
 
@@ -73,7 +133,7 @@ def make_get_filepath(filepath: str) -> str:
 
 
 def utc_ms() -> float:
-    return datetime.datetime.utcnow().timestamp() * 1000
+    return time.time() * 1000
 
 
 def filter_markets(markets: dict, exchange: str, verbose=False) -> (dict, dict, dict):
@@ -133,7 +193,7 @@ async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24, ver
     # Try cache first
     try:
         if os.path.exists(markets_path):
-            if utc_ms() - get_file_mod_utc(markets_path) < max_age_ms:
+            if utc_ms() - get_file_mod_ms(markets_path) < max_age_ms:
                 with open(markets_path, "r") as f:
                     markets = json.load(f)
                 if verbose:
@@ -144,12 +204,7 @@ async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24, ver
         logging.error("Error loading %s: %s", markets_path, e)
 
     # Fetch from exchange via ccxt
-    cc = getattr(ccxt, ex)({"enableRateLimit": True})
-    try:
-        cc.options["defaultType"] = "swap"
-    except Exception:
-        pass
-
+    cc = load_ccxt_instance(ex, enable_rate_limit=True)
     try:
         markets = await cc.load_markets(True)
     except Exception as e:
@@ -205,6 +260,24 @@ def normalize_exchange_name(exchange: str) -> str:
             return cand
 
     return ex
+
+
+def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True):
+    """
+    Return a ccxt async-support exchange instance for the given exchange id.
+
+    The returned instance should be closed by the caller with: await cc.close()
+    """
+    ex = normalize_exchange_name(exchange_id)
+    try:
+        cc = getattr(ccxt, ex)({"enableRateLimit": bool(enable_rate_limit)})
+    except Exception:
+        raise RuntimeError(f"ccxt exchange '{ex}' not available")
+    try:
+        cc.options["defaultType"] = "swap"
+    except Exception:
+        pass
+    return cc
 
 
 def get_quote(exchange):
@@ -461,7 +534,7 @@ def symbol_to_coin(symbol):
 async def format_approved_ignored_coins(config, exchanges: [str]):
     if isinstance(exchanges, str):
         exchanges = [exchanges]
-    path = config["live"]["approved_coins"]
+    path = _require_live_value(config, "approved_coins")
     if path in [
         [""],
         [],
@@ -473,7 +546,7 @@ async def format_approved_ignored_coins(config, exchanges: [str]):
         {"long": "", "short": ""},
         {"long": [""], "short": [""]},
     ]:
-        if config["live"]["empty_means_all_approved"]:
+        if bool(_require_live_value(config, "empty_means_all_approved")):
             marketss = await asyncio.gather(*[load_markets(ex, verbose=False) for ex in exchanges])
             marketss = [filter_markets(m, ex)[0] for m, ex in zip(marketss, exchanges)]
             approved_coins = set()
@@ -489,12 +562,12 @@ async def format_approved_ignored_coins(config, exchanges: [str]):
             # leave empty
             config["live"]["approved_coins"] = {"long": [], "short": []}
     else:
-        ac = normalize_coins_source(config["live"]["approved_coins"])
+        ac = normalize_coins_source(_require_live_value(config, "approved_coins"))
         config["live"]["approved_coins"] = {
             pside: [cf for x in ac[pside] if (cf := symbol_to_coin(x))] for pside in ac
         }
 
-    ic = normalize_coins_source(config["live"]["ignored_coins"])
+    ic = normalize_coins_source(_require_live_value(config, "ignored_coins"))
     config["live"]["ignored_coins"] = {
         pside: [cf for x in ic[pside] if (cf := symbol_to_coin(x))] for pside in ic
     }
@@ -619,3 +692,75 @@ def read_external_coins_lists(filepath) -> dict:
         # Split by newline, comma, and/or space, and filter out empty strings
         items = [item.strip() for item in content.replace(",", " ").split() if item.strip()]
     return {"long": items, "short": items}
+
+
+async def get_first_ohlcv_iteratively(cc, symbol):
+    """Return the earliest OHLCV candle for a Bitget market.
+
+    Bitget does not accept a conventional ``since`` parameter for swap OHLCV
+    queries. Instead we page backwards using ``params={"until": ms}``, where an
+    empty response indicates that ``until`` predates the instrument listing.  We
+    leverage that behaviour to binary-search over monthly candles and then
+    refine the result with a daily fetch.  The returned value is the first full
+    candle ``[timestamp, open, high, low, close, volume]`` if available, else
+    ``None``."""
+
+    DAY_MS = 86_400_000
+    MONTH_MS = 30 * DAY_MS
+
+    async def fetch_month(until: Optional[int] = None):
+        params = {"limit": 200}
+        if until is not None:
+            params["until"] = int(until)
+        return await cc.fetch_ohlcv(symbol, timeframe="1M", params=params)
+
+    async def fetch_day(until: int):
+        return await cc.fetch_ohlcv(
+            symbol, timeframe="1d", params={"until": int(until), "limit": 200}
+        )
+
+    month_chunk = await fetch_month()
+    if not month_chunk:
+        return None
+
+    best_candle = month_chunk[0]
+    first_month_ts = int(best_candle[0])
+
+    # Initial bounds for binary search: start near zero, clamp upper bound to now.
+    now_ms = int(getattr(cc, "milliseconds")())
+    lo = 0
+    hi = max(now_ms, int(month_chunk[-1][0]) + MONTH_MS)
+
+    while hi - lo > MONTH_MS:
+        mid = (lo + hi) // 2
+        candles = await fetch_month(mid)
+        if candles:
+            new_first = int(candles[0][0])
+            if new_first >= hi:
+                break
+            best_candle = candles[0]
+            hi = new_first
+            first_month_ts = new_first
+        else:
+            lo = mid
+
+    # Sequentially step back in case the monthly page was capped by the limit.
+    while True:
+        prev_until = max(0, first_month_ts - 1)
+        if prev_until <= 0:
+            break
+        prev_chunk = await fetch_month(prev_until)
+        if not prev_chunk:
+            break
+        prev_first = int(prev_chunk[0][0])
+        if prev_first >= first_month_ts:
+            break
+        first_month_ts = prev_first
+        best_candle = prev_chunk[0]
+
+    # Refine with daily candles near the discovered month boundary.
+    daily_chunk = await fetch_day(first_month_ts + 32 * DAY_MS)
+    if daily_chunk:
+        return daily_chunk[0]
+
+    return best_candle

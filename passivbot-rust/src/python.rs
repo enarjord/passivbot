@@ -187,6 +187,31 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         starting_balance: extract_value(dict, "starting_balance").unwrap_or_default(),
         maker_fee: extract_value(dict, "maker_fee").unwrap_or_default(),
         coins: extract_value(dict, "coins").unwrap_or_default(),
+        // First timestamp (ms); default to 0 if not provided
+        first_timestamp_ms: extract_value(dict, "first_timestamp_ms").unwrap_or(0u64),
+        requested_start_timestamp_ms: extract_value(dict, "requested_start_timestamp_ms")
+            .unwrap_or(0u64),
+        first_valid_indices: dict
+            .get_item("first_valid_indices")?
+            .map(|item| item.extract::<Vec<usize>>())
+            .transpose()?
+            .unwrap_or_default(),
+        last_valid_indices: dict
+            .get_item("last_valid_indices")?
+            .map(|item| item.extract::<Vec<usize>>())
+            .transpose()?
+            .unwrap_or_default(),
+        warmup_minutes: dict
+            .get_item("warmup_minutes")?
+            .map(|item| item.extract::<Vec<usize>>())
+            .transpose()?
+            .unwrap_or_default(),
+        trade_start_indices: dict
+            .get_item("trade_start_indices")?
+            .map(|item| item.extract::<Vec<usize>>())
+            .transpose()?
+            .unwrap_or_default(),
+        global_warmup_bars: extract_value(dict, "global_warmup_bars").unwrap_or(0usize),
     })
 }
 
@@ -222,6 +247,14 @@ fn extract_bool_value(dict: &PyDict, key: &str) -> PyResult<bool> {
     }
 }
 
+fn extract_grid_spacing_we_weight(dict: &PyDict) -> PyResult<f64> {
+    if let Some(obj) = dict.get_item("entry_grid_spacing_we_weight")? {
+        obj.extract::<f64>()
+    } else {
+        extract_value(dict, "entry_grid_spacing_we_weight")
+    }
+}
+
 fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
     Ok(BotParams {
         close_grid_markup_end: extract_value(dict, "close_grid_markup_end")?,
@@ -233,8 +266,13 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         close_trailing_threshold_pct: extract_value(dict, "close_trailing_threshold_pct")?,
         enforce_exposure_limit: extract_bool_value(dict, "enforce_exposure_limit")?,
         entry_grid_double_down_factor: extract_value(dict, "entry_grid_double_down_factor")?,
-        entry_grid_spacing_weight: extract_value(dict, "entry_grid_spacing_weight")?,
+        entry_grid_spacing_log_weight: extract_value(dict, "entry_grid_spacing_log_weight")?,
+        entry_grid_spacing_we_weight: extract_grid_spacing_we_weight(dict)?,
         entry_grid_spacing_pct: extract_value(dict, "entry_grid_spacing_pct")?,
+        entry_grid_spacing_log_span_hours: extract_value(
+            dict,
+            "entry_grid_spacing_log_span_hours",
+        )?,
         entry_initial_ema_dist: extract_value(dict, "entry_initial_ema_dist")?,
         entry_initial_qty_pct: extract_value(dict, "entry_initial_qty_pct")?,
         entry_trailing_double_down_factor: extract_value(
@@ -244,16 +282,8 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         entry_trailing_retracement_pct: extract_value(dict, "entry_trailing_retracement_pct")?,
         entry_trailing_grid_ratio: extract_value(dict, "entry_trailing_grid_ratio")?,
         entry_trailing_threshold_pct: extract_value(dict, "entry_trailing_threshold_pct")?,
-        filter_noisiness_rolling_window: {
-            let filter_noisiness_rolling_window_float: f64 =
-                extract_value(dict, "filter_noisiness_rolling_window")?;
-            filter_noisiness_rolling_window_float.round() as usize
-        },
-        filter_volume_rolling_window: {
-            let filter_volume_rolling_window_float: f64 =
-                extract_value(dict, "filter_volume_rolling_window")?;
-            filter_volume_rolling_window_float.round() as usize
-        },
+        filter_log_range_ema_span: extract_value(dict, "filter_log_range_ema_span")?,
+        filter_volume_ema_span: extract_value(dict, "filter_volume_ema_span")?,
         filter_volume_drop_pct: extract_value(dict, "filter_volume_drop_pct")?,
         ema_span_0: extract_value(dict, "ema_span_0")?,
         ema_span_1: extract_value(dict, "ema_span_1")?,
@@ -292,7 +322,8 @@ pub fn calc_next_entry_long_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_spacing_weight: f64,
+    entry_grid_spacing_log_weight: f64,
+    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
@@ -309,6 +340,7 @@ pub fn calc_next_entry_long_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_lower: f64,
+    grid_log_range: f64,
     order_book_bid: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -328,11 +360,13 @@ pub fn calc_next_entry_long_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
+        grid_log_range,
         ..Default::default()
     };
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_spacing_weight,
+        entry_grid_spacing_log_weight,
+        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
@@ -452,7 +486,8 @@ pub fn calc_next_entry_short_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_spacing_weight: f64,
+    entry_grid_spacing_log_weight: f64,
+    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
@@ -469,6 +504,7 @@ pub fn calc_next_entry_short_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_upper: f64,
+    grid_log_range: f64,
     order_book_ask: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -488,11 +524,13 @@ pub fn calc_next_entry_short_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
+        grid_log_range,
         ..Default::default()
     };
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_spacing_weight,
+        entry_grid_spacing_log_weight,
+        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
@@ -612,7 +650,8 @@ pub fn calc_entries_long_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_spacing_weight: f64,
+    entry_grid_spacing_log_weight: f64,
+    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
@@ -629,6 +668,7 @@ pub fn calc_entries_long_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_lower: f64,
+    grid_log_range: f64,
     order_book_bid: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -649,12 +689,14 @@ pub fn calc_entries_long_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
+        grid_log_range,
         ..Default::default()
     };
 
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_spacing_weight,
+        entry_grid_spacing_log_weight,
+        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
@@ -699,7 +741,8 @@ pub fn calc_entries_short_py(
     min_cost: f64,
     c_mult: f64,
     entry_grid_double_down_factor: f64,
-    entry_grid_spacing_weight: f64,
+    entry_grid_spacing_log_weight: f64,
+    entry_grid_spacing_we_weight: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
@@ -716,6 +759,7 @@ pub fn calc_entries_short_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_upper: f64,
+    grid_log_range: f64,
     order_book_ask: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -736,12 +780,14 @@ pub fn calc_entries_short_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
+        grid_log_range,
         ..Default::default()
     };
 
     let bot_params = BotParams {
         entry_grid_double_down_factor,
-        entry_grid_spacing_weight,
+        entry_grid_spacing_log_weight,
+        entry_grid_spacing_we_weight,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
         entry_initial_qty_pct,
