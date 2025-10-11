@@ -1,6 +1,6 @@
 # Backtesting
 
-Passivbot includes a backtester which will simulate the bot's behavior on past price data. Historical 1m candlestick data is automatically downloaded and cached for all coins.
+Passivbot ships with a backtester that replays historical 1 minute candles. When a coin isn’t cached locally, the backtester fetches data from the exchange archives (see `src/downloader.py`) and stores it under `historical_data/` for reuse.
 
 ## Usage
 
@@ -26,4 +26,3 @@ For a comprehensive list of CLI args:
 ```shell
 python3 src/backtest.py -h
 ```
-
