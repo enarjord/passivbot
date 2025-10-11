@@ -9,5 +9,3 @@ If there's an error running the command `maturin develop --release`: `error: lin
 `apt install python3-dev`
 
 and try again.
-
-More info coming soon...
