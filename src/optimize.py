@@ -941,6 +941,23 @@ def apply_fine_tune_bounds(config: dict, fine_tune_params: list[str]) -> None:
                 f"fine-tune bounds: missing bot value for '{key}', leaving bounds unchanged"
             )
             continue
+        current_bounds = bounds.get(key)
+        target_value = None
+        if isinstance(current_bounds, (list, tuple)):
+            if len(current_bounds) == 1:
+                target_value = current_bounds[0]
+            elif len(current_bounds) >= 2:
+                low, high = current_bounds[0], current_bounds[1]
+                if low != high:
+                    # Explicit range provided (e.g. via CLI); respect it.
+                    continue
+                target_value = low
+        if target_value is not None:
+            try:
+                side_cfg[param] = float(target_value)
+            except (TypeError, ValueError):
+                side_cfg[param] = target_value
+            continue
         value = side_cfg[param]
         try:
             value_float = float(value)
