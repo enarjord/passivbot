@@ -65,9 +65,7 @@ _BASE_EXCHANGE_TEMPLATE = {
     },
 }
 
-DEFAULT_CONFIG_SEARCH_PATHS: Tuple[str, ...] = (
-    os.path.join("configs", "custom_endpoints.json"),
-)
+DEFAULT_CONFIG_SEARCH_PATHS: Tuple[str, ...] = (os.path.join("configs", "custom_endpoints.json"),)
 
 
 class CustomEndpointConfigError(RuntimeError):

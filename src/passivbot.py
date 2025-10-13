@@ -2974,7 +2974,9 @@ async def main():
             override_path = cfg_value
             autodiscover = False
             preloaded_override = load_custom_endpoint_config(override_path)
-            logging.info("Using custom endpoints from config live.custom_endpoints_path: %s", override_path)
+            logging.info(
+                "Using custom endpoints from config live.custom_endpoints_path: %s", override_path
+            )
     else:
         logging.debug("Custom endpoints not specified; falling back to auto-discovery.")
 

@@ -139,8 +139,16 @@ class KucoinBot(Passivbot):
         if options:
             base_kwargs["options"] = options
 
-        async_cls = AsyncKucoinBrokerFutures if partner_id and partner_secret and broker_name else ccxt_async.kucoinfutures
-        pro_cls = ProKucoinBrokerFutures if partner_id and partner_secret and broker_name else ccxt_pro.kucoinfutures
+        async_cls = (
+            AsyncKucoinBrokerFutures
+            if partner_id and partner_secret and broker_name
+            else ccxt_async.kucoinfutures
+        )
+        pro_cls = (
+            ProKucoinBrokerFutures
+            if partner_id and partner_secret and broker_name
+            else ccxt_pro.kucoinfutures
+        )
 
         self.cca = async_cls(dict(base_kwargs))
         try:

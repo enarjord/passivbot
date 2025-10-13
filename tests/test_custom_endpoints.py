@@ -37,7 +37,9 @@ def test_load_custom_endpoint_config_parses_binance_override(tmp_path):
                 "binanceusdm": {
                     "disable_ws": True,
                     "rest": {
-                    "rewrite_domains": {"https://fapi.binance.com": "https://proxy.example.exchange"}
+                        "rewrite_domains": {
+                            "https://fapi.binance.com": "https://proxy.example.exchange"
+                        }
                     },
                 }
             },
@@ -97,7 +99,9 @@ def test_apply_rest_overrides_handles_hostname_placeholder():
     class DummyBybit:
         def __init__(self):
             self.hostname = "bybit.com"
-            self.urls = {"api": {"public": "https://api.{hostname}/v5", "private": "https://api.{hostname}/v5"}}
+            self.urls = {
+                "api": {"public": "https://api.{hostname}/v5", "private": "https://api.{hostname}/v5"}
+            }
             self.headers = {}
 
     exchange = DummyBybit()
