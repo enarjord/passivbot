@@ -37,7 +37,7 @@ def test_load_custom_endpoint_config_parses_binance_override(tmp_path):
                 "binanceusdm": {
                     "disable_ws": True,
                     "rest": {
-                        "rewrite_domains": {"https://fapi.binance.com": "https://binance-fapi-1.mltech.ai"}
+                    "rewrite_domains": {"https://fapi.binance.com": "https://proxy.example.exchange"}
                     },
                 }
             },
@@ -50,7 +50,7 @@ def test_load_custom_endpoint_config_parses_binance_override(tmp_path):
     assert override is not None
     assert override.disable_ws is True
     assert override.rest_domain_rewrites == {
-        "https://fapi.binance.com": "https://binance-fapi-1.mltech.ai"
+        "https://fapi.binance.com": "https://proxy.example.exchange"
     }
     assert override.rest_url_overrides == {}
     assert override.rest_extra_headers == {}
