@@ -100,7 +100,7 @@ class ResolvedEndpointOverride:
             and not self.rest_extra_headers
         )
 
-    def rewrite_url(self, url: str) -> str:
+    def rewrite_url(self, url: str, *, hostname: Optional[str] = None) -> str:
         """
         Return ``url`` with domain-level rewrites applied.
 
@@ -114,17 +114,26 @@ class ResolvedEndpointOverride:
         for old, new in self.rest_domain_rewrites.items():
             if not old:
                 continue
-            if new_url.startswith(old):
-                return new + new_url[len(old) :]
-            if "://" not in old:
-                # Interpret bare host as scheme-agnostic replacement.
-                needle = "://" + old
-                idx = new_url.find(needle)
-                if idx != -1:
-                    return new_url[: idx + 3] + new + new_url[idx + len(needle) :]
+
+            candidates = [old]
+            if hostname and "{hostname}" in old:
+                candidates.append(old.replace("{hostname}", hostname))
+
+            for candidate in candidates:
+                if not candidate:
+                    continue
+                if new_url.startswith(candidate):
+                    return new + new_url[len(candidate) :]
+                if "://" not in candidate:
+                    needle = "://" + candidate
+                    idx = new_url.find(needle)
+                    if idx != -1:
+                        return new_url[: idx + 3] + new + new_url[idx + len(needle) :]
         return new_url
 
-    def apply_to_api_urls(self, urls: Mapping[str, str]) -> Dict[str, str]:
+    def apply_to_api_urls(
+        self, urls: Mapping[str, str], *, hostname: Optional[str] = None
+    ) -> Dict[str, str]:
         """
         Return a new ``dict`` with REST URL overrides applied to the provided
         ccxt ``urls['api']`` mapping.
@@ -133,7 +142,7 @@ class ResolvedEndpointOverride:
         for key, value in self.rest_url_overrides.items():
             updated[key] = value
         for key, value in list(updated.items()):
-            updated[key] = self.rewrite_url(value)
+            updated[key] = self.rewrite_url(value, hostname=hostname)
         return updated
 
 
@@ -391,7 +400,8 @@ def apply_rest_overrides_to_ccxt(
         urls = getattr(exchange, "urls", {})
         if isinstance(urls, Mapping) and "api" in urls:
             original_api = dict(urls["api"])
-            updated = override.apply_to_api_urls(original_api)
+            hostname = getattr(exchange, "hostname", None)
+            updated = override.apply_to_api_urls(original_api, hostname=hostname)
             exchange.urls["api"] = updated
             for key, original_value in original_api.items():
                 new_value = updated.get(key)
