@@ -32,6 +32,7 @@ from utils import (
     make_get_filepath,
     format_approved_ignored_coins,
     filter_markets,
+    normalize_exchange_name,
 )
 from prettytable import PrettyTable
 from uuid import uuid4
@@ -70,6 +71,14 @@ from procedures import (
 from utils import get_file_mod_ms
 from downloader import compute_per_coin_warmup_minutes
 import re
+
+from custom_endpoint_overrides import (
+    apply_rest_overrides_to_ccxt,
+    configure_custom_endpoint_loader,
+    get_custom_endpoint_source,
+    load_custom_endpoint_config,
+    resolve_custom_endpoint_override,
+)
 
 
 calc_diff = pbr.calc_diff
@@ -261,6 +270,18 @@ class Passivbot:
         self.user_info = load_user_info(self.user)
         self.exchange = self.user_info["exchange"]
         self.broker_code = load_broker_code(self.user_info["exchange"])
+        self.exchange_ccxt_id = normalize_exchange_name(self.exchange)
+        self.endpoint_override = resolve_custom_endpoint_override(self.exchange_ccxt_id)
+        self.ws_enabled = True
+        if self.endpoint_override:
+            self.ws_enabled = not self.endpoint_override.disable_ws
+            source_path = get_custom_endpoint_source()
+            logging.info(
+                "Custom endpoint override active for %s (disable_ws=%s, source=%s)",
+                self.exchange_ccxt_id,
+                self.endpoint_override.disable_ws,
+                source_path if source_path else "auto-discovered",
+            )
         self.custom_id_max_length = 36
         self.sym_padding = 17
         self.action_str_max_len = max(
@@ -299,6 +320,8 @@ class Passivbot:
         # Legacy EMA caches removed; use CandlestickManager EMA helpers
         # Legacy ohlcvs_1m fields removed in favor of CandlestickManager
         self.stop_signal_received = False
+        self.cca = None
+        self.ccp = None
         self.create_ccxt_sessions()
         self.debug_mode = False
         self.balance_threshold = 1.0  # don't create orders if balance is less than threshold
@@ -991,6 +1014,12 @@ class Passivbot:
     def pad_sym(self, symbol):
         """Return the symbol left-aligned to the configured log width."""
         return f"{symbol: <{self.sym_padding}}"
+
+    def _apply_endpoint_override(self, client) -> None:
+        """Apply configured REST endpoint overrides to a ccxt client."""
+        if client is None:
+            return
+        apply_rest_overrides_to_ccxt(client, self.endpoint_override)
 
     def stop_data_maintainers(self, verbose=True):
         """Cancel background candle/orderbook tasks and log the outcome."""
@@ -2432,7 +2461,8 @@ class Passivbot:
         self.stop_signal_received = True
         self.stop_data_maintainers()
         await self.cca.close()
-        await self.ccp.close()
+        if self.ccp is not None:
+            await self.ccp.close()
         raise Exception("Bot will restart.")
 
     async def update_ohlcvs_1m_for_actives(self):
@@ -2492,12 +2522,13 @@ class Passivbot:
         """Spawn background tasks responsible for market metadata and order watching."""
         if hasattr(self, "maintainers"):
             self.stop_data_maintainers()
+        maintainer_names = ["maintain_hourly_cycle"]
+        if self.ws_enabled:
+            maintainer_names.append("watch_orders")
+        else:
+            logging.info("Websocket maintainers skipped (ws disabled via custom endpoints).")
         self.maintainers = {
-            k: asyncio.create_task(getattr(self, k)())
-            for k in [
-                "maintain_hourly_cycle",
-                "watch_orders",
-            ]
+            name: asyncio.create_task(getattr(self, name)()) for name in maintainer_names
         }
 
     # Legacy websocket 1m ohlcv watchers removed; CandlestickManager is authoritative
@@ -2699,7 +2730,8 @@ class Passivbot:
         """Stop background tasks and close exchange clients."""
         logging.info(f"Stopped data maintainers: {self.stop_data_maintainers()}")
         await self.cca.close()
-        await self.ccp.close()
+        if self.ccp is not None:
+            await self.ccp.close()
 
     def add_to_coins_lists(self, content, k_coins, log_psides=None):
         """Update approved/ignored coin sets from configuration content."""
@@ -2882,6 +2914,15 @@ async def main():
         default="configs/template.json",
         help="path to hjson passivbot config",
     )
+    parser.add_argument(
+        "--custom-endpoints",
+        dest="custom_endpoints",
+        default=None,
+        help=(
+            "Path to custom endpoints JSON for this run. "
+            "Use 'none' to disable overrides even if a default file exists."
+        ),
+    )
 
     template_config = get_template_config("v7")
     del template_config["optimize"]
@@ -2892,6 +2933,57 @@ async def main():
     config = load_config(args.config_path, live_only=True)
     update_config_with_args(config, args)
     config = format_config(config, live_only=True)
+
+    custom_endpoints_cli = args.custom_endpoints
+    live_section = config.get("live") if isinstance(config.get("live"), dict) else {}
+    custom_endpoints_cfg = live_section.get("custom_endpoints_path") if live_section else None
+
+    override_path = None
+    autodiscover = True
+    preloaded_override = None
+
+    def _sanitize(value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return "none"
+            return stripped
+        return str(value)
+
+    cli_value = _sanitize(custom_endpoints_cli) if custom_endpoints_cli is not None else None
+    cfg_value = _sanitize(custom_endpoints_cfg) if custom_endpoints_cfg is not None else None
+
+    if cli_value is not None:
+        if cli_value.lower() in {"none", "off", "disable"}:
+            override_path = None
+            autodiscover = False
+            logging.info("Custom endpoints disabled via CLI argument.")
+        else:
+            override_path = cli_value
+            autodiscover = False
+            preloaded_override = load_custom_endpoint_config(override_path)
+            logging.info("Using custom endpoints from CLI path: %s", override_path)
+    elif cfg_value:
+        if cfg_value.lower() in {"none", "off", "disable"}:
+            override_path = None
+            autodiscover = False
+            logging.info("Custom endpoints disabled via config live.custom_endpoints_path.")
+        else:
+            override_path = cfg_value
+            autodiscover = False
+            preloaded_override = load_custom_endpoint_config(override_path)
+            logging.info("Using custom endpoints from config live.custom_endpoints_path: %s", override_path)
+    else:
+        logging.debug("Custom endpoints not specified; falling back to auto-discovery.")
+
+    configure_custom_endpoint_loader(
+        override_path,
+        autodiscover=autodiscover,
+        preloaded=preloaded_override,
+    )
+
     user_info = load_user_info(require_live_value(config, "user"))
     await load_markets(user_info["exchange"], verbose=True)
 
@@ -2909,8 +3001,10 @@ async def main():
         finally:
             try:
                 bot.stop_data_maintainers()
-                await bot.ccp.close()
-                await bot.cca.close()
+                if bot.ccp is not None:
+                    await bot.ccp.close()
+                if bot.cca is not None:
+                    await bot.cca.close()
             except:
                 pass
         logging.info(f"restarting bot...")

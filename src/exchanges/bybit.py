@@ -27,14 +27,18 @@ class BybitBot(Passivbot):
         super().__init__(config)
 
     def create_ccxt_sessions(self):
-        self.ccp = getattr(ccxt_pro, self.exchange)(
-            {
-                "apiKey": self.user_info["key"],
-                "secret": self.user_info["secret"],
-                "password": self.user_info["passphrase"],
-                "headers": {"referer": self.broker_code} if self.broker_code else {},
-            }
-        )
+        if self.ws_enabled:
+            self.ccp = getattr(ccxt_pro, self.exchange)(
+                {
+                    "apiKey": self.user_info["key"],
+                    "secret": self.user_info["secret"],
+                    "password": self.user_info["passphrase"],
+                    "headers": {"referer": self.broker_code} if self.broker_code else {},
+                }
+            )
+            self._apply_endpoint_override(self.ccp)
+        elif self.endpoint_override:
+            logging.info("Skipping Bybit websocket session due to custom endpoint override.")
         self.cca = getattr(ccxt_async, self.exchange)(
             {
                 "apiKey": self.user_info["key"],
@@ -43,6 +47,7 @@ class BybitBot(Passivbot):
                 "headers": {"referer": self.broker_code} if self.broker_code else {},
             }
         )
+        self._apply_endpoint_override(self.cca)
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()

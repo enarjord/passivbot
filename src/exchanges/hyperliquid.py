@@ -45,20 +45,21 @@ class HyperliquidBot(Passivbot):
         self.custom_id_max_length = 34
 
     def create_ccxt_sessions(self):
-        self.ccp = getattr(ccxt_pro, self.exchange)(
-            {
-                "walletAddress": self.user_info["wallet_address"],
-                "privateKey": self.user_info["private_key"],
-            }
-        )
-        self.ccp.options["defaultType"] = "swap"
+        creds = {
+            "walletAddress": self.user_info["wallet_address"],
+            "privateKey": self.user_info["private_key"],
+        }
+        if self.ws_enabled:
+            self.ccp = getattr(ccxt_pro, self.exchange)(creds)
+            self.ccp.options["defaultType"] = "swap"
+            self._apply_endpoint_override(self.ccp)
+        elif self.endpoint_override:
+            logging.info("Skipping Hyperliquid websocket session due to custom endpoint override.")
         self.cca = getattr(ccxt_async, self.exchange)(
-            {
-                "walletAddress": self.user_info["wallet_address"],
-                "privateKey": self.user_info["private_key"],
-            }
+            creds
         )
         self.cca.options["defaultType"] = "swap"
+        self._apply_endpoint_override(self.cca)
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()

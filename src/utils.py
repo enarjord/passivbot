@@ -12,6 +12,10 @@ from collections import defaultdict
 from typing import Dict, Any, List, Union, Optional
 import re
 import logging
+from custom_endpoint_overrides import (
+    apply_rest_overrides_to_ccxt,
+    resolve_custom_endpoint_override,
+)
 
 
 logging.basicConfig(
@@ -277,6 +281,11 @@ def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True):
         cc.options["defaultType"] = "swap"
     except Exception:
         pass
+    try:
+        override = resolve_custom_endpoint_override(ex)
+        apply_rest_overrides_to_ccxt(cc, override)
+    except Exception as exc:
+        logging.warning("Failed to apply custom endpoint override for %s: %s", ex, exc)
     return cc
 
 

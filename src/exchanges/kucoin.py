@@ -130,53 +130,34 @@ class KucoinBot(Passivbot):
                     }
                 }
             }
-        if partner_id and partner_secret and broker_name:
-            # Instantiate custom classes that inject the broker name on signing
-            self.ccp = ProKucoinBrokerFutures(
-                {
-                    "apiKey": self.user_info["key"],
-                    "secret": self.user_info["secret"],
-                    "password": self.user_info["passphrase"],
-                    "enableRateLimit": True,
-                    "options": options,
-                }
-            )
-            self.cca = AsyncKucoinBrokerFutures(
-                {
-                    "apiKey": self.user_info["key"],
-                    "secret": self.user_info["secret"],
-                    "password": self.user_info["passphrase"],
-                    "enableRateLimit": True,
-                    "options": options,
-                }
-            )
-        else:
-            # Fall back to vanilla CCXT futures exchanges when no broker codes
-            self.ccp = ccxt_pro.kucoinfutures(
-                {
-                    "apiKey": self.user_info["key"],
-                    "secret": self.user_info["secret"],
-                    "password": self.user_info["passphrase"],
-                    "enableRateLimit": True,
-                }
-            )
-            self.cca = ccxt_async.kucoinfutures(
-                {
-                    "apiKey": self.user_info["key"],
-                    "secret": self.user_info["secret"],
-                    "password": self.user_info["passphrase"],
-                    "enableRateLimit": True,
-                }
-            )
-        # Always trade perpetual swaps on KuCoin by default.
-        try:
-            self.ccp.options["defaultType"] = "swap"
-        except Exception:
-            pass
+        base_kwargs = {
+            "apiKey": self.user_info["key"],
+            "secret": self.user_info["secret"],
+            "password": self.user_info["passphrase"],
+            "enableRateLimit": True,
+        }
+        if options:
+            base_kwargs["options"] = options
+
+        async_cls = AsyncKucoinBrokerFutures if partner_id and partner_secret and broker_name else ccxt_async.kucoinfutures
+        pro_cls = ProKucoinBrokerFutures if partner_id and partner_secret and broker_name else ccxt_pro.kucoinfutures
+
+        self.cca = async_cls(dict(base_kwargs))
         try:
             self.cca.options["defaultType"] = "swap"
         except Exception:
             pass
+        self._apply_endpoint_override(self.cca)
+
+        if self.ws_enabled:
+            self.ccp = pro_cls(dict(base_kwargs))
+            try:
+                self.ccp.options["defaultType"] = "swap"
+            except Exception:
+                pass
+            self._apply_endpoint_override(self.ccp)
+        elif self.endpoint_override:
+            logging.info("Skipping Kucoin websocket session due to custom endpoint override.")
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()

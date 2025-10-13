@@ -25,20 +25,26 @@ class DefxBot(Passivbot):
         self.hedge_mode = False
 
     def create_ccxt_sessions(self):
-        self.ccp = getattr(ccxt_pro, self.exchange)(
-            {
-                "apiKey": self.user_info["key"],
-                "secret": self.user_info["secret"],
-            }
-        )
+        if self.ws_enabled:
+            self.ccp = getattr(ccxt_pro, self.exchange)(
+                {
+                    "apiKey": self.user_info["key"],
+                    "secret": self.user_info["secret"],
+                }
+            )
+        elif self.endpoint_override:
+            logging.info("Skipping Defx websocket session due to custom endpoint override.")
         self.cca = getattr(ccxt_async, self.exchange)(
             {
                 "apiKey": self.user_info["key"],
                 "secret": self.user_info["secret"],
             }
         )
-        self.ccp.options["defaultType"] = "swap"
         self.cca.options["defaultType"] = "swap"
+        if self.ws_enabled and self.ccp is not None:
+            self.ccp.options["defaultType"] = "swap"
+            self._apply_endpoint_override(self.ccp)
+        self._apply_endpoint_override(self.cca)
 
     async def fetch_wallet_collaterals(self):
         fetched = None

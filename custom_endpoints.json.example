@@ -1,0 +1,21 @@
+{
+    "defaults": {
+        "disable_ws": false,
+        "rest": {
+            "rewrite_domains": {},
+            "url_overrides": {},
+            "extra_headers": {}
+        }
+    },
+    "exchanges": {
+        "binanceusdm": {
+            "disable_ws": true,
+            "rest": {
+                "rewrite_domains": {
+                    "https://fapi.binance.com": "https://proxy.example.exchange"
+                }
+            },
+            "notes": "Sample override that sends Binance futures REST calls through a fictional proxy."
+        }
+    }
+}

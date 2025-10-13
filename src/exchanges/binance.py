@@ -33,7 +33,12 @@ class BinanceBot(Passivbot):
 
     def create_ccxt_sessions(self):
         self.broker_code_spot = load_broker_code("binance_spot")
-        for ccx, ccxt_module in [("cca", ccxt_async), ("ccp", ccxt_pro)]:
+        targets = [("cca", ccxt_async)]
+        if self.ws_enabled:
+            targets.append(("ccp", ccxt_pro))
+        elif self.endpoint_override:
+            logging.info("Skipping Binance websocket session due to custom endpoint override.")
+        for ccx, ccxt_module in targets:
             exchange_class = getattr(ccxt_module, "binanceusdm")
             setattr(
                 self,
@@ -53,6 +58,7 @@ class BinanceBot(Passivbot):
             if self.broker_code_spot:
                 for key in ["spot", "margin"]:
                     getattr(self, ccx).options["broker"][key] = "x-" + self.broker_code_spot
+            self._apply_endpoint_override(getattr(self, ccx))
 
     async def print_new_user_suggestion(self):
         between_print_wait_ms = 1000 * 60 * 60 * 4

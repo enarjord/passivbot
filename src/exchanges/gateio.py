@@ -45,22 +45,28 @@ class GateIOBot(Passivbot):
         self.custom_id_max_length = 28
 
     def create_ccxt_sessions(self):
-        self.ccp = getattr(ccxt_pro, self.exchange)(
-            {
-                "apiKey": self.user_info["key"],
-                "secret": self.user_info["secret"],
-                "headers": {"X-Gate-Channel-Id": self.broker_code} if self.broker_code else {},
-            }
-        )
-        self.ccp.options["defaultType"] = "swap"
+        headers = {"X-Gate-Channel-Id": self.broker_code} if self.broker_code else {}
+        if self.ws_enabled:
+            self.ccp = getattr(ccxt_pro, self.exchange)(
+                {
+                    "apiKey": self.user_info["key"],
+                    "secret": self.user_info["secret"],
+                    "headers": headers,
+                }
+            )
+            self.ccp.options["defaultType"] = "swap"
+            self._apply_endpoint_override(self.ccp)
+        elif self.endpoint_override:
+            logging.info("Skipping GateIO websocket session due to custom endpoint override.")
         self.cca = getattr(ccxt_async, self.exchange)(
             {
                 "apiKey": self.user_info["key"],
                 "secret": self.user_info["secret"],
-                "headers": {"X-Gate-Channel-Id": self.broker_code} if self.broker_code else {},
+                "headers": headers,
             }
         )
         self.cca.options["defaultType"] = "swap"
+        self._apply_endpoint_override(self.cca)
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
@@ -140,7 +146,8 @@ class GateIOBot(Passivbot):
             if not hasattr(self, "uid") or not self.uid:
                 self.uid = balance["info"][0]["user"]
                 self.cca.uid = self.uid
-                self.ccp.uid = self.uid
+                if self.ccp is not None:
+                    self.ccp.uid = self.uid
             balance = balance[self.quote]["total"]
             positions = []
             for x in positions_fetched:

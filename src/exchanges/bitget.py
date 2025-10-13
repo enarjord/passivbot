@@ -33,14 +33,18 @@ class BitgetBot(Passivbot):
         self.custom_id_max_length = 64
 
     def create_ccxt_sessions(self):
-        self.ccp = getattr(ccxt_pro, self.exchange)(
-            {
-                "apiKey": self.user_info["key"],
-                "secret": self.user_info["secret"],
-                "password": self.user_info["passphrase"],
-            }
-        )
-        self.ccp.options["defaultType"] = "swap"
+        if self.ws_enabled:
+            self.ccp = getattr(ccxt_pro, self.exchange)(
+                {
+                    "apiKey": self.user_info["key"],
+                    "secret": self.user_info["secret"],
+                    "password": self.user_info["passphrase"],
+                }
+            )
+            self.ccp.options["defaultType"] = "swap"
+            self._apply_endpoint_override(self.ccp)
+        elif self.endpoint_override:
+            logging.info("Skipping Bitget websocket session due to custom endpoint override.")
         self.cca = getattr(ccxt_async, self.exchange)(
             {
                 "apiKey": self.user_info["key"],
@@ -49,6 +53,7 @@ class BitgetBot(Passivbot):
             }
         )
         self.cca.options["defaultType"] = "swap"
+        self._apply_endpoint_override(self.cca)
 
     async def determine_utc_offset(self, verbose=True):
         # returns millis to add to utc to get exchange timestamp
