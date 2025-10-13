@@ -1498,7 +1498,9 @@ async def prepare_hlcvs_internal(
     mss = {}
     for coin in sorted(valid_coins):
         meta = om.get_market_specific_settings(coin)
-        first_idx, last_idx = valid_index_ranges.get(coin, (hlcvs.shape[0], hlcvs.shape[0]))
+        first_idx, last_idx = valid_index_ranges.get(
+            coin, (unified_array.shape[0], unified_array.shape[0])
+        )
         meta["first_valid_index"] = first_idx
         meta["last_valid_index"] = last_idx
         warm_minutes = int(per_coin_warmups.get(coin, default_warm))
