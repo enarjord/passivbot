@@ -72,7 +72,7 @@ You can embed the path in your live config so it is always applied:
 Passivbot logs every override at launch. Look for entries such as:
 
 ```
-INFO Custom endpoint active for binanceusdm.fapiPrivate: https://fapi.binance.com/fapi/v1 -> https://binance-fapi-1.mltech.ai/fapi/v1
+INFO Custom endpoint active for binanceusdm.fapiPrivate: https://fapi.binance.com/fapi/v1 -> https://proxy.example.exchange/fapi/v1
 INFO Custom endpoint override active for binanceusdm (disable_ws=True, source=...)
 ```
 
