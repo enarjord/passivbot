@@ -108,26 +108,32 @@ class ResolvedEndpointOverride:
         """
         if not url:
             return url
-        new_url = url
+        resolved_url = url
+        if hostname and "{hostname}" in url:
+            resolved_url = url.replace("{hostname}", hostname)
+
         for old, new in self.rest_domain_rewrites.items():
             if not old:
                 continue
 
-            candidates = [old]
+            candidates = {old}
             if hostname and "{hostname}" in old:
-                candidates.append(old.replace("{hostname}", hostname))
+                candidates.add(old.replace("{hostname}", hostname))
 
             for candidate in candidates:
                 if not candidate:
                     continue
-                if new_url.startswith(candidate):
-                    return new + new_url[len(candidate) :]
+                if resolved_url.startswith(candidate):
+                    suffix = resolved_url[len(candidate) :]
+                    return new.rstrip("/") + suffix
                 if "://" not in candidate:
                     needle = "://" + candidate
-                    idx = new_url.find(needle)
+                    idx = resolved_url.find(needle)
                     if idx != -1:
-                        return new_url[: idx + 3] + new + new_url[idx + len(needle) :]
-        return new_url
+                        prefix = resolved_url[: idx + 3]
+                        suffix = resolved_url[idx + len(needle) :]
+                        return prefix + new + suffix
+        return resolved_url
 
     def apply_to_api_urls(
         self, urls: Mapping[str, str], *, hostname: Optional[str] = None
