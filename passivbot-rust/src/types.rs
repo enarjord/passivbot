@@ -243,6 +243,7 @@ pub struct Balance {
 
 #[derive(Default, Clone)]
 pub struct Equities {
+    pub timestamps_ms: Vec<u64>,
     pub usd: Vec<f64>,
     pub btc: Vec<f64>,
 }
@@ -250,6 +251,7 @@ pub struct Equities {
 #[derive(Debug, Clone)]
 pub struct Fill {
     pub index: usize,
+    pub timestamp_ms: u64,
     pub coin: String,
     pub pnl: f64,
     pub fee_paid: f64,

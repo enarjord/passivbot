@@ -10,6 +10,63 @@ from procedures import dump_pretty_json
 from utils import format_end_date, symbol_to_coin, normalize_coins_source
 
 
+CURRENCY_METRICS = {
+    "adg",
+    "adg_per_exposure_long",
+    "adg_per_exposure_short",
+    "adg_w",
+    "adg_w_per_exposure_long",
+    "adg_w_per_exposure_short",
+    "calmar_ratio",
+    "calmar_ratio_w",
+    "drawdown_worst",
+    "drawdown_worst_mean_1pct",
+    "equity_balance_diff_neg_max",
+    "equity_balance_diff_neg_mean",
+    "equity_balance_diff_pos_max",
+    "equity_balance_diff_pos_mean",
+    "equity_choppiness",
+    "equity_choppiness_w",
+    "equity_jerkiness",
+    "equity_jerkiness_w",
+    "expected_shortfall_1pct",
+    "exponential_fit_error",
+    "exponential_fit_error_w",
+    "gain",
+    "gain_per_exposure_long",
+    "gain_per_exposure_short",
+    "loss_profit_ratio",
+    "loss_profit_ratio_w",
+    "mdg",
+    "mdg_per_exposure_long",
+    "mdg_per_exposure_short",
+    "mdg_w",
+    "mdg_w_per_exposure_long",
+    "mdg_w_per_exposure_short",
+    "omega_ratio",
+    "omega_ratio_w",
+    "sharpe_ratio",
+    "sharpe_ratio_w",
+    "sortino_ratio",
+    "sortino_ratio_w",
+    "sterling_ratio",
+    "sterling_ratio_w",
+    "volume_pct_per_day_avg",
+    "volume_pct_per_day_avg_w",
+}
+
+SHARED_METRICS = {
+    "positions_held_per_day",
+    "position_held_hours_mean",
+    "position_held_hours_max",
+    "position_held_hours_median",
+    "position_unchanged_hours_max",
+    "flat_btc_balance_hours",
+    "volume_pct_per_day_avg",
+    "volume_pct_per_day_avg_w",
+}
+
+
 Path = Tuple[str, ...]  # ("bot", "long", "entry_grid_spacing_pct")
 
 
@@ -577,6 +634,9 @@ def _migrate_btc_collateral_settings(result: dict, verbose: bool = True) -> None
     if "btc_collateral_ltv_cap" not in backtest:
         backtest["btc_collateral_ltv_cap"] = None
 
+    if "emit_legacy_metrics" not in backtest:
+        backtest["emit_legacy_metrics"] = False
+
 
 def detect_flavor(config: dict, template: dict) -> str:
     """Detect incoming config flavor to drive the builder.
@@ -750,35 +810,21 @@ def _apply_non_live_adjustments(result: dict, verbose: bool = True) -> None:
             if coin not in result["live"]["ignored_coins"][pside]
         ]
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
-    result["optimize"]["scoring"] = sorted(result["optimize"]["scoring"])
-    result["optimize"]["limits"] = parse_limits_string(result["optimize"]["limits"])
-    for key, value in sorted(result["optimize"]["limits"].items()):
-        if key.startswith("lower_bound_"):
-            new_key = key.replace("lower_bound_", "penalize_if_greater_than_")
-            result["optimize"]["limits"][new_key] = value
-            if verbose:
-                print(f"changed config.optimize.limits.{key} -> {new_key}")
-            del result["optimize"]["limits"][key]
-    btc_cap = result["backtest"].get("btc_collateral_cap", 0.0)
-    try:
-        btc_cap_val = float(btc_cap)
-    except (TypeError, ValueError):
-        btc_cap_val = 0.0
-    if btc_cap_val <= 0.0:
-        for idx, value in enumerate(result["optimize"]["scoring"]):
-            if value.startswith("btc_"):
-                new_value = value[len("btc_") :]
-                if verbose:
-                    print(f"changed config.optimize.scoring.{value} -> {new_value}")
-                result["optimize"]["scoring"][idx] = new_value
-        for key in sorted(result["optimize"]["limits"]):
-            if key.startswith("btc_"):
-                new_key = key[len("btc_") :]
-                limit_value = result["optimize"]["limits"][key]
-                if verbose:
-                    print(f"changed config.optimize.limits.{key} -> {new_key}")
-                result["optimize"]["limits"][new_key] = limit_value
-                del result["optimize"]["limits"][key]
+
+    canonical_scoring = []
+    seen = set()
+    for metric in result["optimize"].get("scoring", []):
+        canon = canonicalize_metric_name(metric)
+        if canon not in seen:
+            canonical_scoring.append(canon)
+            seen.add(canon)
+    result["optimize"]["scoring"] = canonical_scoring
+
+    limits_dict = parse_limits_string(result["optimize"].get("limits", {}))
+    canonical_limits = {}
+    for key, value in limits_dict.items():
+        canonical_limits[canonicalize_limit_name(key)] = value
+    result["optimize"]["limits"] = canonical_limits
     for key, value in sorted(result["optimize"]["bounds"].items()):
         if isinstance(value, list):
             if len(value) == 1:
@@ -910,6 +956,41 @@ def optional_float(x):
     return float(x)
 
 
+def canonicalize_metric_name(metric: str) -> str:
+    if metric.endswith("_usd") or metric.endswith("_btc"):
+        return metric
+
+    for prefix, suffix in (("usd_", "usd"), ("btc_", "btc")):
+        if metric.startswith(prefix):
+            core = metric[len(prefix) :]
+            if core in SHARED_METRICS:
+                return core
+            return f"{core}_{suffix}"
+
+    if metric in SHARED_METRICS:
+        return metric
+
+    if metric in CURRENCY_METRICS:
+        return f"{metric}_usd"
+
+    return metric
+
+
+def canonicalize_limit_name(limit_key: str) -> str:
+    if limit_key.startswith("lower_bound_"):
+        metric = limit_key[len("lower_bound_") :]
+        return "penalize_if_greater_than_" + canonicalize_metric_name(metric)
+    if limit_key.startswith("upper_bound_"):
+        metric = limit_key[len("upper_bound_") :]
+        return "penalize_if_lower_than_" + canonicalize_metric_name(metric)
+    prefixes = ["penalize_if_greater_than_", "penalize_if_lower_than_"]
+    for prefix in prefixes:
+        if limit_key.startswith(prefix):
+            metric = limit_key[len(prefix) :]
+            return prefix + canonicalize_metric_name(metric)
+    return canonicalize_metric_name(limit_key)
+
+
 def merge_negative_cli_values(argv):
     """Allow comma-separated values that begin with '-' to be parsed as option values."""
     out = []
@@ -1013,7 +1094,7 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
                 if full_name == "backtest.btc_collateral_ltv_cap":
                     type_ = optional_float
                 else:
-                    type_ = optional_float
+                    type_ = str
             elif type_ == bool:
                 type_ = str2bool
                 appendix = "[y/n]"
@@ -1128,12 +1209,13 @@ def get_template_config(passivbot_mode="v7"):
             "compress_cache": True,
             "end_date": "now",
             "exchanges": ["binance", "bybit", "gateio", "bitget"],
-            "gap_tolerance_ohlcvs_minutes": 120.0,
-            "start_date": "2021-04-01",
-            "starting_balance": 100000.0,
-            "btc_collateral_cap": 1.0,
-            "btc_collateral_ltv_cap": None,
-            "max_warmup_minutes": 0.0,
+        "gap_tolerance_ohlcvs_minutes": 120.0,
+        "start_date": "2021-04-01",
+        "starting_balance": 100000.0,
+        "btc_collateral_cap": 1.0,
+        "btc_collateral_ltv_cap": None,
+        "emit_legacy_metrics": False,
+        "max_warmup_minutes": 0.0,
         },
         "bot": {
             "long": {

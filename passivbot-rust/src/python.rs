@@ -12,8 +12,8 @@ use crate::types::{
     StateParams, TrailingPriceBundle,
 };
 use memmap::MmapOptions;
-use ndarray::{Array1, Array2, ArrayView};
-use numpy::{IntoPyArray, PyArray1, PyArray2};
+use ndarray::{Array2, ArrayView};
+use numpy::{IntoPyArray, PyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -33,8 +33,7 @@ pub fn run_backtest(
     backtest_params_dict: &PyDict,      // Backtest parameters
 ) -> PyResult<(
     Py<PyArray2<PyObject>>,
-    Py<PyArray1<f64>>,
-    Py<PyArray1<f64>>,
+    Py<PyArray2<f64>>,
     Py<PyDict>,
     Py<PyDict>,
 )> {
@@ -124,39 +123,41 @@ pub fn run_backtest(
     // Run the backtest and process results
     Python::with_gil(|py| {
         let (fills, equities) = backtest.run();
-        let (analysis_usd, analysis_btc) =
-            analyze_backtest_pair(&fills, &equities, backtest.balance.use_btc_collateral);
+        let (analysis_usd, analysis_btc) = analyze_backtest_pair(&fills, &equities);
 
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
         let py_analysis_btc = struct_to_py_dict(py, &analysis_btc)?;
-        let mut py_fills = Array2::from_elem((fills.len(), 13), py.None());
+        let mut py_fills = Array2::from_elem((fills.len(), 14), py.None());
         for (i, fill) in fills.iter().enumerate() {
             py_fills[(i, 0)] = fill.index.into_py(py);
-            py_fills[(i, 1)] = <String as Clone>::clone(&fill.coin).into_py(py);
-            py_fills[(i, 2)] = fill.pnl.into_py(py);
-            py_fills[(i, 3)] = fill.fee_paid.into_py(py);
-            py_fills[(i, 4)] = fill.balance_usd_total.into_py(py);
-            py_fills[(i, 5)] = fill.balance_btc.into_py(py);
-            py_fills[(i, 6)] = fill.balance_usd.into_py(py);
-            py_fills[(i, 7)] = fill.btc_price.into_py(py);
-            py_fills[(i, 8)] = fill.fill_qty.into_py(py);
-            py_fills[(i, 9)] = fill.fill_price.into_py(py);
-            py_fills[(i, 10)] = fill.position_size.into_py(py);
-            py_fills[(i, 11)] = fill.position_price.into_py(py);
-            py_fills[(i, 12)] = fill.order_type.to_string().into_py(py);
+            py_fills[(i, 1)] = (fill.timestamp_ms as i64).into_py(py);
+            py_fills[(i, 2)] = <String as Clone>::clone(&fill.coin).into_py(py);
+            py_fills[(i, 3)] = fill.pnl.into_py(py);
+            py_fills[(i, 4)] = fill.fee_paid.into_py(py);
+            py_fills[(i, 5)] = fill.balance_usd_total.into_py(py);
+            py_fills[(i, 6)] = fill.balance_btc.into_py(py);
+            py_fills[(i, 7)] = fill.balance_usd.into_py(py);
+            py_fills[(i, 8)] = fill.btc_price.into_py(py);
+            py_fills[(i, 9)] = fill.fill_qty.into_py(py);
+            py_fills[(i, 10)] = fill.fill_price.into_py(py);
+            py_fills[(i, 11)] = fill.position_size.into_py(py);
+            py_fills[(i, 12)] = fill.position_price.into_py(py);
+            py_fills[(i, 13)] = fill.order_type.to_string().into_py(py);
         }
 
-        let py_equities_usd = Array1::from_vec(equities.usd)
-            .into_pyarray_bound(py)
-            .unbind();
-        let py_equities_btc = Array1::from_vec(equities.btc)
+        let equities_array =
+            Array2::from_shape_fn((equities.timestamps_ms.len(), 3), |(i, j)| match j {
+                0 => equities.timestamps_ms[i] as f64,
+                1 => equities.usd[i],
+                2 => equities.btc[i],
+                _ => 0.0,
+            })
             .into_pyarray_bound(py)
             .unbind();
         Ok((
             py_fills.into_pyarray_bound(py).unbind(),
-            py_equities_usd,
-            py_equities_btc,
+            equities_array,
             py_analysis_usd.into(),
             py_analysis_btc.into(),
         ))

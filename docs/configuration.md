@@ -12,6 +12,7 @@ This document provides an overview of the parameters found in `config/template.j
 - **starting_balance**: Starting balance in USD at the beginning of the backtest.
 - **btc_collateral_cap**: Target (and ceiling) share of account equity to hold in BTC collateral. `0` keeps the account fully in USD; `1.0` mirrors the legacy 100% BTC mode; values `>1` allow leveraged BTC collateral, accepting negative USD balances.
 - **btc_collateral_ltv_cap**: Optional loan-to-value ceiling (`USD debt ÷ equity`) enforced when topping up BTC. Leave `null` (default) to allow unlimited debt, or set to a float (e.g., `0.6`) to stop buying BTC once leverage exceeds that threshold.
+- **emit_legacy_metrics**: If `true`, analysis results continue to include the legacy USD metric names (`adg`, `sharpe_ratio`, …) in addition to the new `*_usd`/`*_btc` suffixed keys. Disable once downstream tooling consumes the suffixed metrics exclusively. Default: `false`.
 
 ## Bot Settings
 
@@ -241,7 +242,7 @@ When optimizing, parameter values are within the lower and upper bounds.
   - Full list of options: `[adg, adg_w, calmar_ratio, calmar_ratio_w, drawdown_worst, drawdown_worst_mean_1pct, equity_balance_diff_neg_max, equity_balance_diff_neg_mean, equity_balance_diff_pos_max, equity_balance_diff_pos_mean, expected_shortfall_1pct, gain, loss_profit_ratio, loss_profit_ratio_w, mdg, mdg_w, omega_ratio, omega_ratio_w, position_held_hours_max, position_held_hours_mean, position_held_hours_median, position_unchanged_hours_max, positions_held_per_day, sharpe_ratio, sharpe_ratio_w, sortino_ratio, sortino_ratio_w, sterling_ratio, sterling_ratio_w]`
   - Suffix `_w` indicates mean across 10 temporal subsets (whole, last_half, last_third, ..., last_tenth) to weigh recent data more heavily.
   - Examples: `["mdg", "sharpe_ratio", "loss_profit_ratio"]`, `["adg", "sortino_ratio", "drawdown_worst"]`, `["sortino_ratio", "omega_ratio", "adg_w", "position_unchanged_hours_max"]`
-    - Note: if `config.backtest.btc_collateral_cap` is greater than `0`, BTC-denominated metrics are included alongside USD metrics. When the cap is `0`, only USD metrics are reported.
+    - Note: metrics may be suffixed with `_usd` or `_btc` to select denomination. If `config.backtest.btc_collateral_cap` is `0`, BTC values still represent the USD equity translated into BTC terms.
 
 ### Optimization Limits
 
@@ -263,5 +264,5 @@ Limits can be set in the config file under `optimize.limits` or passed via CLI u
 ##### CLI arg Example:
 
 ```
-python3 src/optimize.py --limits "--penalize_if_lower_than_btc_omega_ratio 3.0 --penalize_if_greater_than_loss_profit_ratio 0.5"
+python3 src/optimize.py --limits "--penalize_if_lower_than_omega_ratio_btc 3.0 --penalize_if_greater_than_loss_profit_ratio_usd 0.5"
 ```

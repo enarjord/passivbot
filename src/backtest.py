@@ -95,12 +95,19 @@ def calculate_flat_btc_balance_minutes(fills):
 
     change_minutes = []
     last_balance_btc = None
+    try:
+        first_ts = float(fills[0][1])
+    except (IndexError, TypeError, ValueError):
+        return 0.0
+
     for fill in fills:
         try:
-            minute = float(fill[0])
-            balance_btc = float(fill[5])
+            timestamp_ms = float(fill[1])
+            balance_btc = float(fill[6])
         except (IndexError, TypeError, ValueError):
             return 0.0
+
+        minute = (timestamp_ms - first_ts) / 60000.0
 
         if last_balance_btc is None or balance_btc != last_balance_btc:
             change_minutes.append(minute)
@@ -115,11 +122,12 @@ def calculate_flat_btc_balance_minutes(fills):
     return 0.0
 
 
-def process_forager_fills(fills, coins, hlcvs, equities, equities_btc):
+def process_forager_fills(fills, coins, hlcvs, equities_array):
     fdf = pd.DataFrame(
         fills,
         columns=[
-            "minute",
+            "index",
+            "timestamp",
             "coin",
             "pnl",
             "fee_paid",
@@ -134,6 +142,22 @@ def process_forager_fills(fills, coins, hlcvs, equities, equities_btc):
             "type",
         ],
     )
+    if not fdf.empty:
+        fdf["timestamp"] = pd.to_datetime(fdf["timestamp"].astype(np.int64), unit="ms")
+        fdf["index"] = fdf["index"].astype(int)
+        numeric_cols = [
+            "pnl",
+            "fee_paid",
+            "balance",
+            "balance_btc",
+            "balance_usd",
+            "btc_price",
+            "qty",
+            "price",
+            "psize",
+            "pprice",
+        ]
+        fdf[numeric_cols] = fdf[numeric_cols].apply(pd.to_numeric, errors="coerce")
     analysis_appendix = {}
 
     pnls = {}
@@ -147,21 +171,53 @@ def process_forager_fills(fills, coins, hlcvs, equities, equities_btc):
             continue
         pnls[pside] = profit + loss
         analysis_appendix[f"loss_profit_ratio_{pside}"] = abs(loss / profit)
-    div_by = 60  # save some disk space. Set to 1 to dump uncropped
     analysis_appendix["pnl_ratio_long_short"] = pnls["long"] / (pnls["long"] + pnls["short"])
-    bdf = fdf.groupby((fdf.minute // div_by) * div_by).balance.last()
-    bbdf = fdf.groupby((fdf.minute // div_by) * div_by).balance_btc.last()
-    edf = pd.Series(equities).iloc[::div_by]
-    ebdf = pd.Series(equities_btc).iloc[::div_by]
-    nidx = np.arange(min(bdf.index[0], edf.index[0]), max(bdf.index[-1], edf.index[-1]), div_by)
-    bal_eq = (
-        pd.DataFrame(
-            {"balance": bdf, "equity": edf, "balance_btc": bbdf, "equity_btc": ebdf}, index=nidx
+
+    div_by = 60  # save some disk space. Set to 1 to dump uncropped
+    if not fdf.empty:
+        timestamps_ns = fdf["timestamp"].astype("int64")
+        bucket = (
+            (timestamps_ns // (div_by * 60_000 * 1_000_000))
+            * (div_by * 60_000 * 1_000_000)
         )
-        .astype(float)
-        .ffill()
-        .bfill()
-    )
+        bdf = fdf.groupby(bucket)["balance"].last()
+        bbdf = fdf.groupby(bucket)["balance_btc"].last()
+        # convert to datetime index for easier alignment
+        bdf.index = pd.to_datetime(bdf.index, unit="ns")
+        bbdf.index = pd.to_datetime(bbdf.index, unit="ns")
+    else:
+        bdf = pd.Series(dtype=float)
+        bbdf = pd.Series(dtype=float)
+
+    equities_array = np.asarray(equities_array)
+    equities_index = pd.to_datetime(equities_array[:, 0].astype(np.int64), unit="ms")
+    edf = pd.Series(equities_array[:, 1], index=equities_index)
+    ebdf = pd.Series(equities_array[:, 2], index=equities_index)
+
+    combined_index = sorted(set(bdf.index) | set(edf.index))
+    if len(combined_index) == 0:
+        bal_eq = pd.DataFrame(
+            columns=[
+                "balance_usd",
+                "equity_usd",
+                "balance_btc",
+                "equity_btc",
+            ]
+        )
+    else:
+        bal_eq = pd.DataFrame(index=pd.to_datetime(combined_index, unit="ns"))
+        if not bdf.empty:
+            bal_eq["balance_usd"] = bdf.reindex(bal_eq.index, method="ffill")
+            bal_eq["balance_btc"] = bbdf.reindex(bal_eq.index, method="ffill")
+        else:
+            bal_eq["balance_usd"] = np.nan
+            bal_eq["balance_btc"] = np.nan
+        bal_eq["equity_usd"] = edf.reindex(bal_eq.index, method="ffill")
+        bal_eq["equity_btc"] = ebdf.reindex(bal_eq.index, method="ffill")
+        bal_eq = bal_eq.ffill().bfill()
+    bal_eq = bal_eq.round({"balance_usd":4, "equity_usd":4, "balance_btc":4, "equity_btc":4})
+    for col in ["balance_usd", "equity_usd", "balance_btc", "equity_btc"]:
+        bal_eq[col] = bal_eq[col].astype(np.float32)
     return fdf, sort_dict_keys(analysis_appendix), bal_eq
 
 
@@ -470,7 +526,11 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
 
 
 def expand_analysis(analysis_usd, analysis_btc, fills, config):
-    analysis_usd["flat_btc_balance_hours"] = calculate_flat_btc_balance_minutes(fills) / 60.0
+    analysis_usd = dict(analysis_usd)
+    analysis_btc = dict(analysis_btc)
+    flat_btc_balance_hours = calculate_flat_btc_balance_minutes(fills) / 60.0
+    analysis_usd["flat_btc_balance_hours"] = flat_btc_balance_hours
+    analysis_btc["flat_btc_balance_hours"] = flat_btc_balance_hours
     keys = ["adg", "adg_w", "mdg", "mdg_w", "gain"]
     for pside in ["long", "short"]:
         twel = float(require_config_value(config, f"bot.{pside}.total_wallet_exposure_limit"))
@@ -485,16 +545,48 @@ def expand_analysis(analysis_usd, analysis_btc, fills, config):
                 if analysis_btc[key] is not None
                 else None
             )
-    if float(require_config_value(config, "backtest.btc_collateral_cap")) <= 0.0:
-        return analysis_usd
-    return {
-        **{
-            f"btc_{k}": v
-            for k, v in analysis_btc.items()
-            if "position" not in k and "volume_pct_per_day" not in k
-        },
-        **analysis_usd,
+    emit_legacy = bool(require_config_value(config, "backtest.emit_legacy_metrics"))
+
+    shared_keys = {
+        "positions_held_per_day",
+        "position_held_hours_mean",
+        "position_held_hours_max",
+        "position_held_hours_median",
+        "position_unchanged_hours_max",
     }
+
+    result = {"flat_btc_balance_hours": flat_btc_balance_hours}
+
+    for key in shared_keys:
+        usd_val = analysis_usd.pop(key, None)
+        btc_val = analysis_btc.pop(key, None)
+        if usd_val is not None:
+            result[key] = usd_val
+            if btc_val is not None and not np.isclose(usd_val, btc_val, equal_nan=True):
+                logging.debug(
+                    "shared metric %s differs across denominations: usd=%s btc=%s",
+                    key,
+                    usd_val,
+                    btc_val,
+                )
+        elif btc_val is not None:
+            result[key] = btc_val
+
+    def _add_metrics(metrics: dict, suffix: str):
+        for key, value in metrics.items():
+            if key == "flat_btc_balance_hours":
+                continue
+            result[f"{key}_{suffix}"] = value
+            if emit_legacy:
+                if suffix == "usd":
+                    result.setdefault(key, value)
+                    result.setdefault(f"usd_{key}", value)
+                elif suffix == "btc":
+                    result.setdefault(f"btc_{key}", value)
+
+    _add_metrics(analysis_usd, "usd")
+    _add_metrics(analysis_btc, "btc")
+    return result
 
 
 def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timestamps=None):
@@ -556,7 +648,12 @@ def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timest
     with create_shared_memory_file(hlcvs) as shared_memory_file, create_shared_memory_file(
         btc_usd_prices
     ) as btc_usd_shared_memory_file:
-        fills, equities_usd, equities_btc, analysis_usd, analysis_btc = pbr.run_backtest(
+        (
+            fills,
+            equities_array,
+            analysis_usd,
+            analysis_btc,
+        ) = pbr.run_backtest(
             shared_memory_file,
             hlcvs.shape,
             hlcvs.dtype.str,
@@ -568,10 +665,11 @@ def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timest
         )
 
     logging.info(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
+    equities_array = np.asarray(equities_array)
+
     return (
         fills,
-        equities_usd,
-        equities_btc,
+        equities_array,
         expand_analysis(analysis_usd, analysis_btc, fills, config),
     )
 
@@ -580,22 +678,19 @@ def post_process(
     config,
     hlcvs,
     fills,
-    equities,
-    equities_btc,
+    equities_array,
     btc_usd_prices,
     analysis,
     results_path,
     exchange,
 ):
     sts = utc_ms()
-    equities = pd.Series(equities)
-    equities_btc = pd.Series(equities_btc)
+    equities_array = np.asarray(equities_array)
     fdf, analysis_py, bal_eq = process_forager_fills(
         fills,
         require_config_value(config, f"backtest.coins.{exchange}"),
         hlcvs,
-        equities,
-        equities_btc,
+        equities_array,
     )
     for k in analysis_py:
         if k not in analysis:
@@ -609,7 +704,7 @@ def post_process(
     config["analysis"] = analysis
     dump_config(config, f"{results_path}config.json")
     fdf.to_csv(f"{results_path}fills.csv")
-    bal_eq.to_csv(oj(results_path, "balance_and_equity.csv"))
+    bal_eq.to_csv(oj(results_path, "balance_and_equity.csv.gz"), compression="gzip")
     plot_forager(
         results_path,
         config,
@@ -629,20 +724,40 @@ def plot_forager(
     hlcvs,
 ):
     plots_dir = make_get_filepath(oj(results_path, "fills_plots", ""))
-    plt.clf()
-    bal_eq[["balance", "equity"]].plot(logy=False)
-    plt.savefig(oj(results_path, "balance_and_equity.png"))
-    plt.clf()
-    bal_eq[["balance", "equity"]].plot(logy=True)
-    plt.savefig(oj(results_path, "balance_and_equity_logy.png"))
-    plt.clf()
-    if float(require_config_value(config, "backtest.btc_collateral_cap")) > 0.0:
-        plt.clf()
-        bal_eq[["balance_btc", "equity_btc"]].plot(logy=False)
-        plt.savefig(oj(results_path, "balance_and_equity_btc.png"))
-        plt.clf()
-        bal_eq[["balance_btc", "equity_btc"]].plot(logy=True)
-        plt.savefig(oj(results_path, "balance_and_equity_btc_logy.png"))
+
+    def _plot_balance_panels(logy: bool, filename: str):
+        fig, axes = plt.subplots(2, 1, sharex=True, figsize=(12, 8))
+        denom_configs = [
+            ("USD Balance & Equity", "balance_usd", "equity_usd"),
+            ("BTC Balance & Equity", "balance_btc", "equity_btc"),
+        ]
+        x = bal_eq.index
+        for ax, (title, bal_key, eq_key) in zip(axes, denom_configs):
+            balance = bal_eq.get(bal_key, pd.Series(index=x, data=np.nan))
+            equity = bal_eq.get(eq_key, pd.Series(index=x, data=np.nan))
+            if logy:
+                balance_vals = balance.astype(float).mask(balance.astype(float) <= 0.0)
+                equity_vals = equity.astype(float).mask(equity.astype(float) <= 0.0)
+                ax.set_yscale("log")
+            else:
+                balance_vals = balance
+                equity_vals = equity
+                ax.set_yscale("linear")
+
+            balance_label = bal_key.replace("_", " ").title()
+            equity_label = eq_key.replace("_", " ").title()
+            ax.plot(x, balance_vals, label=balance_label, linewidth=1.0)
+            ax.plot(x, equity_vals, label=equity_label, linewidth=1.0)
+            ax.set_title(title)
+            ax.grid(True, linestyle="--", alpha=0.3)
+            ax.legend()
+        axes[-1].set_xlabel("Time (index)")
+        fig.tight_layout()
+        fig.savefig(oj(results_path, filename))
+        plt.close(fig)
+
+    _plot_balance_panels(logy=False, filename="balance_and_equity.png")
+    _plot_balance_panels(logy=True, filename="balance_and_equity_logy.png")
 
     if not config["disable_plotting"]:
         for i, coin in enumerate(require_config_value(config, f"backtest.coins.{exchange}")):
@@ -714,15 +829,14 @@ async def main():
         config["backtest"]["coins"][exchange] = coins
         config["backtest"]["cache_dir"][exchange] = str(cache_dir)
 
-        fills, equities, equities_btc, analysis = run_backtest(
+        fills, equities_array, analysis = run_backtest(
             hlcvs, mss, config, exchange, btc_usd_prices, timestamps
         )
         post_process(
             config,
             hlcvs,
             fills,
-            equities,
-            equities_btc,
+            equities_array,
             btc_usd_prices,
             analysis,
             results_path,
@@ -740,15 +854,14 @@ async def main():
             ]
             configs[exchange]["backtest"]["coins"][exchange] = coins
             configs[exchange]["backtest"]["cache_dir"][exchange] = str(cache_dir)
-            fills, equities, equities_btc, analysis = run_backtest(
+            fills, equities_array, analysis = run_backtest(
                 hlcvs, mss, configs[exchange], exchange, btc_usd_prices, timestamps
             )
             post_process(
                 configs[exchange],
                 hlcvs,
                 fills,
-                equities,
-                equities_btc,
+                equities_array,
                 btc_usd_prices,
                 analysis,
                 results_path,

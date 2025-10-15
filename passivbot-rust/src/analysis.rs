@@ -17,8 +17,13 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     for (i, &equity) in equities.iter().enumerate() {
         let day = i / 1440;
         if day > current_day {
-            daily_eqs.push(last_equity);
-            daily_eqs_mins.push(current_min);
+            if daily_eqs.is_empty() {
+                daily_eqs.push(last_equity);
+                daily_eqs_mins.push(current_min);
+            } else {
+                daily_eqs.push(last_equity);
+                daily_eqs_mins.push(current_min);
+            }
             current_day = day;
             current_min = equity;
         } else {
@@ -34,44 +39,60 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     }
 
     // Calculate daily percentage changes
-    let daily_eqs_pct_change: Vec<f64> =
-        daily_eqs.windows(2).map(|w| (w[1] - w[0]) / w[0]).collect();
+    let daily_eqs_pct_change: Vec<f64> = daily_eqs
+        .windows(2)
+        .map(|w| {
+            let denom = w[0].abs().max(1e-12);
+            (w[1] - w[0]) / denom
+        })
+        .collect();
     let daily_eqs_mins_pct_change: Vec<f64> = daily_eqs_mins
         .windows(2)
-        .map(|w| (w[1] - w[0]) / w[0])
+        .map(|w| {
+            let denom = w[0].abs().max(1e-12);
+            (w[1] - w[0]) / denom
+        })
         .collect();
 
     // Calculate ADG and standard metrics
     let (gain, adg) = smoothed_terminal_geometric_gain_and_adg(&daily_eqs);
     let mdg = {
-        let mut sorted_pct_change = daily_eqs_pct_change.clone();
-        sorted_pct_change.sort_by(|a, b| {
-            a.partial_cmp(b).unwrap_or_else(|| {
-                if a.is_nan() && b.is_nan() {
-                    Ordering::Equal
-                } else if a.is_nan() {
-                    Ordering::Greater
-                } else {
-                    Ordering::Less
-                }
-            })
-        });
-        if sorted_pct_change.len() % 2 == 0 {
-            (sorted_pct_change[sorted_pct_change.len() / 2 - 1]
-                + sorted_pct_change[sorted_pct_change.len() / 2])
-                / 2.0
+        if daily_eqs_pct_change.is_empty() {
+            0.0
         } else {
-            sorted_pct_change[sorted_pct_change.len() / 2]
+            let mut sorted_pct_change = daily_eqs_pct_change.clone();
+            sorted_pct_change.sort_by(|a, b| {
+                a.partial_cmp(b).unwrap_or_else(|| {
+                    if a.is_nan() && b.is_nan() {
+                        Ordering::Equal
+                    } else if a.is_nan() {
+                        Ordering::Greater
+                    } else {
+                        Ordering::Less
+                    }
+                })
+            });
+            if sorted_pct_change.len() % 2 == 0 {
+                (sorted_pct_change[sorted_pct_change.len() / 2 - 1]
+                    + sorted_pct_change[sorted_pct_change.len() / 2])
+                    / 2.0
+            } else {
+                sorted_pct_change[sorted_pct_change.len() / 2]
+            }
         }
     };
 
     // Calculate variance and standard deviation
-    let variance = daily_eqs_mins_pct_change
-        .iter()
-        .map(|&x| (x - adg).powi(2))
-        .sum::<f64>()
-        / daily_eqs_mins_pct_change.len() as f64;
-    let std_dev = variance.sqrt();
+    let std_dev = if daily_eqs_mins_pct_change.is_empty() {
+        0.0
+    } else {
+        let var = daily_eqs_mins_pct_change
+            .iter()
+            .map(|&x| (x - adg).powi(2))
+            .sum::<f64>()
+            / daily_eqs_mins_pct_change.len() as f64;
+        var.sqrt()
+    };
 
     // Calculate Sharpe Ratio
     let sharpe_ratio = if std_dev != 0.0 { adg / std_dev } else { 0.0 };
@@ -112,7 +133,9 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     };
 
     // Calculate Expected Shortfall (99%)
-    let expected_shortfall_1pct = {
+    let expected_shortfall_1pct = if daily_eqs_mins_pct_change.is_empty() {
+        0.0
+    } else {
         let mut sorted_returns = daily_eqs_mins_pct_change.clone();
         sorted_returns.sort_by(|a, b| {
             a.partial_cmp(b).unwrap_or_else(|| {
@@ -125,22 +148,21 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
                 }
             })
         });
-        let cutoff_index = (daily_eqs_mins_pct_change.len() as f64 * 0.01) as usize;
-        if cutoff_index > 0 {
-            sorted_returns[..cutoff_index]
-                .iter()
-                .map(|x| x.abs())
-                .sum::<f64>()
-                / cutoff_index as f64
-        } else {
-            sorted_returns[0].abs()
-        }
+        let cutoff_index = (sorted_returns.len() as f64 * 0.01).max(1.0) as usize;
+        let worst_n = cutoff_index.min(sorted_returns.len());
+        sorted_returns[..worst_n]
+            .iter()
+            .map(|x| x.abs())
+            .sum::<f64>()
+            / worst_n as f64
     };
 
     // Calculate drawdowns
-    let drawdowns = calc_drawdowns(&daily_eqs_mins);
-    let drawdown_worst_mean_1pct = {
-        let mut sorted_drawdowns = drawdowns.clone();
+    let drawdowns_daily = calc_drawdowns(&daily_eqs_mins);
+    let drawdown_worst_mean_1pct = if drawdowns_daily.is_empty() {
+        0.0
+    } else {
+        let mut sorted_drawdowns = drawdowns_daily.clone();
         sorted_drawdowns.sort_by(|a, b| {
             a.partial_cmp(b).unwrap_or_else(|| {
                 if a.is_nan() && b.is_nan() {
@@ -154,29 +176,34 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
         });
         let cutoff_index = std::cmp::max(1, (sorted_drawdowns.len() as f64 * 0.01) as usize);
         let worst_n = std::cmp::min(cutoff_index, sorted_drawdowns.len());
-        sorted_drawdowns[..worst_n]
-            .iter()
-            .map(|x| x.abs())
-            .sum::<f64>()
-            / worst_n as f64
+        if worst_n == 0 {
+            0.0
+        } else {
+            sorted_drawdowns[..worst_n]
+                .iter()
+                .map(|x| x.abs())
+                .sum::<f64>()
+                / worst_n as f64
+        }
     };
-    let drawdown_worst = drawdowns
-        .iter()
-        .fold(f64::NEG_INFINITY, |a, &b| f64::max(a, b.abs()));
+    let drawdowns_full = calc_drawdowns(equities);
+    let drawdown_worst = if drawdowns_full.is_empty() {
+        0.0
+    } else {
+        drawdowns_full
+            .iter()
+            .fold(f64::NEG_INFINITY, |a, &b| f64::max(a, b.abs()))
+    };
 
     // Calculate Sterling Ratio (using average of worst 1% drawdowns)
     let sterling_ratio = {
-        if drawdown_worst_mean_1pct != 0.0 {
-            adg / drawdown_worst_mean_1pct
-        } else {
-            0.0
-        }
+        let denom = drawdown_worst_mean_1pct.abs().max(1e-12);
+        adg / denom
     };
 
-    let calmar_ratio = if drawdown_worst != 0.0 {
-        adg / drawdown_worst
-    } else {
-        0.0
+    let calmar_ratio = {
+        let denom = drawdown_worst.abs().max(1e-12);
+        adg / denom
     };
 
     // Calculate equity-balance differences
@@ -438,40 +465,46 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
 
 /// Returns (Analysis in USD, Analysis in BTC).
 /// If `balance.use_btc_collateral == false`, both are identical.
-pub fn analyze_backtest_pair(
-    fills: &[Fill],
-    equities: &Equities,
-    use_btc_collateral: bool,
-) -> (Analysis, Analysis) {
+pub fn analyze_backtest_pair(fills: &[Fill], equities: &Equities) -> (Analysis, Analysis) {
     let analysis_usd = analyze_backtest(fills, &equities.usd);
-    if !use_btc_collateral {
-        return (analysis_usd.clone(), analysis_usd);
-    }
     let mut btc_fills = fills.to_vec();
     for fill in btc_fills.iter_mut() {
-        fill.balance_usd_total /= fill.btc_price; // Use actual BTC balance if available
-        fill.pnl = fill.pnl / fill.btc_price; // Convert PNL to BTC
+        let price = if fill.btc_price > 0.0 {
+            fill.btc_price
+        } else {
+            1.0
+        };
+        fill.balance_usd_total /= price; // balance expressed in BTC
+        fill.pnl /= price;
+        fill.fee_paid /= price;
+        fill.fill_price /= price;
+        fill.position_price /= price;
     }
     let analysis_btc = analyze_backtest(&btc_fills, &equities.btc);
+
     (analysis_usd, analysis_btc)
 }
 
 fn calc_drawdowns(equity_series: &[f64]) -> Vec<f64> {
-    let mut cumulative_returns = vec![1.0];
-    let mut cumulative_max = vec![1.0];
-
-    for window in equity_series.windows(2) {
-        let pct_change = (window[1] - window[0]) / window[0];
-        let new_return = cumulative_returns.last().unwrap() * (1.0 + pct_change);
-        cumulative_returns.push(new_return);
-        cumulative_max.push(f64::max(*cumulative_max.last().unwrap(), new_return));
+    if equity_series.is_empty() {
+        return Vec::new();
     }
 
-    cumulative_returns
-        .iter()
-        .zip(cumulative_max.iter())
-        .map(|(&ret, &max)| (ret - max) / max)
-        .collect()
+    let mut drawdowns = Vec::with_capacity(equity_series.len());
+    let mut peak = equity_series[0];
+    if peak.abs() < 1e-12 {
+        peak = 1e-12;
+    }
+
+    for &value in equity_series.iter() {
+        if value > peak {
+            peak = value.max(1e-12);
+        }
+        let denom = peak.abs().max(1e-12);
+        drawdowns.push((value - peak) / denom);
+    }
+
+    drawdowns
 }
 
 /// Calculates the normalized total variation (sum of absolute first differences divided by net equity gain)

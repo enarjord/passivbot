@@ -376,9 +376,7 @@ impl<'a> Backtest<'a> {
                 }
             })
             .collect();
-        let mut equities = Equities::default();
-        equities.usd.push(backtest_params.starting_balance);
-        equities.btc.push(balance.btc);
+        let equities = Equities::default();
 
         // init bot params
         let mut bot_params_master = bot_params[0].clone();
@@ -541,8 +539,8 @@ impl<'a> Backtest<'a> {
             if k > warmup_bars && current_ts >= guard_timestamp_ms {
                 self.update_n_positions_and_wallet_exposure_limits(k);
                 self.update_open_orders_all(k);
+                self.update_equities(k);
             }
-            self.update_equities(k);
         }
         (self.fills.clone(), self.equities.clone())
     }
@@ -731,91 +729,80 @@ impl<'a> Backtest<'a> {
     fn update_balance(&mut self, k: usize, pnl: f64, fee_paid: f64) {
         const CONVERSION_FEE_RATE: f64 = 0.001;
 
-        // Apply PnL and fees to USD balance first
-        self.balance.usd += pnl + fee_paid;
-
-        if !self.balance.use_btc_collateral {
-            self.balance.usd_total = self.balance.usd;
-            self.balance.usd_total_rounded = self.balance.usd;
-            self.balance.btc_total = 0.0;
-            return;
-        }
+        // Apply fees immediately to the USD balance
+        self.balance.usd += fee_paid;
 
         let btc_price = self.btc_usd_prices[k].max(f64::EPSILON);
-        let btc_value = self.balance.btc * btc_price;
-        let equity = btc_value + self.balance.usd;
+        self.balance.usd += pnl;
 
-        if equity <= 0.0 {
-            self.balance.usd_total = equity;
-            self.balance.btc_total = if btc_price > 0.0 {
-                equity / btc_price
-            } else {
-                0.0
-            };
-            self.balance.usd_total_rounded = self.balance.usd_total;
-            return;
-        }
+        if self.balance.use_btc_collateral {
+            let btc_value = self.balance.btc * btc_price;
+            let equity = btc_value + self.balance.usd;
 
-        let current_ratio = if equity > 0.0 {
-            btc_value / equity
-        } else {
-            0.0
-        };
-        let target_cap = self.balance.btc_collateral_cap.max(0.0);
-        let debt = if self.balance.usd < 0.0 {
-            -self.balance.usd
-        } else {
-            0.0
-        };
-        let ltv = if equity > 0.0 {
-            debt / equity
-        } else {
-            f64::INFINITY
-        };
+            if equity > 0.0 {
+                let current_ratio = btc_value / equity;
+                let target_cap = self.balance.btc_collateral_cap.max(0.0);
+                let debt = if self.balance.usd < 0.0 {
+                    -self.balance.usd
+                } else {
+                    0.0
+                };
+                let ltv = debt / equity;
 
-        let mut usd_to_spend = 0.0;
+                let mut usd_to_spend = 0.0;
+                if target_cap > 0.0 && current_ratio + 1e-12 < target_cap {
+                    let ltv_allows = match self.balance.btc_collateral_ltv_cap {
+                        Some(cap) if cap.is_finite() && cap > 0.0 => ltv + 1e-12 < cap,
+                        _ => true,
+                    };
 
-        if target_cap > 0.0 && current_ratio + 1e-12 < target_cap {
-            let ltv_allows = match self.balance.btc_collateral_ltv_cap {
-                Some(cap) if cap.is_finite() && cap > 0.0 => ltv + 1e-12 < cap,
-                _ => true,
-            };
+                    if ltv_allows {
+                        usd_to_spend = (target_cap - current_ratio) * equity;
 
-            if ltv_allows {
-                usd_to_spend = (target_cap - current_ratio) * equity;
+                        if let Some(cap) = self.balance.btc_collateral_ltv_cap {
+                            if cap.is_finite() && cap > 0.0 {
+                                let max_debt = cap * equity;
+                                let allowable_extra_debt = (max_debt - debt).max(0.0);
+                                if usd_to_spend > allowable_extra_debt {
+                                    usd_to_spend = allowable_extra_debt;
+                                }
+                            }
+                        }
 
-                if let Some(cap) = self.balance.btc_collateral_ltv_cap {
-                    if cap.is_finite() && cap > 0.0 {
-                        let max_debt = cap * equity;
-                        let allowable_extra_debt = (max_debt - debt).max(0.0);
-                        if usd_to_spend > allowable_extra_debt {
-                            usd_to_spend = allowable_extra_debt;
+                        if usd_to_spend > 0.0 {
+                            self.balance.usd -= usd_to_spend;
+                            let usd_after_fee = usd_to_spend * (1.0 - CONVERSION_FEE_RATE);
+                            self.balance.btc += usd_after_fee / btc_price;
                         }
                     }
                 }
-
-                if usd_to_spend > 0.0 {
-                    self.balance.usd -= usd_to_spend;
-                    let usd_after_fee = usd_to_spend * (1.0 - CONVERSION_FEE_RATE);
-                    self.balance.btc += usd_after_fee / btc_price;
-                }
+            } else {
+                // Account is effectively depleted; reset BTC balance
+                self.balance.btc = 0.0;
             }
+        } else {
+            self.balance.usd_total = self.balance.usd;
+            self.balance.usd_total_rounded = self.balance.usd;
+            self.balance.btc_total = self.balance.usd_total / btc_price;
+            return;
         }
 
         // Update total balances based on latest BTC amount and USD balance
         let new_btc_value = self.balance.btc * btc_price;
         self.balance.usd_total = new_btc_value + self.balance.usd;
-        self.balance.btc_total = if btc_price > 0.0 {
-            self.balance.usd_total / btc_price
-        } else {
-            0.0
-        };
-        self.balance.usd_total_rounded = self.balance.usd_total;
+        self.balance.btc_total = self.balance.usd_total / btc_price;
+        self.balance.usd_total_rounded = hysteresis_rounding(
+            self.balance.usd_total,
+            self.balance.usd_total_rounded,
+            0.02,
+            0.5,
+        );
     }
 
     fn update_equities(&mut self, k: usize) {
         // Start with the “running totals” in our Balance struct
         let mut equity_usd = self.balance.usd_total;
+        let btc_price = self.btc_usd_prices[k].max(f64::EPSILON);
         let mut equity_btc = self.balance.btc_total;
 
         // Add the unrealized PNL of all positions
@@ -837,7 +824,7 @@ impl<'a> Backtest<'a> {
                 self.exchange_params_list[idx].c_mult,
             );
             equity_usd += upnl;
-            equity_btc += upnl / self.btc_usd_prices[k];
+            equity_btc += upnl / btc_price;
         }
 
         let mut short_keys: Vec<usize> = self.positions.short.keys().cloned().collect();
@@ -858,12 +845,14 @@ impl<'a> Backtest<'a> {
                 self.exchange_params_list[idx].c_mult,
             );
             equity_usd += upnl;
-            equity_btc += upnl / self.btc_usd_prices[k];
+            equity_btc += upnl / btc_price;
         }
 
         // Finally push the results into the Equities struct
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
         self.equities.usd.push(equity_usd);
         self.equities.btc.push(equity_btc);
+        self.equities.timestamps_ms.push(timestamp_ms);
     }
 
     fn update_actives_long(&mut self) -> Vec<usize> {
@@ -1050,8 +1039,10 @@ impl<'a> Backtest<'a> {
         } else {
             self.positions.long.get_mut(&idx).unwrap().size = new_psize;
         }
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
         self.fills.push(Fill {
-            index: k,                                      // index minute
+            index: k, // index minute
+            timestamp_ms,
             coin: self.backtest_params.coins[idx].clone(), // coin
             pnl,                                           // realized pnl
             fee_paid,                                      // fee paid
@@ -1102,8 +1093,10 @@ impl<'a> Backtest<'a> {
         } else {
             self.positions.short.get_mut(&idx).unwrap().size = new_psize;
         }
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
         self.fills.push(Fill {
-            index: k,                                      // index minute
+            index: k, // index minute
+            timestamp_ms,
             coin: self.backtest_params.coins[idx].clone(), // coin
             pnl,                                           // realized pnl
             fee_paid,                                      // fee paid
@@ -1142,20 +1135,22 @@ impl<'a> Backtest<'a> {
         );
         self.positions.long.get_mut(&idx).unwrap().size = new_psize;
         self.positions.long.get_mut(&idx).unwrap().price = new_pprice;
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
         self.fills.push(Fill {
-            index: k,                                        // index minute
-            coin: self.backtest_params.coins[idx].clone(),   // coin
-            pnl: 0.0,                                        // realized pnl
-            fee_paid,                                        // fee paid
-            balance_usd_total: self.balance.usd_total,       // balance after fill
-            balance_btc: self.balance.btc,                   // Added
-            balance_usd: self.balance.usd,                   // Added
-            btc_price: self.btc_usd_prices[k],               // Added
-            fill_qty: order.qty,                             // fill qty
-            fill_price: order.price,                         // fill price
-            position_size: self.positions.long[&idx].size,   // psize after fill
+            index: k, // index minute
+            timestamp_ms,
+            coin: self.backtest_params.coins[idx].clone(), // coin
+            pnl: 0.0,                                      // realized pnl
+            fee_paid,                                      // fee paid
+            balance_usd_total: self.balance.usd_total,     // balance after fill
+            balance_btc: self.balance.btc,                 // Added
+            balance_usd: self.balance.usd,                 // Added
+            btc_price: self.btc_usd_prices[k],             // Added
+            fill_qty: order.qty,                           // fill qty
+            fill_price: order.price,                       // fill price
+            position_size: self.positions.long[&idx].size, // psize after fill
             position_price: self.positions.long[&idx].price, // pprice after fill
-            order_type: order.order_type.clone(),            // fill type
+            order_type: order.order_type.clone(),          // fill type
         });
     }
 
@@ -1181,20 +1176,22 @@ impl<'a> Backtest<'a> {
         );
         self.positions.short.get_mut(&idx).unwrap().size = new_psize;
         self.positions.short.get_mut(&idx).unwrap().price = new_pprice;
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
         self.fills.push(Fill {
-            index: k,                                         // index minute
-            coin: self.backtest_params.coins[idx].clone(),    // coin
-            pnl: 0.0,                                         // realized pnl
-            fee_paid,                                         // fee paid
-            balance_usd_total: self.balance.usd_total,        // balance after fill
-            balance_btc: self.balance.btc,                    // Added
-            balance_usd: self.balance.usd,                    // Added
-            btc_price: self.btc_usd_prices[k],                // Added
-            fill_qty: order.qty,                              // fill qty
-            fill_price: order.price,                          // fill price
-            position_size: self.positions.short[&idx].size,   // psize after fill
+            index: k, // index minute
+            timestamp_ms,
+            coin: self.backtest_params.coins[idx].clone(), // coin
+            pnl: 0.0,                                      // realized pnl
+            fee_paid,                                      // fee paid
+            balance_usd_total: self.balance.usd_total,     // balance after fill
+            balance_btc: self.balance.btc,                 // Added
+            balance_usd: self.balance.usd,                 // Added
+            btc_price: self.btc_usd_prices[k],             // Added
+            fill_qty: order.qty,                           // fill qty
+            fill_price: order.price,                       // fill price
+            position_size: self.positions.short[&idx].size, // psize after fill
             position_price: self.positions.short[&idx].price, // pprice after fill
-            order_type: order.order_type.clone(),             // fill type
+            order_type: order.order_type.clone(),          // fill type
         });
     }
 

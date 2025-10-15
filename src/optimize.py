@@ -547,53 +547,22 @@ class Evaluator:
         self.duplicate_counter = duplicate_counter
         self.bounds = extract_bounds_tuple_list_from_config(self.config)
         self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
-        self.scoring_weights = {
+        shared_metric_weights = {
+            "flat_btc_balance_hours": 1.0,
+            "positions_held_per_day": 1.0,
+            "position_held_hours_mean": 1.0,
+            "position_held_hours_max": 1.0,
+            "position_held_hours_median": 1.0,
+            "position_unchanged_hours_max": 1.0,
+        }
+
+        currency_metric_weights = {
             "adg": -1.0,
             "adg_per_exposure_long": -1.0,
             "adg_per_exposure_short": -1.0,
             "adg_w": -1.0,
             "adg_w_per_exposure_long": -1.0,
             "adg_w_per_exposure_short": -1.0,
-            "btc_adg": -1.0,
-            "btc_adg_per_exposure_long": -1.0,
-            "btc_adg_per_exposure_short": -1.0,
-            "btc_adg_w": -1.0,
-            "btc_adg_w_per_exposure_long": -1.0,
-            "btc_adg_w_per_exposure_short": -1.0,
-            "btc_calmar_ratio": -1.0,
-            "btc_calmar_ratio_w": -1.0,
-            "btc_drawdown_worst": 1.0,
-            "btc_drawdown_worst_mean_1pct": 1.0,
-            "btc_equity_balance_diff_neg_max": 1.0,
-            "btc_equity_balance_diff_neg_mean": 1.0,
-            "btc_equity_balance_diff_pos_max": 1.0,
-            "btc_equity_balance_diff_pos_mean": 1.0,
-            "btc_equity_choppiness": 1.0,
-            "btc_equity_choppiness_w": 1.0,
-            "btc_equity_jerkiness": 1.0,
-            "btc_equity_jerkiness_w": 1.0,
-            "btc_expected_shortfall_1pct": 1.0,
-            "btc_exponential_fit_error": 1.0,
-            "btc_exponential_fit_error_w": 1.0,
-            "btc_gain": -1.0,
-            "btc_gain_per_exposure_long": -1.0,
-            "btc_gain_per_exposure_short": -1.0,
-            "btc_loss_profit_ratio": 1.0,
-            "btc_loss_profit_ratio_w": 1.0,
-            "btc_mdg": -1.0,
-            "btc_mdg_per_exposure_long": -1.0,
-            "btc_mdg_per_exposure_short": -1.0,
-            "btc_mdg_w": -1.0,
-            "btc_mdg_w_per_exposure_long": -1.0,
-            "btc_mdg_w_per_exposure_short": -1.0,
-            "btc_omega_ratio": -1.0,
-            "btc_omega_ratio_w": -1.0,
-            "btc_sharpe_ratio": -1.0,
-            "btc_sharpe_ratio_w": -1.0,
-            "btc_sortino_ratio": -1.0,
-            "btc_sortino_ratio_w": -1.0,
-            "btc_sterling_ratio": -1.0,
-            "btc_sterling_ratio_w": -1.0,
             "calmar_ratio": -1.0,
             "calmar_ratio_w": -1.0,
             "drawdown_worst": 1.0,
@@ -609,7 +578,6 @@ class Evaluator:
             "expected_shortfall_1pct": 1.0,
             "exponential_fit_error": 1.0,
             "exponential_fit_error_w": 1.0,
-            "flat_btc_balance_hours": 1.0,
             "gain": -1.0,
             "gain_per_exposure_long": -1.0,
             "gain_per_exposure_short": -1.0,
@@ -623,11 +591,6 @@ class Evaluator:
             "mdg_w_per_exposure_short": -1.0,
             "omega_ratio": -1.0,
             "omega_ratio_w": -1.0,
-            "position_held_hours_max": 1.0,
-            "position_held_hours_mean": 1.0,
-            "position_held_hours_median": 1.0,
-            "position_unchanged_hours_max": 1.0,
-            "positions_held_per_day": 1.0,
             "sharpe_ratio": -1.0,
             "sharpe_ratio_w": -1.0,
             "sortino_ratio": -1.0,
@@ -637,6 +600,18 @@ class Evaluator:
             "volume_pct_per_day_avg": -1.0,
             "volume_pct_per_day_avg_w": -1.0,
         }
+
+        self.scoring_weights = {}
+        self.scoring_weights.update(shared_metric_weights)
+
+        for metric, weight in currency_metric_weights.items():
+            # canonical names with suffixes
+            self.scoring_weights[f"{metric}_usd"] = weight
+            self.scoring_weights[f"{metric}_btc"] = weight
+            # legacy aliases
+            self.scoring_weights.setdefault(metric, weight)
+            self.scoring_weights.setdefault(f"usd_{metric}", weight)
+            self.scoring_weights.setdefault(f"btc_{metric}", weight)
 
         self.build_limit_checks()
 

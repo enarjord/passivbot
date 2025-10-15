@@ -80,19 +80,19 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     config["live"]["ignored_coins"] = {"long": ["eth"], "short": []}
     config["backtest"]["end_date"] = "2023-01-01"
     config["backtest"]["btc_collateral_cap"] = 0.0
-    config["optimize"]["scoring"] = ["btc_metric", "adg"]
-    config["optimize"]["limits"] = "--lower_bound_drawdown 0.3 --btc_penalty 0.1"
+    config["optimize"]["scoring"] = ["btc_adg", "adg"]
+    config["optimize"]["limits"] = "--lower_bound_drawdown_worst 0.3 --penalize_if_lower_than_gain_btc 0.1"
     config["optimize"]["bounds"]["long_entry_grid_spacing_pct"] = [0.1, 0.05]
 
     _apply_non_live_adjustments(config, verbose=False)
 
     assert config["live"]["approved_coins"]["long"] == ["btc"]
-    assert config["optimize"]["scoring"] == ["adg", "metric"]
+    assert config["optimize"]["scoring"] == ["adg_btc", "adg_usd"]
     limits = config["optimize"]["limits"]
     assert isinstance(limits, dict)
-    assert "lower_bound_drawdown" not in limits
-    assert "penalize_if_greater_than_drawdown" in limits
-    assert limits["penalty"] == pytest.approx(0.1)
+    assert "lower_bound_drawdown_worst" not in limits
+    assert limits["penalize_if_greater_than_drawdown_worst_usd"] == pytest.approx(0.3)
+    assert limits["penalize_if_lower_than_gain_btc"] == pytest.approx(0.1)
     assert config["optimize"]["bounds"]["long_entry_grid_spacing_pct"] == [0.05, 0.1]
     assert config["live"]["approved_coins"]["short"] == ["btc", "eth"]
 
@@ -102,12 +102,14 @@ def test_migrate_btc_collateral_settings_converts_bool():
     _migrate_btc_collateral_settings(config, verbose=False)
     assert config["backtest"]["btc_collateral_cap"] == pytest.approx(1.0)
     assert config["backtest"]["btc_collateral_ltv_cap"] is None
+    assert config["backtest"]["emit_legacy_metrics"] is False
     assert "use_btc_collateral" not in config["backtest"]
 
     config = {"backtest": {"use_btc_collateral": False}}
     _migrate_btc_collateral_settings(config, verbose=False)
     assert config["backtest"]["btc_collateral_cap"] == pytest.approx(0.0)
     assert config["backtest"]["btc_collateral_ltv_cap"] is None
+    assert config["backtest"]["emit_legacy_metrics"] is False
 
 
 def test_ensure_enforce_exposure_limit_bool_casts_values():

@@ -89,7 +89,7 @@ This will:
 
 ### Notes:
 - If the limit key is just `metric_name`, the direction will be inferred from its scoring weight.
-- Metric names may be either plain (e.g., `adg` for USD collateralized backtest) or prefixed with "btc\_" (e.g., `btc_adg` for BTC collateralized backtest).
+- Metric names may be given with explicit suffixes (e.g., `adg_usd` for USD collateralized backtests or `adg_btc` for BTC-denominated results). When no suffix is provided, the USD form is assumed.
 - Penalties are applied to the objective score; they do not disqualify a config.
 
 ## Performance Metrics
@@ -109,7 +109,8 @@ over all exchanges before scoring.
   positive weight means “minimize.”
 - Penalties from `optimize.limits` are added to every objective when a bound is violated,
   turning constraint breaches into very poor scores.
-- Metrics are always exported in USD; when `backtest.btc_collateral_cap > 0`, the BTC-denominated counterparts are emitted with the `btc_` prefix as well.
+- Metrics are emitted with both USD and BTC suffixes (for example, `adg_usd` and `adg_btc`). When `backtest.emit_legacy_metrics` is `true`, the legacy USD names without suffixes are also included.
+- The tables below reference the base metric names for brevity; append `_usd` or `_btc` to select the denomination you want to use.
 - Exposure-normalized variants (e.g., `adg_per_exposure_long`) divide the base metric by
   that side’s configured `total_wallet_exposure_limit`, letting you compare bots that use
   different leverage budgets.

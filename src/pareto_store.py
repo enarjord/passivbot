@@ -263,7 +263,7 @@ def main():
         "-o",
         "--objectives",
         type=str,
-        help="Comma-separated list of objective names to use for Pareto front (e.g., 'btc_adg_w,btc_mdg_w')",
+        help="Comma-separated list of objective names to use for Pareto front (e.g., 'adg_btc,mdg_btc')",
     )
     args = parser.parse_args()
 
