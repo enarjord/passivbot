@@ -37,6 +37,8 @@ pub struct BacktestParams {
     pub warmup_minutes: Vec<usize>,
     pub trade_start_indices: Vec<usize>,
     pub global_warmup_bars: usize,
+    pub btc_collateral_cap: f64,
+    pub btc_collateral_ltv_cap: Option<f64>,
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -229,12 +231,14 @@ impl OrderType {
 
 #[derive(Default)]
 pub struct Balance {
-    pub usd: f64,                 // usd balance
-    pub usd_total: f64,           // total in usd
-    pub usd_total_rounded: f64,   // total in usd rounded for calculations
-    pub btc: f64,                 // btc balance
-    pub btc_total: f64,           // total in btc
-    pub use_btc_collateral: bool, // whether to use btc as collateral
+    pub usd: f64,                            // usd balance
+    pub usd_total: f64,                      // total in usd
+    pub usd_total_rounded: f64,              // total in usd rounded for calculations
+    pub btc: f64,                            // btc balance
+    pub btc_total: f64,                      // total in btc
+    pub use_btc_collateral: bool,            // whether to use btc as collateral
+    pub btc_collateral_cap: f64,             // target/cap ratio of collateral held in btc
+    pub btc_collateral_ltv_cap: Option<f64>, // optional LTV ceiling when topping up btc
 }
 
 #[derive(Default, Clone)]

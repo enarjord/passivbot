@@ -212,6 +212,11 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .transpose()?
             .unwrap_or_default(),
         global_warmup_bars: extract_value(dict, "global_warmup_bars").unwrap_or(0usize),
+        btc_collateral_cap: extract_value(dict, "btc_collateral_cap").unwrap_or(0.0f64),
+        btc_collateral_ltv_cap: match dict.get_item("btc_collateral_ltv_cap")? {
+            Some(item) if !item.is_none() => Some(item.extract::<f64>()?),
+            _ => None,
+        },
     })
 }
 

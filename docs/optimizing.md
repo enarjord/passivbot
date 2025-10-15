@@ -109,9 +109,7 @@ over all exchanges before scoring.
   positive weight means “minimize.”
 - Penalties from `optimize.limits` are added to every objective when a bound is violated,
   turning constraint breaches into very poor scores.
-- Metrics are available in USD collateral form by default. If
-  `backtest.use_btc_collateral` is true, BTC-denominated variants are exported with the
-  `btc_` prefix.
+- Metrics are always exported in USD; when `backtest.btc_collateral_cap > 0`, the BTC-denominated counterparts are emitted with the `btc_` prefix as well.
 - Exposure-normalized variants (e.g., `adg_per_exposure_long`) divide the base metric by
   that side’s configured `total_wallet_exposure_limit`, letting you compare bots that use
   different leverage budgets.

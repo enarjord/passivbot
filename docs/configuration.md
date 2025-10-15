@@ -10,8 +10,8 @@ This document provides an overview of the parameters found in `config/template.j
 - **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. Options: `[binance, bybit, gateio, bitget]`.
 - **start_date**: Start date of backtest.
 - **starting_balance**: Starting balance in USD at the beginning of the backtest.
-- **use_btc_collateral**: `true`/`false`. Set to `true` to backtest with BTC as collateral, simulating starting with 100% BTC and buying BTC with all USD profits, but not selling BTC when taking losses (instead go into USD debt).
-  - Example: Given BTC/USD price of `$100,000`, if BTC balance is `1.0` and backtester makes `$10` profit, BTC balance becomes `1.0001` and USD balance is `0`. If backtester loses `$20`, BTC balance remains `1.0001` and USD balance becomes `-20`. If backtester then makes `$15` profit, USD debt is paid off first: BTC balance remains `1.0001`, USD balance becomes `-5`. If the backtester then makes `$10` profit: BTC balance becomes `1.00015`, USD balance is `0`.
+- **btc_collateral_cap**: Target (and ceiling) share of account equity to hold in BTC collateral. `0` keeps the account fully in USD; `1.0` mirrors the legacy 100% BTC mode; values `>1` allow leveraged BTC collateral, accepting negative USD balances.
+- **btc_collateral_ltv_cap**: Optional loan-to-value ceiling (`USD debt ÷ equity`) enforced when topping up BTC. Leave `null` (default) to allow unlimited debt, or set to a float (e.g., `0.6`) to stop buying BTC once leverage exceeds that threshold.
 
 ## Bot Settings
 
@@ -241,7 +241,7 @@ When optimizing, parameter values are within the lower and upper bounds.
   - Full list of options: `[adg, adg_w, calmar_ratio, calmar_ratio_w, drawdown_worst, drawdown_worst_mean_1pct, equity_balance_diff_neg_max, equity_balance_diff_neg_mean, equity_balance_diff_pos_max, equity_balance_diff_pos_mean, expected_shortfall_1pct, gain, loss_profit_ratio, loss_profit_ratio_w, mdg, mdg_w, omega_ratio, omega_ratio_w, position_held_hours_max, position_held_hours_mean, position_held_hours_median, position_unchanged_hours_max, positions_held_per_day, sharpe_ratio, sharpe_ratio_w, sortino_ratio, sortino_ratio_w, sterling_ratio, sterling_ratio_w]`
   - Suffix `_w` indicates mean across 10 temporal subsets (whole, last_half, last_third, ..., last_tenth) to weigh recent data more heavily.
   - Examples: `["mdg", "sharpe_ratio", "loss_profit_ratio"]`, `["adg", "sortino_ratio", "drawdown_worst"]`, `["sortino_ratio", "omega_ratio", "adg_w", "position_unchanged_hours_max"]`
-    - Note: if config.backtest.use_btc_collateral=True, add prefix "btc_" to use btc denominated metrics, e.g. btc_adg or btc_drawdown_worst.
+    - Note: if `config.backtest.btc_collateral_cap` is greater than `0`, BTC-denominated metrics are included alongside USD metrics. When the cap is `0`, only USD metrics are reported.
 
 ### Optimization Limits
 

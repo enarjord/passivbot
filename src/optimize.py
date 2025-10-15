@@ -1105,12 +1105,7 @@ async def main():
             validate_array(hlcvs, "hlcvs")
             shared_memory_file = create_shared_memory_file(hlcvs)
             shared_memory_files[exchange] = shared_memory_file
-            if bool(require_config_value(config, "backtest.use_btc_collateral")):
-                # Use the fetched array
-                btc_usd_data_dict[exchange] = btc_usd_prices
-            else:
-                # Fall back to all ones
-                btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
+            btc_usd_data_dict[exchange] = btc_usd_prices
             validate_array(
                 btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}", allow_nan=False
             )
@@ -1140,10 +1135,7 @@ async def main():
                 shared_memory_file = create_shared_memory_file(hlcvs)
                 shared_memory_files[exchange] = shared_memory_file
                 # Create the BTC array for this exchange
-                if bool(require_config_value(config, "backtest.use_btc_collateral")):
-                    btc_usd_data_dict[exchange] = btc_usd_prices
-                else:
-                    btc_usd_data_dict[exchange] = np.ones(hlcvs.shape[0], dtype=np.float64)
+                btc_usd_data_dict[exchange] = btc_usd_prices
 
                 validate_array(
                     btc_usd_data_dict[exchange],
@@ -1207,11 +1199,7 @@ async def main():
         # For optimization, use the BTC/USD prices from the first exchange (or combined)
         # Since all exchanges should align in timesteps, this should be consistent
         btc_usd_data = btc_usd_prices  # Use the fetched btc_usd_prices from prepare_hlcvs_mss
-        if bool(require_config_value(config, "backtest.use_btc_collateral")):
-            logging.info("Using fetched BTC/USD prices for collateral")
-        else:
-            logging.info("Using default BTC/USD prices (all 1.0s) as use_btc_collateral is False")
-            btc_usd_data = np.ones(hlcvs_dict[next(iter(hlcvs_dict))].shape[0], dtype=np.float64)
+        logging.info("Using fetched BTC/USD prices for collateral calculations")
 
         validate_array(btc_usd_data, "btc_usd_data", allow_nan=False)
         btc_usd_shared_memory_file = create_shared_memory_file(btc_usd_data)

@@ -242,17 +242,28 @@ impl<'a> Backtest<'a> {
         exchange_params_list: Vec<ExchangeParams>,
         backtest_params: &BacktestParams,
     ) -> Self {
-        // Determine if BTC collateral is used
         let mut balance = Balance::default();
-        balance.use_btc_collateral = btc_usd_prices.iter().any(|&p| p != 1.0);
+        balance.btc_collateral_cap = backtest_params.btc_collateral_cap.max(0.0);
+        balance.btc_collateral_ltv_cap = backtest_params.btc_collateral_ltv_cap;
+        balance.use_btc_collateral = balance.btc_collateral_cap > 0.0;
 
-        // Initialize balances
+        let starting_balance = backtest_params.starting_balance;
+        let initial_btc_price = btc_usd_prices[0].max(f64::EPSILON);
+
         if balance.use_btc_collateral {
-            balance.btc = backtest_params.starting_balance / btc_usd_prices[0];
+            let btc_value = balance.btc_collateral_cap * starting_balance;
+            balance.btc = btc_value / initial_btc_price;
+            balance.usd = starting_balance - btc_value;
         } else {
-            balance.usd = backtest_params.starting_balance;
+            balance.usd = starting_balance;
+            balance.btc = 0.0;
         }
-        balance.usd_total = backtest_params.starting_balance;
+        balance.usd_total = (balance.btc * initial_btc_price) + balance.usd;
+        balance.btc_total = if initial_btc_price > 0.0 {
+            balance.usd_total / initial_btc_price
+        } else {
+            0.0
+        };
         balance.usd_total_rounded = balance.usd_total;
 
         let n_timesteps = hlcvs.shape()[0];
@@ -717,40 +728,89 @@ impl<'a> Backtest<'a> {
         }
     }
 
-    fn update_balance(&mut self, k: usize, mut pnl: f64, fee_paid: f64) {
-        if self.balance.use_btc_collateral {
-            // Fees reduce USD portion
-            self.balance.usd += fee_paid;
+    fn update_balance(&mut self, k: usize, pnl: f64, fee_paid: f64) {
+        const CONVERSION_FEE_RATE: f64 = 0.001;
 
-            if pnl > 0.0 {
-                // If USD balance is negative, offset it with realized PNL first
-                if self.balance.usd < 0.0 {
-                    let offset_amount = pnl.min(-self.balance.usd);
-                    self.balance.usd += offset_amount;
-                    pnl -= offset_amount;
-                }
-                // Any remaining positive PNL is converted to BTC
-                if pnl > 0.0 {
-                    let btc_to_add = pnl / self.btc_usd_prices[k];
-                    self.balance.btc += btc_to_add * 0.999; // apply 0.1% spot trading fee
-                }
-            } else if pnl < 0.0 {
-                // Negative PNL directly reduces USD
-                self.balance.usd += pnl;
-            }
+        // Apply PnL and fees to USD balance first
+        self.balance.usd += pnl + fee_paid;
 
-            // Now recalc totals
-            self.balance.usd_total = (self.balance.btc * self.btc_usd_prices[k]) + self.balance.usd;
-            self.balance.btc_total = self.balance.usd_total / self.btc_usd_prices[k];
-        } else {
-            // Simple USD-only logic
-            self.balance.usd += pnl + fee_paid;
-
-            // Keep total fields consistent
+        if !self.balance.use_btc_collateral {
             self.balance.usd_total = self.balance.usd;
             self.balance.usd_total_rounded = self.balance.usd;
             self.balance.btc_total = 0.0;
+            return;
         }
+
+        let btc_price = self.btc_usd_prices[k].max(f64::EPSILON);
+        let btc_value = self.balance.btc * btc_price;
+        let equity = btc_value + self.balance.usd;
+
+        if equity <= 0.0 {
+            self.balance.usd_total = equity;
+            self.balance.btc_total = if btc_price > 0.0 {
+                equity / btc_price
+            } else {
+                0.0
+            };
+            self.balance.usd_total_rounded = self.balance.usd_total;
+            return;
+        }
+
+        let current_ratio = if equity > 0.0 {
+            btc_value / equity
+        } else {
+            0.0
+        };
+        let target_cap = self.balance.btc_collateral_cap.max(0.0);
+        let debt = if self.balance.usd < 0.0 {
+            -self.balance.usd
+        } else {
+            0.0
+        };
+        let ltv = if equity > 0.0 {
+            debt / equity
+        } else {
+            f64::INFINITY
+        };
+
+        let mut usd_to_spend = 0.0;
+
+        if target_cap > 0.0 && current_ratio + 1e-12 < target_cap {
+            let ltv_allows = match self.balance.btc_collateral_ltv_cap {
+                Some(cap) if cap.is_finite() && cap > 0.0 => ltv + 1e-12 < cap,
+                _ => true,
+            };
+
+            if ltv_allows {
+                usd_to_spend = (target_cap - current_ratio) * equity;
+
+                if let Some(cap) = self.balance.btc_collateral_ltv_cap {
+                    if cap.is_finite() && cap > 0.0 {
+                        let max_debt = cap * equity;
+                        let allowable_extra_debt = (max_debt - debt).max(0.0);
+                        if usd_to_spend > allowable_extra_debt {
+                            usd_to_spend = allowable_extra_debt;
+                        }
+                    }
+                }
+
+                if usd_to_spend > 0.0 {
+                    self.balance.usd -= usd_to_spend;
+                    let usd_after_fee = usd_to_spend * (1.0 - CONVERSION_FEE_RATE);
+                    self.balance.btc += usd_after_fee / btc_price;
+                }
+            }
+        }
+
+        // Update total balances based on latest BTC amount and USD balance
+        let new_btc_value = self.balance.btc * btc_price;
+        self.balance.usd_total = new_btc_value + self.balance.usd;
+        self.balance.btc_total = if btc_price > 0.0 {
+            self.balance.usd_total / btc_price
+        } else {
+            0.0
+        };
+        self.balance.usd_total_rounded = self.balance.usd_total;
     }
 
     fn update_equities(&mut self, k: usize) {

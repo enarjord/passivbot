@@ -250,9 +250,10 @@ def load_coins_hlcvs_from_cache(config, exchange):
                 with gzip.open(btc_fname, "rb") as f:
                     btc_usd_prices = np.load(f)
             else:
-                # Backward compatibility: default to 1.0s if not cached
-                logging.info(f"{exchange} No BTC/USD prices in cache, using default array of 1.0s")
-                btc_usd_prices = np.ones(hlcvs.shape[0], dtype=np.float64)
+                logging.info(
+                    f"{exchange} No BTC/USD prices in cache; cache invalid for fractional collateral"
+                )
+                return None
         else:
             fname = cache_dir / "hlcvs.npy"
             logging.info(f"{exchange} Attempting to load hlcvs data from cache {fname}...")
@@ -271,9 +272,10 @@ def load_coins_hlcvs_from_cache(config, exchange):
                 )
                 btc_usd_prices = np.load(btc_fname)
             else:
-                # Backward compatibility: default to 1.0s if not cached
-                logging.info(f"{exchange} No BTC/USD prices in cache, using default array of 1.0s")
-                btc_usd_prices = np.ones(hlcvs.shape[0], dtype=np.float64)
+                logging.info(
+                    f"{exchange} No BTC/USD prices in cache; cache invalid for fractional collateral"
+                )
+                return None
         results_path = oj(require_config_value(config, "backtest.base_dir"), exchange, "")
         return cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps
     return None
@@ -447,11 +449,16 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             for coin in coins
         ]
     if backtest_params is None:
+        btc_collateral_cap = float(require_config_value(config, "backtest.btc_collateral_cap"))
+        btc_collateral_ltv_cap = require_config_value(config, "backtest.btc_collateral_ltv_cap")
+        if btc_collateral_ltv_cap is not None:
+            btc_collateral_ltv_cap = float(btc_collateral_ltv_cap)
         backtest_params = {
             "starting_balance": require_config_value(config, "backtest.starting_balance"),
             "maker_fee": mss[coins[0]]["maker"],
             "coins": coins,
-            "use_btc_collateral": bool(require_config_value(config, "backtest.use_btc_collateral")),
+            "btc_collateral_cap": btc_collateral_cap,
+            "btc_collateral_ltv_cap": btc_collateral_ltv_cap,
             "requested_start_timestamp_ms": 0,
             "first_valid_indices": [],
             "last_valid_indices": [],
@@ -478,7 +485,7 @@ def expand_analysis(analysis_usd, analysis_btc, fills, config):
                 if analysis_btc[key] is not None
                 else None
             )
-    if not bool(require_config_value(config, "backtest.use_btc_collateral")):
+    if float(require_config_value(config, "backtest.btc_collateral_cap")) <= 0.0:
         return analysis_usd
     return {
         **{
@@ -492,8 +499,6 @@ def expand_analysis(analysis_usd, analysis_btc, fills, config):
 
 def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timestamps=None):
     bot_params_list, exchange_params, backtest_params = prep_backtest_args(config, mss, exchange)
-    if not bool(require_config_value(config, "backtest.use_btc_collateral")):
-        btc_usd_prices = np.ones(len(btc_usd_prices))
     logging.info(f"Backtesting {exchange}...")
     sts = utc_ms()
 
@@ -631,7 +636,7 @@ def plot_forager(
     bal_eq[["balance", "equity"]].plot(logy=True)
     plt.savefig(oj(results_path, "balance_and_equity_logy.png"))
     plt.clf()
-    if bool(require_config_value(config, "backtest.use_btc_collateral")):
+    if float(require_config_value(config, "backtest.btc_collateral_cap")) > 0.0:
         plt.clf()
         bal_eq[["balance_btc", "equity_btc"]].plot(logy=False)
         plt.savefig(oj(results_path, "balance_and_equity_btc.png"))

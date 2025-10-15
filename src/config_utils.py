@@ -548,6 +548,36 @@ def _apply_backward_compatibility_renames(result: dict, verbose: bool = True) ->
             del bounds[old]
 
 
+def _migrate_btc_collateral_settings(result: dict, verbose: bool = True) -> None:
+    """Convert legacy bool collateral flag to fractional settings and ensure defaults."""
+    backtest = result.setdefault("backtest", {})
+
+    if "use_btc_collateral" in backtest:
+        use_btc = backtest.pop("use_btc_collateral")
+        try:
+            use_btc_bool = bool(int(use_btc))
+        except (TypeError, ValueError):
+            use_btc_bool = bool(use_btc)
+        if "btc_collateral_cap" not in backtest:
+            backtest["btc_collateral_cap"] = 1.0 if use_btc_bool else 0.0
+            if verbose:
+                print(
+                    f"changed backtest.use_btc_collateral -> backtest.btc_collateral_cap = "
+                    f"{backtest['btc_collateral_cap']}"
+                )
+        if "btc_collateral_ltv_cap" not in backtest:
+            backtest["btc_collateral_ltv_cap"] = None
+
+    cap = backtest.get("btc_collateral_cap")
+    try:
+        backtest["btc_collateral_cap"] = float(cap)
+    except (TypeError, ValueError):
+        backtest["btc_collateral_cap"] = 0.0
+
+    if "btc_collateral_ltv_cap" not in backtest:
+        backtest["btc_collateral_ltv_cap"] = None
+
+
 def detect_flavor(config: dict, template: dict) -> str:
     """Detect incoming config flavor to drive the builder.
 
@@ -729,7 +759,12 @@ def _apply_non_live_adjustments(result: dict, verbose: bool = True) -> None:
             if verbose:
                 print(f"changed config.optimize.limits.{key} -> {new_key}")
             del result["optimize"]["limits"][key]
-    if not result["backtest"]["use_btc_collateral"]:
+    btc_cap = result["backtest"].get("btc_collateral_cap", 0.0)
+    try:
+        btc_cap_val = float(btc_cap)
+    except (TypeError, ValueError):
+        btc_cap_val = 0.0
+    if btc_cap_val <= 0.0:
         for idx, value in enumerate(result["optimize"]["scoring"]):
             if value.startswith("btc_"):
                 new_value = value[len("btc_") :]
@@ -766,6 +801,7 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     flavor = detect_flavor(config, template)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
     _apply_backward_compatibility_renames(result, verbose=verbose)
+    _migrate_btc_collateral_settings(result, verbose=verbose)
     _ensure_bot_defaults_and_bounds(result, verbose=verbose)
     result["bot"] = sort_dict_keys(result["bot"])
 
@@ -868,6 +904,12 @@ def comma_separated_values(x):
     return x.split(",")
 
 
+def optional_float(x):
+    if isinstance(x, str) and x.strip().lower() in {"none", "null", ""}:
+        return None
+    return float(x)
+
+
 def merge_negative_cli_values(argv):
     """Allow comma-separated values that begin with '-' to be parsed as option values."""
     out = []
@@ -967,6 +1009,11 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
                 acronym = "c"
             elif "iters" in full_name:
                 acronym = "i"
+            elif value is None:
+                if full_name == "backtest.btc_collateral_ltv_cap":
+                    type_ = optional_float
+                else:
+                    type_ = optional_float
             elif type_ == bool:
                 type_ = str2bool
                 appendix = "[y/n]"
@@ -1084,7 +1131,8 @@ def get_template_config(passivbot_mode="v7"):
             "gap_tolerance_ohlcvs_minutes": 120.0,
             "start_date": "2021-04-01",
             "starting_balance": 100000.0,
-            "use_btc_collateral": False,
+            "btc_collateral_cap": 1.0,
+            "btc_collateral_ltv_cap": None,
             "max_warmup_minutes": 0.0,
         },
         "bot": {

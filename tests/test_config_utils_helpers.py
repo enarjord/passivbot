@@ -5,6 +5,7 @@ from config_utils import (
     _apply_non_live_adjustments,
     _ensure_bot_defaults_and_bounds,
     _ensure_enforce_exposure_limit_bool,
+    _migrate_btc_collateral_settings,
     _normalize_position_counts,
     _rename_config_keys,
     _sync_with_template,
@@ -78,7 +79,7 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     config["live"]["approved_coins"] = "btc,eth"
     config["live"]["ignored_coins"] = {"long": ["eth"], "short": []}
     config["backtest"]["end_date"] = "2023-01-01"
-    config["backtest"]["use_btc_collateral"] = False
+    config["backtest"]["btc_collateral_cap"] = 0.0
     config["optimize"]["scoring"] = ["btc_metric", "adg"]
     config["optimize"]["limits"] = "--lower_bound_drawdown 0.3 --btc_penalty 0.1"
     config["optimize"]["bounds"]["long_entry_grid_spacing_pct"] = [0.1, 0.05]
@@ -94,6 +95,19 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     assert limits["penalty"] == pytest.approx(0.1)
     assert config["optimize"]["bounds"]["long_entry_grid_spacing_pct"] == [0.05, 0.1]
     assert config["live"]["approved_coins"]["short"] == ["btc", "eth"]
+
+
+def test_migrate_btc_collateral_settings_converts_bool():
+    config = {"backtest": {"use_btc_collateral": True}}
+    _migrate_btc_collateral_settings(config, verbose=False)
+    assert config["backtest"]["btc_collateral_cap"] == pytest.approx(1.0)
+    assert config["backtest"]["btc_collateral_ltv_cap"] is None
+    assert "use_btc_collateral" not in config["backtest"]
+
+    config = {"backtest": {"use_btc_collateral": False}}
+    _migrate_btc_collateral_settings(config, verbose=False)
+    assert config["backtest"]["btc_collateral_cap"] == pytest.approx(0.0)
+    assert config["backtest"]["btc_collateral_ltv_cap"] is None
 
 
 def test_ensure_enforce_exposure_limit_bool_casts_values():
