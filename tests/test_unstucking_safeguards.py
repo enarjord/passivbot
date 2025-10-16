@@ -5,35 +5,57 @@ import pytest
 
 
 def _make_mock_pbr():
-    return types.SimpleNamespace(
-        calc_auto_unstuck_allowance=lambda balance, allowance_pct, max_pnl, last_pnl: allowance_pct
-        * balance,
-        calc_wallet_exposure=lambda c_mult, balance, size, price: abs(size)
-        * price
-        / max(balance, 1e-6),
-        calc_min_entry_qty=lambda *args, **kwargs: 0.0,
-        calc_min_entry_qty_py=lambda *args, **kwargs: 0.0,
-        cost_to_qty=lambda *args, **kwargs: 0.0,
-        round_dn=lambda value, step: value,
-        round_up=lambda value, step: value,
-        round_dynamic=lambda value, sig: value,
-        calc_pnl_long=lambda entry_price, close_price, qty, c_mult: (close_price - entry_price) * qty,
-        calc_pnl_short=lambda entry_price, close_price, qty, c_mult: (entry_price - close_price)
-        * qty,
-        calc_pprice_diff_int=lambda *args, **kwargs: 0.0,
-        get_order_id_type_from_string=lambda s: 0x1234,
-        order_type_id_to_snake=lambda type_id: {
+    module = types.ModuleType("passivbot_rust")
+    module.calc_auto_unstuck_allowance = (
+        lambda balance, allowance_pct, max_pnl, last_pnl: allowance_pct * balance
+    )
+    module.calc_wallet_exposure = (
+        lambda c_mult, balance, size, price: abs(size) * price / max(balance, 1e-6)
+    )
+    module.calc_min_entry_qty = lambda *args, **kwargs: 0.0
+    module.calc_min_entry_qty_py = lambda *args, **kwargs: 0.0
+    module.cost_to_qty = lambda *args, **kwargs: 0.0
+    module.round_dn = lambda value, step: value
+    module.round_up = lambda value, step: value
+    module.round_dynamic = lambda value, sig: value
+    module.calc_pnl_long = (
+        lambda entry_price, close_price, qty, c_mult: (close_price - entry_price) * qty
+    )
+    module.calc_pnl_short = (
+        lambda entry_price, close_price, qty, c_mult: (entry_price - close_price) * qty
+    )
+    module.calc_pprice_diff_int = lambda *args, **kwargs: 0.0
+    module.calc_diff = lambda price, reference: price - reference
+    module.round_ = lambda value, step: value
+
+    def _get_order_id_type_from_string(name: str) -> int:
+        mapping = {
+            "close_unstuck_long": 0x1234,
+            "close_unstuck_short": 0x1235,
+            "empty": 0x0000,
+        }
+        return mapping.get(name, 0x9999)
+
+    def _order_type_id_to_snake(type_id: int) -> str:
+        mapping = {
             0x1234: "close_unstuck_long",
             0x1235: "close_unstuck_short",
-        }.get(type_id, "other"),
-        calc_diff=lambda price, reference: price - reference,
-        round_=lambda value, step: value,
-    )
+            0x0000: "empty",
+        }
+        return mapping.get(type_id, "other")
+
+    module.get_order_id_type_from_string = _get_order_id_type_from_string
+    module.order_type_id_to_snake = _order_type_id_to_snake
+    return module
 
 
 @pytest.fixture(autouse=True)
 def mock_pbr(monkeypatch):
-    monkeypatch.setitem(sys.modules, "passivbot_rust", _make_mock_pbr())
+    stub_module = _make_mock_pbr()
+    monkeypatch.setitem(sys.modules, "passivbot_rust", stub_module)
+    import passivbot
+
+    monkeypatch.setattr(passivbot, "pbr", stub_module, raising=False)
 
 
 def _dummy_config():
