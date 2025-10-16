@@ -153,7 +153,10 @@ def type_token(type_id: int, with_marker: bool = True) -> str:
 
 def snake_of(type_id: int) -> str:
     """Map an order type id to its snake_case string representation."""
-    return pbr.order_type_id_to_snake(type_id)
+    try:
+        return pbr.order_type_id_to_snake(type_id)
+    except Exception:
+        return "unknown"
 
 
 # Legacy EMA helper removed; CandlestickManager provides EMA utilities
@@ -749,8 +752,11 @@ class Passivbot:
                 type_id = try_decode_type_id_from_custom_id(custom_id)
                 if type_id is None:
                     continue
-                order_type = snake_of(type_id)
-                if order_type in ("close_unstuck_long", "close_unstuck_short"):
+                try:
+                    order_type = snake_of(type_id)
+                except Exception:
+                    continue
+                if order_type in {"close_unstuck_long", "close_unstuck_short"}:
                     return True
         return False
 
@@ -2278,6 +2284,7 @@ class Passivbot:
         ideal_orders = await self.calc_ideal_orders(allow_unstuck=allow_new_unstuck)
 
         # Sanity check: ideal orders should contain at most one unstuck order
+        unstuck_names = {"close_unstuck_long", "close_unstuck_short"}
         unstuck_ideal_count = 0
         for orders in ideal_orders.values():
             for order in orders:
@@ -2285,7 +2292,7 @@ class Passivbot:
                 order_type_id = try_decode_type_id_from_custom_id(custom_id)
                 if order_type_id is None:
                     continue
-                if snake_of(order_type_id) in {"close_unstuck_long", "close_unstuck_short"}:
+                if snake_of(order_type_id) in unstuck_names:
                     unstuck_ideal_count += 1
         if unstuck_ideal_count > 1:
             logging.warning(
@@ -2293,15 +2300,13 @@ class Passivbot:
             )
             # keep the first encountered order, drop the rest
             keep_one = True
-            for orders in ideal_orders.values():
+            for symbol, orders in ideal_orders.items():
                 new_orders = []
                 for order in orders:
                     custom_id = order.get("custom_id", "")
                     order_type_id = try_decode_type_id_from_custom_id(custom_id)
-                    if order_type_id is not None and snake_of(order_type_id) in {
-                        "close_unstuck_long",
-                        "close_unstuck_short",
-                    }:
+                    order_type = snake_of(order_type_id) if order_type_id is not None else ""
+                    if order_type in unstuck_names:
                         if keep_one:
                             new_orders.append(order)
                             keep_one = False
@@ -2309,7 +2314,7 @@ class Passivbot:
                             continue
                     else:
                         new_orders.append(order)
-                orders[:] = new_orders
+                ideal_orders[symbol] = new_orders
         actual_orders = {}
         for symbol in self.active_symbols:
             actual_orders[symbol] = []
@@ -2324,7 +2329,8 @@ class Passivbot:
                             "price": x["price"],
                             "reduce_only": (x["position_side"] == "long" and x["side"] == "sell")
                             or (x["position_side"] == "short" and x["side"] == "buy"),
-                            "id": x["id"],
+                            "id": x.get("id"),
+                            "custom_id": x.get("custom_id"),
                         }
                     )
                 except Exception as e:
@@ -2337,6 +2343,18 @@ class Passivbot:
             # Some symbols may have no ideal orders for this cycle; treat as empty list
             ideal_list = ideal_orders.get(symbol, []) if isinstance(ideal_orders, dict) else []
             to_cancel_, to_create_ = filter_orders(actual_orders[symbol], ideal_list, keys)
+            seen_unstuck = False
+            filtered_to_create = []
+            for order in to_create_:
+                custom_id = order.get("custom_id", "")
+                order_type_id = try_decode_type_id_from_custom_id(custom_id)
+                order_type = snake_of(order_type_id) if order_type_id is not None else ""
+                if order_type in unstuck_names:
+                    if seen_unstuck:
+                        continue
+                    seen_unstuck = True
+                filtered_to_create.append(order)
+            to_create_ = filtered_to_create
             for pside in ["long", "short"]:
                 if self.PB_modes[pside][symbol] == "manual":
                     # neither create nor cancel orders

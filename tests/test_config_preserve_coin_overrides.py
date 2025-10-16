@@ -12,7 +12,10 @@ from config_utils import format_config, get_template_config
             "SOLUSDT": {"live": {"forced_mode_short": "manual"}},
         },
         {
-            "DOGEUSDT": {"live": {"forced_mode_long": "manual"}, "bot": {"long": {"wallet_exposure_limit": 0.25}}},
+            "DOGEUSDT": {
+                "live": {"forced_mode_long": "manual"},
+                "bot": {"long": {"wallet_exposure_limit": 0.25}},
+            },
         },
     ],
 )

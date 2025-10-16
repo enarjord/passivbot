@@ -18,12 +18,12 @@ def _make_mock_pbr():
     module.round_dn = lambda value, step: value
     module.round_up = lambda value, step: value
     module.round_dynamic = lambda value, sig: value
-    module.calc_pnl_long = lambda entry_price, close_price, qty, c_mult: (
-        close_price - entry_price
-    ) * qty
-    module.calc_pnl_short = lambda entry_price, close_price, qty, c_mult: (
-        entry_price - close_price
-    ) * qty
+    module.calc_pnl_long = (
+        lambda entry_price, close_price, qty, c_mult: (close_price - entry_price) * qty
+    )
+    module.calc_pnl_short = (
+        lambda entry_price, close_price, qty, c_mult: (entry_price - close_price) * qty
+    )
     module.calc_pprice_diff_int = lambda *args, **kwargs: 0.0
     module.calc_diff = lambda price, reference: price - reference
     module.round_ = lambda value, step: value
@@ -56,7 +56,6 @@ def mock_pbr(monkeypatch):
     import passivbot
 
     monkeypatch.setattr(passivbot, "pbr", stub_module, raising=False)
-    monkeypatch.setattr(passivbot, "_UNSTUCK_TYPE_IDS", passivbot._collect_unstuck_type_ids(), raising=False)
 
 
 def _dummy_config():

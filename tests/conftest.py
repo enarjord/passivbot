@@ -43,12 +43,12 @@ def _install_passivbot_rust_stub():
     stub.round_dynamic = _identity
     stub.round_dynamic_up = _identity
     stub.round_dynamic_dn = _identity
-    stub.calc_pnl_long = lambda entry_price, close_price, qty, c_mult=1.0: (
-        close_price - entry_price
-    ) * qty
-    stub.calc_pnl_short = lambda entry_price, close_price, qty, c_mult=1.0: (
-        entry_price - close_price
-    ) * qty
+    stub.calc_pnl_long = (
+        lambda entry_price, close_price, qty, c_mult=1.0: (close_price - entry_price) * qty
+    )
+    stub.calc_pnl_short = (
+        lambda entry_price, close_price, qty, c_mult=1.0: (entry_price - close_price) * qty
+    )
     stub.calc_pprice_diff_int = lambda *args, **kwargs: 0
     stub.calc_auto_unstuck_allowance = (
         lambda balance, allowance_pct, max_pnl, last_pnl: allowance_pct * balance
@@ -56,8 +56,8 @@ def _install_passivbot_rust_stub():
     stub.calc_wallet_exposure = (
         lambda c_mult, balance, size, price: abs(size) * price / max(balance, 1e-12)
     )
-    stub.cost_to_qty = lambda cost, price, c_mult=1.0: 0.0 if price == 0 else cost / (
-        price * (c_mult if c_mult else 1.0)
+    stub.cost_to_qty = lambda cost, price, c_mult=1.0: (
+        0.0 if price == 0 else cost / (price * (c_mult if c_mult else 1.0))
     )
     stub.qty_to_cost = lambda qty, price, c_mult=1.0: qty * price * (c_mult if c_mult else 1.0)
 
@@ -67,17 +67,18 @@ def _install_passivbot_rust_stub():
     stub.calc_closes_long_py = lambda *args, **kwargs: []
     stub.calc_closes_short_py = lambda *args, **kwargs: []
 
-    stub.get_order_id_type_from_string = (
-        lambda name: {"close_unstuck_long": 0x1234, "close_unstuck_short": 0x1235}.get(name, 0)
-    )
-    stub.order_type_id_to_snake = (
-        lambda type_id: {0x1234: "close_unstuck_long", 0x1235: "close_unstuck_short"}.get(
-            type_id, "other"
-        )
-    )
-    stub.order_type_snake_to_id = (
-        lambda name: {"close_unstuck_long": 0x1234, "close_unstuck_short": 0x1235}.get(name, 0)
-    )
+    stub.get_order_id_type_from_string = lambda name: {
+        "close_unstuck_long": 0x1234,
+        "close_unstuck_short": 0x1235,
+    }.get(name, 0)
+    stub.order_type_id_to_snake = lambda type_id: {
+        0x1234: "close_unstuck_long",
+        0x1235: "close_unstuck_short",
+    }.get(type_id, "other")
+    stub.order_type_snake_to_id = lambda name: {
+        "close_unstuck_long": 0x1234,
+        "close_unstuck_short": 0x1235,
+    }.get(name, 0)
 
     stub.run_backtest = lambda *args, **kwargs: {}
 
