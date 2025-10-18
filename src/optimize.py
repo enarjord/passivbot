@@ -73,6 +73,7 @@ from opt_utils import make_json_serializable, generate_incremental_diff, round_f
 from pareto_store import ParetoStore
 import msgpack
 from typing import Sequence, Tuple, List
+from itertools import permutations
 
 logging.basicConfig(
     format="%(asctime)s %(processName)-12s %(levelname)-8s %(message)s",
@@ -738,7 +739,7 @@ class Evaluator:
                 exchange_params=self.exchange_params[exchange],
                 backtest_params=self.backtest_params[exchange],
             )
-            fills, equities_usd, equities_btc, analysis_usd, analysis_btc = pbr.run_backtest(
+            run_result = pbr.run_backtest(
                 self.shared_memory_files[exchange],
                 self.hlcvs_shapes[exchange],
                 self.hlcvs_dtypes[exchange].str,
@@ -748,6 +749,10 @@ class Evaluator:
                 self.exchange_params[exchange],
                 self.backtest_params[exchange],
             )
+            if len(run_result) == 5:
+                fills, _, _, analysis_usd, analysis_btc = run_result
+            else:
+                fills, _, analysis_usd, analysis_btc = run_result
             analyses[exchange] = expand_analysis(analysis_usd, analysis_btc, fills, config)
         analyses_combined = self.combine_analyses(analyses)
         objectives = self.calc_fitness(analyses_combined)
@@ -832,14 +837,58 @@ class Evaluator:
                 modifier += (check["bound"] - val) * (check["penalty_weight"])
 
         scores = []
-        for sk in sorted(self.config["optimize"]["scoring"]):
+        for sk in self.config["optimize"]["scoring"]:
             if modifier:
                 scores.append(modifier)
             else:
-                val = analyses_combined.get(f"{sk}_mean")
+                parts = sk.split("_")
+                candidates = []
+                if len(parts) <= 1:
+                    candidates = [sk]
+                else:
+                    base, rest = parts[0], parts[1:]
+                    base_candidate = "_".join([base, *rest])
+                    candidates.append(base_candidate)
+                    for perm in permutations(rest):
+                        candidate = "_".join([base, *perm])
+                        candidates.append(candidate)
+
+                extended_candidates = []
+                seen = set()
+                for candidate in candidates:
+                    if candidate not in seen:
+                        extended_candidates.append(candidate)
+                        seen.add(candidate)
+                    for suffix in ("usd", "btc"):
+                        with_suffix = f"{candidate}_{suffix}"
+                        if with_suffix not in seen:
+                            extended_candidates.append(with_suffix)
+                            seen.add(with_suffix)
+                        parts_candidate = candidate.split("_")
+                        if len(parts_candidate) >= 2:
+                            inserted = "_".join(parts_candidate[:-1] + [suffix, parts_candidate[-1]])
+                            if inserted not in seen:
+                                extended_candidates.append(inserted)
+                                seen.add(inserted)
+
+                val = None
+                weight = None
+                selected_metric = None
+                for candidate in extended_candidates:
+                    metric_key = f"{candidate}_mean"
+                    if val is None and metric_key in analyses_combined:
+                        val = analyses_combined[metric_key]
+                        selected_metric = candidate
+                    if weight is None and candidate in self.scoring_weights:
+                        weight = self.scoring_weights[candidate]
+                    if val is not None and weight is not None:
+                        break
+
                 if val is None:
                     return None
-                scores.append(val * self.scoring_weights[sk])
+                if weight is None:
+                    weight = 1.0
+                scores.append(val * weight)
         return tuple(scores)
 
     def __del__(self):
