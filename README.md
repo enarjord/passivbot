@@ -174,7 +174,7 @@ https://partner.bybit.com/b/passivbot
 https://partner.bitget.com/bg/Y8FU1W  
 https://www.okx.com/join/PASSIVBOT  
 https://app.hyperliquid.xyz/join/PASSIVBOT  
-https://www.kucoin.com/r/rf/CX8Q6DUF  
+https://www.kucoin.com/r/broker/CX8QZQJX  
 
 **Note on Binance**  
 To support continued Passivbot development, please use a Binance account which  
