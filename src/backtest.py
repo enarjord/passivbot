@@ -27,6 +27,7 @@ from utils import (
     format_end_date,
     format_approved_ignored_coins,
     date_to_ts,
+    trim_analysis_aliases,
 )
 from pure_funcs import (
     ts_to_date,
@@ -42,7 +43,11 @@ from downloader import (
     compute_per_coin_warmup_minutes,
 )
 from pathlib import Path
-from plotting import plot_fills_forager
+from plotting import (
+    create_forager_balance_figures,
+    create_forager_coin_figures,
+    save_figures,
+)
 from collections import defaultdict
 import matplotlib.pyplot as plt
 import logging
@@ -145,6 +150,7 @@ def process_forager_fills(fills, coins, hlcvs, equities_array):
     if not fdf.empty:
         fdf["timestamp"] = pd.to_datetime(fdf["timestamp"].astype(np.int64), unit="ms")
         fdf["index"] = fdf["index"].astype(int)
+        fdf["minute"] = fdf["index"].astype(int)
         numeric_cols = [
             "pnl",
             "fee_paid",
@@ -158,6 +164,8 @@ def process_forager_fills(fills, coins, hlcvs, equities_array):
             "pprice",
         ]
         fdf[numeric_cols] = fdf[numeric_cols].apply(pd.to_numeric, errors="coerce")
+    else:
+        fdf["minute"] = pd.Series(dtype=int)
     analysis_appendix = {}
 
     pnls = {}
@@ -172,30 +180,36 @@ def process_forager_fills(fills, coins, hlcvs, equities_array):
         pnls[pside] = profit + loss
         analysis_appendix[f"loss_profit_ratio_{pside}"] = abs(loss / profit)
     analysis_appendix["pnl_ratio_long_short"] = pnls["long"] / (pnls["long"] + pnls["short"])
-
     div_by = 60  # save some disk space. Set to 1 to dump uncropped
     if not fdf.empty:
         timestamps_ns = fdf["timestamp"].astype("int64")
-        bucket = (
-            (timestamps_ns // (div_by * 60_000 * 1_000_000))
-            * (div_by * 60_000 * 1_000_000)
-        )
-        bdf = fdf.groupby(bucket)["balance"].last()
-        bbdf = fdf.groupby(bucket)["balance_btc"].last()
+        bucket = (timestamps_ns // (div_by * 60_000 * 1_000_000)) * (div_by * 60_000 * 1_000_000)
+        bdf = fdf.groupby(bucket)["balance"].last().rename("balance_usd")
+        bbdf = fdf.groupby(bucket)["balance_btc"].last().rename("balance_btc")
         # convert to datetime index for easier alignment
         bdf.index = pd.to_datetime(bdf.index, unit="ns")
         bbdf.index = pd.to_datetime(bbdf.index, unit="ns")
     else:
-        bdf = pd.Series(dtype=float)
-        bbdf = pd.Series(dtype=float)
-
+        bdf = pd.Series(dtype=float, name="balance_usd")
+        bbdf = pd.Series(dtype=float, name="balance_btc")
     equities_array = np.asarray(equities_array)
     equities_index = pd.to_datetime(equities_array[:, 0].astype(np.int64), unit="ms")
-    edf = pd.Series(equities_array[:, 1], index=equities_index)
-    ebdf = pd.Series(equities_array[:, 2], index=equities_index)
-
-    combined_index = sorted(set(bdf.index) | set(edf.index))
-    if len(combined_index) == 0:
+    edf = pd.Series(
+        equities_array[:, 1],
+        index=equities_index,
+        name="equity_usd",
+    )
+    ebdf = pd.Series(
+        equities_array[:, 2],
+        index=equities_index,
+        name="equity_btc",
+    )
+    bal_eq = pd.concat(
+        [bdf, edf, bbdf, ebdf],
+        axis=1,
+        join="outer",
+    )
+    if bal_eq.empty:
         bal_eq = pd.DataFrame(
             columns=[
                 "balance_usd",
@@ -205,19 +219,22 @@ def process_forager_fills(fills, coins, hlcvs, equities_array):
             ]
         )
     else:
-        bal_eq = pd.DataFrame(index=pd.to_datetime(combined_index, unit="ns"))
-        if not bdf.empty:
-            bal_eq["balance_usd"] = bdf.reindex(bal_eq.index, method="ffill")
-            bal_eq["balance_btc"] = bbdf.reindex(bal_eq.index, method="ffill")
-        else:
-            bal_eq["balance_usd"] = np.nan
-            bal_eq["balance_btc"] = np.nan
-        bal_eq["equity_usd"] = edf.reindex(bal_eq.index, method="ffill")
-        bal_eq["equity_btc"] = ebdf.reindex(bal_eq.index, method="ffill")
-        bal_eq = bal_eq.ffill().bfill()
-    bal_eq = bal_eq.round({"balance_usd":4, "equity_usd":4, "balance_btc":4, "equity_btc":4})
-    for col in ["balance_usd", "equity_usd", "balance_btc", "equity_btc"]:
-        bal_eq[col] = bal_eq[col].astype(np.float32)
+        bal_eq = bal_eq.sort_index()
+        bal_eq = bal_eq[~bal_eq.index.duplicated(keep="first")]
+        bal_eq = (
+            bal_eq.reindex(
+                columns=[
+                    "balance_usd",
+                    "equity_usd",
+                    "balance_btc",
+                    "equity_btc",
+                ]
+            )
+            .ffill()
+            .bfill()
+        )
+    bal_eq = bal_eq.round(4)
+    bal_eq = bal_eq.astype(np.float32)
     return fdf, sort_dict_keys(analysis_appendix), bal_eq
 
 
@@ -576,7 +593,21 @@ def expand_analysis(analysis_usd, analysis_btc, fills, config):
         for key, value in metrics.items():
             if key == "flat_btc_balance_hours":
                 continue
-            result[f"{key}_{suffix}"] = value
+            suffix_lower = suffix.lower()
+            key_lower = key.lower()
+            if f"_{suffix_lower}" in key_lower:
+                normalized_key = key
+            else:
+                normalized_key = f"{key}_{suffix}"
+            result[normalized_key] = value
+            result.setdefault(key, value)
+            if f"_{suffix_lower}" not in key_lower:
+                parts = key.split("_")
+                if len(parts) > 1:
+                    alias = "_".join(parts[:-1] + [suffix_lower, parts[-1]])
+                else:
+                    alias = f"{key}_{suffix_lower}"
+                result.setdefault(alias, value)
             if emit_legacy:
                 if suffix == "usd":
                     result.setdefault(key, value)
@@ -696,7 +727,7 @@ def post_process(
         if k not in analysis:
             analysis[k] = analysis_py[k]
     logging.info(f"seconds elapsed for analysis: {(utc_ms() - sts) / 1000:.4f}")
-    pprint.pprint(analysis)
+    pprint.pprint(trim_analysis_aliases(analysis))
     results_path = make_get_filepath(
         oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
     )
@@ -705,74 +736,16 @@ def post_process(
     dump_config(config, f"{results_path}config.json")
     fdf.to_csv(f"{results_path}fills.csv")
     bal_eq.to_csv(oj(results_path, "balance_and_equity.csv.gz"), compression="gzip")
-    plot_forager(
-        results_path,
-        config,
-        exchange,
-        fdf,
-        bal_eq,
-        hlcvs,
-    )
-
-
-def plot_forager(
-    results_path,
-    config: dict,
-    exchange: str,
-    fdf: pd.DataFrame,
-    bal_eq,
-    hlcvs,
-):
-    plots_dir = make_get_filepath(oj(results_path, "fills_plots", ""))
-
-    def _plot_balance_panels(logy: bool, filename: str):
-        fig, axes = plt.subplots(2, 1, sharex=True, figsize=(12, 8))
-        denom_configs = [
-            ("USD Balance & Equity", "balance_usd", "equity_usd"),
-            ("BTC Balance & Equity", "balance_btc", "equity_btc"),
-        ]
-        x = bal_eq.index
-        for ax, (title, bal_key, eq_key) in zip(axes, denom_configs):
-            balance = bal_eq.get(bal_key, pd.Series(index=x, data=np.nan))
-            equity = bal_eq.get(eq_key, pd.Series(index=x, data=np.nan))
-            if logy:
-                balance_vals = balance.astype(float).mask(balance.astype(float) <= 0.0)
-                equity_vals = equity.astype(float).mask(equity.astype(float) <= 0.0)
-                ax.set_yscale("log")
-            else:
-                balance_vals = balance
-                equity_vals = equity
-                ax.set_yscale("linear")
-
-            balance_label = bal_key.replace("_", " ").title()
-            equity_label = eq_key.replace("_", " ").title()
-            ax.plot(x, balance_vals, label=balance_label, linewidth=1.0)
-            ax.plot(x, equity_vals, label=equity_label, linewidth=1.0)
-            ax.set_title(title)
-            ax.grid(True, linestyle="--", alpha=0.3)
-            ax.legend()
-        axes[-1].set_xlabel("Time (index)")
-        fig.tight_layout()
-        fig.savefig(oj(results_path, filename))
-        plt.close(fig)
-
-    _plot_balance_panels(logy=False, filename="balance_and_equity.png")
-    _plot_balance_panels(logy=True, filename="balance_and_equity_logy.png")
+    balance_figs = create_forager_balance_figures(bal_eq)
+    save_figures(balance_figs, results_path)
 
     if not config["disable_plotting"]:
-        for i, coin in enumerate(require_config_value(config, f"backtest.coins.{exchange}")):
-            try:
-                logging.info(f"Plotting fills for {coin}")
-                hlcvs_df = pd.DataFrame(hlcvs[:, i, :3], columns=["high", "low", "close"])
-                fdfc = fdf[fdf.coin == coin]
-                plt.clf()
-                plot_fills_forager(fdfc, hlcvs_df)
-                plt.title(f"Fills {coin}")
-                plt.xlabel = "time"
-                plt.ylabel = "price"
-                plt.savefig(oj(plots_dir, f"{coin}.png"))
-            except Exception as e:
-                logging.info(f"Error plotting {coin} {e}")
+        try:
+            coins = require_config_value(config, f"backtest.coins.{exchange}")
+            coin_figs = create_forager_coin_figures(coins, fdf, hlcvs)
+            save_figures(coin_figs, oj(results_path, "fills_plots"))
+        except Exception as e:
+            logging.info(f"Error creating fill plots: {e}")
 
 
 async def main():
