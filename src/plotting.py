@@ -160,7 +160,7 @@ def dump_plots(
     disable_plotting: bool = False,
 ):
     init(autoreset=True)
-    plt.rcParams["figure.figsize"] = [29, 18]
+    plt.rcParams["figure.figsize"] = [32, 19]
     try:
         pd.set_option("display.precision", 10)
     except Exception as e:
@@ -435,9 +435,15 @@ def plot_pnls_stuck(sdf, fdf, symbol=None, start_pct=0.0, end_pct=1.0, unstuck_t
 
 
 def plot_fills_forager(
-    fdf: pd.DataFrame, hlcvs_df: pd.DataFrame, start_pct=0.0, end_pct=1.0, whole=False
+    fdf: pd.DataFrame,
+    hlcvs_df: pd.DataFrame,
+    start_pct=0.0,
+    end_pct=1.0,
+    whole=False,
+    clear: bool = True,
 ):
-    plt.clf()
+    if clear:
+        plt.clf()
     if len(fdf) == 0:
         return
     if whole:
@@ -488,6 +494,84 @@ def plot_fills_forager(
         )
     ax.legend(legend)
     return plt
+
+
+def create_forager_balance_figures(
+    bal_eq: pd.DataFrame,
+    figsize=(32, 19),
+    autoplot: bool = False,
+) -> dict:
+    figures = {}
+    denom_configs = [
+        ("USD Balance & Equity", "balance_usd", "equity_usd"),
+        ("BTC Balance & Equity", "balance_btc", "equity_btc"),
+    ]
+    for logy in (False, True):
+        fig, axes = plt.subplots(2, 1, sharex=True, figsize=figsize)
+        x = bal_eq.index
+        for ax, (title, bal_key, eq_key) in zip(axes, denom_configs):
+            balance = bal_eq.get(bal_key, pd.Series(index=x, data=np.nan)).astype(float)
+            equity = bal_eq.get(eq_key, pd.Series(index=x, data=np.nan)).astype(float)
+            if logy:
+                balance = balance.mask(balance <= 0.0)
+                equity = equity.mask(equity <= 0.0)
+                ax.set_yscale("log")
+            else:
+                ax.set_yscale("linear")
+            ax.plot(x, balance, label=bal_key.replace("_", " ").title(), linewidth=1.0)
+            ax.plot(x, equity, label=eq_key.replace("_", " ").title(), linewidth=1.0)
+            ax.set_title(title)
+            ax.grid(True, linestyle="--", alpha=0.3)
+            ax.legend()
+        axes[-1].set_xlabel("Time")
+        fig.tight_layout()
+        key = "balance_and_equity_logy" if logy else "balance_and_equity"
+        figures[key] = fig
+        if not autoplot:
+            plt.close(fig)
+    if autoplot:
+        for fig in figures.values():
+            fig.show()
+    return figures
+
+
+def create_forager_coin_figures(
+    coins: list,
+    fdf: pd.DataFrame,
+    hlcvs: np.ndarray,
+    figsize=(32, 19),
+) -> dict:
+    figures = {}
+    if hlcvs is None:
+        return figures
+    for idx, coin in enumerate(coins):
+        fdfc = fdf[fdf.coin == coin]
+        if fdfc.empty:
+            continue
+        hlcvs_df = pd.DataFrame(hlcvs[:, idx, :3], columns=["high", "low", "close"])
+        plt.figure(figsize=figsize)
+        plot_fills_forager(fdfc, hlcvs_df, clear=False)
+        fig = plt.gcf()
+        ax = fig.axes[0] if fig.axes else fig.add_subplot(111)
+        ax.set_title(f"Fills {coin}")
+        ax.set_xlabel("Minute")
+        ax.set_ylabel("Price")
+        figures[coin] = fig
+    return figures
+
+
+def save_figures(figures: dict, output_dir: str, suffix: str = ".png", close: bool = True) -> dict:
+    if not figures:
+        return {}
+    output_dir = make_get_filepath(output_dir if output_dir.endswith("/") else f"{output_dir}/")
+    saved_paths = {}
+    for name, fig in figures.items():
+        filepath = os.path.join(output_dir, f"{name}{suffix}")
+        fig.savefig(filepath)
+        if close:
+            plt.close(fig)
+        saved_paths[name] = filepath
+    return saved_paths
 
 
 def plot_pareto_front(df, metrics, minimize=(True, True)):
