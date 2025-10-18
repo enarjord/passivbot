@@ -140,6 +140,60 @@ def utc_ms() -> float:
     return time.time() * 1000
 
 
+def trim_analysis_aliases(analysis: dict) -> dict:
+    """Return a copy of ``analysis`` with redundant alias metrics removed.
+
+    Two clean-up rules are applied:
+
+    1. If a key ends with ``"_usd"`` and its value matches the base metric
+       (the same key with the suffix removed), the base entry is dropped while
+       the explicit ``*_usd`` key is retained.
+    2. Within the remaining items, if multiple keys are permutations of the same
+       underscore-separated tokens and share the exact value (e.g.
+       ``"drawdown_btc_worst"`` vs ``"drawdown_worst_btc"``), only a single key
+       is kept. Preference is given to keys whose trailing token is a currency
+       tag (``usd``/``btc``); ties fall back to key length and lexical order.
+
+    The original ``analysis`` mapping is left untouched.
+    """
+
+    trimmed = dict(analysis)
+
+    # Step 1: remove base keys when *_usd carries the same value.
+    for key, value in list(trimmed.items()):
+        if key.endswith("_usd"):
+            base_key = key[:-4]
+            if base_key in trimmed and trimmed[base_key] == value:
+                trimmed.pop(base_key)
+
+    # Step 2: remove duplicate permutations sharing identical values.
+    groups = {}
+    for key in trimmed:
+        canon = tuple(sorted(key.split("_")))
+        groups.setdefault(canon, []).append(key)
+
+    def _score(alias: str) -> tuple:
+        tokens = alias.split("_")
+        tail_currency = 1 if tokens and tokens[-1] in {"usd", "btc"} else 0
+        return (tail_currency, -len(alias), alias)
+
+    for keys in groups.values():
+        if len(keys) < 2:
+            continue
+        values = {}
+        for key in keys:
+            values.setdefault(trimmed[key], []).append(key)
+        for aliases in values.values():
+            if len(aliases) < 2:
+                continue
+            keep = max(aliases, key=_score)
+            for alias in aliases:
+                if alias != keep:
+                    trimmed.pop(alias, None)
+
+    return trimmed
+
+
 def filter_markets(markets: dict, exchange: str, verbose=False) -> (dict, dict, dict):
     """
     returns (eligible, ineligible, reasons)
