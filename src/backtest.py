@@ -127,7 +127,13 @@ def calculate_flat_btc_balance_minutes(fills):
     return 0.0
 
 
-def process_forager_fills(fills, coins, hlcvs, equities_array):
+def process_forager_fills(
+    fills,
+    coins,
+    hlcvs,
+    equities_array,
+    balance_sample_divider: int = 1,
+):
     fdf = pd.DataFrame(
         fills,
         columns=[
@@ -180,10 +186,12 @@ def process_forager_fills(fills, coins, hlcvs, equities_array):
         pnls[pside] = profit + loss
         analysis_appendix[f"loss_profit_ratio_{pside}"] = abs(loss / profit)
     analysis_appendix["pnl_ratio_long_short"] = pnls["long"] / (pnls["long"] + pnls["short"])
-    div_by = 60  # save some disk space. Set to 1 to dump uncropped
+    sample_divider = max(1, int(balance_sample_divider))
     if not fdf.empty:
         timestamps_ns = fdf["timestamp"].astype("int64")
-        bucket = (timestamps_ns // (div_by * 60_000 * 1_000_000)) * (div_by * 60_000 * 1_000_000)
+        bucket = (timestamps_ns // (sample_divider * 60_000 * 1_000_000)) * (
+            sample_divider * 60_000 * 1_000_000
+        )
         bdf = fdf.groupby(bucket)["balance"].last().rename("balance_usd")
         bbdf = fdf.groupby(bucket)["balance_btc"].last().rename("balance_btc")
         # convert to datetime index for easier alignment
@@ -221,20 +229,21 @@ def process_forager_fills(fills, coins, hlcvs, equities_array):
     else:
         bal_eq = bal_eq.sort_index()
         bal_eq = bal_eq[~bal_eq.index.duplicated(keep="first")]
-        bal_eq = (
-            bal_eq.reindex(
-                columns=[
-                    "balance_usd",
-                    "equity_usd",
-                    "balance_btc",
-                    "equity_btc",
-                ]
-            )
-            .ffill()
-            .bfill()
-        )
-    bal_eq = bal_eq.round(4)
-    bal_eq = bal_eq.astype(np.float32)
+        bal_eq = bal_eq.reindex(
+            columns=[
+                "balance_usd",
+                "equity_usd",
+                "balance_btc",
+                "equity_btc",
+            ]
+        ).ffill().bfill()
+        if sample_divider > 1 and not bal_eq.empty:
+            try:
+                bal_eq = bal_eq.resample(f"{sample_divider}T").last()
+            except ValueError:
+                bal_eq = bal_eq.iloc[::sample_divider]
+            bal_eq = bal_eq.dropna(how="all").ffill().bfill()
+    bal_eq = bal_eq.round(4).astype(np.float32)
     return fdf, sort_dict_keys(analysis_appendix), bal_eq
 
 
@@ -722,6 +731,7 @@ def post_process(
         require_config_value(config, f"backtest.coins.{exchange}"),
         hlcvs,
         equities_array,
+        balance_sample_divider=60,
     )
     for k in analysis_py:
         if k not in analysis:

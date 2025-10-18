@@ -540,23 +540,28 @@ def create_forager_coin_figures(
     fdf: pd.DataFrame,
     hlcvs: np.ndarray,
     figsize=(32, 19),
+    start_pct=0.0,
+    end_pct=1.0,
+    coin=None,
 ) -> dict:
     figures = {}
     if hlcvs is None:
         return figures
-    for idx, coin in enumerate(coins):
-        fdfc = fdf[fdf.coin == coin]
+    for idx, coin_ in enumerate(coins):
+        if coin is not None and coin_ != coin:
+            continue
+        fdfc = fdf[fdf.coin == coin_]
         if fdfc.empty:
             continue
         hlcvs_df = pd.DataFrame(hlcvs[:, idx, :3], columns=["high", "low", "close"])
         plt.figure(figsize=figsize)
-        plot_fills_forager(fdfc, hlcvs_df, clear=False)
+        plot_fills_forager(fdfc, hlcvs_df, clear=False, start_pct=start_pct, end_pct=end_pct)
         fig = plt.gcf()
         ax = fig.axes[0] if fig.axes else fig.add_subplot(111)
-        ax.set_title(f"Fills {coin}")
+        ax.set_title(f"Fills {coin_}")
         ax.set_xlabel("Minute")
         ax.set_ylabel("Price")
-        figures[coin] = fig
+        figures[coin_] = fig
     return figures
 
 
