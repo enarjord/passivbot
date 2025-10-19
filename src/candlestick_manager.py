@@ -282,6 +282,7 @@ class CandlestickManager:
 
         self._cache: Dict[str, np.ndarray] = {}
         self._index: Dict[str, dict] = {}
+        self._index_mtime: Dict[str, Optional[float]] = {}
         # Cache for EMA computations: per symbol -> {(metric, span, tf): (value, end_ts, computed_at_ms)}
         self._ema_cache: Dict[str, Dict[Tuple[str, int, str], Tuple[float, int, int]]] = {}
         # Cache for current (in-progress) minute close per symbol: symbol -> (price, updated_ms)
@@ -480,33 +481,63 @@ class CandlestickManager:
     ) -> dict:
         tf_norm = self._normalize_timeframe_arg(timeframe, tf)
         key = f"{symbol}::{tf_norm}"
-        if key in self._index:
-            return self._index[key]
-        # Try load from disk
         idx_path = self._index_path(symbol, timeframe=timeframe, tf=tf_norm)
-        idx = {"shards": {}, "meta": {}}
+        existing = self._index.get(key)
+        cached_mtime = self._index_mtime.get(key)
         try:
-            with open(idx_path, "r", encoding="utf-8") as f:
-                idx = json.load(f)
+            current_mtime = os.path.getmtime(idx_path)
         except FileNotFoundError:
-            pass
-        except Exception as e:  # pragma: no cover
+            current_mtime = None
+        except Exception:
+            current_mtime = None
+
+        if existing is None or cached_mtime != current_mtime:
+            idx = {"shards": {}, "meta": {}}
+            # Try load from disk
+            if current_mtime is not None:
+                try:
+                    with open(idx_path, "r", encoding="utf-8") as f:
+                        idx = json.load(f)
+                except FileNotFoundError:
+                    pass
+                except Exception as e:  # pragma: no cover
+                    self._log(
+                        "warning",
+                        "index_load_failed",
+                        symbol=symbol,
+                        timeframe=tf_norm,
+                        error=str(e),
+                    )
+            if not isinstance(idx, dict):
+                idx = {"shards": {}, "meta": {}}
+            idx.setdefault("shards", {})
+            meta = idx.setdefault("meta", {})
+            meta.setdefault("known_gaps", [])  # list of [start_ts, end_ts]
+            meta.setdefault("last_refresh_ms", 0)
+            meta.setdefault("last_final_ts", 0)
+            self._index[key] = idx
+            self._index_mtime[key] = current_mtime
             self._log(
-                "warning",
-                "index_load_failed",
+                "debug",
+                "index_reload",
                 symbol=symbol,
                 timeframe=tf_norm,
-                error=str(e),
+                mtime=current_mtime,
+                cache_hit=existing is not None,
             )
-        # Ensure meta keys
-        if not isinstance(idx, dict):
-            idx = {"shards": {}, "meta": {}}
+            return idx
+
+        idx = existing
+        # Ensure meta keys even for cached entries (in case earlier versions lacked them)
         idx.setdefault("shards", {})
         meta = idx.setdefault("meta", {})
-        meta.setdefault("known_gaps", [])  # list of [start_ts, end_ts]
+        meta.setdefault("known_gaps", [])
         meta.setdefault("last_refresh_ms", 0)
         meta.setdefault("last_final_ts", 0)
         self._index[key] = idx
+        self._index_mtime[key] = current_mtime
+        if current_mtime is not None:
+            self._log("debug", "index_cached", symbol=symbol, timeframe=tf_norm, mtime=current_mtime)
         return idx
 
     def _atomic_write_bytes(self, path: str, data: bytes) -> None:
@@ -531,6 +562,10 @@ class CandlestickManager:
         lock_path = idx_path + ".lock"
         with portalocker.Lock(lock_path, timeout=5):
             self._atomic_write_bytes(idx_path, payload)
+        try:
+            self._index_mtime[key] = os.path.getmtime(idx_path)
+        except Exception:
+            self._index_mtime[key] = None
 
     def _fetch_lock_path(self, symbol: str, timeframe: str) -> str:
         safe_symbol = _sanitize_symbol(symbol)
@@ -1417,9 +1452,24 @@ class CandlestickManager:
         latest_finalized = _floor_minute(now) - ONE_MIN_MS
         if end_ts >= latest_finalized and self.exchange is not None:
             if max_age_ms == 0:
+                self._log(
+                    "debug",
+                    "get_candles_force_refresh",
+                    symbol=symbol,
+                    end_ts=end_ts,
+                )
                 await self.refresh(symbol, through_ts=end_ts)
             elif max_age_ms is not None and max_age_ms > 0:
                 last_ref = self._get_last_refresh_ms(symbol)
+                self._log(
+                    "debug",
+                    "get_candles_check_refresh",
+                    symbol=symbol,
+                    end_ts=end_ts,
+                    last_refresh_ms=last_ref,
+                    max_age_ms=max_age_ms,
+                    now=now,
+                )
                 if last_ref == 0 or (now - last_ref) > int(max_age_ms):
                     await self.refresh(symbol, through_ts=end_ts)
                 else:
@@ -1556,6 +1606,16 @@ class CandlestickManager:
                     if last_have < end_excl - ONE_MIN_MS:
                         need_fetch = True
                         fetch_start = max(start_ts, last_have + ONE_MIN_MS)
+                self._log(
+                    "debug",
+                    "get_candles_present_decision",
+                    symbol=symbol,
+                    need_fetch=need_fetch,
+                    fetch_start=fetch_start,
+                    last_have=int(sub[-1]["ts"]) if sub.size else None,
+                    end_excl=end_excl,
+                    sub_size=int(sub.shape[0]) if sub.size else 0,
+                )
                 if need_fetch:
                     async with self._acquire_fetch_lock(symbol, "1m"):
                         try:
@@ -1566,6 +1626,16 @@ class CandlestickManager:
                         sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
                         last_have = int(sub[-1]["ts"]) if sub.size else start_ts - ONE_MIN_MS
                         need_fetch_inner = sub.size == 0 or last_have < end_excl - ONE_MIN_MS
+                        self._log(
+                            "debug",
+                            "get_candles_present_inner",
+                            symbol=symbol,
+                            need_fetch=need_fetch_inner,
+                            fetch_start=fetch_start,
+                            last_have=last_have if sub.size else None,
+                            end_excl=end_excl,
+                            sub_size=int(sub.shape[0]) if sub.size else 0,
+                        )
                         if need_fetch_inner:
                             persisted_batches = False
 
@@ -1816,6 +1886,7 @@ class CandlestickManager:
             pass
 
         # 3) Use candles API to get current minute
+        got = None
         try:
             self._log(
                 "debug",
@@ -1841,53 +1912,123 @@ class CandlestickManager:
         except Exception:
             pass
 
-        # 3b) Directly fetch a small tail window via OHLCV and merge to cache
-        if self.exchange is not None:
+        if got is None or got.size == 0:
             try:
-                n = int(self.overlap_candles) if getattr(self, "overlap_candles", 0) else 1
-                if n <= 0:
-                    n = 1
-                # Cap by exchange default page limit for safety
-                try:
-                    n = int(min(max(1, n), int(self._ccxt_limit_default)))
-                except Exception:
-                    n = max(1, n)
-                since_tail = max(0, int(end_current) - ONE_MIN_MS * (n - 1))
-                self._log(
-                    "debug",
-                    "ccxt_fetch_ohlcv_tail_for_current_close",
-                    symbol=symbol,
-                    tf="1m",
-                    since_ts=since_tail,
-                    limit=n,
-                )
-                rows = await self._ccxt_fetch_ohlcv_once(
-                    symbol,
-                    since_ms=since_tail,
-                    limit=n,
-                    end_exclusive_ms=None,
-                    timeframe="1m",
-                )
-                arr = self._normalize_ccxt_ohlcv(rows)
-                if arr.size:
-                    price = float(arr[-1]["c"])  # may be current minute partial
-                    # Merge into memory cache, persist shard(s), and update refresh meta for TTL gating
-                    merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), arr)
-                    self._cache[symbol] = merged
+                last_ref = self._get_last_refresh_ms(symbol)
+            except Exception:
+                last_ref = 0
+            # If we have a recent refresh (or TTL not enforced), fall back to last finalized candle
+            # to avoid redundant tail fetches. Treat max_age_ms=None as no TTL barrier.
+            ttl_ok = True
+            if max_age_ms is not None and max_age_ms > 0:
+                ttl_ok = (now - int(last_ref)) <= int(max_age_ms)
+            if last_ref and ttl_ok:
+                last_final = int(end_current - ONE_MIN_MS)
+                if last_final >= 0:
                     try:
-                        self._enforce_memory_retention(symbol)
-                        self._save_range(symbol, arr, timeframe="1m")
+                        got_prev = await self.get_candles(
+                            symbol,
+                            start_ts=last_final,
+                            end_ts=last_final,
+                            max_age_ms=max_age_ms,
+                            timeframe=None,
+                            strict=False,
+                        )
+                        if got_prev is not None and got_prev.size:
+                            got_prev_sorted = np.sort(_ensure_dtype(got_prev), order="ts")
+                            price = float(got_prev_sorted[-1]["c"])
+                            self._current_close_cache[symbol] = (price, now)
+                            self._log(
+                                "debug",
+                                "get_current_close_from_candles_finalized",
+                                symbol=symbol,
+                                ts=int(got_prev_sorted[-1]["ts"]),
+                            )
+                            return price
                     except Exception:
                         pass
-                    self._set_last_refresh_meta(symbol, last_refresh_ms=now)
-                    self._current_close_cache[symbol] = (price, now)
+
+        # 3b) Directly fetch a small tail window via OHLCV (with cross-process lock) and merge to cache
+        if self.exchange is not None:
+            try:
+                async with self._acquire_fetch_lock(symbol, "1m"):
+                    now_locked = _utc_now_ms()
+                    end_current_locked = _floor_minute(now_locked)
+                    last_final_locked = end_current_locked - ONE_MIN_MS
+
+                    # Refresh cache from disk before deciding to fetch
+                    try:
+                        self._load_from_disk(symbol, last_final_locked, end_current_locked, timeframe="1m")
+                    except Exception:
+                        pass
+
+                    arr_cache = self._cache.get(symbol)
+                    if arr_cache is not None and arr_cache.size:
+                        arr_sorted = np.sort(_ensure_dtype(arr_cache), order="ts")
+                        last_ts = int(arr_sorted[-1]["ts"])
+                        if last_ts >= end_current_locked:
+                            price = float(arr_sorted[-1]["c"])
+                            self._current_close_cache[symbol] = (price, now_locked)
+                            self._set_last_refresh_meta(symbol, last_refresh_ms=now_locked)
+                            self._log(
+                                "debug",
+                                "get_current_close_mem_candle_locked",
+                                symbol=symbol,
+                            )
+                            return price
+                        if last_ts >= last_final_locked:
+                            price = float(arr_sorted[-1]["c"])
+                            self._current_close_cache[symbol] = (price, now_locked)
+                            self._log(
+                                "debug",
+                                "get_current_close_from_candles_finalized_locked",
+                                symbol=symbol,
+                                ts=last_ts,
+                            )
+                            return price
+
+                    n = int(self.overlap_candles) if getattr(self, "overlap_candles", 0) else 1
+                    if n <= 0:
+                        n = 1
+                    try:
+                        n = int(min(max(1, n), int(self._ccxt_limit_default)))
+                    except Exception:
+                        n = max(1, n)
+                    since_tail = max(0, int(end_current_locked) - ONE_MIN_MS * (n - 1))
                     self._log(
                         "debug",
-                        "get_current_close_from_direct_ohlcv",
+                        "ccxt_fetch_ohlcv_tail_for_current_close",
                         symbol=symbol,
-                        rows=arr.shape[0],
+                        tf="1m",
+                        since_ts=since_tail,
+                        limit=n,
                     )
-                    return price
+                    rows = await self._ccxt_fetch_ohlcv_once(
+                        symbol,
+                        since_ms=since_tail,
+                        limit=n,
+                        end_exclusive_ms=None,
+                        timeframe="1m",
+                    )
+                    arr = self._normalize_ccxt_ohlcv(rows)
+                    if arr.size:
+                        price = float(arr[-1]["c"])
+                        merged = self._merge_overwrite(self._ensure_symbol_cache(symbol), arr)
+                        self._cache[symbol] = merged
+                        try:
+                            self._enforce_memory_retention(symbol)
+                            self._save_range(symbol, arr, timeframe="1m")
+                        except Exception:
+                            pass
+                        self._set_last_refresh_meta(symbol, last_refresh_ms=now_locked)
+                        self._current_close_cache[symbol] = (price, now_locked)
+                        self._log(
+                            "debug",
+                            "get_current_close_from_direct_ohlcv",
+                            symbol=symbol,
+                            rows=arr.shape[0],
+                        )
+                        return price
             except Exception:
                 pass
 
@@ -2350,18 +2491,42 @@ class CandlestickManager:
                 pass
 
             existing = self._ensure_symbol_cache(symbol)
+            existing_sorted = np.sort(existing, order="ts") if existing.size else existing
+            existing_last_ts = int(existing_sorted[-1]["ts"]) if existing_sorted.size else None
             if existing.size == 0:
                 since = end_exclusive - self.default_window_candles * ONE_MIN_MS
             else:
-                last_ts = int(np.sort(existing, order="ts")[-1]["ts"])
+                last_ts = existing_last_ts if existing_last_ts is not None else 0
                 if last_ts >= end_exclusive - ONE_MIN_MS:
+                    self._log(
+                        "debug",
+                        "refresh_skip_fresh",
+                        symbol=symbol,
+                        end_exclusive=end_exclusive,
+                        last_ts=last_ts,
+                    )
                     return None
                 since = max(0, last_ts - self.overlap_candles * ONE_MIN_MS)
 
             if since >= end_exclusive:
+                self._log(
+                    "debug",
+                    "refresh_skip_since",
+                    symbol=symbol,
+                    since=since,
+                    end_exclusive=end_exclusive,
+                )
                 return None
 
             persisted_batches = False
+            self._log(
+                "debug",
+                "refresh_fetch",
+                symbol=symbol,
+                since=since,
+                end_exclusive=end_exclusive,
+                existing_last_ts=existing_last_ts,
+            )
 
             def _persist_refresh_batch(batch: np.ndarray) -> None:
                 nonlocal persisted_batches
