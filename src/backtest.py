@@ -229,14 +229,18 @@ def process_forager_fills(
     else:
         bal_eq = bal_eq.sort_index()
         bal_eq = bal_eq[~bal_eq.index.duplicated(keep="first")]
-        bal_eq = bal_eq.reindex(
-            columns=[
-                "balance_usd",
-                "equity_usd",
-                "balance_btc",
-                "equity_btc",
-            ]
-        ).ffill().bfill()
+        bal_eq = (
+            bal_eq.reindex(
+                columns=[
+                    "balance_usd",
+                    "equity_usd",
+                    "balance_btc",
+                    "equity_btc",
+                ]
+            )
+            .ffill()
+            .bfill()
+        )
         if sample_divider > 1 and not bal_eq.empty:
             try:
                 bal_eq = bal_eq.resample(f"{sample_divider}T").last()
