@@ -191,6 +191,8 @@ Coins selected for trading are filtered by volume and log range. First, filter c
   - If `true`, `approved_coins=[]` means all coins are approved.
   - If `false`, `approved_coins=[]` means no coins are approved.
 - **execution_delay_seconds**: Wait `x` seconds after executing to exchange.
+- **max_memory_candles_per_symbol**: Maximum number of 1m candles retained in RAM per symbol. Older entries are trimmed once this cap is exceeded. Default (`20_000`) balances memory footprint with trailing-history visibility.
+- **max_disk_candles_per_symbol_per_tf**: Maximum number of candles persisted on disk per symbol and timeframe. Oldest shards are pruned once the limit is hit (default `2_000_000`).
 - **filter_by_min_effective_cost**: If `true`, disallows coins where `balance * WE_limit * initial_qty_pct < min_effective_cost`.
   - Example: If the exchange's effective minimum cost for a coin is `$5`, but the bot wants to make an order of `$2`, disallow that coin.
 - **forced_mode_long**, **forced_mode_short**: Force all coins long/short to a given mode.
@@ -205,7 +207,6 @@ Coins selected for trading are filtered by volume and log range. First, filter c
 - **max_n_cancellations_per_batch**: Cancels `n` open orders per execution.
 - **max_n_creations_per_batch**: Creates `n` new orders per execution.
 - **max_n_restarts_per_day**: If the bot crashes, restart up to `n` times per day before stopping completely.
-- **mimic_backtest_1m_delay**: If `true`, the bot will only update and evaluate open orders once per full minute, synchronized to the clock (e.g., 12:01:00, 12:02:00, etc.). This mimics the backtester's timestep logic and avoids intraminute updates. Useful for achieving higher fidelity between backtest and live performance.
 - **minimum_coin_age_days**: Disallows coins younger than a given number of days.
 - Candlestick management is handled by the CandlestickManager with on-disk caching and TTL-based refresh. Legacy settings `ohlcvs_1m_rolling_window_days` and `ohlcvs_1m_update_after_minutes` are no longer used. Use `inactive_coin_candle_ttl_minutes` to control how long 1m candles for inactive symbols are kept in RAM before being refreshed.
 - **pnls_max_lookback_days**: How far into the past to fetch PnL history.
@@ -238,7 +239,7 @@ When optimizing, parameter values are within the lower and upper bounds.
   - Default values are median daily gain and Sharpe ratio.
   - Uses the NSGA-II algorithm (Non-dominated Sorting Genetic Algorithm II) for multi-objective optimization.
   - The fitness function minimizes both objectives (converted to negative values internally).
-  - Full list of options: `[adg, adg_w, calmar_ratio, calmar_ratio_w, drawdown_worst, drawdown_worst_mean_1pct, equity_balance_diff_neg_max, equity_balance_diff_neg_mean, equity_balance_diff_pos_max, equity_balance_diff_pos_mean, expected_shortfall_1pct, gain, loss_profit_ratio, loss_profit_ratio_w, mdg, mdg_w, omega_ratio, omega_ratio_w, position_held_hours_max, position_held_hours_mean, position_held_hours_median, position_unchanged_hours_max, positions_held_per_day, sharpe_ratio, sharpe_ratio_w, sortino_ratio, sortino_ratio_w, sterling_ratio, sterling_ratio_w]`
+  - Full list of options: `[adg, adg_w, calmar_ratio, calmar_ratio_w, drawdown_worst, drawdown_worst_mean_1pct, equity_balance_diff_neg_max, equity_balance_diff_neg_mean, equity_balance_diff_pos_max, equity_balance_diff_pos_mean, expected_shortfall_1pct, flat_btc_balance_hours, gain, loss_profit_ratio, loss_profit_ratio_w, mdg, mdg_w, omega_ratio, omega_ratio_w, position_held_hours_max, position_held_hours_mean, position_held_hours_median, position_unchanged_hours_max, positions_held_per_day, sharpe_ratio, sharpe_ratio_w, sortino_ratio, sortino_ratio_w, sterling_ratio, sterling_ratio_w]`
   - Suffix `_w` indicates mean across 10 temporal subsets (whole, last_half, last_third, ..., last_tenth) to weigh recent data more heavily.
   - Examples: `["mdg", "sharpe_ratio", "loss_profit_ratio"]`, `["adg", "sortino_ratio", "drawdown_worst"]`, `["sortino_ratio", "omega_ratio", "adg_w", "position_unchanged_hours_max"]`
     - Note: if config.backtest.use_btc_collateral=True, add prefix "btc_" to use btc denominated metrics, e.g. btc_adg or btc_drawdown_worst.
@@ -246,6 +247,8 @@ When optimizing, parameter values are within the lower and upper bounds.
 ### Optimization Limits
 
 The optimizer penalizes backtests whose metric values exceed or fall short of specified thresholds. Penalties are added to the fitness score to discourage undesirable configurations but do not disqualify the config.
+
+Any metric listed above (and its `btc_` prefixed counterpart when `backtest.use_btc_collateral=True`) can be used with `penalize_if_greater_than_*` / `penalize_if_lower_than_*`. Metrics present only in `analysis.json` but not in the scoring list are not currently available as limits.
 
 #### Format
 

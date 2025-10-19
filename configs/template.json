@@ -70,7 +70,7 @@
  "coin_overrides": {},
  "live": {"approved_coins": "configs/approved_coins_top23mcap.json",
           "auto_gs": true,
-          "inactive_coin_candle_ttl": 10.0,
+          "inactive_coin_candle_ttl_minutes": 10.0,
           "empty_means_all_approved": true,
           "execution_delay_seconds": 2,
           "filter_by_min_effective_cost": true,
