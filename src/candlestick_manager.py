@@ -293,6 +293,8 @@ class CandlestickManager:
             {}
         )
         self._tf_range_cache_cap = 8
+        # Reentrant bookkeeping for portalocker fetch locks: key -> (count, lock_obj)
+        self._held_fetch_locks: Dict[Tuple[str, str], Tuple[int, Optional[portalocker.Lock]]] = {}
 
         self._setup_logging()
 
@@ -581,18 +583,58 @@ class CandlestickManager:
     @asynccontextmanager
     async def _acquire_fetch_lock(self, symbol: str, timeframe: Optional[str]) -> AsyncIterator[None]:
         tf_norm = self._normalize_timeframe_arg(timeframe, None)
+
         lock_path = self._fetch_lock_path(symbol, tf_norm)
-        lock = portalocker.Lock(lock_path, timeout=300)
+        key = (symbol, tf_norm)
+        held = self._held_fetch_locks.get(key)
+        if held is not None:
+            count, lock_obj = held
+            self._held_fetch_locks[key] = (count + 1, lock_obj)
+            self._log(
+                "debug",
+                "fetch_lock_reentrant",
+                symbol=symbol,
+                timeframe=tf_norm,
+                depth=count + 1,
+            )
+            try:
+                yield
+            finally:
+                count, lock_obj = self._held_fetch_locks.get(key, (1, None))
+                if count <= 1:
+                    self._held_fetch_locks.pop(key, None)
+                else:
+                    self._held_fetch_locks[key] = (count - 1, lock_obj)
+        else:
+            lock = portalocker.Lock(lock_path, timeout=300)
 
-        def _acquire():
-            lock.acquire()
-            return lock
+            def _acquire_with_retry() -> portalocker.Lock:
+                attempt = 0
+                while True:
+                    try:
+                        lock.acquire()
+                        return lock
+                    except portalocker.exceptions.LockException as exc:
+                        attempt += 1
+                        self._log(
+                            "debug",
+                            "fetch_lock_wait",
+                            symbol=symbol,
+                            timeframe=tf_norm,
+                            attempt=attempt,
+                            error=str(exc),
+                        )
+                        time.sleep(0.1)
 
-        lock_obj = await asyncio.to_thread(_acquire)
-        try:
-            yield
-        finally:
-            await asyncio.to_thread(lock_obj.release)
+            lock_obj = await asyncio.to_thread(_acquire_with_retry)
+            self._held_fetch_locks[key] = (1, lock_obj)
+            try:
+                yield
+            finally:
+                try:
+                    self._held_fetch_locks.pop(key, None)
+                finally:
+                    await asyncio.to_thread(lock_obj.release)
 
     @staticmethod
     def _normalize_timeframe_arg(
