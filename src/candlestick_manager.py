@@ -39,9 +39,10 @@ import os
 import time
 import zlib
 import inspect
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple, List, Callable
+from typing import Dict, Optional, Tuple, List, Callable, AsyncIterator
 from collections import OrderedDict
 
 import numpy as np
@@ -284,7 +285,7 @@ class CandlestickManager:
             self.debug_level = 2 if bool(debug) else 0
 
         self._cache: Dict[str, np.ndarray] = {}
-        self._locks: Dict[str, asyncio.Lock] = {}
+        self._locks: Dict[Tuple[str, str], asyncio.Lock] = {}
         self._index: Dict[str, dict] = {}
         # Cache for EMA computations: per symbol -> {(metric, span, tf): (value, end_ts, computed_at_ms)}
         self._ema_cache: Dict[str, Dict[Tuple[str, int, str], Tuple[float, int, int]]] = {}
@@ -539,12 +540,41 @@ class CandlestickManager:
         else:  # pragma: no cover
             self._atomic_write_bytes(idx_path, payload)
 
-    def _get_lock(self, symbol: str) -> asyncio.Lock:
-        lock = self._locks.get(symbol)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._locks[symbol] = lock
-        return lock
+    def _fetch_lock_path(self, symbol: str, timeframe: str) -> str:
+        safe_symbol = _sanitize_symbol(symbol)
+        lock_dir = os.path.join(
+            self.cache_dir,
+            self.exchange_name,
+            safe_symbol,
+            "locks",
+        )
+        os.makedirs(lock_dir, exist_ok=True)
+        return os.path.join(lock_dir, f"{timeframe}.lock")
+
+    @asynccontextmanager
+    async def _acquire_fetch_lock(self, symbol: str, timeframe: Optional[str]) -> AsyncIterator[None]:
+        tf_norm = self._normalize_timeframe_arg(timeframe, None)
+        if portalocker is not None:
+            lock_path = self._fetch_lock_path(symbol, tf_norm)
+            lock = portalocker.Lock(lock_path, timeout=300)
+
+            def _acquire():
+                lock.acquire()
+                return lock
+
+            lock_obj = await asyncio.to_thread(_acquire)
+            try:
+                yield
+            finally:
+                await asyncio.to_thread(lock_obj.release)
+        else:
+            key = (symbol, tf_norm)
+            lock = self._locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._locks[key] = lock
+            async with lock:
+                yield
 
     @staticmethod
     def _normalize_timeframe_arg(
@@ -1301,62 +1331,87 @@ class CandlestickManager:
                             return out_disk
 
                 end_excl = int(end_ts) + period_ms
-                persisted_batches = False
 
-                def _persist_tf_batch(batch: np.ndarray) -> None:
-                    nonlocal persisted_batches
-                    persisted_batches = True
-                    self._persist_batch(symbol, batch, timeframe=out_tf)
+                async with self._acquire_fetch_lock(symbol, out_tf):
+                    try:
+                        disk_arr = self._load_from_disk(symbol, start_ts, end_ts, timeframe=out_tf)
+                    except Exception:
+                        disk_arr = None
 
-                try:
-                    fetched = await self._fetch_ohlcv_paginated(
-                        symbol,
-                        int(start_ts),
-                        int(end_excl),
-                        timeframe=out_tf,
-                        on_batch=_persist_tf_batch,
-                    )
-                except TypeError:
-                    fetched = await self._fetch_ohlcv_paginated(
-                        symbol,
-                        int(start_ts),
-                        int(end_excl),
-                        timeframe=out_tf,
-                    )
-                if fetched.size == 0:
-                    # If network yields nothing, return disk slice if available
                     if isinstance(disk_arr, np.ndarray) and disk_arr.size:
-                        out = self._slice_ts_range(disk_arr, start_ts, end_ts)
-                        # cache and return
-                        sym_cache[cache_key] = (out, int(now))
-                        try:
-                            sym_cache.move_to_end(cache_key)
-                        except Exception:
-                            pass
-                        while len(sym_cache) > self._tf_range_cache_cap:
-                            sym_cache.popitem(last=False)
-                        self._tf_range_cache[symbol] = sym_cache
-                        return out
-                    return fetched
-                # Clip to inclusive [start_ts, end_ts] in bucket space
-                out = self._slice_ts_range(fetched, start_ts, end_ts)
-                # Persist TF shards if streaming callback was not triggered
-                if out.size and not persisted_batches:
-                    self._persist_batch(symbol, out, timeframe=out_tf)
-                # Store in TF range cache
-                sym_cache[cache_key] = (out, int(now))
-                try:
-                    sym_cache.move_to_end(cache_key)
-                except Exception:
-                    pass
-                # LRU eviction per symbol
-                try:
+                        out_disk = self._slice_ts_range(disk_arr, start_ts, end_ts)
+                        if out_disk.size:
+                            tsd = _ts_index(out_disk)
+                            expected_len = int((end_ts - start_ts) // period_ms) + 1
+                            if (
+                                out_disk.shape[0] == expected_len
+                                and int(tsd[0]) == int(start_ts)
+                                and int(tsd[-1]) == int(end_ts)
+                                and (
+                                    expected_len == 1
+                                    or (
+                                        int(np.diff(tsd).min(initial=period_ms)) == period_ms
+                                        and int(np.diff(tsd).max(initial=period_ms)) == period_ms
+                                    )
+                                )
+                            ):
+                                sym_cache[cache_key] = (out_disk, int(now))
+                                try:
+                                    sym_cache.move_to_end(cache_key)
+                                except Exception:
+                                    pass
+                                while len(sym_cache) > self._tf_range_cache_cap:
+                                    sym_cache.popitem(last=False)
+                                self._tf_range_cache[symbol] = sym_cache
+                                return out_disk
+
+                    persisted_batches = False
+
+                    def _persist_tf_batch(batch: np.ndarray) -> None:
+                        nonlocal persisted_batches
+                        persisted_batches = True
+                        self._persist_batch(symbol, batch, timeframe=out_tf)
+
+                    try:
+                        fetched = await self._fetch_ohlcv_paginated(
+                            symbol,
+                            int(start_ts),
+                            int(end_excl),
+                            timeframe=out_tf,
+                            on_batch=_persist_tf_batch,
+                        )
+                    except TypeError:
+                        fetched = await self._fetch_ohlcv_paginated(
+                            symbol,
+                            int(start_ts),
+                            int(end_excl),
+                            timeframe=out_tf,
+                        )
+                    if fetched.size == 0:
+                        if isinstance(disk_arr, np.ndarray) and disk_arr.size:
+                            out = self._slice_ts_range(disk_arr, start_ts, end_ts)
+                            sym_cache[cache_key] = (out, int(now))
+                            try:
+                                sym_cache.move_to_end(cache_key)
+                            except Exception:
+                                pass
+                            while len(sym_cache) > self._tf_range_cache_cap:
+                                sym_cache.popitem(last=False)
+                            self._tf_range_cache[symbol] = sym_cache
+                            return out
+                        return fetched
+                    out = self._slice_ts_range(fetched, start_ts, end_ts)
+                    if out.size and not persisted_batches:
+                        self._persist_batch(symbol, out, timeframe=out_tf)
+                    sym_cache[cache_key] = (out, int(now))
+                    try:
+                        sym_cache.move_to_end(cache_key)
+                    except Exception:
+                        pass
                     while len(sym_cache) > self._tf_range_cache_cap:
                         sym_cache.popitem(last=False)
-                except Exception:
-                    pass
-                self._tf_range_cache[symbol] = sym_cache
-                return out
+                    self._tf_range_cache[symbol] = sym_cache
+                    return out
 
         now = _utc_now_ms()
         if end_ts is None:
@@ -1452,48 +1507,58 @@ class CandlestickManager:
                 if unknown_missing:
                     end_excl = min(end_ts + ONE_MIN_MS, end_finalized + ONE_MIN_MS)
                     if adj_start_ts < end_excl:
-                        persisted_batches = False
+                        async with self._acquire_fetch_lock(symbol, "1m"):
+                            try:
+                                self._load_from_disk(symbol, start_ts, end_ts, timeframe="1m")
+                            except Exception:
+                                pass
+                            arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+                            sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
+                            missing_after = self._missing_spans(sub, start_ts, end_ts)
+                            unknown_after = [
+                                (s, e) for (s, e) in missing_after if not span_in_known(s, e)
+                            ]
+                            if unknown_after:
+                                persisted_batches = False
 
-                        def _persist_hist_batch(batch: np.ndarray) -> None:
-                            nonlocal persisted_batches
-                            persisted_batches = True
-                            self._persist_batch(
-                                symbol,
-                                batch,
-                                timeframe="1m",
-                                merge_cache=True,
-                                last_refresh_ms=now,
-                            )
+                                def _persist_hist_batch(batch: np.ndarray) -> None:
+                                    nonlocal persisted_batches
+                                    persisted_batches = True
+                                    self._persist_batch(
+                                        symbol,
+                                        batch,
+                                        timeframe="1m",
+                                        merge_cache=True,
+                                        last_refresh_ms=now,
+                                    )
 
-                        try:
-                            fetched = await self._fetch_ohlcv_paginated(
-                                symbol,
-                                adj_start_ts,
-                                end_excl,
-                                on_batch=_persist_hist_batch,
-                            )
-                        except TypeError:
-                            fetched = await self._fetch_ohlcv_paginated(
-                                symbol,
-                                adj_start_ts,
-                                end_excl,
-                            )
-                        if fetched.size:
-                            if not persisted_batches:
-                                self._persist_batch(
-                                    symbol,
-                                    fetched,
-                                    timeframe="1m",
-                                    merge_cache=True,
-                                    last_refresh_ms=now,
-                                )
-                            arr = np.sort(self._cache[symbol], order="ts")
-                            sub = self._slice_ts_range(arr, start_ts, end_ts)
-                        # Mark any remaining unknown spans as known gaps to avoid repeated calls
-                        still_missing = self._missing_spans(sub, start_ts, end_ts)
-                        for s, e in still_missing:
-                            if not span_in_known(s, e):
-                                self._add_known_gap(symbol, s, e)
+                                try:
+                                    fetched = await self._fetch_ohlcv_paginated(
+                                        symbol,
+                                        adj_start_ts,
+                                        end_excl,
+                                        on_batch=_persist_hist_batch,
+                                    )
+                                except TypeError:
+                                    fetched = await self._fetch_ohlcv_paginated(
+                                        symbol,
+                                        adj_start_ts,
+                                        end_excl,
+                                    )
+                                if fetched.size and not persisted_batches:
+                                    self._persist_batch(
+                                        symbol,
+                                        fetched,
+                                        timeframe="1m",
+                                        merge_cache=True,
+                                        last_refresh_ms=now,
+                                    )
+                            arr = np.sort(self._cache[symbol], order="ts") if symbol in self._cache else np.empty((0,), dtype=CANDLE_DTYPE)
+                            sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
+                            still_missing = self._missing_spans(sub, start_ts, end_ts)
+                            for s, e in still_missing:
+                                if not span_in_known(s, e):
+                                    self._add_known_gap(symbol, s, e)
         elif self.exchange is not None and allow_fetch_present:
             # Range touches present (end at or beyond current minute); fetch up to current minute inclusive
             end_current = _floor_minute(now)
@@ -1509,43 +1574,52 @@ class CandlestickManager:
                         need_fetch = True
                         fetch_start = max(start_ts, last_have + ONE_MIN_MS)
                 if need_fetch:
-                    persisted_batches = False
+                    async with self._acquire_fetch_lock(symbol, "1m"):
+                        try:
+                            self._load_from_disk(symbol, start_ts, end_ts, timeframe="1m")
+                        except Exception:
+                            pass
+                        arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+                        sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
+                        last_have = int(sub[-1]["ts"]) if sub.size else start_ts - ONE_MIN_MS
+                        need_fetch_inner = sub.size == 0 or last_have < end_excl - ONE_MIN_MS
+                        if need_fetch_inner:
+                            persisted_batches = False
 
-                    def _persist_present_batch(batch: np.ndarray) -> None:
-                        nonlocal persisted_batches
-                        persisted_batches = True
-                        self._persist_batch(
-                            symbol,
-                            batch,
-                            timeframe="1m",
-                            merge_cache=True,
-                            last_refresh_ms=now,
-                        )
+                            def _persist_present_batch(batch: np.ndarray) -> None:
+                                nonlocal persisted_batches
+                                persisted_batches = True
+                                self._persist_batch(
+                                    symbol,
+                                    batch,
+                                    timeframe="1m",
+                                    merge_cache=True,
+                                    last_refresh_ms=now,
+                                )
 
-                    try:
-                        fetched = await self._fetch_ohlcv_paginated(
-                            symbol,
-                            fetch_start,
-                            end_excl,
-                            on_batch=_persist_present_batch,
-                        )
-                    except TypeError:
-                        fetched = await self._fetch_ohlcv_paginated(
-                            symbol,
-                            fetch_start,
-                            end_excl,
-                        )
-                    if fetched.size:
-                        if not persisted_batches:
-                            self._persist_batch(
-                                symbol,
-                                fetched,
-                                timeframe="1m",
-                                merge_cache=True,
-                                last_refresh_ms=now,
-                            )
-                        arr = np.sort(self._cache[symbol], order="ts")
-                        sub = self._slice_ts_range(arr, start_ts, end_ts)
+                            try:
+                                fetched = await self._fetch_ohlcv_paginated(
+                                    symbol,
+                                    fetch_start,
+                                    end_excl,
+                                    on_batch=_persist_present_batch,
+                                )
+                            except TypeError:
+                                fetched = await self._fetch_ohlcv_paginated(
+                                    symbol,
+                                    fetch_start,
+                                    end_excl,
+                                )
+                            if fetched.size and not persisted_batches:
+                                self._persist_batch(
+                                    symbol,
+                                    fetched,
+                                    timeframe="1m",
+                                    merge_cache=True,
+                                    last_refresh_ms=now,
+                                )
+                        arr = np.sort(self._cache[symbol], order="ts") if symbol in self._cache else np.empty((0,), dtype=CANDLE_DTYPE)
+                        sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
 
         # Best-effort tail completion (present-only): if we still miss trailing
         # minutes within the requested window, attempt one more fetch from the
@@ -1567,44 +1641,59 @@ class CandlestickManager:
                 fetch_start = last_have + ONE_MIN_MS
                 if fetch_start >= end_excl_range:
                     break
-                persisted_batches = False
+                async with self._acquire_fetch_lock(symbol, "1m"):
+                    try:
+                        self._load_from_disk(symbol, start_ts, end_ts, timeframe="1m")
+                    except Exception:
+                        pass
+                    arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+                    sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
+                    if sub.size == 0:
+                        break
+                    last_have = int(sub[-1]["ts"]) if sub.size else start_ts - ONE_MIN_MS
+                    if last_have >= end_excl_range - ONE_MIN_MS:
+                        break
+                    fetch_start = last_have + ONE_MIN_MS
+                    if fetch_start >= end_excl_range:
+                        break
+                    persisted_batches = False
 
-                def _persist_tail_batch(batch: np.ndarray) -> None:
-                    nonlocal persisted_batches
-                    persisted_batches = True
-                    self._persist_batch(
-                        symbol,
-                        batch,
-                        timeframe="1m",
-                        merge_cache=True,
-                        last_refresh_ms=now,
-                    )
+                    def _persist_tail_batch(batch: np.ndarray) -> None:
+                        nonlocal persisted_batches
+                        persisted_batches = True
+                        self._persist_batch(
+                            symbol,
+                            batch,
+                            timeframe="1m",
+                            merge_cache=True,
+                            last_refresh_ms=now,
+                        )
 
-                try:
-                    fetched = await self._fetch_ohlcv_paginated(
-                        symbol,
-                        fetch_start,
-                        end_excl_range,
-                        on_batch=_persist_tail_batch,
-                    )
-                except TypeError:
-                    fetched = await self._fetch_ohlcv_paginated(
-                        symbol,
-                        fetch_start,
-                        end_excl_range,
-                    )
-                if fetched.size == 0:
-                    break
-                if not persisted_batches:
-                    self._persist_batch(
-                        symbol,
-                        fetched,
-                        timeframe="1m",
-                        merge_cache=True,
-                        last_refresh_ms=now,
-                    )
-                arr = np.sort(self._cache[symbol], order="ts")
-                sub = self._slice_ts_range(arr, start_ts, end_ts)
+                    try:
+                        fetched = await self._fetch_ohlcv_paginated(
+                            symbol,
+                            fetch_start,
+                            end_excl_range,
+                            on_batch=_persist_tail_batch,
+                        )
+                    except TypeError:
+                        fetched = await self._fetch_ohlcv_paginated(
+                            symbol,
+                            fetch_start,
+                            end_excl_range,
+                        )
+                    if fetched.size == 0:
+                        break
+                    if not persisted_batches:
+                        self._persist_batch(
+                            symbol,
+                            fetched,
+                            timeframe="1m",
+                            merge_cache=True,
+                            last_refresh_ms=now,
+                        )
+                    arr = np.sort(self._cache[symbol], order="ts")
+                    sub = self._slice_ts_range(arr, start_ts, end_ts)
 
         # Gap-oriented fetch and tagging (present-only): try filling internal
         # gaps once; mark remaining as known gaps. Skip for pure historical
@@ -1633,47 +1722,57 @@ class CandlestickManager:
                     if span_in_known(s, e):
                         continue
                     end_excl_gap = e + ONE_MIN_MS
-                    persisted_batches = False
+                    async with self._acquire_fetch_lock(symbol, "1m"):
+                        try:
+                            self._load_from_disk(symbol, start_ts, end_ts, timeframe="1m")
+                        except Exception:
+                            pass
+                        arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+                        sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
+                        missing_now = self._missing_spans(sub, start_ts, inclusive_end)
+                        if not any(ms == s and me == e for ms, me in missing_now):
+                            continue
+                        persisted_batches = False
 
-                    def _persist_gap_batch(batch: np.ndarray) -> None:
-                        nonlocal persisted_batches
-                        persisted_batches = True
-                        self._persist_batch(
-                            symbol,
-                            batch,
-                            timeframe="1m",
-                            merge_cache=True,
-                            last_refresh_ms=now,
-                        )
-
-                    try:
-                        fetched = await self._fetch_ohlcv_paginated(
-                            symbol,
-                            s,
-                            end_excl_gap,
-                            on_batch=_persist_gap_batch,
-                        )
-                    except TypeError:
-                        fetched = await self._fetch_ohlcv_paginated(
-                            symbol,
-                            s,
-                            end_excl_gap,
-                        )
-                    attempts += 1
-                    attempted.append((s, e))
-                    if fetched.size:
-                        if not persisted_batches:
+                        def _persist_gap_batch(batch: np.ndarray) -> None:
+                            nonlocal persisted_batches
+                            persisted_batches = True
                             self._persist_batch(
                                 symbol,
-                                fetched,
+                                batch,
                                 timeframe="1m",
                                 merge_cache=True,
                                 last_refresh_ms=now,
                             )
-                        arr = np.sort(self._cache[symbol], order="ts")
-                        sub = self._slice_ts_range(arr, start_ts, end_ts)
-                    else:
-                        noresult.append((s, e))
+
+                        try:
+                            fetched = await self._fetch_ohlcv_paginated(
+                                symbol,
+                                s,
+                                end_excl_gap,
+                                on_batch=_persist_gap_batch,
+                            )
+                        except TypeError:
+                            fetched = await self._fetch_ohlcv_paginated(
+                                symbol,
+                                s,
+                                end_excl_gap,
+                            )
+                        attempts += 1
+                        attempted.append((s, e))
+                        if fetched.size:
+                            if not persisted_batches:
+                                self._persist_batch(
+                                    symbol,
+                                    fetched,
+                                    timeframe="1m",
+                                    merge_cache=True,
+                                    last_refresh_ms=now,
+                                )
+                            arr = np.sort(self._cache[symbol], order="ts")
+                            sub = self._slice_ts_range(arr, start_ts, end_ts)
+                        else:
+                            noresult.append((s, e))
                 # After attempts, recompute missing and tag remaining as known gaps
                 still_missing = self._missing_spans(sub, start_ts, inclusive_end)
                 # Only mark as known those attempted spans that still remain missing
@@ -2254,21 +2353,26 @@ class CandlestickManager:
         - Excludes current in-progress minute
         - No-op if `self.exchange` is None
         """
-        lock = self._get_lock(symbol)
-        async with lock:
+        async with self._acquire_fetch_lock(symbol, "1m"):
             if self.exchange is None:
                 return None
             now = _utc_now_ms()
-            end_exclusive = _floor_minute(now)  # exclude current minute
+            end_exclusive = _floor_minute(now)
             if through_ts is not None:
                 end_exclusive = min(end_exclusive, _floor_minute(int(through_ts)) + ONE_MIN_MS)
 
+            try:
+                self._load_from_disk(symbol, 0, end_exclusive, timeframe="1m")
+            except Exception:
+                pass
+
             existing = self._ensure_symbol_cache(symbol)
             if existing.size == 0:
-                # start a small window by default
                 since = end_exclusive - self.default_window_candles * ONE_MIN_MS
             else:
-                last_ts = int(np.sort(existing, order="ts")[-1]["ts"])  # last stored ts
+                last_ts = int(np.sort(existing, order="ts")[-1]["ts"])
+                if last_ts >= end_exclusive - ONE_MIN_MS:
+                    return None
                 since = max(0, last_ts - self.overlap_candles * ONE_MIN_MS)
 
             if since >= end_exclusive:

@@ -6,7 +6,7 @@ from tools.event_loop_policy import set_windows_event_loop_policy
 
 set_windows_event_loop_policy()
 
-from ccxt.base.errors import NetworkError
+from ccxt.base.errors import NetworkError, RateLimitExceeded
 import random
 import traceback
 import argparse
@@ -206,14 +206,20 @@ def signal_handler(sig, frame):
     """Handle SIGINT by signalling the running bot to stop gracefully."""
     print("\nReceived shutdown signal. Stopping bot...")
     bot = globals().get("bot")
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = None
+
     if bot is not None:
-        try:
-            bot.stop_signal_received = True
-        except Exception:
-            # If signalling the running bot fails for any reason, fall back to exiting.
-            sys.exit(0)
-    else:
-        sys.exit(0)
+        bot.stop_signal_received = True
+        if loop is not None:
+            shutdown_task = getattr(bot, "_shutdown_task", None)
+            if shutdown_task is None or shutdown_task.done():
+                bot._shutdown_task = loop.create_task(bot.shutdown_gracefully())
+            loop.call_soon_threadsafe(lambda: None)
+    elif loop is not None:
+        loop.call_soon_threadsafe(loop.stop)
 
 
 signal.signal(signal.SIGINT, signal_handler)
@@ -766,7 +772,9 @@ class Passivbot:
             try:
                 self.execution_scheduled = False
                 self.state_change_detected_by_symbol = set()
-                await self.update_pos_oos_pnls_ohlcvs()
+                if not await self.update_pos_oos_pnls_ohlcvs():
+                    await asyncio.sleep(0.5)
+                    continue
                 res = await self.execute_to_exchange()
                 if self.debug_mode:
                     return res
@@ -781,14 +789,46 @@ class Passivbot:
                 traceback.print_exc()
                 await asyncio.sleep(1.0)
 
-    async def update_pos_oos_pnls_ohlcvs(self):
+    async def shutdown_gracefully(self):
+        if getattr(self, "_shutdown_in_progress", False):
+            return
+        self._shutdown_in_progress = True
+        self.stop_signal_received = True
+        logging.info("Shutdown requested; closing background tasks and sessions.")
+        try:
+            self.stop_data_maintainers(verbose=False)
+        except Exception as e:
+            logging.error(f"error stopping maintainers during shutdown {e}")
+        await asyncio.sleep(0)
+        try:
+            if getattr(self, "ccp", None) is not None:
+                await self.ccp.close()
+        except Exception as e:
+            logging.error(f"error closing private ccxt session {e}")
+        try:
+            if getattr(self, "cca", None) is not None:
+                await self.cca.close()
+        except Exception as e:
+            logging.error(f"error closing public ccxt session {e}")
+        logging.info("Shutdown cleanup complete.")
+
+    async def update_pos_oos_pnls_ohlcvs(self) -> bool:
         """Refresh positions, open orders, realised PnL, and 1m candles."""
-        await self.update_positions()
-        await asyncio.gather(
+        if self.stop_signal_received:
+            return False
+        positions_ok = await self.update_positions()
+        if not positions_ok:
+            return False
+        open_orders_ok, pnls_ok = await asyncio.gather(
             self.update_open_orders(),
             self.update_pnls(),
         )
+        if not open_orders_ok or not pnls_ok:
+            return False
+        if self.stop_signal_received:
+            return False
         await self.update_ohlcvs_1m_for_actives()
+        return True
 
     def add_to_recent_order_cancellations(self, order):
         """Record a recently cancelled order to throttle repeated cancellations."""
@@ -1597,10 +1637,16 @@ class Passivbot:
         age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * float(
             self.live_value("pnls_max_lookback_days")
         )
+        if self.stop_signal_received:
+            return False
         await self.init_pnls()  # will do nothing if already initiated
         old_ids = {elm["id"] for elm in self.pnls}
         start_time = self.pnls[-1]["timestamp"] - 1000 if self.pnls else age_limit
-        res = await self.fetch_pnls(start_time=start_time, limit=100)
+        try:
+            res = await self.fetch_pnls(start_time=start_time, limit=100)
+        except RateLimitExceeded:
+            logging.warning("rate limit while fetching pnls; retrying next cycle")
+            return False
         if res in [None, False]:
             return False
         new_pnls = [x for x in res if x["id"] not in old_ids]
@@ -1633,6 +1679,8 @@ class Passivbot:
         """Refresh open orders from the exchange and reconcile the local cache."""
         if not hasattr(self, "open_orders"):
             self.open_orders = {}
+        if self.stop_signal_received:
+            return False
         res = None
         try:
             res = await self.fetch_open_orders()
@@ -1675,6 +1723,9 @@ class Passivbot:
                 await asyncio.sleep(1.5)
                 await self.update_positions()
             return True
+        except RateLimitExceeded:
+            logging.warning("rate limit while fetching open orders; retrying next cycle")
+            return False
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
             print_async_exception(res)
@@ -1815,7 +1866,14 @@ class Passivbot:
         """Fetch positions, update balance, and reconcile local position state."""
         if not hasattr(self, "positions"):
             self.positions = {}
-        res = await self.fetch_positions()
+        try:
+            res = await self.fetch_positions()
+        except RateLimitExceeded:
+            logging.warning("rate limit while fetching positions; retrying next cycle")
+            return False
+        except NetworkError as e:
+            logging.error(f"network error fetching positions: {e}")
+            return False
         if not res or all(x in [None, False] for x in res):
             return False
         positions_list_new, balance_new = res
@@ -3027,6 +3085,10 @@ async def main():
                     await bot.cca.close()
             except:
                 pass
+        if bot.stop_signal_received:
+            logging.info("Bot stopped via signal; exiting main loop.")
+            break
+
         logging.info(f"restarting bot...")
         print()
         for z in range(cooldown_secs, -1, -1):

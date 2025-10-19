@@ -238,6 +238,45 @@ async def test_tf_loads_from_disk_without_network(tmp_path, monkeypatch):
 
 # EOF
 @pytest.mark.asyncio
+async def test_concurrent_requests_share_fetch(tmp_path, monkeypatch):
+    class _Ex:
+        id = "okx"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="okx", cache_dir=str(tmp_path / "caches"))
+    symbol = "LOCK/USDT"
+    start_ts = _floor_minute(int(time.time() * 1000)) - 5 * ONE_MIN_MS
+    end_ts = start_ts + 4 * ONE_MIN_MS
+
+    calls = {"count": 0}
+
+    async def fake_fetch(symbol_, since_ms, end_exclusive_ms, *, timeframe=None, on_batch=None):
+        calls["count"] += 1
+        await asyncio.sleep(0.05)
+        ts = list(range(int(since_ms), int(end_exclusive_ms), ONE_MIN_MS))
+        arr = np.zeros(len(ts), dtype=CANDLE_DTYPE)
+        if ts:
+            arr["ts"] = np.asarray(ts, dtype=np.int64)
+            arr["o"] = 1.0
+            arr["h"] = 2.0
+            arr["l"] = 0.5
+            arr["c"] = 1.5
+            arr["bv"] = 1.0
+        if on_batch is not None:
+            on_batch(arr)
+        return arr
+
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_fetch)
+
+    async def one_call():
+        return await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=0)
+
+    out1, out2 = await asyncio.gather(one_call(), one_call())
+    assert out1.size > 0 and out2.size > 0
+    assert calls["count"] == 1
+
+
+# EOF
+@pytest.mark.asyncio
 async def test_tf_range_cache_reuse_within_ttl(monkeypatch, tmp_path):
     # Fixed now for deterministic bucket alignment
     fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
