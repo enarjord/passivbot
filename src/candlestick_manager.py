@@ -46,11 +46,7 @@ from typing import Dict, Optional, Tuple, List, Callable, AsyncIterator
 from collections import OrderedDict
 
 import numpy as np
-
-try:
-    import portalocker  # type: ignore
-except Exception:  # pragma: no cover - tests don't assert the specific locker used
-    portalocker = None  # fallback to no external file lock
+import portalocker  # type: ignore
 
 
 # ----- Constants and dtypes -----
@@ -285,7 +281,6 @@ class CandlestickManager:
             self.debug_level = 2 if bool(debug) else 0
 
         self._cache: Dict[str, np.ndarray] = {}
-        self._locks: Dict[Tuple[str, str], asyncio.Lock] = {}
         self._index: Dict[str, dict] = {}
         # Cache for EMA computations: per symbol -> {(metric, span, tf): (value, end_ts, computed_at_ms)}
         self._ema_cache: Dict[str, Dict[Tuple[str, int, str], Tuple[float, int, int]]] = {}
@@ -530,14 +525,11 @@ class CandlestickManager:
         key = f"{symbol}::{tf_norm}"
         idx_path = self._index_path(symbol, timeframe=timeframe, tf=tf_norm)
         payload = json.dumps(self._index[key], sort_keys=True).encode("utf-8")
-        if portalocker is not None:
-            # Lock the final target index.json to serialize writers
-            os.makedirs(os.path.dirname(idx_path), exist_ok=True)
-            # Use portalocker with a filename, not a file handle, so it creates the file if missing
-            lock_path = idx_path + ".lock"
-            with portalocker.Lock(lock_path, timeout=5):
-                self._atomic_write_bytes(idx_path, payload)
-        else:  # pragma: no cover
+        # Lock the final target index.json to serialize writers
+        os.makedirs(os.path.dirname(idx_path), exist_ok=True)
+        # Use portalocker with a filename, not a file handle, so it creates the file if missing
+        lock_path = idx_path + ".lock"
+        with portalocker.Lock(lock_path, timeout=5):
             self._atomic_write_bytes(idx_path, payload)
 
     def _fetch_lock_path(self, symbol: str, timeframe: str) -> str:
@@ -554,27 +546,18 @@ class CandlestickManager:
     @asynccontextmanager
     async def _acquire_fetch_lock(self, symbol: str, timeframe: Optional[str]) -> AsyncIterator[None]:
         tf_norm = self._normalize_timeframe_arg(timeframe, None)
-        if portalocker is not None:
-            lock_path = self._fetch_lock_path(symbol, tf_norm)
-            lock = portalocker.Lock(lock_path, timeout=300)
+        lock_path = self._fetch_lock_path(symbol, tf_norm)
+        lock = portalocker.Lock(lock_path, timeout=300)
 
-            def _acquire():
-                lock.acquire()
-                return lock
+        def _acquire():
+            lock.acquire()
+            return lock
 
-            lock_obj = await asyncio.to_thread(_acquire)
-            try:
-                yield
-            finally:
-                await asyncio.to_thread(lock_obj.release)
-        else:
-            key = (symbol, tf_norm)
-            lock = self._locks.get(key)
-            if lock is None:
-                lock = asyncio.Lock()
-                self._locks[key] = lock
-            async with lock:
-                yield
+        lock_obj = await asyncio.to_thread(_acquire)
+        try:
+            yield
+        finally:
+            await asyncio.to_thread(lock_obj.release)
 
     @staticmethod
     def _normalize_timeframe_arg(
