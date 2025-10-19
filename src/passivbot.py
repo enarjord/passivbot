@@ -2193,9 +2193,10 @@ class Passivbot:
                         self.positions[symbol][pside]["price"],
                     )
                     we_limit = self.bp(pside, "wallet_exposure_limit", symbol)
-                    if we_limit == 0.0 or wallet_exposure / we_limit > self.bp(
-                        pside, "unstuck_threshold", symbol
-                    ):
+                    unstuck_threshold = self.bp(pside, "unstuck_threshold", symbol)
+                    if unstuck_threshold < 0.0:
+                        continue
+                    if we_limit == 0.0 or wallet_exposure / we_limit > unstuck_threshold:
                         # is stuck. Use CandlestickManager EMA bounds to calc target price
                         try:
                             span_0 = self.bp(pside, "ema_span_0", symbol)

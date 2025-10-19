@@ -1466,9 +1466,13 @@ impl<'a> Backtest<'a> {
                     position.price,
                 );
 
+                let unstuck_threshold = self.bp(idx, LONG).unstuck_threshold;
+                if unstuck_threshold < 0.0 {
+                    continue;
+                }
                 if self.bp(idx, LONG).wallet_exposure_limit == 0.0
                     || wallet_exposure / self.bp(idx, LONG).wallet_exposure_limit
-                        > self.bp(idx, LONG).unstuck_threshold
+                        > unstuck_threshold
                 {
                     let ema_bands = self.emas[idx].compute_bands(LONG);
                     let ema_price = round_up(
@@ -1510,9 +1514,13 @@ impl<'a> Backtest<'a> {
                     position.price,
                 );
 
+                let unstuck_threshold = self.bp(idx, SHORT).unstuck_threshold;
+                if unstuck_threshold < 0.0 {
+                    continue;
+                }
                 if self.bp(idx, SHORT).wallet_exposure_limit == 0.0
                     || wallet_exposure / self.bp(idx, SHORT).wallet_exposure_limit
-                        > self.bp(idx, SHORT).unstuck_threshold
+                        > unstuck_threshold
                 {
                     let ema_bands = self.emas[idx].compute_bands(SHORT);
                     let ema_price = round_dn(
