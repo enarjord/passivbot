@@ -1108,6 +1108,9 @@ def get_optional_live_value(config: dict, key: str, default=None):
 
 def get_template_config(passivbot_mode="v7"):
     return {
+        "logging": {
+            "level": 1,
+        },
         "backtest": {
             "base_dir": "backtests",
             "combine_ohlcvs": True,

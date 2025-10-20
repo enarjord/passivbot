@@ -13,6 +13,13 @@ This document provides an overview of the parameters found in `config/template.j
 - **use_btc_collateral**: `true`/`false`. Set to `true` to backtest with BTC as collateral, simulating starting with 100% BTC and buying BTC with all USD profits, but not selling BTC when taking losses (instead go into USD debt).
   - Example: Given BTC/USD price of `$100,000`, if BTC balance is `1.0` and backtester makes `$10` profit, BTC balance becomes `1.0001` and USD balance is `0`. If backtester loses `$20`, BTC balance remains `1.0001` and USD balance becomes `-20`. If backtester then makes `$15` profit, USD debt is paid off first: BTC balance remains `1.0001`, USD balance becomes `-5`. If the backtester then makes `$10` profit: BTC balance becomes `1.00015`, USD balance is `0`.
 
+## Logging
+
+- **level**: Controls global verbosity for Passivbot and tooling.
+  - Accepted values: `0` (warnings), `1` (info), `2` (debug), `3` (trace).
+  - The CLI flag `--debug-level`/`--log-level` on `src/passivbot.py` and `src/backtest.py` overrides the configured value for a single run.
+  - Components such as the CandlestickManager inherit this level, so EMA warm-up and candle maintenance logs follow the same verbosity.
+
 ## Bot Settings
 
 ### General Parameters for Long and Short

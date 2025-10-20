@@ -19,6 +19,7 @@ from config_utils import (
     parse_overrides,
     require_config_value,
     require_live_value,
+    get_optional_config_value,
 )
 from utils import (
     utc_ms,
@@ -52,12 +53,7 @@ import traceback
 
 import tempfile
 from contextlib import contextmanager
-
-logging.basicConfig(
-    format="%(asctime)s %(levelname)-8s %(message)s",
-    level=logging.INFO,
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
+from logging_setup import configure_logging
 
 
 @contextmanager
@@ -668,6 +664,15 @@ async def main():
         action="store_true",
         help="disable plotting",
     )
+    parser.add_argument(
+        "--debug-level",
+        "--log-level",
+        dest="debug_level",
+        type=int,
+        choices=[0, 1, 2, 3],
+        default=None,
+        help="Logging verbosity: 0=warnings, 1=info, 2=debug, 3=trace.",
+    )
     template_config = get_template_config("v7")
     del template_config["optimize"]
     keep_live_keys = {
@@ -680,6 +685,8 @@ async def main():
             del template_config["live"][key]
     add_arguments_recursively(parser, template_config)
     args = parser.parse_args()
+    initial_debug = args.debug_level if args.debug_level is not None else 1
+    configure_logging(debug=initial_debug)
     if args.config_path is None:
         logging.info(f"loading default template config configs/template.json")
         config = load_config("configs/template.json", verbose=False)
@@ -688,6 +695,21 @@ async def main():
         config = load_config(args.config_path)
     update_config_with_args(config, args)
     config = format_config(config, verbose=False)
+    config_logging_level = get_optional_config_value(config, "logging.level", 1)
+    try:
+        config_logging_level = int(float(config_logging_level))
+    except Exception:
+        config_logging_level = 1
+    if args.debug_level is None:
+        effective_debug = max(0, min(config_logging_level, 3))
+        configure_logging(debug=effective_debug)
+    else:
+        effective_debug = max(0, min(int(args.debug_level), 3))
+    logging_section = config.get("logging")
+    if not isinstance(logging_section, dict):
+        logging_section = {}
+    config["logging"] = logging_section
+    logging_section["level"] = effective_debug
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     for ex in backtest_exchanges:
         await load_markets(ex)
