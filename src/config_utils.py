@@ -619,45 +619,6 @@ def _apply_backward_compatibility_renames(result: dict, verbose: bool = True) ->
             del bounds[old]
 
 
-def _migrate_twel_enforcer_threshold(result: dict, verbose: bool = True) -> None:
-    """Move legacy top-level twel_enforcer_threshold into bot.{long,short} scopes."""
-
-    if "twel_enforcer_threshold" not in result:
-        return
-
-    legacy_value = result.pop("twel_enforcer_threshold")
-
-    def _coerce(val, default=1.0):
-        try:
-            return float(val)
-        except (TypeError, ValueError):
-            return default
-
-    if isinstance(legacy_value, dict):
-        long_val = legacy_value.get("long", legacy_value.get("LONG"))
-        short_val = legacy_value.get("short", legacy_value.get("SHORT"))
-        if long_val is None and short_val is not None:
-            long_val = short_val
-        if short_val is None and long_val is not None:
-            short_val = long_val
-    else:
-        long_val = short_val = legacy_value
-
-    bot_cfg = result.setdefault("bot", {})
-    for pside, value in (("long", long_val), ("short", short_val)):
-        if not isinstance(bot_cfg.get(pside), dict):
-            bot_cfg[pside] = {}
-        side_cfg = bot_cfg[pside]
-        if "twel_enforcer_threshold" not in side_cfg or side_cfg["twel_enforcer_threshold"] is None:
-            side_cfg["twel_enforcer_threshold"] = _coerce(value)
-            if verbose:
-                logging.info(
-                    "Migrated twel_enforcer_threshold -> bot.%s.twel_enforcer_threshold=%s",
-                    pside,
-                    side_cfg["twel_enforcer_threshold"],
-                )
-
-
 def _migrate_btc_collateral_settings(result: dict, verbose: bool = True) -> None:
     """Convert legacy bool collateral flag to fractional settings and ensure defaults."""
     backtest = result.setdefault("backtest", {})
@@ -894,7 +855,6 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     flavor = detect_flavor(config, template)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
     _apply_backward_compatibility_renames(result, verbose=verbose)
-    _migrate_twel_enforcer_threshold(result, verbose=verbose)
     _migrate_btc_collateral_settings(result, verbose=verbose)
     _ensure_bot_defaults_and_bounds(result, verbose=verbose)
     result["bot"] = sort_dict_keys(result["bot"])
