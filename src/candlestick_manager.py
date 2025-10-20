@@ -65,6 +65,7 @@ class _LockRecord:
     count: int
     acquired_at: float
 
+
 CANDLE_DTYPE = np.dtype(
     [
         ("ts", "int64"),
@@ -370,23 +371,17 @@ class CandlestickManager:
             except FileNotFoundError:
                 continue
             except Exception as exc:
-                self.log.warning(
-                    "failed to stat lock %s during cleanup: %s", lock_path, exc
-                )
+                self.log.warning("failed to stat lock %s during cleanup: %s", lock_path, exc)
                 continue
             age = now - stat.st_mtime
             if age > threshold:
                 try:
                     lock_path.unlink()
-                    self.log.warning(
-                        "removed stale candle lock %s (age %.1fs)", lock_path, age
-                    )
+                    self.log.warning("removed stale candle lock %s (age %.1fs)", lock_path, age)
                 except FileNotFoundError:
                     continue
                 except Exception as exc:
-                    self.log.error(
-                        "failed to remove stale lock %s: %s", lock_path, exc
-                    )
+                    self.log.error("failed to remove stale lock %s: %s", lock_path, exc)
 
     async def _release_lock(
         self, lock: portalocker.Lock, path: str, symbol: str, timeframe: str
@@ -711,7 +706,9 @@ class CandlestickManager:
                 await asyncio.to_thread(lock_obj.acquire)
                 acquired_at = time.time()
                 self._touch_lockfile(lock_path)
-                self._held_fetch_locks[key] = _LockRecord(lock=lock_obj, count=1, acquired_at=acquired_at)
+                self._held_fetch_locks[key] = _LockRecord(
+                    lock=lock_obj, count=1, acquired_at=acquired_at
+                )
                 self._log(
                     "debug",
                     "fetch_lock_acquired",

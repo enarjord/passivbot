@@ -80,9 +80,7 @@ def configure_logging(
         path = Path(log_file).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
         if rotation:
-            file_handler = RotatingFileHandler(
-                path, maxBytes=max_bytes, backupCount=backup_count
-            )
+            file_handler = RotatingFileHandler(path, maxBytes=max_bytes, backupCount=backup_count)
         else:
             file_handler = logging.FileHandler(path)
         file_handler.setFormatter(formatter)

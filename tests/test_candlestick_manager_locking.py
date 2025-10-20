@@ -35,7 +35,9 @@ class FakeExchange:
         return out
 
 
-def _fake_paginated(self, symbol, since_ms, end_exclusive_ms, *, timeframe=None, tf=None, on_batch=None):
+def _fake_paginated(
+    self, symbol, since_ms, end_exclusive_ms, *, timeframe=None, tf=None, on_batch=None
+):
     step = 60_000
     start = since_ms
     end = end_exclusive_ms
@@ -69,9 +71,13 @@ async def test_concurrent_refresh_no_deadlock(tmp_path):
     )
 
     # Monkeypatch fetch to avoid network requests and keep deterministic timing
-    async def fake_fetch(self, symbol, since_ms, end_exclusive_ms, *, timeframe=None, tf=None, on_batch=None):
+    async def fake_fetch(
+        self, symbol, since_ms, end_exclusive_ms, *, timeframe=None, tf=None, on_batch=None
+    ):
         await asyncio.sleep(0.01)
-        return _fake_paginated(self, symbol, since_ms, end_exclusive_ms, timeframe=timeframe, tf=tf, on_batch=on_batch)
+        return _fake_paginated(
+            self, symbol, since_ms, end_exclusive_ms, timeframe=timeframe, tf=tf, on_batch=on_batch
+        )
 
     cm1._fetch_ohlcv_paginated = fake_fetch.__get__(cm1, CandlestickManager)
     cm2._fetch_ohlcv_paginated = fake_fetch.__get__(cm2, CandlestickManager)
