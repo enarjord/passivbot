@@ -14,6 +14,13 @@ This document provides an overview of the parameters found in `config/template.j
 - **btc_collateral_ltv_cap**: Optional loan-to-value ceiling (`USD debt ÷ equity`) enforced when topping up BTC. Leave `null` (default) to allow unlimited debt, or set to a float (e.g., `0.6`) to stop buying BTC once leverage exceeds that threshold.
 - **emit_legacy_metrics**: If `true`, analysis results continue to include the legacy USD metric names (`adg`, `sharpe_ratio`, …) in addition to the new `*_usd`/`*_btc` suffixed keys. Disable once downstream tooling consumes the suffixed metrics exclusively. Default: `false`.
 
+## Logging
+
+- **level**: Controls global verbosity for Passivbot and tooling.
+  - Accepted values: `0` (warnings), `1` (info), `2` (debug), `3` (trace).
+  - The CLI flag `--debug-level`/`--log-level` on `src/passivbot.py` and `src/backtest.py` overrides the configured value for a single run.
+  - Components such as the CandlestickManager inherit this level, so EMA warm-up and candle maintenance logs follow the same verbosity.
+
 ## Bot Settings
 
 ### General Parameters for Long and Short

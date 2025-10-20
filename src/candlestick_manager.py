@@ -32,17 +32,17 @@ from __future__ import annotations
 
 import asyncio
 import calendar
+import inspect
 import json
 import logging
 import math
 import os
 import time
 import zlib
-import inspect
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple, List, Callable, AsyncIterator
+from typing import AsyncIterator, Callable, Dict, List, Optional, Tuple
 from collections import OrderedDict
 
 import numpy as np
@@ -52,6 +52,18 @@ import portalocker  # type: ignore
 # ----- Constants and dtypes -----
 
 ONE_MIN_MS = 60_000
+
+_LOCK_TIMEOUT_SECONDS = 10.0
+_LOCK_STALE_SECONDS = 180.0
+_LOCK_BACKOFF_INITIAL = 0.1
+_LOCK_BACKOFF_MAX = 2.0
+
+
+@dataclass
+class _LockRecord:
+    lock: portalocker.Lock
+    count: int
+    acquired_at: float
 
 CANDLE_DTYPE = np.dtype(
     [
@@ -241,8 +253,8 @@ class CandlestickManager:
         Max number of 1m candles in RAM per symbol (rolling window).
     max_disk_candles_per_symbol_per_tf : int
         Max total candles per symbol+timeframe on disk (oldest shards pruned).
-    debug : bool
-        Enable verbose logging.
+    debug : int | bool
+        Logging verbosity (0=warnings, 1=network info, 2=debug, 3=trace).
     """
 
     # Many helpers accept both `timeframe=` and the concise `tf=` alias.  The alias keeps
@@ -274,11 +286,12 @@ class CandlestickManager:
         self.overlap_candles = int(overlap_candles)
         self.max_memory_candles_per_symbol = int(max_memory_candles_per_symbol)
         self.max_disk_candles_per_symbol_per_tf = int(max_disk_candles_per_symbol_per_tf)
-        # Debug levels: 0 = production, 1 = network-only debug, 2 = full debug
+        # Debug levels: 0=warnings, 1=network-only, 2=full debug, 3=trace
         try:
-            self.debug_level = int(debug)
+            dbg = int(float(debug))
         except Exception:
-            self.debug_level = 2 if bool(debug) else 0
+            dbg = 2 if bool(debug) else 0
+        self.debug_level = max(0, min(int(dbg), 3))
 
         self._cache: Dict[str, np.ndarray] = {}
         self._index: Dict[str, dict] = {}
@@ -293,10 +306,16 @@ class CandlestickManager:
             {}
         )
         self._tf_range_cache_cap = 8
-        # Reentrant bookkeeping for portalocker fetch locks: key -> (count, lock_obj)
-        self._held_fetch_locks: Dict[Tuple[str, str], Tuple[int, Optional[portalocker.Lock]]] = {}
+        # Timeout parameters for cross-process fetch locks
+        self._lock_timeout_seconds = float(_LOCK_TIMEOUT_SECONDS)
+        self._lock_stale_seconds = float(_LOCK_STALE_SECONDS)
+        self._lock_backoff_initial = float(_LOCK_BACKOFF_INITIAL)
+        self._lock_backoff_max = float(_LOCK_BACKOFF_MAX)
+        # Reentrant bookkeeping for portalocker fetch locks: key -> _LockRecord
+        self._held_fetch_locks: Dict[Tuple[str, str], _LockRecord] = {}
 
         self._setup_logging()
+        self._cleanup_stale_locks()
 
         # Initialize optional global semaphore for remote calls
         try:
@@ -318,30 +337,98 @@ class CandlestickManager:
     # ----- Logging -----
 
     def _setup_logging(self) -> None:
-        self.log = logging.getLogger("CandlestickManager")
-        # Isolate from root handlers to avoid duplicate/missing logs
-        self.log.propagate = False
-        self.log.setLevel(logging.DEBUG if self.debug_level >= 1 else logging.INFO)
-        fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%Y-%m-%dT%H:%M:%S")
-        # Attach file handler once
-        if not any(isinstance(h, logging.FileHandler) for h in self.log.handlers):
-            os.makedirs("logs", exist_ok=True)
-            fh = logging.FileHandler("logs/candlestick_manager.log")
-            fh.setFormatter(fmt)
-            fh.setLevel(logging.DEBUG if self.debug_level >= 1 else logging.INFO)
-            self.log.addHandler(fh)
-        # Attach console handler in debug mode (ensure we don't confuse FileHandler subclassing)
-        has_console = any(
-            isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
-            for h in self.log.handlers
-        )
-        if self.debug_level >= 1 and not has_console:
-            ch = logging.StreamHandler()
-            ch.setFormatter(fmt)
-            ch.setLevel(logging.DEBUG)
-            self.log.addHandler(ch)
+        trace_level = getattr(logging, "TRACE", None)
+        if not isinstance(trace_level, int):
+            trace_level = 5
+            logging.addLevelName(trace_level, "TRACE")
+            setattr(logging, "TRACE", trace_level)
+        level_map = {
+            0: logging.WARNING,
+            1: logging.INFO,
+            2: logging.DEBUG,
+            3: trace_level,
+        }
+        desired_level = level_map.get(self.debug_level, logging.INFO)
+        self.log = logging.getLogger("passivbot.candlestick_manager")
+        self.log.setLevel(desired_level)
 
     # ----- Retention helpers -----
+
+    def _cleanup_stale_locks(self) -> None:
+        """Remove leftover lock files that are clearly stale."""
+        try:
+            base = Path(self.cache_dir) / self.exchange_name
+        except Exception:
+            return
+        if not base.exists():
+            return
+        now = time.time()
+        threshold = self._lock_stale_seconds
+        for lock_path in base.glob("*/locks/*.lock"):
+            try:
+                stat = lock_path.stat()
+            except FileNotFoundError:
+                continue
+            except Exception as exc:
+                self.log.warning(
+                    "failed to stat lock %s during cleanup: %s", lock_path, exc
+                )
+                continue
+            age = now - stat.st_mtime
+            if age > threshold:
+                try:
+                    lock_path.unlink()
+                    self.log.warning(
+                        "removed stale candle lock %s (age %.1fs)", lock_path, age
+                    )
+                except FileNotFoundError:
+                    continue
+                except Exception as exc:
+                    self.log.error(
+                        "failed to remove stale lock %s: %s", lock_path, exc
+                    )
+
+    async def _release_lock(
+        self, lock: portalocker.Lock, path: str, symbol: str, timeframe: str
+    ) -> None:
+        """Release a portalocker lock safely and refresh its metadata."""
+        try:
+            await asyncio.to_thread(lock.release)
+        except portalocker.exceptions.LockException as exc:
+            self._log(
+                "warning",
+                "fetch_lock_release_failed",
+                symbol=symbol,
+                timeframe=timeframe,
+                error=str(exc),
+            )
+        except Exception as exc:
+            self._log(
+                "warning",
+                "fetch_lock_release_error",
+                symbol=symbol,
+                timeframe=timeframe,
+                error=str(exc),
+            )
+        finally:
+            self._touch_lockfile(path)
+
+    def _touch_lockfile(self, path: str) -> None:
+        try:
+            os.utime(path, None)
+        except FileNotFoundError:
+            return
+        except Exception:
+            return
+
+    def _lockfile_age(self, path: str) -> Optional[float]:
+        try:
+            mtime = os.path.getmtime(path)
+        except FileNotFoundError:
+            return None
+        except Exception:
+            return None
+        return time.time() - mtime
 
     def _enforce_memory_retention(self, symbol: str) -> None:
         try:
@@ -588,53 +675,98 @@ class CandlestickManager:
         key = (symbol, tf_norm)
         held = self._held_fetch_locks.get(key)
         if held is not None:
-            count, lock_obj = held
-            self._held_fetch_locks[key] = (count + 1, lock_obj)
+            self._held_fetch_locks[key] = _LockRecord(
+                lock=held.lock, count=held.count + 1, acquired_at=held.acquired_at
+            )
             self._log(
                 "debug",
                 "fetch_lock_reentrant",
                 symbol=symbol,
                 timeframe=tf_norm,
-                depth=count + 1,
+                depth=held.count + 1,
             )
             try:
                 yield
             finally:
-                count, lock_obj = self._held_fetch_locks.get(key, (1, None))
-                if count <= 1:
+                record = self._held_fetch_locks.get(key)
+                if record is None:
+                    return
+                if record.count <= 1:
                     self._held_fetch_locks.pop(key, None)
+                    await self._release_lock(record.lock, lock_path, symbol, tf_norm)
                 else:
-                    self._held_fetch_locks[key] = (count - 1, lock_obj)
-        else:
-            lock = portalocker.Lock(lock_path, timeout=300)
+                    self._held_fetch_locks[key] = _LockRecord(
+                        lock=record.lock, count=record.count - 1, acquired_at=record.acquired_at
+                    )
+            return
 
-            def _acquire_with_retry() -> portalocker.Lock:
-                attempt = 0
-                while True:
+        backoff = self._lock_backoff_initial
+        deadline = time.monotonic() + self._lock_timeout_seconds
+        attempt = 0
+
+        while True:
+            attempt += 1
+            lock_obj = portalocker.Lock(lock_path, timeout=0, fail_when_locked=True)
+            try:
+                await asyncio.to_thread(lock_obj.acquire)
+                acquired_at = time.time()
+                self._touch_lockfile(lock_path)
+                self._held_fetch_locks[key] = _LockRecord(lock=lock_obj, count=1, acquired_at=acquired_at)
+                self._log(
+                    "debug",
+                    "fetch_lock_acquired",
+                    symbol=symbol,
+                    timeframe=tf_norm,
+                    attempt=attempt,
+                )
+                try:
+                    yield
+                finally:
+                    record = self._held_fetch_locks.pop(key, None)
+                    if record is not None:
+                        await self._release_lock(record.lock, lock_path, symbol, tf_norm)
+                return
+            except portalocker.exceptions.LockException as exc:
+                age = self._lockfile_age(lock_path)
+                if age is not None and age > self._lock_stale_seconds:
+                    self._log(
+                        "warning",
+                        "fetch_lock_stale",
+                        symbol=symbol,
+                        timeframe=tf_norm,
+                        age=f"{age:.2f}",
+                        lock_path=lock_path,
+                    )
                     try:
-                        lock.acquire()
-                        return lock
-                    except portalocker.exceptions.LockException as exc:
-                        attempt += 1
+                        os.remove(lock_path)
+                    except FileNotFoundError:
+                        pass
+                    except Exception as rm_exc:
                         self._log(
-                            "debug",
-                            "fetch_lock_wait",
+                            "error",
+                            "fetch_lock_stale_remove_failed",
                             symbol=symbol,
                             timeframe=tf_norm,
-                            attempt=attempt,
-                            error=str(exc),
+                            error=str(rm_exc),
                         )
-                        time.sleep(0.1)
+                    continue
 
-            lock_obj = await asyncio.to_thread(_acquire_with_retry)
-            self._held_fetch_locks[key] = (1, lock_obj)
-            try:
-                yield
-            finally:
-                try:
-                    self._held_fetch_locks.pop(key, None)
-                finally:
-                    await asyncio.to_thread(lock_obj.release)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Timed out acquiring candle lock for {symbol} ({tf_norm}) after "
+                        f"{self._lock_timeout_seconds:.1f}s"
+                    ) from exc
+
+                self._log(
+                    "debug",
+                    "fetch_lock_wait",
+                    symbol=symbol,
+                    timeframe=tf_norm,
+                    attempt=attempt,
+                    error=str(exc),
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2.0, self._lock_backoff_max)
 
     @staticmethod
     def _normalize_timeframe_arg(
@@ -2535,14 +2667,49 @@ class CandlestickManager:
         - Excludes current in-progress minute
         - No-op if `self.exchange` is None
         """
-        async with self._acquire_fetch_lock(symbol, "1m"):
-            if self.exchange is None:
-                return None
-            now = _utc_now_ms()
-            end_exclusive = _floor_minute(now)
-            if through_ts is not None:
-                end_exclusive = min(end_exclusive, _floor_minute(int(through_ts)) + ONE_MIN_MS)
+        if self.exchange is None:
+            return None
 
+        now = _utc_now_ms()
+        end_exclusive = _floor_minute(now)
+        if through_ts is not None:
+            end_exclusive = min(end_exclusive, _floor_minute(int(through_ts)) + ONE_MIN_MS)
+
+        try:
+            self._load_from_disk(symbol, 0, end_exclusive, timeframe="1m")
+        except Exception:
+            pass
+
+        existing = self._ensure_symbol_cache(symbol)
+        existing_sorted = np.sort(existing, order="ts") if existing.size else existing
+        existing_last_ts = int(existing_sorted[-1]["ts"]) if existing_sorted.size else None
+        if existing.size == 0:
+            proposed_since = end_exclusive - self.default_window_candles * ONE_MIN_MS
+        else:
+            last_ts = existing_last_ts if existing_last_ts is not None else 0
+            if last_ts >= end_exclusive - ONE_MIN_MS:
+                self._log(
+                    "debug",
+                    "refresh_skip_fresh",
+                    symbol=symbol,
+                    end_exclusive=end_exclusive,
+                    last_ts=last_ts,
+                )
+                return None
+            proposed_since = max(0, last_ts - self.overlap_candles * ONE_MIN_MS)
+
+        if proposed_since >= end_exclusive:
+            self._log(
+                "debug",
+                "refresh_skip_since",
+                symbol=symbol,
+                since=proposed_since,
+                end_exclusive=end_exclusive,
+            )
+            return None
+
+        async with self._acquire_fetch_lock(symbol, "1m"):
+            # Re-evaluate with lock in case another process already fetched.
             try:
                 self._load_from_disk(symbol, 0, end_exclusive, timeframe="1m")
             except Exception:
@@ -2577,6 +2744,7 @@ class CandlestickManager:
                 return None
 
             persisted_batches = False
+            now_fetch = _utc_now_ms()
             self._log(
                 "debug",
                 "refresh_fetch",
@@ -2594,7 +2762,7 @@ class CandlestickManager:
                     batch,
                     timeframe="1m",
                     merge_cache=True,
-                    last_refresh_ms=now,
+                    last_refresh_ms=now_fetch,
                 )
 
             try:
@@ -2614,7 +2782,7 @@ class CandlestickManager:
                     new_arr,
                     timeframe="1m",
                     merge_cache=True,
-                    last_refresh_ms=now,
+                    last_refresh_ms=now_fetch,
                 )
             return None
 
