@@ -238,21 +238,6 @@ fn bot_params_pair_from_dict(dict: &PyDict) -> PyResult<BotParamsPair> {
     })
 }
 
-fn extract_bool_value(dict: &PyDict, key: &str) -> PyResult<bool> {
-    if let Ok(val) = extract_value::<bool>(dict, key) {
-        Ok(val)
-    } else if let Ok(val) = extract_value::<i64>(dict, key) {
-        Ok(val != 0)
-    } else if let Ok(val) = extract_value::<usize>(dict, key) {
-        Ok(val != 0)
-    } else if let Ok(val) = extract_value::<f64>(dict, key) {
-        Ok(val != 0.0)
-    } else {
-        // If none of the above types match, try to get the value as a bool
-        extract_value::<bool>(dict, key)
-    }
-}
-
 fn extract_grid_spacing_we_weight(dict: &PyDict) -> PyResult<f64> {
     if let Some(obj) = dict.get_item("entry_grid_spacing_we_weight")? {
         obj.extract::<f64>()
@@ -270,7 +255,6 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         close_trailing_grid_ratio: extract_value(dict, "close_trailing_grid_ratio")?,
         close_trailing_qty_pct: extract_value(dict, "close_trailing_qty_pct")?,
         close_trailing_threshold_pct: extract_value(dict, "close_trailing_threshold_pct")?,
-        enforce_exposure_limit: extract_bool_value(dict, "enforce_exposure_limit")?,
         entry_grid_double_down_factor: extract_value(dict, "entry_grid_double_down_factor")?,
         entry_grid_spacing_log_weight: extract_value(dict, "entry_grid_spacing_log_weight")?,
         entry_grid_spacing_we_weight: extract_grid_spacing_we_weight(dict)?,
@@ -315,6 +299,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         },
         total_wallet_exposure_limit: extract_value(dict, "total_wallet_exposure_limit")?,
         wallet_exposure_limit: extract_value(dict, "wallet_exposure_limit")?,
+        we_excess_allowance_pct: extract_value(dict, "we_excess_allowance_pct")?,
         unstuck_close_pct: extract_value(dict, "unstuck_close_pct")?,
         unstuck_ema_dist: extract_value(dict, "unstuck_ema_dist")?,
         unstuck_loss_allowance_pct: extract_value(dict, "unstuck_loss_allowance_pct")?,
@@ -358,6 +343,7 @@ pub fn calc_next_entry_long_py(
     entry_trailing_threshold_we_weight: f64,
     entry_trailing_threshold_log_weight: f64,
     wallet_exposure_limit: f64,
+    we_excess_allowance_pct: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -405,6 +391,7 @@ pub fn calc_next_entry_long_py(
         entry_trailing_threshold_we_weight,
         entry_trailing_threshold_log_weight,
         wallet_exposure_limit,
+        we_excess_allowance_pct,
         ..Default::default()
     };
     let position = Position {
@@ -446,8 +433,8 @@ pub fn calc_next_close_long_py(
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
-    enforce_exposure_limit: bool,
     wallet_exposure_limit: f64,
+    we_excess_allowance_pct: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -480,8 +467,8 @@ pub fn calc_next_close_long_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
-        enforce_exposure_limit,
         wallet_exposure_limit,
+        we_excess_allowance_pct,
         ..Default::default()
     };
     let position = Position {
@@ -530,6 +517,7 @@ pub fn calc_next_entry_short_py(
     entry_trailing_threshold_we_weight: f64,
     entry_trailing_threshold_log_weight: f64,
     wallet_exposure_limit: f64,
+    we_excess_allowance_pct: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -577,6 +565,7 @@ pub fn calc_next_entry_short_py(
         entry_trailing_threshold_we_weight,
         entry_trailing_threshold_log_weight,
         wallet_exposure_limit,
+        we_excess_allowance_pct,
         ..Default::default()
     };
     let position = Position {
@@ -618,8 +607,8 @@ pub fn calc_next_close_short_py(
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
-    enforce_exposure_limit: bool,
     wallet_exposure_limit: f64,
+    we_excess_allowance_pct: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -652,8 +641,8 @@ pub fn calc_next_close_short_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
-        enforce_exposure_limit,
         wallet_exposure_limit,
+        we_excess_allowance_pct,
         ..Default::default()
     };
     let position = Position {
@@ -910,8 +899,8 @@ pub fn calc_closes_long_py(
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
-    enforce_exposure_limit: bool,
     wallet_exposure_limit: f64,
+    we_excess_allowance_pct: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -946,8 +935,8 @@ pub fn calc_closes_long_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
-        enforce_exposure_limit,
         wallet_exposure_limit,
+        we_excess_allowance_pct,
         ..Default::default()
     };
 
@@ -990,8 +979,8 @@ pub fn calc_closes_short_py(
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
-    enforce_exposure_limit: bool,
     wallet_exposure_limit: f64,
+    we_excess_allowance_pct: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -1026,8 +1015,8 @@ pub fn calc_closes_short_py(
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
-        enforce_exposure_limit,
         wallet_exposure_limit,
+        we_excess_allowance_pct,
         ..Default::default()
     };
     let position = Position {

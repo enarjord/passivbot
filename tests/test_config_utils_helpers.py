@@ -4,7 +4,6 @@ from config_utils import (
     _apply_backward_compatibility_renames,
     _apply_non_live_adjustments,
     _ensure_bot_defaults_and_bounds,
-    _ensure_enforce_exposure_limit_bool,
     _migrate_btc_collateral_settings,
     _normalize_position_counts,
     _rename_config_keys,
@@ -112,22 +111,6 @@ def test_migrate_btc_collateral_settings_converts_bool():
     assert config["backtest"]["btc_collateral_cap"] == pytest.approx(0.0)
     assert config["backtest"]["btc_collateral_ltv_cap"] is None
     assert config["backtest"]["emit_legacy_metrics"] is False
-
-
-def test_ensure_enforce_exposure_limit_bool_casts_values():
-    config = {
-        "bot": {
-            "long": {"enforce_exposure_limit": 1},
-            "short": {"enforce_exposure_limit": 0},
-        }
-    }
-
-    _ensure_enforce_exposure_limit_bool(config)
-
-    assert config["bot"]["long"]["enforce_exposure_limit"] is True
-    assert config["bot"]["short"]["enforce_exposure_limit"] is False
-
-
 def test_apply_backward_compatibility_renames_moves_filter_keys():
     config = {
         "bot": {

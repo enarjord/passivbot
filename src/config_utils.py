@@ -222,7 +222,6 @@ def get_allowed_modifications():
                 "close_trailing_threshold_pct": True,
                 "ema_span_0": True,
                 "ema_span_1": True,
-                "enforce_exposure_limit": True,
                 "entry_grid_double_down_factor": True,
                 "entry_grid_spacing_pct": True,
                 "entry_grid_spacing_log_span_hours": True,
@@ -242,6 +241,7 @@ def get_allowed_modifications():
                 "unstuck_ema_dist": True,
                 "unstuck_threshold": True,
                 "wallet_exposure_limit": True,
+                "we_excess_allowance_pct": True,
             },
             "short": {
                 "close_grid_markup_end": True,
@@ -253,7 +253,6 @@ def get_allowed_modifications():
                 "close_trailing_threshold_pct": True,
                 "ema_span_0": True,
                 "ema_span_1": True,
-                "enforce_exposure_limit": True,
                 "entry_grid_double_down_factor": True,
                 "entry_grid_spacing_pct": True,
                 "entry_grid_spacing_log_span_hours": True,
@@ -273,8 +272,10 @@ def get_allowed_modifications():
                 "unstuck_ema_dist": True,
                 "unstuck_threshold": True,
                 "wallet_exposure_limit": True,
+                "we_excess_allowance_pct": True,
             },
         },
+        "twel_enforcer_threshold": True,
         "live": {
             "forced_mode_long": True,
             "forced_mode_short": True,
@@ -847,14 +848,6 @@ def _apply_non_live_adjustments(result: dict, verbose: bool = True) -> None:
                 result["optimize"]["bounds"][key] = sorted(value)
 
 
-def _ensure_enforce_exposure_limit_bool(result: dict) -> None:
-    """Ensure enforce_exposure_limit is a bool for each side."""
-    for pside in result["bot"]:
-        result["bot"][pside]["enforce_exposure_limit"] = bool(
-            result["bot"][pside]["enforce_exposure_limit"]
-        )
-
-
 def format_config(config: dict, verbose=True, live_only=False, base_config_path: str = "") -> dict:
     # attempts to format a config to v7 config
     template = get_template_config("v7")
@@ -875,7 +868,6 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
         # unneeded adjustments if running live
         _apply_non_live_adjustments(result, verbose=verbose)
 
-    _ensure_enforce_exposure_limit_bool(result)
     return result
 
 
@@ -1273,7 +1265,6 @@ def get_template_config(passivbot_mode="v7"):
                 "close_trailing_threshold_pct": 0.008,
                 "ema_span_0": 1318.0,
                 "ema_span_1": 1435.0,
-                "enforce_exposure_limit": True,
                 "entry_grid_double_down_factor": 0.894,
                 "entry_grid_spacing_log_span_hours": 72,
                 "entry_grid_spacing_log_weight": 0.0,
@@ -1298,6 +1289,7 @@ def get_template_config(passivbot_mode="v7"):
                 "unstuck_ema_dist": 0.0,
                 "unstuck_loss_allowance_pct": 0.03,
                 "unstuck_threshold": 0.916,
+                "we_excess_allowance_pct": 0.0,
             },
             "short": {
                 "close_grid_markup_end": 0.0089,
@@ -1309,7 +1301,6 @@ def get_template_config(passivbot_mode="v7"):
                 "close_trailing_threshold_pct": 0.008,
                 "ema_span_0": 1318.0,
                 "ema_span_1": 1435.0,
-                "enforce_exposure_limit": True,
                 "entry_grid_double_down_factor": 0.894,
                 "entry_grid_spacing_log_span_hours": 72,
                 "entry_grid_spacing_log_weight": 0.0,
@@ -1334,8 +1325,10 @@ def get_template_config(passivbot_mode="v7"):
                 "unstuck_ema_dist": 0.0,
                 "unstuck_loss_allowance_pct": 0.03,
                 "unstuck_threshold": 0.916,
+                "we_excess_allowance_pct": 0.0,
             },
         },
+        "twel_enforcer_threshold": 1.0,
         "coin_overrides": {},
         "live": {
             "approved_coins": {"long": [], "short": []},
@@ -1387,6 +1380,7 @@ def get_template_config(passivbot_mode="v7"):
                 "long_entry_trailing_threshold_pct": [0.001, 0.1],
                 "long_entry_trailing_threshold_we_weight": [0.0, 20.0],
                 "long_entry_trailing_threshold_log_weight": [0.0, 400.0],
+                "long_we_excess_allowance_pct": [0.0, 0.5],
                 "long_filter_log_range_ema_span": [10.0, 1440.0],
                 "long_filter_volume_drop_pct": [0.0, 1.0],
                 "long_filter_volume_ema_span": [10.0, 1440.0],
@@ -1420,6 +1414,7 @@ def get_template_config(passivbot_mode="v7"):
                 "short_entry_trailing_threshold_pct": [0.001, 0.1],
                 "short_entry_trailing_threshold_we_weight": [0.0, 20.0],
                 "short_entry_trailing_threshold_log_weight": [0.0, 400.0],
+                "short_we_excess_allowance_pct": [0.0, 0.5],
                 "short_filter_log_range_ema_span": [10.0, 1440.0],
                 "short_filter_volume_drop_pct": [0.0, 1.0],
                 "short_filter_volume_ema_span": [10.0, 1440.0],

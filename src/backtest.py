@@ -551,6 +551,9 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "warmup_minutes": [],
             "trade_start_indices": [],
             "global_warmup_bars": 0,
+            "twel_enforcer_threshold": float(
+                require_config_value(config, "twel_enforcer_threshold")
+            ),
         }
     return bot_params_list, exchange_params, backtest_params
 
