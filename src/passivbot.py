@@ -23,6 +23,7 @@ import logging
 import math
 from candlestick_manager import CandlestickManager
 from typing import Dict, Iterable, Tuple, List, Optional
+from logging_setup import configure_logging
 from utils import (
     load_markets,
     coin_to_symbol,
@@ -54,6 +55,7 @@ from config_utils import (
     add_arguments_recursively,
     update_config_with_args,
     format_config,
+    get_optional_config_value,
     normalize_coins_source,
     expand_PB_mode,
     get_template_config,
@@ -192,13 +194,6 @@ from pure_funcs import (
     ensure_millis,
 )
 
-
-logging.basicConfig(
-    format="%(asctime)s %(levelname)-8s %(message)s",
-    level=logging.INFO,
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
-
 ONE_MIN_MS = 60_000
 
 
@@ -275,6 +270,12 @@ class Passivbot:
     def __init__(self, config: dict):
         """Initialise the bot with configuration, user context, and runtime caches."""
         self.config = config
+        try:
+            lvl_raw = get_optional_config_value(config, "logging.level", 1)
+            lvl = int(float(lvl_raw)) if lvl_raw is not None else 1
+        except Exception:
+            lvl = 1
+        self.logging_level = max(0, min(int(lvl), 3))
         self.user = require_live_value(config, "user")
         self.user_info = load_user_info(self.user)
         self.exchange = self.user_info["exchange"]
@@ -341,7 +342,7 @@ class Passivbot:
         self.recent_order_cancellations = []
         self._disabled_psides_logged = set()
         # CandlestickManager settings from config.live
-        cm_kwargs = {"exchange": self.cca, "debug": 0}
+        cm_kwargs = {"exchange": self.cca, "debug": self.logging_level}
         mem_cap_raw = require_live_value(config, "max_memory_candles_per_symbol")
         mem_cap_effective = DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL
         try:
@@ -2559,16 +2560,22 @@ class Passivbot:
                 window = 120
             start_ts = end_ts - ONE_MIN_MS * window
 
-            tasks = [
-                asyncio.create_task(
-                    self.cm.get_candles(
-                        s, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, strict=False
+            symbols = sorted(set(self.active_symbols))
+            for sym in symbols:
+                try:
+                    await self.cm.get_candles(
+                        sym, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, strict=False
                     )
-                )
-                for s in self.active_symbols
-            ]
-            if tasks:
-                await asyncio.gather(*tasks)
+                except TimeoutError as exc:
+                    logging.warning(
+                        "Timed out acquiring candle lock for %s; will retry next cycle (%s)",
+                        sym,
+                        exc,
+                    )
+                except Exception as exc:
+                    logging.error(
+                        "error refreshing candles for %s: %s", sym, exc, exc_info=True
+                    )
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
             traceback.print_exc()
@@ -2999,6 +3006,15 @@ async def main():
             "Use 'none' to disable overrides even if a default file exists."
         ),
     )
+    parser.add_argument(
+        "--debug-level",
+        "--log-level",
+        dest="debug_level",
+        type=int,
+        choices=[0, 1, 2, 3],
+        default=None,
+        help="Logging verbosity: 0=warnings, 1=info, 2=debug, 3=trace.",
+    )
 
     template_config = get_template_config("v7")
     del template_config["optimize"]
@@ -3006,9 +3022,26 @@ async def main():
     add_arguments_recursively(parser, template_config)
     raw_args = merge_negative_cli_values(sys.argv[1:])
     args = parser.parse_args(raw_args)
+    initial_debug = args.debug_level if args.debug_level is not None else 1
+    configure_logging(debug=initial_debug)
     config = load_config(args.config_path, live_only=True)
     update_config_with_args(config, args)
     config = format_config(config, live_only=True)
+    config_logging_level = get_optional_config_value(config, "logging.level", 1)
+    try:
+        config_logging_level = int(float(config_logging_level))
+    except Exception:
+        config_logging_level = 1
+    if args.debug_level is None:
+        effective_debug = max(0, min(config_logging_level, 3))
+        configure_logging(debug=effective_debug)
+    else:
+        effective_debug = max(0, min(int(args.debug_level), 3))
+    logging_section = config.get("logging")
+    if not isinstance(logging_section, dict):
+        logging_section = {}
+    config["logging"] = logging_section
+    logging_section["level"] = effective_debug
 
     custom_endpoints_cli = args.custom_endpoints
     live_section = config.get("live") if isinstance(config.get("live"), dict) else {}
