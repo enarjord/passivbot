@@ -69,7 +69,7 @@ Passivbot can be configured to create a grid of entry orders, with prices and qu
 - **entry_initial_qty_pct**:
   - `initial_entry_cost = balance * wallet_exposure_limit * initial_qty_pct`
 - **entry_trailing_double_down_factor**:
-  - Multiplier applied when sizing each trailing re-entry. Values > 1.0 make successive trailing fills larger; values < 1.0 temper the size of additional entries.
+  - Multiplier controlling how aggressively trailing re-entries ramp up. As with the grid equivalent, any positive value increases the size of successive fills (higher values grow them faster).
 - **entry_trailing_threshold_pct**, **entry_trailing_retracement_pct**:
   - Same semantics as the trailing-close parameters below, but applied to trailing entries. The bot waits for a favorable move (`threshold_pct`) and subsequent pullback (`retracement_pct`) before firing a trailing re-entry.
 - **entry_trailing_threshold_we_weight**, **entry_trailing_retracement_we_weight**:
