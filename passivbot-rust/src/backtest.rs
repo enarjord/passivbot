@@ -1835,9 +1835,97 @@ impl<'a> Backtest<'a> {
                 _ => (),
             }
         }
+
+        if self.trading_enabled.long {
+            let long_indices: Vec<usize> = self.open_orders.long.keys().cloned().collect();
+            for idx in long_indices {
+                if let Some(orders) = self.open_orders.long.get_mut(&idx) {
+                    self.trim_reduce_only_orders(idx, LONG, &mut orders.closes);
+                }
+            }
+        }
+        if self.trading_enabled.short {
+            let short_indices: Vec<usize> = self.open_orders.short.keys().cloned().collect();
+            for idx in short_indices {
+                if let Some(orders) = self.open_orders.short.get_mut(&idx) {
+                    self.trim_reduce_only_orders(idx, SHORT, &mut orders.closes);
+                }
+            }
+        }
     }
 
     #[inline]
+    fn trim_reduce_only_orders(&self, idx: usize, side: usize, closes: &mut Vec<Order>) {
+        const QTY_TOLERANCE: f64 = 1e-9;
+        if closes.is_empty() {
+            return;
+        }
+        let has_auto_reduce = closes.iter().any(|o| match side {
+            LONG => o.order_type == OrderType::CloseAutoReduceLong,
+            SHORT => o.order_type == OrderType::CloseAutoReduceShort,
+            _ => false,
+        });
+        if !has_auto_reduce {
+            return;
+        }
+        let position_abs = match side {
+            LONG => self
+                .positions
+                .long
+                .get(&idx)
+                .map(|pos| pos.size.abs())
+                .unwrap_or(0.0),
+            SHORT => self
+                .positions
+                .short
+                .get(&idx)
+                .map(|pos| pos.size.abs())
+                .unwrap_or(0.0),
+            _ => 0.0,
+        };
+        if position_abs <= QTY_TOLERANCE {
+            closes.clear();
+            return;
+        }
+
+        let exchange_params = &self.exchange_params_list[idx];
+        let mut closes_sorted = closes.clone();
+        closes_sorted.sort_by(|a, b| match side {
+            LONG => a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal),
+            SHORT => b.price.partial_cmp(&a.price).unwrap_or(Ordering::Equal),
+            _ => Ordering::Equal,
+        });
+
+        let mut trimmed: Vec<Order> = Vec::with_capacity(closes.len());
+        let mut remaining = position_abs;
+
+        for mut order in closes_sorted {
+            if remaining <= QTY_TOLERANCE {
+                break;
+            }
+            let mut qty_abs = order.qty.abs().min(remaining);
+            qty_abs = round_dn(qty_abs, exchange_params.qty_step);
+            if qty_abs <= QTY_TOLERANCE {
+                continue;
+            }
+            order.qty = if order.qty.is_sign_negative() {
+                -qty_abs
+            } else {
+                qty_abs
+            };
+            trimmed.push(order);
+            remaining -= qty_abs;
+        }
+
+        trimmed.sort_by(|a, b| match side {
+            LONG => a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal),
+            SHORT => b.price.partial_cmp(&a.price).unwrap_or(Ordering::Equal),
+            _ => Ordering::Equal,
+        });
+
+        *closes = trimmed;
+    }
+
     fn update_emas(&mut self, k: usize) {
         // Compute/refresh latest 1h bucket on whole-hour boundaries
         let current_ts = self.first_timestamp_ms + (k as u64) * 60_000u64;
