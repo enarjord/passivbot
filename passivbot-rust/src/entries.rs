@@ -39,6 +39,15 @@ pub fn calc_min_entry_qty(entry_price: f64, exchange_params: &ExchangeParams) ->
     )
 }
 
+fn wallet_exposure_limit_with_allowance(bot_params: &BotParams) -> f64 {
+    let base_limit = bot_params.wallet_exposure_limit;
+    if base_limit <= 0.0 {
+        base_limit
+    } else {
+        base_limit * (1.0 + bot_params.we_excess_allowance_pct.max(0.0))
+    }
+}
+
 pub fn calc_cropped_reentry_qty(
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
@@ -49,8 +58,10 @@ pub fn calc_cropped_reentry_qty(
     entry_price: f64,
     wallet_exposure_limit_cap: f64,
 ) -> (f64, f64) {
-    let effective_wallet_exposure_limit =
-        f64::min(wallet_exposure_limit_cap, bot_params.wallet_exposure_limit);
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
     let position_size_abs = position.size.abs();
     let entry_qty_abs = entry_qty.abs();
     let wallet_exposure_if_filled = calc_wallet_exposure_if_filled(
@@ -93,8 +104,10 @@ pub fn calc_reentry_qty(
     bot_params: &BotParams,
     wallet_exposure_limit_cap: f64,
 ) -> f64 {
-    let effective_wallet_exposure_limit =
-        f64::min(wallet_exposure_limit_cap, bot_params.wallet_exposure_limit);
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
     f64::max(
         calc_min_entry_qty(entry_price, &exchange_params),
         round_(
@@ -118,8 +131,10 @@ fn calc_reentry_price_bid(
     grid_log_range: f64,
     wallet_exposure_limit_cap: f64,
 ) -> f64 {
-    let effective_wallet_exposure_limit =
-        f64::min(wallet_exposure_limit_cap, bot_params.wallet_exposure_limit);
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
     let we_multiplier = if effective_wallet_exposure_limit > 0.0 {
         (wallet_exposure / effective_wallet_exposure_limit)
             * bot_params.entry_grid_spacing_we_weight
@@ -152,8 +167,10 @@ fn calc_reentry_price_ask(
     grid_log_range: f64,
     wallet_exposure_limit_cap: f64,
 ) -> f64 {
-    let effective_wallet_exposure_limit =
-        f64::min(wallet_exposure_limit_cap, bot_params.wallet_exposure_limit);
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
     let we_multiplier = if effective_wallet_exposure_limit > 0.0 {
         (wallet_exposure / effective_wallet_exposure_limit)
             * bot_params.entry_grid_spacing_we_weight
@@ -224,8 +241,10 @@ pub fn calc_grid_entry_long(
         position.size,
         position.price,
     );
-    let effective_wallet_exposure_limit =
-        f64::min(wallet_exposure_limit_cap, bot_params.wallet_exposure_limit);
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
     if wallet_exposure >= effective_wallet_exposure_limit * 0.999 {
         return Order::default();
     }
@@ -349,6 +368,7 @@ pub fn calc_next_entry_long(
         // no orders
         return Order::default();
     }
+    let allowed_wallet_exposure_limit = wallet_exposure_limit_with_allowance(bot_params);
     if bot_params.entry_trailing_grid_ratio >= 1.0 || bot_params.entry_trailing_grid_ratio <= -1.0 {
         // return trailing only
         return calc_trailing_entry_long(
@@ -357,7 +377,7 @@ pub fn calc_next_entry_long(
             &bot_params,
             &position,
             &trailing_price_bundle,
-            base_wallet_exposure_limit,
+            allowed_wallet_exposure_limit,
         );
     } else if bot_params.entry_trailing_grid_ratio == 0.0 {
         // return grid only
@@ -366,7 +386,7 @@ pub fn calc_next_entry_long(
             &state_params,
             &bot_params,
             &position,
-            base_wallet_exposure_limit,
+            allowed_wallet_exposure_limit,
         );
     }
     let wallet_exposure = calc_wallet_exposure(
@@ -384,10 +404,10 @@ pub fn calc_next_entry_long(
         // trailing first
         if wallet_exposure_ratio < bot_params.entry_trailing_grid_ratio {
             let wallet_exposure_limit_cap = if wallet_exposure == 0.0 {
-                base_wallet_exposure_limit
+                allowed_wallet_exposure_limit
             } else {
                 (base_wallet_exposure_limit * bot_params.entry_trailing_grid_ratio * 1.01)
-                    .min(base_wallet_exposure_limit)
+                    .min(allowed_wallet_exposure_limit)
             };
             calc_trailing_entry_long(
                 &exchange_params,
@@ -404,17 +424,17 @@ pub fn calc_next_entry_long(
                 &state_params,
                 &bot_params,
                 &position,
-                base_wallet_exposure_limit,
+                allowed_wallet_exposure_limit,
             )
         }
     } else {
         // grid first
         if wallet_exposure_ratio < 1.0 + bot_params.entry_trailing_grid_ratio {
             let wallet_exposure_limit_cap = if wallet_exposure == 0.0 {
-                base_wallet_exposure_limit
+                allowed_wallet_exposure_limit
             } else {
                 (base_wallet_exposure_limit * (1.0 + bot_params.entry_trailing_grid_ratio) * 1.01)
-                    .min(base_wallet_exposure_limit)
+                    .min(allowed_wallet_exposure_limit)
             };
             calc_grid_entry_long(
                 &exchange_params,
@@ -430,7 +450,7 @@ pub fn calc_next_entry_long(
                 &bot_params,
                 &position,
                 &trailing_price_bundle,
-                base_wallet_exposure_limit,
+                allowed_wallet_exposure_limit,
             )
         }
     }
@@ -482,8 +502,10 @@ pub fn calc_trailing_entry_long(
         position.size,
         position.price,
     );
-    let effective_wallet_exposure_limit =
-        f64::min(wallet_exposure_limit_cap, bot_params.wallet_exposure_limit);
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
     if wallet_exposure > effective_wallet_exposure_limit * 0.999 {
         return Order::default();
     }
@@ -643,8 +665,10 @@ pub fn calc_grid_entry_short(
         position_size_abs,
         position.price,
     );
-    let effective_wallet_exposure_limit =
-        f64::min(wallet_exposure_limit_cap, bot_params.wallet_exposure_limit);
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
     if wallet_exposure >= effective_wallet_exposure_limit * 0.999 {
         return Order::default();
     }
@@ -805,8 +829,10 @@ pub fn calc_trailing_entry_short(
         position_size_abs,
         position.price,
     );
-    let effective_wallet_exposure_limit =
-        f64::min(wallet_exposure_limit_cap, bot_params.wallet_exposure_limit);
+    let effective_wallet_exposure_limit = f64::min(
+        wallet_exposure_limit_cap,
+        wallet_exposure_limit_with_allowance(bot_params),
+    );
     if wallet_exposure > effective_wallet_exposure_limit * 0.999 {
         return Order::default();
     }
@@ -928,6 +954,7 @@ pub fn calc_next_entry_short(
         // no orders
         return Order::default();
     }
+    let allowed_wallet_exposure_limit = wallet_exposure_limit_with_allowance(bot_params);
     if bot_params.entry_trailing_grid_ratio >= 1.0 || bot_params.entry_trailing_grid_ratio <= -1.0 {
         // return trailing only
         return calc_trailing_entry_short(
@@ -936,7 +963,7 @@ pub fn calc_next_entry_short(
             &bot_params,
             &position,
             &trailing_price_bundle,
-            base_wallet_exposure_limit,
+            allowed_wallet_exposure_limit,
         );
     } else if bot_params.entry_trailing_grid_ratio == 0.0 {
         // return grid only
@@ -945,7 +972,7 @@ pub fn calc_next_entry_short(
             &state_params,
             &bot_params,
             &position,
-            base_wallet_exposure_limit,
+            allowed_wallet_exposure_limit,
         );
     }
     let wallet_exposure = calc_wallet_exposure(
@@ -969,12 +996,12 @@ pub fn calc_next_entry_short(
                     &bot_params,
                     &position,
                     &trailing_price_bundle,
-                    base_wallet_exposure_limit,
+                    allowed_wallet_exposure_limit,
                 )
             } else {
                 let wallet_exposure_limit_cap =
                     (base_wallet_exposure_limit * bot_params.entry_trailing_grid_ratio * 1.01)
-                        .min(base_wallet_exposure_limit);
+                        .min(allowed_wallet_exposure_limit);
                 calc_trailing_entry_short(
                     &exchange_params,
                     &state_params,
@@ -991,7 +1018,7 @@ pub fn calc_next_entry_short(
                 &state_params,
                 &bot_params,
                 &position,
-                base_wallet_exposure_limit,
+                allowed_wallet_exposure_limit,
             )
         }
     } else {
@@ -1003,13 +1030,13 @@ pub fn calc_next_entry_short(
                     &state_params,
                     &bot_params,
                     &position,
-                    base_wallet_exposure_limit,
+                    allowed_wallet_exposure_limit,
                 )
             } else {
                 let wallet_exposure_limit_cap = (base_wallet_exposure_limit
                     * (1.0 + bot_params.entry_trailing_grid_ratio)
                     * 1.01)
-                    .min(base_wallet_exposure_limit);
+                    .min(allowed_wallet_exposure_limit);
                 calc_grid_entry_short(
                     &exchange_params,
                     &state_params,
@@ -1025,7 +1052,7 @@ pub fn calc_next_entry_short(
                 &bot_params,
                 &position,
                 &trailing_price_bundle,
-                base_wallet_exposure_limit,
+                allowed_wallet_exposure_limit,
             )
         }
     }

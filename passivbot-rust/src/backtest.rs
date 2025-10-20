@@ -6,6 +6,7 @@ use crate::entries::{
     calc_entries_long, calc_entries_short, calc_min_entry_qty, calc_next_entry_long,
     calc_next_entry_short,
 };
+use crate::risk::{calc_twel_enforcer_actions, TwelEnforcerInputPosition};
 use crate::types::{
     BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities, ExchangeParams, Fill,
     Order, OrderBook, OrderType, Position, Positions, StateParams, TrailingPriceBundle,
@@ -1665,6 +1666,99 @@ impl<'a> Backtest<'a> {
         (NO_POS, NO_POS, Order::default())
     }
 
+    fn calc_twel_enforcer_orders(
+        &self,
+        k: usize,
+        skip: Option<(usize, usize)>,
+    ) -> Vec<(usize, usize, Order)> {
+        let mut results: Vec<(usize, usize, Order)> = Vec::new();
+        let balance = self.balance.usd_total_rounded;
+        if balance <= 0.0 {
+            return results;
+        }
+
+        let skip_long = skip.filter(|(_, side)| *side == LONG).map(|(idx, _)| idx);
+        let skip_short = skip.filter(|(_, side)| *side == SHORT).map(|(idx, _)| idx);
+
+        let long_threshold = self.bot_params_master.long.twel_enforcer_threshold;
+        if long_threshold >= 0.0 {
+            let total_wel_long = self
+                .bot_params_master
+                .long
+                .total_wallet_exposure_limit
+                .max(0.0);
+            if total_wel_long > 0.0 {
+                let mut inputs: Vec<TwelEnforcerInputPosition> =
+                    Vec::with_capacity(self.positions.long.len());
+                for (&idx, position) in &self.positions.long {
+                    let mark_price = self.hlcvs[[k, idx, CLOSE]];
+                    inputs.push(TwelEnforcerInputPosition {
+                        idx,
+                        position_size: position.size,
+                        position_price: position.price,
+                        mark_price,
+                        base_wallet_exposure_limit: self.bp(idx, LONG).wallet_exposure_limit,
+                        we_excess_allowance_pct: self.bp(idx, LONG).we_excess_allowance_pct,
+                        c_mult: self.exchange_params_list[idx].c_mult,
+                        qty_step: self.exchange_params_list[idx].qty_step,
+                        price_step: self.exchange_params_list[idx].price_step,
+                    });
+                }
+                let actions = calc_twel_enforcer_actions(
+                    LONG,
+                    long_threshold,
+                    total_wel_long,
+                    balance,
+                    &inputs,
+                    skip_long,
+                );
+                for (idx, order) in actions {
+                    results.push((idx, LONG, order));
+                }
+            }
+        }
+
+        let short_threshold = self.bot_params_master.short.twel_enforcer_threshold;
+        if short_threshold >= 0.0 {
+            let total_wel_short = self
+                .bot_params_master
+                .short
+                .total_wallet_exposure_limit
+                .max(0.0);
+            if total_wel_short > 0.0 {
+                let mut inputs: Vec<TwelEnforcerInputPosition> =
+                    Vec::with_capacity(self.positions.short.len());
+                for (&idx, position) in &self.positions.short {
+                    let mark_price = self.hlcvs[[k, idx, CLOSE]];
+                    inputs.push(TwelEnforcerInputPosition {
+                        idx,
+                        position_size: position.size,
+                        position_price: position.price,
+                        mark_price,
+                        base_wallet_exposure_limit: self.bp(idx, SHORT).wallet_exposure_limit,
+                        we_excess_allowance_pct: self.bp(idx, SHORT).we_excess_allowance_pct,
+                        c_mult: self.exchange_params_list[idx].c_mult,
+                        qty_step: self.exchange_params_list[idx].qty_step,
+                        price_step: self.exchange_params_list[idx].price_step,
+                    });
+                }
+                let actions = calc_twel_enforcer_actions(
+                    SHORT,
+                    short_threshold,
+                    total_wel_short,
+                    balance,
+                    &inputs,
+                    skip_short,
+                );
+                for (idx, order) in actions {
+                    results.push((idx, SHORT, order));
+                }
+            }
+        }
+
+        results
+    }
+
     fn update_open_orders_all(&mut self, k: usize) {
         self.open_orders = OpenOrders::default();
         if self.trading_enabled.long {
@@ -1713,6 +1807,32 @@ impl<'a> Backtest<'a> {
                         .closes = vec![unstucking_close];
                 }
                 _ => unreachable!(),
+            }
+        }
+
+        let skip = if unstucking_pside != NO_POS {
+            Some((unstucking_idx, unstucking_pside))
+        } else {
+            None
+        };
+        let enforcer_orders = self.calc_twel_enforcer_orders(k, skip);
+        for (idx, pside, order) in enforcer_orders {
+            match pside {
+                LONG => self
+                    .open_orders
+                    .long
+                    .entry(idx)
+                    .or_default()
+                    .closes
+                    .push(order),
+                SHORT => self
+                    .open_orders
+                    .short
+                    .entry(idx)
+                    .or_default()
+                    .closes
+                    .push(order),
+                _ => (),
             }
         }
     }

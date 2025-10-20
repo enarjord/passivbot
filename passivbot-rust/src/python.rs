@@ -3,9 +3,11 @@ use crate::backtest::Backtest;
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
 };
+use crate::constants::{LONG, SHORT};
 use crate::entries::{
     calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
 };
+use crate::risk::{calc_twel_enforcer_actions, TwelEnforcerInputPosition};
 use crate::types::OrderType;
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, Position,
@@ -247,6 +249,11 @@ fn extract_grid_spacing_we_weight(dict: &PyDict) -> PyResult<f64> {
 }
 
 fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
+    let twel_enforcer_threshold = match dict.get_item("twel_enforcer_threshold")? {
+        Some(item) => item.extract::<f64>()?,
+        None => 1.0,
+    };
+
     Ok(BotParams {
         close_grid_markup_end: extract_value(dict, "close_grid_markup_end")?,
         close_grid_markup_start: extract_value(dict, "close_grid_markup_start")?,
@@ -300,6 +307,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         total_wallet_exposure_limit: extract_value(dict, "total_wallet_exposure_limit")?,
         wallet_exposure_limit: extract_value(dict, "wallet_exposure_limit")?,
         we_excess_allowance_pct: extract_value(dict, "we_excess_allowance_pct")?,
+        twel_enforcer_threshold,
         unstuck_close_pct: extract_value(dict, "unstuck_close_pct")?,
         unstuck_ema_dist: extract_value(dict, "unstuck_ema_dist")?,
         unstuck_loss_allowance_pct: extract_value(dict, "unstuck_loss_allowance_pct")?,
@@ -691,6 +699,7 @@ pub fn calc_entries_long_py(
     entry_trailing_threshold_we_weight: f64,
     entry_trailing_threshold_log_weight: f64,
     wallet_exposure_limit: f64,
+    we_excess_allowance_pct: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -740,6 +749,7 @@ pub fn calc_entries_long_py(
         entry_trailing_threshold_we_weight,
         entry_trailing_threshold_log_weight,
         wallet_exposure_limit,
+        we_excess_allowance_pct,
         ..Default::default()
     };
 
@@ -790,6 +800,7 @@ pub fn calc_entries_short_py(
     entry_trailing_threshold_we_weight: f64,
     entry_trailing_threshold_log_weight: f64,
     wallet_exposure_limit: f64,
+    we_excess_allowance_pct: f64,
     balance: f64,
     position_size: f64,
     position_price: f64,
@@ -839,6 +850,7 @@ pub fn calc_entries_short_py(
         entry_trailing_threshold_we_weight,
         entry_trailing_threshold_log_weight,
         wallet_exposure_limit,
+        we_excess_allowance_pct,
         ..Default::default()
     };
 
@@ -1042,6 +1054,97 @@ pub fn calc_closes_short_py(
         .into_iter()
         .map(|order| (order.qty, order.price, order.order_type.id()))
         .collect()
+}
+
+#[pyfunction]
+pub fn calc_twel_enforcer_orders_py(
+    side: &str,
+    threshold: f64,
+    total_wallet_exposure_limit: f64,
+    balance: f64,
+    positions: &PyList,
+    skip_idx: Option<usize>,
+) -> PyResult<Vec<(usize, f64, f64, u16)>> {
+    let side_code = match side {
+        "long" => LONG,
+        "short" => SHORT,
+        _ => {
+            return Err(PyValueError::new_err(
+                "side must be either 'long' or 'short'",
+            ))
+        }
+    };
+    let mut parsed_positions: Vec<TwelEnforcerInputPosition> = Vec::with_capacity(positions.len());
+    for item in positions {
+        let dict = item.downcast::<PyDict>()?;
+        parsed_positions.push(TwelEnforcerInputPosition {
+            idx: dict
+                .get_item("idx")?
+                .ok_or_else(|| PyValueError::new_err("twel enforcer position missing 'idx'"))?
+                .extract::<usize>()?,
+            position_size: dict
+                .get_item("position_size")?
+                .ok_or_else(|| {
+                    PyValueError::new_err("twel enforcer position missing 'position_size'")
+                })?
+                .extract::<f64>()?,
+            position_price: dict
+                .get_item("position_price")?
+                .ok_or_else(|| {
+                    PyValueError::new_err("twel enforcer position missing 'position_price'")
+                })?
+                .extract::<f64>()?,
+            mark_price: dict
+                .get_item("mark_price")?
+                .ok_or_else(|| {
+                    PyValueError::new_err("twel enforcer position missing 'mark_price'")
+                })?
+                .extract::<f64>()?,
+            base_wallet_exposure_limit: dict
+                .get_item("base_wallet_exposure_limit")?
+                .ok_or_else(|| {
+                    PyValueError::new_err(
+                        "twel enforcer position missing 'base_wallet_exposure_limit'",
+                    )
+                })?
+                .extract::<f64>()?,
+            we_excess_allowance_pct: dict
+                .get_item("we_excess_allowance_pct")?
+                .ok_or_else(|| {
+                    PyValueError::new_err(
+                        "twel enforcer position missing 'we_excess_allowance_pct'",
+                    )
+                })?
+                .extract::<f64>()?,
+            c_mult: dict
+                .get_item("c_mult")?
+                .ok_or_else(|| PyValueError::new_err("twel enforcer position missing 'c_mult'"))?
+                .extract::<f64>()?,
+            qty_step: dict
+                .get_item("qty_step")?
+                .ok_or_else(|| PyValueError::new_err("twel enforcer position missing 'qty_step'"))?
+                .extract::<f64>()?,
+            price_step: dict
+                .get_item("price_step")?
+                .ok_or_else(|| {
+                    PyValueError::new_err("twel enforcer position missing 'price_step'")
+                })?
+                .extract::<f64>()?,
+        });
+    }
+
+    let actions = calc_twel_enforcer_actions(
+        side_code,
+        threshold,
+        total_wallet_exposure_limit,
+        balance,
+        &parsed_positions,
+        skip_idx,
+    );
+    Ok(actions
+        .into_iter()
+        .map(|(idx, order)| (idx, order.qty, order.price, order.order_type.id()))
+        .collect())
 }
 
 #[pyfunction]

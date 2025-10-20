@@ -4,6 +4,7 @@ mod closes;
 mod constants;
 mod entries;
 mod python;
+mod risk;
 mod trailing_flip;
 mod types;
 mod utils;
@@ -38,6 +39,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calc_entries_short_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_closes_long_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_closes_short_py, m)?)?;
+    m.add_function(wrap_pyfunction!(calc_twel_enforcer_orders_py, m)?)?;
     m.add_function(wrap_pyfunction!(run_backtest, m)?)?;
     m.add_function(wrap_pyfunction!(calc_auto_unstuck_allowance, m)?)?;
     m.add_function(wrap_pyfunction!(hysteresis_rounding, m)?)?;

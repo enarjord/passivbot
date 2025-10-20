@@ -2140,6 +2140,100 @@ class Passivbot:
                     }
                 )
                 seen.add(seen_key)
+        # TWEL enforcer orders
+        try:
+            unstuck_side = ""
+            if unstucking_symbol:
+                order_name = unstucking_close[2]
+                if isinstance(order_name, str):
+                    if "long" in order_name:
+                        unstuck_side = "long"
+                    elif "short" in order_name:
+                        unstuck_side = "short"
+            for pside in ["long", "short"]:
+                threshold = self.bot_value(pside, "twel_enforcer_threshold")
+                if threshold is None or threshold < 0.0:
+                    continue
+                total_wel = self.bot_value(pside, "total_wallet_exposure_limit")
+                if total_wel is None or total_wel <= 0.0:
+                    continue
+                positions_payload = []
+                symbol_idx_map = {}
+                idx_counter = 0
+                for symbol in self.positions:
+                    if not self.has_position(pside, symbol):
+                        continue
+                    size = self.positions[symbol][pside]["size"]
+                    if size == 0.0:
+                        continue
+                    positions_payload.append(
+                        {
+                            "idx": idx_counter,
+                            "position_size": float(size),
+                            "position_price": float(self.positions[symbol][pside]["price"]),
+                            "mark_price": float(
+                                last_prices.get(
+                                    symbol, self.positions[symbol][pside]["price"]
+                                )
+                            ),
+                            "base_wallet_exposure_limit": float(
+                                self.bp(pside, "wallet_exposure_limit", symbol)
+                            ),
+                            "we_excess_allowance_pct": float(
+                                self.bp(pside, "we_excess_allowance_pct", symbol)
+                            ),
+                            "c_mult": float(self.c_mults[symbol]),
+                            "qty_step": float(self.qty_steps[symbol]),
+                            "price_step": float(self.price_steps[symbol]),
+                        }
+                    )
+                    symbol_idx_map[idx_counter] = symbol
+                    idx_counter += 1
+                if not positions_payload:
+                    continue
+                skip_idx = None
+                if unstucking_symbol and unstuck_side == pside:
+                    skip_idx = next(
+                        (idx for idx, sym in symbol_idx_map.items() if sym == unstucking_symbol),
+                        None,
+                    )
+                enforcer_actions = pbr.calc_twel_enforcer_orders_py(
+                    pside,
+                    float(threshold),
+                    float(total_wel),
+                    float(self.balance),
+                    positions_payload,
+                    skip_idx,
+                )
+                for idx, qty, price, order_type_id in enforcer_actions:
+                    symbol = symbol_idx_map.get(idx)
+                    if symbol is None or not self.has_position(pside, symbol):
+                        continue
+                    if abs(qty) <= 0.0:
+                        continue
+                    if symbol == unstucking_symbol and unstuck_side == pside:
+                        continue
+                    if symbol not in ideal_orders_f:
+                        ideal_orders_f[symbol] = []
+                    order_side = "sell" if pside == "long" else "buy"
+                    exec_type = (
+                        "market" if self.live_value("market_orders_allowed") else "limit"
+                    )
+                    ideal_orders_f[symbol].append(
+                        {
+                            "symbol": symbol,
+                            "side": order_side,
+                            "position_side": pside,
+                            "qty": abs(qty),
+                            "price": price,
+                            "reduce_only": True,
+                            "custom_id": self.format_custom_id_single(order_type_id),
+                            "type": exec_type,
+                        }
+                    )
+        except Exception as exc:
+            logging.info(f"debug: failed to compute TWEL enforcer orders: {exc}")
+
         # ensure close qtys don't exceed pos sizes
         for symbol in ideal_orders_f:
             for i in range(len(ideal_orders_f[symbol])):
