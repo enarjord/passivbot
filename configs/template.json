@@ -16,7 +16,6 @@
     "btc_collateral_ltv_cap": null,
     "emit_legacy_metrics": false
   },
-  "twel_enforcer_threshold": 1.0,
   "bot": {
     "long": {
       "close_grid_markup_end": 0.003354,
@@ -43,6 +42,7 @@
       "entry_trailing_threshold_pct": 0.06497,
       "entry_trailing_threshold_we_weight": 0.0,
       "entry_trailing_threshold_log_weight": 0.0,
+      "twel_enforcer_threshold": 1.0,
       "we_excess_allowance_pct": 0.0,
       "filter_log_range_ema_span": 39.82,
       "filter_volume_drop_pct": 0.5077,
@@ -79,6 +79,7 @@
       "entry_trailing_threshold_pct": 0.04012,
       "entry_trailing_threshold_we_weight": 0.0,
       "entry_trailing_threshold_log_weight": 0.0,
+      "twel_enforcer_threshold": 1.0,
       "we_excess_allowance_pct": 0.0,
       "filter_log_range_ema_span": 335.7,
       "filter_volume_drop_pct": 0.5257,

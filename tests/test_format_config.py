@@ -112,12 +112,15 @@ def test_format_config_current_roundtrip_basic():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
     current["bot"]["long"]["we_excess_allowance_pct"] = 0.25
-    current["twel_enforcer_threshold"] = 2
+    current["bot"]["long"]["twel_enforcer_threshold"] = 0.95
+    current["bot"]["short"]["twel_enforcer_threshold"] = 1.08
     out = format_config(current, verbose=False)
     for k in ["bot", "live", "optimize", "backtest"]:
         assert k in out
     assert isinstance(out["bot"]["long"]["we_excess_allowance_pct"], float)
-    assert isinstance(out["twel_enforcer_threshold"], (int, float))
+    assert isinstance(out["bot"]["long"]["twel_enforcer_threshold"], (int, float))
+    assert isinstance(out["bot"]["short"]["twel_enforcer_threshold"], (int, float))
+    assert "twel_enforcer_threshold" not in out
 
 
 def test_format_config_preserves_approved_coins_dict():
