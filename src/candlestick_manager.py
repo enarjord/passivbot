@@ -65,6 +65,7 @@ class _LockRecord:
     count: int
     acquired_at: float
 
+
 CANDLE_DTYPE = np.dtype(
     [
         ("ts", "int64"),
@@ -370,23 +371,17 @@ class CandlestickManager:
             except FileNotFoundError:
                 continue
             except Exception as exc:
-                self.log.warning(
-                    "failed to stat lock %s during cleanup: %s", lock_path, exc
-                )
+                self.log.warning("failed to stat lock %s during cleanup: %s", lock_path, exc)
                 continue
             age = now - stat.st_mtime
             if age > threshold:
                 try:
                     lock_path.unlink()
-                    self.log.warning(
-                        "removed stale candle lock %s (age %.1fs)", lock_path, age
-                    )
+                    self.log.warning("removed stale candle lock %s (age %.1fs)", lock_path, age)
                 except FileNotFoundError:
                     continue
                 except Exception as exc:
-                    self.log.error(
-                        "failed to remove stale lock %s: %s", lock_path, exc
-                    )
+                    self.log.error("failed to remove stale lock %s: %s", lock_path, exc)
 
     async def _release_lock(
         self, lock: portalocker.Lock, path: str, symbol: str, timeframe: str
@@ -711,7 +706,9 @@ class CandlestickManager:
                 await asyncio.to_thread(lock_obj.acquire)
                 acquired_at = time.time()
                 self._touch_lockfile(lock_path)
-                self._held_fetch_locks[key] = _LockRecord(lock=lock_obj, count=1, acquired_at=acquired_at)
+                self._held_fetch_locks[key] = _LockRecord(
+                    lock=lock_obj, count=1, acquired_at=acquired_at
+                )
                 self._log(
                     "debug",
                     "fetch_lock_acquired",
@@ -1719,7 +1716,9 @@ class CandlestickManager:
                                 self._load_from_disk(symbol, start_ts, end_ts, timeframe="1m")
                             except Exception:
                                 pass
-                            arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+                            arr = _ensure_dtype(
+                                self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE))
+                            )
                             sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
                             missing_after = self._missing_spans(sub, start_ts, end_ts)
                             unknown_after = [
@@ -1760,7 +1759,11 @@ class CandlestickManager:
                                         merge_cache=True,
                                         last_refresh_ms=now,
                                     )
-                            arr = np.sort(self._cache[symbol], order="ts") if symbol in self._cache else np.empty((0,), dtype=CANDLE_DTYPE)
+                            arr = (
+                                np.sort(self._cache[symbol], order="ts")
+                                if symbol in self._cache
+                                else np.empty((0,), dtype=CANDLE_DTYPE)
+                            )
                             sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
                             still_missing = self._missing_spans(sub, start_ts, end_ts)
                             for s, e in still_missing:
@@ -1796,7 +1799,9 @@ class CandlestickManager:
                             self._load_from_disk(symbol, start_ts, end_ts, timeframe="1m")
                         except Exception:
                             pass
-                        arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+                        arr = _ensure_dtype(
+                            self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE))
+                        )
                         sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
                         last_have = int(sub[-1]["ts"]) if sub.size else start_ts - ONE_MIN_MS
                         need_fetch_inner = sub.size == 0 or last_have < end_excl - ONE_MIN_MS
@@ -1845,7 +1850,11 @@ class CandlestickManager:
                                     merge_cache=True,
                                     last_refresh_ms=now,
                                 )
-                        arr = np.sort(self._cache[symbol], order="ts") if symbol in self._cache else np.empty((0,), dtype=CANDLE_DTYPE)
+                        arr = (
+                            np.sort(self._cache[symbol], order="ts")
+                            if symbol in self._cache
+                            else np.empty((0,), dtype=CANDLE_DTYPE)
+                        )
                         sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
 
         # Best-effort tail completion (present-only): if we still miss trailing
@@ -1954,7 +1963,9 @@ class CandlestickManager:
                             self._load_from_disk(symbol, start_ts, end_ts, timeframe="1m")
                         except Exception:
                             pass
-                        arr = _ensure_dtype(self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE)))
+                        arr = _ensure_dtype(
+                            self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE))
+                        )
                         sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
                         missing_now = self._missing_spans(sub, start_ts, inclusive_end)
                         if not any(ms == s and me == e for ms, me in missing_now):
@@ -2132,7 +2143,9 @@ class CandlestickManager:
 
                     # Refresh cache from disk before deciding to fetch
                     try:
-                        self._load_from_disk(symbol, last_final_locked, end_current_locked, timeframe="1m")
+                        self._load_from_disk(
+                            symbol, last_final_locked, end_current_locked, timeframe="1m"
+                        )
                     except Exception:
                         pass
 
