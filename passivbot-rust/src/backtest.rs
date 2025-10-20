@@ -1839,56 +1839,87 @@ impl<'a> Backtest<'a> {
         if self.trading_enabled.long {
             let long_indices: Vec<usize> = self.open_orders.long.keys().cloned().collect();
             for idx in long_indices {
+                let has_auto = self
+                    .open_orders
+                    .long
+                    .get(&idx)
+                    .map(|orders| {
+                        orders
+                            .closes
+                            .iter()
+                            .any(|o| o.order_type == OrderType::CloseAutoReduceLong)
+                    })
+                    .unwrap_or(false);
+                if !has_auto {
+                    continue;
+                }
+                let position_abs = self
+                    .positions
+                    .long
+                    .get(&idx)
+                    .map(|pos| pos.size.abs())
+                    .unwrap_or(0.0);
                 if let Some(orders) = self.open_orders.long.get_mut(&idx) {
-                    self.trim_reduce_only_orders(idx, LONG, &mut orders.closes);
+                    Self::trim_reduce_only_orders(
+                        &mut orders.closes,
+                        position_abs,
+                        LONG,
+                        &self.exchange_params_list[idx],
+                    );
                 }
             }
         }
         if self.trading_enabled.short {
             let short_indices: Vec<usize> = self.open_orders.short.keys().cloned().collect();
             for idx in short_indices {
+                let has_auto = self
+                    .open_orders
+                    .short
+                    .get(&idx)
+                    .map(|orders| {
+                        orders
+                            .closes
+                            .iter()
+                            .any(|o| o.order_type == OrderType::CloseAutoReduceShort)
+                    })
+                    .unwrap_or(false);
+                if !has_auto {
+                    continue;
+                }
+                let position_abs = self
+                    .positions
+                    .short
+                    .get(&idx)
+                    .map(|pos| pos.size.abs())
+                    .unwrap_or(0.0);
                 if let Some(orders) = self.open_orders.short.get_mut(&idx) {
-                    self.trim_reduce_only_orders(idx, SHORT, &mut orders.closes);
+                    Self::trim_reduce_only_orders(
+                        &mut orders.closes,
+                        position_abs,
+                        SHORT,
+                        &self.exchange_params_list[idx],
+                    );
                 }
             }
         }
     }
 
     #[inline]
-    fn trim_reduce_only_orders(&self, idx: usize, side: usize, closes: &mut Vec<Order>) {
+    fn trim_reduce_only_orders(
+        closes: &mut Vec<Order>,
+        position_abs: f64,
+        side: usize,
+        exchange_params: &ExchangeParams,
+    ) {
         const QTY_TOLERANCE: f64 = 1e-9;
         if closes.is_empty() {
             return;
         }
-        let has_auto_reduce = closes.iter().any(|o| match side {
-            LONG => o.order_type == OrderType::CloseAutoReduceLong,
-            SHORT => o.order_type == OrderType::CloseAutoReduceShort,
-            _ => false,
-        });
-        if !has_auto_reduce {
-            return;
-        }
-        let position_abs = match side {
-            LONG => self
-                .positions
-                .long
-                .get(&idx)
-                .map(|pos| pos.size.abs())
-                .unwrap_or(0.0),
-            SHORT => self
-                .positions
-                .short
-                .get(&idx)
-                .map(|pos| pos.size.abs())
-                .unwrap_or(0.0),
-            _ => 0.0,
-        };
         if position_abs <= QTY_TOLERANCE {
             closes.clear();
             return;
         }
 
-        let exchange_params = &self.exchange_params_list[idx];
         let mut closes_sorted = closes.clone();
         closes_sorted.sort_by(|a, b| match side {
             LONG => a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal),

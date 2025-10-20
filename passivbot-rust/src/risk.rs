@@ -90,18 +90,6 @@ pub fn calc_twel_enforcer_actions(
         } else {
             f64::MAX
         };
-        let max_reducible = (abs_psize - base_psize).max(0.0);
-        if max_reducible > 1e-9 {
-            eprintln!(
-                "[twel-candidate] idx={} abs_psize={} base_psize={} max_reducible={} exposure={} base_limit={}",
-                pos.idx,
-                abs_psize,
-                base_psize,
-                max_reducible,
-                exposure,
-                base_limit,
-            );
-        }
         candidates.push(Candidate {
             idx: pos.idx,
             exposure,
@@ -205,17 +193,6 @@ pub fn calc_twel_enforcer_actions(
         if qty_to_close <= qty_tolerance {
             continue;
         }
-        let max_reducible_total = (candidate.initial_abs_psize - candidate.base_psize).max(0.0);
-        eprintln!(
-            "[twel-summary] idx={} initial_psize={} base_psize={} final_psize={} requested_close={} clamped_close={} max_reducible={}",
-            candidate.idx,
-            candidate.initial_abs_psize,
-            candidate.base_psize,
-            candidate.abs_psize,
-            candidate.psize_to_close,
-            qty_to_close,
-            max_reducible_total,
-        );
         let mut price = candidate.mark_price;
         if !price.is_finite() || price <= 0.0 {
             price = candidate.position_price;
