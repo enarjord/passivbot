@@ -36,6 +36,7 @@ pub fn calc_twel_enforcer_actions(
         exposure: f64,
         base_limit: f64,
         base_psize: f64,
+        initial_abs_psize: f64,
         abs_psize: f64,
         position_price: f64,
         mark_price: f64,
@@ -94,6 +95,7 @@ pub fn calc_twel_enforcer_actions(
             exposure,
             base_limit,
             base_psize,
+            initial_abs_psize: abs_psize,
             abs_psize,
             position_price: pos.position_price,
             mark_price,
@@ -182,6 +184,15 @@ pub fn calc_twel_enforcer_actions(
         if candidate.psize_to_close <= qty_tolerance {
             continue;
         }
+        let available_qty = (candidate.initial_abs_psize - candidate.abs_psize).max(0.0);
+        if available_qty <= qty_tolerance {
+            continue;
+        }
+        let mut qty_to_close = candidate.psize_to_close.min(available_qty);
+        qty_to_close = round_dn(qty_to_close, candidate.qty_step);
+        if qty_to_close <= qty_tolerance {
+            continue;
+        }
         let mut price = candidate.mark_price;
         if !price.is_finite() || price <= 0.0 {
             price = candidate.position_price;
@@ -211,8 +222,8 @@ pub fn calc_twel_enforcer_actions(
             _ => price,
         };
         let qty = match side {
-            LONG => -candidate.psize_to_close,
-            SHORT => candidate.psize_to_close,
+            LONG => -qty_to_close,
+            SHORT => qty_to_close,
             _ => 0.0,
         };
         if qty.abs() <= qty_tolerance {
