@@ -213,7 +213,7 @@ pub fn calc_grid_entry_long(
     if initial_entry_price <= exchange_params.price_step {
         return Order::default();
     }
-    let initial_entry_qty = calc_initial_entry_qty(
+    let mut initial_entry_qty = calc_initial_entry_qty(
         exchange_params,
         bot_params,
         state_params.balance,
@@ -234,6 +234,9 @@ pub fn calc_grid_entry_long(
             price: initial_entry_price,
             order_type: OrderType::EntryInitialPartialLong,
         };
+    } else if position.size < initial_entry_qty {
+        initial_entry_qty = round_(position.size, exchange_params.qty_step)
+            .max(calc_min_entry_qty(initial_entry_price, &exchange_params));
     }
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
@@ -473,7 +476,7 @@ pub fn calc_trailing_entry_long(
     if initial_entry_price <= exchange_params.price_step {
         return Order::default();
     }
-    let initial_entry_qty = calc_initial_entry_qty(
+    let mut initial_entry_qty = calc_initial_entry_qty(
         exchange_params,
         bot_params,
         state_params.balance,
@@ -495,6 +498,9 @@ pub fn calc_trailing_entry_long(
             price: initial_entry_price,
             order_type: OrderType::EntryInitialPartialLong,
         };
+    } else if position.size < initial_entry_qty {
+        initial_entry_qty = round_(position.size, exchange_params.qty_step)
+            .max(calc_min_entry_qty(initial_entry_price, &exchange_params));
     }
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
@@ -633,7 +639,7 @@ pub fn calc_grid_entry_short(
     if initial_entry_price <= exchange_params.price_step {
         return Order::default();
     }
-    let initial_entry_qty = calc_initial_entry_qty(
+    let mut initial_entry_qty = calc_initial_entry_qty(
         exchange_params,
         bot_params,
         state_params.balance,
@@ -658,6 +664,9 @@ pub fn calc_grid_entry_short(
             price: initial_entry_price,
             order_type: OrderType::EntryInitialPartialShort,
         };
+    } else if position_size_abs < initial_entry_qty {
+        initial_entry_qty = round_(position_size_abs, exchange_params.qty_step)
+            .max(calc_min_entry_qty(initial_entry_price, &exchange_params));
     }
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
@@ -796,7 +805,7 @@ pub fn calc_trailing_entry_short(
     if initial_entry_price <= exchange_params.price_step {
         return Order::default();
     }
-    let initial_entry_qty = calc_initial_entry_qty(
+    let mut initial_entry_qty = calc_initial_entry_qty(
         exchange_params,
         bot_params,
         state_params.balance,
@@ -822,6 +831,9 @@ pub fn calc_trailing_entry_short(
             price: initial_entry_price,
             order_type: OrderType::EntryInitialPartialShort,
         };
+    } else if position_size_abs < initial_entry_qty {
+        initial_entry_qty = round_(position_size_abs, exchange_params.qty_step)
+            .max(calc_min_entry_qty(initial_entry_price, &exchange_params));
     }
     let wallet_exposure = calc_wallet_exposure(
         exchange_params.c_mult,
