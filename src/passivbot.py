@@ -2573,9 +2573,7 @@ class Passivbot:
                         exc,
                     )
                 except Exception as exc:
-                    logging.error(
-                        "error refreshing candles for %s: %s", sym, exc, exc_info=True
-                    )
+                    logging.error("error refreshing candles for %s: %s", sym, exc, exc_info=True)
         except Exception as e:
             logging.error(f"error with {get_function_name()} {e}")
             traceback.print_exc()
@@ -2756,9 +2754,14 @@ class Passivbot:
                     rate = completed / elapsed_s
                     pct = int(100 * completed / n)
                     eta_s = int((n - completed) / max(1e-6, rate))
-                    logging.info(
-                        f"volume EMA: {completed}/{n} {pct}% elapsed={int(elapsed_s)}s eta~{eta_s}s"
-                    )
+                    msg = f"volume EMA: {completed}/{n} {pct}% elapsed={int(elapsed_s)}s eta~{eta_s}s"
+                    log_level = getattr(self, "logging_level", 1)
+                    if log_level >= 3:
+                        logging.debug(msg)
+                    elif completed == n:
+                        logging.info(
+                            f"volume EMA refresh finished for {n} symbols in {int(elapsed_s)}s"
+                        )
                     last_log_ms = now_ms
         return out
 
