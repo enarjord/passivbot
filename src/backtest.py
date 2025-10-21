@@ -743,7 +743,7 @@ def post_process(
     )
     json.dump(analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True)
     config["analysis"] = analysis
-    dump_config(config, f"{results_path}config.json")
+    dump_config(format_config(config), f"{results_path}config.json")
     fdf.to_csv(f"{results_path}fills.csv")
     bal_eq.to_csv(oj(results_path, "balance_and_equity.csv.gz"), compression="gzip")
     balance_figs = create_forager_balance_figures(bal_eq)
