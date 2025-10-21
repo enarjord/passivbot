@@ -7,13 +7,13 @@ and boolean checks; the pseudo-code below mirrors the algebra in
 
 Throughout:
 
-* `side ∈ {long, short}`
+* `pside ∈ {long, short}`
 * `EMA_low, EMA_high` are the minima / maxima of the three EMA spans
   (`ema_span_0`, `ema_span_1`, `sqrt(ema_span_0 * ema_span_1)`).
 * `pos.price`, `pos.size` are the current average entry price and signed quantity
   (`>0` long, `<0` short).
 * `wallet_exposure(balance, size, price, c_mult)` returns `abs(size) * price / (balance * c_mult)`.
-* `wel_base` abbreviates `wallet_exposure_limit` for the symbol and side.
+* `wel_base` abbreviates `wallet_exposure_limit` for the symbol and pside.
 
 ## Initial Entry & Grid Re-entries
 
@@ -22,7 +22,7 @@ alpha(span)         = 2 / (span + 1)
 ramp_spacing(wel)   = 1 + (wel / wel_base) * entry_grid_spacing_we_weight + vol_term
 vol_term            = log_range_ema * entry_grid_spacing_log_weight
 
-initial_price(side) =
+initial_price(pside) =
     long  : min(best_bid, EMA_low * (1 - entry_initial_ema_dist))
     short : max(best_ask, EMA_high * (1 + entry_initial_ema_dist))
 
@@ -30,7 +30,7 @@ initial_qty(balance) =
     max(min_qty,
         balance * wel_base * entry_initial_qty_pct / initial_price)
 
-next_grid_price(side, k) =
+next_grid_price(pside, k) =
     long  : last_fill_price * (1 - entry_grid_spacing_pct * ramp_spacing(wel))^k
     short : last_fill_price * (1 + entry_grid_spacing_pct * ramp_spacing(wel))^k
 
@@ -60,7 +60,7 @@ retracement = entry_trailing_retracement_pct *
 
 wel_ratio = wallet_exposure(...) / wel_base
 
-triggered_when(side == long):
+triggered_when(pside == long):
     high_since_entry    > pos.price * (1 + threshold)
     and
     low_since_threshold < high_since_entry * (1 - retracement)
@@ -80,14 +80,14 @@ limit (or the TWEL enforcer, see below).
 ## Take-profit Grid (Close Orders)
 
 ```text
-tp_prices(side, i in [0, n)):
+tp_prices(pside, i in [0, n)):
     step   = (close_grid_markup_end - close_grid_markup_start) / (n - 1)
     markup = close_grid_markup_start + i * step
 
     long  : pos.price * (1 + markup)
     short : pos.price * (1 - markup)
 
-tp_qty(side, i) = full_pos_size * close_grid_qty_pct
+tp_qty(pside, i) = full_pos_size * close_grid_qty_pct
 ```
 
 `n ≈ 1 / close_grid_qty_pct`.  Quantities are trimmed so the sum equals the current position
@@ -129,7 +129,7 @@ unstuck_allowed = peak_balance * (1 - unstuck_loss_allowance_pct *
 if equity < unstuck_allowed:
     close_qty   = full_pos_size * unstuck_close_pct
     close_price = EMA_band_opposite *
-                    (1 + sign(side) * unstuck_ema_dist)
+                    (1 + sign(pside) * unstuck_ema_dist)
 ```
 
 Positions become eligible when
@@ -156,7 +156,7 @@ While `Σ exposure_i` exceeds the threshold:
 The final reduce-only order is:
 
 ```text
-qty  = sign(side) * min(reduced_psize, |pos.size|)
+qty  = sign(pside) * min(reduced_psize, |pos.size|)
 price ≈ mark_price
 order_type = CloseAutoReduce{Long,Short}
 ```
