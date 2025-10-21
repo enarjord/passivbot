@@ -2173,9 +2173,7 @@ class Passivbot:
                             "position_size": float(size),
                             "position_price": float(self.positions[symbol][pside]["price"]),
                             "mark_price": float(
-                                last_prices.get(
-                                    symbol, self.positions[symbol][pside]["price"]
-                                )
+                                last_prices.get(symbol, self.positions[symbol][pside]["price"])
                             ),
                             "base_wallet_exposure_limit": float(
                                 self.bp(pside, "wallet_exposure_limit", symbol)
@@ -2217,9 +2215,7 @@ class Passivbot:
                     if symbol not in ideal_orders_f:
                         ideal_orders_f[symbol] = []
                     order_side = "sell" if pside == "long" else "buy"
-                    exec_type = (
-                        "market" if self.live_value("market_orders_allowed") else "limit"
-                    )
+                    exec_type = "market" if self.live_value("market_orders_allowed") else "limit"
                     ideal_orders_f[symbol].append(
                         {
                             "symbol": symbol,
