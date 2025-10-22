@@ -175,11 +175,12 @@ The final reduce-only order is:
 
 ```text
 qty  = sign(pside) * min(reduced_psize, |pos.size|)
-price ≈ mark_price
+price ≈ market_price
 order_type = CloseAutoReduceTwel{Long,Short}
 ```
 
 By construction the quantity never exceeds the live position size.
+Positions already earmarked for `CloseAutoReduceWel*` during the same scheduling cycle are skipped so that reductions do not double-up; they can be considered again on subsequent iterations once the WEL order has been filled.
 
 ## Parameter Interactions at a Glance
 

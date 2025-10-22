@@ -1,14 +1,15 @@
 use crate::constants::{LONG, SHORT};
 use crate::types::{Order, OrderType};
-use crate::utils::{calc_wallet_exposure, round_dn, round_up};
+use crate::utils::{calc_pprice_diff_int, calc_wallet_exposure, round_dn, round_up};
 
 #[derive(Clone, Debug)]
 pub struct TwelEnforcerInputPosition {
     pub idx: usize,
     pub position_size: f64,
     pub position_price: f64,
-    pub mark_price: f64,
+    pub market_price: f64,
     pub base_wallet_exposure_limit: f64,
+    pub risk_wel_enforcer_threshold: f64,
     pub risk_we_excess_allowance_pct: f64,
     pub c_mult: f64,
     pub qty_step: f64,
@@ -16,7 +17,7 @@ pub struct TwelEnforcerInputPosition {
 }
 
 pub fn calc_twel_enforcer_actions(
-    side: usize,
+    pside: usize,
     threshold: f64,
     total_wallet_exposure_limit: f64,
     balance: f64,
@@ -34,12 +35,12 @@ pub fn calc_twel_enforcer_actions(
     struct Candidate {
         idx: usize,
         exposure: f64,
-        base_limit: f64,
-        base_psize: f64,
+        target_limit: f64,
+        target_psize: f64,
         initial_abs_psize: f64,
         abs_psize: f64,
         position_price: f64,
-        mark_price: f64,
+        market_price: f64,
         qty_step: f64,
         price_step: f64,
         c_mult: f64,
@@ -68,10 +69,12 @@ pub fn calc_twel_enforcer_actions(
             continue;
         }
         let allowed_limit = base_limit * (1.0 + pos.risk_we_excess_allowance_pct.max(0.0));
-        if allowed_limit <= base_limit {
-            continue;
-        }
-        if exposure <= base_limit {
+        let target_limit = if pos.risk_wel_enforcer_threshold > 0.0 {
+            allowed_limit * pos.risk_wel_enforcer_threshold
+        } else {
+            allowed_limit
+        };
+        if exposure <= target_limit {
             continue;
         }
         if let Some(skip) = skip_idx {
@@ -79,26 +82,22 @@ pub fn calc_twel_enforcer_actions(
                 continue;
             }
         }
-        let mark_price = if pos.mark_price.is_finite() && pos.mark_price > 0.0 {
-            pos.mark_price
+        let market_price = if pos.market_price.is_finite() && pos.market_price > 0.0 {
+            pos.market_price
         } else {
             pos.position_price
         };
-        let base_psize = (base_limit * balance) / (pos.position_price * pos.c_mult);
-        let price_diff = if pos.position_price > 0.0 {
-            (mark_price / pos.position_price - 1.0).abs()
-        } else {
-            f64::MAX
-        };
+        let target_psize = (target_limit * balance) / (pos.position_price * pos.c_mult);
+        let price_diff = calc_pprice_diff_int(pside, pos.position_price, market_price);
         candidates.push(Candidate {
             idx: pos.idx,
             exposure,
-            base_limit,
-            base_psize,
+            target_limit,
+            target_psize,
             initial_abs_psize: abs_psize,
             abs_psize,
             position_price: pos.position_price,
-            mark_price,
+            market_price,
             qty_step: pos.qty_step,
             price_step: pos.price_step,
             c_mult: pos.c_mult,
@@ -121,10 +120,10 @@ pub fn calc_twel_enforcer_actions(
         let mut best_idx: Option<usize> = None;
         let mut best_metric = f64::MAX;
         for (idx, candidate) in candidates.iter().enumerate() {
-            if candidate.exposure <= candidate.base_limit + exposure_tolerance {
+            if candidate.exposure <= candidate.target_limit + exposure_tolerance {
                 continue;
             }
-            if candidate.abs_psize <= candidate.base_psize + qty_tolerance {
+            if candidate.abs_psize <= candidate.target_psize + qty_tolerance {
                 continue;
             }
             if candidate.price_diff < best_metric {
@@ -136,9 +135,9 @@ pub fn calc_twel_enforcer_actions(
             break;
         };
         let candidate = &mut candidates[candidate_idx];
-        let max_reducible_psize = (candidate.abs_psize - candidate.base_psize).max(0.0);
+        let max_reducible_psize = (candidate.abs_psize - candidate.target_psize).max(0.0);
         if max_reducible_psize <= qty_tolerance {
-            candidate.exposure = candidate.base_limit;
+            candidate.exposure = candidate.target_limit;
             continue;
         }
         let needed_exposure = (total_exposure - limit).max(0.0);
@@ -149,7 +148,7 @@ pub fn calc_twel_enforcer_actions(
             (needed_exposure * balance) / (candidate.position_price * candidate.c_mult);
         let raw_reduce_psize = max_reducible_psize.min(needed_psize.max(0.0));
         if raw_reduce_psize <= qty_tolerance {
-            candidate.exposure = candidate.base_limit;
+            candidate.exposure = candidate.target_limit;
             continue;
         }
         let mut qty_reduce = round_up(raw_reduce_psize, candidate.qty_step);
@@ -157,7 +156,7 @@ pub fn calc_twel_enforcer_actions(
             qty_reduce = max_reducible_psize;
         }
         if qty_reduce <= qty_tolerance {
-            candidate.exposure = candidate.base_limit;
+            candidate.exposure = candidate.target_limit;
             continue;
         }
         let new_abs_psize = (candidate.abs_psize - qty_reduce).max(0.0);
@@ -193,14 +192,14 @@ pub fn calc_twel_enforcer_actions(
         if qty_to_close <= qty_tolerance {
             continue;
         }
-        let mut price = candidate.mark_price;
+        let mut price = candidate.market_price;
         if !price.is_finite() || price <= 0.0 {
             price = candidate.position_price;
         }
         if price <= 0.0 {
             continue;
         }
-        let price = match side {
+        let price = match pside {
             LONG => {
                 let adjusted = price * 0.9995;
                 let rounded = round_dn(adjusted, candidate.price_step);
@@ -221,7 +220,7 @@ pub fn calc_twel_enforcer_actions(
             }
             _ => price,
         };
-        let qty = match side {
+        let qty = match pside {
             LONG => -qty_to_close,
             SHORT => qty_to_close,
             _ => 0.0,
@@ -229,7 +228,7 @@ pub fn calc_twel_enforcer_actions(
         if qty.abs() <= qty_tolerance {
             continue;
         }
-        let order_type = match side {
+        let order_type = match pside {
             LONG => OrderType::CloseAutoReduceTwelLong,
             SHORT => OrderType::CloseAutoReduceTwelShort,
             _ => OrderType::Empty,

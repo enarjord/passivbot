@@ -1107,10 +1107,10 @@ pub fn calc_twel_enforcer_orders_py(
                     PyValueError::new_err("twel enforcer position missing 'position_price'")
                 })?
                 .extract::<f64>()?,
-            mark_price: dict
-                .get_item("mark_price")?
+            market_price: dict
+                .get_item("market_price")?
                 .ok_or_else(|| {
-                    PyValueError::new_err("twel enforcer position missing 'mark_price'")
+                    PyValueError::new_err("twel enforcer position missing 'market_price'")
                 })?
                 .extract::<f64>()?,
             base_wallet_exposure_limit: dict
@@ -1118,6 +1118,14 @@ pub fn calc_twel_enforcer_orders_py(
                 .ok_or_else(|| {
                     PyValueError::new_err(
                         "twel enforcer position missing 'base_wallet_exposure_limit'",
+                    )
+                })?
+                .extract::<f64>()?,
+            risk_wel_enforcer_threshold: dict
+                .get_item("risk_wel_enforcer_threshold")?
+                .ok_or_else(|| {
+                    PyValueError::new_err(
+                        "twel enforcer position missing 'risk_wel_enforcer_threshold'",
                     )
                 })?
                 .extract::<f64>()?,

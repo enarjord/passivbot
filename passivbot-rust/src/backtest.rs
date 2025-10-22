@@ -1680,6 +1680,39 @@ impl<'a> Backtest<'a> {
         let skip_long = skip.filter(|(_, side)| *side == LONG).map(|(idx, _)| idx);
         let skip_short = skip.filter(|(_, side)| *side == SHORT).map(|(idx, _)| idx);
 
+        let wel_blocked_long: HashSet<usize> = self
+            .open_orders
+            .long
+            .iter()
+            .filter_map(|(&idx, orders)| {
+                if orders
+                    .closes
+                    .iter()
+                    .any(|o| o.order_type == OrderType::CloseAutoReduceWelLong)
+                {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let wel_blocked_short: HashSet<usize> = self
+            .open_orders
+            .short
+            .iter()
+            .filter_map(|(&idx, orders)| {
+                if orders
+                    .closes
+                    .iter()
+                    .any(|o| o.order_type == OrderType::CloseAutoReduceWelShort)
+                {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         let long_threshold = self.bot_params_master.long.risk_twel_enforcer_threshold;
         if long_threshold >= 0.0 {
             let total_wel_long = self
@@ -1691,13 +1724,17 @@ impl<'a> Backtest<'a> {
                 let mut inputs: Vec<TwelEnforcerInputPosition> =
                     Vec::with_capacity(self.positions.long.len());
                 for (&idx, position) in &self.positions.long {
-                    let mark_price = self.hlcvs[[k, idx, CLOSE]];
+                    if wel_blocked_long.contains(&idx) {
+                        continue;
+                    }
+                    let market_price = self.hlcvs[[k, idx, CLOSE]];
                     inputs.push(TwelEnforcerInputPosition {
                         idx,
                         position_size: position.size,
                         position_price: position.price,
-                        mark_price,
+                        market_price,
                         base_wallet_exposure_limit: self.bp(idx, LONG).wallet_exposure_limit,
+                        risk_wel_enforcer_threshold: self.bp(idx, LONG).risk_wel_enforcer_threshold,
                         risk_we_excess_allowance_pct: self.bp(idx, LONG).risk_we_excess_allowance_pct,
                         c_mult: self.exchange_params_list[idx].c_mult,
                         qty_step: self.exchange_params_list[idx].qty_step,
@@ -1729,13 +1766,17 @@ impl<'a> Backtest<'a> {
                 let mut inputs: Vec<TwelEnforcerInputPosition> =
                     Vec::with_capacity(self.positions.short.len());
                 for (&idx, position) in &self.positions.short {
-                    let mark_price = self.hlcvs[[k, idx, CLOSE]];
+                    if wel_blocked_short.contains(&idx) {
+                        continue;
+                    }
+                    let market_price = self.hlcvs[[k, idx, CLOSE]];
                     inputs.push(TwelEnforcerInputPosition {
                         idx,
                         position_size: position.size,
                         position_price: position.price,
-                        mark_price,
+                        market_price,
                         base_wallet_exposure_limit: self.bp(idx, SHORT).wallet_exposure_limit,
+                        risk_wel_enforcer_threshold: self.bp(idx, SHORT).risk_wel_enforcer_threshold,
                         risk_we_excess_allowance_pct: self.bp(idx, SHORT).risk_we_excess_allowance_pct,
                         c_mult: self.exchange_params_list[idx].c_mult,
                         qty_step: self.exchange_params_list[idx].qty_step,

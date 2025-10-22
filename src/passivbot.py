@@ -2142,6 +2142,16 @@ class Passivbot:
                     }
                 )
                 seen.add(seen_key)
+        wel_blocked_symbols = {
+            symbol
+            for symbol, orders in ideal_orders.items()
+            if any(
+                isinstance(order, tuple)
+                and isinstance(order[2], str)
+                and "close_auto_reduce_wel" in order[2]
+                for order in orders
+            )
+        }
         # TWEL enforcer orders
         try:
             unstuck_side = ""
@@ -2165,6 +2175,8 @@ class Passivbot:
                 for symbol in self.positions:
                     if not self.has_position(pside, symbol):
                         continue
+                    if symbol in wel_blocked_symbols:
+                        continue
                     size = self.positions[symbol][pside]["size"]
                     if size == 0.0:
                         continue
@@ -2173,11 +2185,14 @@ class Passivbot:
                             "idx": idx_counter,
                             "position_size": float(size),
                             "position_price": float(self.positions[symbol][pside]["price"]),
-                            "mark_price": float(
+                            "market_price": float(
                                 last_prices.get(symbol, self.positions[symbol][pside]["price"])
                             ),
                             "base_wallet_exposure_limit": float(
                                 self.bp(pside, "wallet_exposure_limit", symbol)
+                            ),
+                            "risk_wel_enforcer_threshold": float(
+                                self.bp(pside, "risk_wel_enforcer_threshold", symbol)
                             ),
                             "risk_we_excess_allowance_pct": float(
                                 self.bp(pside, "risk_we_excess_allowance_pct", symbol)
