@@ -179,8 +179,8 @@ pub enum OrderType {
     EntryGridInflatedLong = 6,
 
     CloseGridLong = 7,
-   CloseTrailingLong = 8,
-   CloseUnstuckLong = 9,
+    CloseTrailingLong = 8,
+    CloseUnstuckLong = 9,
     CloseAutoReduceTwelLong = 10,
 
     EntryInitialNormalShort = 11,

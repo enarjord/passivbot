@@ -1735,7 +1735,9 @@ impl<'a> Backtest<'a> {
                         market_price,
                         base_wallet_exposure_limit: self.bp(idx, LONG).wallet_exposure_limit,
                         risk_wel_enforcer_threshold: self.bp(idx, LONG).risk_wel_enforcer_threshold,
-                        risk_we_excess_allowance_pct: self.bp(idx, LONG).risk_we_excess_allowance_pct,
+                        risk_we_excess_allowance_pct: self
+                            .bp(idx, LONG)
+                            .risk_we_excess_allowance_pct,
                         c_mult: self.exchange_params_list[idx].c_mult,
                         qty_step: self.exchange_params_list[idx].qty_step,
                         price_step: self.exchange_params_list[idx].price_step,
@@ -1776,8 +1778,12 @@ impl<'a> Backtest<'a> {
                         position_price: position.price,
                         market_price,
                         base_wallet_exposure_limit: self.bp(idx, SHORT).wallet_exposure_limit,
-                        risk_wel_enforcer_threshold: self.bp(idx, SHORT).risk_wel_enforcer_threshold,
-                        risk_we_excess_allowance_pct: self.bp(idx, SHORT).risk_we_excess_allowance_pct,
+                        risk_wel_enforcer_threshold: self
+                            .bp(idx, SHORT)
+                            .risk_wel_enforcer_threshold,
+                        risk_we_excess_allowance_pct: self
+                            .bp(idx, SHORT)
+                            .risk_we_excess_allowance_pct,
                         c_mult: self.exchange_params_list[idx].c_mult,
                         qty_step: self.exchange_params_list[idx].qty_step,
                         price_step: self.exchange_params_list[idx].price_step,
@@ -1885,15 +1891,13 @@ impl<'a> Backtest<'a> {
                     .long
                     .get(&idx)
                     .map(|orders| {
-                        orders
-                            .closes
-                            .iter()
-                            .any(|o| {
-                                matches!(
-                                    o.order_type,
-                                    OrderType::CloseAutoReduceWelLong | OrderType::CloseAutoReduceTwelLong
-                                )
-                            })
+                        orders.closes.iter().any(|o| {
+                            matches!(
+                                o.order_type,
+                                OrderType::CloseAutoReduceWelLong
+                                    | OrderType::CloseAutoReduceTwelLong
+                            )
+                        })
                     })
                     .unwrap_or(false);
                 if !has_auto {
@@ -1923,15 +1927,13 @@ impl<'a> Backtest<'a> {
                     .short
                     .get(&idx)
                     .map(|orders| {
-                        orders
-                            .closes
-                            .iter()
-                            .any(|o| {
-                                matches!(
-                                    o.order_type,
-                                    OrderType::CloseAutoReduceWelShort | OrderType::CloseAutoReduceTwelShort
-                                )
-                            })
+                        orders.closes.iter().any(|o| {
+                            matches!(
+                                o.order_type,
+                                OrderType::CloseAutoReduceWelShort
+                                    | OrderType::CloseAutoReduceTwelShort
+                            )
+                        })
                     })
                     .unwrap_or(false);
                 if !has_auto {

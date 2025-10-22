@@ -65,8 +65,8 @@ fn calc_wel_auto_reduce_long(
     if position_size_abs <= f64::EPSILON {
         return None;
     }
-    let target_psize = (target_exposure * state_params.balance)
-        / (position.price * exchange_params.c_mult);
+    let target_psize =
+        (target_exposure * state_params.balance) / (position.price * exchange_params.c_mult);
     let mut reduce_qty = (position_size_abs - target_psize).max(0.0);
     if reduce_qty <= f64::EPSILON {
         return None;
@@ -123,8 +123,8 @@ fn calc_wel_auto_reduce_short(
     if position_size_abs <= f64::EPSILON {
         return None;
     }
-    let target_psize = (target_exposure * state_params.balance)
-        / (position.price * exchange_params.c_mult);
+    let target_psize =
+        (target_exposure * state_params.balance) / (position.price * exchange_params.c_mult);
     let mut reduce_qty = (position_size_abs - target_psize).max(0.0);
     if reduce_qty <= f64::EPSILON {
         return None;
