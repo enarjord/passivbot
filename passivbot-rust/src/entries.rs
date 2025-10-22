@@ -44,7 +44,7 @@ fn wallet_exposure_limit_with_allowance(bot_params: &BotParams) -> f64 {
     if base_limit <= 0.0 {
         base_limit
     } else {
-        base_limit * (1.0 + bot_params.we_excess_allowance_pct.max(0.0))
+        base_limit * (1.0 + bot_params.risk_we_excess_allowance_pct.max(0.0))
     }
 }
 

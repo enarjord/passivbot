@@ -9,7 +9,7 @@ pub struct TwelEnforcerInputPosition {
     pub position_price: f64,
     pub mark_price: f64,
     pub base_wallet_exposure_limit: f64,
-    pub we_excess_allowance_pct: f64,
+    pub risk_we_excess_allowance_pct: f64,
     pub c_mult: f64,
     pub qty_step: f64,
     pub price_step: f64,
@@ -67,7 +67,7 @@ pub fn calc_twel_enforcer_actions(
         if base_limit <= 0.0 {
             continue;
         }
-        let allowed_limit = base_limit * (1.0 + pos.we_excess_allowance_pct.max(0.0));
+        let allowed_limit = base_limit * (1.0 + pos.risk_we_excess_allowance_pct.max(0.0));
         if allowed_limit <= base_limit {
             continue;
         }

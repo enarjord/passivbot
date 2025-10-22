@@ -138,11 +138,11 @@ Positions become eligible when
 ## TWEL Enforcer (Auto Reduce)
 
 The “Total Wallet Exposure Limit” enforcer keeps the sum of exposures below
-`total_wallet_exposure_limit * twel_enforcer_threshold`.  For each position:
+`total_wallet_exposure_limit * risk_twel_enforcer_threshold`.  For each position:
 
 ```text
 exposure_i      = wallet_exposure(...)
-allowed_i       = wel_base_i * (1 + we_excess_allowance_pct)
+allowed_i       = wel_base_i * (1 + risk_we_excess_allowance_pct)
 base_psize_i    = allowed_i * balance / (price_i * c_mult_i)
 max_reducible_i = max(0, |pos.size_i| - base_psize_i)
 ```
@@ -173,7 +173,7 @@ By construction the quantity never exceeds the live position size.
 | `close_grid_markup_*`, `close_grid_qty_pct`    | Shapes TP ladder                                          | `tp_prices`, `tp_qty` |
 | `close_trailing_*`                             | Mirrors trailing entries but for exits                    | `threshold_close`, `retracement_close` |
 | `unstuck_*`                                    | Loss realization rules                                    | `unstuck_allowed`, `close_price` |
-| `twel_enforcer_threshold`, `we_excess_allowance_pct` | Portfolio-wide exposure cap                              | `max_reducible_i`, `qty` |
+| `risk_twel_enforcer_threshold`, `risk_we_excess_allowance_pct` | Portfolio-wide exposure cap                              | `max_reducible_i`, `qty` |
 
 For worked examples on a per-parameter basis, see the comments sprinkled in
 `passivbot-rust/src/entries.rs` and the optimiser notebooks under `notebooks/`.

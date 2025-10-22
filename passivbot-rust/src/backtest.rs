@@ -1680,7 +1680,7 @@ impl<'a> Backtest<'a> {
         let skip_long = skip.filter(|(_, side)| *side == LONG).map(|(idx, _)| idx);
         let skip_short = skip.filter(|(_, side)| *side == SHORT).map(|(idx, _)| idx);
 
-        let long_threshold = self.bot_params_master.long.twel_enforcer_threshold;
+        let long_threshold = self.bot_params_master.long.risk_twel_enforcer_threshold;
         if long_threshold >= 0.0 {
             let total_wel_long = self
                 .bot_params_master
@@ -1698,7 +1698,7 @@ impl<'a> Backtest<'a> {
                         position_price: position.price,
                         mark_price,
                         base_wallet_exposure_limit: self.bp(idx, LONG).wallet_exposure_limit,
-                        we_excess_allowance_pct: self.bp(idx, LONG).we_excess_allowance_pct,
+                        risk_we_excess_allowance_pct: self.bp(idx, LONG).risk_we_excess_allowance_pct,
                         c_mult: self.exchange_params_list[idx].c_mult,
                         qty_step: self.exchange_params_list[idx].qty_step,
                         price_step: self.exchange_params_list[idx].price_step,
@@ -1718,7 +1718,7 @@ impl<'a> Backtest<'a> {
             }
         }
 
-        let short_threshold = self.bot_params_master.short.twel_enforcer_threshold;
+        let short_threshold = self.bot_params_master.short.risk_twel_enforcer_threshold;
         if short_threshold >= 0.0 {
             let total_wel_short = self
                 .bot_params_master
@@ -1736,7 +1736,7 @@ impl<'a> Backtest<'a> {
                         position_price: position.price,
                         mark_price,
                         base_wallet_exposure_limit: self.bp(idx, SHORT).wallet_exposure_limit,
-                        we_excess_allowance_pct: self.bp(idx, SHORT).we_excess_allowance_pct,
+                        risk_we_excess_allowance_pct: self.bp(idx, SHORT).risk_we_excess_allowance_pct,
                         c_mult: self.exchange_params_list[idx].c_mult,
                         qty_step: self.exchange_params_list[idx].qty_step,
                         price_step: self.exchange_params_list[idx].price_step,

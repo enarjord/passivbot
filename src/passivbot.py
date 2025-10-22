@@ -2047,7 +2047,7 @@ class Passivbot:
                         self.bp(pside, "entry_trailing_threshold_we_weight", symbol),
                         self.bp(pside, "entry_trailing_threshold_log_weight", symbol),
                         self.bp(pside, "wallet_exposure_limit", symbol),
-                        self.bp(pside, "we_excess_allowance_pct", symbol),
+                        self.bp(pside, "risk_we_excess_allowance_pct", symbol),
                         self.balance,
                         self.positions[symbol][pside]["size"],
                         self.positions[symbol][pside]["price"],
@@ -2073,7 +2073,7 @@ class Passivbot:
                         self.bp(pside, "close_trailing_retracement_pct", symbol),
                         self.bp(pside, "close_trailing_threshold_pct", symbol),
                         self.bp(pside, "wallet_exposure_limit", symbol),
-                        self.bp(pside, "we_excess_allowance_pct", symbol),
+                        self.bp(pside, "risk_we_excess_allowance_pct", symbol),
                         self.balance,
                         self.positions[symbol][pside]["size"],
                         self.positions[symbol][pside]["price"],
@@ -2152,7 +2152,7 @@ class Passivbot:
                     elif "short" in order_name:
                         unstuck_side = "short"
             for pside in ["long", "short"]:
-                threshold = self.bot_value(pside, "twel_enforcer_threshold")
+                threshold = self.bot_value(pside, "risk_twel_enforcer_threshold")
                 if threshold is None or threshold < 0.0:
                     continue
                 total_wel = self.bot_value(pside, "total_wallet_exposure_limit")
@@ -2178,8 +2178,8 @@ class Passivbot:
                             "base_wallet_exposure_limit": float(
                                 self.bp(pside, "wallet_exposure_limit", symbol)
                             ),
-                            "we_excess_allowance_pct": float(
-                                self.bp(pside, "we_excess_allowance_pct", symbol)
+                            "risk_we_excess_allowance_pct": float(
+                                self.bp(pside, "risk_we_excess_allowance_pct", symbol)
                             ),
                             "c_mult": float(self.c_mults[symbol]),
                             "qty_step": float(self.qty_steps[symbol]),
