@@ -39,7 +39,7 @@ pub fn calc_min_entry_qty(entry_price: f64, exchange_params: &ExchangeParams) ->
     )
 }
 
-fn wallet_exposure_limit_with_allowance(bot_params: &BotParams) -> f64 {
+pub fn wallet_exposure_limit_with_allowance(bot_params: &BotParams) -> f64 {
     let base_limit = bot_params.wallet_exposure_limit;
     if base_limit <= 0.0 {
         base_limit

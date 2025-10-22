@@ -1,4 +1,4 @@
-use crate::entries::calc_min_entry_qty;
+use crate::entries::{calc_min_entry_qty, wallet_exposure_limit_with_allowance};
 use crate::types::{
     BotParams, ExchangeParams, Order, OrderType, Position, StateParams, TrailingPriceBundle,
 };
@@ -38,6 +38,122 @@ pub fn calc_close_qty(
     } else {
         close_qty
     }
+}
+
+fn calc_wel_auto_reduce_long(
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    bot_params: &BotParams,
+    position: &Position,
+    wallet_exposure: f64,
+) -> Option<Order> {
+    if bot_params.risk_wel_enforcer_threshold <= 0.0 {
+        return None;
+    }
+    if state_params.balance <= 0.0 || position.price <= 0.0 {
+        return None;
+    }
+    let allowed_limit = wallet_exposure_limit_with_allowance(bot_params);
+    if allowed_limit <= 0.0 {
+        return None;
+    }
+    let target_exposure = allowed_limit * bot_params.risk_wel_enforcer_threshold;
+    if wallet_exposure <= target_exposure {
+        return None;
+    }
+    let position_size_abs = position.size.abs();
+    if position_size_abs <= f64::EPSILON {
+        return None;
+    }
+    let target_psize = (target_exposure * state_params.balance)
+        / (position.price * exchange_params.c_mult);
+    let mut reduce_qty = (position_size_abs - target_psize).max(0.0);
+    if reduce_qty <= f64::EPSILON {
+        return None;
+    }
+    reduce_qty = round_up(reduce_qty, exchange_params.qty_step);
+    if reduce_qty <= f64::EPSILON {
+        return None;
+    }
+    let market_price = if state_params.order_book.ask > 0.0 {
+        state_params.order_book.ask
+    } else {
+        position.price
+    };
+    if market_price <= 0.0 {
+        return None;
+    }
+    let min_qty = calc_min_entry_qty(market_price, exchange_params);
+    let close_qty = f64::min(
+        position_size_abs,
+        f64::max(min_qty, reduce_qty.min(position_size_abs)),
+    );
+    if close_qty <= f64::EPSILON {
+        return None;
+    }
+    Some(Order {
+        qty: -close_qty,
+        price: market_price,
+        order_type: OrderType::CloseAutoReduceWelLong,
+    })
+}
+
+fn calc_wel_auto_reduce_short(
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    bot_params: &BotParams,
+    position: &Position,
+    wallet_exposure: f64,
+) -> Option<Order> {
+    if bot_params.risk_wel_enforcer_threshold <= 0.0 {
+        return None;
+    }
+    if state_params.balance <= 0.0 || position.price <= 0.0 {
+        return None;
+    }
+    let allowed_limit = wallet_exposure_limit_with_allowance(bot_params);
+    if allowed_limit <= 0.0 {
+        return None;
+    }
+    let target_exposure = allowed_limit * bot_params.risk_wel_enforcer_threshold;
+    if wallet_exposure <= target_exposure {
+        return None;
+    }
+    let position_size_abs = position.size.abs();
+    if position_size_abs <= f64::EPSILON {
+        return None;
+    }
+    let target_psize = (target_exposure * state_params.balance)
+        / (position.price * exchange_params.c_mult);
+    let mut reduce_qty = (position_size_abs - target_psize).max(0.0);
+    if reduce_qty <= f64::EPSILON {
+        return None;
+    }
+    reduce_qty = round_up(reduce_qty, exchange_params.qty_step);
+    if reduce_qty <= f64::EPSILON {
+        return None;
+    }
+    let market_price = if state_params.order_book.bid > 0.0 {
+        state_params.order_book.bid
+    } else {
+        position.price
+    };
+    if market_price <= 0.0 {
+        return None;
+    }
+    let min_qty = calc_min_entry_qty(market_price, exchange_params);
+    let close_qty = f64::min(
+        position_size_abs,
+        f64::max(min_qty, reduce_qty.min(position_size_abs)),
+    );
+    if close_qty <= f64::EPSILON {
+        return None;
+    }
+    Some(Order {
+        qty: close_qty,
+        price: market_price,
+        order_type: OrderType::CloseAutoReduceWelShort,
+    })
 }
 
 pub fn calc_grid_close_long(
@@ -234,6 +350,15 @@ pub fn calc_next_close_long(
         position.size,
         position.price,
     );
+    if let Some(order) = calc_wel_auto_reduce_long(
+        exchange_params,
+        state_params,
+        bot_params,
+        position,
+        wallet_exposure,
+    ) {
+        return order;
+    }
     let wallet_exposure_ratio = if bot_params.wallet_exposure_limit <= 0.0 {
         10.0
     } else {
@@ -365,13 +490,12 @@ pub fn calc_grid_close_short(
     let n_steps =
         ((close_prices_start - close_prices_end).abs() / exchange_params.price_step).ceil();
     let close_grid_qty_pct_modified = f64::max(bot_params.close_grid_qty_pct, 1.0 / n_steps);
-    let wallet_exposure = calc_wallet_exposure(
+    let wallet_exposure_ratio = calc_wallet_exposure(
         exchange_params.c_mult,
         state_params.balance,
         position_size_abs,
         position.price,
-    );
-    let wallet_exposure_ratio = wallet_exposure / bot_params.wallet_exposure_limit;
+    ) / bot_params.wallet_exposure_limit;
     let close_price = if wallet_exposure_ratio > 1.0 {
         f64::min(
             state_params.order_book.bid,
@@ -520,6 +644,15 @@ pub fn calc_next_close_short(
         position_size_abs,
         position.price,
     );
+    if let Some(order) = calc_wel_auto_reduce_short(
+        exchange_params,
+        state_params,
+        bot_params,
+        position,
+        wallet_exposure,
+    ) {
+        return order;
+    }
     let wallet_exposure_ratio = if bot_params.wallet_exposure_limit <= 0.0 {
         10.0
     } else {

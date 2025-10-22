@@ -2074,6 +2074,7 @@ class Passivbot:
                         self.bp(pside, "close_trailing_threshold_pct", symbol),
                         self.bp(pside, "wallet_exposure_limit", symbol),
                         self.bp(pside, "risk_we_excess_allowance_pct", symbol),
+                        self.bp(pside, "risk_wel_enforcer_threshold", symbol),
                         self.balance,
                         self.positions[symbol][pside]["size"],
                         self.positions[symbol][pside]["price"],

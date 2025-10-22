@@ -135,6 +135,24 @@ if equity < unstuck_allowed:
 Positions become eligible when
 `wallet_exposure / wel_base > unstuck_threshold`.
 
+## WEL Enforcer (Auto Reduce)
+
+The per-position wallet exposure limit (WEL) enforcer trims individual symbols
+whenever their exposure rises above the allowance-adjusted cap:
+
+```text
+allowed_i    = wel_base_i * (1 + risk_we_excess_allowance_pct)
+target_i     = allowed_i * risk_wel_enforcer_threshold
+```
+
+If `exposure_i > target_i`, the bot submits a reduce-only order sized just large
+enough (with step rounding and minimum-qty guards) to bring the position back to
+`target_i`. These orders are emitted as `CloseAutoReduceWel{Long,Short}` and are
+returned directly from `calc_next_close_*`/`calc_closes_*`.
+
+Setting `risk_wel_enforcer_threshold` below `1.0` forces a gentle, continuous
+trimming behaviour; values above `1.0` create an additional grace margin.
+
 ## TWEL Enforcer (Auto Reduce)
 
 The “Total Wallet Exposure Limit” enforcer keeps the sum of exposures below
@@ -158,7 +176,7 @@ The final reduce-only order is:
 ```text
 qty  = sign(pside) * min(reduced_psize, |pos.size|)
 price ≈ mark_price
-order_type = CloseAutoReduce{Long,Short}
+order_type = CloseAutoReduceTwel{Long,Short}
 ```
 
 By construction the quantity never exceeds the live position size.
@@ -173,6 +191,7 @@ By construction the quantity never exceeds the live position size.
 | `close_grid_markup_*`, `close_grid_qty_pct`    | Shapes TP ladder                                          | `tp_prices`, `tp_qty` |
 | `close_trailing_*`                             | Mirrors trailing entries but for exits                    | `threshold_close`, `retracement_close` |
 | `unstuck_*`                                    | Loss realization rules                                    | `unstuck_allowed`, `close_price` |
+| `risk_wel_enforcer_threshold`, `risk_we_excess_allowance_pct` | Per-symbol exposure cap                                 | `target_i`, `qty` |
 | `risk_twel_enforcer_threshold`, `risk_we_excess_allowance_pct` | Portfolio-wide exposure cap                              | `max_reducible_i`, `qty` |
 
 For worked examples on a per-parameter basis, see the comments sprinkled in

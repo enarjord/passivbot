@@ -230,8 +230,8 @@ pub fn calc_twel_enforcer_actions(
             continue;
         }
         let order_type = match side {
-            LONG => OrderType::CloseAutoReduceLong,
-            SHORT => OrderType::CloseAutoReduceShort,
+            LONG => OrderType::CloseAutoReduceTwelLong,
+            SHORT => OrderType::CloseAutoReduceTwelShort,
             _ => OrderType::Empty,
         };
         actions.push((

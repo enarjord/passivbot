@@ -128,8 +128,9 @@ pub struct BotParams {
     pub n_positions: usize,
     pub total_wallet_exposure_limit: f64,
     pub wallet_exposure_limit: f64, // is total_wallet_exposure_limit / n_positions
-    pub risk_we_excess_allowance_pct: f64,
+    pub risk_wel_enforcer_threshold: f64,
     pub risk_twel_enforcer_threshold: f64,
+    pub risk_we_excess_allowance_pct: f64,
     pub unstuck_close_pct: f64,
     pub unstuck_ema_dist: f64,
     pub unstuck_loss_allowance_pct: f64,
@@ -178,9 +179,9 @@ pub enum OrderType {
     EntryGridInflatedLong = 6,
 
     CloseGridLong = 7,
-    CloseTrailingLong = 8,
-    CloseUnstuckLong = 9,
-    CloseAutoReduceLong = 10,
+   CloseTrailingLong = 8,
+   CloseUnstuckLong = 9,
+    CloseAutoReduceTwelLong = 10,
 
     EntryInitialNormalShort = 11,
     EntryInitialPartialShort = 12,
@@ -193,10 +194,12 @@ pub enum OrderType {
     CloseGridShort = 18,
     CloseTrailingShort = 19,
     CloseUnstuckShort = 20,
-    CloseAutoReduceShort = 21,
+    CloseAutoReduceTwelShort = 21,
 
     ClosePanicLong = 22,
     ClosePanicShort = 23,
+    CloseAutoReduceWelLong = 24,
+    CloseAutoReduceWelShort = 25,
 
     Empty = 65535,
 }
@@ -228,7 +231,8 @@ impl OrderType {
                 | CloseGridLong
                 | CloseTrailingLong
                 | CloseUnstuckLong
-                | CloseAutoReduceLong
+                | CloseAutoReduceTwelLong
+                | CloseAutoReduceWelLong
                 | ClosePanicLong
         )
     }

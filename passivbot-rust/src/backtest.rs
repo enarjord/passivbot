@@ -1847,7 +1847,12 @@ impl<'a> Backtest<'a> {
                         orders
                             .closes
                             .iter()
-                            .any(|o| o.order_type == OrderType::CloseAutoReduceLong)
+                            .any(|o| {
+                                matches!(
+                                    o.order_type,
+                                    OrderType::CloseAutoReduceWelLong | OrderType::CloseAutoReduceTwelLong
+                                )
+                            })
                     })
                     .unwrap_or(false);
                 if !has_auto {
@@ -1880,7 +1885,12 @@ impl<'a> Backtest<'a> {
                         orders
                             .closes
                             .iter()
-                            .any(|o| o.order_type == OrderType::CloseAutoReduceShort)
+                            .any(|o| {
+                                matches!(
+                                    o.order_type,
+                                    OrderType::CloseAutoReduceWelShort | OrderType::CloseAutoReduceTwelShort
+                                )
+                            })
                     })
                     .unwrap_or(false);
                 if !has_auto {
