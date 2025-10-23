@@ -1121,7 +1121,6 @@ def get_template_config(passivbot_mode="v7"):
             "start_date": "2021-04-01",
             "starting_balance": 100000.0,
             "use_btc_collateral": False,
-            "max_warmup_minutes": 0.0,
         },
         "bot": {
             "long": {
@@ -1210,6 +1209,8 @@ def get_template_config(passivbot_mode="v7"):
             "minimum_coin_age_days": 7.0,
             "pnls_max_lookback_days": 30.0,
             "price_distance_threshold": 0.002,
+            "memory_snapshot_interval_minutes": 30.0,
+            "max_warmup_minutes": 0.0,
             "time_in_force": "good_till_cancelled",
             "warmup_ratio": 0.2,
             "user": "bybit_01",
