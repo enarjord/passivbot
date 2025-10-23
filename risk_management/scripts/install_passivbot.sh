@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-
 usage() {
     cat <<'EOF'
 Usage: install_passivbot.sh [--install-passivbot] [--] [pip flags]
@@ -48,8 +47,6 @@ while (($#)); do
             ;;
     esac
 done
-
-=======
 
 PYTHON_BIN="python3"
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
