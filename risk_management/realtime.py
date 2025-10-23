@@ -13,6 +13,15 @@ from custom_endpoint_overrides import (
     load_custom_endpoint_config,
 )
 
+try:  # pragma: no cover - optional dependency when running tests
+    from ccxt.base.errors import AuthenticationError
+except (ModuleNotFoundError, ImportError):  # pragma: no cover - ccxt is optional for tests
+
+    class AuthenticationError(Exception):
+        """Fallback authentication error used when ccxt is unavailable."""
+
+        pass
+
 from .account_clients import AccountClientProtocol, CCXTAccountClient
 from .configuration import CustomEndpointSettings, RealtimeConfig
 
@@ -74,8 +83,18 @@ class RealtimeDataFetcher:
         account_messages: Dict[str, str] = {}
         for account_config, result in zip(self.config.accounts, results):
             if isinstance(result, Exception):
-                message = f"{account_config.name}: {result}"
-                logger.exception("Failed to fetch snapshot for %s", account_config.name, exc_info=result)
+                if isinstance(result, AuthenticationError):
+                    message = (
+                        f"{account_config.name}: authentication failed - {result}"
+                    )
+                    logger.warning(
+                        "Authentication failed for %s: %s", account_config.name, result
+                    )
+                else:
+                    message = f"{account_config.name}: {result}"
+                    logger.exception(
+                        "Failed to fetch snapshot for %s", account_config.name, exc_info=result
+                    )
                 account_messages[account_config.name] = message
                 accounts_payload.append({"name": account_config.name, "balance": 0.0, "positions": []})
             else:
