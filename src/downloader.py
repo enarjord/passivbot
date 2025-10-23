@@ -91,6 +91,11 @@ def _to_float(value):
         return 0.0
 
 
+def _require_max_warmup_minutes(config: dict) -> float:
+    """Return the warmup ceiling from the live config."""
+    return _to_float(require_live_value(config, "max_warmup_minutes"))
+
+
 def _iter_param_sets(config: dict):
     bot_cfg = config.get("bot", {})
     base_long = dict(bot_cfg.get("long", {}) or {})
@@ -162,19 +167,19 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         max_minutes = max(max_minutes, _extract_bound_max(bounds, key) * 60.0)
 
     warmup_ratio = float(require_config_value(config, "live.warmup_ratio"))
-    limit = require_config_value(config, "backtest.max_warmup_minutes")
+    limit = _require_max_warmup_minutes(config)
 
     if not math.isfinite(max_minutes):
         return 0
     warmup_minutes = max_minutes * max(0.0, warmup_ratio)
-    if isinstance(limit, (int, float)) and limit > 0:
+    if limit > 0:
         warmup_minutes = min(warmup_minutes, limit)
     return int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
 
 
 def compute_per_coin_warmup_minutes(config: dict) -> dict:
     warmup_ratio = float(require_config_value(config, "live.warmup_ratio"))
-    limit = require_config_value(config, "backtest.max_warmup_minutes")
+    limit = _require_max_warmup_minutes(config)
     per_coin = {}
     minute_fields = [
         "ema_span_0",
@@ -195,7 +200,7 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
             per_coin[coin] = 0
             continue
         warmup_minutes = max_minutes * max(0.0, warmup_ratio)
-        if isinstance(limit, (int, float)) and limit > 0:
+        if limit > 0:
             warmup_minutes = min(warmup_minutes, limit)
         per_coin[coin] = int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
     return per_coin
