@@ -125,10 +125,14 @@ class CCXTAccountClient(AccountClientProtocol):
         self.client = _instantiate_ccxt_client(config.exchange, credentials)
         self._balance_params = dict(config.params.get("balance", {}))
         self._positions_params = dict(config.params.get("positions", {}))
-        self._markets_loaded = asyncio.Lock()
+        self._markets_loaded: asyncio.Lock | None = None
 
     async def _ensure_markets(self) -> None:
-        async with self._markets_loaded:
+        lock = self._markets_loaded
+        if lock is None:
+            lock = asyncio.Lock()
+            self._markets_loaded = lock
+        async with lock:
             if getattr(self.client, "markets", None):
                 return
             await self.client.load_markets()
