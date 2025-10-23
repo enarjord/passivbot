@@ -17,6 +17,28 @@ repository's source tree.
 
 Run the helper script to bootstrap the environment:
 
+```bash
+./scripts/install_passivbot.sh
+```
+
+The script prepares the virtual environment without touching your existing
+Passivbot installation.  By default it does **not** install Passivbot or link to
+its source tree, keeping the workspace fully isolated for the upcoming risk
+management utilities.
+
+If you want code inside the virtual environment to import Passivbot directly
+from a local checkout, provide the path to Passivbot's `src/` directory via
+`--link-passivbot`:
+
+```bash
+./scripts/install_passivbot.sh --link-passivbot /path/to/passivbot/src
+```
+
+This optional flag drops a `.pth` file into the environment's `site-packages`
+directory so modules under the supplied path become importable.  Skipping the
+flag leaves the environment unaware of Passivbot entirely, which can be useful
+if you plan to interact with Passivbot over APIs or other integration points
+instead of importing its Python modules.
 existing Passivbot installation requirements, we maintain an isolated virtual
 environment under `risk_management/.venv_passivbot_risk`.
 
@@ -60,7 +82,6 @@ analytics, monitoring, and alerting—while keeping the main Passivbot setup
 untouched.
 
 
-
 If you need to adjust the build invocation (for example, to pass additional
 flags to `pip install`), append them to the script call and they will be
 forwarded to the editable install step:
@@ -75,10 +96,17 @@ added—to import Passivbot modules and configurations.
 
 
 
+
 ## What the installer does
 
 * Creates (or reuses) the virtual environment at
   `risk_management/.venv_passivbot_risk`.
+
+* Optionally writes a `.pth` file into the environment's `site-packages`
+  directory when `--link-passivbot` is supplied so the referenced Passivbot
+  source tree becomes importable without additional installation steps.
+* Optionally upgrades `pip`, `setuptools`, and `wheel` when
+  `--upgrade-packaging` is provided.
 
 * Drops a `.pth` file into the environment's `site-packages` directory so the
   Passivbot source tree at `../src` is importable without additional
@@ -110,7 +138,6 @@ added—to import Passivbot modules and configurations.
 
 * Installs Passivbot from the repository root in editable mode so that local
   changes to Passivbot are instantly available to the risk management package.
-
 
 
 ## Requirements
