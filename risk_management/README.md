@@ -29,8 +29,10 @@ added—to import Passivbot modules and configurations.
 * Creates (or reuses) the virtual environment at
   `risk_management/.venv_passivbot_risk`.
 * Upgrades `pip`, `setuptools`, and `wheel` to recent versions.
+
 * Installs Passivbot's build prerequisite `setuptools-rust` that is
   required during editable installations of the core project.
+
 * Installs Passivbot from the repository root in editable mode so that local
   changes to Passivbot are instantly available to the risk management package.
 

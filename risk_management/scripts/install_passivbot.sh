@@ -24,6 +24,7 @@ source "${VENV_DIR}/bin/activate"
 
 pip install --upgrade pip setuptools wheel
 
+
 # Install build prerequisites required by Passivbot's setup.py
 pip install --upgrade setuptools-rust
 
