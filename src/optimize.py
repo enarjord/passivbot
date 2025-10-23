@@ -333,6 +333,7 @@ def ea_mu_plus_lambda_stream(
     recorder,
     evaluator_config,
     overrides_list,
+    pool,
 ):
     logbook = tools.Logbook()
     logbook.header = "gen", "evals", "min", "max"
@@ -1386,6 +1387,7 @@ async def main():
             recorder=recorder,
             evaluator_config=evaluator.config,
             overrides_list=overrides_list,
+            pool=pool,
         )
 
         logging.info("Optimization complete.")
