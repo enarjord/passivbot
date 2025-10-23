@@ -345,17 +345,36 @@ def ea_mu_plus_lambda_stream(
         if not individuals:
             return 0
         logging.debug("Evaluating %d candidates", len(individuals))
+        pending = {}
+        for idx, ind in enumerate(individuals):
+            pending[pool.apply_async(toolbox.evaluate, (ind,))] = idx
+
+        completed = 0
         try:
-            results = toolbox.map(toolbox.evaluate, individuals)
+            while pending:
+                ready = [res for res in pending if res.ready()]
+                if not ready:
+                    time.sleep(0.1)
+                    continue
+                for res in ready:
+                    idx = pending.pop(res)
+                    fit_values, metrics = res.get()
+                    ind = individuals[idx]
+                    ind.fitness.values = fit_values
+                    ind.evaluation_metrics = metrics
+                    _record_individual_result(ind, evaluator_config, overrides_list, recorder)
+                    completed += 1
         except KeyboardInterrupt:
-            logging.info("Evaluation interrupted; cancelling pending work...")
+            logging.info("Evaluation interrupted; terminating pending tasks...")
+            for res in pending:
+                try:
+                    res.cancel()
+                except Exception:
+                    pass
             raise
-        for ind, (fit_values, metrics) in zip(individuals, results):
-            ind.fitness.values = fit_values
-            ind.evaluation_metrics = metrics
-            _record_individual_result(ind, evaluator_config, overrides_list, recorder)
-        total_evals += len(individuals)
-        return len(individuals)
+
+        total_evals += completed
+        return completed
 
     def log_generation(gen, nevals, record):
         best = record.get("min") if record else None
