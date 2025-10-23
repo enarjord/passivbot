@@ -61,6 +61,25 @@ def _apply_credentials(client: Any, credentials: Mapping[str, Any]) -> None:
                 logger.debug("Ignored unsupported credential field %s", key)
 
 
+def _disable_fetch_currencies(client: Any) -> None:
+    """Disable ccxt currency lookups that require authenticated endpoints."""
+
+    options = getattr(client, "options", None)
+    if isinstance(options, MutableMapping):
+        # ccxt exchanges often respect ``options['fetchCurrencies']`` when deciding
+        # whether to hit authenticated endpoints while loading markets.
+        options["fetchCurrencies"] = False
+        # Suppress any warnings about skipping currency downloads without keys.
+        options["warnOnFetchCurrenciesWithoutApiKey"] = False
+
+    has = getattr(client, "has", None)
+    if isinstance(has, MutableMapping):
+        # Some exchange implementations consult ``has['fetchCurrencies']``
+        # instead of the options flag, therefore toggle both to cover either
+        # code path.
+        has["fetchCurrencies"] = False
+
+
 def _instantiate_ccxt_client(exchange_id: str, credentials: Mapping[str, Any]) -> Any:
     """Instantiate a ccxt async client honoring passivbot customisations when available."""
 
@@ -70,6 +89,7 @@ def _instantiate_ccxt_client(exchange_id: str, credentials: Mapping[str, Any]) -
     if load_ccxt_instance is not None:
         client = load_ccxt_instance(normalized, enable_rate_limit=rate_limited)
         _apply_credentials(client, credentials)
+        _disable_fetch_currencies(client)
         return client
 
     if ccxt_async is None:
@@ -84,7 +104,10 @@ def _instantiate_ccxt_client(exchange_id: str, credentials: Mapping[str, Any]) -
 
     params: MutableMapping[str, Any] = dict(credentials)
     params.setdefault("enableRateLimit", rate_limited)
-    return exchange_class(params)
+    client = exchange_class(params)
+    _apply_credentials(client, credentials)
+    _disable_fetch_currencies(client)
+    return client
 
 
 class CCXTAccountClient(AccountClientProtocol):
@@ -102,10 +125,14 @@ class CCXTAccountClient(AccountClientProtocol):
         self.client = _instantiate_ccxt_client(config.exchange, credentials)
         self._balance_params = dict(config.params.get("balance", {}))
         self._positions_params = dict(config.params.get("positions", {}))
-        self._markets_loaded = asyncio.Lock()
+        self._markets_loaded: asyncio.Lock | None = None
 
     async def _ensure_markets(self) -> None:
-        async with self._markets_loaded:
+        lock = self._markets_loaded
+        if lock is None:
+            lock = asyncio.Lock()
+            self._markets_loaded = lock
+        async with lock:
             if getattr(self.client, "markets", None):
                 return
             await self.client.load_markets()
