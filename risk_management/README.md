@@ -89,6 +89,13 @@ feature off entirely.  Omitting the section keeps the default auto-discovery
 behaviour, which searches for `configs/custom_endpoints.json` relative to the
 current working directory.
 
+Alternatively, override the behaviour at launch time with
+`--custom-endpoints`.  For example, run the web server with
+`--custom-endpoints ../configs/custom_endpoints.json` to force the same proxy
+file Passivbot uses, `--custom-endpoints auto` to re-enable discovery, or
+`--custom-endpoints none` to disable overrides regardless of the configuration
+file.
+
 ### Authentication
 
 The web UI requires bcrypt hashed passwords.  Use the helper script to generate
