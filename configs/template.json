@@ -8,7 +8,7 @@
               "exchanges": ["binance", "bybit"],
               "gap_tolerance_ohlcvs_minutes": 120,
               "max_warmup_minutes": 0,
-              "start_date": "2023-01-01",
+              "start_date": "2022-07-01",
               "starting_balance": 100000},
  "bot": {"long": {"close_grid_markup_end": 0.003354,
                   "close_grid_markup_start": 0.006385,

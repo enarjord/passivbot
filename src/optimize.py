@@ -21,15 +21,11 @@ if sys.platform.startswith("win"):
         sys.modules["fcntl"] = _FcntlStub()
         fcntl = sys.modules["fcntl"]
     # ==== END fcntl stub for Windows ====
-import shutil
 import passivbot_rust as pbr
 import asyncio
 import argparse
 import multiprocessing
-import mmap
-from multiprocessing import Queue, Process
 from collections import defaultdict
-from contextlib import nullcontext
 from backtest import (
     prepare_hlcvs_mss,
     prep_backtest_args,
@@ -62,18 +58,74 @@ import traceback
 import json
 import pprint
 from deap import base, creator, tools, algorithms
-from contextlib import contextmanager
-import tempfile
-import time
 import math
 import fcntl
-from tqdm import tqdm
 from optimizer_overrides import optimizer_overrides
 from opt_utils import make_json_serializable, generate_incremental_diff, round_floats
 from pareto_store import ParetoStore
 import msgpack
 from typing import Sequence, Tuple, List
 from itertools import permutations
+from shared_arrays import SharedArrayManager, attach_shared_array
+
+
+class ResultRecorder:
+    def __init__(
+        self,
+        *,
+        results_dir: str,
+        sig_digits: int,
+        flush_interval: int,
+        scoring_keys: Sequence[str],
+        compress: bool,
+        write_all_results: bool,
+    ):
+        self.store = ParetoStore(
+            directory=results_dir,
+            sig_digits=sig_digits,
+            flush_interval=flush_interval,
+            log_name="optimizer.pareto",
+        )
+        self.write_all = write_all_results
+        self.compress = compress
+        self.results_file = None
+        self.packer = None
+        if self.write_all:
+            filename = os.path.join(results_dir, "all_results.bin")
+            self.results_file = open(filename, "ab")
+            self.packer = msgpack.Packer(use_bin_type=True)
+        self.prev_data = None
+        self.counter = 0
+        self.scoring_keys = list(scoring_keys)
+
+    def record(self, data: dict) -> None:
+        if self.write_all and self.results_file:
+            if self.compress:
+                if self.prev_data is None or self.counter % 100 == 0:
+                    output_data = make_json_serializable(data)
+                else:
+                    diff = generate_incremental_diff(self.prev_data, data)
+                    output_data = make_json_serializable(diff)
+                self.counter += 1
+                self.prev_data = data
+            else:
+                output_data = data
+            try:
+                self.results_file.write(self.packer.pack(output_data))
+                self.results_file.flush()
+            except Exception as exc:
+                logging.error(f"Error writing results: {exc}")
+        try:
+            self.store.add_entry(data)
+        except Exception as exc:
+            logging.error(f"ParetoStore error: {exc}")
+
+    def flush(self) -> None:
+        self.store.flush_now()
+
+    def close(self) -> None:
+        if self.results_file:
+            self.results_file.close()
 
 logging.basicConfig(
     format="%(asctime)s %(processName)-12s %(levelname)-8s %(message)s",
@@ -156,128 +208,6 @@ def get_bound_keys_ignored():
 # ============================================================================
 
 
-def results_writer_process(
-    queue,
-    results_dir,
-    sig_digits,
-    flush_interval,
-    *,
-    compress: bool = True,
-    write_all_results: bool = True,
-):
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(processName)-12s %(levelname)-8s %(message)s",
-    )
-    log = logging.getLogger("optimizer.pareto")
-    store = ParetoStore(
-        directory=results_dir,
-        sig_digits=sig_digits,
-        flush_interval=flush_interval,
-        log_name="optimizer.pareto",
-    )
-
-    pareto_front = []
-    objectives_dict = {}
-    index_to_entry = {}
-    iteration = 0
-    n_objectives = None
-    scoring_keys = None
-
-    results_filename = os.path.join(results_dir, "all_results.bin")
-
-    try:
-        with open(results_filename, "ab") if write_all_results else nullcontext() as f:
-            packer = msgpack.Packer(use_bin_type=True) if write_all_results else None
-            prev_data = None
-            counter = 0
-            while True:
-                data = queue.get()
-                if data == "DONE":
-                    store.flush_now()
-                    break
-                if write_all_results:
-                    try:
-                        # Write raw results (diffed if compress enabled)
-                        if compress:
-                            if prev_data is None or counter % 100 == 0:
-                                output_data = make_json_serializable(data)
-                            else:
-                                diff = generate_incremental_diff(prev_data, data)
-                                output_data = make_json_serializable(diff)
-                            counter += 1
-                            prev_data = data
-                        else:
-                            output_data = data
-
-                        if scoring_keys is None:
-                            scoring_keys = data["optimize"]["scoring"]
-                            n_objectives = len(scoring_keys)
-
-                        # --- Write to all_results.bin ---
-                        f.write(packer.pack(output_data))
-                        f.flush()
-                    except Exception as e:
-                        logging.error(f"Error writing results: {e}")
-                try:
-                    store.add_entry(data)
-                except Exception as e:
-                    logging.error(f"ParetoStore error: {e}")
-
-    except Exception as e:
-        logging.error(f"Results writer process error: {e}")
-    finally:
-        # ------------------------------------------------------------------
-        # Make *absolutely* sure the Pareto directory has fresh distance
-        # prefixes before we quit (even after Ctrl-C or an uncaught error).
-        # ------------------------------------------------------------------
-        try:
-            store.flush_interval = 0.0
-            store.flush_now()
-            logging.info("Final Pareto-front update completed.")
-        except Exception as e1:
-            logging.error(f"Unable to flush Pareto front on shutdown: {e1}")
-            traceback.print_exc()
-
-
-def create_shared_memory_file(hlcvs):
-    temp_file = tempfile.NamedTemporaryFile(delete=False)
-    logging.info(f"Creating shared memory file: {temp_file.name}...")
-    shared_memory_file = temp_file.name
-    temp_file.close()
-
-    try:
-        total_size = hlcvs.nbytes
-        chunk_size = 1024 * 1024  # 1 MB chunks
-        hlcvs_bytes = hlcvs.tobytes()
-
-        with open(shared_memory_file, "wb") as f:
-            with tqdm(
-                total=total_size, unit="B", unit_scale=True, desc="Writing to shared memory"
-            ) as pbar:
-                for i in range(0, len(hlcvs_bytes), chunk_size):
-                    chunk = hlcvs_bytes[i : i + chunk_size]
-                    f.write(chunk)
-                    pbar.update(len(chunk))
-
-    except IOError as e:
-        logging.error(f"Error writing to shared memory file: {e}")
-        raise
-    logging.info(f"Done creating shared memory file")
-    return shared_memory_file
-
-
-def check_disk_space(path, required_space):
-    total, used, free = shutil.disk_usage(path)
-    logging.info(
-        f"Disk space - Total: {total/(1024**3):.2f} GB, Used: {used/(1024**3):.2f} GB, Free: {free/(1024**3):.2f} GB"
-    )
-    if free < required_space:
-        raise IOError(
-            f"Not enough disk space. Required: {required_space/(1024**3):.2f} GB, Available: {free/(1024**3):.2f} GB"
-        )
-
-
 def mutPolynomialBoundedWrapper(individual, eta, low, up, indpb):
     """
     A wrapper around DEAP's mutPolynomialBounded function to pre-process
@@ -358,6 +288,72 @@ def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up):
     return ind1, ind2
 
 
+def _record_individual_result(individual, evaluator_config, overrides_list, recorder):
+    metrics = getattr(individual, "evaluation_metrics", {}) or {}
+    config = individual_to_config(individual, optimizer_overrides, overrides_list, evaluator_config)
+    data = {**config, "analyses_combined": metrics}
+    recorder.record(data)
+    if hasattr(individual, "evaluation_metrics"):
+        del individual.evaluation_metrics
+
+
+def ea_mu_plus_lambda_stream(
+    population,
+    toolbox,
+    mu,
+    lambda_,
+    cxpb,
+    mutpb,
+    ngen,
+    stats,
+    halloffame,
+    verbose,
+    recorder,
+    evaluator_config,
+    overrides_list,
+):
+    logbook = tools.Logbook()
+    logbook.header = "gen", "evals", "min", "max"
+
+    def evaluate_and_record(individuals):
+        if not individuals:
+            return 0
+        results = toolbox.map(toolbox.evaluate, individuals)
+        for ind, (fit_values, metrics) in zip(individuals, results):
+            ind.fitness.values = fit_values
+            ind.evaluation_metrics = metrics
+            _record_individual_result(ind, evaluator_config, overrides_list, recorder)
+        return len(individuals)
+
+    invalid_ind = [ind for ind in population if not ind.fitness.valid]
+    nevals = evaluate_and_record(invalid_ind)
+
+    if halloffame is not None:
+        halloffame.update(population)
+
+    record = stats.compile(population) if stats is not None else {}
+    logbook.record(gen=0, nevals=nevals, **record)
+    if verbose:
+        print(logbook.stream)
+
+    for gen in range(1, ngen + 1):
+        offspring = algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
+        invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
+        nevals = evaluate_and_record(invalid_ind)
+
+        population[:] = toolbox.select(population + offspring, mu)
+
+        if halloffame is not None:
+            halloffame.update(population)
+
+        record = stats.compile(population) if stats is not None else {}
+        logbook.record(gen=gen, nevals=nevals, **record)
+        if verbose:
+            print(logbook.stream)
+
+    return population, logbook
+
+
 def individual_to_config(individual, optimizer_overrides, overrides_list, template):
     """
     assume individual is already bound enforced (or will be after)
@@ -390,22 +386,6 @@ def config_to_individual(config, bounds, sig_digits=None):
     )
 
 
-@contextmanager
-def managed_mmap(filename, dtype, shape):
-    mmap = None
-    try:
-        mmap = np.memmap(filename, dtype=dtype, mode="r", shape=shape)
-        yield mmap
-    except FileNotFoundError:
-        if shutdown_event.is_set():
-            yield None
-        else:
-            raise
-    finally:
-        if mmap is not None:
-            del mmap
-
-
 def validate_array(arr, name, allow_nan=True):
     if not allow_nan and np.isnan(arr).any():
         raise ValueError(f"{name} contains NaN values")
@@ -418,136 +398,51 @@ def validate_array(arr, name, allow_nan=True):
 class Evaluator:
     def __init__(
         self,
-        shared_memory_files,
-        hlcvs_shapes,
-        hlcvs_dtypes,
-        btc_usd_shared_memory_files,
-        btc_usd_dtypes,
+        hlcvs_specs,
+        btc_usd_specs,
         msss,
         config,
-        results_queue,
         seen_hashes=None,
         duplicate_counter=None,
         timestamps=None,
+        shared_array_manager: SharedArrayManager | None = None,
     ):
         logging.info("Initializing Evaluator...")
-        self.shared_memory_files = shared_memory_files
-        self.hlcvs_shapes = hlcvs_shapes
-        self.hlcvs_dtypes = hlcvs_dtypes
-        self.btc_usd_shared_memory_files = btc_usd_shared_memory_files
-        self.btc_usd_dtypes = btc_usd_dtypes
+        self.hlcvs_specs = hlcvs_specs
+        self.btc_usd_specs = btc_usd_specs
         self.msss = msss
         self.timestamps = timestamps or {}
-        self.exchanges = list(shared_memory_files.keys())
-
-        self.mmap_contexts = {}
+        self.exchanges = list(hlcvs_specs.keys())
+        self.shared_array_manager = shared_array_manager
         self.shared_hlcvs_np = {}
+        self.shared_btc_np = {}
+        self._attachments = {"hlcvs": {}, "btc": {}}
         self.exchange_params = {}
         self.backtest_params = {}
+
         for exchange in self.exchanges:
-            logging.info(f"Setting up managed_mmap for {exchange}...")
-            self.mmap_contexts[exchange] = managed_mmap(
-                self.shared_memory_files[exchange],
-                self.hlcvs_dtypes[exchange],
-                self.hlcvs_shapes[exchange],
-            )
-            self.shared_hlcvs_np[exchange] = self.mmap_contexts[exchange].__enter__()
+            logging.info("Preparing cached parameters for %s...", exchange)
+            if self.shared_array_manager is not None:
+                self.shared_hlcvs_np[exchange] = self.shared_array_manager.view(
+                    self.hlcvs_specs[exchange]
+                )
+                btc_spec = self.btc_usd_specs.get(exchange)
+                if btc_spec is not None:
+                    self.shared_btc_np[exchange] = self.shared_array_manager.view(btc_spec)
             _, self.exchange_params[exchange], self.backtest_params[exchange] = prep_backtest_args(
                 config, self.msss[exchange], exchange
             )
-            first_ts_list = self.timestamps.get(exchange)
-            first_ts_ms = 0
-            if first_ts_list is not None and len(first_ts_list) > 0:
-                try:
-                    first_ts_ms = int(first_ts_list[0])
-                except Exception:
-                    logging.warning(
-                        "Evaluator: unable to parse first timestamp for %s from timestamps array",
-                        exchange,
-                    )
-                    first_ts_ms = 0
-            exchange_mss = self.msss.get(exchange, {}) if isinstance(self.msss, dict) else {}
-            meta = exchange_mss.get("__meta__", {}) if isinstance(exchange_mss, dict) else {}
-            if first_ts_ms == 0:
-                candidate_ts = (
-                    meta.get("requested_start_ts")
-                    or meta.get("effective_start_ts")
-                    or require_config_value(config, "backtest.start_date")
-                )
-                if isinstance(candidate_ts, (int, float)):
-                    first_ts_ms = int(candidate_ts)
-                elif isinstance(candidate_ts, str):
-                    try:
-                        first_ts_ms = int(date_to_ts(candidate_ts))
-                    except Exception:
-                        first_ts_ms = 0
-                if first_ts_ms:
-                    logging.info(
-                        "Evaluator: using fallback first timestamp %s for %s",
-                        first_ts_ms,
-                        exchange,
-                    )
-                else:
-                    logging.warning(
-                        "Evaluator: falling back to 0 first_timestamp_ms for %s; timestamps unavailable",
-                        exchange,
-                    )
-            self.backtest_params[exchange]["first_timestamp_ms"] = first_ts_ms
-            candidate_start = meta.get("requested_start_ts") or require_config_value(
-                config, "backtest.start_date"
-            )
-            try:
-                if isinstance(candidate_start, str):
-                    requested_start_ts = int(date_to_ts(candidate_start))
-                else:
-                    requested_start_ts = int(candidate_start or 0)
-            except Exception:
-                requested_start_ts = int(
-                    date_to_ts(require_config_value(config, "backtest.start_date"))
-                )
-            self.backtest_params[exchange]["requested_start_timestamp_ms"] = requested_start_ts
-            coins_order = self.backtest_params[exchange].get("coins", [])
-            hlcvs_arr = self.shared_hlcvs_np[exchange]
-            total_steps = hlcvs_arr.shape[0]
-            first_valid_indices = []
-            last_valid_indices = []
-            warmup_minutes = []
-            trade_start_indices = []
-            warmup_map = compute_per_coin_warmup_minutes(config)
-            default_warm = int(warmup_map.get("__default__", 0))
-            for idx, coin in enumerate(coins_order):
-                meta_coin = exchange_mss.get(coin, {}) if isinstance(exchange_mss, dict) else {}
-                first_idx = int(meta_coin.get("first_valid_index", 0))
-                last_idx = int(meta_coin.get("last_valid_index", total_steps - 1))
-                if first_idx >= total_steps:
-                    first_idx = total_steps
-                if last_idx >= total_steps:
-                    last_idx = total_steps - 1
-                first_valid_indices.append(first_idx)
-                last_valid_indices.append(last_idx)
-                warm = int(meta_coin.get("warmup_minutes", warmup_map.get(coin, default_warm)))
-                warmup_minutes.append(warm)
-                if first_idx > last_idx:
-                    trade_idx = first_idx
-                else:
-                    trade_idx = min(last_idx, first_idx + warm)
-                trade_start_indices.append(trade_idx)
-            self.backtest_params[exchange]["first_valid_indices"] = first_valid_indices
-            self.backtest_params[exchange]["last_valid_indices"] = last_valid_indices
-            self.backtest_params[exchange]["warmup_minutes"] = warmup_minutes
-            self.backtest_params[exchange]["trade_start_indices"] = trade_start_indices
-            self.backtest_params[exchange]["global_warmup_bars"] = compute_backtest_warmup_minutes(
-                config
-            )
-            logging.info(f"mmap_context entered successfully for {exchange}.")
 
         self.config = config
         logging.info("Evaluator initialization complete.")
-        self.results_queue = results_queue
         self.seen_hashes = seen_hashes if seen_hashes is not None else {}
-        self.duplicate_counter = duplicate_counter
+        self.duplicate_counter = duplicate_counter if duplicate_counter is not None else {"count": 0}
         self.bounds = extract_bounds_tuple_list_from_config(self.config)
         self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
+
+        for exchange in self.exchanges:
+            self._populate_backtest_metadata(exchange)
+
         shared_metric_weights = {
             "flat_btc_balance_hours": 1.0,
             "positions_held_per_day": 1.0,
@@ -606,15 +501,113 @@ class Evaluator:
         self.scoring_weights.update(shared_metric_weights)
 
         for metric, weight in currency_metric_weights.items():
-            # canonical names with suffixes
             self.scoring_weights[f"{metric}_usd"] = weight
             self.scoring_weights[f"{metric}_btc"] = weight
-            # legacy aliases
             self.scoring_weights.setdefault(metric, weight)
             self.scoring_weights.setdefault(f"usd_{metric}", weight)
             self.scoring_weights.setdefault(f"btc_{metric}", weight)
 
         self.build_limit_checks()
+
+    def _ensure_attached(self, exchange: str) -> None:
+        if exchange not in self.shared_hlcvs_np:
+            spec = self.hlcvs_specs[exchange]
+            attachment = attach_shared_array(spec)
+            self._attachments["hlcvs"][exchange] = attachment
+            self.shared_hlcvs_np[exchange] = attachment.array
+        if exchange not in self.shared_btc_np:
+            btc_spec = self.btc_usd_specs.get(exchange)
+            if btc_spec is not None:
+                attachment = attach_shared_array(btc_spec)
+                self._attachments["btc"][exchange] = attachment
+                self.shared_btc_np[exchange] = attachment.array
+
+    def _populate_backtest_metadata(self, exchange: str) -> None:
+        self._ensure_attached(exchange)
+        hlcvs_arr = self.shared_hlcvs_np[exchange]
+        exchange_mss = self.msss.get(exchange, {}) if isinstance(self.msss, dict) else {}
+        meta = exchange_mss.get("__meta__", {}) if isinstance(exchange_mss, dict) else {}
+
+        first_ts_list = self.timestamps.get(exchange)
+        first_ts_ms = 0
+        if first_ts_list is not None and len(first_ts_list) > 0:
+            try:
+                first_ts_ms = int(first_ts_list[0])
+            except Exception:
+                logging.warning(
+                    "Evaluator: unable to parse first timestamp for %s from timestamps array", exchange
+                )
+                first_ts_ms = 0
+        if first_ts_ms == 0:
+            candidate_ts = (
+                meta.get("requested_start_ts")
+                or meta.get("effective_start_ts")
+                or require_config_value(self.config, "backtest.start_date")
+            )
+            if isinstance(candidate_ts, (int, float)):
+                first_ts_ms = int(candidate_ts)
+            elif isinstance(candidate_ts, str):
+                try:
+                    first_ts_ms = int(date_to_ts(candidate_ts))
+                except Exception:
+                    first_ts_ms = 0
+            if first_ts_ms:
+                logging.info(
+                    "Evaluator: using fallback first timestamp %s for %s", first_ts_ms, exchange
+                )
+            else:
+                logging.warning(
+                    "Evaluator: falling back to 0 first_timestamp_ms for %s; timestamps unavailable",
+                    exchange,
+                )
+        self.backtest_params[exchange]["first_timestamp_ms"] = first_ts_ms
+
+        candidate_start = meta.get("requested_start_ts") or require_config_value(
+            self.config, "backtest.start_date"
+        )
+        try:
+            if isinstance(candidate_start, str):
+                requested_start_ts = int(date_to_ts(candidate_start))
+            else:
+                requested_start_ts = int(candidate_start or 0)
+        except Exception:
+            requested_start_ts = int(
+                date_to_ts(require_config_value(self.config, "backtest.start_date"))
+            )
+        self.backtest_params[exchange]["requested_start_timestamp_ms"] = requested_start_ts
+
+        coins_order = self.backtest_params[exchange].get("coins", [])
+        total_steps = hlcvs_arr.shape[0]
+        warmup_map = compute_per_coin_warmup_minutes(self.config)
+        default_warm = int(warmup_map.get("__default__", 0))
+        first_valid_indices = []
+        last_valid_indices = []
+        warmup_minutes = []
+        trade_start_indices = []
+        for idx, coin in enumerate(coins_order):
+            meta_coin = exchange_mss.get(coin, {}) if isinstance(exchange_mss, dict) else {}
+            first_idx = int(meta_coin.get("first_valid_index", 0))
+            last_idx = int(meta_coin.get("last_valid_index", total_steps - 1))
+            if first_idx >= total_steps:
+                first_idx = total_steps
+            if last_idx >= total_steps:
+                last_idx = total_steps - 1
+            first_valid_indices.append(first_idx)
+            last_valid_indices.append(last_idx)
+            warm = int(meta_coin.get("warmup_minutes", warmup_map.get(coin, default_warm)))
+            warmup_minutes.append(warm)
+            if first_idx > last_idx:
+                trade_idx = first_idx
+            else:
+                trade_idx = min(last_idx, first_idx + warm)
+            trade_start_indices.append(trade_idx)
+        self.backtest_params[exchange]["first_valid_indices"] = first_valid_indices
+        self.backtest_params[exchange]["last_valid_indices"] = last_valid_indices
+        self.backtest_params[exchange]["warmup_minutes"] = warmup_minutes
+        self.backtest_params[exchange]["trade_start_indices"] = trade_start_indices
+        self.backtest_params[exchange]["global_warmup_bars"] = compute_backtest_warmup_minutes(
+            self.config
+        )
 
     def perturb_step_digits(self, individual, change_chance=0.5):
         perturbed = []
@@ -732,6 +725,7 @@ class Evaluator:
             self.seen_hashes[individual_hash] = None
         analyses = {}
         for exchange in self.exchanges:
+            self._ensure_attached(exchange)
             bot_params_list, _, _ = prep_backtest_args(
                 config,
                 [],
@@ -740,33 +734,33 @@ class Evaluator:
                 backtest_params=self.backtest_params[exchange],
             )
             run_result = pbr.run_backtest(
-                self.shared_memory_files[exchange],
-                self.hlcvs_shapes[exchange],
-                self.hlcvs_dtypes[exchange].str,
-                self.btc_usd_shared_memory_files[exchange],
-                self.btc_usd_dtypes[exchange].str,
+                self.shared_hlcvs_np[exchange],
+                self.shared_btc_np[exchange],
                 bot_params_list,
                 self.exchange_params[exchange],
                 self.backtest_params[exchange],
             )
             if len(run_result) == 5:
-                fills, _, _, analysis_usd, analysis_btc = run_result
+                fills, equities_array, _, analysis_usd, analysis_btc = run_result
             else:
-                fills, _, analysis_usd, analysis_btc = run_result
+                fills, equities_array, analysis_usd, analysis_btc = run_result
             analyses[exchange] = expand_analysis(analysis_usd, analysis_btc, fills, config)
+
+            # Explicitly drop large intermediate arrays to keep worker RSS low.
+            del fills
+            del equities_array
+            del analysis_usd
+            del analysis_btc
         analyses_combined = self.combine_analyses(analyses)
+        del analyses
         objectives = self.calc_fitness(analyses_combined)
         for i, val in enumerate(objectives):
             analyses_combined[f"w_{i}"] = val
-        data = {
-            **config,
-            "analyses_combined": analyses_combined,
-            "analyses": analyses,
-        }
-        self.results_queue.put(data)
+        # attach metrics to individual so the parent process can persist lean results
+        individual.evaluation_metrics = analyses_combined
         actual_hash = calc_hash(individual)
         self.seen_hashes[actual_hash] = tuple(objectives)
-        return tuple(objectives)
+        return tuple(objectives), analyses_combined
 
     def combine_analyses(self, analyses):
         analyses_combined = {}
@@ -892,32 +886,26 @@ class Evaluator:
         return tuple(scores)
 
     def __del__(self):
-        if hasattr(self, "mmap_contexts"):
-            for mmap_context in self.mmap_contexts.values():
-                mmap_context.__exit__(None, None, None)
+        for attachment_map in self._attachments.values():
+            for attachment in attachment_map.values():
+                attachment.close()
 
     def __getstate__(self):
-        # This method is called when pickling. We exclude mmap_contexts and shared_hlcvs_np
         state = self.__dict__.copy()
-        del state["mmap_contexts"]
-        del state["shared_hlcvs_np"]
+        state.pop("shared_hlcvs_np", None)
+        state.pop("shared_btc_np", None)
+        state.pop("_attachments", None)
+        state.pop("shared_array_manager", None)
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-        self.mmap_contexts = {}
+        self.shared_array_manager = None
         self.shared_hlcvs_np = {}
+        self.shared_btc_np = {}
+        self._attachments = {"hlcvs": {}, "btc": {}}
         for exchange in self.exchanges:
-            self.mmap_contexts[exchange] = managed_mmap(
-                self.shared_memory_files[exchange],
-                self.hlcvs_dtypes[exchange],
-                self.hlcvs_shapes[exchange],
-            )
-            self.shared_hlcvs_np[exchange] = self.mmap_contexts[exchange].__enter__()
-            if self.shared_hlcvs_np[exchange] is None:
-                print(
-                    f"Warning: Unable to recreate shared memory mapping during unpickling for {exchange}."
-                )
+            self._ensure_attached(exchange)
 
 
 def add_extra_options(parser):
@@ -1093,20 +1081,13 @@ async def main():
     await format_approved_ignored_coins(config, backtest_exchanges)
     try:
         # Prepare data for each exchange
-        hlcvs_dict = {}
-        shared_memory_files = {}
-        hlcvs_shapes = {}
-        hlcvs_dtypes = {}
+        array_manager = SharedArrayManager()
+        hlcvs_specs = {}
+        btc_usd_specs = {}
         msss = {}
         timestamps_dict = {}
-
-        # Store per-exchange BTC arrays in a dict,
-        # and store their shared-memory file names in another dict.
-        btc_usd_data_dict = {}
-        btc_usd_shared_memory_files = {}
-        btc_usd_dtypes = {}
-
         config["backtest"]["coins"] = {}
+
         if bool(require_config_value(config, "backtest.combine_ohlcvs")):
             exchange = "combined"
             coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = (
@@ -1119,25 +1100,17 @@ async def main():
             for ex in exchange_preference:
                 logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
             config["backtest"]["coins"][exchange] = coins
-            hlcvs_dict[exchange] = hlcvs
-            hlcvs_shapes[exchange] = hlcvs.shape
-            hlcvs_dtypes[exchange] = hlcvs.dtype
             msss[exchange] = mss
-            required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
-            check_disk_space(tempfile.gettempdir(), required_space)
-            logging.info(f"Starting to create shared memory file for {exchange}...")
             validate_array(hlcvs, "hlcvs")
-            shared_memory_file = create_shared_memory_file(hlcvs)
-            shared_memory_files[exchange] = shared_memory_file
-            btc_usd_data_dict[exchange] = btc_usd_prices
-            validate_array(
-                btc_usd_data_dict[exchange], f"btc_usd_data for {exchange}", allow_nan=False
-            )
-            btc_usd_shared_memory_files[exchange] = create_shared_memory_file(
-                btc_usd_data_dict[exchange]
-            )
-            btc_usd_dtypes[exchange] = btc_usd_data_dict[exchange].dtype
-            logging.info(f"Finished creating shared memory file for {exchange}: {shared_memory_file}")
+            hlcvs_array = np.ascontiguousarray(hlcvs, dtype=np.float64)
+            hlcvs_spec, _ = array_manager.create_from(hlcvs_array)
+            hlcvs_specs[exchange] = hlcvs_spec
+
+            btc_usd_array = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
+            validate_array(btc_usd_array, f"btc_usd_data for {exchange}", allow_nan=False)
+            btc_usd_spec, _ = array_manager.create_from(btc_usd_array)
+            btc_usd_specs[exchange] = btc_usd_spec
+            del hlcvs, hlcvs_array, btc_usd_prices, btc_usd_array
         else:
             tasks = {}
             for exchange in backtest_exchanges:
@@ -1148,31 +1121,17 @@ async def main():
                 ]
                 timestamps_dict[exchange] = _timestamps
                 config["backtest"]["coins"][exchange] = coins
-                hlcvs_dict[exchange] = hlcvs
-                hlcvs_shapes[exchange] = hlcvs.shape
-                hlcvs_dtypes[exchange] = hlcvs.dtype
                 msss[exchange] = mss
-                required_space = hlcvs.nbytes * 1.1  # Add 10% buffer
-                check_disk_space(tempfile.gettempdir(), required_space)
-                logging.info(f"Starting to create shared memory file for {exchange}...")
                 validate_array(hlcvs, "hlcvs")
-                shared_memory_file = create_shared_memory_file(hlcvs)
-                shared_memory_files[exchange] = shared_memory_file
-                # Create the BTC array for this exchange
-                btc_usd_data_dict[exchange] = btc_usd_prices
+                hlcvs_array = np.ascontiguousarray(hlcvs, dtype=np.float64)
+                hlcvs_spec, _ = array_manager.create_from(hlcvs_array)
+                hlcvs_specs[exchange] = hlcvs_spec
 
-                validate_array(
-                    btc_usd_data_dict[exchange],
-                    f"btc_usd_data for {exchange}",
-                    allow_nan=False,
-                )
-                btc_usd_shared_memory_files[exchange] = create_shared_memory_file(
-                    btc_usd_data_dict[exchange]
-                )
-                btc_usd_dtypes[exchange] = btc_usd_data_dict[exchange].dtype
-                logging.info(
-                    f"Finished creating shared memory file for {exchange}: {shared_memory_file}"
-                )
+                btc_usd_array = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
+                validate_array(btc_usd_array, f"btc_usd_data for {exchange}", allow_nan=False)
+                btc_usd_spec, _ = array_manager.create_from(btc_usd_array)
+                btc_usd_specs[exchange] = btc_usd_spec
+                del hlcvs, hlcvs_array, btc_usd_prices, btc_usd_array
         exchanges = backtest_exchanges
         exchanges_fname = (
             "combined"
@@ -1201,50 +1160,36 @@ async def main():
         config["results_filename"] = results_filename
         overrides_list = config.get("optimize", {}).get("enable_overrides", [])
 
-        # Create results queue and start manager process
+        # Shared state used by workers for duplicate detection
         manager = multiprocessing.Manager()
-        results_queue = manager.Queue()
         seen_hashes = manager.dict()
         duplicate_counter = manager.dict()
         duplicate_counter["count"] = 0
-        flush_interval = 60  # or read from your config
-        sig_digits = config["optimize"]["round_to_n_significant_digits"]
-        writer_process = multiprocessing.Process(
-            target=results_writer_process,
-            args=(results_queue, results_dir, sig_digits, flush_interval),
-            kwargs={
-                "compress": config["optimize"]["compress_results_file"],
-                "write_all_results": config["optimize"].get("write_all_results", True),  # ← new
-            },
-        )
-        writer_process.start()
 
-        # Prepare BTC/USD data
-        # For optimization, use the BTC/USD prices from the first exchange (or combined)
-        # Since all exchanges should align in timesteps, this should be consistent
-        btc_usd_data = btc_usd_prices  # Use the fetched btc_usd_prices from prepare_hlcvs_mss
-        logging.info("Using fetched BTC/USD prices for collateral calculations")
-
-        validate_array(btc_usd_data, "btc_usd_data", allow_nan=False)
-        btc_usd_shared_memory_file = create_shared_memory_file(btc_usd_data)
-
-        # Initialize evaluator with results queue and BTC/USD shared memory
+        # Initialize evaluator with shared memory references
         evaluator = Evaluator(
-            shared_memory_files=shared_memory_files,
-            hlcvs_shapes=hlcvs_shapes,
-            hlcvs_dtypes=hlcvs_dtypes,
-            # Instead of a single file/dtype, pass dictionaries
-            btc_usd_shared_memory_files=btc_usd_shared_memory_files,
-            btc_usd_dtypes=btc_usd_dtypes,
+            hlcvs_specs=hlcvs_specs,
+            btc_usd_specs=btc_usd_specs,
             msss=msss,
             config=config,
-            results_queue=results_queue,
             seen_hashes=seen_hashes,
             duplicate_counter=duplicate_counter,
             timestamps=timestamps_dict,
+            shared_array_manager=array_manager,
         )
 
         logging.info(f"Finished initializing evaluator...")
+        flush_interval = 60  # or read from your config
+        sig_digits = config["optimize"]["round_to_n_significant_digits"]
+        recorder = ResultRecorder(
+            results_dir=results_dir,
+            sig_digits=sig_digits,
+            flush_interval=flush_interval,
+            scoring_keys=config["optimize"]["scoring"],
+            compress=config["optimize"]["compress_results_file"],
+            write_all_results=config["optimize"].get("write_all_results", True),
+        )
+
         n_objectives = len(config["optimize"]["scoring"])
         creator.create("FitnessMulti", base.Fitness, weights=(-1.0,) * n_objectives)
         creator.create("Individual", list, fitness=creator.FitnessMulti)
@@ -1269,15 +1214,6 @@ async def main():
         for i, (low, high) in enumerate(bounds):
             toolbox.register(f"attr_{i}", np.random.uniform, low, high)
 
-        def create_individual():
-            return creator.Individual([getattr(toolbox, f"attr_{i}")() for i in range(len(bounds))])
-
-        toolbox.register("individual", create_individual)
-        toolbox.register("population", tools.initRepeat, list, toolbox.individual)
-
-        # Register the evaluation function
-        toolbox.register("evaluate", evaluator.evaluate, overrides_list=overrides_list)
-
         # Register genetic operators
         toolbox.register(
             "mate",
@@ -1295,6 +1231,7 @@ async def main():
             indpb=mutation_indpb,
         )
         toolbox.register("select", tools.selNSGA2)
+        toolbox.register("evaluate", evaluator.evaluate, overrides_list=overrides_list)
 
         # Parallelization setup
         logging.info(f"Initializing multiprocessing pool. N cpus: {config['optimize']['n_cpus']}")
@@ -1310,12 +1247,17 @@ async def main():
             bounds,
             sig_digits,
         )
-        if (nstart := len(starting_individuals)) > (popsize := config["optimize"]["population_size"]):
+        population_size = config["optimize"]["population_size"]
+        if (nstart := len(starting_individuals)) > population_size:
             logging.info(f"Number of starting configs greater than population size.")
-            logging.info(f"Increasing population size: {popsize} -> {nstart}")
+            logging.info(f"Increasing population size: {population_size} -> {nstart}")
             config["optimize"]["population_size"] = nstart
+            population_size = nstart
 
-        population = toolbox.population(n=config["optimize"]["population_size"])
+        def _make_random_individual():
+            return creator.Individual([np.random.uniform(low, high) for low, high in bounds])
+
+        population = [_make_random_individual() for _ in range(population_size)]
         if starting_individuals:
             for i in range(len(starting_individuals)):
                 population[i] = creator.Individual(starting_individuals[i])
@@ -1347,7 +1289,7 @@ async def main():
         # Run the optimization
         logging.info(f"Starting optimize...")
         lambda_size = max(1, int(round(config["optimize"]["population_size"] * offspring_multiplier)))
-        population, logbook = algorithms.eaMuPlusLambda(
+        population, logbook = ea_mu_plus_lambda_stream(
             population,
             toolbox,
             mu=config["optimize"]["population_size"],
@@ -1358,6 +1300,9 @@ async def main():
             stats=stats,
             halloffame=hof,
             verbose=False,
+            recorder=recorder,
+            evaluator_config=evaluator.config,
+            overrides_list=overrides_list,
         )
 
         # Print statistics
@@ -1369,32 +1314,18 @@ async def main():
         logging.error(f"An error occurred: {e}")
         traceback.print_exc()
     finally:
-        # Signal the writer process to shut down and wait for it
-        if "results_queue" in locals():
-            results_queue.put("DONE")
-            writer_process.join()
+        if "recorder" in locals():
+            try:
+                recorder.flush()
+            except Exception:
+                logging.exception("Failed to flush recorder")
+            recorder.close()
         if "pool" in locals():
             logging.info("Closing and terminating the process pool...")
             pool.close()
-            pool.terminate()
             pool.join()
-
-        # Remove shared memory files (including BTC/USD)
-        if "shared_memory_files" in locals():
-            for shared_memory_file in shared_memory_files.values():
-                if shared_memory_file and os.path.exists(shared_memory_file):
-                    logging.info(f"Removing shared memory file: {shared_memory_file}")
-                    try:
-                        os.unlink(shared_memory_file)
-                    except Exception as e:
-                        logging.error(f"Error removing shared memory file: {e}")
-        if "btc_usd_shared_memory_file" in locals():
-            if btc_usd_shared_memory_file and os.path.exists(btc_usd_shared_memory_file):
-                logging.info(f"Removing BTC/USD shared memory file: {btc_usd_shared_memory_file}")
-                try:
-                    os.unlink(btc_usd_shared_memory_file)
-                except Exception as e:
-                    logging.error(f"Error removing BTC/USD shared memory file: {e}")
+        if "array_manager" in locals():
+            array_manager.cleanup()
 
         logging.info("Cleanup complete. Exiting.")
         sys.exit(0)

@@ -177,3 +177,20 @@ from opt_utils import load_results
 for config in load_results("optimize_results/.../all_results.bin"):
     # Work with config
 ```
+
+### Monitoring Optimizer Memory Usage
+
+The script `tools/profile_optimizer_memory.py` (requires `psutil`) can be used to launch
+two optimizer runs with different CPU counts and record both process RSS and system-wide
+memory pressure. This is useful when validating that shared-memory datasets are behaving
+as expected on a given machine.
+
+```bash
+python tools/profile_optimizer_memory.py \
+  --coins BTC ETH XRP SOL \
+  --iters 20 \
+  --population-size 12 \
+  --cpus 2 6
+```
+
+The script writes raw samples and a summary to `tmp/optimizer_mem_profiles/`.

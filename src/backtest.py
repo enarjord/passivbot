@@ -56,31 +56,7 @@ from main import manage_rust_compilation
 import gzip
 import traceback
 
-import tempfile
-from contextlib import contextmanager
 from logging_setup import configure_logging
-
-
-@contextmanager
-def create_shared_memory_file(array: np.ndarray):
-    with tempfile.NamedTemporaryFile(delete=False) as f:
-        filepath = f.name
-        array.tofile(f)
-
-    try:
-        yield filepath
-    finally:
-        # Ensure file is closed before deleting
-        try:
-            os.unlink(filepath)
-        except PermissionError:
-            import time
-
-            time.sleep(0.1)  # Wait briefly and try again
-            try:
-                os.unlink(filepath)
-            except Exception as e:
-                print(f"Failed to delete temporary file {filepath}: {e}")
 
 
 plt.rcParams["figure.figsize"] = [29, 18]
@@ -684,25 +660,18 @@ def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timest
         requested_start_ts = int(date_to_ts(require_config_value(config, "backtest.start_date")))
     backtest_params["requested_start_timestamp_ms"] = requested_start_ts
 
-    # Use context managers for both HLCV and BTC/USD shared memory files
-    with create_shared_memory_file(hlcvs) as shared_memory_file, create_shared_memory_file(
-        btc_usd_prices
-    ) as btc_usd_shared_memory_file:
-        (
-            fills,
-            equities_array,
-            analysis_usd,
-            analysis_btc,
-        ) = pbr.run_backtest(
-            shared_memory_file,
-            hlcvs.shape,
-            hlcvs.dtype.str,
-            btc_usd_shared_memory_file,
-            btc_usd_prices.dtype.str,
-            bot_params_list,
-            exchange_params,
-            backtest_params,
-        )
+    (
+        fills,
+        equities_array,
+        analysis_usd,
+        analysis_btc,
+    ) = pbr.run_backtest(
+        np.ascontiguousarray(hlcvs, dtype=np.float64),
+        np.ascontiguousarray(btc_usd_prices, dtype=np.float64),
+        bot_params_list,
+        exchange_params,
+        backtest_params,
+    )
 
     logging.info(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
     equities_array = np.asarray(equities_array)

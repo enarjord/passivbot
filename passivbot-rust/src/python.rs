@@ -13,65 +13,38 @@ use crate::types::{
     BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, Position,
     StateParams, TrailingPriceBundle,
 };
-use memmap::MmapOptions;
-use ndarray::{Array2, ArrayView};
-use numpy::{IntoPyArray, PyArray2};
+use ndarray::Array2;
+use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray3};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use serde::Serialize;
-use std::fs::File;
 use std::str::FromStr;
 
 #[pyfunction]
 pub fn run_backtest(
-    shared_memory_file: &str,           // Existing HLCV shared memory file
-    hlcvs_shape: (usize, usize, usize), // Shape of HLCV data
-    hlcvs_dtype: &str,                  // Dtype of HLCV data
-    btc_usd_shared_memory_file: &str,   // New BTC/USD shared memory file
-    btc_usd_dtype: &str,                // Dtype of BTC/USD data
-    bot_params: &PyAny,                 // Bot parameters per coin
-    exchange_params_list: &PyAny,       // Exchange parameters
-    backtest_params_dict: &PyDict,      // Backtest parameters
+    hlcvs: PyReadonlyArray3<f64>, // Shared HLCV data (timesteps x coins x features)
+    btc_usd: PyReadonlyArray1<f64>, // Shared BTC/USD collateral prices
+    bot_params: &PyAny,           // Bot parameters per coin
+    exchange_params_list: &PyAny, // Exchange parameters
+    backtest_params_dict: &PyDict, // Backtest parameters
 ) -> PyResult<(
     Py<PyArray2<PyObject>>,
     Py<PyArray2<f64>>,
     Py<PyDict>,
     Py<PyDict>,
 )> {
-    // Open and map the HLCV shared memory file
-    let file = File::open(shared_memory_file)
-        .map_err(|e| PyValueError::new_err(format!("Unable to open shared memory file: {}", e)))?;
-    let mmap = unsafe {
-        MmapOptions::new()
-            .map(&file)
-            .map_err(|e| PyValueError::new_err(format!("Unable to map HLCV file: {}", e)))?
-    };
-    let hlcvs_rust = unsafe {
-        match hlcvs_dtype {
-            "<f8" => ArrayView::from_shape_ptr(hlcvs_shape, mmap.as_ptr() as *const f64),
-            _ => return Err(PyValueError::new_err("Unsupported dtype for HLCV data")),
-        }
-    };
+    let hlcvs_rust = hlcvs.as_array();
+    let btc_usd_rust = btc_usd.as_array();
 
-    // Open and map the BTC/USD shared memory file
-    let btc_usd_file = File::open(btc_usd_shared_memory_file).map_err(|e| {
-        PyValueError::new_err(format!("Unable to open BTC/USD shared memory file: {}", e))
-    })?;
-    let btc_usd_mmap = unsafe {
-        MmapOptions::new()
-            .map(&btc_usd_file)
-            .map_err(|e| PyValueError::new_err(format!("Unable to map BTC/USD file: {}", e)))?
-    };
-    let n_timesteps = hlcvs_shape.0; // Number of timesteps from HLCV shape
-    let btc_usd_rust = unsafe {
-        match btc_usd_dtype {
-            "<f8" => ArrayView::from_shape_ptr((n_timesteps,), btc_usd_mmap.as_ptr() as *const f64),
-            _ => return Err(PyValueError::new_err("Unsupported dtype for BTC/USD data")),
-        }
-    };
+    if hlcvs_rust.ndim() != 3 {
+        return Err(PyValueError::new_err(format!(
+            "Expected 3D HLCV array, got ndim={}",
+            hlcvs_rust.ndim()
+        )));
+    }
 
-    // Ensure BTC/USD data length matches HLCV timesteps
+    let n_timesteps = hlcvs_rust.shape()[0];
     if btc_usd_rust.len() != n_timesteps {
         return Err(PyValueError::new_err(format!(
             "BTC/USD data length ({}) does not match HLCV timesteps ({})",
