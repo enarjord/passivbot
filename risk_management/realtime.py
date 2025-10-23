@@ -13,6 +13,15 @@ from custom_endpoint_overrides import (
     load_custom_endpoint_config,
 )
 
+try:  # pragma: no cover - optional dependency when running tests
+    from ccxt.base.errors import AuthenticationError
+except (ModuleNotFoundError, ImportError):  # pragma: no cover - ccxt is optional for tests
+
+    class AuthenticationError(Exception):
+        """Fallback authentication error used when ccxt is unavailable."""
+
+        pass
+
 from .account_clients import AccountClientProtocol, CCXTAccountClient
 from .configuration import CustomEndpointSettings, RealtimeConfig
 
@@ -66,6 +75,7 @@ class RealtimeDataFetcher:
             self._account_clients = clients
         else:
             self._account_clients = list(account_clients)
+        self._last_auth_errors: Dict[str, str] = {}
 
     async def fetch_snapshot(self) -> Dict[str, Any]:
         tasks = [client.fetch() for client in self._account_clients]
@@ -74,12 +84,39 @@ class RealtimeDataFetcher:
         account_messages: Dict[str, str] = {}
         for account_config, result in zip(self.config.accounts, results):
             if isinstance(result, Exception):
-                message = f"{account_config.name}: {result}"
-                logger.exception("Failed to fetch snapshot for %s", account_config.name, exc_info=result)
+                if isinstance(result, AuthenticationError):
+                    message = (
+                        f"{account_config.name}: authentication failed - {result}"
+                    )
+                    error_message = str(result)
+                    previous_error = self._last_auth_errors.get(account_config.name)
+                    if previous_error != error_message:
+                        logger.warning(
+                            "Authentication failed for %s: %s",
+                            account_config.name,
+                            result,
+                        )
+                        self._last_auth_errors[account_config.name] = error_message
+                    else:
+                        logger.debug(
+                            "Authentication failure for %s unchanged: %s",
+                            account_config.name,
+                            result,
+                        )
+                else:
+                    message = f"{account_config.name}: {result}"
+                    logger.exception(
+                        "Failed to fetch snapshot for %s", account_config.name, exc_info=result
+                    )
                 account_messages[account_config.name] = message
                 accounts_payload.append({"name": account_config.name, "balance": 0.0, "positions": []})
             else:
                 accounts_payload.append(result)
+                if account_config.name in self._last_auth_errors:
+                    logger.info(
+                        "Authentication for %s restored", account_config.name
+                    )
+                    self._last_auth_errors.pop(account_config.name, None)
         snapshot = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "accounts": accounts_payload,
