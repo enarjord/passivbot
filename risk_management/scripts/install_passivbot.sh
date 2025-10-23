@@ -24,6 +24,7 @@ source "${VENV_DIR}/bin/activate"
 
 pip install --upgrade pip setuptools wheel
 
+
 # Install build prerequisites required by Passivbot's setup.py
 pip install --upgrade setuptools-rust
 
@@ -36,6 +37,14 @@ else
 fi
 
 pip install "${PIP_INSTALL_FLAGS[@]}" -e "${REPO_ROOT}"
+
+
+# Install build prerequisites required by Passivbot's setup.py
+pip install --upgrade setuptools-rust
+
+# Install passivbot from repository root in editable mode
+pip install -e "${REPO_ROOT}"
+
 
 echo "Passivbot has been installed into ${VENV_DIR}."
 echo "Activate the environment with:"

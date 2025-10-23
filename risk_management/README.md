@@ -20,6 +20,7 @@ editable mode:
 ./scripts/install_passivbot.sh
 ```
 
+
 If you need to adjust the build invocation (for example, to pass additional
 flags to `pip install`), append them to the script call and they will be
 forwarded to the editable install step:
@@ -37,12 +38,21 @@ added—to import Passivbot modules and configurations.
 * Creates (or reuses) the virtual environment at
   `risk_management/.venv_passivbot_risk`.
 * Upgrades `pip`, `setuptools`, and `wheel` to recent versions.
+
 * Installs Passivbot's build prerequisite `setuptools-rust` that is
   required during editable installations of the core project.
 * Installs Passivbot from the repository root in editable mode with PEP 517
   builds enabled by default, ensuring nested requirement files are resolved
   correctly. Any extra flags passed to the script are forwarded to the `pip`
   command so you can tailor the build locally.
+
+
+* Installs Passivbot's build prerequisite `setuptools-rust` that is
+  required during editable installations of the core project.
+
+* Installs Passivbot from the repository root in editable mode so that local
+  changes to Passivbot are instantly available to the risk management package.
+
 
 ## Requirements
 
