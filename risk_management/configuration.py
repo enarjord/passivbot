@@ -9,6 +9,14 @@ from typing import Any, Dict, Iterable, List, Mapping
 
 
 @dataclass()
+class CustomEndpointSettings:
+    """Settings controlling how custom endpoint overrides are loaded."""
+
+    path: str | None = None
+    autodiscover: bool = True
+
+
+@dataclass()
 class AccountConfig:
     """Configuration for a single exchange account."""
 
@@ -40,6 +48,7 @@ class RealtimeConfig:
     notification_channels: List[str] = field(default_factory=list)
     auth: AuthConfig | None = None
     account_messages: Dict[str, str] = field(default_factory=dict)
+    custom_endpoints: CustomEndpointSettings | None = None
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -74,6 +83,25 @@ def _merge_credentials(primary: Mapping[str, Any], secondary: Mapping[str, Any])
     merged = dict(secondary)
     merged.update(primary)
     return _normalise_credentials(merged)
+
+
+def _parse_custom_endpoints(settings: Any) -> CustomEndpointSettings | None:
+    """Return structured custom endpoint settings from ``settings``."""
+
+    if settings is None:
+        return None
+    if isinstance(settings, Mapping):
+        path_raw = settings.get("path")
+        path = str(path_raw).strip() if path_raw not in (None, "") else None
+        autodiscover = bool(settings.get("autodiscover", True))
+        return CustomEndpointSettings(path=path or None, autodiscover=autodiscover)
+    value = str(settings).strip()
+    if not value:
+        return None
+    lowered = value.lower()
+    if lowered in {"none", "off", "disable"}:
+        return CustomEndpointSettings(path=None, autodiscover=False)
+    return CustomEndpointSettings(path=value, autodiscover=False)
 
 
 def _parse_accounts(
@@ -158,9 +186,11 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     alert_thresholds = {str(k): float(v) for k, v in config.get("alert_thresholds", {}).items()}
     notification_channels = [str(item) for item in config.get("notification_channels", [])]
     auth = _parse_auth(config.get("auth"))
+    custom_endpoints = _parse_custom_endpoints(config.get("custom_endpoints"))
     return RealtimeConfig(
         accounts=accounts,
         alert_thresholds=alert_thresholds,
         notification_channels=notification_channels,
         auth=auth,
+        custom_endpoints=custom_endpoints,
     )
