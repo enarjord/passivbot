@@ -1,10 +1,36 @@
+from pathlib import Path
+
 from setuptools import setup, find_packages
 from setuptools_rust import RustExtension
 
 
-def parse_requirements(filename):
-    with open(filename, "r") as file:
-        return [line.strip() for line in file if line.strip() and not line.startswith("#")]
+BASE_DIR = Path(__file__).resolve().parent
+
+
+def parse_requirements(filename, _seen=None):
+    """Parse a requirements file supporting nested includes."""
+
+    if _seen is None:
+        _seen = set()
+
+    path = BASE_DIR / filename
+    if path in _seen:
+        return []
+    _seen.add(path)
+
+    requirements = []
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("-r"):
+            parts = line.split(maxsplit=1)
+            if len(parts) != 2 or not parts[1].strip():
+                raise ValueError(f"Invalid requirements include directive: {raw_line}")
+            requirements.extend(parse_requirements(parts[1].strip(), _seen))
+        else:
+            requirements.append(line)
+    return requirements
 
 
 setup(
