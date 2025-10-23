@@ -56,6 +56,7 @@ from config_utils import (
     update_config_with_args,
     format_config,
     get_optional_config_value,
+    get_optional_live_value,
     normalize_coins_source,
     expand_PB_mode,
     get_template_config,
@@ -370,6 +371,22 @@ class Passivbot:
         # TTL (minutes) for EMA candles on non-traded symbols
         ttl_min = require_live_value(config, "inactive_coin_candle_ttl_minutes")
         self.inactive_coin_candle_ttl_ms = int(float(ttl_min) * 60_000)
+        raw_mem_interval = get_optional_live_value(config, "memory_snapshot_interval_minutes", 30.0)
+        try:
+            interval_minutes = float(raw_mem_interval)
+        except Exception:
+            logging.warning(
+                "Unable to parse live.memory_snapshot_interval_minutes=%r; using fallback 30",
+                raw_mem_interval,
+            )
+            interval_minutes = 30.0
+        if interval_minutes <= 0.0:
+            logging.warning(
+                "live.memory_snapshot_interval_minutes=%r is non-positive; using fallback 30",
+                raw_mem_interval,
+            )
+            interval_minutes = 30.0
+        self.memory_snapshot_interval_ms = max(60_000, int(interval_minutes * 60_000))
         auto_gs = bool(self.live_value("auto_gs"))
         self.PB_mode_stop = {
             "long": "graceful_stop" if auto_gs else "manual",
@@ -393,6 +410,7 @@ class Passivbot:
         except Exception as e:
             logging.info(f"warmup skipped due to: {e}")
         await asyncio.sleep(1)
+        self._log_memory_snapshot()
         logging.info(f"Starting data maintainers...")
         await self.start_data_maintainers()
 
@@ -443,13 +461,51 @@ class Passivbot:
         cache_bytes = None
         cache_candles = None
         cache_symbols = None
+        cache_top = None
+        tf_cache_bytes = None
+        tf_cache_ranges = None
+        tf_cache_top = None
         try:
             cache = getattr(self.cm, "_cache", {}) if hasattr(self, "cm") else {}
             cache_symbols = len(cache)
-            cache_bytes = sum(
-                int(getattr(arr, "nbytes", 0)) for arr in cache.values() if arr is not None
-            )
-            cache_candles = sum(int(arr.shape[0]) for arr in cache.values() if hasattr(arr, "shape"))
+            stats = []
+            for sym, arr in cache.items():
+                if arr is None:
+                    continue
+                arr_bytes = int(getattr(arr, "nbytes", 0))
+                arr_rows = int(arr.shape[0]) if hasattr(arr, "shape") else 0
+                stats.append((sym, arr_bytes, arr_rows))
+            cache_bytes = sum(val for _, val, _ in stats)
+            cache_candles = sum(rows for _, _, rows in stats)
+            if stats:
+                top = sorted(stats, key=lambda item: item[1], reverse=True)[:3]
+                cache_top = ", ".join(
+                    f"{sym}:{bytes_ / (1024 * 1024):.1f}MiB/{rows}" for sym, bytes_, rows in top
+                )
+            tf_cache = getattr(self.cm, "_tf_range_cache", {}) if hasattr(self, "cm") else {}
+            tf_stats = []
+            for sym, entries in tf_cache.items():
+                if not isinstance(entries, dict):
+                    continue
+                for key, val in entries.items():
+                    try:
+                        tf_label = key[0] if isinstance(key, tuple) and key else str(key)
+                    except Exception:
+                        tf_label = "unknown"
+                    arr = val[0] if isinstance(val, tuple) and val else val
+                    if not hasattr(arr, "nbytes"):
+                        continue
+                    arr_bytes = int(getattr(arr, "nbytes", 0))
+                    arr_rows = int(arr.shape[0]) if hasattr(arr, "shape") else 0
+                    tf_stats.append(((sym, tf_label), arr_bytes, arr_rows))
+            if tf_stats:
+                tf_cache_bytes = sum(size for _, size, _ in tf_stats)
+                tf_cache_ranges = len(tf_stats)
+                top_tf = sorted(tf_stats, key=lambda item: item[1], reverse=True)[:3]
+                tf_cache_top = ", ".join(
+                    f"{sym}:{tf}:{bytes_ / (1024 * 1024):.1f}MiB/{rows}"
+                    for (sym, tf), bytes_, rows in top_tf
+                )
         except Exception:
             cache_bytes = None
         prev = getattr(self, "_mem_log_prev", None)
@@ -470,6 +526,44 @@ class Passivbot:
                     detail += f" across {cache_symbols} symbols"
                 cache_desc += f" ({detail})"
             parts.append(cache_desc)
+            if cache_top:
+                parts.append(f"cm_top={cache_top}")
+        if tf_cache_bytes is not None:
+            tf_desc = f"cm_tf_cache={tf_cache_bytes / (1024 * 1024):.2f} MiB"
+            if tf_cache_ranges is not None:
+                tf_desc += f" ({tf_cache_ranges} ranges)"
+            parts.append(tf_desc)
+            if tf_cache_top:
+                parts.append(f"cm_tf_top={tf_cache_top}")
+        try:
+            loop = asyncio.get_running_loop()
+            tasks = asyncio.all_tasks(loop)
+            total_tasks = len(tasks)
+            pending = sum(1 for t in tasks if not t.done())
+            task_counts: Dict[str, int] = {}
+            for t in tasks:
+                coro = getattr(t, "get_coro", None)
+                name = None
+                if callable(coro):
+                    try:
+                        coro_obj = coro()
+                        name = getattr(coro_obj, "__qualname__", None)
+                    except Exception:
+                        name = None
+                if not name:
+                    name = getattr(t, "get_name", lambda: None)()
+                if not name:
+                    name = type(t).__name__
+                task_counts[name] = task_counts.get(name, 0) + 1
+            top_tasks = ", ".join(
+                f"{name}:{count}"
+                for name, count in sorted(task_counts.items(), key=lambda kv: kv[1], reverse=True)[:4]
+            )
+            parts.append(f"tasks={total_tasks} pending={pending}")
+            if top_tasks:
+                parts.append(f"task_top={top_tasks}")
+        except Exception:
+            pass
         logging.info("; ".join(parts))
         self._mem_log_prev = {"timestamp": now_ms, "rss": rss}
         if cache_bytes is not None:
@@ -2588,7 +2682,8 @@ class Passivbot:
                 last_mem_log_ts = None
                 if isinstance(mem_prev, dict):
                     last_mem_log_ts = mem_prev.get("timestamp")
-                if last_mem_log_ts is None or now - last_mem_log_ts >= 1000 * 60 * 60:
+                interval = getattr(self, "memory_snapshot_interval_ms", 3_600_000)
+                if last_mem_log_ts is None or now - last_mem_log_ts >= interval:
                     self._log_memory_snapshot(now_ms=now)
                 # update markets dict once every hour
                 if now - self.init_markets_last_update_ms > 1000 * 60 * 60:
