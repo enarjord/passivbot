@@ -3,9 +3,39 @@
 This directory contains a stand-alone risk management, portfolio monitoring,
 and alerting system designed to work *with* Passivbot without modifying the
 core trading bot.  The extension will grow iteratively.  In this iteration we
-focus on providing a reproducible way to prepare an isolated virtual
-environment that can import Passivbot's source tree without altering the
-existing installation you may already be using for live trading.
+ship a self-contained terminal dashboard that consumes a JSON snapshot and
+highlights portfolio exposure alongside simulated alert messages.  Everything
+can run without touching a live Passivbot environment so you can experiment
+freely.
+
+## Quick start
+
+1. (Optional) Bootstrap the isolated virtual environment so dependencies stay
+   separate from your trading installation:
+
+   ```bash
+   cd risk_management
+   ./scripts/install_passivbot.sh --upgrade-packaging
+   source .venv_passivbot_risk/bin/activate
+   ```
+
+2. Render the dashboard using the included sample snapshot:
+
+   ```bash
+   python -m risk_management.dashboard
+   ```
+
+   The command prints a summary of two example accounts, their positions, and
+   any alerts triggered by the configured thresholds.  Edit
+   `risk_management/dashboard_config.json` to plug in your own numbers or point
+   the command to a custom snapshot via `--config /path/to/file.json`.
+
+3. To mimic continuous monitoring, add `--interval 5 --iterations 0` and update
+   the JSON file in another terminal.  The CLI will re-read the file on the
+   chosen cadence and immediately reflect the changes.
+
+The previous quick start guide that focused solely on creating the virtual
+environment is kept below for reference.
 
 ## Installation Overview
 

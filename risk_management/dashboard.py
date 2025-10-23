@@ -1,0 +1,341 @@
+"""Terminal dashboard for monitoring Passivbot portfolios.
+
+The module consumes a JSON snapshot describing one or more accounts along with
+alert thresholds.  It renders a textual dashboard summarising exposure, profit
+and loss, and risk metrics while also highlighting any triggered alerts.
+
+Although the data is static for demonstration purposes, the command line
+interface can watch the snapshot file for changes and continuously re-render
+the dashboard.  This mimics how a future monitoring service could poll real
+time exchange or database information.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Sequence
+
+
+@dataclass
+class Position:
+    """A lightweight representation of a trading position."""
+
+    symbol: str
+    side: str
+    notional: float
+    entry_price: float
+    mark_price: float
+    liquidation_price: float | None
+    wallet_exposure_pct: float | None
+    unrealized_pnl: float
+    max_drawdown_pct: float | None
+    take_profit_price: float | None = None
+    stop_loss_price: float | None = None
+
+    def exposure_relative_to(self, balance: float) -> float:
+        if balance == 0:
+            return 0.0
+        return abs(self.notional) / balance
+
+    def pnl_pct(self, balance: float) -> float:
+        if balance == 0:
+            return 0.0
+        return self.unrealized_pnl / balance
+
+
+@dataclass
+class Account:
+    """Account level snapshot."""
+
+    name: str
+    balance: float
+    positions: Sequence[Position]
+
+    def total_abs_notional(self) -> float:
+        return sum(abs(p.notional) for p in self.positions)
+
+    def total_unrealized(self) -> float:
+        return sum(p.unrealized_pnl for p in self.positions)
+
+    def exposure_pct(self) -> float:
+        if self.balance == 0:
+            return 0.0
+        return self.total_abs_notional() / self.balance
+
+
+@dataclass
+class AlertThresholds:
+    wallet_exposure_pct: float = 0.6
+    position_wallet_exposure_pct: float = 0.25
+    max_drawdown_pct: float = 0.3
+    loss_threshold_pct: float = -0.12
+
+
+def _format_currency(value: float) -> str:
+    return f"${value:,.2f}"
+
+
+def _format_pct(value: float) -> str:
+    return f"{value * 100:6.2f}%"
+
+
+def _format_price(value: float | None) -> str:
+    if value is None or math.isnan(value):
+        return "-"
+    return f"{value:,.2f}"
+
+
+def _parse_position(raw: Dict[str, Any]) -> Position:
+    required = [
+        "symbol",
+        "side",
+        "notional",
+        "entry_price",
+        "mark_price",
+        "unrealized_pnl",
+    ]
+    missing = [field for field in required if field not in raw]
+    if missing:
+        raise ValueError(f"Position missing required fields: {missing}")
+
+    return Position(
+        symbol=str(raw["symbol"]),
+        side=str(raw.get("side", "")),
+        notional=float(raw["notional"]),
+        entry_price=float(raw["entry_price"]),
+        mark_price=float(raw["mark_price"]),
+        liquidation_price=(
+            float(raw["liquidation_price"])
+            if raw.get("liquidation_price") is not None
+            else None
+        ),
+        wallet_exposure_pct=(
+            float(raw["wallet_exposure_pct"])
+            if raw.get("wallet_exposure_pct") is not None
+            else None
+        ),
+        unrealized_pnl=float(raw["unrealized_pnl"]),
+        max_drawdown_pct=(
+            float(raw["max_drawdown_pct"])
+            if raw.get("max_drawdown_pct") is not None
+            else None
+        ),
+        take_profit_price=(
+            float(raw["take_profit_price"])
+            if raw.get("take_profit_price") is not None
+            else None
+        ),
+        stop_loss_price=(
+            float(raw["stop_loss_price"])
+            if raw.get("stop_loss_price") is not None
+            else None
+        ),
+    )
+
+
+def _parse_account(raw: Dict[str, Any]) -> Account:
+    if "name" not in raw or "balance" not in raw:
+        raise ValueError("Account entries must include 'name' and 'balance'.")
+
+    positions_raw = raw.get("positions", [])
+    positions = [_parse_position(pos) for pos in positions_raw]
+    return Account(name=str(raw["name"]), balance=float(raw["balance"]), positions=positions)
+
+
+def _parse_thresholds(raw: Dict[str, Any]) -> AlertThresholds:
+    thresholds = AlertThresholds()
+    for key in (
+        "wallet_exposure_pct",
+        "position_wallet_exposure_pct",
+        "max_drawdown_pct",
+        "loss_threshold_pct",
+    ):
+        if key in raw:
+            setattr(thresholds, key, float(raw[key]))
+    return thresholds
+
+
+def load_snapshot(path: Path) -> Dict[str, Any]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data
+
+
+def parse_snapshot(data: Dict[str, Any]) -> tuple[datetime, Sequence[Account], AlertThresholds, Sequence[str]]:
+    generated_at_raw = data.get("generated_at")
+    if generated_at_raw:
+        try:
+            generated_at = datetime.fromisoformat(generated_at_raw.replace("Z", "+00:00"))
+        except ValueError:
+            generated_at = datetime.now(timezone.utc)
+    else:
+        generated_at = datetime.now(timezone.utc)
+
+    accounts = [_parse_account(acc) for acc in data.get("accounts", [])]
+    thresholds = _parse_thresholds(data.get("alert_thresholds", {}))
+    notifications = [str(channel) for channel in data.get("notification_channels", [])]
+    return generated_at, accounts, thresholds, notifications
+
+
+def evaluate_alerts(accounts: Sequence[Account], thresholds: AlertThresholds) -> List[str]:
+    alerts: List[str] = []
+    for account in accounts:
+        exposure = account.exposure_pct()
+        if exposure > thresholds.wallet_exposure_pct:
+            alerts.append(
+                f"{account.name}: wallet exposure {exposure:.2%} exceeds limit {thresholds.wallet_exposure_pct:.2%}"
+            )
+
+        balance = account.balance
+        unrealized_pct = account.total_unrealized() / balance if balance else 0.0
+        if unrealized_pct < thresholds.loss_threshold_pct:
+            alerts.append(
+                f"{account.name}: unrealized PnL {unrealized_pct:.2%} below loss limit {thresholds.loss_threshold_pct:.2%}"
+            )
+
+        for position in account.positions:
+            pos_exposure = position.exposure_relative_to(balance)
+            if pos_exposure > thresholds.position_wallet_exposure_pct:
+                alerts.append(
+                    f"{account.name} {position.symbol}: exposure {pos_exposure:.2%} exceeds {thresholds.position_wallet_exposure_pct:.2%}"
+                )
+            if (
+                position.max_drawdown_pct is not None
+                and position.max_drawdown_pct > thresholds.max_drawdown_pct
+            ):
+                alerts.append(
+                    f"{account.name} {position.symbol}: drawdown {position.max_drawdown_pct:.2%} exceeds {thresholds.max_drawdown_pct:.2%}"
+                )
+    return alerts
+
+
+def render_dashboard(
+    generated_at: datetime,
+    accounts: Sequence[Account],
+    alerts: Sequence[str],
+    notifications: Sequence[str],
+) -> str:
+    lines: List[str] = []
+    lines.append("=" * 80)
+    lines.append("Passivbot Risk Management Dashboard")
+    lines.append(f"Snapshot generated at: {generated_at.astimezone(timezone.utc).isoformat()}")
+    lines.append("=" * 80)
+    lines.append("")
+
+    if not accounts:
+        lines.append("No accounts available in the snapshot.")
+    for account in accounts:
+        lines.append(f"Account: {account.name}")
+        lines.append(f"  Balance: {_format_currency(account.balance)}")
+        lines.append(f"  Exposure: {_format_pct(account.exposure_pct())}")
+        lines.append(f"  Unrealized PnL: {_format_currency(account.total_unrealized())}")
+        lines.append("")
+        if account.positions:
+            header = (
+                f"    {'Symbol':<10}{'Side':<6}{'Exposure':>10}{'PnL':>12}{'Entry':>12}{'Mark':>12}"
+                f"{'Liq.':>12}{'Max DD':>10}{'TP':>12}{'SL':>12}"
+            )
+            lines.append(header)
+            lines.append("    " + "-" * (len(header) - 4))
+            for position in account.positions:
+                balance = account.balance
+                pos_exposure = position.exposure_relative_to(balance)
+                pnl_pct = position.pnl_pct(balance)
+                lines.append(
+                    "    "
+                    + f"{position.symbol:<10}{position.side:<6}{_format_pct(pos_exposure):>10}"
+                    + f"{_format_pct(pnl_pct):>12}{_format_price(position.entry_price):>12}"
+                    + f"{_format_price(position.mark_price):>12}{_format_price(position.liquidation_price):>12}"
+                    + f"{_format_pct(position.max_drawdown_pct or 0.0):>10}"
+                    + f"{_format_price(position.take_profit_price):>12}{_format_price(position.stop_loss_price):>12}"
+                )
+        else:
+            lines.append("    No open positions.")
+        lines.append("")
+
+    lines.append("Alerts")
+    lines.append("-" * 80)
+    if alerts:
+        for item in alerts:
+            lines.append(f"• {item}")
+    else:
+        lines.append("No active alerts. All monitored metrics are within thresholds.")
+    lines.append("")
+
+    if notifications:
+        lines.append("Notification channels")
+        lines.append("-" * 80)
+        for channel in notifications:
+            lines.append(f"• {channel}")
+    else:
+        lines.append("No notification channels configured.")
+
+    lines.append("=" * 80)
+    return "\n".join(lines)
+
+
+def run_dashboard(config_path: Path) -> str:
+    snapshot = load_snapshot(config_path)
+    generated_at, accounts, thresholds, notifications = parse_snapshot(snapshot)
+    alerts = evaluate_alerts(accounts, thresholds)
+    return render_dashboard(generated_at, accounts, alerts, notifications)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Render the risk management dashboard")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path(__file__).with_name("dashboard_config.json"),
+        help="Path to the JSON snapshot used for the dashboard.",
+    )
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=0.0,
+        help="Refresh interval in seconds. Set to >0 to continuously monitor the file.",
+    )
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=1,
+        help="Number of times to render the dashboard when --interval is set. Use 0 to loop indefinitely.",
+    )
+
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
+    if args.interval < 0:
+        parser.error("--interval must be >= 0")
+    if args.iterations < 0:
+        parser.error("--iterations must be >= 0")
+
+    try:
+        iteration = 0
+        while True:
+            dashboard = run_dashboard(args.config)
+            print(dashboard)
+            iteration += 1
+            if args.iterations and iteration >= args.iterations:
+                break
+            if args.interval == 0:
+                break
+            time.sleep(args.interval)
+        return 0
+    except FileNotFoundError:
+        parser.error(f"Snapshot file not found: {args.config}")
+    except json.JSONDecodeError as exc:
+        parser.error(f"Snapshot file is not valid JSON: {exc}")
+    except ValueError as exc:
+        parser.error(str(exc))
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+

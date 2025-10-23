@@ -1,0 +1,93 @@
+{
+  "generated_at": "2024-05-04T12:00:00Z",
+  "accounts": [
+    {
+      "name": "Binance Futures",
+      "balance": 15000,
+      "positions": [
+        {
+          "symbol": "BTCUSDT",
+          "side": "long",
+          "notional": 5200,
+          "entry_price": 63250,
+          "mark_price": 62810,
+          "liquidation_price": 52400,
+          "wallet_exposure_pct": 0.35,
+          "unrealized_pnl": -460,
+          "max_drawdown_pct": 0.18,
+          "take_profit_price": 67200,
+          "stop_loss_price": 59800
+        },
+        {
+          "symbol": "ETHUSDT",
+          "side": "short",
+          "notional": 2600,
+          "entry_price": 3120,
+          "mark_price": 3184,
+          "liquidation_price": 3520,
+          "wallet_exposure_pct": 0.17,
+          "unrealized_pnl": -530,
+          "max_drawdown_pct": 0.22,
+          "take_profit_price": 2880,
+          "stop_loss_price": 3300
+        },
+        {
+          "symbol": "SOLUSDT",
+          "side": "long",
+          "notional": 1100,
+          "entry_price": 158,
+          "mark_price": 164,
+          "liquidation_price": 106,
+          "wallet_exposure_pct": 0.07,
+          "unrealized_pnl": 420,
+          "max_drawdown_pct": 0.09,
+          "take_profit_price": 190,
+          "stop_loss_price": 142
+        }
+      ]
+    },
+    {
+      "name": "OKX Futures",
+      "balance": 8400,
+      "positions": [
+        {
+          "symbol": "XRPUSDT",
+          "side": "long",
+          "notional": 1850,
+          "entry_price": 0.56,
+          "mark_price": 0.6,
+          "liquidation_price": 0.38,
+          "wallet_exposure_pct": 0.22,
+          "unrealized_pnl": 280,
+          "max_drawdown_pct": 0.11,
+          "take_profit_price": 0.66,
+          "stop_loss_price": 0.49
+        },
+        {
+          "symbol": "ARBUSDT",
+          "side": "short",
+          "notional": 900,
+          "entry_price": 1.42,
+          "mark_price": 1.36,
+          "liquidation_price": 1.74,
+          "wallet_exposure_pct": 0.11,
+          "unrealized_pnl": 170,
+          "max_drawdown_pct": 0.05,
+          "take_profit_price": 1.18,
+          "stop_loss_price": 1.54
+        }
+      ]
+    }
+  ],
+  "alert_thresholds": {
+    "wallet_exposure_pct": 0.65,
+    "position_wallet_exposure_pct": 0.25,
+    "max_drawdown_pct": 0.25,
+    "loss_threshold_pct": -0.08
+  },
+  "notification_channels": [
+    "email:risk-team@example.com",
+    "slack:#passivbot-risk-alerts"
+  ]
+}
+
