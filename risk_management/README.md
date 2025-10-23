@@ -7,7 +7,6 @@ focus on providing a reproducible way to prepare an isolated virtual
 environment that can import Passivbot's source tree without altering the
 existing installation you may already be using for live trading.
 
-
 ## Installation Overview
 
 The risk management service is developed as a separate Python package that
@@ -25,10 +24,20 @@ Run the helper script to bootstrap the environment and install Passivbot in
 editable mode:
 
 
+
 ```bash
 ./scripts/install_passivbot.sh
 ```
 
+
+The script prepares the virtual environment and writes a `.pth` file so that
+`risk_management` code can import Passivbot modules directly from `../src`
+without reinstalling Passivbot.  This lets you keep running Passivbot from your
+existing environment while prototyping new risk tooling separately.
+
+If you want the helper to refresh `pip`, `setuptools`, and `wheel` inside the
+virtual environment, add `--upgrade-packaging` to the command.  Otherwise those
+tools are left untouched to avoid unnecessary downloads.
 
 The script upgrades core packaging tools inside the virtual environment and
 writes a `.pth` file so that `risk_management` code can import Passivbot
@@ -51,6 +60,7 @@ analytics, monitoring, and alerting—while keeping the main Passivbot setup
 untouched.
 
 
+
 If you need to adjust the build invocation (for example, to pass additional
 flags to `pip install`), append them to the script call and they will be
 forwarded to the editable install step:
@@ -64,10 +74,17 @@ iterations—where portfolio analytics, monitoring, and alerting features will b
 added—to import Passivbot modules and configurations.
 
 
+
 ## What the installer does
 
 * Creates (or reuses) the virtual environment at
   `risk_management/.venv_passivbot_risk`.
+
+* Drops a `.pth` file into the environment's `site-packages` directory so the
+  Passivbot source tree at `../src` is importable without additional
+  installation steps.
+* Optionally upgrades `pip`, `setuptools`, and `wheel` when
+  `--upgrade-packaging` is provided.
 
 * Upgrades `pip`, `setuptools`, and `wheel` to recent versions inside that
   environment.
@@ -93,6 +110,7 @@ added—to import Passivbot modules and configurations.
 
 * Installs Passivbot from the repository root in editable mode so that local
   changes to Passivbot are instantly available to the risk management package.
+
 
 
 ## Requirements
