@@ -105,10 +105,6 @@ class RealtimeDataFetcher:
                             result,
                         )
 
-                    logger.warning(
-                        "Authentication failed for %s: %s", account_config.name, result
-                    )
-
                 else:
                     message = f"{account_config.name}: {result}"
                     logger.exception(

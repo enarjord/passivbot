@@ -47,13 +47,28 @@ class AccountClientProtocol(abc.ABC):
 def _apply_credentials(client: Any, credentials: Mapping[str, Any]) -> None:
     """Populate authentication fields on a ccxt client."""
 
+    sensitive_fields = {"apiKey", "secret", "password", "uid", "login", "walletAddress", "privateKey"}
+
     for key, value in credentials.items():
-        if key in ("apiKey", "secret", "password", "uid", "login"):
+        if value is None:
+            continue
+        if key in sensitive_fields:
             setattr(client, key, value)
         elif key == "headers" and isinstance(value, Mapping):
             headers = getattr(client, "headers", {}) or {}
             headers.update(value)
             client.headers = headers
+        elif key == "options" and isinstance(value, Mapping):
+            options = getattr(client, "options", None)
+            if isinstance(options, MutableMapping):
+                options.update(value)
+            else:
+                setattr(client, "options", dict(value))
+        elif key == "ccxt" and isinstance(value, Mapping):
+            # Some configurations expose an explicit ``ccxt`` block mirroring
+            # passivbot's "ccxt_config" support. Apply the known keys while
+            # falling back to attribute assignment for any extras.
+            _apply_credentials(client, value)
         else:
             try:
                 setattr(client, key, value)

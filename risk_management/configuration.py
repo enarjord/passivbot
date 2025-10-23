@@ -61,28 +61,63 @@ def _load_json(path: Path) -> Dict[str, Any]:
 def _normalise_credentials(data: Mapping[str, Any]) -> Dict[str, Any]:
     """Normalise credential keys to ccxt's expected names."""
 
-    mapping = {
+    key_aliases = {
         "key": "apiKey",
         "apikey": "apiKey",
         "api_key": "apiKey",
+        "api-key": "apiKey",
         "secret": "secret",
+        "secret_key": "secret",
+        "secretkey": "secret",
+        "secret-key": "secret",
+        "apisecret": "secret",
+        "api_secret": "secret",
+        "api-secret": "secret",
         "password": "password",
         "passphrase": "password",
+        "pass_phrase": "password",
+        "pass-phrase": "password",
         "uid": "uid",
+        "user_id": "uid",
+        "wallet_address": "walletAddress",
+        "walletaddress": "walletAddress",
+        "private_key": "privateKey",
+        "privatekey": "privateKey",
+        "ccxt_config": "ccxt",
+        "ccxtconfig": "ccxt",
     }
     normalised: Dict[str, Any] = {}
     for raw_key, value in data.items():
         if value is None:
             continue
-        key = mapping.get(raw_key, raw_key)
+        if isinstance(value, str):
+            value = value.strip()
+            if value == "":
+                continue
+        key_lookup = raw_key.lower().replace(" ", "").replace("-", "_")
+        key = key_aliases.get(key_lookup, raw_key)
+        if key == "exchange":
+            # ``exchange`` is metadata in api key files and should not be
+            # treated as authentication input for ccxt clients.
+            continue
+        if key in {"headers", "options"} and isinstance(value, Mapping):
+            existing = normalised.setdefault(key, {})
+            existing.update(value)
+            continue
         normalised[key] = value
     return normalised
 
 
 def _merge_credentials(primary: Mapping[str, Any], secondary: Mapping[str, Any]) -> Dict[str, Any]:
-    merged = dict(secondary)
-    merged.update(primary)
-    return _normalise_credentials(merged)
+    merged = _normalise_credentials(secondary)
+    primary_normalised = _normalise_credentials(primary)
+    for key, value in primary_normalised.items():
+        if key in {"headers", "options"} and isinstance(value, Mapping):
+            existing = merged.setdefault(key, {})
+            existing.update(value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _parse_custom_endpoints(settings: Any) -> CustomEndpointSettings | None:

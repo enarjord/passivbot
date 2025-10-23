@@ -10,7 +10,11 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from risk_management.configuration import load_realtime_config
+from risk_management.configuration import (
+    _merge_credentials,
+    _normalise_credentials,
+    load_realtime_config,
+)
 
 
 def _write_config(tmp_path: Path, payload: dict) -> Path:
@@ -55,3 +59,43 @@ def test_custom_endpoint_path_keeps_absolute(tmp_path) -> None:
     assert config.custom_endpoints is not None
     assert config.custom_endpoints.path == str(absolute_path.resolve())
     assert config.custom_endpoints.autodiscover is True
+
+
+def test_normalise_credentials_supports_aliases() -> None:
+    payload = {
+        "key": " key-value ",
+        "api_secret": " secret-value ",
+        "passPhrase": " pass ",
+        "uid": " 123 ",
+        "exchange": "binance",
+        "headers": {"X-Test": "1"},
+        "options": {"defaultType": "swap"},
+        "ccxt_config": {"login": "demo"},
+        "wallet_address": " wallet ",
+        "private_key": " private ",
+    }
+
+    normalised = _normalise_credentials(payload)
+
+    assert normalised == {
+        "apiKey": "key-value",
+        "secret": "secret-value",
+        "password": "pass",
+        "uid": "123",
+        "headers": {"X-Test": "1"},
+        "options": {"defaultType": "swap"},
+        "ccxt": {"login": "demo"},
+        "walletAddress": "wallet",
+        "privateKey": "private",
+    }
+
+
+def test_merge_credentials_prioritises_primary_values() -> None:
+    primary = {"apiKey": "primary", "headers": {"X-Primary": "1"}}
+    secondary = {"key": "secondary", "headers": {"X-Secondary": "2"}, "exchange": "binance"}
+
+    merged = _merge_credentials(primary, secondary)
+
+    assert merged["apiKey"] == "primary"
+    assert merged["headers"] == {"X-Secondary": "2", "X-Primary": "1"}
+    assert "exchange" not in merged
