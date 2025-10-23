@@ -1,0 +1,38 @@
+{
+  "api_keys_file": "../api-keys.json",
+  "accounts": [
+    {
+      "name": "Binance Futures",
+      "exchange": "binanceusdm",
+      "api_key_id": "binance_01",
+      "settle_currency": "USDT"
+    },
+    {
+      "name": "OKX Futures",
+      "exchange": "okx",
+      "api_key_id": "okx_01",
+      "settle_currency": "USDT",
+      "params": {
+        "balance": {"type": "swap"},
+        "positions": {"type": "swap"}
+      }
+    }
+  ],
+  "alert_thresholds": {
+    "wallet_exposure_pct": 0.65,
+    "position_wallet_exposure_pct": 0.25,
+    "max_drawdown_pct": 0.25,
+    "loss_threshold_pct": -0.08
+  },
+  "notification_channels": [
+    "email:risk-team@example.com",
+    "slack:#passivbot-risk-alerts"
+  ],
+  "auth": {
+    "secret_key": "replace-me-with-a-long-random-string",
+    "session_cookie_name": "risk_dashboard_session",
+    "users": {
+      "admin": "replace-with-bcrypt-hash"
+    }
+  }
+}

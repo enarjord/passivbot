@@ -34,6 +34,45 @@ freely.
    the JSON file in another terminal.  The CLI will re-read the file on the
    chosen cadence and immediately reflect the changes.
 
+## Realtime monitoring
+
+Provide exchange credentials via `risk_management/realtime_config.json` (see
+`realtime_config.example.json` for a complete template) and point the CLI at the
+file to fetch balances and positions directly from the exchanges:
+
+```bash
+python -m risk_management.dashboard --realtime-config risk_management/realtime_config.json --interval 30 --iterations 0
+```
+
+The command connects to each configured account, aggregates the portfolio
+metrics, and continuously renders the dashboard.  Any fetch issues are surfaced
+inline under the affected account.
+
+## Web dashboard
+
+Launch the FastAPI web server to obtain an authenticated dashboard with live
+updates:
+
+```bash
+python -m risk_management.web_server --config risk_management/realtime_config.json --host 0.0.0.0 --port 8000
+```
+
+Navigate to `http://localhost:8000` to sign in and view the interactive
+dashboard.  The page automatically polls for fresh data and updates account
+cards, alerts, and notification channels without a full refresh.
+
+### Authentication
+
+The web UI requires bcrypt hashed passwords.  Use the helper script to generate
+hashes:
+
+```bash
+python risk_management/scripts/hash_password.py
+```
+
+Paste the resulting hash into the `auth.users` section of your realtime
+configuration file.
+
 The previous quick start guide that focused solely on creating the virtual
 environment is kept below for reference.
 
