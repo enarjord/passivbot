@@ -5,7 +5,7 @@ from __future__ import annotations
 import abc
 import asyncio
 import logging
-from typing import Any, Dict, Iterable, Mapping, MutableMapping
+from typing import Any, Dict, Iterable, Mapping, MutableMapping, Sequence
 
 try:  # pragma: no cover - optional dependency in some envs
     import ccxt.async_support as ccxt_async
@@ -44,16 +44,43 @@ class AccountClientProtocol(abc.ABC):
         """Close any open network connections."""
 
 
+def _set_exchange_field(client: Any, key: str, value: Any, aliases: Sequence[str]) -> None:
+    """Assign ``value`` to ``key`` on ``client`` and store aliases when possible."""
+
+    config = getattr(client, "config", None)
+    keys = tuple(dict.fromkeys((key, *aliases)))  # preserve order, drop duplicates
+    for attr in keys:
+        try:
+            setattr(client, attr, value)
+        except Exception:
+            logger.debug("Ignored unsupported credential attribute %s", attr)
+        if isinstance(config, MutableMapping):
+            try:
+                config[attr] = value
+            except Exception:
+                logger.debug("Failed to persist credential %s in exchange config", attr)
+
+
 def _apply_credentials(client: Any, credentials: Mapping[str, Any]) -> None:
     """Populate authentication fields on a ccxt client."""
 
     sensitive_fields = {"apiKey", "secret", "password", "uid", "login", "walletAddress", "privateKey"}
+    alias_map = {
+        "apiKey": ("api_key", "key"),
+        "secret": ("apiSecret", "secret_key", "secretKey"),
+        "password": ("passphrase",),
+        "uid": (),
+        "login": (),
+        "walletAddress": ("wallet_address",),
+        "privateKey": ("private_key",),
+    }
 
     for key, value in credentials.items():
         if value is None:
             continue
         if key in sensitive_fields:
-            setattr(client, key, value)
+            aliases = alias_map.get(key, ())
+            _set_exchange_field(client, key, value, aliases)
         elif key == "headers" and isinstance(value, Mapping):
             headers = getattr(client, "headers", {}) or {}
             headers.update(value)
