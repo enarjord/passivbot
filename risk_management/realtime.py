@@ -88,6 +88,7 @@ class RealtimeDataFetcher:
                     message = (
                         f"{account_config.name}: authentication failed - {result}"
                     )
+
                     error_message = str(result)
                     previous_error = self._last_auth_errors.get(account_config.name)
                     if previous_error != error_message:
@@ -103,6 +104,11 @@ class RealtimeDataFetcher:
                             account_config.name,
                             result,
                         )
+
+                    logger.warning(
+                        "Authentication failed for %s: %s", account_config.name, result
+                    )
+
                 else:
                     message = f"{account_config.name}: {result}"
                     logger.exception(
