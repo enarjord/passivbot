@@ -25,6 +25,7 @@ import passivbot_rust as pbr
 import asyncio
 import argparse
 import multiprocessing
+import time
 from collections import defaultdict
 from backtest import (
     prepare_hlcvs_mss,
@@ -315,17 +316,49 @@ def ea_mu_plus_lambda_stream(
     logbook = tools.Logbook()
     logbook.header = "gen", "evals", "min", "max"
 
+    start_time = time.time()
+    total_evals = 0
+
     def evaluate_and_record(individuals):
+        nonlocal total_evals
         if not individuals:
             return 0
-        results = toolbox.map(toolbox.evaluate, individuals)
+        logging.debug("Evaluating %d candidates", len(individuals))
+        try:
+            results = toolbox.map(toolbox.evaluate, individuals)
+        except KeyboardInterrupt:
+            logging.info("Evaluation interrupted; cancelling pending work...")
+            raise
         for ind, (fit_values, metrics) in zip(individuals, results):
             ind.fitness.values = fit_values
             ind.evaluation_metrics = metrics
             _record_individual_result(ind, evaluator_config, overrides_list, recorder)
+        total_evals += len(individuals)
         return len(individuals)
 
+    def _format_objectives(values):
+        if not values:
+            return "[]"
+        return "[" + ", ".join(f"{v:.3g}" for v in values) + "]"
+
+    def log_generation(gen, nevals, record):
+        best = record.get("min") if record else None
+        front_size = len(halloffame) if halloffame is not None else 0
+        logging.info(
+            "Gen %d complete | evals=%d | total=%d | front=%d | best=%s | elapsed=%.1fs",
+            gen,
+            nevals,
+            total_evals,
+            front_size,
+            _format_objectives(best),
+            time.time() - start_time,
+        )
+        if verbose and record:
+            logging.debug("Logbook: %s", " ".join(f"{k}={v}" for k, v in record.items()))
+
     invalid_ind = [ind for ind in population if not ind.fitness.valid]
+    if invalid_ind:
+        logging.info("Evaluating initial population (%d candidates)...", len(invalid_ind))
     nevals = evaluate_and_record(invalid_ind)
 
     if halloffame is not None:
@@ -333,8 +366,7 @@ def ea_mu_plus_lambda_stream(
 
     record = stats.compile(population) if stats is not None else {}
     logbook.record(gen=0, nevals=nevals, **record)
-    if verbose:
-        print(logbook.stream)
+    log_generation(0, nevals, record)
 
     for gen in range(1, ngen + 1):
         offspring = algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
@@ -348,9 +380,15 @@ def ea_mu_plus_lambda_stream(
 
         record = stats.compile(population) if stats is not None else {}
         logbook.record(gen=gen, nevals=nevals, **record)
-        if verbose:
-            print(logbook.stream)
+        log_generation(gen, nevals, record)
 
+    logging.info(
+        "Optimization summary | generations=%d | total_evals=%d | front=%d | duration=%.1fs",
+        ngen,
+        total_evals,
+        len(halloffame) if halloffame is not None else 0,
+        time.time() - start_time,
+    )
     return population, logbook
 
 
@@ -407,7 +445,7 @@ class Evaluator:
         timestamps=None,
         shared_array_manager: SharedArrayManager | None = None,
     ):
-        logging.info("Initializing Evaluator...")
+        logging.debug("Initializing Evaluator...")
         self.hlcvs_specs = hlcvs_specs
         self.btc_usd_specs = btc_usd_specs
         self.msss = msss
@@ -421,7 +459,7 @@ class Evaluator:
         self.backtest_params = {}
 
         for exchange in self.exchanges:
-            logging.info("Preparing cached parameters for %s...", exchange)
+            logging.debug("Preparing cached parameters for %s...", exchange)
             if self.shared_array_manager is not None:
                 self.shared_hlcvs_np[exchange] = self.shared_array_manager.view(
                     self.hlcvs_specs[exchange]
@@ -434,7 +472,8 @@ class Evaluator:
             )
 
         self.config = config
-        logging.info("Evaluator initialization complete.")
+        logging.debug("Evaluator initialization complete.")
+        logging.info("Evaluator ready | exchanges=%d", len(self.exchanges))
         self.seen_hashes = seen_hashes if seen_hashes is not None else {}
         self.duplicate_counter = duplicate_counter if duplicate_counter is not None else {"count": 0}
         self.bounds = extract_bounds_tuple_list_from_config(self.config)
@@ -708,8 +747,11 @@ class Evaluator:
                 perturbed = enforce_bounds(perturbed, self.bounds, self.sig_digits)
                 new_hash = calc_hash(perturbed)
                 if new_hash not in self.seen_hashes:
-                    logging.info(
-                        f"[DUPLICATE {dup_ct}] resolved with {perturb_fn.__name__} Hash: {new_hash}"
+                    logging.debug(
+                        "[DUPLICATE %d] resolved with %s -> %s",
+                        dup_ct,
+                        perturb_fn.__name__,
+                        new_hash,
                     )
                     individual[:] = perturbed
                     self.seen_hashes[new_hash] = None
@@ -718,7 +760,7 @@ class Evaluator:
                     )
                     break
             else:
-                logging.info(f"[DUPLICATE {dup_ct}] All perturbations failed.")
+                logging.debug("[DUPLICATE %d] All perturbations failed.", dup_ct)
                 if existing_score is not None:
                     return existing_score
         else:
@@ -1065,7 +1107,12 @@ async def main():
         logging.info(f"loading config {args.config_path}")
         config = load_config(args.config_path, verbose=True)
     update_config_with_args(config, args)
-    config = format_config(config, verbose=True)
+    config = format_config(config, verbose=False)
+    logging.info(
+        "Config normalized for optimization | template=%s | scoring=%s",
+        TEMPLATE_CONFIG_MODE,
+        ",".join(config["optimize"].get("scoring", [])),
+    )
     fine_tune_params = (
         [p.strip() for p in (args.fine_tune_params or "").split(",") if p.strip()]
         if getattr(args, "fine_tune_params", "")
@@ -1079,6 +1126,7 @@ async def main():
         )
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     await format_approved_ignored_coins(config, backtest_exchanges)
+    interrupted = False
     try:
         # Prepare data for each exchange
         array_manager = SharedArrayManager()
@@ -1305,11 +1353,11 @@ async def main():
             overrides_list=overrides_list,
         )
 
-        # Print statistics
-        print(logbook)
+        logging.info("Optimization complete.")
 
-        logging.info(f"Optimization complete.")
-
+    except KeyboardInterrupt:
+        interrupted = True
+        logging.warning("Keyboard interrupt received; terminating optimization...")
     except Exception as e:
         logging.error(f"An error occurred: {e}")
         traceback.print_exc()
@@ -1321,14 +1369,18 @@ async def main():
                 logging.exception("Failed to flush recorder")
             recorder.close()
         if "pool" in locals():
-            logging.info("Closing and terminating the process pool...")
-            pool.close()
+            if interrupted:
+                logging.info("Terminating worker pool...")
+                pool.terminate()
+            else:
+                logging.info("Closing worker pool...")
+                pool.close()
             pool.join()
         if "array_manager" in locals():
             array_manager.cleanup()
 
         logging.info("Cleanup complete. Exiting.")
-        sys.exit(0)
+        sys.exit(130 if interrupted else 0)
 
 
 if __name__ == "__main__":

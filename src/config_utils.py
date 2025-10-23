@@ -10,6 +10,13 @@ from procedures import dump_pretty_json
 from utils import format_end_date, symbol_to_coin, normalize_coins_source
 
 
+def _log_config(verbose: bool, level: int, message: str, *args) -> None:
+    if verbose or level >= logging.WARNING:
+        logging.log(level, message, *args)
+    else:
+        logging.debug(message, *args)
+
+
 CURRENCY_METRICS = {
     "adg",
     "adg_per_exposure_long",
@@ -365,24 +372,23 @@ def parse_overrides(config, verbose=True):
     result = deepcopy(config)
     if not result.get("coin_overrides", {}):
         result["coin_overrides"] = parse_old_coin_flags(config)
-        if verbose:
-            if result["coin_overrides"]:
-                logging.info(
-                    "Converted old coin_flags to coin_overrides: %s -> %s",
-                    config.get("live", {}).get("coin_flags"),
-                    result["coin_overrides"],
-                )
+        if verbose and result["coin_overrides"]:
+            _log_config(
+                verbose,
+                logging.INFO,
+                "Converted old coin_flags to coin_overrides: %s -> %s",
+                config.get("live", {}).get("coin_flags"),
+                result["coin_overrides"],
+            )
     result["live"].pop("coin_flags", None) if "live" in result else None
     for coin in sorted(result["coin_overrides"]):
         coinf = symbol_to_coin(coin)
         if coinf != coin:
             if coinf:
                 result["coin_overrides"][coinf] = deepcopy(result["coin_overrides"][coin])
-                if verbose:
-                    logging.info("Renamed %s -> %s for coin_overrides", coin, coinf)
+                _log_config(verbose, logging.INFO, "Renamed %s -> %s for coin_overrides", coin, coinf)
             else:
-                if verbose:
-                    logging.info("Failed to format %s; removed from coin_overrides", coin)
+                _log_config(verbose, logging.INFO, "Failed to format %s; removed from coin_overrides", coin)
             del result["coin_overrides"][coin]
     for coin, overrides in result["coin_overrides"].items():
         parsed_overrides = {}
@@ -398,8 +404,7 @@ def parse_overrides(config, verbose=True):
         )
 
         result.setdefault("coin_overrides", {})[coin] = parsed_overrides
-        if verbose:
-            logging.info("Added overrides for %s: %s", coin, sort_dict_keys(parsed_overrides))
+        _log_config(verbose, logging.INFO, "Added overrides for %s: %s", coin, sort_dict_keys(parsed_overrides))
     return result
 
 
@@ -600,15 +605,13 @@ def _apply_backward_compatibility_renames(result: dict, verbose: bool = True) ->
             if old in bot_cfg:
                 if new not in bot_cfg:
                     bot_cfg[new] = bot_cfg[old]
-                    if verbose:
-                        print(f"renaming parameter bot.{pside}.{old}: {new}")
+                    _log_config(verbose, logging.INFO, "renaming parameter bot.%s.%s -> %s", pside, old, new)
                 del bot_cfg[old]
         for old, new in LEGACY_ENTRY_GRID_KEYS.items():
             if old in bot_cfg:
                 if new not in bot_cfg:
                     bot_cfg[new] = bot_cfg[old]
-                    if verbose:
-                        print(f"renaming parameter bot.{pside}.{old}: {new}")
+                    _log_config(verbose, logging.INFO, "renaming parameter bot.%s.%s -> %s", pside, old, new)
                 del bot_cfg[old]
 
     bounds = result.get("optimize", {}).get("bounds", {})
@@ -616,8 +619,7 @@ def _apply_backward_compatibility_renames(result: dict, verbose: bool = True) ->
         if old in bounds:
             if new not in bounds:
                 bounds[new] = bounds[old]
-                if verbose:
-                    print(f"renaming parameter optimize.bounds.{old}: {new}")
+                _log_config(verbose, logging.INFO, "renaming parameter optimize.bounds.%s -> %s", old, new)
             del bounds[old]
 
 
@@ -633,11 +635,12 @@ def _migrate_btc_collateral_settings(result: dict, verbose: bool = True) -> None
             use_btc_bool = bool(use_btc)
         if "btc_collateral_cap" not in backtest:
             backtest["btc_collateral_cap"] = 1.0 if use_btc_bool else 0.0
-            if verbose:
-                print(
-                    f"changed backtest.use_btc_collateral -> backtest.btc_collateral_cap = "
-                    f"{backtest['btc_collateral_cap']}"
-                )
+            _log_config(
+                verbose,
+                logging.INFO,
+                "changed backtest.use_btc_collateral -> backtest.btc_collateral_cap = %s",
+                backtest["btc_collateral_cap"],
+            )
         if "btc_collateral_ltv_cap" not in backtest:
             backtest["btc_collateral_ltv_cap"] = None
 
@@ -759,13 +762,25 @@ def _ensure_bot_defaults_and_bounds(result: dict, verbose: bool = True) -> None:
         ]:
             if k0 not in result["bot"][pside]:
                 result["bot"][pside][k0] = v_bt
-                if verbose:
-                    print(f"adding missing backtest parameter {pside} {k0}: {v_bt}")
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "adding missing backtest parameter %s %s: %s",
+                    pside,
+                    k0,
+                    v_bt,
+                )
             opt_key = f"{pside}_{k0}"
             if opt_key not in result["optimize"]["bounds"]:
                 result["optimize"]["bounds"][opt_key] = v_opt
-                if verbose:
-                    print(f"adding missing optimize parameter {pside} {opt_key}: {v_opt}")
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "adding missing optimize parameter %s %s: %s",
+                    pside,
+                    opt_key,
+                    v_opt,
+                )
 
 
 def _rename_config_keys(result: dict, verbose: bool = True) -> None:
@@ -777,14 +792,18 @@ def _rename_config_keys(result: dict, verbose: bool = True) -> None:
     ]:
         if src in result[section]:
             result[section][dst] = deepcopy(result[section][src])
-            if verbose:
-                print(f"renaming parameter {section} {src}: {dst}")
+            _log_config(verbose, logging.INFO, "renaming parameter %s %s -> %s", section, src, dst)
             del result[section][src]
     if "exchange" in result["backtest"] and isinstance(result["backtest"]["exchange"], str):
         exchange = result["backtest"]["exchange"]
         result["backtest"]["exchanges"] = [exchange]
-        if verbose:
-            print(f"changed backtest.exchange: {exchange} -> backtest.exchanges: [{exchange}]")
+        _log_config(
+            verbose,
+            logging.INFO,
+            "changed backtest.exchange: %s -> backtest.exchanges: [%s]",
+            exchange,
+            exchange,
+        )
         del result["backtest"]["exchange"]
 
 
@@ -906,8 +925,7 @@ def add_missing_keys_recursively(src, dst, parent=None, verbose=True):
         parent = []
     for k in src:
         if k not in dst:
-            if verbose:
-                logging.info("Added missing %s to config.", ".".join(parent + [k]))
+            _log_config(verbose, logging.INFO, "Added missing %s to config.", ".".join(parent + [k]))
             dst[k] = src[k]
         # --- NEW: only walk down if both sides are dicts -------------
         elif isinstance(src[k], dict) and isinstance(dst.get(k), dict):
@@ -915,22 +933,24 @@ def add_missing_keys_recursively(src, dst, parent=None, verbose=True):
         # --------------------------------------------------------------
         elif isinstance(src[k], dict):
             # type clash: leave the user’s value untouched
-            if verbose:
-                logging.info(
-                    "Skipping template subtree %s (template is dict, config is %s)",
-                    ".".join(parent + [k]),
-                    type(dst.get(k)).__name__,
-                )
+            _log_config(
+                verbose,
+                logging.INFO,
+                "Skipping template subtree %s (template is dict, config is %s)",
+                ".".join(parent + [k]),
+                type(dst.get(k)).__name__,
+            )
             continue
         else:
             # previous branches already handle k not in dst; keep safe assignment
             if k not in dst:
-                if verbose:
-                    logging.info(
-                        "Adding missing key -> val %s -> %s to config",
-                        ".".join(parent + [k]),
-                        src[k],
-                    )
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "Adding missing key -> val %s -> %s to config",
+                    ".".join(parent + [k]),
+                    src[k],
+                )
                 dst[k] = src[k]
 
 
@@ -970,8 +990,7 @@ def remove_unused_keys_recursively(
             continue
         if k not in src:
             del dst[k]
-            if verbose:
-                logging.info("Removed unused key from config: %s", ".".join(current_path))
+            _log_config(verbose, logging.INFO, "Removed unused key from config: %s", ".".join(current_path))
             continue
         src_val = src[k]
         dst_val = dst[k]
@@ -1159,7 +1178,7 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             acronyms.add(acronym)
 
 
-def recursive_config_update(config, key, value, path=None):
+def recursive_config_update(config, key, value, path=None, verbose=False):
     if path is None:
         path = []
 
@@ -1180,27 +1199,29 @@ def recursive_config_update(config, key, value, path=None):
         coerced_value = _coerce_value(config[key], value)
         if coerced_value != config[key]:
             full_path = ".".join(path + [key])
-            print(f"changed {full_path} {config[key]} -> {coerced_value}")
+            _log_config(verbose, logging.INFO, "changed %s %s -> %s", full_path, config[key], coerced_value)
             config[key] = coerced_value
         return True
 
     key_split = key.split(".")
     if key_split[0] in config:
         new_path = path + [key_split[0]]
-        return recursive_config_update(config[key_split[0]], ".".join(key_split[1:]), value, new_path)
+        return recursive_config_update(
+            config[key_split[0]], ".".join(key_split[1:]), value, new_path, verbose=verbose
+        )
 
     return False
 
 
-def update_config_with_args(config, args):
+def update_config_with_args(config, args, verbose=False):
     for key, value in vars(args).items():
         if value is None:
             continue
         if key in {"live.approved_coins", "live.ignored_coins"}:
             normalized = normalize_coins_source(value)
-            recursive_config_update(config, key, normalized)
+            recursive_config_update(config, key, normalized, verbose=verbose)
             continue
-        recursive_config_update(config, key, value)
+        recursive_config_update(config, key, value, verbose=verbose)
 
 
 def require_config_value(config: dict, dotted_path: str):
