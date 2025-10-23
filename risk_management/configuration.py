@@ -187,6 +187,7 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     notification_channels = [str(item) for item in config.get("notification_channels", [])]
     auth = _parse_auth(config.get("auth"))
     custom_endpoints = _parse_custom_endpoints(config.get("custom_endpoints"))
+
     if custom_endpoints and custom_endpoints.path:
         resolved_path = Path(custom_endpoints.path).expanduser()
         if not resolved_path.is_absolute():
@@ -197,6 +198,7 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
             path=str(resolved_path),
             autodiscover=custom_endpoints.autodiscover,
         )
+
     return RealtimeConfig(
         accounts=accounts,
         alert_thresholds=alert_thresholds,
