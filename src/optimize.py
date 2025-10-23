@@ -117,9 +117,23 @@ class ResultRecorder:
             except Exception as exc:
                 logging.error(f"Error writing results: {exc}")
         try:
-            self.store.add_entry(data)
+            updated = self.store.add_entry(data)
         except Exception as exc:
             logging.error(f"ParetoStore error: {exc}")
+        else:
+            if updated:
+                metrics = data.get("analyses_combined", {}) or {}
+                objective_values = [
+                    metrics[key]
+                    for key in sorted(metrics)
+                    if key.startswith("w_") and metrics.get(key) is not None
+                ]
+                logging.info(
+                    "Pareto update | eval=%d | front=%d | objectives=%s",
+                    self.store.n_iters,
+                    len(self.store._front),
+                    _format_objectives(objective_values),
+                )
 
     def flush(self) -> None:
         self.store.flush_now()
@@ -136,6 +150,13 @@ logging.basicConfig(
 
 
 TEMPLATE_CONFIG_MODE = "v7"
+
+
+def _format_objectives(values: Sequence[float]) -> str:
+    if not values:
+        return "[]"
+    return "[" + ", ".join(f"{v:.3g}" for v in values) + "]"
+
 
 # === bounds helpers =========================================================
 
@@ -335,11 +356,6 @@ def ea_mu_plus_lambda_stream(
             _record_individual_result(ind, evaluator_config, overrides_list, recorder)
         total_evals += len(individuals)
         return len(individuals)
-
-    def _format_objectives(values):
-        if not values:
-            return "[]"
-        return "[" + ", ".join(f"{v:.3g}" for v in values) + "]"
 
     def log_generation(gen, nevals, record):
         best = record.get("min") if record else None
