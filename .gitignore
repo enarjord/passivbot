@@ -297,6 +297,8 @@ dmypy.json
 [Ll]ib64
 [Ll]ocal
 [Ss]cripts
+!risk_management/scripts/
+!risk_management/scripts/*
 pyvenv.cfg
 pip-selfcheck.json
 
