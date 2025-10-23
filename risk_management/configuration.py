@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping
 
 
-@dataclass(slots=True)
+@dataclass()
 class AccountConfig:
     """Configuration for a single exchange account."""
 
@@ -22,7 +22,7 @@ class AccountConfig:
     enabled: bool = True
 
 
-@dataclass(slots=True)
+@dataclass()
 class AuthConfig:
     """Settings for session authentication in the web dashboard."""
 
@@ -31,7 +31,7 @@ class AuthConfig:
     session_cookie_name: str = "risk_dashboard_session"
 
 
-@dataclass(slots=True)
+@dataclass()
 class RealtimeConfig:
     """Top level realtime configuration."""
 

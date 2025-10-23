@@ -24,7 +24,7 @@ from .configuration import AccountConfig, RealtimeConfig
 logger = logging.getLogger(__name__)
 
 
-@dataclass(slots=True)
+@dataclass()
 class AccountClientProtocol:
     """Protocol describing realtime account clients."""
 
