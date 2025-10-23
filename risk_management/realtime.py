@@ -4,80 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
-try:  # pragma: no cover - optional dependency for tests
-    import ccxt.async_support as ccxt_async
-    from ccxt.base.errors import BaseError
-except ModuleNotFoundError:  # pragma: no cover - allow tests without ccxt
-    ccxt_async = None  # type: ignore[assignment]
-
-    class BaseError(Exception):
-        """Fallback error when ccxt is unavailable."""
-
-        pass
-
-from .configuration import AccountConfig, RealtimeConfig
+from .account_clients import AccountClientProtocol, CCXTAccountClient
+from .configuration import RealtimeConfig
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass()
-class AccountClientProtocol:
-    """Protocol describing realtime account clients."""
-
-    async def fetch(self) -> Dict[str, Any]:  # pragma: no cover - protocol definition
-        raise NotImplementedError
-
-    async def close(self) -> None:  # pragma: no cover - protocol definition
-        raise NotImplementedError
-
-
-class CCXTAccountClient(AccountClientProtocol):
-    """Realtime account client backed by ccxt asynchronous exchanges."""
-
-    def __init__(self, config: AccountConfig):
-        self.config = config
-        exchange_id = config.exchange
-        if ccxt_async is None:  # pragma: no cover - configuration error
-            raise RuntimeError("ccxt is required to instantiate CCXTAccountClient")
-        try:
-            exchange_class = getattr(ccxt_async, exchange_id)
-        except AttributeError as exc:  # pragma: no cover - configuration error
-            raise ValueError(f"Exchange '{exchange_id}' is not supported by ccxt.") from exc
-        params = dict(config.credentials)
-        params.setdefault("enableRateLimit", True)
-        self.client = exchange_class(params)
-        self._balance_params = dict(config.params.get("balance", {}))
-        self._positions_params = dict(config.params.get("positions", {}))
-
-    async def fetch(self) -> Dict[str, Any]:
-        await self.client.load_markets()
-        balance_raw = await self.client.fetch_balance(params=self._balance_params)
-        balance_value = _extract_balance(balance_raw, self.config.settle_currency)
-        positions_raw: Iterable[Mapping[str, Any]] = []
-        positions: List[Dict[str, Any]] = []
-        if hasattr(self.client, "fetch_positions"):
-            try:
-                positions_raw = await self.client.fetch_positions(params=self._positions_params)
-            except BaseError as exc:
-                logger.warning(
-                    "Failed to fetch positions for %s: %s", self.config.name, exc, exc_info=True
-                )
-        for position_raw in positions_raw or []:
-            parsed = _parse_position(position_raw, balance_value)
-            if parsed is not None:
-                positions.append(parsed)
-        return {
-            "name": self.config.name,
-            "balance": balance_value,
-            "positions": positions,
-        }
-
-    async def close(self) -> None:
-        await self.client.close()
 
 
 class RealtimeDataFetcher:
@@ -90,11 +23,20 @@ class RealtimeDataFetcher:
     ) -> None:
         self.config = config
         if account_clients is None:
-            if ccxt_async is None:
-                raise RuntimeError(
-                    "ccxt is required to create realtime exchange clients."
-                )
-            self._account_clients = [CCXTAccountClient(account) for account in config.accounts]
+            clients: List[AccountClientProtocol] = []
+            for account in config.accounts:
+                try:
+                    clients.append(CCXTAccountClient(account))
+                except RuntimeError as exc:
+                    raise RuntimeError(
+                        "Unable to create realtime clients. Install ccxt or provide custom account clients."
+                    ) from exc
+                except Exception as exc:
+                    logger.error(
+                        "Failed to initialise account client for %s: %s", account.name, exc, exc_info=True
+                    )
+                    raise
+            self._account_clients = clients
         else:
             self._account_clients = list(account_clients)
 
