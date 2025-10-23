@@ -61,6 +61,34 @@ Navigate to `http://localhost:8000` to sign in and view the interactive
 dashboard.  The page automatically polls for fresh data and updates account
 cards, alerts, and notification channels without a full refresh.
 
+### Custom endpoint overrides
+
+If your Passivbot installation proxies REST requests through
+`configs/custom_endpoints.json`, mirror the same routing for the risk
+dashboard by declaring a `custom_endpoints` block in your realtime
+configuration:
+
+```json
+{
+  "api_keys_file": "../api-keys.json",
+  "custom_endpoints": {
+    "path": "../configs/custom_endpoints.json",
+    "autodiscover": false
+  },
+  "accounts": [
+    { "name": "Binance Futures", "exchange": "binanceusdm" }
+  ],
+  "auth": { "secret_key": "...", "users": { "admin": "..." } }
+}
+```
+
+Providing a string value (for example
+`"custom_endpoints": "../configs/custom_endpoints.json"`) forces the loader
+to use that file, while the values `"none"`, `"off"`, or `"disable"` turn the
+feature off entirely.  Omitting the section keeps the default auto-discovery
+behaviour, which searches for `configs/custom_endpoints.json` relative to the
+current working directory.
+
 ### Authentication
 
 The web UI requires bcrypt hashed passwords.  Use the helper script to generate

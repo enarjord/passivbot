@@ -7,10 +7,36 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
+from custom_endpoint_overrides import (
+    CustomEndpointConfigError,
+    configure_custom_endpoint_loader,
+    load_custom_endpoint_config,
+)
+
 from .account_clients import AccountClientProtocol, CCXTAccountClient
-from .configuration import RealtimeConfig
+from .configuration import CustomEndpointSettings, RealtimeConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _configure_custom_endpoints(settings: CustomEndpointSettings | None) -> None:
+    """Initialise custom endpoint overrides before creating ccxt clients."""
+
+    if settings is None:
+        configure_custom_endpoint_loader(None, autodiscover=True)
+        return
+
+    path = settings.path
+    autodiscover = settings.autodiscover
+    preloaded = None
+
+    if path:
+        try:
+            preloaded = load_custom_endpoint_config(path)
+        except CustomEndpointConfigError as exc:
+            raise ValueError(f"Failed to load custom endpoint config '{path}': {exc}") from exc
+
+    configure_custom_endpoint_loader(path, autodiscover=autodiscover, preloaded=preloaded)
 
 
 class RealtimeDataFetcher:
@@ -22,6 +48,7 @@ class RealtimeDataFetcher:
         account_clients: Sequence[AccountClientProtocol] | None = None,
     ) -> None:
         self.config = config
+        _configure_custom_endpoints(config.custom_endpoints)
         if account_clients is None:
             clients: List[AccountClientProtocol] = []
             for account in config.accounts:
