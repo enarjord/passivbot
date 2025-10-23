@@ -43,6 +43,7 @@ while (($#)); do
 
 
 INSTALL_PASSIVBOT=false
+
 PIP_INSTALL_FLAGS=()
 
 while (($#)); do
