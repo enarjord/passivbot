@@ -1,0 +1,322 @@
+{% extends "base.html" %}
+
+{% block header_controls %}
+  <div style="display: flex; align-items: center; gap: 1rem;">
+    <span class="badge">Logged in as {{ user }}</span>
+    <form method="post" action="/logout">
+      <button type="submit">Logout</button>
+    </form>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <div>
+        <h2 style="margin-bottom: 0.5rem;">Portfolio overview</h2>
+        <p style="color: var(--muted); margin: 0;">
+          Snapshot generated at <strong data-overview-generated>{{ snapshot.generated_at }}</strong>
+        </p>
+      </div>
+      <span class="badge {% if snapshot.alerts %}alert{% else %}ok{% endif %}" data-alert-summary>
+        {% if snapshot.alerts %}
+          {{ snapshot.alerts|length }} active alert{{ 's' if snapshot.alerts|length != 1 }}
+        {% else %}
+          All clear
+        {% endif %}
+      </span>
+    </div>
+  </section>
+
+  <div data-accounts>
+    {% for account in snapshot.accounts %}
+      <section class="card" data-account="{{ account.name }}">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
+          <h2>{{ account.name }}</h2>
+          <span class="badge">{{ account.positions|length }} position{{ 's' if account.positions|length != 1 }}</span>
+        </div>
+        {% if account.message %}
+          <div class="status">{{ account.message }}</div>
+        {% endif %}
+        <div class="metrics">
+          <div class="metric">
+            <span class="label">Balance</span>
+            <span class="value">{{ account.balance|currency }}</span>
+          </div>
+          <div class="metric">
+            <span class="label">Exposure</span>
+            <span class="value">{{ account.exposure|pct }}</span>
+          </div>
+          <div class="metric">
+            <span class="label">Unrealized PnL</span>
+            <span class="value {% if account.unrealized_pnl >= 0 %}gain{% else %}loss{% endif %}">
+              {{ account.unrealized_pnl|currency }}
+            </span>
+          </div>
+          <div class="metric">
+            <span class="label">Positions</span>
+            <span class="value">{{ account.positions|length }}</span>
+          </div>
+        </div>
+        {% if account.positions %}
+          <div class="table-wrapper" style="overflow-x: auto;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Exposure</th>
+                  <th>PnL</th>
+                  <th>Entry</th>
+                  <th>Mark</th>
+                  <th>Liq.</th>
+                  <th>Max DD</th>
+                  <th>TP</th>
+                  <th>SL</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for position in account.positions %}
+                  <tr>
+                    <td>{{ position.symbol }}</td>
+                    <td>{{ position.side }}</td>
+                    <td>{{ position.exposure|pct }}</td>
+                    <td class="{% if position.unrealized_pnl >= 0 %}gain{% else %}loss{% endif %}">
+                      {{ position.unrealized_pnl|currency }} ({{ position.pnl_pct|pct }})
+                    </td>
+                    <td>{{ position.entry_price|currency }}</td>
+                    <td>{{ position.mark_price|currency }}</td>
+                    <td>{% if position.liquidation_price is not none %}{{ position.liquidation_price|currency }}{% else %}-{% endif %}</td>
+                    <td>{% if position.max_drawdown_pct is not none %}{{ position.max_drawdown_pct|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if position.take_profit_price is not none %}{{ position.take_profit_price|currency }}{% else %}-{% endif %}</td>
+                    <td>{% if position.stop_loss_price is not none %}{{ position.stop_loss_price|currency }}{% else %}-{% endif %}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p style="color: var(--muted);">No open positions.</p>
+        {% endif %}
+      </section>
+    {% endfor %}
+  </div>
+
+  <section class="card alerts">
+    <h2>Alerts</h2>
+    {% if snapshot.alerts %}
+      <ul data-alerts>
+        {% for alert in snapshot.alerts %}
+          <li>{{ alert }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p data-alerts style="color: var(--muted);">No active alerts. All monitored metrics are within thresholds.</p>
+    {% endif %}
+  </section>
+
+  <section class="card notifications">
+    <h2>Notification channels</h2>
+    {% if snapshot.notifications %}
+      <ul data-notifications>
+        {% for channel in snapshot.notifications %}
+          <li>{{ channel }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p data-notifications style="color: var(--muted);">No notification channels configured.</p>
+    {% endif %}
+  </section>
+{% endblock %}
+
+{% block generated_at %}{{ snapshot.generated_at }}{% endblock %}
+
+{% block scripts %}
+  <script>
+    const REFRESH_INTERVAL_MS = 10000;
+
+    const formatCurrency = (value) => {
+      const number = Number(value || 0);
+      return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(number);
+    };
+
+    const formatPrice = (value) => {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) {
+        return "-";
+      }
+      return Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 });
+    };
+
+    const formatPct = (value) => {
+      const number = Number(value || 0) * 100;
+      return `${number.toFixed(2)}%`;
+    };
+
+    const renderSnapshot = (snapshot) => {
+      const generatedAtEl = document.querySelector("[data-generated-at]");
+      if (generatedAtEl) {
+        generatedAtEl.textContent = new Date(snapshot.generated_at).toLocaleString();
+      }
+
+      const overviewGenerated = document.querySelector("[data-overview-generated]");
+      if (overviewGenerated) {
+        overviewGenerated.textContent = new Date(snapshot.generated_at).toLocaleString();
+      }
+
+      const alertBadge = document.querySelector("[data-alert-summary]");
+      if (alertBadge) {
+        if (Array.isArray(snapshot.alerts) && snapshot.alerts.length > 0) {
+          alertBadge.classList.add("alert");
+          alertBadge.classList.remove("ok");
+          const count = snapshot.alerts.length;
+          alertBadge.textContent = `${count} active alert${count === 1 ? "" : "s"}`;
+        } else {
+          alertBadge.classList.add("ok");
+          alertBadge.classList.remove("alert");
+          alertBadge.textContent = "All clear";
+        }
+      }
+
+      const accountsContainer = document.querySelector("[data-accounts]");
+      accountsContainer.innerHTML = snapshot.accounts
+        .map((account) => {
+          const positionsRows = account.positions
+            .map((position) => {
+              const pnlClass = Number(position.unrealized_pnl) >= 0 ? "gain" : "loss";
+              const maxDd = position.max_drawdown_pct !== null && position.max_drawdown_pct !== undefined
+                ? formatPct(position.max_drawdown_pct)
+                : "-";
+              return `
+                <tr>
+                  <td>${position.symbol}</td>
+                  <td>${position.side}</td>
+                  <td>${formatPct(position.exposure)}</td>
+                  <td class="${pnlClass}">${formatCurrency(position.unrealized_pnl)} (${formatPct(position.pnl_pct)})</td>
+                  <td>${formatPrice(position.entry_price)}</td>
+                  <td>${formatPrice(position.mark_price)}</td>
+                  <td>${formatPrice(position.liquidation_price)}</td>
+                  <td>${maxDd}</td>
+                  <td>${formatPrice(position.take_profit_price)}</td>
+                  <td>${formatPrice(position.stop_loss_price)}</td>
+                </tr>
+              `;
+            })
+            .join("");
+
+          const exposureClass = Number(account.unrealized_pnl) >= 0 ? "gain" : "loss";
+
+          return `
+            <section class="card" data-account="${account.name}">
+              <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
+                <h2>${account.name}</h2>
+                <span class="badge">${account.positions.length} position${account.positions.length === 1 ? "" : "s"}</span>
+              </div>
+              ${account.message ? `<div class="status">${account.message}</div>` : ""}
+              <div class="metrics">
+                <div class="metric">
+                  <span class="label">Balance</span>
+                  <span class="value">${formatCurrency(account.balance)}</span>
+                </div>
+                <div class="metric">
+                  <span class="label">Exposure</span>
+                  <span class="value">${formatPct(account.exposure)}</span>
+                </div>
+                <div class="metric">
+                  <span class="label">Unrealized PnL</span>
+                  <span class="value ${exposureClass}">${formatCurrency(account.unrealized_pnl)}</span>
+                </div>
+                <div class="metric">
+                  <span class="label">Positions</span>
+                  <span class="value">${account.positions.length}</span>
+                </div>
+              </div>
+              ${account.positions.length > 0
+                ? `<div class="table-wrapper" style="overflow-x: auto;">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Symbol</th>
+                          <th>Side</th>
+                          <th>Exposure</th>
+                          <th>PnL</th>
+                          <th>Entry</th>
+                          <th>Mark</th>
+                          <th>Liq.</th>
+                          <th>Max DD</th>
+                          <th>TP</th>
+                          <th>SL</th>
+                        </tr>
+                      </thead>
+                      <tbody>${positionsRows}</tbody>
+                    </table>
+                  </div>`
+                : `<p style="color: var(--muted);">No open positions.</p>`}
+            </section>
+          `;
+        })
+        .join("");
+
+      const alertsContainer = document.querySelector("[data-alerts]");
+      if (Array.isArray(snapshot.alerts) && snapshot.alerts.length > 0) {
+        if (alertsContainer.tagName === "UL") {
+          alertsContainer.innerHTML = snapshot.alerts.map((alert) => `<li>${alert}</li>`).join("");
+        } else {
+          const ul = document.createElement("ul");
+          ul.innerHTML = snapshot.alerts.map((alert) => `<li>${alert}</li>`).join("");
+          alertsContainer.replaceWith(ul);
+          ul.setAttribute("data-alerts", "");
+        }
+      } else if (alertsContainer) {
+        if (alertsContainer.tagName === "UL") {
+          const replacement = document.createElement("p");
+          replacement.textContent = "No active alerts. All monitored metrics are within thresholds.";
+          replacement.style.color = "var(--muted)";
+          replacement.setAttribute("data-alerts", "");
+          alertsContainer.replaceWith(replacement);
+        } else {
+          alertsContainer.textContent = "No active alerts. All monitored metrics are within thresholds.";
+        }
+      }
+
+      const notificationsContainer = document.querySelector("[data-notifications]");
+      if (Array.isArray(snapshot.notifications) && snapshot.notifications.length > 0) {
+        if (notificationsContainer.tagName === "UL") {
+          notificationsContainer.innerHTML = snapshot.notifications
+            .map((channel) => `<li>${channel}</li>`)
+            .join("");
+        } else {
+          const ul = document.createElement("ul");
+          ul.innerHTML = snapshot.notifications.map((channel) => `<li>${channel}</li>`).join("");
+          notificationsContainer.replaceWith(ul);
+          ul.setAttribute("data-notifications", "");
+        }
+      } else if (notificationsContainer) {
+        if (notificationsContainer.tagName === "UL") {
+          const replacement = document.createElement("p");
+          replacement.textContent = "No notification channels configured.";
+          replacement.style.color = "var(--muted)";
+          replacement.setAttribute("data-notifications", "");
+          notificationsContainer.replaceWith(replacement);
+        } else {
+          notificationsContainer.textContent = "No notification channels configured.";
+        }
+      }
+    };
+
+    const poll = async () => {
+      try {
+        const response = await fetch("/api/snapshot", { credentials: "include" });
+        if (!response.ok) {
+          return;
+        }
+        const snapshot = await response.json();
+        renderSnapshot(snapshot);
+      } catch (error) {
+        console.error("Failed to refresh snapshot", error);
+      }
+    };
+
+    setInterval(poll, REFRESH_INTERVAL_MS);
+    poll();
+  </script>
+{% endblock %}

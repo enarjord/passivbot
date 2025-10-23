@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Login · Passivbot Risk Dashboard{% endblock %}
+
+{% block header_controls %}{% endblock %}
+
+{% block content %}
+  <div class="card" style="max-width: 420px; margin: 4rem auto; text-align: center;">
+    <h2>Sign in</h2>
+    <p style="color: var(--muted); margin-bottom: 1.5rem;">
+      Authenticate to access live portfolio telemetry.
+    </p>
+    {% if error %}
+      <div class="status">{{ error }}</div>
+    {% endif %}
+    <form method="post" action="/login" style="display: grid; gap: 1rem; text-align: left;">
+      <label style="display: grid; gap: 0.4rem; font-size: 0.9rem;">
+        <span>Username</span>
+        <input
+          type="text"
+          name="username"
+          required
+          style="padding: 0.75rem 1rem; border-radius: 0.65rem; border: none; font-size: 1rem;"
+        />
+      </label>
+      <label style="display: grid; gap: 0.4rem; font-size: 0.9rem;">
+        <span>Password</span>
+        <input
+          type="password"
+          name="password"
+          required
+          style="padding: 0.75rem 1rem; border-radius: 0.65rem; border: none; font-size: 1rem;"
+        />
+      </label>
+      <button type="submit">Login</button>
+    </form>
+  </div>
+{% endblock %}
+
+{% block generated_at %}—{% endblock %}

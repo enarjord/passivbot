@@ -4,23 +4,26 @@ The module consumes a JSON snapshot describing one or more accounts along with
 alert thresholds.  It renders a textual dashboard summarising exposure, profit
 and loss, and risk metrics while also highlighting any triggered alerts.
 
-Although the data is static for demonstration purposes, the command line
-interface can watch the snapshot file for changes and continuously re-render
-the dashboard.  This mimics how a future monitoring service could poll real
-time exchange or database information.
+The command line interface can either read a static snapshot file or, when
+configured with realtime credentials, fetch fresh account information from the
+supported exchanges on a configurable interval.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import math
+import logging
 import sys
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Sequence
+
+from .configuration import load_realtime_config
+from .realtime import RealtimeDataFetcher
 
 
 @dataclass
@@ -76,6 +79,9 @@ class AlertThresholds:
     position_wallet_exposure_pct: float = 0.25
     max_drawdown_pct: float = 0.3
     loss_threshold_pct: float = -0.12
+
+
+logger = logging.getLogger(__name__)
 
 
 def _format_currency(value: float) -> str:
@@ -220,6 +226,7 @@ def render_dashboard(
     accounts: Sequence[Account],
     alerts: Sequence[str],
     notifications: Sequence[str],
+    account_messages: Mapping[str, str] | None = None,
 ) -> str:
     lines: List[str] = []
     lines.append("=" * 80)
@@ -228,6 +235,8 @@ def render_dashboard(
     lines.append("=" * 80)
     lines.append("")
 
+    account_messages = account_messages or {}
+
     if not accounts:
         lines.append("No accounts available in the snapshot.")
     for account in accounts:
@@ -235,6 +244,9 @@ def render_dashboard(
         lines.append(f"  Balance: {_format_currency(account.balance)}")
         lines.append(f"  Exposure: {_format_pct(account.exposure_pct())}")
         lines.append(f"  Unrealized PnL: {_format_currency(account.total_unrealized())}")
+        status_message = account_messages.get(account.name)
+        if status_message:
+            lines.append(f"  Status: {status_message}")
         lines.append("")
         if account.positions:
             header = (
@@ -282,9 +294,14 @@ def render_dashboard(
 
 def run_dashboard(config_path: Path) -> str:
     snapshot = load_snapshot(config_path)
+    return build_dashboard(snapshot)
+
+
+def build_dashboard(snapshot: Dict[str, Any]) -> str:
     generated_at, accounts, thresholds, notifications = parse_snapshot(snapshot)
     alerts = evaluate_alerts(accounts, thresholds)
-    return render_dashboard(generated_at, accounts, alerts, notifications)
+    account_messages = snapshot.get("account_messages", {}) if isinstance(snapshot, Mapping) else {}
+    return render_dashboard(generated_at, accounts, alerts, notifications, account_messages=account_messages)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -294,6 +311,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         default=Path(__file__).with_name("dashboard_config.json"),
         help="Path to the JSON snapshot used for the dashboard.",
+    )
+    parser.add_argument(
+        "--realtime-config",
+        type=Path,
+        default=None,
+        help="Path to a realtime configuration file. Overrides --config when provided.",
     )
     parser.add_argument(
         "--interval",
@@ -316,17 +339,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--iterations must be >= 0")
 
     try:
-        iteration = 0
-        while True:
-            dashboard = run_dashboard(args.config)
-            print(dashboard)
-            iteration += 1
-            if args.iterations and iteration >= args.iterations:
-                break
-            if args.interval == 0:
-                break
-            time.sleep(args.interval)
-        return 0
+        return asyncio.run(_run_cli(args))
     except FileNotFoundError:
         parser.error(f"Snapshot file not found: {args.config}")
     except json.JSONDecodeError as exc:
@@ -334,6 +347,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
     return 1
+
+
+async def _run_cli(args: argparse.Namespace) -> int:
+    realtime_fetcher: RealtimeDataFetcher | None = None
+    if args.realtime_config:
+        realtime_config = load_realtime_config(Path(args.realtime_config))
+        realtime_fetcher = RealtimeDataFetcher(realtime_config)
+        logger.info("Starting realtime dashboard using %s", args.realtime_config)
+
+    try:
+        iteration = 0
+        while True:
+            if realtime_fetcher is not None:
+                snapshot = await realtime_fetcher.fetch_snapshot()
+            else:
+                snapshot = load_snapshot(Path(args.config))
+            dashboard = build_dashboard(snapshot)
+            print(dashboard)
+            iteration += 1
+            if args.iterations and iteration >= args.iterations:
+                break
+            if args.interval == 0:
+                break
+            await asyncio.sleep(args.interval)
+        return 0
+    finally:
+        if realtime_fetcher is not None:
+            await realtime_fetcher.close()
 
 
 if __name__ == "__main__":
