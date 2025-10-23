@@ -153,9 +153,11 @@ TEMPLATE_CONFIG_MODE = "v7"
 
 
 def _format_objectives(values: Sequence[float]) -> str:
+    if isinstance(values, np.ndarray):
+        values = values.tolist()
     if not values:
         return "[]"
-    return "[" + ", ".join(f"{v:.3g}" for v in values) + "]"
+    return "[" + ", ".join(f"{float(v):.3g}" for v in values) + "]"
 
 
 # === bounds helpers =========================================================
