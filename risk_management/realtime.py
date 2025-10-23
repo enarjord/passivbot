@@ -75,6 +75,7 @@ class RealtimeDataFetcher:
             self._account_clients = clients
         else:
             self._account_clients = list(account_clients)
+        self._last_auth_errors: Dict[str, str] = {}
 
     async def fetch_snapshot(self) -> Dict[str, Any]:
         tasks = [client.fetch() for client in self._account_clients]
@@ -87,9 +88,27 @@ class RealtimeDataFetcher:
                     message = (
                         f"{account_config.name}: authentication failed - {result}"
                     )
+
+                    error_message = str(result)
+                    previous_error = self._last_auth_errors.get(account_config.name)
+                    if previous_error != error_message:
+                        logger.warning(
+                            "Authentication failed for %s: %s",
+                            account_config.name,
+                            result,
+                        )
+                        self._last_auth_errors[account_config.name] = error_message
+                    else:
+                        logger.debug(
+                            "Authentication failure for %s unchanged: %s",
+                            account_config.name,
+                            result,
+                        )
+
                     logger.warning(
                         "Authentication failed for %s: %s", account_config.name, result
                     )
+
                 else:
                     message = f"{account_config.name}: {result}"
                     logger.exception(
@@ -99,6 +118,11 @@ class RealtimeDataFetcher:
                 accounts_payload.append({"name": account_config.name, "balance": 0.0, "positions": []})
             else:
                 accounts_payload.append(result)
+                if account_config.name in self._last_auth_errors:
+                    logger.info(
+                        "Authentication for %s restored", account_config.name
+                    )
+                    self._last_auth_errors.pop(account_config.name, None)
         snapshot = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "accounts": accounts_payload,
