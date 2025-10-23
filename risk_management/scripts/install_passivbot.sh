@@ -49,8 +49,6 @@ while (($#)); do
     esac
 done
 
-=======
-
 PYTHON_BIN="python3"
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
     echo "python3 is required but not found. Please install Python 3.9 or newer." >&2
