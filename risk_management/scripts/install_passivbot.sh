@@ -28,8 +28,23 @@ pip install --upgrade pip setuptools wheel
 # Install build prerequisites required by Passivbot's setup.py
 pip install --upgrade setuptools-rust
 
+# Install passivbot from repository root in editable mode, defaulting to a PEP 517 build
+PIP_INSTALL_FLAGS=("$@")
+if [ ${#PIP_INSTALL_FLAGS[@]} -eq 0 ]; then
+    PIP_INSTALL_FLAGS=("--use-pep517")
+else
+    echo "Using custom pip install flags: ${PIP_INSTALL_FLAGS[*]}"
+fi
+
+pip install "${PIP_INSTALL_FLAGS[@]}" -e "${REPO_ROOT}"
+
+
+# Install build prerequisites required by Passivbot's setup.py
+pip install --upgrade setuptools-rust
+
 # Install passivbot from repository root in editable mode
 pip install -e "${REPO_ROOT}"
+
 
 echo "Passivbot has been installed into ${VENV_DIR}."
 echo "Activate the environment with:"
