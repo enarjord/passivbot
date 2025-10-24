@@ -53,11 +53,13 @@ inline under the affected account.
 The sample file `risk_management/realtime_config.example.json` is ready to be
 copied and adjusted.  It expects API key entries named `binance_01`, `okx_01`,
 and `bybit_01` in the credentials file and demonstrates the venue-specific
-parameters required to fetch balances and positions:
+parameters required to fetch balances and positions.  When the `api_keys_file`
+field is omitted (as below) the loader walks up from the realtime config
+directory and uses the first `api-keys.json` it encounters, matching Passivbot's
+default layout.  Provide an explicit path when storing credentials elsewhere:
 
 ```json
 {
-  "api_keys_file": "../api-keys.json",
   "custom_endpoints": {
     "path": "../configs/custom_endpoints.json",
     "autodiscover": false
@@ -150,11 +152,11 @@ cards, alerts, and notification channels without a full refresh.
 If your Passivbot installation proxies REST requests through
 `configs/custom_endpoints.json`, mirror the same routing for the risk
 dashboard by declaring a `custom_endpoints` block in your realtime
-configuration:
+configuration.  The example below keeps automatic API key discovery and
+overrides only the endpoint file:
 
 ```json
 {
-  "api_keys_file": "../api-keys.json",
   "custom_endpoints": {
     "path": "../configs/custom_endpoints.json",
     "autodiscover": false
