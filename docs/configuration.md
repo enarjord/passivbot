@@ -20,6 +20,8 @@ This document provides an overview of the parameters found in `config/template.j
   - Accepted values: `0` (warnings), `1` (info), `2` (debug), `3` (trace).
   - The CLI flag `--debug-level`/`--log-level` on `src/passivbot.py` and `src/backtest.py` overrides the configured value for a single run.
   - Components such as the CandlestickManager inherit this level, so EMA warm-up and candle maintenance logs follow the same verbosity.
+- **memory_snapshot_interval_minutes**: Interval between `_log_memory_snapshot` telemetry entries (RSS, cache footprint, asyncio task counts). Default `30`; lower values surface leaks sooner, higher values reduce noise.
+- **volume_refresh_info_threshold_seconds**: Minimum duration a bulk volume-EMA refresh must take before it is promoted to an INFO log. Runs that finish faster emit only DEBUG output (when debug logging is enabled). Set `0` to keep the previous always-INFO behaviour.
 
 ## Bot Settings
 
@@ -230,7 +232,6 @@ Coins selected for trading are filtered by volume and log range. First, filter c
 - **risk_wel_enforcer_threshold**: Per-symbol multiplier that triggers the WEL enforcer. When a position’s exposure exceeds `wallet_exposure_limit * (1 + risk_we_excess_allowance_pct) * risk_wel_enforcer_threshold` the bot emits a reduce-only order to bring it back under control. Set <1.0 for continual trimming, `1.0` for a hard cap, or ≤0 to disable.
 - **risk_twel_enforcer_threshold**: Fraction of the configured `total_wallet_exposure_limit` that triggers the TWEL enforcer. When aggregate exposure exceeds this threshold the bot queues reduction orders instead of new entries. Set >1.0 to allow a grace margin, `1.0` for strict enforcement, or ≤0 to disable.
 - **risk_we_excess_allowance_pct**: Per-symbol allowance above the configured wallet exposure limit that the enforcer tolerates before trimming. Useful for smoothing reductions; leave at `0.0` for a hard cap.
-- **memory_snapshot_interval_minutes**: Interval between `_log_memory_snapshot` telemetry entries (RSS, CandlestickManager cache stats, task counts). Default is `30`; lower values surface leaks sooner at the cost of noisier logs.
 - **max_warmup_minutes**: Hard ceiling applied to the historical warm-up window for both backtests and live warm-ups. Use `0` to disable the cap; otherwise values above `0` clamp the per-symbol warmup calculated from EMA spans.
 - **warmup_ratio**: Multiplier applied to the longest EMA or log-range span (in minutes) across long/short settings to decide how much 1m history to prefetch before trading. A value of `0.2`, for example, warmups ~20% of the deepest lookback, capped by `max_warmup_minutes`.
 - **warmup_minutes**: Per-coin warm-up window (in minutes) derived from `warmup_ratio`, indicator spans, and the optional `max_warmup_minutes` ceiling. This value is used by the backtester and CandlestickManager to skip the earliest candles until indicators are fully primed; adjust `warmup_ratio` or the spans themselves to change it.
