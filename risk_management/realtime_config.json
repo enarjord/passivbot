@@ -1,5 +1,4 @@
 {
-  "api_keys_file": "../api-keys.json",
   "accounts": [
     {
       "name": "Binance Futures",
