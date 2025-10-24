@@ -371,22 +371,42 @@ class Passivbot:
         # TTL (minutes) for EMA candles on non-traded symbols
         ttl_min = require_live_value(config, "inactive_coin_candle_ttl_minutes")
         self.inactive_coin_candle_ttl_ms = int(float(ttl_min) * 60_000)
-        raw_mem_interval = get_optional_live_value(config, "memory_snapshot_interval_minutes", 30.0)
+        raw_mem_interval = get_optional_config_value(
+            config, "logging.memory_snapshot_interval_minutes", 30.0
+        )
         try:
             interval_minutes = float(raw_mem_interval)
         except Exception:
             logging.warning(
-                "Unable to parse live.memory_snapshot_interval_minutes=%r; using fallback 30",
+                "Unable to parse logging.memory_snapshot_interval_minutes=%r; using fallback 30",
                 raw_mem_interval,
             )
             interval_minutes = 30.0
         if interval_minutes <= 0.0:
             logging.warning(
-                "live.memory_snapshot_interval_minutes=%r is non-positive; using fallback 30",
+                "logging.memory_snapshot_interval_minutes=%r is non-positive; using fallback 30",
                 raw_mem_interval,
             )
             interval_minutes = 30.0
         self.memory_snapshot_interval_ms = max(60_000, int(interval_minutes * 60_000))
+        raw_volume_threshold = get_optional_config_value(
+            config, "logging.volume_refresh_info_threshold_seconds", 30.0
+        )
+        try:
+            volume_threshold = float(raw_volume_threshold)
+        except Exception:
+            logging.warning(
+                "Unable to parse logging.volume_refresh_info_threshold_seconds=%r; using fallback 30",
+                raw_volume_threshold,
+            )
+            volume_threshold = 30.0
+        if volume_threshold < 0:
+            logging.warning(
+                "logging.volume_refresh_info_threshold_seconds=%r is negative; using 0",
+                raw_volume_threshold,
+            )
+            volume_threshold = 0.0
+        self.volume_refresh_info_threshold_seconds = float(volume_threshold)
         auto_gs = bool(self.live_value("auto_gs"))
         self.PB_mode_stop = {
             "long": "graceful_stop" if auto_gs else "manual",
@@ -2963,12 +2983,20 @@ class Passivbot:
                     eta_s = int((n - completed) / max(1e-6, rate))
                     msg = f"volume EMA: {completed}/{n} {pct}% elapsed={int(elapsed_s)}s eta~{eta_s}s"
                     log_level = getattr(self, "logging_level", 1)
-                    if log_level >= 3:
-                        logging.debug(msg)
-                    elif completed == n:
-                        logging.info(
-                            f"volume EMA refresh finished for {n} symbols in {int(elapsed_s)}s"
+                    if completed == n:
+                        threshold = getattr(
+                            self, "volume_refresh_info_threshold_seconds", 30.0
                         )
+                        if threshold <= 0 or elapsed_s >= threshold:
+                            logging.info(
+                                f"volume EMA refresh finished for {n} symbols in {int(elapsed_s)}s"
+                            )
+                        elif log_level >= 3:
+                            logging.debug(
+                                f"{msg} (below info threshold {int(threshold)}s)"
+                            )
+                    elif log_level >= 3:
+                        logging.debug(msg)
                     last_log_ms = now_ms
         return out
 
