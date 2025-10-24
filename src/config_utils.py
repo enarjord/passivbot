@@ -622,6 +622,18 @@ def _apply_backward_compatibility_renames(result: dict, verbose: bool = True) ->
                 _log_config(verbose, logging.INFO, "renaming parameter optimize.bounds.%s -> %s", old, new)
             del bounds[old]
 
+    live_cfg = result.get("live")
+    logging_cfg = result.setdefault("logging", {})
+    if isinstance(live_cfg, dict) and "memory_snapshot_interval_minutes" in live_cfg:
+        val = live_cfg.pop("memory_snapshot_interval_minutes")
+        if "memory_snapshot_interval_minutes" not in logging_cfg:
+            logging_cfg["memory_snapshot_interval_minutes"] = val
+            _log_config(
+                verbose,
+                logging.INFO,
+                "moved live.memory_snapshot_interval_minutes -> logging.memory_snapshot_interval_minutes",
+            )
+
 
 def _migrate_btc_collateral_settings(result: dict, verbose: bool = True) -> None:
     """Convert legacy bool collateral flag to fractional settings and ensure defaults."""
@@ -1266,6 +1278,8 @@ def get_template_config(passivbot_mode="v7"):
     return {
         "logging": {
             "level": 1,
+            "memory_snapshot_interval_minutes": 30.0,
+            "volume_refresh_info_threshold_seconds": 30.0,
         },
         "backtest": {
             "base_dir": "backtests",
@@ -1380,7 +1394,6 @@ def get_template_config(passivbot_mode="v7"):
             "minimum_coin_age_days": 7.0,
             "pnls_max_lookback_days": 30.0,
             "price_distance_threshold": 0.002,
-            "memory_snapshot_interval_minutes": 30.0,
             "max_warmup_minutes": 0.0,
             "time_in_force": "good_till_cancelled",
             "warmup_ratio": 0.2,
