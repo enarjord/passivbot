@@ -6,11 +6,12 @@ import json
 import sys
 from pathlib import Path
 
+
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from risk_management.configuration import (
+from risk_management.configuration import (  # noqa: E402
     _merge_credentials,
     _normalise_credentials,
     load_realtime_config,
@@ -36,7 +37,7 @@ def _base_payload() -> dict:
     }
 
 
-def test_custom_endpoint_path_resolves_relative(tmp_path) -> None:
+def test_custom_endpoint_path_resolves_relative(tmp_path: Path) -> None:
     payload = _base_payload()
     payload["custom_endpoints"] = {"path": "../custom_endpoints.json", "autodiscover": False}
     config_path = _write_config(tmp_path, payload)
@@ -48,7 +49,7 @@ def test_custom_endpoint_path_resolves_relative(tmp_path) -> None:
     assert config.custom_endpoints.path == str(expected_path)
 
 
-def test_custom_endpoint_path_keeps_absolute(tmp_path) -> None:
+def test_custom_endpoint_path_keeps_absolute(tmp_path: Path) -> None:
     payload = _base_payload()
     absolute_path = tmp_path / "custom" / "endpoints.json"
     payload["custom_endpoints"] = {"path": str(absolute_path), "autodiscover": True}
@@ -99,3 +100,91 @@ def test_merge_credentials_prioritises_primary_values() -> None:
     assert merged["apiKey"] == "primary"
     assert merged["headers"] == {"X-Secondary": "2", "X-Primary": "1"}
     assert "exchange" not in merged
+
+
+def test_load_realtime_config_supports_nested_user_entries(tmp_path: Path) -> None:
+    api_keys_path = tmp_path / "api-keys.json"
+    api_keys_path.write_text(
+        json.dumps(
+            {
+                "referrals": {"binance": "https://example.com"},
+                "binance_01": {"exchange": "binance", "key": "a", "secret": "b"},
+                "users": {
+                    "okx_01": {
+                        "exchange": "okx",
+                        "key": "c",
+                        "secret": "d",
+                        "passphrase": "p",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    config_path = config_dir / "realtime.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "api_keys_file": "../api-keys.json",
+                "accounts": [
+                    {
+                        "name": "Binance",
+                        "api_key_id": "binance_01",
+                        "exchange": "binance",
+                    },
+                    {
+                        "name": "OKX",
+                        "api_key_id": "okx_01",
+                        "exchange": "okx",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_realtime_config(config_path)
+
+    assert len(config.accounts) == 2
+    binance = config.accounts[0]
+    okx = config.accounts[1]
+
+    assert binance.credentials["apiKey"] == "a"
+    assert binance.credentials["secret"] == "b"
+
+    assert okx.credentials["apiKey"] == "c"
+    assert okx.credentials["secret"] == "d"
+    assert okx.credentials["password"] == "p"
+
+
+def test_load_realtime_config_expands_user_path(tmp_path: Path, monkeypatch) -> None:
+    home_api_keys = tmp_path / "api-keys.json"
+    home_api_keys.write_text(
+        json.dumps({"binance": {"exchange": "binance", "key": "x", "secret": "y"}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "api_keys_file": "~/api-keys.json",
+                "accounts": [
+                    {
+                        "name": "Binance",
+                        "api_key_id": "binance",
+                        "exchange": "binance",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_realtime_config(config_path)
+    assert config.accounts[0].credentials["apiKey"] == "x"
