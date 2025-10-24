@@ -218,6 +218,18 @@ pub fn calc_pprice_diff_int(pside: usize, pprice: f64, price: f64) -> f64 {
     }
 }
 
+/// Pside-aware signed price difference helper. Alias of calc_pprice_diff_int with clearer name.
+#[pyfunction]
+pub fn calc_pside_price_diff_int(pside: usize, pprice: f64, price: f64) -> f64 {
+    calc_pprice_diff_int(pside, pprice, price)
+}
+
+/// Backwards-compatible alias; prefer calc_pside_price_diff_int.
+#[pyfunction]
+pub fn calc_price_diff_pside_int(pside: usize, pprice: f64, price: f64) -> f64 {
+    calc_pside_price_diff_int(pside, pprice, price)
+}
+
 #[pyfunction]
 pub fn calc_auto_unstuck_allowance(
     balance: f64,

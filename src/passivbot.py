@@ -2117,6 +2117,10 @@ class Passivbot:
         }
 
         ideal_orders = defaultdict(list)
+        # Accumulate entries for TWEL gating per side
+        entries_acc = {"long": [], "short": []}
+        symbol_idx_map_entries = {"long": {}, "short": {}}
+        idx_counters = {"long": 0, "short": 0}
         for pside in self.PB_modes:
             for symbol in self.PB_modes[pside]:
                 if self.PB_modes[pside][symbol] == "panic":
@@ -2198,9 +2202,36 @@ class Passivbot:
                         self.trailing_prices[symbol][pside]["min_since_max"],
                         last_prices[symbol],
                     )
+                    # Accumulate closes immediately
                     ideal_orders[symbol] += [
-                        (x[0], x[1], snake_of(x[2]), x[2]) for x in entries + closes
+                        (x[0], x[1], snake_of(x[2]), x[2]) for x in closes
                     ]
+                    # Accumulate entries for gating
+                    if symbol not in symbol_idx_map_entries[pside]:
+                        symbol_idx_map_entries[pside][idx_counters[pside]] = symbol
+                        idx_counters[pside] += 1
+                    # map symbol to idx (stable index)
+                    # ensure we reuse same idx for same symbol
+                    inv_map = {v: k for k, v in symbol_idx_map_entries[pside].items()}
+                    idx = inv_map.get(symbol, None)
+                    if idx is None:
+                        idx = idx_counters[pside]
+                        symbol_idx_map_entries[pside][idx] = symbol
+                        idx_counters[pside] += 1
+                    for (qty, price, order_type_id) in entries:
+                        entries_acc[pside].append(
+                            {
+                                "idx": idx,
+                                "qty": float(abs(qty)),
+                                "price": float(price),
+                                "qty_step": float(self.qty_steps[symbol]),
+                                "min_qty": float(self.min_qtys[symbol]),
+                                "min_cost": float(self.min_costs[symbol]),
+                                "c_mult": float(self.c_mults[symbol]),
+                                "market_price": float(last_prices[symbol]),
+                                "order_type_id": int(order_type_id),
+                            }
+                        )
 
         unstucking_symbol, unstucking_close = await self.calc_unstucking_close(
             allow_new_unstuck=allow_unstuck
@@ -2266,6 +2297,44 @@ class Passivbot:
                 for order in orders
             )
         }
+        # TWEL entry gating (Rust powered)
+        try:
+            for pside in ["long", "short"]:
+                total_wel = self.bot_value(pside, "total_wallet_exposure_limit")
+                if total_wel is None or total_wel <= 0.0:
+                    continue
+                # Build positions payload per side
+                positions_payload = []
+                inv_map = {v: k for k, v in symbol_idx_map_entries[pside].items()}
+                for symbol in self.positions:
+                    idx = inv_map.get(symbol)
+                    if idx is None:
+                        continue
+                    positions_payload.append(
+                        {
+                            "idx": idx,
+                            "position_size": float(self.positions[symbol][pside]["size"]),
+                            "position_price": float(self.positions[symbol][pside]["price"]),
+                            "c_mult": float(self.c_mults[symbol]),
+                        }
+                    )
+                if not entries_acc[pside]:
+                    continue
+                gated = pbr.gate_entries_by_twel_py(
+                    pside,
+                    float(self.balance),
+                    float(total_wel),
+                    positions_payload,
+                    entries_acc[pside],
+                )
+                # Map back by idx
+                for (idx, qty, price, order_type_id) in gated:
+                    symbol = symbol_idx_map_entries[pside].get(idx)
+                    if symbol is None:
+                        continue
+                    ideal_orders[symbol].append((qty, price, snake_of(order_type_id), order_type_id))
+        except Exception as exc:
+            logging.info(f"debug: failed to gate entries by TWEL: {exc}")
         # TWEL enforcer orders
         try:
             unstuck_side = ""

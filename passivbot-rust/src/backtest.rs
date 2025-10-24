@@ -6,7 +6,10 @@ use crate::entries::{
     calc_entries_long, calc_entries_short, calc_min_entry_qty, calc_next_entry_long,
     calc_next_entry_short,
 };
-use crate::risk::{calc_twel_enforcer_actions, TwelEnforcerInputPosition};
+use crate::risk::{
+    calc_twel_enforcer_actions, gate_entries_by_twel, GateEntriesCandidate, GateEntriesPosition,
+    TwelEnforcerInputPosition,
+};
 use crate::types::{
     BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities, ExchangeParams, Fill,
     Order, OrderBook, OrderType, Position, Positions, StateParams, TrailingPriceBundle,
@@ -1953,6 +1956,141 @@ impl<'a> Backtest<'a> {
                         &self.exchange_params_list[idx],
                     );
                 }
+            }
+        }
+
+        self.gate_entries_portfolio(k, LONG);
+        self.gate_entries_portfolio(k, SHORT);
+    }
+
+    fn gate_entries_portfolio(&mut self, k: usize, side: usize) {
+        let (trading_enabled, total_limit) = match side {
+            LONG => (
+                self.trading_enabled.long,
+                self.bot_params_master.long.total_wallet_exposure_limit,
+            ),
+            SHORT => (
+                self.trading_enabled.short,
+                self.bot_params_master.short.total_wallet_exposure_limit,
+            ),
+            _ => (false, 0.0),
+        };
+        if !trading_enabled {
+            return;
+        }
+        let open_orders_side = match side {
+            LONG => &mut self.open_orders.long,
+            SHORT => &mut self.open_orders.short,
+            _ => return,
+        };
+        if total_limit <= 0.0 {
+            for bundle in open_orders_side.values_mut() {
+                bundle.entries.clear();
+            }
+            return;
+        }
+        let balance = self.balance.usd_total_rounded;
+        if balance <= 0.0 {
+            for bundle in open_orders_side.values_mut() {
+                bundle.entries.clear();
+            }
+            return;
+        }
+        let positions_payload: Vec<GateEntriesPosition> = match side {
+            LONG => self
+                .positions
+                .long
+                .iter()
+                .map(|(&idx, pos)| GateEntriesPosition {
+                    idx,
+                    position_size: pos.size,
+                    position_price: pos.price,
+                    c_mult: self.exchange_params_list[idx].c_mult,
+                })
+                .collect(),
+            SHORT => self
+                .positions
+                .short
+                .iter()
+                .map(|(&idx, pos)| GateEntriesPosition {
+                    idx,
+                    position_size: pos.size,
+                    position_price: pos.price,
+                    c_mult: self.exchange_params_list[idx].c_mult,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+
+        let mut entry_candidates: Vec<GateEntriesCandidate> = Vec::new();
+        {
+            for (&idx, bundle) in open_orders_side.iter() {
+                if bundle.entries.is_empty() {
+                    continue;
+                }
+                let params = &self.exchange_params_list[idx];
+                let raw_market_price = self.hlcvs[[k, idx, CLOSE]];
+                for order in &bundle.entries {
+                    let qty = order.qty.abs();
+                    if qty <= 0.0 || order.price <= 0.0 {
+                        continue;
+                    }
+                    let mut market_price = raw_market_price;
+                    if !market_price.is_finite() || market_price <= 0.0 {
+                        market_price = if order.price > 0.0 {
+                            order.price
+                        } else {
+                            params.price_step
+                        };
+                    }
+                    entry_candidates.push(GateEntriesCandidate {
+                        idx,
+                        qty,
+                        price: order.price,
+                        qty_step: params.qty_step,
+                        min_qty: params.min_qty,
+                        min_cost: params.min_cost,
+                        c_mult: params.c_mult,
+                        market_price,
+                        order_type: order.order_type,
+                    });
+                }
+            }
+        }
+        if entry_candidates.is_empty() {
+            return;
+        }
+        let gated = gate_entries_by_twel(
+            side,
+            balance,
+            total_limit,
+            &positions_payload,
+            &entry_candidates,
+        );
+        let mut new_entries_map: HashMap<usize, Vec<Order>> = HashMap::new();
+        for decision in gated {
+            let qty_signed = if side == LONG {
+                decision.qty
+            } else {
+                -decision.qty
+            };
+            new_entries_map
+                .entry(decision.idx)
+                .or_default()
+                .push(Order {
+                    qty: qty_signed,
+                    price: decision.price,
+                    order_type: decision.order_type,
+                });
+        }
+        for (&idx, bundle) in open_orders_side.iter_mut() {
+            if bundle.entries.is_empty() {
+                continue;
+            }
+            if let Some(new_entries) = new_entries_map.remove(&idx) {
+                bundle.entries = new_entries;
+            } else {
+                bundle.entries.clear();
             }
         }
     }

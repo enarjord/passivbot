@@ -14,6 +14,14 @@ def _install_passivbot_rust_stub():
     if "passivbot_rust" in sys.modules:
         return
 
+    try:
+        import importlib
+
+        importlib.import_module("passivbot_rust")
+        return
+    except Exception:
+        pass
+
     stub = types.ModuleType("passivbot_rust")
 
     def _identity(x, *_args, **_kwargs):

@@ -15,7 +15,7 @@ setup(
     rust_extensions=[
         RustExtension("passivbot_rust", path="passivbot-rust/Cargo.toml", binding="pyo3")
     ],
-    install_requires=parse_requirements("requirements.txt"),
+    install_requires=parse_requirements("requirements-rust.txt"),
     setup_requires=["setuptools-rust>=1.9.0", "wheel"],
     include_package_data=True,
     zip_safe=False,

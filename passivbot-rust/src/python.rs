@@ -7,7 +7,10 @@ use crate::constants::{LONG, SHORT};
 use crate::entries::{
     calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
 };
-use crate::risk::{calc_twel_enforcer_actions, TwelEnforcerInputPosition};
+use crate::risk::{
+    calc_twel_enforcer_actions, gate_entries_by_twel, GateEntriesCandidate, GateEntriesDecision,
+    GateEntriesPosition, TwelEnforcerInputPosition,
+};
 use crate::types::OrderType;
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, Position,
@@ -20,6 +23,211 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use serde::Serialize;
 use std::str::FromStr;
+
+#[pyfunction]
+pub fn gate_entries_by_twel_py(
+    side: &str,
+    balance: f64,
+    total_wallet_exposure_limit: f64,
+    positions: &Bound<'_, PyList>,
+    entries: &Bound<'_, PyList>,
+) -> PyResult<Vec<(usize, f64, f64, u16)>> {
+    let positions = positions.as_ref();
+    let entries = entries.as_ref();
+    let side_code = match side {
+        "long" => LONG,
+        "short" => SHORT,
+        _ => {
+            return Err(PyValueError::new_err(
+                "side must be either 'long' or 'short'",
+            ))
+        }
+    };
+    if balance <= 0.0 || total_wallet_exposure_limit <= 0.0 {
+        return Ok(vec![]);
+    }
+
+    let positions_len = positions.len()?;
+    let mut positions_vec: Vec<GateEntriesPosition> = Vec::with_capacity(positions_len);
+    for item in positions.iter()? {
+        let item = item?;
+        let dict = item.downcast::<PyDict>()?;
+        let idx = dict
+            .get_item("idx")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'idx'"))?
+            .extract::<usize>()?;
+        let position_size = dict
+            .get_item("position_size")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'position_size'"))?
+            .extract::<f64>()?;
+        let position_price = dict
+            .get_item("position_price")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'position_price'"))?
+            .extract::<f64>()?;
+        let c_mult = dict
+            .get_item("c_mult")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'c_mult'"))?
+            .extract::<f64>()?;
+        positions_vec.push(GateEntriesPosition {
+            idx,
+            position_size,
+            position_price,
+            c_mult,
+        });
+    }
+
+    let entries_len = entries.len()?;
+    let mut entries_vec: Vec<GateEntriesCandidate> = Vec::with_capacity(entries_len);
+    for item in entries.iter()? {
+        let item = item?;
+        let dict = item.downcast::<PyDict>()?;
+        let idx = dict
+            .get_item("idx")?
+            .ok_or_else(|| PyValueError::new_err("entry missing 'idx'"))?
+            .extract::<usize>()?;
+        let qty = dict
+            .get_item("qty")?
+            .ok_or_else(|| PyValueError::new_err("entry missing 'qty'"))?
+            .extract::<f64>()?;
+        let price = dict
+            .get_item("price")?
+            .ok_or_else(|| PyValueError::new_err("entry missing 'price'"))?
+            .extract::<f64>()?;
+        let qty_step = dict
+            .get_item("qty_step")?
+            .ok_or_else(|| PyValueError::new_err("entry missing 'qty_step'"))?
+            .extract::<f64>()?;
+        let min_qty = dict
+            .get_item("min_qty")?
+            .ok_or_else(|| PyValueError::new_err("entry missing 'min_qty'"))?
+            .extract::<f64>()?;
+        let min_cost = dict
+            .get_item("min_cost")?
+            .ok_or_else(|| PyValueError::new_err("entry missing 'min_cost'"))?
+            .extract::<f64>()?;
+        let c_mult = dict
+            .get_item("c_mult")?
+            .ok_or_else(|| PyValueError::new_err("entry missing 'c_mult'"))?
+            .extract::<f64>()?;
+        let market_price = dict
+            .get_item("market_price")?
+            .ok_or_else(|| PyValueError::new_err("entry missing 'market_price'"))?
+            .extract::<f64>()?;
+        let order_type_id = dict
+            .get_item("order_type_id")?
+            .ok_or_else(|| PyValueError::new_err("entry missing 'order_type_id'"))?
+            .extract::<u16>()?;
+        let order_type = OrderType::try_from(order_type_id).map_err(|_| {
+            PyValueError::new_err("unknown order_type_id provided to gate_entries_by_twel")
+        })?;
+        entries_vec.push(GateEntriesCandidate {
+            idx,
+            qty,
+            price,
+            qty_step,
+            min_qty,
+            min_cost,
+            c_mult,
+            market_price,
+            order_type,
+        });
+    }
+
+    let gated = gate_entries_by_twel(
+        side_code,
+        balance,
+        total_wallet_exposure_limit,
+        &positions_vec,
+        &entries_vec,
+    );
+
+    let mut result: Vec<(usize, f64, f64, u16)> = Vec::with_capacity(gated.len());
+    for GateEntriesDecision {
+        idx,
+        qty,
+        price,
+        order_type,
+    } in gated
+    {
+        result.push((idx, qty, price, order_type.id()));
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::{PyDict, PyList};
+
+    #[test]
+    fn test_gate_entries_blocks_when_twe_if_filled_exceeds() {
+        Python::with_gil(|py| {
+            let side = "long";
+            let balance = 1000.0;
+            let twel = 1.0;
+            // One position small
+            let positions = PyList::empty_bound(py);
+            let p0 = PyDict::new_bound(py);
+            p0.set_item("idx", 0usize).unwrap();
+            p0.set_item("position_size", 0.0f64).unwrap();
+            p0.set_item("position_price", 0.0f64).unwrap();
+            p0.set_item("c_mult", 1.0f64).unwrap();
+            positions.append(p0).unwrap();
+            // Two entries that together would push twe_if_filled >= 1.0
+            let entries = PyList::empty_bound(py);
+            let e1 = PyDict::new_bound(py);
+            e1.set_item("idx", 0usize).unwrap();
+            e1.set_item("qty", 5.0f64).unwrap(); // cost 5*100/1000 = 0.5
+            e1.set_item("price", 100.0f64).unwrap();
+            e1.set_item("qty_step", 0.01f64).unwrap();
+            e1.set_item("min_qty", 0.0f64).unwrap();
+            e1.set_item("min_cost", 0.0f64).unwrap();
+            e1.set_item("c_mult", 1.0f64).unwrap();
+            e1.set_item("market_price", 100.0f64).unwrap();
+            e1.set_item("order_type_id", OrderType::EntryGridNormalLong.id())
+                .unwrap();
+            entries.append(e1).unwrap();
+            let e2 = PyDict::new_bound(py);
+            e2.set_item("idx", 0usize).unwrap();
+            e2.set_item("qty", 6.0f64).unwrap(); // +0.6 exposure -> total 1.1 > 1.0
+            e2.set_item("price", 100.0f64).unwrap();
+            e2.set_item("qty_step", 0.01f64).unwrap();
+            e2.set_item("min_qty", 0.0f64).unwrap();
+            e2.set_item("min_cost", 0.0f64).unwrap();
+            e2.set_item("c_mult", 1.0f64).unwrap();
+            e2.set_item("market_price", 90.0f64).unwrap();
+            e2.set_item("order_type_id", OrderType::EntryGridNormalLong.id())
+                .unwrap();
+            entries.append(e2).unwrap();
+
+            let res = gate_entries_by_twel_py(side, balance, twel, &positions, &entries).unwrap();
+            // Should not allow both; either prune one or adjust last
+            assert!(!res.is_empty());
+            // Simulate twe_if_filled with returned
+            let mut psize = 0.0f64;
+            let mut pprice = 0.0f64;
+            for (idx, qty, price, _ot) in res.into_iter() {
+                let (_i, _qty, _price) = (idx, qty, price);
+                let (nps, npp) =
+                    crate::utils::calc_new_psize_pprice(psize, pprice, qty, price, 0.01);
+                psize = nps;
+                pprice = npp;
+            }
+            let twe = crate::utils::calc_wallet_exposure(
+                1.0,
+                balance,
+                psize.abs(),
+                if pprice > 0.0 { pprice } else { 100.0 },
+            );
+            assert!(
+                twe < twel - 1e-12,
+                "gated twe {} not strictly below {}",
+                twe,
+                twel
+            );
+        });
+    }
+}
 
 #[pyfunction]
 pub fn run_backtest(
