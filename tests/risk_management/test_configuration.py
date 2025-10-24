@@ -161,6 +161,7 @@ def test_load_realtime_config_supports_nested_user_entries(tmp_path: Path) -> No
     assert config.config_root == config_path.parent.resolve()
 
 
+
 def test_load_realtime_config_expands_user_path(tmp_path: Path, monkeypatch) -> None:
     home_api_keys = tmp_path / "api-keys.json"
     home_api_keys.write_text(
@@ -190,3 +191,4 @@ def test_load_realtime_config_expands_user_path(tmp_path: Path, monkeypatch) -> 
     config = load_realtime_config(config_path)
     assert config.accounts[0].credentials["apiKey"] == "x"
     assert config.config_root == config_path.parent.resolve()
+
