@@ -1,13 +1,20 @@
-"""Tests for realtime snapshot fetching behaviour."""
-
-from __future__ import annotations
-
 import asyncio
+import json
 import logging
+from pathlib import Path
 from typing import Iterable, List
 
+from custom_endpoint_overrides import (
+    configure_custom_endpoint_loader,
+    resolve_custom_endpoint_override,
+)
+
 from risk_management.configuration import AccountConfig, RealtimeConfig
-from risk_management.realtime import AuthenticationError, RealtimeDataFetcher
+from risk_management.realtime import (
+    AuthenticationError,
+    RealtimeDataFetcher,
+    _configure_custom_endpoints,
+)
 
 
 class StubAccountClient:
@@ -77,3 +84,35 @@ def test_authentication_warning_resets_after_success(caplog) -> None:
     assert any("Authentication for Test restored" in record.message for record in infos)
     assert snapshot_success["accounts"][0]["balance"] == 123.0
     asyncio.run(fetcher.close())
+
+
+def test_configure_custom_endpoints_prefers_config_directory(tmp_path: Path) -> None:
+    overrides_dir = tmp_path / "configs"
+    overrides_dir.mkdir(parents=True)
+    overrides_path = overrides_dir / "custom_endpoints.json"
+    overrides_path.write_text(
+        json.dumps(
+            {
+                "exchanges": {
+                    "binanceusdm": {
+                        "rest": {
+                            "rewrite_domains": {
+                                "https://fapi.binance.com": "https://mltech.example"
+                            }
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        _configure_custom_endpoints(None, overrides_dir)
+        override = resolve_custom_endpoint_override("binanceusdm")
+        assert override is not None
+        assert (
+            override.rest_domain_rewrites["https://fapi.binance.com"] == "https://mltech.example"
+        )
+    finally:
+        configure_custom_endpoint_loader(None, autodiscover=True)

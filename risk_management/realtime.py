@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
 from custom_endpoint_overrides import (
@@ -28,11 +30,40 @@ from .configuration import CustomEndpointSettings, RealtimeConfig
 logger = logging.getLogger(__name__)
 
 
-def _configure_custom_endpoints(settings: CustomEndpointSettings | None) -> None:
+def _build_search_paths(config_root: Path | None) -> tuple[str, ...]:
+    """Return candidate custom endpoint paths prioritising the config directory."""
+
+    candidates: list[str] = []
+    if config_root is not None:
+        candidate = (config_root / "custom_endpoints.json").resolve()
+        candidates.append(str(candidate))
+    default_path = os.path.join("configs", "custom_endpoints.json")
+    if default_path not in candidates:
+        candidates.append(default_path)
+    # Remove duplicates while preserving order
+    ordered = list(dict.fromkeys(candidates))
+    return tuple(ordered)
+
+
+def _configure_custom_endpoints(
+    settings: CustomEndpointSettings | None, config_root: Path | None
+) -> None:
     """Initialise custom endpoint overrides before creating ccxt clients."""
 
-    if settings is None:
-        configure_custom_endpoint_loader(None, autodiscover=True)
+    search_paths = _build_search_paths(config_root)
+
+    if settings is None or (not settings.path and settings.autodiscover):
+        preloaded = None
+        try:
+            preloaded = load_custom_endpoint_config(search_paths=search_paths)
+        except CustomEndpointConfigError as exc:
+            logger.warning("Failed to load custom endpoint config via discovery: %s", exc)
+        configure_custom_endpoint_loader(None, autodiscover=True, preloaded=preloaded)
+        source = preloaded.source_path if preloaded else None
+        if source:
+            logger.info("Using custom endpoints from %s", source)
+        else:
+            logger.info("No custom endpoint overrides found; using exchange defaults")
         return
 
     path = settings.path
@@ -46,6 +77,8 @@ def _configure_custom_endpoints(settings: CustomEndpointSettings | None) -> None
             raise ValueError(f"Failed to load custom endpoint config '{path}': {exc}") from exc
 
     configure_custom_endpoint_loader(path, autodiscover=autodiscover, preloaded=preloaded)
+    if path:
+        logger.info("Using custom endpoints from %s", path)
 
 
 class RealtimeDataFetcher:
@@ -57,7 +90,7 @@ class RealtimeDataFetcher:
         account_clients: Sequence[AccountClientProtocol] | None = None,
     ) -> None:
         self.config = config
-        _configure_custom_endpoints(config.custom_endpoints)
+        _configure_custom_endpoints(config.custom_endpoints, config.config_root)
         if account_clients is None:
             clients: List[AccountClientProtocol] = []
             for account in config.accounts:

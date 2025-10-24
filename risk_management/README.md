@@ -48,6 +48,80 @@ The command connects to each configured account, aggregates the portfolio
 metrics, and continuously renders the dashboard.  Any fetch issues are surfaced
 inline under the affected account.
 
+### Example realtime configuration
+
+The sample file `risk_management/realtime_config.example.json` is ready to be
+copied and adjusted.  It expects API key entries named `binance_01`, `okx_01`,
+and `bybit_01` in the credentials file and demonstrates the venue-specific
+parameters required to fetch balances and positions:
+
+```json
+{
+  "api_keys_file": "../api-keys.json",
+  "custom_endpoints": {
+    "path": "../configs/custom_endpoints.json",
+    "autodiscover": false
+  },
+  "accounts": [
+    {
+      "name": "Binance Futures",
+      "exchange": "binanceusdm",
+      "api_key_id": "binance_01",
+      "settle_currency": "USDT"
+    },
+    {
+      "name": "OKX Futures",
+      "exchange": "okx",
+      "api_key_id": "okx_01",
+      "settle_currency": "USDT",
+      "params": {
+        "balance": {"type": "swap"},
+        "positions": {"type": "swap"}
+      }
+    },
+    {
+      "name": "Bybit USDT Perpetuals",
+      "exchange": "bybit",
+      "api_key_id": "bybit_01",
+      "settle_currency": "USDT",
+      "params": {
+        "balance": {"type": "swap"},
+        "positions": {"type": "swap"}
+      }
+    }
+  ],
+  "alert_thresholds": {
+    "wallet_exposure_pct": 0.65,
+    "position_wallet_exposure_pct": 0.25,
+    "max_drawdown_pct": 0.25,
+    "loss_threshold_pct": -0.08
+  },
+  "notification_channels": [
+    "email:risk-team@example.com",
+    "slack:#passivbot-risk-alerts"
+  ],
+  "auth": {
+    "secret_key": "replace-me-with-a-long-random-string",
+    "session_cookie_name": "risk_dashboard_session",
+    "users": {
+      "admin": "replace-with-bcrypt-hash"
+    }
+  }
+}
+```
+
+Replace the `api_key_id` values or append new blocks to match the entries in
+your API key store.  The loader accepts the same `api-keys.json` layout that
+Passivbot uses: direct top-level entries, a nested `users` object, and optional
+metadata such as `referrals`.  The optional `params.balance` and
+`params.positions` objects are forwarded to ccxt when invoking
+`fetch_balance()` and `fetch_positions()`, which is useful for exchanges (such
+as OKX and Bybit) that require the `type="swap"` hint to return futures data.
+Omitting the objects is fine for venues that default to USD-M perpetual
+endpoints.  Pass the realtime CLI a `--custom-endpoints` argument when you need
+to reuse the exact proxy file as your trading bot (for example,
+`--custom-endpoints ../configs/custom_endpoints.json`).
+
 ## Web dashboard
 
 Launch the FastAPI web server to obtain an authenticated dashboard with live
@@ -86,8 +160,10 @@ Providing a string value (for example
 `"custom_endpoints": "../configs/custom_endpoints.json"`) forces the loader
 to use that file, while the values `"none"`, `"off"`, or `"disable"` turn the
 feature off entirely.  Omitting the section keeps the default auto-discovery
-behaviour, which searches for `configs/custom_endpoints.json` relative to the
-current working directory.
+behaviour.  The loader first checks for `custom_endpoints.json` next to the
+realtime configuration file and then falls back to
+`configs/custom_endpoints.json` relative to your Passivbot checkout, matching
+the trading bot's lookup order.
 
 Alternatively, override the behaviour at launch time with
 `--custom-endpoints`.  For example, run the web server with

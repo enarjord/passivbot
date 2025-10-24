@@ -49,6 +49,7 @@ class RealtimeConfig:
     auth: AuthConfig | None = None
     account_messages: Dict[str, str] = field(default_factory=dict)
     custom_endpoints: CustomEndpointSettings | None = None
+    config_root: Path | None = None
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -204,16 +205,27 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     """Load a realtime configuration file."""
 
     config = _load_json(path)
+    config_root = path.parent.resolve()
     api_keys_file = config.get("api_keys_file")
-    api_keys: Mapping[str, Any] | None = None
+    api_keys: Dict[str, Mapping[str, Any]] | None = None
     if api_keys_file:
-        api_keys_path = (path.parent / api_keys_file).resolve()
+        api_keys_path = Path(str(api_keys_file)).expanduser()
+        if not api_keys_path.is_absolute():
+            api_keys_path = (path.parent / api_keys_path).resolve()
+        else:
+            api_keys_path = api_keys_path.resolve()
         api_keys_raw = _load_json(api_keys_path)
-        api_keys = {
-            key: value
-            for key, value in api_keys_raw.items()
-            if isinstance(value, Mapping) and key != "referrals"
-        }
+        flattened: Dict[str, Mapping[str, Any]] = {}
+        for key, value in api_keys_raw.items():
+            if key == "referrals" or not isinstance(value, Mapping):
+                continue
+            if key.lower() == "users":
+                for sub_key, sub_value in value.items():
+                    if isinstance(sub_value, Mapping):
+                        flattened[sub_key] = sub_value
+                continue
+            flattened[key] = value
+        api_keys = flattened
     accounts_raw = config.get("accounts")
     if not accounts_raw:
         raise ValueError("Realtime configuration must include at least one account entry.")
@@ -240,4 +252,5 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
         notification_channels=notification_channels,
         auth=auth,
         custom_endpoints=custom_endpoints,
+        config_root=config_root,
     )
