@@ -1,0 +1,45 @@
+{
+    "referrals": {
+        "bybit": "https://partner.bybit.com/b/passivbot",
+        "bitget": "https://partner.bitget.com/bg/Y8FU1W",
+        "okx": "https://www.okx.com/join/PASSIVBOT",
+        "binance": "https://accounts.binance.com/register?ref=TII4B07C",
+        "gateio": "https://www.gate.io/signup/AQCRUVTE",
+        "hyperliquid": "https://app.hyperliquid.xyz/join/PASSIVBOT",
+        "defx": "https://app.defx.com/join/4DKR14",
+        "kucoin": "https://www.kucoin.com/r/rf/CX8Q6DUF"
+    },
+    "binance_01" : {
+        "exchange": "binance",
+        "key": "3a85ae8a-8384-4d72-b363-8a5daf4a9bc6",
+        "secret": "8778e084f476aaf6379ec9e33ac9ca133e82231c31a1cebdba5fc56b80066f04"
+    },
+    "bybit_01" : {
+        "exchange": "bybit",
+        "key": "9f2d4d1c-5dcd-4a9c-b823-e4e9b4705ba0",
+        "secret": "7bb418d6a21177908d1a40de4fa288b7c2e47890edef1ebd453846f85531b0e1"
+    },
+    "bitget_01" : {
+        "exchange": "bitget",
+        "key": "key",
+        "secret": "secret",
+        "passphrase": "passphrase"
+    },
+    "okx_01" : {
+        "exchange": "okx",
+        "key": "key",
+        "secret": "secret",
+        "passphrase": "passphrase"
+    },
+    "hyperliquid_01" : {
+        "exchange": "hyperliquid",
+        "wallet_address": "wallet_address",
+        "private_key": "private_key",
+        "is_vault": false
+    },
+    "gateio_01" : {
+        "exchange": "gateio",
+        "key": "key",
+        "secret": "secret"
+    }
+}
