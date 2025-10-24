@@ -37,3 +37,14 @@ def test_apply_credentials_merges_and_sets_sensitive_fields() -> None:
     assert client.uid == "123"
     assert client.headers == {"Existing": "1", "X-First": "A", "X-Nested": "B"}
     assert client.options == {"existing": True, "defaultType": "swap"}
+
+
+def test_apply_credentials_formats_header_placeholders() -> None:
+    client = DummyClient()
+
+    client.headers["Authorization"] = "Bearer {apiKey}:{secret}"
+    credentials = {"apiKey": "alpha", "secret": "beta"}
+
+    _apply_credentials(client, credentials)
+
+    assert client.headers["Authorization"] == "Bearer alpha:beta"
