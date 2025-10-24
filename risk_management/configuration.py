@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping
+from typing import Any, Dict, Iterable, List, Mapping, Set
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass()
@@ -121,6 +125,43 @@ def _merge_credentials(primary: Mapping[str, Any], secondary: Mapping[str, Any])
     return merged
 
 
+def _iter_candidate_roots(config_root: Path | None) -> Iterable[Path]:
+    """Yield directories to inspect when auto-discovering shared files."""
+
+    module_root = Path(__file__).resolve().parent
+    repository_root = module_root.parent
+
+    bases = [config_root, Path.cwd(), module_root, repository_root]
+
+    seen: Set[Path] = set()
+    for base in bases:
+        if base is None:
+            continue
+        try:
+            resolved = base.resolve()
+        except FileNotFoundError:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        yield resolved
+        for parent in resolved.parents:
+            if parent in seen:
+                continue
+            seen.add(parent)
+            yield parent
+
+
+def _discover_api_keys_path(config_root: Path | None) -> Path | None:
+    """Return the first ``api-keys.json`` found relative to common roots."""
+
+    for root in _iter_candidate_roots(config_root):
+        candidate = root / "api-keys.json"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _parse_custom_endpoints(settings: Any) -> CustomEndpointSettings | None:
     """Return structured custom endpoint settings from ``settings``."""
 
@@ -208,12 +249,18 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     config_root = path.parent.resolve()
     api_keys_file = config.get("api_keys_file")
     api_keys: Dict[str, Mapping[str, Any]] | None = None
+    api_keys_path: Path | None = None
     if api_keys_file:
         api_keys_path = Path(str(api_keys_file)).expanduser()
         if not api_keys_path.is_absolute():
             api_keys_path = (path.parent / api_keys_path).resolve()
         else:
             api_keys_path = api_keys_path.resolve()
+    else:
+        api_keys_path = _discover_api_keys_path(config_root)
+        if api_keys_path:
+            logger.info("Using api keys from %s", api_keys_path)
+    if api_keys_path:
         api_keys_raw = _load_json(api_keys_path)
         flattened: Dict[str, Mapping[str, Any]] = {}
         for key, value in api_keys_raw.items():

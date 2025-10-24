@@ -192,3 +192,36 @@ def test_load_realtime_config_expands_user_path(tmp_path: Path, monkeypatch) -> 
     assert config.accounts[0].credentials["apiKey"] == "x"
     assert config.config_root == config_path.parent.resolve()
 
+
+def test_load_realtime_config_discovers_api_keys_file(tmp_path: Path) -> None:
+    repo_root = tmp_path / "passivbot"
+    repo_root.mkdir()
+
+    api_keys_path = repo_root / "api-keys.json"
+    api_keys_path.write_text(
+        json.dumps({"binance": {"exchange": "binance", "key": "auto", "secret": "secret"}}),
+        encoding="utf-8",
+    )
+
+    config_dir = repo_root / "risk_management"
+    config_dir.mkdir()
+    config_path = config_dir / "realtime.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "accounts": [
+                    {
+                        "name": "Binance",
+                        "exchange": "binance",
+                        "api_key_id": "binance",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_realtime_config(config_path)
+
+    assert config.accounts[0].credentials["apiKey"] == "auto"
+
