@@ -111,11 +111,22 @@ parameters required to fetch balances and positions:
 ```
 
 Replace the `api_key_id` values or append new blocks to match the entries in
+
+your API key store.  The loader accepts the same `api-keys.json` layout that
+Passivbot uses: direct top-level entries, a nested `users` object, and optional
+metadata such as `referrals`.  The optional `params.balance` and
+`params.positions` objects are forwarded to ccxt when invoking
+`fetch_balance()` and `fetch_positions()`, which is useful for exchanges (such
+as OKX and Bybit) that require the `type="swap"` hint to return futures data.
+Omitting the objects is fine for venues that default to USD-M perpetual
+endpoints.
+
 your API key store.  The optional `params.balance` and `params.positions`
 objects are forwarded to ccxt when invoking `fetch_balance()` and
 `fetch_positions()`, which is useful for exchanges (such as OKX and Bybit) that
 require the `type="swap"` hint to return futures data.  Omitting the objects is
 fine for venues that default to USD-M perpetual endpoints.
+
 
 ## Web dashboard
 

@@ -205,15 +205,25 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
 
     config = _load_json(path)
     api_keys_file = config.get("api_keys_file")
-    api_keys: Mapping[str, Any] | None = None
+    api_keys: Dict[str, Mapping[str, Any]] | None = None
     if api_keys_file:
-        api_keys_path = (path.parent / api_keys_file).resolve()
+        api_keys_path = Path(str(api_keys_file)).expanduser()
+        if not api_keys_path.is_absolute():
+            api_keys_path = (path.parent / api_keys_path).resolve()
+        else:
+            api_keys_path = api_keys_path.resolve()
         api_keys_raw = _load_json(api_keys_path)
-        api_keys = {
-            key: value
-            for key, value in api_keys_raw.items()
-            if isinstance(value, Mapping) and key != "referrals"
-        }
+        flattened: Dict[str, Mapping[str, Any]] = {}
+        for key, value in api_keys_raw.items():
+            if key == "referrals" or not isinstance(value, Mapping):
+                continue
+            if key.lower() == "users":
+                for sub_key, sub_value in value.items():
+                    if isinstance(sub_value, Mapping):
+                        flattened[sub_key] = sub_value
+                continue
+            flattened[key] = value
+        api_keys = flattened
     accounts_raw = config.get("accounts")
     if not accounts_raw:
         raise ValueError("Realtime configuration must include at least one account entry.")
