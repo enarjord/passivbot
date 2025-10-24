@@ -119,6 +119,9 @@ metadata such as `referrals`.  The optional `params.balance` and
 `fetch_balance()` and `fetch_positions()`, which is useful for exchanges (such
 as OKX and Bybit) that require the `type="swap"` hint to return futures data.
 Omitting the objects is fine for venues that default to USD-M perpetual
+endpoints.  Pass the realtime CLI a `--custom-endpoints` argument when you need
+to reuse the exact proxy file as your trading bot (for example,
+`--custom-endpoints ../configs/custom_endpoints.json`).
 endpoints.
 
 your API key store.  The optional `params.balance` and `params.positions`
@@ -126,6 +129,7 @@ objects are forwarded to ccxt when invoking `fetch_balance()` and
 `fetch_positions()`, which is useful for exchanges (such as OKX and Bybit) that
 require the `type="swap"` hint to return futures data.  Omitting the objects is
 fine for venues that default to USD-M perpetual endpoints.
+
 
 
 ## Web dashboard
@@ -166,8 +170,10 @@ Providing a string value (for example
 `"custom_endpoints": "../configs/custom_endpoints.json"`) forces the loader
 to use that file, while the values `"none"`, `"off"`, or `"disable"` turn the
 feature off entirely.  Omitting the section keeps the default auto-discovery
-behaviour, which searches for `configs/custom_endpoints.json` relative to the
-current working directory.
+behaviour.  The loader first checks for `custom_endpoints.json` next to the
+realtime configuration file and then falls back to
+`configs/custom_endpoints.json` relative to your Passivbot checkout, matching
+the trading bot's lookup order.
 
 Alternatively, override the behaviour at launch time with
 `--custom-endpoints`.  For example, run the web server with

@@ -49,6 +49,7 @@ class RealtimeConfig:
     auth: AuthConfig | None = None
     account_messages: Dict[str, str] = field(default_factory=dict)
     custom_endpoints: CustomEndpointSettings | None = None
+    config_root: Path | None = None
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -204,6 +205,7 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     """Load a realtime configuration file."""
 
     config = _load_json(path)
+    config_root = path.parent.resolve()
     api_keys_file = config.get("api_keys_file")
     api_keys: Dict[str, Mapping[str, Any]] | None = None
     if api_keys_file:
@@ -250,4 +252,5 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
         notification_channels=notification_channels,
         auth=auth,
         custom_endpoints=custom_endpoints,
+        config_root=config_root,
     )

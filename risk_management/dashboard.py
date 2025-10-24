@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
-from .configuration import load_realtime_config
+from .configuration import CustomEndpointSettings, load_realtime_config
 from .realtime import RealtimeDataFetcher
 
 
@@ -330,6 +330,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=1,
         help="Number of times to render the dashboard when --interval is set. Use 0 to loop indefinitely.",
     )
+    parser.add_argument(
+        "--custom-endpoints",
+        help=(
+            "Override custom endpoint behaviour. Provide a JSON file path to reuse the same "
+            "proxy configuration as Passivbot, 'auto' to enable auto-discovery, or 'none' to "
+            "disable overrides."
+        ),
+    )
 
     args = parser.parse_args(list(argv) if argv is not None else None)
 
@@ -353,6 +361,25 @@ async def _run_cli(args: argparse.Namespace) -> int:
     realtime_fetcher: RealtimeDataFetcher | None = None
     if args.realtime_config:
         realtime_config = load_realtime_config(Path(args.realtime_config))
+        override = args.custom_endpoints
+        if override is not None:
+            override_normalized = override.strip()
+            if not override_normalized:
+                realtime_config.custom_endpoints = None
+            else:
+                lowered = override_normalized.lower()
+                if lowered in {"none", "off", "disable"}:
+                    realtime_config.custom_endpoints = CustomEndpointSettings(
+                        path=None, autodiscover=False
+                    )
+                elif lowered in {"auto", "autodiscover", "default"}:
+                    realtime_config.custom_endpoints = CustomEndpointSettings(
+                        path=None, autodiscover=True
+                    )
+                else:
+                    realtime_config.custom_endpoints = CustomEndpointSettings(
+                        path=override_normalized, autodiscover=False
+                    )
         realtime_fetcher = RealtimeDataFetcher(realtime_config)
         logger.info("Starting realtime dashboard using %s", args.realtime_config)
 
