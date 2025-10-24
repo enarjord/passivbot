@@ -20,6 +20,16 @@
         "balance": {"type": "swap"},
         "positions": {"type": "swap"}
       }
+    },
+    {
+      "name": "Bybit USDT Perpetuals",
+      "exchange": "bybit",
+      "api_key_id": "bybit_01",
+      "settle_currency": "USDT",
+      "params": {
+        "balance": {"type": "swap"},
+        "positions": {"type": "swap"}
+      }
     }
   ],
   "alert_thresholds": {
