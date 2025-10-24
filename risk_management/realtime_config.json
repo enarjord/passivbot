@@ -1,9 +1,13 @@
 {
   "api_keys_file": "../api-keys.json",
+  "custom_endpoints": {
+    "path": "../configs/custom_endpoints.json",
+    "autodiscover": false
+  },
   "accounts": [
     {
       "name": "Binance Futures",
-      "exchange": "binanceusdm",
+      "exchange": "binance",
       "api_key_id": "binance_01",
       "settle_currency": "USDT"
     },
@@ -11,6 +15,16 @@
       "name": "OKX Futures",
       "exchange": "okx",
       "api_key_id": "okx_01",
+      "settle_currency": "USDT",
+      "params": {
+        "balance": {"type": "swap"},
+        "positions": {"type": "swap"}
+      }
+    },
+    {
+      "name": "Bybit USDT Perpetuals",
+      "exchange": "bybit",
+      "api_key_id": "bybit_01",
       "settle_currency": "USDT",
       "params": {
         "balance": {"type": "swap"},
@@ -25,14 +39,14 @@
     "loss_threshold_pct": -0.08
   },
   "notification_channels": [
-    "email:risk-team@example.com",
+    "email:admin@plezna.com",
     "slack:#passivbot-risk-alerts"
   ],
   "auth": {
-    "secret_key": "replace-me-with-a-long-random-string",
+    "secret_key": "jhgjhguyg^^554$$67CFCGFDGFd",
     "session_cookie_name": "risk_dashboard_session",
     "users": {
-      "admin": "replace-with-bcrypt-hash"
+      "admin": "$2b$12$0ZCLkFp6iuhlEFshgPCBz.0dXxmRCV4vcjxHfRh0qKtzc79Pj9c5W"
     }
   }
 }
