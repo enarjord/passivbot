@@ -61,6 +61,58 @@ def _set_exchange_field(client: Any, key: str, value: Any, aliases: Sequence[str
                 logger.debug("Failed to persist credential %s in exchange config", attr)
 
 
+def _format_header_placeholders(
+    headers: MutableMapping[str, Any], values: Mapping[str, Any]
+) -> Mapping[str, Any] | None:
+    """Expand placeholder tokens in ``headers`` using ``values`` as the source."""
+
+    class _DefaultDict(dict):
+        def __missing__(self, key: str) -> str:
+            return "{" + key + "}"
+
+    alias_map = {
+        "apiKey": ("api_key", "key"),
+        "secret": ("apiSecret", "secret_key", "secretKey"),
+        "password": ("passphrase", "pass_phrase"),
+        "uid": ("user_id",),
+        "walletAddress": ("wallet_address",),
+        "privateKey": ("private_key",),
+    }
+
+    substitutions: Dict[str, str] = {}
+
+    for key, value in values.items():
+        if isinstance(value, (str, int, float, bool)):
+            substitutions[key] = str(value)
+
+    for canonical, aliases in alias_map.items():
+        canonical_value = substitutions.get(canonical)
+        if canonical_value is None:
+            continue
+        for alias in aliases:
+            substitutions.setdefault(alias, canonical_value)
+
+    formatter = _DefaultDict(substitutions)
+
+    updated = False
+    for header_key, header_value in list(headers.items()):
+        if isinstance(header_value, str) and "{" in header_value and "}" in header_value:
+            try:
+                formatted = header_value.format_map(formatter)
+            except Exception:  # pragma: no cover - defensive against malformed format strings
+                continue
+            if formatted != header_value:
+                headers[header_key] = formatted
+                updated = True
+
+    if updated:
+        # ``headers`` may be an exchange-specific structure; normalise to ``dict`` to
+        # avoid subtle mutation bugs when ccxt clones the mapping.
+        return dict(headers)
+
+    return None
+
+
 def _apply_credentials(client: Any, credentials: Mapping[str, Any]) -> None:
     """Populate authentication fields on a ccxt client."""
 
@@ -101,6 +153,12 @@ def _apply_credentials(client: Any, credentials: Mapping[str, Any]) -> None:
                 setattr(client, key, value)
             except Exception:
                 logger.debug("Ignored unsupported credential field %s", key)
+
+    headers = getattr(client, "headers", None)
+    if isinstance(headers, MutableMapping):
+        formatted = _format_header_placeholders(headers, credentials)
+        if formatted is not None:
+            client.headers = formatted
 
 
 def _disable_fetch_currencies(client: Any) -> None:
