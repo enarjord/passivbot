@@ -2203,9 +2203,7 @@ class Passivbot:
                         last_prices[symbol],
                     )
                     # Accumulate closes immediately
-                    ideal_orders[symbol] += [
-                        (x[0], x[1], snake_of(x[2]), x[2]) for x in closes
-                    ]
+                    ideal_orders[symbol] += [(x[0], x[1], snake_of(x[2]), x[2]) for x in closes]
                     # Accumulate entries for gating
                     if symbol not in symbol_idx_map_entries[pside]:
                         symbol_idx_map_entries[pside][idx_counters[pside]] = symbol
@@ -2218,7 +2216,7 @@ class Passivbot:
                         idx = idx_counters[pside]
                         symbol_idx_map_entries[pside][idx] = symbol
                         idx_counters[pside] += 1
-                    for (qty, price, order_type_id) in entries:
+                    for qty, price, order_type_id in entries:
                         entries_acc[pside].append(
                             {
                                 "idx": idx,
@@ -2328,7 +2326,7 @@ class Passivbot:
                     entries_acc[pside],
                 )
                 # Map back by idx
-                for (idx, qty, price, order_type_id) in gated:
+                for idx, qty, price, order_type_id in gated:
                     symbol = symbol_idx_map_entries[pside].get(idx)
                     if symbol is None:
                         continue
@@ -2449,188 +2447,102 @@ class Passivbot:
 
     async def calc_unstucking_close(self, allow_new_unstuck: bool = True) -> (float, float, str, int):
         """Optionally return an emergency close order for stuck positions."""
+        empty = (0.0, 0.0, "", pbr.get_order_id_type_from_string("empty"))
         if not allow_new_unstuck or len(self.pnls) == 0:
-            return "", (
-                0.0,
-                0.0,
-                "",
-                pbr.get_order_id_type_from_string("empty"),
-            )  # needs trade history to calc unstucking order
-        stuck_positions = []
+            return "", empty
+
         pnls_cumsum = np.array([x["pnl"] for x in self.pnls]).cumsum()
-        pnls_cumsum_max, pnls_cumsum_last = (pnls_cumsum.max(), pnls_cumsum[-1])
+        pnls_cumsum_max, pnls_cumsum_last = pnls_cumsum.max(), pnls_cumsum[-1]
+
         unstuck_allowances = {}
-        last_prices = await self.cm.get_last_prices(set(self.positions), max_age_ms=10_000)
         for pside in ["long", "short"]:
-            unstuck_allowances[pside] = (
-                pbr.calc_auto_unstuck_allowance(
+            pct = self.bot_value(pside, "unstuck_loss_allowance_pct")
+            if pct > 0.0:
+                unstuck_allowances[pside] = pbr.calc_auto_unstuck_allowance(
                     self.balance,
-                    self.bot_value(pside, "unstuck_loss_allowance_pct")
-                    * self.bot_value(pside, "total_wallet_exposure_limit"),
+                    pct * self.bot_value(pside, "total_wallet_exposure_limit"),
                     pnls_cumsum_max,
                     pnls_cumsum_last,
                 )
-                if self.bot_value(pside, "unstuck_loss_allowance_pct") > 0.0
-                else 0.0
-            )
-            if unstuck_allowances[pside] <= 0.0:
+            else:
+                unstuck_allowances[pside] = 0.0
+
+        if unstuck_allowances["long"] <= 0.0 and unstuck_allowances["short"] <= 0.0:
+            return "", empty
+
+        last_prices = await self.cm.get_last_prices(set(self.positions), max_age_ms=10_000)
+
+        positions_payload = []
+        idx_map = {}
+        idx_counter = 0
+
+        for symbol in sorted(self.positions):
+            current_price = float(last_prices.get(symbol, 0.0))
+            if not math.isfinite(current_price) or current_price <= 0.0:
                 continue
-            for symbol in self.positions:
-                if self.has_position(pside, symbol):
-                    wallet_exposure = pbr.calc_wallet_exposure(
-                        self.c_mults[symbol],
-                        self.balance,
-                        self.positions[symbol][pside]["size"],
-                        self.positions[symbol][pside]["price"],
+
+            for pside in ["long", "short"]:
+                if unstuck_allowances.get(pside, 0.0) <= 0.0:
+                    continue
+                if not self.has_position(pside, symbol):
+                    continue
+
+                try:
+                    span_0 = self.bp(pside, "ema_span_0", symbol)
+                    span_1 = self.bp(pside, "ema_span_1", symbol)
+                    ema_lower, ema_upper = await self.cm.get_ema_bounds(
+                        symbol,
+                        span_0,
+                        span_1,
+                        max_age_ms=30_000,
                     )
-                    we_limit = self.bp(pside, "wallet_exposure_limit", symbol)
-                    unstuck_threshold = self.bp(pside, "unstuck_threshold", symbol)
-                    if unstuck_threshold < 0.0:
-                        continue
-                    if we_limit == 0.0 or wallet_exposure / we_limit > unstuck_threshold:
-                        # is stuck. Use CandlestickManager EMA bounds to calc target price
-                        try:
-                            span_0 = self.bp(pside, "ema_span_0", symbol)
-                            span_1 = self.bp(pside, "ema_span_1", symbol)
-                            lower, upper = await self.cm.get_ema_bounds(
-                                symbol,
-                                span_0,
-                                span_1,
-                                max_age_ms=30_000,
-                            )
-                            # Apply unstuck_ema_dist and rounding per side
-                            ema_dist = float(self.bp(pside, "unstuck_ema_dist", symbol))
-                            # For closes: long uses upper bound (round up), short uses lower bound (round down)
-                            if pside == "long":
-                                base = float(upper)
-                                ema_price = pbr.round_up(
-                                    base * (1.0 + ema_dist), self.price_steps[symbol]
-                                )
-                            else:
-                                base = float(lower)
-                                ema_price = pbr.round_dn(
-                                    base * (1.0 - ema_dist), self.price_steps[symbol]
-                                )
-                        except Exception as e:
-                            logging.info(
-                                f"debug: failed ema bounds for unstucking {symbol} {pside}: {e}; skipping unstuck check for this symbol"
-                            )
-                            # Skip unstuck evaluation for this symbol if EMA bounds are unavailable
-                            continue
-                        if (pside == "long" and last_prices[symbol] >= ema_price) or (
-                            pside == "short" and last_prices[symbol] <= ema_price
-                        ):
-                            # eligible for unstucking
-                            pprice_diff = pbr.calc_pprice_diff_int(
-                                self.pside_int_map[pside],
-                                self.positions[symbol][pside]["price"],
-                                (await self.cm.get_current_close(symbol, max_age_ms=10_000)),
-                            )
-                            stuck_positions.append((symbol, pside, pprice_diff, ema_price))
-        if not stuck_positions:
-            return "", (0.0, 0.0, "", pbr.get_order_id_type_from_string("empty"))
-        stuck_positions.sort(key=lambda x: x[2])
-        for symbol, pside, pprice_diff, ema_price in stuck_positions:
-            close_price = last_prices[symbol]
-            if pside == "long":
-                min_entry_qty = calc_min_entry_qty(
-                    close_price,
-                    self.c_mults[symbol],
-                    self.qty_steps[symbol],
-                    self.min_qtys[symbol],
-                    self.min_costs[symbol],
-                )
-                close_qty = -min(
-                    self.positions[symbol][pside]["size"],
-                    max(
-                        min_entry_qty,
-                        pbr.round_dn(
-                            pbr.cost_to_qty(
-                                self.balance
-                                * self.bp(pside, "wallet_exposure_limit", symbol)
-                                * self.bp(pside, "unstuck_close_pct", symbol),
-                                close_price,
-                                self.c_mults[symbol],
-                            ),
-                            self.qty_steps[symbol],
-                        ),
-                    ),
-                )
-                if close_qty != 0.0:
-                    pnl_if_closed = getattr(pbr, f"calc_pnl_{pside}")(
-                        self.positions[symbol][pside]["price"],
-                        close_price,
-                        close_qty,
-                        self.c_mults[symbol],
+                except Exception as e:
+                    logging.info(
+                        f"debug: failed ema bounds for unstucking {symbol} {pside}: {e}; skipping"
                     )
-                    pnl_if_closed_abs = abs(pnl_if_closed)
-                    if pnl_if_closed < 0.0 and pnl_if_closed_abs > unstuck_allowances[pside]:
-                        close_qty = -min(
-                            self.positions[symbol][pside]["size"],
-                            max(
-                                min_entry_qty,
-                                pbr.round_dn(
-                                    abs(close_qty) * (unstuck_allowances[pside] / pnl_if_closed_abs),
-                                    self.qty_steps[symbol],
-                                ),
-                            ),
-                        )
-                    return symbol, (
-                        close_qty,
-                        close_price,
-                        "close_unstuck_long",
-                        pbr.get_order_id_type_from_string("close_unstuck_long"),
-                    )
-            elif pside == "short":
-                min_entry_qty = calc_min_entry_qty(
-                    close_price,
-                    self.c_mults[symbol],
-                    self.qty_steps[symbol],
-                    self.min_qtys[symbol],
-                    self.min_costs[symbol],
-                )
-                close_qty = min(
-                    abs(self.positions[symbol][pside]["size"]),
-                    max(
-                        min_entry_qty,
-                        pbr.round_dn(
-                            pbr.cost_to_qty(
-                                self.balance
-                                * self.bp(pside, "wallet_exposure_limit", symbol)
-                                * self.bp(pside, "unstuck_close_pct", symbol),
-                                close_price,
-                                self.c_mults[symbol],
-                            ),
-                            self.qty_steps[symbol],
-                        ),
-                    ),
-                )
-                if close_qty != 0.0:
-                    pnl_if_closed = getattr(pbr, f"calc_pnl_{pside}")(
-                        self.positions[symbol][pside]["price"],
-                        close_price,
-                        close_qty,
-                        self.c_mults[symbol],
-                    )
-                    pnl_if_closed_abs = abs(pnl_if_closed)
-                    if pnl_if_closed < 0.0 and pnl_if_closed_abs > unstuck_allowances[pside]:
-                        close_qty = min(
-                            abs(self.positions[symbol][pside]["size"]),
-                            max(
-                                min_entry_qty,
-                                pbr.round_dn(
-                                    close_qty * (unstuck_allowances[pside] / pnl_if_closed_abs),
-                                    self.qty_steps[symbol],
-                                ),
-                            ),
-                        )
-                    return symbol, (
-                        close_qty,
-                        close_price,
-                        "close_unstuck_short",
-                        pbr.get_order_id_type_from_string("close_unstuck_short"),
-                    )
-        return "", (0.0, 0.0, "", pbr.get_order_id_type_from_string("empty"))
+                    continue
+
+                payload = {
+                    "idx": idx_counter,
+                    "side": pside,
+                    "position_size": float(self.positions[symbol][pside]["size"]),
+                    "position_price": float(self.positions[symbol][pside]["price"]),
+                    "wallet_exposure_limit": float(self.bp(pside, "wallet_exposure_limit", symbol)),
+                    "unstuck_threshold": float(self.bp(pside, "unstuck_threshold", symbol)),
+                    "unstuck_close_pct": float(self.bp(pside, "unstuck_close_pct", symbol)),
+                    "unstuck_ema_dist": float(self.bp(pside, "unstuck_ema_dist", symbol)),
+                    "ema_band_upper": float(ema_upper),
+                    "ema_band_lower": float(ema_lower),
+                    "current_price": current_price,
+                    "price_step": float(self.price_steps[symbol]),
+                    "qty_step": float(self.qty_steps[symbol]),
+                    "min_qty": float(self.min_qtys[symbol]),
+                    "min_cost": float(self.min_costs[symbol]),
+                    "c_mult": float(self.c_mults[symbol]),
+                }
+                positions_payload.append(payload)
+                idx_map[idx_counter] = (symbol, pside)
+                idx_counter += 1
+
+        if not positions_payload:
+            return "", empty
+
+        result = pbr.calc_unstucking_close_py(
+            float(self.balance),
+            float(unstuck_allowances.get("long", 0.0)),
+            float(unstuck_allowances.get("short", 0.0)),
+            positions_payload,
+        )
+        if not result:
+            return "", empty
+
+        idx, side_code, qty, price, order_type_id = result
+        symbol_pside = idx_map.get(idx)
+        if symbol_pside is None:
+            return "", empty
+
+        symbol, _ = symbol_pside
+        return symbol, (qty, price, snake_of(order_type_id), order_type_id)
 
     async def calc_orders_to_cancel_and_create(self):
         """Determine which existing orders to cancel and which new ones to place."""
@@ -3053,17 +2965,13 @@ class Passivbot:
                     msg = f"volume EMA: {completed}/{n} {pct}% elapsed={int(elapsed_s)}s eta~{eta_s}s"
                     log_level = getattr(self, "logging_level", 1)
                     if completed == n:
-                        threshold = getattr(
-                            self, "volume_refresh_info_threshold_seconds", 30.0
-                        )
+                        threshold = getattr(self, "volume_refresh_info_threshold_seconds", 30.0)
                         if threshold <= 0 or elapsed_s >= threshold:
                             logging.info(
                                 f"volume EMA refresh finished for {n} symbols in {int(elapsed_s)}s"
                             )
                         elif log_level >= 3:
-                            logging.debug(
-                                f"{msg} (below info threshold {int(threshold)}s)"
-                            )
+                            logging.debug(f"{msg} (below info threshold {int(threshold)}s)")
                     elif log_level >= 3:
                         logging.debug(msg)
                     last_log_ms = now_ms
