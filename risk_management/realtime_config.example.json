@@ -3,6 +3,7 @@
     "path": "../configs/custom_endpoints.json",
     "autodiscover": false
   },
+  "debug_api_payloads": false,
   "accounts": [
     {
       "name": "Binance Futures",
