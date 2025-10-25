@@ -100,6 +100,7 @@ def test_realtime_fetcher_reports_errors() -> None:
     assert "Problematic" in snapshot["account_messages"]
 
     view = build_presentable_snapshot(snapshot)
-    assert view["accounts"][0]["message"] is not None
+    assert view["accounts"] == []
+    assert view["hidden_accounts"][0]["name"] == "Problematic"
 
     asyncio.run(fetcher.close())
