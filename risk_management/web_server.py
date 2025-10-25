@@ -6,13 +6,27 @@ import argparse
 import copy
 import importlib
 import logging
-from typing import Optional
 from pathlib import Path
-
-import uvicorn
+from typing import Optional, TYPE_CHECKING
 
 from .configuration import CustomEndpointSettings, load_realtime_config
 from .letsencrypt import LetsEncryptError, ensure_certificate
+
+if TYPE_CHECKING:  # pragma: no cover - used only for type hints
+    import uvicorn
+
+
+def _import_uvicorn() -> "uvicorn":
+    """Import :mod:`uvicorn` with a helpful error message when missing."""
+
+    try:
+        import uvicorn  # type: ignore[import]
+    except ModuleNotFoundError as exc:  # pragma: no cover - depends on runtime environment
+        raise ModuleNotFoundError(
+            "The 'uvicorn' package is required to run the risk management web server. "
+            "Install passivbot with the 'dashboard' extras or add uvicorn to your environment."
+        ) from exc
+    return uvicorn
 
 
 def _determine_uvicorn_logging(config) -> tuple[Optional[dict], str]:
@@ -198,6 +212,8 @@ def main(argv: Optional[list[str]] = None) -> None:
             "were supplied. Either launch the server with --ssl-certfile/--ssl-keyfile or set "
             "'auth.https_only' to false in the realtime configuration for non-TLS development environments."
         )
+
+    uvicorn = _import_uvicorn()
 
     uvicorn.run(
         app,

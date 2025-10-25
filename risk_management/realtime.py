@@ -32,19 +32,15 @@ from .email_notifications import EmailAlertSender
 
 logger = logging.getLogger(__name__)
 
-def _exception_info(exc: BaseException) -> tuple[type[BaseException], BaseException, Optional[TracebackType]]:
-def _exception_info(exc: BaseException) -> tuple[type[BaseException], BaseException, TracebackType | None]:
-  
+def _exception_info(
+    exc: BaseException,
+) -> tuple[type[BaseException], BaseException, TracebackType | None]:
     """Return a ``logging`` compatible ``exc_info`` tuple for ``exc``."""
 
     return (type(exc), exc, exc.__traceback__)
 
 
-
-def _build_search_paths(config_root: Optional[Path]) -> tuple[str, ...]:
-
 def _build_search_paths(config_root: Path | None) -> tuple[str, ...]:
-
     """Return candidate custom endpoint paths prioritising the config directory."""
 
     candidates: list[str] = []

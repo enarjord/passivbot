@@ -592,13 +592,14 @@ def _parse_auth(auth_raw: Optional[Mapping[str, Any]]) -> Optional[AuthConfig]:
     )
 
 
-def load_realtime_config(path: Path) -> RealtimeConfig:
+def load_realtime_config(path: Path | str) -> RealtimeConfig:
     """Load a realtime configuration file.
 
     Parameters
     ----------
     path:
-        Absolute or relative path to the realtime configuration JSON file.
+        Absolute or relative path to the realtime configuration JSON file. ``path``
+        may be provided as either a :class:`pathlib.Path` instance or a string.
 
     Returns
     -------
@@ -619,6 +620,8 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     """
 
     _configure_default_logging(debug_level=1)
+
+    path = Path(path)
 
     config_payload = _load_json(path)
     config = _ensure_mapping(config_payload, description="Realtime configuration")
