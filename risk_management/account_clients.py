@@ -19,6 +19,11 @@ except ModuleNotFoundError:  # pragma: no cover - allow tests without ccxt
 
         pass
 
+from custom_endpoint_overrides import (
+    apply_rest_overrides_to_ccxt,
+    resolve_custom_endpoint_override,
+)
+
 try:  # pragma: no cover - passivbot is optional when running tests
     from passivbot.utils import load_ccxt_instance, normalize_exchange_name
 except (ModuleNotFoundError, ImportError):  # pragma: no cover - allow running without passivbot
@@ -213,6 +218,8 @@ def _instantiate_ccxt_client(exchange_id: str, credentials: Mapping[str, Any]) -
         client = load_ccxt_instance(normalized, enable_rate_limit=rate_limited)
         _apply_credentials(client, credentials)
         _disable_fetch_currencies(client)
+        override = resolve_custom_endpoint_override(normalized)
+        apply_rest_overrides_to_ccxt(client, override)
         return client
 
     if ccxt_async is None:
@@ -230,6 +237,8 @@ def _instantiate_ccxt_client(exchange_id: str, credentials: Mapping[str, Any]) -
     client = exchange_class(params)
     _apply_credentials(client, credentials)
     _disable_fetch_currencies(client)
+    override = resolve_custom_endpoint_override(normalized)
+    apply_rest_overrides_to_ccxt(client, override)
     return client
 
 
