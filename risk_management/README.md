@@ -139,8 +139,10 @@ Override the lookup with `"custom_endpoints": {"path": "../configs/custom_endpoi
 ### Debugging helpers
 
 Set `"debug_api_payloads": true` globally or per account to dump the raw JSON
-returned by ccxt.  Use this sparingly; responses include large payloads and
-secret values are not redacted automatically.
+returned by ccxt.  When enabled the loader now initialises the same logging
+format used by Passivbot's trading and backtesting commands so payloads respect
+`TRACE`/`DEBUG` verbosity and include timestamps.  Use this sparingly; responses
+include large payloads and secret values are not redacted automatically.
 
 ## 3. Run the terminal dashboard
 
