@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import List
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -40,6 +42,14 @@ def _base_payload() -> dict:
     }
 
 
+def test_load_realtime_config_requires_object_top_level(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps([]), encoding="utf-8")
+
+    with pytest.raises(TypeError, match="Realtime configuration must be a JSON object"):
+        load_realtime_config(config_path)
+
+
 def test_custom_endpoint_path_resolves_relative(tmp_path: Path) -> None:
     payload = _base_payload()
     payload["custom_endpoints"] = {"path": "../custom_endpoints.json", "autodiscover": False}
@@ -63,6 +73,18 @@ def test_custom_endpoint_path_keeps_absolute(tmp_path: Path) -> None:
     assert config.custom_endpoints is not None
     assert config.custom_endpoints.path == str(absolute_path.resolve())
     assert config.custom_endpoints.autodiscover is True
+
+
+def test_load_realtime_config_requires_mapping_api_keys(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["api_keys_file"] = "../api-keys.json"
+    config_path = _write_config(tmp_path, payload)
+
+    api_keys_path = config_path.parent.parent / "api-keys.json"
+    api_keys_path.write_text(json.dumps([{"key": "value"}]), encoding="utf-8")
+
+    with pytest.raises(TypeError, match="API key configuration must be a JSON object"):
+        load_realtime_config(config_path)
 
 
 def test_normalise_credentials_supports_aliases() -> None:
@@ -194,6 +216,16 @@ def test_load_realtime_config_expands_user_path(tmp_path: Path, monkeypatch) -> 
     config = load_realtime_config(config_path)
     assert config.accounts[0].credentials["apiKey"] == "x"
     assert config.config_root == config_path.parent.resolve()
+
+
+def test_load_realtime_config_propagates_account_messages(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["account_messages"] = {"Example": "Healthy", "Other": None}
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_realtime_config(config_path)
+
+    assert config.account_messages == {"Example": "Healthy"}
 
 
 def test_debug_logging_enabled_for_global_flag(tmp_path: Path, monkeypatch) -> None:

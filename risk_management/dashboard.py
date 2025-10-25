@@ -1,13 +1,15 @@
 """Terminal dashboard for monitoring trading portfolios.
 
 The module consumes a JSON snapshot describing one or more accounts along with
-alert thresholds.  It renders a textual dashboard summarising exposure, profit
+alert thresholds. It renders a textual dashboard summarising exposure, profit
 and loss, and risk metrics while also highlighting any triggered alerts.
 
 The command line interface can either read a static snapshot file or, when
 configured with realtime credentials, fetch fresh account information from the
 supported exchanges on a configurable interval.
-"""
+
+Additional helpers in this module support rendering and interacting with the
+CLI risk dashboard."""
 
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from .configuration import CustomEndpointSettings, load_realtime_config
 
@@ -34,16 +36,16 @@ class Position:
     notional: float
     entry_price: float
     mark_price: float
-    liquidation_price: float | None
-    wallet_exposure_pct: float | None
+    liquidation_price: Optional[float]
+    wallet_exposure_pct: Optional[float]
     unrealized_pnl: float
-    max_drawdown_pct: float | None
-    take_profit_price: float | None = None
-    stop_loss_price: float | None = None
-    size: float | None = None
-    signed_notional: float | None = None
-    volatility: Mapping[str, float] | None = None
-    funding_rates: Mapping[str, float] | None = None
+    max_drawdown_pct: Optional[float]
+    take_profit_price: Optional[float] = None
+    stop_loss_price: Optional[float] = None
+    size: Optional[float] = None
+    signed_notional: Optional[float] = None
+    volatility: Optional[Mapping[str, float]] = None
+    funding_rates: Optional[Mapping[str, float]] = None
 
     def exposure_relative_to(self, balance: float) -> float:
         if balance == 0:
@@ -63,15 +65,15 @@ class Order:
     symbol: str
     side: str
     order_type: str
-    price: float | None
-    amount: float | None
-    remaining: float | None
+    price: Optional[float]
+    amount: Optional[float]
+    remaining: Optional[float]
     status: str
     reduce_only: bool
-    stop_price: float | None = None
-    notional: float | None = None
-    order_id: str | None = None
-    created_at: str | None = None
+    stop_price: Optional[float] = None
+    notional: Optional[float] = None
+    order_id: Optional[str] = None
+    created_at: Optional[str] = None
 
 
 @dataclass
@@ -144,7 +146,7 @@ def _format_pct(value: float) -> str:
     return f"{value * 100:6.2f}%"
 
 
-def _format_price(value: float | None) -> str:
+def _format_price(value: Optional[float]) -> str:
     if value is None or math.isnan(value):
         return "-"
     return f"{value:,.2f}"
@@ -331,7 +333,7 @@ def render_dashboard(
     accounts: Sequence[Account],
     alerts: Sequence[str],
     notifications: Sequence[str],
-    account_messages: Mapping[str, str] | None = None,
+    account_messages: Optional[Mapping[str, str]] = None,
 ) -> str:
     lines: List[str] = []
     lines.append("=" * 80)
@@ -409,7 +411,7 @@ def build_dashboard(snapshot: Dict[str, Any]) -> str:
     return render_dashboard(generated_at, accounts, alerts, notifications, account_messages=account_messages)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Render the risk management dashboard")
     parser.add_argument(
         "--config",
@@ -465,7 +467,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 async def _run_cli(args: argparse.Namespace) -> int:
     from .realtime import RealtimeDataFetcher
 
-    realtime_fetcher: RealtimeDataFetcher | None = None
+    realtime_fetcher: Optional[RealtimeDataFetcher] = None
     if args.realtime_config:
         realtime_config = load_realtime_config(Path(args.realtime_config))
         override = args.custom_endpoints

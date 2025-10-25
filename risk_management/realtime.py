@@ -6,8 +6,9 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
+from types import TracebackType
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from custom_endpoint_overrides import (
     CustomEndpointConfigError,
@@ -32,7 +33,13 @@ from .email_notifications import EmailAlertSender
 logger = logging.getLogger(__name__)
 
 
-def _build_search_paths(config_root: Path | None) -> tuple[str, ...]:
+def _exception_info(exc: BaseException) -> tuple[type[BaseException], BaseException, Optional[TracebackType]]:
+    """Return a ``logging`` compatible ``exc_info`` tuple for ``exc``."""
+
+    return (type(exc), exc, exc.__traceback__)
+
+
+def _build_search_paths(config_root: Optional[Path]) -> tuple[str, ...]:
     """Return candidate custom endpoint paths prioritising the config directory."""
 
     candidates: list[str] = []
@@ -48,7 +55,7 @@ def _build_search_paths(config_root: Path | None) -> tuple[str, ...]:
 
 
 def _configure_custom_endpoints(
-    settings: CustomEndpointSettings | None, config_root: Path | None
+    settings: Optional[CustomEndpointSettings], config_root: Optional[Path]
 ) -> None:
     """Initialise custom endpoint overrides before creating ccxt clients."""
 
@@ -89,7 +96,7 @@ class RealtimeDataFetcher:
     def __init__(
         self,
         config: RealtimeConfig,
-        account_clients: Sequence[AccountClientProtocol] | None = None,
+        account_clients: Optional[Sequence[AccountClientProtocol]] = None,
     ) -> None:
         self.config = config
         _configure_custom_endpoints(config.custom_endpoints, config.config_root)
@@ -139,7 +146,7 @@ class RealtimeDataFetcher:
         tasks = [client.fetch() for client in self._account_clients]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         accounts_payload: List[Dict[str, Any]] = []
-        account_messages: Dict[str, str] = {}
+        account_messages: Dict[str, str] = dict(self.config.account_messages)
         for account_config, result in zip(self.config.accounts, results):
             if isinstance(result, Exception):
                 if isinstance(result, AuthenticationError):
@@ -165,8 +172,10 @@ class RealtimeDataFetcher:
 
                 else:
                     message = f"{account_config.name}: {result}"
-                    logger.exception(
-                        "Failed to fetch snapshot for %s", account_config.name, exc_info=result
+                    logger.error(
+                        "Failed to fetch snapshot for %s",
+                        account_config.name,
+                        exc_info=_exception_info(result),
                     )
                 account_messages[account_config.name] = message
                 accounts_payload.append({"name": account_config.name, "balance": 0.0, "positions": []})
@@ -192,7 +201,7 @@ class RealtimeDataFetcher:
         await asyncio.gather(*(client.close() for client in self._account_clients))
 
     async def execute_kill_switch(
-        self, account_name: str | None = None, symbol: str | None = None
+        self, account_name: Optional[str] = None, symbol: Optional[str] = None
     ) -> Dict[str, Any]:
         scope = account_name or "all accounts"
         symbol_desc = f" for {symbol}" if symbol else ""
@@ -208,7 +217,7 @@ class RealtimeDataFetcher:
             try:
                 results[client.config.name] = await client.kill_switch(symbol)
             except Exception as exc:  # pragma: no cover - defensive logging
-                logger.exception("Kill switch failed for %s", client.config.name, exc_info=exc)
+                logger.exception("Kill switch failed for %s", client.config.name, exc_info=True)
                 results[client.config.name] = {"error": str(exc)}
         logger.info("Kill switch completed for %s", scope)
         return results
@@ -246,7 +255,7 @@ def _extract_balance(balance: Mapping[str, Any], settle_currency: str) -> float:
     if not isinstance(balance, Mapping):
         return 0.0
 
-    def _to_float(value: Any) -> float | None:
+    def _to_float(value: Any) -> Optional[float]:
         if value is None:
             return None
         if isinstance(value, (int, float)):
@@ -268,7 +277,7 @@ def _extract_balance(balance: Mapping[str, Any], settle_currency: str) -> float:
         "totalBalance",
     )
 
-    def _find_nested_aggregate(value: Any) -> float | None:
+    def _find_nested_aggregate(value: Any) -> Optional[float]:
         if isinstance(value, Mapping):
             for key in aggregate_keys:
                 candidate = _to_float(value.get(key))
@@ -333,7 +342,7 @@ def _extract_balance(balance: Mapping[str, Any], settle_currency: str) -> float:
     return 0.0
 
 
-def _parse_position(position: Mapping[str, Any], balance: float) -> Dict[str, Any] | None:
+def _parse_position(position: Mapping[str, Any], balance: float) -> Optional[Dict[str, Any]]:
     size = _first_float(
         position.get("contracts"),
         position.get("size"),
@@ -420,7 +429,7 @@ def _parse_position(position: Mapping[str, Any], balance: float) -> Dict[str, An
     }
 
 
-def _parse_order(order: Mapping[str, Any]) -> Dict[str, Any] | None:
+def _parse_order(order: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(order, Mapping):
         return None
     symbol = order.get("symbol") or order.get("id")
@@ -479,7 +488,7 @@ def _parse_order(order: Mapping[str, Any]) -> Dict[str, Any] | None:
     }
 
 
-def _first_float(*values: Any) -> float | None:
+def _first_float(*values: Any) -> Optional[float]:
     for value in values:
         if value in (None, ""):
             continue

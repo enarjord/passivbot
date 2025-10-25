@@ -9,7 +9,7 @@ import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Set
+from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Set
 
 
 logger = logging.getLogger(__name__)
@@ -25,14 +25,14 @@ def _debug_to_logging_level(debug_level: int) -> int:
     return logging.DEBUG
 
 
-def _resolve_passivbot_logging_configurator() -> Callable[..., Any] | None:
+def _resolve_passivbot_logging_configurator() -> Optional[Callable[..., Any]]:
     """Return Passivbot's logging configurator when the package is available."""
 
     return _cached_passivbot_logging_configurator()
 
 
 @lru_cache(maxsize=1)
-def _cached_passivbot_logging_configurator() -> Callable[..., Any] | None:
+def _cached_passivbot_logging_configurator() -> Optional[Callable[..., Any]]:
     spec = importlib.util.find_spec("logging_setup")
     if spec is None:  # pragma: no cover - Passivbot package missing in unit tests
         return None
@@ -72,65 +72,17 @@ def _configure_default_logging(debug_level: int = 1) -> bool:
     _ensure_logger_level(risk_logger, desired_level)
 
     return not already_configured
-=======
-def _configure_default_logging(debug_level: int = 1) -> bool:
-
-def _configure_default_logging() -> bool:
-
-    """Configure Passivbot-style logging if no handlers are present."""
-
-    root_logger = logging.getLogger()
-    if root_logger.handlers:
-        return False
-    try:  # Import lazily so the risk tools can run independently in tests
-        from logging_setup import configure_logging  # type: ignore
-    except ModuleNotFoundError:  # pragma: no cover - fallback when package unavailable
-        configure_logging = None  # type: ignore[assignment]
-    if configure_logging is not None:
-      
-        configure_logging(debug=debug_level)
-    else:
-        logging.basicConfig(level=_debug_to_logging_level(debug_level))
-
-        configure_logging(debug=2)
-    else:
-        logging.basicConfig(level=logging.DEBUG)
-
-    return True
 
 
 def _ensure_debug_logging_enabled() -> None:
     """Raise logging verbosity when debug API payloads are requested."""
 
-
     _configure_default_logging(debug_level=2)
-
-    _configure_default_logging(debug_level=2)
-    _configure_default_logging()
-
-
-    root_logger = logging.getLogger()
-    if root_logger.level in {
-        logging.NOTSET,
-        logging.WARNING,
-        logging.ERROR,
-        logging.CRITICAL,
-    } or root_logger.level > logging.DEBUG:
-        root_logger.setLevel(logging.DEBUG)
-    for handler in root_logger.handlers:
-        if handler.level in {logging.NOTSET} or handler.level > logging.DEBUG:
-            handler.setLevel(logging.DEBUG)
-
 
     root_logger = logging.getLogger()
     risk_logger = logging.getLogger("risk_management")
     _ensure_logger_level(root_logger, logging.DEBUG)
     _ensure_logger_level(risk_logger, logging.DEBUG)
-    if risk_logger.level in {logging.NOTSET} or risk_logger.level > logging.DEBUG:
-        risk_logger.setLevel(logging.DEBUG)
-    for handler in risk_logger.handlers:
-        if handler.level in {logging.NOTSET} or handler.level > logging.DEBUG:
-            handler.setLevel(logging.DEBUG)
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -157,7 +109,7 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
 class CustomEndpointSettings:
     """Settings controlling how custom endpoint overrides are loaded."""
 
-    path: str | None = None
+    path: Optional[str] = None
     autodiscover: bool = True
 
 
@@ -168,9 +120,9 @@ class AccountConfig:
     name: str
     exchange: str
     settle_currency: str = "USDT"
-    api_key_id: str | None = None
+    api_key_id: Optional[str] = None
     credentials: Dict[str, Any] = field(default_factory=dict)
-    symbols: List[str] | None = None
+    symbols: Optional[List[str]] = None
     params: Dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
     debug_api_payloads: bool = False
@@ -192,11 +144,11 @@ class EmailSettings:
 
     host: str
     port: int = 587
-    username: str | None = None
-    password: str | None = None
+    username: Optional[str] = None
+    password: Optional[str] = None
     use_tls: bool = True
     use_ssl: bool = False
-    sender: str | None = None
+    sender: Optional[str] = None
 
 
 @dataclass()
@@ -205,8 +157,8 @@ class GrafanaDashboardConfig:
 
     title: str
     url: str
-    description: str | None = None
-    height: int | None = None
+    description: Optional[str] = None
+    height: Optional[int] = None
 
 
 @dataclass()
@@ -216,7 +168,7 @@ class GrafanaConfig:
     dashboards: List[GrafanaDashboardConfig] = field(default_factory=list)
     default_height: int = 600
     theme: str = "dark"
-    base_url: str | None = None
+    base_url: Optional[str] = None
 
 
 @dataclass()
@@ -226,21 +178,46 @@ class RealtimeConfig:
     accounts: List[AccountConfig]
     alert_thresholds: Dict[str, float] = field(default_factory=dict)
     notification_channels: List[str] = field(default_factory=list)
-    auth: AuthConfig | None = None
+    auth: Optional[AuthConfig] = None
     account_messages: Dict[str, str] = field(default_factory=dict)
-    custom_endpoints: CustomEndpointSettings | None = None
-    email: EmailSettings | None = None
-    config_root: Path | None = None
+    custom_endpoints: Optional[CustomEndpointSettings] = None
+    email: Optional[EmailSettings] = None
+    config_root: Optional[Path] = None
     debug_api_payloads: bool = False
-    reports_dir: Path | None = None
-    grafana: GrafanaConfig | None = None
+    reports_dir: Optional[Path] = None
+    grafana: Optional[GrafanaConfig] = None
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
+    """Return parsed JSON payload from ``path`` with helpful error messages."""
+
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise FileNotFoundError(f"Configuration file not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in configuration file {path}: {exc}") from exc
+
+
+def _ensure_mapping(payload: Any, *, description: str) -> MutableMapping[str, Any]:
+    """Return ``payload`` when it is a mapping, otherwise raise ``TypeError``."""
+
+    if isinstance(payload, MutableMapping):
+        return payload
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    raise TypeError(f"{description} must be a JSON object, not {type(payload).__name__}.")
+
+
+def _resolve_path_relative_to(base: Path, candidate: Any) -> Path:
+    """Return an absolute path for ``candidate`` relative to ``base`` when required."""
+
+    path = Path(str(candidate)).expanduser()
+    if not path.is_absolute():
+        path = (base / path).resolve()
+    else:
+        path = path.resolve()
+    return path
 
 
 def _normalise_credentials(data: Mapping[str, Any]) -> Dict[str, Any]:
@@ -305,7 +282,7 @@ def _merge_credentials(primary: Mapping[str, Any], secondary: Mapping[str, Any])
     return merged
 
 
-def _iter_candidate_roots(config_root: Path | None) -> Iterable[Path]:
+def _iter_candidate_roots(config_root: Optional[Path]) -> Iterable[Path]:
     """Yield directories to inspect when auto-discovering shared files."""
 
     module_root = Path(__file__).resolve().parent
@@ -332,7 +309,7 @@ def _iter_candidate_roots(config_root: Path | None) -> Iterable[Path]:
             yield parent
 
 
-def _discover_api_keys_path(config_root: Path | None) -> Path | None:
+def _discover_api_keys_path(config_root: Optional[Path]) -> Optional[Path]:
     """Return the first ``api-keys.json`` found relative to common roots."""
 
     for root in _iter_candidate_roots(config_root):
@@ -342,7 +319,7 @@ def _discover_api_keys_path(config_root: Path | None) -> Path | None:
     return None
 
 
-def _parse_custom_endpoints(settings: Any) -> CustomEndpointSettings | None:
+def _parse_custom_endpoints(settings: Any) -> Optional[CustomEndpointSettings]:
     """Return structured custom endpoint settings from ``settings``."""
 
     if settings is None:
@@ -361,7 +338,7 @@ def _parse_custom_endpoints(settings: Any) -> CustomEndpointSettings | None:
     return CustomEndpointSettings(path=value, autodiscover=False)
 
 
-def _parse_email_settings(settings: Any) -> EmailSettings | None:
+def _parse_email_settings(settings: Any) -> Optional[EmailSettings]:
     """Return SMTP settings when provided in the realtime configuration."""
 
     if settings is None:
@@ -397,7 +374,7 @@ def _parse_email_settings(settings: Any) -> EmailSettings | None:
     )
 
 
-def _parse_grafana_config(settings: Any) -> GrafanaConfig | None:
+def _parse_grafana_config(settings: Any) -> Optional[GrafanaConfig]:
     """Return Grafana embedding settings from ``settings``."""
 
     if settings is None:
@@ -424,7 +401,7 @@ def _parse_grafana_config(settings: Any) -> GrafanaConfig | None:
         description_raw = entry.get("description")
         height_raw = entry.get("height")
 
-        height: int | None = None
+        height: Optional[int] = None
         if height_raw not in (None, ""):
             try:
                 height = int(height_raw)
@@ -472,12 +449,14 @@ def _parse_grafana_config(settings: Any) -> GrafanaConfig | None:
 
 def _parse_accounts(
     accounts_raw: Iterable[Mapping[str, Any]],
-    api_keys: Mapping[str, Mapping[str, Any]] | None,
+    api_keys: Optional[Mapping[str, Mapping[str, Any]]],
     debug_api_payloads_default: bool = False,
 ) -> List[AccountConfig]:
     accounts: List[AccountConfig] = []
     debug_requested = False
     for raw in accounts_raw:
+        if not isinstance(raw, Mapping):
+            raise TypeError("Account entries must be objects with account configuration fields.")
         if not raw.get("enabled", True):
             continue
         api_key_id = raw.get("api_key_id")
@@ -525,7 +504,7 @@ def _parse_accounts(
     return accounts
 
 
-def _parse_auth(auth_raw: Mapping[str, Any] | None) -> AuthConfig | None:
+def _parse_auth(auth_raw: Optional[Mapping[str, Any]]) -> Optional[AuthConfig]:
     if not auth_raw:
         return None
     secret_key = auth_raw.get("secret_key")
@@ -535,9 +514,21 @@ def _parse_auth(auth_raw: Mapping[str, Any] | None) -> AuthConfig | None:
     if not users_raw:
         raise ValueError("Authentication configuration requires at least one user entry.")
     if isinstance(users_raw, Mapping):
-        users = dict(users_raw)
+        users = {str(username): str(password) for username, password in users_raw.items()}
     else:
-        users = {str(entry["username"]): str(entry["password_hash"]) for entry in users_raw}
+        users = {}
+        for entry in users_raw:
+            if not isinstance(entry, Mapping):
+                raise TypeError(
+                    "Authentication 'users' entries must be objects with 'username' and 'password_hash'."
+                )
+            username = entry.get("username")
+            password_hash = entry.get("password_hash")
+            if not username or not password_hash:
+                raise ValueError(
+                    "Authentication 'users' entries must include both 'username' and 'password_hash'."
+                )
+            users[str(username)] = str(password_hash)
     session_cookie = str(auth_raw.get("session_cookie_name", "risk_dashboard_session"))
     https_only = _coerce_bool(auth_raw.get("https_only"), True)
     return AuthConfig(
@@ -549,27 +540,48 @@ def _parse_auth(auth_raw: Mapping[str, Any] | None) -> AuthConfig | None:
 
 
 def load_realtime_config(path: Path) -> RealtimeConfig:
-    """Load a realtime configuration file."""
+    """Load a realtime configuration file.
+
+    Parameters
+    ----------
+    path:
+        Absolute or relative path to the realtime configuration JSON file.
+
+    Returns
+    -------
+    RealtimeConfig
+        Structured configuration dataclass consumed by the realtime dashboard
+        and supporting utilities.
+
+    Raises
+    ------
+    FileNotFoundError
+        Raised when the configuration file or any referenced api key files
+        cannot be located.
+    ValueError
+        Raised when the configuration payload is incomplete or invalid.
+    TypeError
+        Raised when sections of the configuration are provided in unexpected
+        formats.
+    """
 
     _configure_default_logging(debug_level=1)
 
-    config = _load_json(path)
+    config_payload = _load_json(path)
+    config = _ensure_mapping(config_payload, description="Realtime configuration")
     config_root = path.parent.resolve()
     api_keys_file = config.get("api_keys_file")
-    api_keys: Dict[str, Mapping[str, Any]] | None = None
-    api_keys_path: Path | None = None
+    api_keys: Optional[Dict[str, Mapping[str, Any]]] = None
+    api_keys_path: Optional[Path] = None
     if api_keys_file:
-        api_keys_path = Path(str(api_keys_file)).expanduser()
-        if not api_keys_path.is_absolute():
-            api_keys_path = (path.parent / api_keys_path).resolve()
-        else:
-            api_keys_path = api_keys_path.resolve()
+        api_keys_path = _resolve_path_relative_to(path.parent, api_keys_file)
     else:
         api_keys_path = _discover_api_keys_path(config_root)
         if api_keys_path:
             logger.info("Using api keys from %s", api_keys_path)
     if api_keys_path:
-        api_keys_raw = _load_json(api_keys_path)
+        api_keys_payload = _load_json(api_keys_path)
+        api_keys_raw = _ensure_mapping(api_keys_payload, description="API key configuration")
         flattened: Dict[str, Mapping[str, Any]] = {}
         for key, value in api_keys_raw.items():
             if key == "referrals" or not isinstance(value, Mapping):
@@ -584,6 +596,10 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     accounts_raw = config.get("accounts")
     if not accounts_raw:
         raise ValueError("Realtime configuration must include at least one account entry.")
+    if isinstance(accounts_raw, Mapping) or isinstance(accounts_raw, (str, bytes)):
+        raise TypeError(
+            "Realtime configuration 'accounts' must be an iterable of account definition objects."
+        )
     debug_api_payloads_default = _coerce_bool(config.get("debug_api_payloads"), False)
     if debug_api_payloads_default:
         _ensure_debug_logging_enabled()
@@ -596,25 +612,28 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     email_settings = _parse_email_settings(config.get("email"))
     grafana_settings = _parse_grafana_config(config.get("grafana"))
     reports_dir_value = config.get("reports_dir")
-    reports_dir: Path | None = None
+    reports_dir: Optional[Path] = None
     if reports_dir_value:
-        candidate = Path(str(reports_dir_value)).expanduser()
-        if not candidate.is_absolute():
-            candidate = (path.parent / candidate).resolve()
-        else:
-            candidate = candidate.resolve()
-        reports_dir = candidate
+        reports_dir = _resolve_path_relative_to(path.parent, reports_dir_value)
 
     if custom_endpoints and custom_endpoints.path:
-        resolved_path = Path(custom_endpoints.path).expanduser()
-        if not resolved_path.is_absolute():
-            resolved_path = (path.parent / resolved_path).resolve()
-        else:
-            resolved_path = resolved_path.resolve()
+        resolved_path = _resolve_path_relative_to(path.parent, custom_endpoints.path)
         custom_endpoints = CustomEndpointSettings(
             path=str(resolved_path),
             autodiscover=custom_endpoints.autodiscover,
         )
+
+    account_messages_payload = config.get("account_messages", {})
+    account_messages: Dict[str, str] = {}
+    if account_messages_payload:
+        messages_mapping = _ensure_mapping(
+            account_messages_payload,
+            description="Realtime configuration 'account_messages'",
+        )
+        for name, message in messages_mapping.items():
+            if message is None:
+                continue
+            account_messages[str(name)] = str(message)
 
     return RealtimeConfig(
         accounts=accounts,
@@ -627,4 +646,5 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
         debug_api_payloads=debug_api_payloads_default,
         reports_dir=reports_dir,
         grafana=grafana_settings,
+        account_messages=account_messages,
     )

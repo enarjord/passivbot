@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Optional
 
 
 
@@ -59,7 +59,7 @@ class ReportManager:
 
         return await asyncio.to_thread(self._list_reports_sync, account_name)
 
-    async def get_report_path(self, account_name: str, report_id: str) -> Path | None:
+    async def get_report_path(self, account_name: str, report_id: str) -> Optional[Path]:
         """Return the path to a stored report, if it exists."""
 
         return await asyncio.to_thread(self._get_report_path_sync, account_name, report_id)
@@ -76,7 +76,7 @@ class ReportManager:
             )
 
         generated_at = snapshot.get("generated_at")
-        generated_at_dt: datetime | None = None
+        generated_at_dt: Optional[datetime] = None
         if isinstance(generated_at, str):
             try:
                 generated_at_dt = datetime.fromisoformat(generated_at)
@@ -137,7 +137,7 @@ class ReportManager:
         reports.sort(key=lambda item: item.created_at, reverse=True)
         return reports
 
-    def _get_report_path_sync(self, account_name: str, report_id: str) -> Path | None:
+    def _get_report_path_sync(self, account_name: str, report_id: str) -> Optional[Path]:
         account_dir = self._account_directory(account_name)
         if not account_dir.exists():
             return None
@@ -152,7 +152,7 @@ class ReportManager:
     @staticmethod
     def _extract_account(
         accounts: Any, account_name: str
-    ) -> Mapping[str, Any] | None:
+    ) -> Optional[Mapping[str, Any]]:
         if not isinstance(accounts, Iterable):
             return None
         for entry in accounts:
@@ -161,7 +161,7 @@ class ReportManager:
         return None
 
     @staticmethod
-    def _parse_report_timestamp(report_id: str) -> datetime | None:
+    def _parse_report_timestamp(report_id: str) -> Optional[datetime]:
         for fmt in ("%Y%m%dT%H%M%S%fZ", "%Y%m%dT%H%M%SZ"):
             try:
                 return datetime.strptime(report_id, fmt).replace(tzinfo=timezone.utc)
@@ -175,8 +175,8 @@ class ReportManager:
         self,
         account_name: str,
         account: Mapping[str, Any],
-        portfolio: Mapping[str, Any] | None,
-        alerts: Iterable[str] | None,
+        portfolio: Optional[Mapping[str, Any]],
+        alerts: Optional[Iterable[str]],
     ) -> list[list[str]]:
         balance = account.get("balance", 0.0)
         gross_notional = account.get("gross_exposure_notional", 0.0)
