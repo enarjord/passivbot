@@ -72,6 +72,7 @@ def _configure_default_logging(debug_level: int = 1) -> bool:
     _ensure_logger_level(risk_logger, desired_level)
 
     return not already_configured
+<<<<<<< HEAD
 
 def _configure_default_logging(debug_level: int = 1) -> bool:
 
@@ -97,40 +98,19 @@ def _configure_default_logging() -> bool:
         logging.basicConfig(level=logging.DEBUG)
 
     return True
+=======
+>>>>>>> 2153c64b521b8566e5c169c78cb0e6098a8ad30c
 
 
 def _ensure_debug_logging_enabled() -> None:
     """Raise logging verbosity when debug API payloads are requested."""
 
-
     _configure_default_logging(debug_level=2)
-
-    _configure_default_logging(debug_level=2)
-    _configure_default_logging()
-
-
-    root_logger = logging.getLogger()
-    if root_logger.level in {
-        logging.NOTSET,
-        logging.WARNING,
-        logging.ERROR,
-        logging.CRITICAL,
-    } or root_logger.level > logging.DEBUG:
-        root_logger.setLevel(logging.DEBUG)
-    for handler in root_logger.handlers:
-        if handler.level in {logging.NOTSET} or handler.level > logging.DEBUG:
-            handler.setLevel(logging.DEBUG)
-
 
     root_logger = logging.getLogger()
     risk_logger = logging.getLogger("risk_management")
     _ensure_logger_level(root_logger, logging.DEBUG)
     _ensure_logger_level(risk_logger, logging.DEBUG)
-    if risk_logger.level in {logging.NOTSET} or risk_logger.level > logging.DEBUG:
-        risk_logger.setLevel(logging.DEBUG)
-    for handler in risk_logger.handlers:
-        if handler.level in {logging.NOTSET} or handler.level > logging.DEBUG:
-            handler.setLevel(logging.DEBUG)
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -237,10 +217,14 @@ class RealtimeConfig:
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
+    """Return parsed JSON payload from ``path`` with helpful error messages."""
+
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise FileNotFoundError(f"Configuration file not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in configuration file {path}: {exc}") from exc
 
 
 def _normalise_credentials(data: Mapping[str, Any]) -> Dict[str, Any]:
@@ -478,6 +462,8 @@ def _parse_accounts(
     accounts: List[AccountConfig] = []
     debug_requested = False
     for raw in accounts_raw:
+        if not isinstance(raw, Mapping):
+            raise TypeError("Account entries must be objects with account configuration fields.")
         if not raw.get("enabled", True):
             continue
         api_key_id = raw.get("api_key_id")
@@ -535,9 +521,21 @@ def _parse_auth(auth_raw: Mapping[str, Any] | None) -> AuthConfig | None:
     if not users_raw:
         raise ValueError("Authentication configuration requires at least one user entry.")
     if isinstance(users_raw, Mapping):
-        users = dict(users_raw)
+        users = {str(username): str(password) for username, password in users_raw.items()}
     else:
-        users = {str(entry["username"]): str(entry["password_hash"]) for entry in users_raw}
+        users = {}
+        for entry in users_raw:
+            if not isinstance(entry, Mapping):
+                raise TypeError(
+                    "Authentication 'users' entries must be objects with 'username' and 'password_hash'."
+                )
+            username = entry.get("username")
+            password_hash = entry.get("password_hash")
+            if not username or not password_hash:
+                raise ValueError(
+                    "Authentication 'users' entries must include both 'username' and 'password_hash'."
+                )
+            users[str(username)] = str(password_hash)
     session_cookie = str(auth_raw.get("session_cookie_name", "risk_dashboard_session"))
     https_only = _coerce_bool(auth_raw.get("https_only"), True)
     return AuthConfig(
@@ -549,7 +547,30 @@ def _parse_auth(auth_raw: Mapping[str, Any] | None) -> AuthConfig | None:
 
 
 def load_realtime_config(path: Path) -> RealtimeConfig:
-    """Load a realtime configuration file."""
+    """Load a realtime configuration file.
+
+    Parameters
+    ----------
+    path:
+        Absolute or relative path to the realtime configuration JSON file.
+
+    Returns
+    -------
+    RealtimeConfig
+        Structured configuration dataclass consumed by the realtime dashboard
+        and supporting utilities.
+
+    Raises
+    ------
+    FileNotFoundError
+        Raised when the configuration file or any referenced api key files
+        cannot be located.
+    ValueError
+        Raised when the configuration payload is incomplete or invalid.
+    TypeError
+        Raised when sections of the configuration are provided in unexpected
+        formats.
+    """
 
     _configure_default_logging(debug_level=1)
 
@@ -584,6 +605,10 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     accounts_raw = config.get("accounts")
     if not accounts_raw:
         raise ValueError("Realtime configuration must include at least one account entry.")
+    if isinstance(accounts_raw, Mapping) or isinstance(accounts_raw, (str, bytes)):
+        raise TypeError(
+            "Realtime configuration 'accounts' must be an iterable of account definition objects."
+        )
     debug_api_payloads_default = _coerce_bool(config.get("debug_api_payloads"), False)
     if debug_api_payloads_default:
         _ensure_debug_logging_enabled()
