@@ -618,6 +618,8 @@ class CCXTAccountClient(AccountClientProtocol):
 
     async def kill_switch(self, symbol: str | None = None) -> Dict[str, Any]:
         await self._ensure_markets()
+        scope = f" for {symbol}" if symbol else ""
+        logger.info("[%s] Executing kill switch%s", self.config.name, scope)
         summary: Dict[str, Any] = {
             "cancelled_orders": [],
             "failed_order_cancellations": [],
@@ -626,6 +628,16 @@ class CCXTAccountClient(AccountClientProtocol):
         }
         await self._cancel_open_orders(summary, symbol)
         await self._close_positions(summary, symbol)
+        failures = len(summary["failed_order_cancellations"]) + len(summary["failed_position_closures"])
+        logger.info(
+            "[%s] Kill switch completed: cancelled_orders=%d closed_positions=%d failures=%d",
+            self.config.name,
+            len(summary["cancelled_orders"]),
+            len(summary["closed_positions"]),
+            failures,
+        )
+        if failures:
+            logger.debug("[%s] Kill switch details: %s", self.config.name, _stringify_payload(summary))
         return summary
 
     async def _cancel_open_orders(
@@ -788,11 +800,22 @@ class CCXTAccountClient(AccountClientProtocol):
         fallback: float | None,
     ) -> float | None:
         key = side.lower()
-        if symbol not in cache:
-            cache[symbol] = await self._fetch_best_prices(symbol) or {}
-        price = cache[symbol].get(key)
+        prices = cache.setdefault(symbol, {})
+        if not prices:
+            best = await self._fetch_best_prices(symbol)
+            if best:
+                prices.update(best)
+        price = prices.get(key)
         if price is not None:
             return price
+        if fallback is not None:
+            return fallback
+        ticker_prices = await self._fetch_ticker_prices(symbol)
+        if ticker_prices:
+            prices.update(ticker_prices)
+            price = prices.get(key)
+            if price is not None:
+                return price
         return fallback
 
     async def _fetch_best_prices(self, symbol: str) -> Dict[str, float] | None:
@@ -818,7 +841,52 @@ class CCXTAccountClient(AccountClientProtocol):
             best["sell"] = bid_price
         if ask_price is not None:
             best["buy"] = ask_price
-        return best
+        return best or None
+
+    async def _fetch_ticker_prices(self, symbol: str) -> Dict[str, float] | None:
+        if not hasattr(self.client, "fetch_ticker"):
+            return None
+        try:
+            ticker = await self.client.fetch_ticker(symbol)
+        except BaseError as exc:
+            logger.debug(
+                "[%s] fetch_ticker failed for %s: %s",
+                self.config.name,
+                symbol,
+                exc,
+                exc_info=True,
+            )
+            return None
+
+        info = ticker.get("info") if isinstance(ticker, Mapping) else None
+        info_mapping = info if isinstance(info, Mapping) else {}
+
+        bid = _first_float(
+            ticker.get("bid"),
+            ticker.get("bestBid"),
+            info_mapping.get("bid"),
+            info_mapping.get("bidPrice"),
+            info_mapping.get("bestBid"),
+            info_mapping.get("bestBidPrice"),
+        )
+        ask = _first_float(
+            ticker.get("ask"),
+            ticker.get("bestAsk"),
+            info_mapping.get("ask"),
+            info_mapping.get("askPrice"),
+            info_mapping.get("bestAsk"),
+            info_mapping.get("bestAskPrice"),
+        )
+        last = _first_float(ticker.get("last"), info_mapping.get("last"), info_mapping.get("lastPrice"))
+
+        prices: Dict[str, float] = {}
+        if bid is not None:
+            prices["sell"] = bid
+        if ask is not None:
+            prices["buy"] = ask
+        if not prices and last is not None:
+            prices["sell"] = prices["buy"] = last
+        return prices or None
 
 
 __all__ = [
