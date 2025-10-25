@@ -9,9 +9,17 @@ import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Set
-from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Set
-
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Set,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -233,7 +241,9 @@ def _ensure_mapping(payload: Any, *, description: str) -> MutableMapping[str, An
         return payload
     if isinstance(payload, Mapping):
         return dict(payload)
-    raise TypeError(f"{description} must be a JSON object, not {type(payload).__name__}.")
+    raise TypeError(
+        f"{description} must be a JSON object, not {type(payload).__name__}."
+    )
 
 
 def _resolve_path_relative_to(base: Path, candidate: Any) -> Path:
@@ -297,7 +307,9 @@ def _normalise_credentials(data: Mapping[str, Any]) -> Dict[str, Any]:
     return normalised
 
 
-def _merge_credentials(primary: Mapping[str, Any], secondary: Mapping[str, Any]) -> Dict[str, Any]:
+def _merge_credentials(
+    primary: Mapping[str, Any], secondary: Mapping[str, Any]
+) -> Dict[str, Any]:
     merged = _normalise_credentials(secondary)
     primary_normalised = _normalise_credentials(primary)
     for key, value in primary_normalised.items():
@@ -371,7 +383,9 @@ def _parse_email_settings(settings: Any) -> Optional[EmailSettings]:
     if settings is None:
         return None
     if not isinstance(settings, Mapping):
-        raise TypeError("Email settings must be provided as an object in the configuration file.")
+        raise TypeError(
+            "Email settings must be provided as an object in the configuration file."
+        )
 
     host_raw = settings.get("host")
     if not host_raw or not str(host_raw).strip():
@@ -407,13 +421,17 @@ def _parse_grafana_config(settings: Any) -> Optional[GrafanaConfig]:
     if settings is None:
         return None
     if not isinstance(settings, Mapping):
-        raise TypeError("Grafana settings must be provided as an object in the configuration file.")
+        raise TypeError(
+            "Grafana settings must be provided as an object in the configuration file."
+        )
 
     dashboards_raw = settings.get("dashboards")
     if dashboards_raw in (None, []):
         return None
     if not isinstance(dashboards_raw, Iterable):
-        raise TypeError("Grafana 'dashboards' must be an array of dashboard definitions.")
+        raise TypeError(
+            "Grafana 'dashboards' must be an array of dashboard definitions."
+        )
 
     dashboards: List[GrafanaDashboardConfig] = []
     for entry in dashboards_raw:
@@ -445,9 +463,11 @@ def _parse_grafana_config(settings: Any) -> Optional[GrafanaConfig]:
             GrafanaDashboardConfig(
                 title=str(title_raw).strip() or "Grafana dashboard",
                 url=str(url_raw).strip(),
-                description=str(description_raw).strip()
-                if description_raw not in (None, "")
-                else None,
+                description=(
+                    str(description_raw).strip()
+                    if description_raw not in (None, "")
+                    else None
+                ),
                 height=height,
             )
         )
@@ -483,7 +503,9 @@ def _parse_accounts(
     debug_requested = False
     for raw in accounts_raw:
         if not isinstance(raw, Mapping):
-            raise TypeError("Account entries must be objects with account configuration fields.")
+            raise TypeError(
+                "Account entries must be objects with account configuration fields."
+            )
         if not raw.get("enabled", True):
             continue
         api_key_id = raw.get("api_key_id")
@@ -539,9 +561,13 @@ def _parse_auth(auth_raw: Optional[Mapping[str, Any]]) -> Optional[AuthConfig]:
         raise ValueError("Authentication configuration requires a 'secret_key'.")
     users_raw = auth_raw.get("users")
     if not users_raw:
-        raise ValueError("Authentication configuration requires at least one user entry.")
+        raise ValueError(
+            "Authentication configuration requires at least one user entry."
+        )
     if isinstance(users_raw, Mapping):
-        users = {str(username): str(password) for username, password in users_raw.items()}
+        users = {
+            str(username): str(password) for username, password in users_raw.items()
+        }
     else:
         users = {}
         for entry in users_raw:
@@ -608,7 +634,9 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
             logger.info("Using api keys from %s", api_keys_path)
     if api_keys_path:
         api_keys_payload = _load_json(api_keys_path)
-        api_keys_raw = _ensure_mapping(api_keys_payload, description="API key configuration")
+        api_keys_raw = _ensure_mapping(
+            api_keys_payload, description="API key configuration"
+        )
         flattened: Dict[str, Mapping[str, Any]] = {}
         for key, value in api_keys_raw.items():
             if key == "referrals" or not isinstance(value, Mapping):
@@ -622,7 +650,9 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
         api_keys = flattened
     accounts_raw = config.get("accounts")
     if not accounts_raw:
-        raise ValueError("Realtime configuration must include at least one account entry.")
+        raise ValueError(
+            "Realtime configuration must include at least one account entry."
+        )
     if isinstance(accounts_raw, Mapping) or isinstance(accounts_raw, (str, bytes)):
         raise TypeError(
             "Realtime configuration 'accounts' must be an iterable of account definition objects."
@@ -632,8 +662,12 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
         _ensure_debug_logging_enabled()
 
     accounts = _parse_accounts(accounts_raw, api_keys, debug_api_payloads_default)
-    alert_thresholds = {str(k): float(v) for k, v in config.get("alert_thresholds", {}).items()}
-    notification_channels = [str(item) for item in config.get("notification_channels", [])]
+    alert_thresholds = {
+        str(k): float(v) for k, v in config.get("alert_thresholds", {}).items()
+    }
+    notification_channels = [
+        str(item) for item in config.get("notification_channels", [])
+    ]
     auth = _parse_auth(config.get("auth"))
     custom_endpoints = _parse_custom_endpoints(config.get("custom_endpoints"))
     email_settings = _parse_email_settings(config.get("email"))
