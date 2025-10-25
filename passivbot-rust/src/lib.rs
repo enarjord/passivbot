@@ -53,6 +53,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(order_type_snake_to_id, m)?)?;
     m.add_function(wrap_pyfunction!(get_order_id_type_from_string_alias, m)?)?;
     m.add_function(wrap_pyfunction!(gate_entries_by_twel_py, m)?)?;
+    m.add_function(wrap_pyfunction!(calc_unstucking_close_py, m)?)?;
 
     Ok(())
 }

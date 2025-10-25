@@ -8,8 +8,8 @@ use crate::entries::{
     calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
 };
 use crate::risk::{
-    calc_twel_enforcer_actions, gate_entries_by_twel, GateEntriesCandidate, GateEntriesDecision,
-    GateEntriesPosition, TwelEnforcerInputPosition,
+    calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
+    GateEntriesDecision, GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
 };
 use crate::types::OrderType;
 use crate::types::{
@@ -152,6 +152,116 @@ pub fn gate_entries_by_twel_py(
         result.push((idx, qty, price, order_type.id()));
     }
     Ok(result)
+}
+
+#[pyfunction]
+pub fn calc_unstucking_close_py(
+    balance: f64,
+    allowance_long: f64,
+    allowance_short: f64,
+    positions: &Bound<'_, PyList>,
+) -> PyResult<Option<(usize, usize, f64, f64, u16)>> {
+    let positions = positions.as_ref();
+    let mut inputs: Vec<UnstuckPositionInput> = Vec::with_capacity(positions.len()?);
+    for item in positions.iter()? {
+        let item = item?;
+        let dict = item.downcast::<PyDict>()?;
+        let idx = dict
+            .get_item("idx")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'idx'"))?
+            .extract::<usize>()?;
+        let side_str: String = dict
+            .get_item("side")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'side'"))?
+            .extract::<String>()?;
+        let side = match side_str.as_str() {
+            "long" => LONG,
+            "short" => SHORT,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "position side must be 'long' or 'short'",
+                ))
+            }
+        };
+        let position_size = dict
+            .get_item("position_size")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'position_size'"))?
+            .extract::<f64>()?;
+        let position_price = dict
+            .get_item("position_price")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'position_price'"))?
+            .extract::<f64>()?;
+        let wallet_exposure_limit = dict
+            .get_item("wallet_exposure_limit")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'wallet_exposure_limit'"))?
+            .extract::<f64>()?;
+        let unstuck_threshold = dict
+            .get_item("unstuck_threshold")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_threshold'"))?
+            .extract::<f64>()?;
+        let unstuck_close_pct = dict
+            .get_item("unstuck_close_pct")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_close_pct'"))?
+            .extract::<f64>()?;
+        let unstuck_ema_dist = dict
+            .get_item("unstuck_ema_dist")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_ema_dist'"))?
+            .extract::<f64>()?;
+        let ema_band_upper = dict
+            .get_item("ema_band_upper")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'ema_band_upper'"))?
+            .extract::<f64>()?;
+        let ema_band_lower = dict
+            .get_item("ema_band_lower")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'ema_band_lower'"))?
+            .extract::<f64>()?;
+        let current_price = dict
+            .get_item("current_price")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'current_price'"))?
+            .extract::<f64>()?;
+        let price_step = dict
+            .get_item("price_step")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'price_step'"))?
+            .extract::<f64>()?;
+        let qty_step = dict
+            .get_item("qty_step")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'qty_step'"))?
+            .extract::<f64>()?;
+        let min_qty = dict
+            .get_item("min_qty")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'min_qty'"))?
+            .extract::<f64>()?;
+        let min_cost = dict
+            .get_item("min_cost")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'min_cost'"))?
+            .extract::<f64>()?;
+        let c_mult = dict
+            .get_item("c_mult")?
+            .ok_or_else(|| PyValueError::new_err("position missing 'c_mult'"))?
+            .extract::<f64>()?;
+
+        inputs.push(UnstuckPositionInput {
+            idx,
+            side,
+            position_size,
+            position_price,
+            wallet_exposure_limit,
+            unstuck_threshold,
+            unstuck_close_pct,
+            unstuck_ema_dist,
+            ema_band_upper,
+            ema_band_lower,
+            current_price,
+            price_step,
+            qty_step,
+            min_qty,
+            min_cost,
+            c_mult,
+        });
+    }
+
+    let result = calc_unstucking_action(balance, allowance_long, allowance_short, &inputs);
+    Ok(result.map(|(idx, side, order)| (idx, side, order.qty, order.price, order.order_type.id())))
 }
 
 #[cfg(test)]
