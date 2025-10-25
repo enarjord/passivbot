@@ -611,9 +611,9 @@ pub fn calc_avg_volume_pct_per_day(fills: &[Fill]) -> f64 {
         return 0.0;
     }
 
-    // Use a HashMap to sum cost_pct per day
-    use std::collections::HashMap;
-    let mut daily_totals: HashMap<usize, f64> = HashMap::new();
+    // Use BTreeMap to enforce deterministic iteration order
+    use std::collections::BTreeMap;
+    let mut daily_totals: BTreeMap<usize, f64> = BTreeMap::new();
 
     for fill in fills {
         let day = fill.index / 1440;
