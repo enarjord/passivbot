@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import List
@@ -13,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from risk_management.configuration import (  # noqa: E402
+    _ensure_debug_logging_enabled,
     _merge_credentials,
     _normalise_credentials,
     load_realtime_config,
@@ -226,6 +228,97 @@ def test_debug_logging_enabled_for_account_flag(tmp_path: Path, monkeypatch) -> 
     load_realtime_config(config_path)
 
     assert calls, "expected debug logging to be enabled when account flag is set"
+
+
+def test_default_logging_sets_info_levels(tmp_path: Path) -> None:
+    payload = _base_payload()
+    config_path = _write_config(tmp_path, payload)
+
+    root_logger = logging.getLogger()
+    risk_logger = logging.getLogger("risk_management")
+
+    original_root_level = root_logger.level
+    original_root_handlers = list(root_logger.handlers)
+    original_risk_level = risk_logger.level
+    original_risk_handlers = list(risk_logger.handlers)
+
+    for handler in root_logger.handlers:
+        root_logger.removeHandler(handler)
+    root_handler = logging.StreamHandler()
+    root_handler.setLevel(logging.ERROR)
+    root_logger.addHandler(root_handler)
+    root_logger.setLevel(logging.ERROR)
+
+    for handler in risk_logger.handlers:
+        risk_logger.removeHandler(handler)
+    risk_handler = logging.StreamHandler()
+    risk_handler.setLevel(logging.ERROR)
+    risk_logger.addHandler(risk_handler)
+    risk_logger.setLevel(logging.ERROR)
+
+    try:
+        load_realtime_config(config_path)
+
+        assert root_logger.level == logging.INFO
+        assert root_handler.level == logging.INFO
+        assert risk_logger.level == logging.INFO
+        assert risk_handler.level == logging.INFO
+    finally:
+        risk_logger.removeHandler(risk_handler)
+        for handler in original_risk_handlers:
+            risk_logger.addHandler(handler)
+        risk_logger.setLevel(original_risk_level)
+
+        root_logger.removeHandler(root_handler)
+        for handler in original_root_handlers:
+            root_logger.addHandler(handler)
+        root_logger.setLevel(original_root_level)
+
+
+def test_debug_logging_promotes_root_and_risk_loggers(monkeypatch) -> None:
+    root_logger = logging.getLogger()
+    risk_logger = logging.getLogger("risk_management")
+
+    original_root_level = root_logger.level
+    original_root_handlers = list(root_logger.handlers)
+    original_risk_level = risk_logger.level
+    original_risk_handlers = list(risk_logger.handlers)
+
+    for handler in root_logger.handlers:
+        root_logger.removeHandler(handler)
+    root_handler = logging.StreamHandler()
+    root_handler.setLevel(logging.WARNING)
+    root_logger.addHandler(root_handler)
+    root_logger.setLevel(logging.WARNING)
+
+    for handler in risk_logger.handlers:
+        risk_logger.removeHandler(handler)
+    risk_handler = logging.StreamHandler()
+    risk_handler.setLevel(logging.WARNING)
+    risk_logger.addHandler(risk_handler)
+    risk_logger.setLevel(logging.WARNING)
+
+    monkeypatch.setattr(
+        "risk_management.configuration._configure_default_logging", lambda debug_level=2: False
+    )
+
+    try:
+        _ensure_debug_logging_enabled()
+
+        assert root_logger.level == logging.DEBUG
+        assert root_handler.level == logging.DEBUG
+        assert risk_logger.level == logging.DEBUG
+        assert risk_handler.level == logging.DEBUG
+    finally:
+        risk_logger.removeHandler(risk_handler)
+        for handler in original_risk_handlers:
+            risk_logger.addHandler(handler)
+        risk_logger.setLevel(original_risk_level)
+
+        root_logger.removeHandler(root_handler)
+        for handler in original_root_handlers:
+            root_logger.addHandler(handler)
+        root_logger.setLevel(original_root_level)
 
 
 def test_auth_https_only_flag_respected(tmp_path: Path) -> None:

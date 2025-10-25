@@ -2,31 +2,87 @@
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import json
 import logging
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Set
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Set
 
 
 logger = logging.getLogger(__name__)
 
 
+def _debug_to_logging_level(debug_level: int) -> int:
+    """Translate Passivbot debug level values into logging module levels."""
+
+    if debug_level <= 0:
+        return logging.WARNING
+    if debug_level == 1:
+        return logging.INFO
+    return logging.DEBUG
+
+
+def _resolve_passivbot_logging_configurator() -> Callable[..., Any] | None:
+    """Return Passivbot's logging configurator when the package is available."""
+
+    return _cached_passivbot_logging_configurator()
+
+
+@lru_cache(maxsize=1)
+def _cached_passivbot_logging_configurator() -> Callable[..., Any] | None:
+    spec = importlib.util.find_spec("logging_setup")
+    if spec is None:  # pragma: no cover - Passivbot package missing in unit tests
+        return None
+    module = importlib.import_module("logging_setup")
+    configurator = getattr(module, "configure_logging", None)
+    if not callable(configurator):  # pragma: no cover - defensive guard
+        return None
+    return configurator
+
+
+def _ensure_logger_level(logger: logging.Logger, level: int) -> None:
+    """Ensure ``logger`` and its handlers are set to at most ``level``."""
+
+    if logger.level in {logging.NOTSET} or logger.level > level:
+        logger.setLevel(level)
+    for handler in logger.handlers:
+        if handler.level in {logging.NOTSET} or handler.level > level:
+            handler.setLevel(level)
+
+
+def _configure_default_logging(debug_level: int = 1) -> bool:
+    """Provision Passivbot-style logging and enforce sensible defaults."""
+
+    root_logger = logging.getLogger()
+    already_configured = bool(root_logger.handlers)
+
+    if not already_configured:
+        configurator = _resolve_passivbot_logging_configurator()
+        if configurator is not None:
+            configurator(debug=debug_level)
+        else:
+            logging.basicConfig(level=_debug_to_logging_level(debug_level))
+
+    desired_level = _debug_to_logging_level(debug_level)
+    _ensure_logger_level(root_logger, desired_level)
+    risk_logger = logging.getLogger("risk_management")
+    _ensure_logger_level(risk_logger, desired_level)
+
+    return not already_configured
+
+
 def _ensure_debug_logging_enabled() -> None:
     """Raise logging verbosity when debug API payloads are requested."""
 
-    root_logger = logging.getLogger()
-    if root_logger.level in {
-        logging.NOTSET,
-        logging.WARNING,
-        logging.ERROR,
-        logging.CRITICAL,
-    } or root_logger.level > logging.DEBUG:
-        root_logger.setLevel(logging.DEBUG)
+    _configure_default_logging(debug_level=2)
 
+    root_logger = logging.getLogger()
     risk_logger = logging.getLogger("risk_management")
-    if risk_logger.level in {logging.NOTSET} or risk_logger.level > logging.DEBUG:
-        risk_logger.setLevel(logging.DEBUG)
+    _ensure_logger_level(root_logger, logging.DEBUG)
+    _ensure_logger_level(risk_logger, logging.DEBUG)
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -446,6 +502,8 @@ def _parse_auth(auth_raw: Mapping[str, Any] | None) -> AuthConfig | None:
 
 def load_realtime_config(path: Path) -> RealtimeConfig:
     """Load a realtime configuration file."""
+
+    _configure_default_logging(debug_level=1)
 
     config = _load_json(path)
     config_root = path.parent.resolve()
