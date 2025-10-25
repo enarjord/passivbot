@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
+from types import TracebackType
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
@@ -30,6 +31,12 @@ from .dashboard import evaluate_alerts, parse_snapshot
 from .email_notifications import EmailAlertSender
 
 logger = logging.getLogger(__name__)
+
+
+def _exception_info(exc: BaseException) -> tuple[type[BaseException], BaseException, TracebackType | None]:
+    """Return a ``logging`` compatible ``exc_info`` tuple for ``exc``."""
+
+    return (type(exc), exc, exc.__traceback__)
 
 
 def _build_search_paths(config_root: Path | None) -> tuple[str, ...]:
@@ -139,7 +146,7 @@ class RealtimeDataFetcher:
         tasks = [client.fetch() for client in self._account_clients]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         accounts_payload: List[Dict[str, Any]] = []
-        account_messages: Dict[str, str] = {}
+        account_messages: Dict[str, str] = dict(self.config.account_messages)
         for account_config, result in zip(self.config.accounts, results):
             if isinstance(result, Exception):
                 if isinstance(result, AuthenticationError):
@@ -165,8 +172,10 @@ class RealtimeDataFetcher:
 
                 else:
                     message = f"{account_config.name}: {result}"
-                    logger.exception(
-                        "Failed to fetch snapshot for %s", account_config.name, exc_info=result
+                    logger.error(
+                        "Failed to fetch snapshot for %s",
+                        account_config.name,
+                        exc_info=_exception_info(result),
                     )
                 account_messages[account_config.name] = message
                 accounts_payload.append({"name": account_config.name, "balance": 0.0, "positions": []})
@@ -208,7 +217,7 @@ class RealtimeDataFetcher:
             try:
                 results[client.config.name] = await client.kill_switch(symbol)
             except Exception as exc:  # pragma: no cover - defensive logging
-                logger.exception("Kill switch failed for %s", client.config.name, exc_info=exc)
+                logger.exception("Kill switch failed for %s", client.config.name, exc_info=True)
                 results[client.config.name] = {"error": str(exc)}
         logger.info("Kill switch completed for %s", scope)
         return results
