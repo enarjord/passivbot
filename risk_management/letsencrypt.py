@@ -49,20 +49,10 @@ def ensure_certificate(
     if not normalized_domains:
         raise LetsEncryptError("At least one domain must be supplied for Let's Encrypt provisioning.")
 
-    certbot_path = shutil.which(executable)
-    if certbot_path is None:
-        raise LetsEncryptError(
-            f"Unable to locate the '{executable}' executable required for Let's Encrypt automation."
-        )
-
-
     storage_dir = Path(config_dir) if config_dir else Path("/etc/letsencrypt")
     lineage = cert_name or normalized_domains[0]
 
     command: list[str] = [
-
-        certbot_path,
-
         "certonly",
         "--non-interactive",
         "--agree-tos",
@@ -134,19 +124,6 @@ def ensure_certificate(
             raise LetsEncryptError(
                 "Let's Encrypt provisioning failed; inspect certbot output for details."
             )
-
-    LOGGER.info(
-        "Requesting/renewing Let's Encrypt certificate for %s via %s",
-        ", ".join(normalized_domains),
-        certbot_path,
-    )
-
-    try:
-        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError as exc:  # pragma: no cover - exercised via unit tests
-        raise LetsEncryptError(
-            "Let's Encrypt provisioning failed; inspect certbot output for details."
-        ) from exc
 
 
     certfile = storage_dir / "live" / lineage / "fullchain.pem"

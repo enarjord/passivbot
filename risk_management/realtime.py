@@ -194,6 +194,9 @@ class RealtimeDataFetcher:
     async def execute_kill_switch(
         self, account_name: str | None = None, symbol: str | None = None
     ) -> Dict[str, Any]:
+        scope = account_name or "all accounts"
+        symbol_desc = f" for {symbol}" if symbol else ""
+        logger.info("Kill switch requested for %s%s", scope, symbol_desc)
         targets: List[AccountClientProtocol] = []
         for client in self._account_clients:
             if account_name is None or client.config.name == account_name:
@@ -207,6 +210,7 @@ class RealtimeDataFetcher:
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.exception("Kill switch failed for %s", client.config.name, exc_info=exc)
                 results[client.config.name] = {"error": str(exc)}
+        logger.info("Kill switch completed for %s", scope)
         return results
 
     def _dispatch_email_alerts(self, snapshot: Mapping[str, Any]) -> None:
