@@ -274,6 +274,23 @@ def test_default_logging_sets_info_levels(tmp_path: Path) -> None:
             root_logger.addHandler(handler)
         root_logger.setLevel(original_root_level)
 
+def test_default_logging_provisioned_without_debug(tmp_path: Path, monkeypatch) -> None:
+    payload = _base_payload()
+    config_path = _write_config(tmp_path, payload)
+
+    calls: List[int] = []
+
+    def record_call(debug_level: int = 1) -> bool:
+        calls.append(debug_level)
+        return True
+
+    monkeypatch.setattr("risk_management.configuration._configure_default_logging", record_call)
+
+    load_realtime_config(config_path)
+
+    assert calls == [1], "expected INFO-level logging to be provisioned by default"
+
+
 
 def test_debug_logging_promotes_root_and_risk_loggers(monkeypatch) -> None:
     root_logger = logging.getLogger()

@@ -72,17 +72,65 @@ def _configure_default_logging(debug_level: int = 1) -> bool:
     _ensure_logger_level(risk_logger, desired_level)
 
     return not already_configured
+=======
+def _configure_default_logging(debug_level: int = 1) -> bool:
+
+def _configure_default_logging() -> bool:
+
+    """Configure Passivbot-style logging if no handlers are present."""
+
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return False
+    try:  # Import lazily so the risk tools can run independently in tests
+        from logging_setup import configure_logging  # type: ignore
+    except ModuleNotFoundError:  # pragma: no cover - fallback when package unavailable
+        configure_logging = None  # type: ignore[assignment]
+    if configure_logging is not None:
+      
+        configure_logging(debug=debug_level)
+    else:
+        logging.basicConfig(level=_debug_to_logging_level(debug_level))
+
+        configure_logging(debug=2)
+    else:
+        logging.basicConfig(level=logging.DEBUG)
+
+    return True
 
 
 def _ensure_debug_logging_enabled() -> None:
     """Raise logging verbosity when debug API payloads are requested."""
 
+
     _configure_default_logging(debug_level=2)
+
+    _configure_default_logging(debug_level=2)
+    _configure_default_logging()
+
+
+    root_logger = logging.getLogger()
+    if root_logger.level in {
+        logging.NOTSET,
+        logging.WARNING,
+        logging.ERROR,
+        logging.CRITICAL,
+    } or root_logger.level > logging.DEBUG:
+        root_logger.setLevel(logging.DEBUG)
+    for handler in root_logger.handlers:
+        if handler.level in {logging.NOTSET} or handler.level > logging.DEBUG:
+            handler.setLevel(logging.DEBUG)
+
 
     root_logger = logging.getLogger()
     risk_logger = logging.getLogger("risk_management")
     _ensure_logger_level(root_logger, logging.DEBUG)
     _ensure_logger_level(risk_logger, logging.DEBUG)
+    if risk_logger.level in {logging.NOTSET} or risk_logger.level > logging.DEBUG:
+        risk_logger.setLevel(logging.DEBUG)
+    for handler in risk_logger.handlers:
+        if handler.level in {logging.NOTSET} or handler.level > logging.DEBUG:
+            handler.setLevel(logging.DEBUG)
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
