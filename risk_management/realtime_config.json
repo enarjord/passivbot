@@ -39,6 +39,14 @@
     "max_drawdown_pct": 0.25,
     "loss_threshold_pct": -0.08
   },
+  "email": {
+    "host": "smtp.example.com",
+    "port": 587,
+    "username": "alerts@example.com",
+    "password": "replace-with-app-password",
+    "sender": "alerts@example.com",
+    "use_tls": true
+  },
   "notification_channels": [
     "email:admin@plezna.com",
     "slack:#passivbot-risk-alerts"

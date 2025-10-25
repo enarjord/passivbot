@@ -10,7 +10,7 @@
 {% endblock %}
 
 {% block content %}
-  <section class="card">
+  <section class="card" data-portfolio>
     <div style="display: flex; justify-content: space-between; align-items: center;">
       <div>
         <h2 style="margin-bottom: 0.5rem;">Portfolio overview</h2>
@@ -26,14 +26,67 @@
         {% endif %}
       </span>
     </div>
+    <div class="metrics" style="margin-top: 1.5rem;">
+      <div class="metric">
+        <span class="label">Total Balance</span>
+        <span class="value">{{ snapshot.portfolio.balance|currency }}</span>
+      </div>
+      <div class="metric">
+        <span class="label">Gross Exposure</span>
+        <span class="value">{{ snapshot.portfolio.gross_exposure|currency }}</span>
+        <span class="subvalue">{{ snapshot.portfolio.gross_exposure_pct|pct }}</span>
+      </div>
+      <div class="metric">
+        <span class="label">Net Exposure</span>
+        <span class="value {% if snapshot.portfolio.net_exposure >= 0 %}gain{% else %}loss{% endif %}">{{ snapshot.portfolio.net_exposure|currency }}</span>
+        <span class="subvalue {% if snapshot.portfolio.net_exposure_pct >= 0 %}gain{% else %}loss{% endif %}">{{ snapshot.portfolio.net_exposure_pct|pct }}</span>
+      </div>
+    </div>
+    {% if snapshot.portfolio.symbols %}
+      <div class="table-wrapper" style="overflow-x: auto; margin-top: 1.5rem;">
+        <table>
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Gross Exposure</th>
+              <th>Gross %</th>
+              <th>Net Exposure</th>
+              <th>Net %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for entry in snapshot.portfolio.symbols %}
+              <tr>
+                <td>{{ entry.symbol }}</td>
+                <td>{{ entry.gross_notional|currency }}</td>
+                <td>{{ entry.gross_pct|pct }}</td>
+                <td class="{% if entry.net_notional >= 0 %}gain{% else %}loss{% endif %}">{{ entry.net_notional|currency }}</td>
+                <td class="{% if entry.net_pct >= 0 %}gain{% else %}loss{% endif %}">{{ entry.net_pct|pct }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p style="color: var(--muted); margin-top: 1rem;">No active exposures.</p>
+    {% endif %}
   </section>
 
   <div data-accounts>
     {% for account in snapshot.accounts %}
       <section class="card" data-account="{{ account.name }}">
-        <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
-          <h2>{{ account.name }}</h2>
-          <span class="badge">{{ account.positions|length }} position{{ 's' if account.positions|length != 1 }}</span>
+        <div class="card-header" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
+          <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+            <h2 style="margin: 0;">{{ account.name }}</h2>
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+              <span class="badge">{{ account.positions|length }} position{{ 's' if account.positions|length != 1 }}</span>
+              <span class="badge">{{ account.orders|length }} order{{ 's' if account.orders|length != 1 }}</span>
+            </div>
+          </div>
+          <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;">
+            <button type="button" class="button danger" data-kill-switch="{{ account.name }}">Kill switch</button>
+            <div class="status" data-kill-status="{{ account.name }}" style="display: none;"></div>
+          </div>
         </div>
         {% if account.message %}
           <div class="status">{{ account.message }}</div>
@@ -44,20 +97,46 @@
             <span class="value">{{ account.balance|currency }}</span>
           </div>
           <div class="metric">
-            <span class="label">Exposure</span>
-            <span class="value">{{ account.exposure|pct }}</span>
+            <span class="label">Gross Exposure</span>
+            <span class="value">{{ account.gross_exposure_notional|currency }}</span>
+            <span class="subvalue">{{ account.gross_exposure|pct }}</span>
+          </div>
+          <div class="metric">
+            <span class="label">Net Exposure</span>
+            <span class="value {% if account.net_exposure_notional >= 0 %}gain{% else %}loss{% endif %}">{{ account.net_exposure_notional|currency }}</span>
+            <span class="subvalue {% if account.net_exposure >= 0 %}gain{% else %}loss{% endif %}">{{ account.net_exposure|pct }}</span>
           </div>
           <div class="metric">
             <span class="label">Unrealized PnL</span>
-            <span class="value {% if account.unrealized_pnl >= 0 %}gain{% else %}loss{% endif %}">
-              {{ account.unrealized_pnl|currency }}
-            </span>
-          </div>
-          <div class="metric">
-            <span class="label">Positions</span>
-            <span class="value">{{ account.positions|length }}</span>
+            <span class="value {% if account.unrealized_pnl >= 0 %}gain{% else %}loss{% endif %}">{{ account.unrealized_pnl|currency }}</span>
           </div>
         </div>
+        {% if account.symbol_exposures %}
+          <div class="table-wrapper" style="overflow-x: auto; margin-bottom: 1.5rem;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Gross Exposure</th>
+                  <th>Gross %</th>
+                  <th>Net Exposure</th>
+                  <th>Net %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for exposure in account.symbol_exposures %}
+                  <tr>
+                    <td>{{ exposure.symbol }}</td>
+                    <td>{{ exposure.gross_notional|currency }}</td>
+                    <td>{{ exposure.gross_pct|pct }}</td>
+                    <td class="{% if exposure.net_notional >= 0 %}gain{% else %}loss{% endif %}">{{ exposure.net_notional|currency }}</td>
+                    <td class="{% if exposure.net_pct >= 0 %}gain{% else %}loss{% endif %}">{{ exposure.net_pct|pct }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% endif %}
         {% if account.positions %}
           <div class="table-wrapper" style="overflow-x: auto;">
             <table>
@@ -65,7 +144,8 @@
                 <tr>
                   <th>Symbol</th>
                   <th>Side</th>
-                  <th>Exposure</th>
+                  <th>Notional</th>
+                  <th>Exposure %</th>
                   <th>PnL</th>
                   <th>Entry</th>
                   <th>Mark</th>
@@ -80,10 +160,9 @@
                   <tr>
                     <td>{{ position.symbol }}</td>
                     <td>{{ position.side }}</td>
+                    <td>{{ position.notional|currency }}</td>
                     <td>{{ position.exposure|pct }}</td>
-                    <td class="{% if position.unrealized_pnl >= 0 %}gain{% else %}loss{% endif %}">
-                      {{ position.unrealized_pnl|currency }} ({{ position.pnl_pct|pct }})
-                    </td>
+                    <td class="{% if position.unrealized_pnl >= 0 %}gain{% else %}loss{% endif %}">{{ position.unrealized_pnl|currency }} ({{ position.pnl_pct|pct }})</td>
                     <td>{{ position.entry_price|currency }}</td>
                     <td>{{ position.mark_price|currency }}</td>
                     <td>{% if position.liquidation_price is not none %}{{ position.liquidation_price|currency }}{% else %}-{% endif %}</td>
@@ -97,6 +176,49 @@
           </div>
         {% else %}
           <p style="color: var(--muted);">No open positions.</p>
+        {% endif %}
+        {% if account.orders %}
+          <h3 style="margin-top: 1.5rem;">Open orders</h3>
+          <div class="table-wrapper" style="overflow-x: auto;">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Type</th>
+                  <th>Price</th>
+                  <th>Amount</th>
+                  <th>Remaining</th>
+                  <th>Status</th>
+                  <th>Reduce only</th>
+                  <th>Notional</th>
+                  <th>Stop price</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for order in account.orders %}
+                  <tr>
+                    <td>{{ order.order_id or '-' }}</td>
+                    <td>{{ order.symbol }}</td>
+                    <td>{{ order.side }}</td>
+                    <td>{{ order.type }}</td>
+                    <td>{{ order.price|currency if order.price is not none else '-' }}</td>
+                    <td>{{ order.amount if order.amount is not none else '-' }}</td>
+                    <td>{{ order.remaining if order.remaining is not none else '-' }}</td>
+                    <td>{{ order.status }}</td>
+                    <td>{{ 'Yes' if order.reduce_only else 'No' }}</td>
+                    <td>{{ order.notional|currency if order.notional is not none else '-' }}</td>
+                    <td>{{ order.stop_price|currency if order.stop_price is not none else '-' }}</td>
+                    <td>{{ order.created_at or '-' }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p style="color: var(--muted);">No open orders.</p>
         {% endif %}
       </section>
     {% endfor %}
@@ -152,35 +274,89 @@
       return `${number.toFixed(2)}%`;
     };
 
-    const renderSnapshot = (snapshot) => {
-      const generatedAtEl = document.querySelector("[data-generated-at]");
-      if (generatedAtEl) {
-        generatedAtEl.textContent = new Date(snapshot.generated_at).toLocaleString();
+    const renderPortfolio = (snapshot) => {
+      const portfolioSection = document.querySelector("[data-portfolio]");
+      if (!portfolioSection || !snapshot.portfolio) {
+        return;
       }
+      const portfolio = snapshot.portfolio;
+      const rows = (portfolio.symbols || [])
+        .map((entry) => `
+          <tr>
+            <td>${entry.symbol}</td>
+            <td>${formatCurrency(entry.gross_notional)}</td>
+            <td>${formatPct(entry.gross_pct)}</td>
+            <td class="${Number(entry.net_notional) >= 0 ? "gain" : "loss"}">${formatCurrency(entry.net_notional)}</td>
+            <td class="${Number(entry.net_pct) >= 0 ? "gain" : "loss"}">${formatPct(entry.net_pct)}</td>
+          </tr>
+        `)
+        .join("");
+      portfolioSection.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <h2 style="margin-bottom: 0.5rem;">Portfolio overview</h2>
+            <p style="color: var(--muted); margin: 0;">
+              Snapshot generated at <strong data-overview-generated>${new Date(snapshot.generated_at).toLocaleString()}</strong>
+            </p>
+          </div>
+          <span class="badge ${Array.isArray(snapshot.alerts) && snapshot.alerts.length > 0 ? "alert" : "ok"}" data-alert-summary>
+            ${Array.isArray(snapshot.alerts) && snapshot.alerts.length > 0 ? `${snapshot.alerts.length} active alert${snapshot.alerts.length === 1 ? "" : "s"}` : "All clear"}
+          </span>
+        </div>
+        <div class="metrics" style="margin-top: 1.5rem;">
+          <div class="metric">
+            <span class="label">Total Balance</span>
+            <span class="value">${formatCurrency(portfolio.balance)}</span>
+          </div>
+          <div class="metric">
+            <span class="label">Gross Exposure</span>
+            <span class="value">${formatCurrency(portfolio.gross_exposure)}</span>
+            <span class="subvalue">${formatPct(portfolio.gross_exposure_pct)}</span>
+          </div>
+          <div class="metric">
+            <span class="label">Net Exposure</span>
+            <span class="value ${Number(portfolio.net_exposure) >= 0 ? "gain" : "loss"}">${formatCurrency(portfolio.net_exposure)}</span>
+            <span class="subvalue ${Number(portfolio.net_exposure_pct) >= 0 ? "gain" : "loss"}">${formatPct(portfolio.net_exposure_pct)}</span>
+          </div>
+        </div>
+        ${rows
+          ? `<div class="table-wrapper" style="overflow-x: auto; margin-top: 1.5rem;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Gross Exposure</th>
+                    <th>Gross %</th>
+                    <th>Net Exposure</th>
+                    <th>Net %</th>
+                  </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>`
+          : `<p style="color: var(--muted); margin-top: 1rem;">No active exposures.</p>`}
+      `;
+    };
 
-      const overviewGenerated = document.querySelector("[data-overview-generated]");
-      if (overviewGenerated) {
-        overviewGenerated.textContent = new Date(snapshot.generated_at).toLocaleString();
-      }
-
-      const alertBadge = document.querySelector("[data-alert-summary]");
-      if (alertBadge) {
-        if (Array.isArray(snapshot.alerts) && snapshot.alerts.length > 0) {
-          alertBadge.classList.add("alert");
-          alertBadge.classList.remove("ok");
-          const count = snapshot.alerts.length;
-          alertBadge.textContent = `${count} active alert${count === 1 ? "" : "s"}`;
-        } else {
-          alertBadge.classList.add("ok");
-          alertBadge.classList.remove("alert");
-          alertBadge.textContent = "All clear";
-        }
-      }
-
+    const renderAccounts = (snapshot) => {
       const accountsContainer = document.querySelector("[data-accounts]");
-      accountsContainer.innerHTML = snapshot.accounts
+      if (!accountsContainer) {
+        return;
+      }
+      accountsContainer.innerHTML = (snapshot.accounts || [])
         .map((account) => {
-          const positionsRows = account.positions
+          const exposuresRows = (account.symbol_exposures || [])
+            .map((exposure) => `
+              <tr>
+                <td>${exposure.symbol}</td>
+                <td>${formatCurrency(exposure.gross_notional)}</td>
+                <td>${formatPct(exposure.gross_pct)}</td>
+                <td class="${Number(exposure.net_notional) >= 0 ? "gain" : "loss"}">${formatCurrency(exposure.net_notional)}</td>
+                <td class="${Number(exposure.net_pct) >= 0 ? "gain" : "loss"}">${formatPct(exposure.net_pct)}</td>
+              </tr>
+            `)
+            .join("");
+          const positionsRows = (account.positions || [])
             .map((position) => {
               const pnlClass = Number(position.unrealized_pnl) >= 0 ? "gain" : "loss";
               const maxDd = position.max_drawdown_pct !== null && position.max_drawdown_pct !== undefined
@@ -190,6 +366,7 @@
                 <tr>
                   <td>${position.symbol}</td>
                   <td>${position.side}</td>
+                  <td>${formatCurrency(position.notional)}</td>
                   <td>${formatPct(position.exposure)}</td>
                   <td class="${pnlClass}">${formatCurrency(position.unrealized_pnl)} (${formatPct(position.pnl_pct)})</td>
                   <td>${formatPrice(position.entry_price)}</td>
@@ -202,14 +379,38 @@
               `;
             })
             .join("");
-
-          const exposureClass = Number(account.unrealized_pnl) >= 0 ? "gain" : "loss";
-
+          const ordersRows = (account.orders || [])
+            .map((order) => `
+              <tr>
+                <td>${order.order_id || "-"}</td>
+                <td>${order.symbol}</td>
+                <td>${order.side}</td>
+                <td>${order.type}</td>
+                <td>${order.price !== null && order.price !== undefined ? formatCurrency(order.price) : "-"}</td>
+                <td>${order.amount ?? "-"}</td>
+                <td>${order.remaining ?? "-"}</td>
+                <td>${order.status || "-"}</td>
+                <td>${order.reduce_only ? "Yes" : "No"}</td>
+                <td>${order.notional !== null && order.notional !== undefined ? formatCurrency(order.notional) : "-"}</td>
+                <td>${order.stop_price !== null && order.stop_price !== undefined ? formatCurrency(order.stop_price) : "-"}</td>
+                <td>${order.created_at || "-"}</td>
+              </tr>
+            `)
+            .join("");
           return `
             <section class="card" data-account="${account.name}">
-              <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
-                <h2>${account.name}</h2>
-                <span class="badge">${account.positions.length} position${account.positions.length === 1 ? "" : "s"}</span>
+              <div class="card-header" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
+                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                  <h2 style="margin: 0;">${account.name}</h2>
+                  <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <span class="badge">${account.positions.length} position${account.positions.length === 1 ? "" : "s"}</span>
+                    <span class="badge">${account.orders.length} order${account.orders.length === 1 ? "" : "s"}</span>
+                  </div>
+                </div>
+                <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;">
+                  <button type="button" class="button danger" data-kill-switch="${account.name}">Kill switch</button>
+                  <div class="status" data-kill-status="${account.name}" style="display: none;"></div>
+                </div>
               </div>
               ${account.message ? `<div class="status">${account.message}</div>` : ""}
               <div class="metrics">
@@ -218,26 +419,45 @@
                   <span class="value">${formatCurrency(account.balance)}</span>
                 </div>
                 <div class="metric">
-                  <span class="label">Exposure</span>
-                  <span class="value">${formatPct(account.exposure)}</span>
+                  <span class="label">Gross Exposure</span>
+                  <span class="value">${formatCurrency(account.gross_exposure_notional)}</span>
+                  <span class="subvalue">${formatPct(account.gross_exposure)}</span>
+                </div>
+                <div class="metric">
+                  <span class="label">Net Exposure</span>
+                  <span class="value ${Number(account.net_exposure_notional) >= 0 ? "gain" : "loss"}">${formatCurrency(account.net_exposure_notional)}</span>
+                  <span class="subvalue ${Number(account.net_exposure) >= 0 ? "gain" : "loss"}">${formatPct(account.net_exposure)}</span>
                 </div>
                 <div class="metric">
                   <span class="label">Unrealized PnL</span>
-                  <span class="value ${exposureClass}">${formatCurrency(account.unrealized_pnl)}</span>
-                </div>
-                <div class="metric">
-                  <span class="label">Positions</span>
-                  <span class="value">${account.positions.length}</span>
+                  <span class="value ${Number(account.unrealized_pnl) >= 0 ? "gain" : "loss"}">${formatCurrency(account.unrealized_pnl)}</span>
                 </div>
               </div>
+              ${exposuresRows
+                ? `<div class="table-wrapper" style=\"overflow-x: auto; margin-bottom: 1.5rem;\">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Symbol</th>
+                          <th>Gross Exposure</th>
+                          <th>Gross %</th>
+                          <th>Net Exposure</th>
+                          <th>Net %</th>
+                        </tr>
+                      </thead>
+                      <tbody>${exposuresRows}</tbody>
+                    </table>
+                  </div>`
+                : ""}
               ${account.positions.length > 0
-                ? `<div class="table-wrapper" style="overflow-x: auto;">
+                ? `<div class="table-wrapper" style=\"overflow-x: auto;\">
                     <table>
                       <thead>
                         <tr>
                           <th>Symbol</th>
                           <th>Side</th>
-                          <th>Exposure</th>
+                          <th>Notional</th>
+                          <th>Exposure %</th>
                           <th>PnL</th>
                           <th>Entry</th>
                           <th>Mark</th>
@@ -250,13 +470,42 @@
                       <tbody>${positionsRows}</tbody>
                     </table>
                   </div>`
-                : `<p style="color: var(--muted);">No open positions.</p>`}
+                : `<p style=\"color: var(--muted);\">No open positions.</p>`}
+              ${account.orders.length > 0
+                ? `<h3 style=\"margin-top: 1.5rem;\">Open orders</h3>
+                    <div class="table-wrapper" style=\"overflow-x: auto;\">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>ID</th>
+                            <th>Symbol</th>
+                            <th>Side</th>
+                            <th>Type</th>
+                            <th>Price</th>
+                            <th>Amount</th>
+                            <th>Remaining</th>
+                            <th>Status</th>
+                            <th>Reduce only</th>
+                            <th>Notional</th>
+                            <th>Stop price</th>
+                            <th>Created</th>
+                          </tr>
+                        </thead>
+                        <tbody>${ordersRows}</tbody>
+                      </table>
+                    </div>`
+                : `<p style=\"color: var(--muted);\">No open orders.</p>`}
             </section>
           `;
         })
         .join("");
+    };
 
+    const renderAlerts = (snapshot) => {
       const alertsContainer = document.querySelector("[data-alerts]");
+      if (!alertsContainer) {
+        return;
+      }
       if (Array.isArray(snapshot.alerts) && snapshot.alerts.length > 0) {
         if (alertsContainer.tagName === "UL") {
           alertsContainer.innerHTML = snapshot.alerts.map((alert) => `<li>${alert}</li>`).join("");
@@ -277,13 +526,16 @@
           alertsContainer.textContent = "No active alerts. All monitored metrics are within thresholds.";
         }
       }
+    };
 
+    const renderNotifications = (snapshot) => {
       const notificationsContainer = document.querySelector("[data-notifications]");
+      if (!notificationsContainer) {
+        return;
+      }
       if (Array.isArray(snapshot.notifications) && snapshot.notifications.length > 0) {
         if (notificationsContainer.tagName === "UL") {
-          notificationsContainer.innerHTML = snapshot.notifications
-            .map((channel) => `<li>${channel}</li>`)
-            .join("");
+          notificationsContainer.innerHTML = snapshot.notifications.map((channel) => `<li>${channel}</li>`).join("");
         } else {
           const ul = document.createElement("ul");
           ul.innerHTML = snapshot.notifications.map((channel) => `<li>${channel}</li>`).join("");
@@ -303,7 +555,18 @@
       }
     };
 
-    const poll = async () => {
+    const renderSnapshot = (snapshot) => {
+      const generatedAtEl = document.querySelector("[data-generated-at]");
+      if (generatedAtEl) {
+        generatedAtEl.textContent = new Date(snapshot.generated_at).toLocaleString();
+      }
+      renderPortfolio(snapshot);
+      renderAccounts(snapshot);
+      renderAlerts(snapshot);
+      renderNotifications(snapshot);
+    };
+
+    async function poll() {
       try {
         const response = await fetch("/api/snapshot", { credentials: "include" });
         if (!response.ok) {
@@ -314,7 +577,52 @@
       } catch (error) {
         console.error("Failed to refresh snapshot", error);
       }
-    };
+    }
+
+    async function triggerKillSwitch(accountName, button) {
+      if (!accountName) {
+        return;
+      }
+      const statusEl = document.querySelector(`[data-kill-status="${accountName}"]`);
+      if (statusEl) {
+        statusEl.textContent = "Executing kill switch...";
+        statusEl.style.display = "block";
+        statusEl.classList.remove("success");
+      }
+      button.disabled = true;
+      try {
+        const response = await fetch(`/api/accounts/${encodeURIComponent(accountName)}/kill-switch`, {
+          method: "POST",
+          credentials: "include",
+        });
+        if (!response.ok) {
+          throw new Error(`Kill switch failed (${response.status})`);
+        }
+        await response.json();
+        if (statusEl) {
+          statusEl.textContent = "Kill switch executed.";
+          statusEl.classList.add("success");
+        }
+        await poll();
+      } catch (error) {
+        console.error(error);
+        if (statusEl) {
+          statusEl.textContent = `Kill switch failed: ${error.message}`;
+          statusEl.classList.remove("success");
+        }
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    document.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-kill-switch]");
+      if (!button) {
+        return;
+      }
+      const accountName = button.getAttribute("data-kill-switch");
+      triggerKillSwitch(accountName, button);
+    });
 
     setInterval(poll, REFRESH_INTERVAL_MS);
     poll();

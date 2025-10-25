@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{% block title %}Passivbot Risk Dashboard{% endblock %}</title>
+    <title>{% block title %}Risk Management Dashboard{% endblock %}</title>
     <style>
       :root {
         color-scheme: dark;
@@ -137,6 +137,11 @@
         font-weight: 600;
       }
 
+      .metric .subvalue {
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+
       .badge {
         display: inline-flex;
         align-items: center;
@@ -156,6 +161,17 @@
       .badge.ok {
         background: rgba(52, 211, 153, 0.2);
         color: var(--success);
+      }
+
+      button.danger,
+      .button.danger {
+        background: var(--danger);
+        color: #0f172a;
+      }
+
+      button.danger:hover,
+      .button.danger:hover {
+        box-shadow: 0 10px 25px rgba(248, 113, 113, 0.25);
       }
 
       .alerts,
@@ -188,6 +204,10 @@
         margin-bottom: 1rem;
       }
 
+      .status.success {
+        color: var(--success);
+      }
+
       .gain {
         color: var(--success);
       }
@@ -200,7 +220,7 @@
   </head>
   <body>
     <header>
-      <h1>Passivbot Risk Dashboard</h1>
+      <h1>Risk Management Dashboard</h1>
       {% block header_controls %}{% endblock %}
     </header>
     <main>

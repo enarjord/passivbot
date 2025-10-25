@@ -1,4 +1,4 @@
-"""Terminal dashboard for monitoring Passivbot portfolios.
+"""Terminal dashboard for monitoring trading portfolios.
 
 The module consumes a JSON snapshot describing one or more accounts along with
 alert thresholds.  It renders a textual dashboard summarising exposure, profit
@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
 from .configuration import CustomEndpointSettings, load_realtime_config
-from .realtime import RealtimeDataFetcher
 
 
 @dataclass
@@ -41,6 +40,8 @@ class Position:
     max_drawdown_pct: float | None
     take_profit_price: float | None = None
     stop_loss_price: float | None = None
+    size: float | None = None
+    signed_notional: float | None = None
 
     def exposure_relative_to(self, balance: float) -> float:
         if balance == 0:
@@ -54,12 +55,31 @@ class Position:
 
 
 @dataclass
+class Order:
+    """Representation of an open order."""
+
+    symbol: str
+    side: str
+    order_type: str
+    price: float | None
+    amount: float | None
+    remaining: float | None
+    status: str
+    reduce_only: bool
+    stop_price: float | None = None
+    notional: float | None = None
+    order_id: str | None = None
+    created_at: str | None = None
+
+
+@dataclass
 class Account:
     """Account level snapshot."""
 
     name: str
     balance: float
     positions: Sequence[Position]
+    orders: Sequence[Order] = ()
 
     def total_abs_notional(self) -> float:
         return sum(abs(p.notional) for p in self.positions)
@@ -71,6 +91,36 @@ class Account:
         if self.balance == 0:
             return 0.0
         return self.total_abs_notional() / self.balance
+
+    def net_notional(self) -> float:
+        total = 0.0
+        for position in self.positions:
+            if position.signed_notional is not None:
+                total += position.signed_notional
+            else:
+                total += position.notional if position.side.lower() == "long" else -position.notional
+        return total
+
+    def gross_exposure_pct(self) -> float:
+        return self.exposure_pct()
+
+    def net_exposure_pct(self) -> float:
+        if self.balance == 0:
+            return 0.0
+        return self.net_notional() / self.balance
+
+    def exposures_by_symbol(self) -> Dict[str, Dict[str, float]]:
+        exposures: Dict[str, Dict[str, float]] = {}
+        for position in self.positions:
+            signed = (
+                position.signed_notional
+                if position.signed_notional is not None
+                else position.notional if position.side.lower() == "long" else -position.notional
+            )
+            data = exposures.setdefault(position.symbol, {"gross": 0.0, "net": 0.0})
+            data["gross"] += abs(signed)
+            data["net"] += signed
+        return exposures
 
 
 @dataclass
@@ -111,6 +161,8 @@ def _parse_position(raw: Dict[str, Any]) -> Position:
     if missing:
         raise ValueError(f"Position missing required fields: {missing}")
 
+    size_raw = raw.get("size")
+    signed_notional_raw = raw.get("signed_notional")
     return Position(
         symbol=str(raw["symbol"]),
         side=str(raw.get("side", "")),
@@ -143,6 +195,12 @@ def _parse_position(raw: Dict[str, Any]) -> Position:
             if raw.get("stop_loss_price") is not None
             else None
         ),
+        size=float(size_raw) if size_raw not in (None, "") else None,
+        signed_notional=(
+            float(signed_notional_raw)
+            if signed_notional_raw not in (None, "")
+            else None
+        ),
     )
 
 
@@ -152,7 +210,42 @@ def _parse_account(raw: Dict[str, Any]) -> Account:
 
     positions_raw = raw.get("positions", [])
     positions = [_parse_position(pos) for pos in positions_raw]
-    return Account(name=str(raw["name"]), balance=float(raw["balance"]), positions=positions)
+    orders_raw = raw.get("open_orders") or raw.get("orders") or []
+    orders = [_parse_order(order) for order in orders_raw]
+    return Account(
+        name=str(raw["name"]),
+        balance=float(raw["balance"]),
+        positions=positions,
+        orders=orders,
+    )
+
+
+def _parse_order(raw: Mapping[str, Any]) -> Order:
+    symbol = str(raw.get("symbol", ""))
+    side = str(raw.get("side", "")).lower()
+    order_type = str(raw.get("type") or raw.get("order_type") or "").lower()
+    price = raw.get("price")
+    amount = raw.get("amount")
+    remaining = raw.get("remaining" if "remaining" in raw else "remaining_amount")
+    reduce_only_raw = raw.get("reduce_only") if "reduce_only" in raw else raw.get("reduceOnly")
+    stop_price = raw.get("stop_price") if "stop_price" in raw else raw.get("stopPrice")
+    notional = raw.get("notional")
+    created_at = raw.get("created_at") if "created_at" in raw else raw.get("createdAt")
+    order_id = raw.get("order_id") if "order_id" in raw else raw.get("orderId") or raw.get("id")
+    return Order(
+        symbol=symbol,
+        side=side,
+        order_type=order_type,
+        price=float(price) if price not in (None, "") else None,
+        amount=float(amount) if amount not in (None, "") else None,
+        remaining=float(remaining) if remaining not in (None, "") else None,
+        status=str(raw.get("status", "")),
+        reduce_only=bool(reduce_only_raw),
+        stop_price=float(stop_price) if stop_price not in (None, "") else None,
+        notional=float(notional) if notional not in (None, "") else None,
+        order_id=str(order_id) if order_id not in (None, "") else None,
+        created_at=str(created_at) if created_at not in (None, "") else None,
+    )
 
 
 def _parse_thresholds(raw: Dict[str, Any]) -> AlertThresholds:
@@ -230,7 +323,7 @@ def render_dashboard(
 ) -> str:
     lines: List[str] = []
     lines.append("=" * 80)
-    lines.append("Passivbot Risk Management Dashboard")
+    lines.append("Risk Management Dashboard")
     lines.append(f"Snapshot generated at: {generated_at.astimezone(timezone.utc).isoformat()}")
     lines.append("=" * 80)
     lines.append("")
@@ -334,7 +427,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--custom-endpoints",
         help=(
             "Override custom endpoint behaviour. Provide a JSON file path to reuse the same "
-            "proxy configuration as Passivbot, 'auto' to enable auto-discovery, or 'none' to "
+            "proxy configuration as the trading system, 'auto' to enable auto-discovery, or 'none' to "
             "disable overrides."
         ),
     )
@@ -358,6 +451,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 async def _run_cli(args: argparse.Namespace) -> int:
+    from .realtime import RealtimeDataFetcher
+
     realtime_fetcher: RealtimeDataFetcher | None = None
     if args.realtime_config:
         realtime_config = load_realtime_config(Path(args.realtime_config))

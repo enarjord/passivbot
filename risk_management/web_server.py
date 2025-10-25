@@ -52,7 +52,7 @@ def _determine_uvicorn_logging(config) -> tuple[dict | None, str]:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Launch the Passivbot risk dashboard web UI")
+    parser = argparse.ArgumentParser(description="Launch the risk dashboard web UI")
     parser.add_argument("--config", type=Path, required=True, help="Path to the realtime configuration file")
     parser.add_argument("--host", default="0.0.0.0", help="Host address for the web server")
     parser.add_argument("--port", type=int, default=8000, help="Port for the web server")
@@ -60,8 +60,8 @@ def main(argv: list[str] | None = None) -> None:
         "--custom-endpoints",
         help=(
             "Override custom endpoint behaviour. Provide a JSON file path to reuse the same "
-            "proxy configuration as Passivbot, 'auto' to enable auto-discovery, or 'none' to "
-            "disable overrides."
+            "proxy configuration as the trading system, 'auto' to enable auto-discovery, or "
+            "'none' to disable overrides."
         ),
     )
     parser.add_argument("--reload", action="store_true", help="Enable autoreload (development only)")

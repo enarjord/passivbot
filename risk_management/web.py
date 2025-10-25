@@ -1,4 +1,4 @@
-"""FastAPI powered web dashboard for Passivbot risk management."""
+"""FastAPI powered web dashboard for live risk management."""
 
 from __future__ import annotations
 
@@ -53,6 +53,9 @@ class RiskDashboardService:
     async def close(self) -> None:
         await self._fetcher.close()
 
+    async def trigger_kill_switch(self, account_name: str | None = None) -> Dict[str, Any]:
+        return await self._fetcher.execute_kill_switch(account_name)
+
 
 def create_app(
     config: RealtimeConfig,
@@ -73,7 +76,7 @@ def create_app(
         )
     assert auth_manager is not None  # for mypy/static tools
 
-    app = FastAPI(title="Passivbot Risk Dashboard")
+    app = FastAPI(title="Risk Management Dashboard")
     app.state.service = service
     app.state.auth_manager = auth_manager
 
@@ -160,6 +163,22 @@ def create_app(
         snapshot = await service.fetch_snapshot()
         view_model = build_presentable_snapshot(snapshot)
         return JSONResponse(view_model)
+
+    @app.post("/api/accounts/{account_name}/kill-switch", response_class=JSONResponse)
+    async def api_kill_switch(
+        account_name: str,
+        service: RiskDashboardService = Depends(get_service),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        target = account_name.strip()
+        try:
+            if not target or target.lower() == "all":
+                result = await service.trigger_kill_switch()
+            else:
+                result = await service.trigger_kill_switch(target)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        return JSONResponse(result)
 
     @app.on_event("shutdown")
     async def shutdown() -> None:  # pragma: no cover - FastAPI lifecycle
