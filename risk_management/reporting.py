@@ -5,6 +5,13 @@ from __future__ import annotations
 import asyncio
 import csv
 import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable, Mapping, NamedTuple
+
+
+class StoredReport(NamedTuple):
+  
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +42,7 @@ class StoredReport:
 @dataclass(slots=True)
 
 class StoredReport:
+
     """Metadata about a stored report."""
 
     account: str
@@ -42,6 +50,8 @@ class StoredReport:
     path: Path
     created_at: datetime
     size: int
+
+
 
 
     def to_view(self) -> dict[str, Any]:
