@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import List
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -191,6 +192,40 @@ def test_load_realtime_config_expands_user_path(tmp_path: Path, monkeypatch) -> 
     config = load_realtime_config(config_path)
     assert config.accounts[0].credentials["apiKey"] == "x"
     assert config.config_root == config_path.parent.resolve()
+
+
+def test_debug_logging_enabled_for_global_flag(tmp_path: Path, monkeypatch) -> None:
+    payload = _base_payload()
+    payload["debug_api_payloads"] = True
+    config_path = _write_config(tmp_path, payload)
+
+    calls: List[None] = []
+
+    def record_call() -> None:
+        calls.append(None)
+
+    monkeypatch.setattr("risk_management.configuration._ensure_debug_logging_enabled", record_call)
+
+    load_realtime_config(config_path)
+
+    assert calls, "expected debug logging to be enabled when global flag is set"
+
+
+def test_debug_logging_enabled_for_account_flag(tmp_path: Path, monkeypatch) -> None:
+    payload = _base_payload()
+    payload["accounts"][0]["debug_api_payloads"] = True
+    config_path = _write_config(tmp_path, payload)
+
+    calls: List[None] = []
+
+    def record_call() -> None:
+        calls.append(None)
+
+    monkeypatch.setattr("risk_management.configuration._ensure_debug_logging_enabled", record_call)
+
+    load_realtime_config(config_path)
+
+    assert calls, "expected debug logging to be enabled when account flag is set"
 
 
 def test_load_realtime_config_discovers_api_keys_file(tmp_path: Path) -> None:
