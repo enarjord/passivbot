@@ -228,6 +228,22 @@ def test_debug_logging_enabled_for_account_flag(tmp_path: Path, monkeypatch) -> 
     assert calls, "expected debug logging to be enabled when account flag is set"
 
 
+def test_auth_https_only_flag_respected(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["auth"] = {
+        "secret_key": "abc",
+        "users": {"demo": "hashed"},
+        "https_only": False,
+    }
+
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_realtime_config(config_path)
+
+    assert config.auth is not None
+    assert config.auth.https_only is False
+
+
 def test_load_realtime_config_parses_email_settings(tmp_path: Path) -> None:
     payload = _base_payload()
     payload["email"] = {

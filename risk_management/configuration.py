@@ -435,7 +435,13 @@ def _parse_auth(auth_raw: Mapping[str, Any] | None) -> AuthConfig | None:
     else:
         users = {str(entry["username"]): str(entry["password_hash"]) for entry in users_raw}
     session_cookie = str(auth_raw.get("session_cookie_name", "risk_dashboard_session"))
-    return AuthConfig(secret_key=str(secret_key), users=users, session_cookie_name=session_cookie)
+    https_only = _coerce_bool(auth_raw.get("https_only"), True)
+    return AuthConfig(
+        secret_key=str(secret_key),
+        users=users,
+        session_cookie_name=session_cookie,
+        https_only=https_only,
+    )
 
 
 def load_realtime_config(path: Path) -> RealtimeConfig:

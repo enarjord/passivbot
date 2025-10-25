@@ -134,6 +134,33 @@ it only for development environments that cannot serve TLS. Supply
 (optionally with `--ssl-keyfile-password`) when launching the web server to
 enable HTTPS directly. Both paths must be provided together or the server will
 refuse to start.
+
+### Automating TLS with Let's Encrypt
+
+Passivbot can request and renew certificates automatically through
+[`certbot`](https://certbot.eff.org/). Provide one or more `--letsencrypt-domain`
+flags and the server will invoke certbot in standalone mode before launching
+Uvicorn:
+
+```bash
+python -m risk_management.web_server \
+  --config risk_management/realtime_config.json \
+  --letsencrypt-domain dashboard.example.com \
+  --letsencrypt-email sre@example.com \
+  --letsencrypt-http-port 80
+```
+
+The helper reuses existing certificates until renewal is required (`certbot
+--keep-until-expiring`). Set `--letsencrypt-staging` (optionally with
+`--letsencrypt-dry-run`) while testing to avoid production rate limits. To store
+certbot data outside the default `/etc/letsencrypt` directory, pass
+`--letsencrypt-config-dir`, `--letsencrypt-work-dir`, and `--letsencrypt-logs-dir`
+paths.
+
+When managing certificates separately, point `--letsencrypt-webroot` at the
+directory certbot writes `/.well-known/acme-challenge/*` files into. The web
+server exposes the directory automatically so http-01 challenges succeed during
+renewals triggered by external automation.
 endpoints.
 
 your API key store.  The optional `params.balance` and `params.positions`
