@@ -1,8 +1,9 @@
 use crate::constants::{LONG, SHORT};
-use crate::types::{Order, OrderType};
+use crate::entries::calc_min_entry_qty;
+use crate::types::{ExchangeParams, Order, OrderType};
 use crate::utils::{
-    calc_new_psize_pprice, calc_pprice_diff_int, calc_pside_price_diff_int, calc_wallet_exposure,
-    round_dn, round_up,
+    calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, calc_pprice_diff_int,
+    calc_pside_price_diff_int, calc_wallet_exposure, cost_to_qty, round_dn, round_up,
 };
 use std::collections::HashMap;
 
@@ -261,6 +262,262 @@ pub fn gate_entries_by_twel(
         .into_iter()
         .map(|(_, decision)| decision)
         .collect()
+}
+
+#[derive(Clone, Debug)]
+pub struct UnstuckPositionInput {
+    pub idx: usize,
+    pub side: usize,
+    pub position_size: f64,
+    pub position_price: f64,
+    pub wallet_exposure_limit: f64,
+    pub unstuck_threshold: f64,
+    pub unstuck_close_pct: f64,
+    pub unstuck_ema_dist: f64,
+    pub ema_band_upper: f64,
+    pub ema_band_lower: f64,
+    pub current_price: f64,
+    pub price_step: f64,
+    pub qty_step: f64,
+    pub min_qty: f64,
+    pub min_cost: f64,
+    pub c_mult: f64,
+}
+
+pub fn calc_unstucking_action(
+    balance: f64,
+    allowance_long: f64,
+    allowance_short: f64,
+    positions: &[UnstuckPositionInput],
+) -> Option<(usize, usize, Order)> {
+    if balance <= 0.0 || positions.is_empty() {
+        return None;
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct Candidate<'a> {
+        input: &'a UnstuckPositionInput,
+        pprice_diff: f64,
+    }
+
+    let mut stuck_positions: Vec<Candidate> = Vec::new();
+
+    for input in positions {
+        let allowance = match input.side {
+            LONG => allowance_long,
+            SHORT => allowance_short,
+            _ => 0.0,
+        };
+        if allowance <= 0.0 {
+            continue;
+        }
+
+        if !input.position_price.is_finite() || input.position_price <= 0.0 {
+            continue;
+        }
+        let size_abs = input.position_size.abs();
+        if size_abs <= f64::EPSILON {
+            continue;
+        }
+
+        let wallet_exposure =
+            calc_wallet_exposure(input.c_mult, balance, size_abs, input.position_price);
+
+        let unstuck_threshold = input.unstuck_threshold;
+        if unstuck_threshold < 0.0 {
+            continue;
+        }
+        if input.wallet_exposure_limit > 0.0
+            && wallet_exposure / input.wallet_exposure_limit <= unstuck_threshold
+        {
+            continue;
+        }
+
+        if !input.current_price.is_finite() || input.current_price <= 0.0 {
+            continue;
+        }
+
+        let price_step = if input.price_step > 0.0 {
+            input.price_step
+        } else {
+            0.0
+        };
+
+        let ema_price = match input.side {
+            LONG => {
+                if !input.ema_band_upper.is_finite() || input.ema_band_upper <= 0.0 {
+                    continue;
+                }
+                let target = input.ema_band_upper * (1.0 + input.unstuck_ema_dist);
+                let rounded = if price_step > 0.0 {
+                    round_up(target, price_step)
+                } else {
+                    target
+                };
+                if !rounded.is_finite() || rounded <= 0.0 {
+                    continue;
+                }
+                rounded
+            }
+            SHORT => {
+                if !input.ema_band_lower.is_finite() || input.ema_band_lower <= 0.0 {
+                    continue;
+                }
+                let target = input.ema_band_lower * (1.0 - input.unstuck_ema_dist);
+                let rounded = if price_step > 0.0 {
+                    round_dn(target, price_step)
+                } else {
+                    target
+                };
+                if !rounded.is_finite() || rounded <= 0.0 {
+                    continue;
+                }
+                rounded
+            }
+            _ => continue,
+        };
+
+        let meets_trigger = match input.side {
+            LONG => input.current_price >= ema_price,
+            SHORT => input.current_price <= ema_price,
+            _ => false,
+        };
+        if !meets_trigger {
+            continue;
+        }
+
+        let pprice_diff =
+            calc_pprice_diff_int(input.side, input.position_price, input.current_price);
+        if !pprice_diff.is_finite() {
+            continue;
+        }
+
+        stuck_positions.push(Candidate { input, pprice_diff });
+    }
+
+    if stuck_positions.is_empty() {
+        return None;
+    }
+
+    stuck_positions.sort_by(|a, b| {
+        match a
+            .pprice_diff
+            .partial_cmp(&b.pprice_diff)
+            .unwrap_or(std::cmp::Ordering::Equal)
+        {
+            std::cmp::Ordering::Equal => a.input.idx.cmp(&b.input.idx),
+            other => other,
+        }
+    });
+
+    for candidate in stuck_positions {
+        let input = candidate.input;
+        let allowance = match input.side {
+            LONG => allowance_long,
+            SHORT => allowance_short,
+            _ => 0.0,
+        };
+        if allowance <= 0.0 {
+            continue;
+        }
+
+        let exchange_params = ExchangeParams {
+            qty_step: input.qty_step,
+            price_step: input.price_step,
+            min_qty: input.min_qty,
+            min_cost: input.min_cost,
+            c_mult: input.c_mult,
+        };
+        let min_entry_qty = calc_min_entry_qty(input.current_price, &exchange_params);
+
+        match input.side {
+            LONG => {
+                let size_abs = input.position_size.max(0.0);
+                if size_abs <= f64::EPSILON {
+                    continue;
+                }
+                let target_qty = cost_to_qty(
+                    balance * input.wallet_exposure_limit * input.unstuck_close_pct,
+                    input.current_price,
+                    input.c_mult,
+                );
+                let target_qty = round_dn(target_qty, input.qty_step).max(0.0);
+                let mut close_qty = -f64::min(size_abs, f64::max(min_entry_qty, target_qty));
+                if close_qty == 0.0 {
+                    continue;
+                }
+                let pnl_if_closed = calc_pnl_long(
+                    input.position_price,
+                    input.current_price,
+                    close_qty,
+                    input.c_mult,
+                );
+                let pnl_abs = pnl_if_closed.abs();
+                if pnl_if_closed < 0.0 && pnl_abs > allowance {
+                    let scaled_qty = close_qty.abs() * (allowance / pnl_abs);
+                    let scaled_qty = f64::min(size_abs, scaled_qty);
+                    let scaled_qty = f64::max(min_entry_qty, round_dn(scaled_qty, input.qty_step));
+                    close_qty = -scaled_qty;
+                }
+                if close_qty == 0.0 {
+                    continue;
+                }
+                return Some((
+                    input.idx,
+                    LONG,
+                    Order {
+                        qty: close_qty,
+                        price: input.current_price,
+                        order_type: OrderType::CloseUnstuckLong,
+                    },
+                ));
+            }
+            SHORT => {
+                let size_abs = input.position_size.abs();
+                if size_abs <= f64::EPSILON {
+                    continue;
+                }
+                let target_qty = cost_to_qty(
+                    balance * input.wallet_exposure_limit * input.unstuck_close_pct,
+                    input.current_price,
+                    input.c_mult,
+                );
+                let target_qty = round_dn(target_qty, input.qty_step).max(0.0);
+                let mut close_qty = f64::min(size_abs, f64::max(min_entry_qty, target_qty));
+                if close_qty == 0.0 {
+                    continue;
+                }
+                let pnl_if_closed = calc_pnl_short(
+                    input.position_price,
+                    input.current_price,
+                    close_qty,
+                    input.c_mult,
+                );
+                let pnl_abs = pnl_if_closed.abs();
+                if pnl_if_closed < 0.0 && pnl_abs > allowance {
+                    let scaled_qty = close_qty * (allowance / pnl_abs);
+                    let scaled_qty = f64::min(size_abs, scaled_qty);
+                    let scaled_qty = f64::max(min_entry_qty, round_dn(scaled_qty, input.qty_step));
+                    close_qty = scaled_qty;
+                }
+                if close_qty == 0.0 {
+                    continue;
+                }
+                return Some((
+                    input.idx,
+                    SHORT,
+                    Order {
+                        qty: close_qty,
+                        price: input.current_price,
+                        order_type: OrderType::CloseUnstuckShort,
+                    },
+                ));
+            }
+            _ => continue,
+        }
+    }
+
+    None
 }
 
 #[derive(Clone, Debug)]
