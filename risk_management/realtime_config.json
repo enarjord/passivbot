@@ -7,7 +7,7 @@
   },
   "reports_dir": "../risk_reports",
   "grafana": {
-    "base_url": "https://grafana.example.com/",
+    "base_url": "https://108.160.138.76:8001/",
     "default_height": 620,
     "dashboards": [
       {
@@ -25,7 +25,7 @@
 
   "accounts": [
     {
-      "name": "Binance Futures",
+      "name": "Binance Futures TheAlter",
       "exchange": "binanceusdm",
       "api_key_id": "binance_01",
       "settle_currency": "USDT"
@@ -41,7 +41,7 @@
       }
     },
     {
-      "name": "Bybit USDT Perpetuals",
+      "name": "Bybit USDT Perpetuals AlphaMint",
       "exchange": "bybit",
       "api_key_id": "bybit_01",
       "settle_currency": "USDT",
@@ -58,11 +58,11 @@
     "loss_threshold_pct": -0.08
   },
   "email": {
-    "host": "smtp.example.com",
+    "host": "smtppro.zoho.in",
     "port": 587,
-    "username": "alerts@example.com",
-    "password": "replace-with-app-password",
-    "sender": "alerts@example.com",
+    "username": "admin@plezna.com",
+    "password": "L4naQ6CKK4Ja",
+    "sender": "admin@plezna.com",
     "use_tls": true
   },
   "notification_channels": [
@@ -72,6 +72,7 @@
   "auth": {
     "secret_key": "jhgjhguyg^^554$$67CFCGFDGFd",
     "session_cookie_name": "risk_dashboard_session",
+    "https_only": false,
     "users": {
       "admin": "$2b$12$0ZCLkFp6iuhlEFshgPCBz.0dXxmRCV4vcjxHfRh0qKtzc79Pj9c5W"
     }

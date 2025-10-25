@@ -72,7 +72,7 @@ def _configure_default_logging(debug_level: int = 1) -> bool:
     _ensure_logger_level(risk_logger, desired_level)
 
     return not already_configured
-=======
+
 def _configure_default_logging(debug_level: int = 1) -> bool:
 
 def _configure_default_logging() -> bool:
