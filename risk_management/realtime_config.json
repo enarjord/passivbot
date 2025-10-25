@@ -5,6 +5,7 @@
     "path": "/root/passivbot/configs/custom_endpoints.json",
     "autodiscover": false
   },
+  "reports_dir": "../risk_reports",
   "accounts": [
     {
       "name": "Binance Futures",

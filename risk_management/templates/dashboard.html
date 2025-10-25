@@ -32,6 +32,87 @@
     .page-section[hidden] {
       display: none;
     }
+
+    .button.secondary {
+      background: rgba(148, 163, 184, 0.2);
+      color: var(--text);
+    }
+
+    .button.secondary:hover {
+      background: rgba(148, 163, 184, 0.3);
+      box-shadow: 0 8px 20px rgba(148, 163, 184, 0.2);
+    }
+
+    .status-message {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .status-message.success {
+      color: var(--success);
+    }
+
+    .status-message.error {
+      color: var(--danger);
+    }
+
+    .report-section {
+      margin-top: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .report-actions {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.5rem;
+    }
+
+    .report-list {
+      width: 100%;
+      background: rgba(15, 23, 42, 0.5);
+      border-radius: 0.75rem;
+      padding: 0.75rem 1rem;
+    }
+
+    .report-list__items {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .report-list__item {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 0.75rem;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+      padding-bottom: 0.5rem;
+    }
+
+    .report-list__item:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+
+    .report-list__meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .report-list__empty {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin: 0;
+    }
   </style>
 {% endblock %}
 
@@ -154,7 +235,7 @@
               </div>
               <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;">
                 <button type="button" class="button danger" data-kill-switch="{{ account.name }}">Kill switch</button>
-                <div class="status" data-kill-status="{{ account.name }}" style="display: none;"></div>
+                <div class="status-message" data-kill-status="{{ account.name }}" hidden></div>
               </div>
             </div>
             {% if account.message %}
@@ -206,6 +287,15 @@
                 </table>
               </div>
             {% endif %}
+            <div class="report-section">
+              <div class="report-actions">
+                <button type="button" class="button secondary" data-generate-report="{{ account.name }}">Generate report</button>
+                <div class="status-message" data-report-status="{{ account.name }}" hidden></div>
+              </div>
+              <div class="report-list" data-report-list="{{ account.name }}">
+                <p class="report-list__empty">No stored reports yet.</p>
+              </div>
+            </div>
             {% if account.positions %}
               <div class="table-wrapper" style="overflow-x: auto;">
                 <table>
@@ -396,6 +486,18 @@
       return `${number.toFixed(2)}%`;
     };
 
+    const formatBytes = (value) => {
+      const number = Number(value);
+      if (!Number.isFinite(number) || number <= 0) {
+        return "0 B";
+      }
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      const exponent = Math.min(Math.floor(Math.log(number) / Math.log(1024)), units.length - 1);
+      const size = number / 1024 ** exponent;
+      const precision = exponent === 0 ? 0 : 2;
+      return `${size.toFixed(precision)} ${units[exponent]}`;
+    };
+
     const renderPortfolio = (snapshot) => {
       const portfolioSection = document.querySelector(
         '[data-page-section="overview"] [data-portfolio]'
@@ -469,7 +571,8 @@
       if (!accountsContainer) {
         return;
       }
-      accountsContainer.innerHTML = (snapshot.accounts || [])
+      const accountsData = Array.isArray(snapshot.accounts) ? snapshot.accounts : [];
+      accountsContainer.innerHTML = accountsData
         .map((account) => {
           const exposures = Array.isArray(account.symbol_exposures)
             ? account.symbol_exposures
@@ -540,7 +643,7 @@
                 </div>
                 <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;">
                   <button type="button" class="button danger" data-kill-switch="${account.name}">Kill switch</button>
-                  <div class="status" data-kill-status="${account.name}" style="display: none;"></div>
+                  <div class="status-message" data-kill-status="${account.name}" hidden></div>
                 </div>
               </div>
               ${account.message ? `<div class="status">${account.message}</div>` : ""}
@@ -580,6 +683,15 @@
                     </table>
                   </div>`
                 : ""}
+              <div class="report-section">
+                <div class="report-actions">
+                  <button type="button" class="button secondary" data-generate-report="${account.name}">Generate report</button>
+                  <div class="status-message" data-report-status="${account.name}" hidden></div>
+                </div>
+                <div class="report-list" data-report-list="${account.name}">
+                  <p class="report-list__empty">No stored reports yet.</p>
+                </div>
+              </div>
               ${positions.length > 0
                 ? `<div class="table-wrapper" style=\"overflow-x: auto;\">
                     <table>
@@ -630,6 +742,150 @@
           `;
         })
         .join("");
+      accountsData.forEach((account) => {
+        if (account && account.name) {
+          loadAccountReports(account.name);
+        }
+      });
+    };
+
+    const setReportStatus = (accountName, message, variant = "info") => {
+      const statusEl = document.querySelector(`[data-report-status="${accountName}"]`);
+      if (!statusEl) {
+        return;
+      }
+      statusEl.classList.remove("success", "error");
+      if (!message) {
+        statusEl.textContent = "";
+        statusEl.hidden = true;
+        return;
+      }
+      statusEl.textContent = message;
+      statusEl.hidden = false;
+      if (variant === "success") {
+        statusEl.classList.add("success");
+      } else if (variant === "error") {
+        statusEl.classList.add("error");
+      }
+    };
+
+    const renderReportList = (accountName, reports) => {
+      const container = document.querySelector(`[data-report-list="${accountName}"]`);
+      if (!container) {
+        return;
+      }
+      if (!Array.isArray(reports) || reports.length === 0) {
+        container.innerHTML = '<p class="report-list__empty">No stored reports yet.</p>';
+        return;
+      }
+      const items = reports
+        .map((report) => {
+          const timestamp = report.created_at
+            ? new Date(report.created_at).toLocaleString()
+            : "";
+          const size = formatBytes(report.size ?? 0);
+          const filename = report.filename || `report-${report.report_id}.csv`;
+          const downloadUrl = report.download_url || "#";
+          return `
+            <li class="report-list__item">
+              <div>
+                <a href="${downloadUrl}" class="button" style="padding: 0.4rem 0.9rem;" download="${filename}">
+                  Download
+                </a>
+                <span style="margin-left: 0.75rem; font-weight: 600;">${filename}</span>
+              </div>
+              <div class="report-list__meta">
+                <span>${timestamp}</span>
+                <span>${size}</span>
+              </div>
+            </li>
+          `;
+        })
+        .join("");
+      container.innerHTML = `<ul class="report-list__items">${items}</ul>`;
+    };
+
+    const loadAccountReports = async (accountName) => {
+      if (!accountName) {
+        return;
+      }
+      try {
+        const response = await fetch(`/api/accounts/${encodeURIComponent(accountName)}/reports`, {
+          credentials: "include",
+        });
+        if (!response.ok) {
+          throw new Error(`Failed to load reports (${response.status})`);
+        }
+        const payload = await response.json();
+        renderReportList(accountName, payload.reports || []);
+        const statusEl = document.querySelector(`[data-report-status="${accountName}"]`);
+        if (statusEl && statusEl.classList.contains("error")) {
+          setReportStatus(accountName, "");
+        }
+      } catch (error) {
+        console.error(error);
+        setReportStatus(accountName, "Unable to load stored reports.", "error");
+      }
+    };
+
+    const triggerReportDownload = (downloadUrl, filename) => {
+      if (!downloadUrl) {
+        return;
+      }
+      const anchor = document.createElement("a");
+      anchor.href = downloadUrl;
+      if (filename) {
+        anchor.download = filename;
+      }
+      anchor.rel = "noopener";
+      anchor.style.display = "none";
+      document.body.appendChild(anchor);
+      anchor.click();
+      requestAnimationFrame(() => anchor.remove());
+    };
+
+    const generateAccountReport = async (accountName, button) => {
+      if (!accountName) {
+        return;
+      }
+      const statusEl = document.querySelector(`[data-report-status="${accountName}"]`);
+      if (statusEl) {
+        statusEl.hidden = false;
+        statusEl.classList.remove("success", "error");
+        statusEl.textContent = "Generating report...";
+      }
+      if (button) {
+        button.disabled = true;
+      }
+      try {
+        const response = await fetch(`/api/accounts/${encodeURIComponent(accountName)}/reports`, {
+          method: "POST",
+          credentials: "include",
+        });
+        if (!response.ok) {
+          throw new Error(`Failed to generate report (${response.status})`);
+        }
+        const payload = await response.json();
+        if (statusEl) {
+          statusEl.textContent = "Report generated.";
+          statusEl.classList.remove("error");
+          statusEl.classList.add("success");
+        }
+        await loadAccountReports(accountName);
+        triggerReportDownload(payload.download_url, payload.filename);
+      } catch (error) {
+        console.error(error);
+        if (statusEl) {
+          statusEl.textContent = `Report generation failed: ${error.message}`;
+          statusEl.classList.remove("success");
+          statusEl.classList.add("error");
+          statusEl.hidden = false;
+        }
+      } finally {
+        if (button) {
+          button.disabled = false;
+        }
+      }
     };
 
     const renderAlerts = (snapshot) => {
@@ -751,13 +1007,27 @@
     }
 
     document.addEventListener("click", (event) => {
-      const button = event.target.closest("[data-kill-switch]");
-      if (!button) {
+      const killButton = event.target.closest("[data-kill-switch]");
+      if (killButton) {
+        const accountName = killButton.getAttribute("data-kill-switch");
+        triggerKillSwitch(accountName, killButton);
         return;
       }
-      const accountName = button.getAttribute("data-kill-switch");
-      triggerKillSwitch(accountName, button);
+      const reportButton = event.target.closest("[data-generate-report]");
+      if (reportButton) {
+        const accountName = reportButton.getAttribute("data-generate-report");
+        generateAccountReport(accountName, reportButton);
+      }
     });
+
+    document
+      .querySelectorAll('[data-page-section="accounts"] [data-report-list]')
+      .forEach((element) => {
+        const accountName = element.getAttribute("data-report-list");
+        if (accountName) {
+          loadAccountReports(accountName);
+        }
+      });
 
     setInterval(poll, REFRESH_INTERVAL_MS);
     poll();
