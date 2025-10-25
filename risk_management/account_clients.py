@@ -71,6 +71,10 @@ class AccountClientProtocol(abc.ABC):
     async def close(self) -> None:
         """Close any open network connections."""
 
+    @abc.abstractmethod
+    async def kill_switch(self) -> Dict[str, Any]:
+        """Cancel open orders and close all positions for the account."""
+
 
 def _set_exchange_field(client: Any, key: str, value: Any, aliases: Sequence[str]) -> None:
     """Assign ``value`` to ``key`` on ``client`` and store aliases when possible."""
@@ -257,6 +261,8 @@ class CCXTAccountClient(AccountClientProtocol):
         self.client = _instantiate_ccxt_client(config.exchange, credentials)
         self._balance_params = dict(config.params.get("balance", {}))
         self._positions_params = dict(config.params.get("positions", {}))
+        self._orders_params = dict(config.params.get("orders", {}))
+        self._close_params = dict(config.params.get("close", {}))
         self._markets_loaded: asyncio.Lock | None = None
         self._debug_api_payloads = bool(config.debug_api_payloads)
 
@@ -289,7 +295,11 @@ class CCXTAccountClient(AccountClientProtocol):
         await self._ensure_markets()
         balance_raw = await self.client.fetch_balance(params=self._balance_params)
         self._log_exchange_payload("fetch_balance", balance_raw, self._balance_params)
-        from .realtime import _extract_balance, _parse_position  # circular safe import
+        from .realtime import (  # circular safe import
+            _extract_balance,
+            _parse_order,
+            _parse_position,
+        )
 
         balance_value = _extract_balance(balance_raw, self.config.settle_currency)
         positions_raw: Iterable[Mapping[str, Any]] = []
@@ -319,14 +329,174 @@ class CCXTAccountClient(AccountClientProtocol):
             logger.debug(
                 "[%s] fetch_positions not available on exchange client", self.config.name
             )
+
+        open_orders: list[Dict[str, Any]] = []
+        if hasattr(self.client, "fetch_open_orders"):
+            try:
+                raw_orders: Iterable[Mapping[str, Any]] | None = None
+                if self.config.symbols:
+                    combined: list[Mapping[str, Any]] = []
+                    for symbol in self.config.symbols:
+                        params = dict(self._orders_params)
+                        raw = await self.client.fetch_open_orders(symbol, params=params)
+                        self._log_exchange_payload(
+                            "fetch_open_orders",
+                            raw,
+                            {**params, "symbol": symbol},
+                        )
+                        if raw:
+                            combined.extend(raw)
+                    raw_orders = combined
+                else:
+                    raw_orders = await self.client.fetch_open_orders(params=self._orders_params)
+                    self._log_exchange_payload(
+                        "fetch_open_orders", raw_orders, self._orders_params
+                    )
+                for order_raw in raw_orders or []:
+                    parsed_order = _parse_order(order_raw)
+                    if parsed_order is not None:
+                        open_orders.append(parsed_order)
+            except BaseError as exc:
+                logger.warning(
+                    "Failed to fetch open orders for %s: %s", self.config.name, exc, exc_info=True
+                )
+                if self._debug_api_payloads:
+                    logger.debug(
+                        "[%s] fetch_open_orders params=%s raised=%s",
+                        self.config.name,
+                        _stringify_payload(self._orders_params),
+                        exc,
+                    )
+        elif self._debug_api_payloads:
+            logger.debug(
+                "[%s] fetch_open_orders not available on exchange client", self.config.name
+            )
+
         return {
             "name": self.config.name,
             "balance": balance_value,
             "positions": positions,
+            "open_orders": open_orders,
         }
 
     async def close(self) -> None:
         await self.client.close()
+
+    async def kill_switch(self) -> Dict[str, Any]:
+        await self._ensure_markets()
+        summary: Dict[str, Any] = {
+            "cancelled_orders": [],
+            "failed_order_cancellations": [],
+            "closed_positions": [],
+            "failed_position_closures": [],
+        }
+        await self._cancel_open_orders(summary)
+        await self._close_positions(summary)
+        return summary
+
+    async def _cancel_open_orders(self, summary: Dict[str, Any]) -> None:
+        if hasattr(self.client, "cancel_all_orders"):
+            try:
+                if self.config.symbols:
+                    for symbol in self.config.symbols:
+                        await self.client.cancel_all_orders(symbol, params=self._orders_params)
+                        summary["cancelled_orders"].append({"symbol": symbol})
+                else:
+                    await self.client.cancel_all_orders(params=self._orders_params)
+                    summary["cancelled_orders"].append({"symbol": None})
+                return
+            except BaseError as exc:
+                logger.warning(
+                    "cancel_all_orders failed for %s: %s", self.config.name, exc, exc_info=True
+                )
+                summary["failed_order_cancellations"].append(
+                    {"error": str(exc), "method": "cancel_all_orders"}
+                )
+
+        if not hasattr(self.client, "fetch_open_orders"):
+            return
+
+        try:
+            symbols = self.config.symbols or [None]
+            for symbol in symbols:
+                params = dict(self._orders_params)
+                orders = await self.client.fetch_open_orders(symbol, params=params)
+                for order in orders or []:
+                    order_id = order.get("id") or order.get("clientOrderId")
+                    if not order_id:
+                        continue
+                    try:
+                        if symbol:
+                            await self.client.cancel_order(order_id, symbol, params=params)
+                        else:
+                            await self.client.cancel_order(order_id, params=params)
+                        summary["cancelled_orders"].append(
+                            {"symbol": symbol or order.get("symbol"), "order_id": order_id}
+                        )
+                    except BaseError as exc:
+                        logger.warning(
+                            "Failed to cancel order %s on %s: %s",
+                            order_id,
+                            self.config.name,
+                            exc,
+                            exc_info=True,
+                        )
+                        summary["failed_order_cancellations"].append(
+                            {
+                                "symbol": symbol or order.get("symbol"),
+                                "order_id": order_id,
+                                "error": str(exc),
+                            }
+                        )
+        except BaseError as exc:
+            logger.warning(
+                "Failed to enumerate open orders for %s: %s", self.config.name, exc, exc_info=True
+            )
+
+    async def _close_positions(self, summary: Dict[str, Any]) -> None:
+        if not hasattr(self.client, "fetch_positions"):
+            return
+
+        try:
+            positions = await self.client.fetch_positions(params=self._positions_params)
+        except BaseError as exc:
+            logger.warning(
+                "Failed to fetch positions for kill switch on %s: %s",
+                self.config.name,
+                exc,
+                exc_info=True,
+            )
+            summary["failed_position_closures"].append({"error": str(exc)})
+            return
+
+        for position in positions or []:
+            size = position.get("contracts") or position.get("size") or position.get("amount")
+            symbol = position.get("symbol") or position.get("id")
+            if not symbol:
+                continue
+            try:
+                qty = abs(float(size))
+            except (TypeError, ValueError):
+                continue
+            if qty == 0:
+                continue
+            side = "sell" if float(size) > 0 else "buy"
+            params = dict(self._close_params)
+            params.setdefault("reduceOnly", True)
+            try:
+                await self.client.create_order(symbol, "market", side, qty, params=params)
+                summary["closed_positions"].append({"symbol": symbol, "side": side, "amount": qty})
+            except BaseError as exc:
+                logger.warning(
+                    "Failed to close position %s on %s: %s",
+                    symbol,
+                    self.config.name,
+                    exc,
+                    exc_info=True,
+                )
+                summary["failed_position_closures"].append(
+                    {"symbol": symbol, "side": side, "amount": qty, "error": str(exc)}
+                )
 
 
 __all__ = [

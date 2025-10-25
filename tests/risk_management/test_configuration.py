@@ -228,6 +228,31 @@ def test_debug_logging_enabled_for_account_flag(tmp_path: Path, monkeypatch) -> 
     assert calls, "expected debug logging to be enabled when account flag is set"
 
 
+def test_load_realtime_config_parses_email_settings(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["email"] = {
+        "host": "smtp.example.com",
+        "port": 2525,
+        "username": "alerts@example.com",
+        "password": "secret",
+        "sender": "alerts@example.com",
+        "use_tls": False,
+        "use_ssl": True,
+    }
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_realtime_config(config_path)
+
+    assert config.email is not None
+    assert config.email.host == "smtp.example.com"
+    assert config.email.port == 2525
+    assert config.email.username == "alerts@example.com"
+    assert config.email.password == "secret"
+    assert config.email.sender == "alerts@example.com"
+    assert config.email.use_tls is False
+    assert config.email.use_ssl is True
+
+
 def test_load_realtime_config_discovers_api_keys_file(tmp_path: Path) -> None:
     repo_root = tmp_path / "passivbot"
     repo_root.mkdir()
