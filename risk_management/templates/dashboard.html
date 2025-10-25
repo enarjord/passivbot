@@ -1,5 +1,40 @@
 {% extends "base.html" %}
 
+{% block head %}
+  <style>
+    .view-nav {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    .view-nav__button {
+      background: rgba(148, 163, 184, 0.15);
+      color: var(--text);
+      border-radius: 0.75rem;
+      padding: 0.6rem 1.25rem;
+      border: 1px solid transparent;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .view-nav__button:hover {
+      background: rgba(148, 163, 184, 0.25);
+    }
+
+    .view-nav__button.active {
+      background: var(--accent);
+      color: #0f172a;
+      border-color: transparent;
+    }
+
+    .page-section[hidden] {
+      display: none;
+    }
+  </style>
+{% endblock %}
+
 {% block header_controls %}
   <div style="display: flex; align-items: center; gap: 1rem;">
     <span class="badge">Logged in as {{ user }}</span>
@@ -10,109 +45,72 @@
 {% endblock %}
 
 {% block content %}
-  <section class="card" data-portfolio>
-    <div style="display: flex; justify-content: space-between; align-items: center;">
-      <div>
-        <h2 style="margin-bottom: 0.5rem;">Portfolio overview</h2>
-        <p style="color: var(--muted); margin: 0;">
-          Snapshot generated at <strong data-overview-generated>{{ snapshot.generated_at }}</strong>
-        </p>
-      </div>
-      <span class="badge {% if snapshot.alerts %}alert{% else %}ok{% endif %}" data-alert-summary>
-        {% if snapshot.alerts %}
-          {{ snapshot.alerts|length }} active alert{{ 's' if snapshot.alerts|length != 1 }}
-        {% else %}
-          All clear
-        {% endif %}
-      </span>
-    </div>
-    <div class="metrics" style="margin-top: 1.5rem;">
-      <div class="metric">
-        <span class="label">Total Balance</span>
-        <span class="value">{{ snapshot.portfolio.balance|currency }}</span>
-      </div>
-      <div class="metric">
-        <span class="label">Gross Exposure</span>
-        <span class="value">{{ snapshot.portfolio.gross_exposure|currency }}</span>
-        <span class="subvalue">{{ snapshot.portfolio.gross_exposure_pct|pct }}</span>
-      </div>
-      <div class="metric">
-        <span class="label">Net Exposure</span>
-        <span class="value {% if snapshot.portfolio.net_exposure >= 0 %}gain{% else %}loss{% endif %}">{{ snapshot.portfolio.net_exposure|currency }}</span>
-        <span class="subvalue {% if snapshot.portfolio.net_exposure_pct >= 0 %}gain{% else %}loss{% endif %}">{{ snapshot.portfolio.net_exposure_pct|pct }}</span>
-      </div>
-    </div>
-    {% if snapshot.portfolio.symbols %}
-      <div class="table-wrapper" style="overflow-x: auto; margin-top: 1.5rem;">
-        <table>
-          <thead>
-            <tr>
-              <th>Symbol</th>
-              <th>Gross Exposure</th>
-              <th>Gross %</th>
-              <th>Net Exposure</th>
-              <th>Net %</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for entry in snapshot.portfolio.symbols %}
-              <tr>
-                <td>{{ entry.symbol }}</td>
-                <td>{{ entry.gross_notional|currency }}</td>
-                <td>{{ entry.gross_pct|pct }}</td>
-                <td class="{% if entry.net_notional >= 0 %}gain{% else %}loss{% endif %}">{{ entry.net_notional|currency }}</td>
-                <td class="{% if entry.net_pct >= 0 %}gain{% else %}loss{% endif %}">{{ entry.net_pct|pct }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <p style="color: var(--muted); margin-top: 1rem;">No active exposures.</p>
-    {% endif %}
-  </section>
+  <nav class="view-nav" role="tablist" aria-label="Dashboard sections">
+    <button
+      type="button"
+      class="view-nav__button active"
+      role="tab"
+      aria-selected="true"
+      data-page-target="overview"
+    >
+      Overview
+    </button>
+    <button
+      type="button"
+      class="view-nav__button"
+      role="tab"
+      aria-selected="false"
+      data-page-target="accounts"
+    >
+      Accounts
+    </button>
+    <button
+      type="button"
+      class="view-nav__button"
+      role="tab"
+      aria-selected="false"
+      data-page-target="alerts"
+    >
+      Alerts &amp; notifications
+    </button>
+  </nav>
 
-  <div data-accounts>
-    {% for account in snapshot.accounts %}
-      <section class="card" data-account="{{ account.name }}">
-        <div class="card-header" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
-          <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-            <h2 style="margin: 0;">{{ account.name }}</h2>
-            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-              <span class="badge">{{ account.positions|length }} position{{ 's' if account.positions|length != 1 }}</span>
-              <span class="badge">{{ account.orders|length }} order{{ 's' if account.orders|length != 1 }}</span>
-            </div>
+  <div class="page-sections">
+    <div class="page-section" data-page-section="overview">
+      <section class="card" data-portfolio>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <h2 style="margin-bottom: 0.5rem;">Portfolio overview</h2>
+            <p style="color: var(--muted); margin: 0;">
+              Snapshot generated at <strong data-overview-generated>{{ snapshot.generated_at }}</strong>
+            </p>
           </div>
-          <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;">
-            <button type="button" class="button danger" data-kill-switch="{{ account.name }}">Kill switch</button>
-            <div class="status" data-kill-status="{{ account.name }}" style="display: none;"></div>
-          </div>
+          <span class="badge {% if snapshot.alerts %}alert{% else %}ok{% endif %}" data-alert-summary>
+            {% if snapshot.alerts %}
+              {{ snapshot.alerts|length }} active alert{{ 's' if snapshot.alerts|length != 1 }}
+            {% else %}
+              All clear
+            {% endif %}
+          </span>
         </div>
-        {% if account.message %}
-          <div class="status">{{ account.message }}</div>
-        {% endif %}
-        <div class="metrics">
+        <div class="metrics" style="margin-top: 1.5rem;">
           <div class="metric">
-            <span class="label">Balance</span>
-            <span class="value">{{ account.balance|currency }}</span>
+            <span class="label">Total Balance</span>
+            <span class="value">{{ snapshot.portfolio.balance|currency }}</span>
           </div>
           <div class="metric">
             <span class="label">Gross Exposure</span>
-            <span class="value">{{ account.gross_exposure_notional|currency }}</span>
-            <span class="subvalue">{{ account.gross_exposure|pct }}</span>
+            <span class="value">{{ snapshot.portfolio.gross_exposure|currency }}</span>
+            <span class="subvalue">{{ snapshot.portfolio.gross_exposure_pct|pct }}</span>
           </div>
           <div class="metric">
             <span class="label">Net Exposure</span>
-            <span class="value {% if account.net_exposure_notional >= 0 %}gain{% else %}loss{% endif %}">{{ account.net_exposure_notional|currency }}</span>
-            <span class="subvalue {% if account.net_exposure >= 0 %}gain{% else %}loss{% endif %}">{{ account.net_exposure|pct }}</span>
-          </div>
-          <div class="metric">
-            <span class="label">Unrealized PnL</span>
-            <span class="value {% if account.unrealized_pnl >= 0 %}gain{% else %}loss{% endif %}">{{ account.unrealized_pnl|currency }}</span>
+            <span class="value {% if snapshot.portfolio.net_exposure >= 0 %}gain{% else %}loss{% endif %}">{{ snapshot.portfolio.net_exposure|currency }}</span>
+            <span class="subvalue {% if snapshot.portfolio.net_exposure_pct >= 0 %}gain{% else %}loss{% endif %}">{{ snapshot.portfolio.net_exposure_pct|pct }}</span>
           </div>
         </div>
-        {% if account.symbol_exposures %}
-          <div class="table-wrapper" style="overflow-x: auto; margin-bottom: 1.5rem;">
+        {% if snapshot.portfolio.symbols %}
+          <div class="table-wrapper" style="overflow-x: auto; margin-top: 1.5rem;">
             <table>
               <thead>
                 <tr>
@@ -124,131 +122,206 @@
                 </tr>
               </thead>
               <tbody>
-                {% for exposure in account.symbol_exposures %}
+                {% for entry in snapshot.portfolio.symbols %}
                   <tr>
-                    <td>{{ exposure.symbol }}</td>
-                    <td>{{ exposure.gross_notional|currency }}</td>
-                    <td>{{ exposure.gross_pct|pct }}</td>
-                    <td class="{% if exposure.net_notional >= 0 %}gain{% else %}loss{% endif %}">{{ exposure.net_notional|currency }}</td>
-                    <td class="{% if exposure.net_pct >= 0 %}gain{% else %}loss{% endif %}">{{ exposure.net_pct|pct }}</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        {% endif %}
-        {% if account.positions %}
-          <div class="table-wrapper" style="overflow-x: auto;">
-            <table>
-              <thead>
-                <tr>
-                  <th>Symbol</th>
-                  <th>Side</th>
-                  <th>Notional</th>
-                  <th>Exposure %</th>
-                  <th>PnL</th>
-                  <th>Entry</th>
-                  <th>Mark</th>
-                  <th>Liq.</th>
-                  <th>Max DD</th>
-                  <th>TP</th>
-                  <th>SL</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for position in account.positions %}
-                  <tr>
-                    <td>{{ position.symbol }}</td>
-                    <td>{{ position.side }}</td>
-                    <td>{{ position.notional|currency }}</td>
-                    <td>{{ position.exposure|pct }}</td>
-                    <td class="{% if position.unrealized_pnl >= 0 %}gain{% else %}loss{% endif %}">{{ position.unrealized_pnl|currency }} ({{ position.pnl_pct|pct }})</td>
-                    <td>{{ position.entry_price|currency }}</td>
-                    <td>{{ position.mark_price|currency }}</td>
-                    <td>{% if position.liquidation_price is not none %}{{ position.liquidation_price|currency }}{% else %}-{% endif %}</td>
-                    <td>{% if position.max_drawdown_pct is not none %}{{ position.max_drawdown_pct|pct }}{% else %}-{% endif %}</td>
-                    <td>{% if position.take_profit_price is not none %}{{ position.take_profit_price|currency }}{% else %}-{% endif %}</td>
-                    <td>{% if position.stop_loss_price is not none %}{{ position.stop_loss_price|currency }}{% else %}-{% endif %}</td>
+                    <td>{{ entry.symbol }}</td>
+                    <td>{{ entry.gross_notional|currency }}</td>
+                    <td>{{ entry.gross_pct|pct }}</td>
+                    <td class="{% if entry.net_notional >= 0 %}gain{% else %}loss{% endif %}">{{ entry.net_notional|currency }}</td>
+                    <td class="{% if entry.net_pct >= 0 %}gain{% else %}loss{% endif %}">{{ entry.net_pct|pct }}</td>
                   </tr>
                 {% endfor %}
               </tbody>
             </table>
           </div>
         {% else %}
-          <p style="color: var(--muted);">No open positions.</p>
-        {% endif %}
-        {% if account.orders %}
-          <h3 style="margin-top: 1.5rem;">Open orders</h3>
-          <div class="table-wrapper" style="overflow-x: auto;">
-            <table>
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Symbol</th>
-                  <th>Side</th>
-                  <th>Type</th>
-                  <th>Price</th>
-                  <th>Amount</th>
-                  <th>Remaining</th>
-                  <th>Status</th>
-                  <th>Reduce only</th>
-                  <th>Notional</th>
-                  <th>Stop price</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for order in account.orders %}
-                  <tr>
-                    <td>{{ order.order_id or '-' }}</td>
-                    <td>{{ order.symbol }}</td>
-                    <td>{{ order.side }}</td>
-                    <td>{{ order.type }}</td>
-                    <td>{{ order.price|currency if order.price is not none else '-' }}</td>
-                    <td>{{ order.amount if order.amount is not none else '-' }}</td>
-                    <td>{{ order.remaining if order.remaining is not none else '-' }}</td>
-                    <td>{{ order.status }}</td>
-                    <td>{{ 'Yes' if order.reduce_only else 'No' }}</td>
-                    <td>{{ order.notional|currency if order.notional is not none else '-' }}</td>
-                    <td>{{ order.stop_price|currency if order.stop_price is not none else '-' }}</td>
-                    <td>{{ order.created_at or '-' }}</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        {% else %}
-          <p style="color: var(--muted);">No open orders.</p>
+          <p style="color: var(--muted); margin-top: 1rem;">No active exposures.</p>
         {% endif %}
       </section>
-    {% endfor %}
+    </div>
+
+    <div class="page-section" data-page-section="accounts" hidden>
+      <div data-accounts>
+        {% for account in snapshot.accounts %}
+          <section class="card" data-account="{{ account.name }}">
+            <div class="card-header" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
+              <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                <h2 style="margin: 0;">{{ account.name }}</h2>
+                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                  <span class="badge">{{ account.positions|length }} position{{ 's' if account.positions|length != 1 }}</span>
+                  <span class="badge">{{ account.orders|length }} order{{ 's' if account.orders|length != 1 }}</span>
+                </div>
+              </div>
+              <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;">
+                <button type="button" class="button danger" data-kill-switch="{{ account.name }}">Kill switch</button>
+                <div class="status" data-kill-status="{{ account.name }}" style="display: none;"></div>
+              </div>
+            </div>
+            {% if account.message %}
+              <div class="status">{{ account.message }}</div>
+            {% endif %}
+            <div class="metrics">
+              <div class="metric">
+                <span class="label">Balance</span>
+                <span class="value">{{ account.balance|currency }}</span>
+              </div>
+              <div class="metric">
+                <span class="label">Gross Exposure</span>
+                <span class="value">{{ account.gross_exposure_notional|currency }}</span>
+                <span class="subvalue">{{ account.gross_exposure|pct }}</span>
+              </div>
+              <div class="metric">
+                <span class="label">Net Exposure</span>
+                <span class="value {% if account.net_exposure_notional >= 0 %}gain{% else %}loss{% endif %}">{{ account.net_exposure_notional|currency }}</span>
+                <span class="subvalue {% if account.net_exposure >= 0 %}gain{% else %}loss{% endif %}">{{ account.net_exposure|pct }}</span>
+              </div>
+              <div class="metric">
+                <span class="label">Unrealized PnL</span>
+                <span class="value {% if account.unrealized_pnl >= 0 %}gain{% else %}loss{% endif %}">{{ account.unrealized_pnl|currency }}</span>
+              </div>
+            </div>
+            {% if account.symbol_exposures %}
+              <div class="table-wrapper" style="overflow-x: auto; margin-bottom: 1.5rem;">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      <th>Gross Exposure</th>
+                      <th>Gross %</th>
+                      <th>Net Exposure</th>
+                      <th>Net %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for exposure in account.symbol_exposures %}
+                      <tr>
+                        <td>{{ exposure.symbol }}</td>
+                        <td>{{ exposure.gross_notional|currency }}</td>
+                        <td>{{ exposure.gross_pct|pct }}</td>
+                        <td class="{% if exposure.net_notional >= 0 %}gain{% else %}loss{% endif %}">{{ exposure.net_notional|currency }}</td>
+                        <td class="{% if exposure.net_pct >= 0 %}gain{% else %}loss{% endif %}">{{ exposure.net_pct|pct }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% endif %}
+            {% if account.positions %}
+              <div class="table-wrapper" style="overflow-x: auto;">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      <th>Side</th>
+                      <th>Notional</th>
+                      <th>Exposure %</th>
+                      <th>PnL</th>
+                      <th>Entry</th>
+                      <th>Mark</th>
+                      <th>Liq.</th>
+                      <th>Max DD</th>
+                      <th>TP</th>
+                      <th>SL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for position in account.positions %}
+                      <tr>
+                        <td>{{ position.symbol }}</td>
+                        <td>{{ position.side }}</td>
+                        <td>{{ position.notional|currency }}</td>
+                        <td>{{ position.exposure|pct }}</td>
+                        <td class="{% if position.unrealized_pnl >= 0 %}gain{% else %}loss{% endif %}">{{ position.unrealized_pnl|currency }} ({{ position.pnl_pct|pct }})</td>
+                        <td>{{ position.entry_price|currency }}</td>
+                        <td>{{ position.mark_price|currency }}</td>
+                        <td>{% if position.liquidation_price is not none %}{{ position.liquidation_price|currency }}{% else %}-{% endif %}</td>
+                        <td>{% if position.max_drawdown_pct is not none %}{{ position.max_drawdown_pct|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position.take_profit_price is not none %}{{ position.take_profit_price|currency }}{% else %}-{% endif %}</td>
+                        <td>{% if position.stop_loss_price is not none %}{{ position.stop_loss_price|currency }}{% else %}-{% endif %}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% else %}
+              <p style="color: var(--muted);">No open positions.</p>
+            {% endif %}
+            {% if account.orders %}
+              <h3 style="margin-top: 1.5rem;">Open orders</h3>
+              <div class="table-wrapper" style="overflow-x: auto;">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Symbol</th>
+                      <th>Side</th>
+                      <th>Type</th>
+                      <th>Price</th>
+                      <th>Amount</th>
+                      <th>Remaining</th>
+                      <th>Status</th>
+                      <th>Reduce only</th>
+                      <th>Notional</th>
+                      <th>Stop price</th>
+                      <th>Created</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for order in account.orders %}
+                      <tr>
+                        <td>{{ order.order_id or '-' }}</td>
+                        <td>{{ order.symbol }}</td>
+                        <td>{{ order.side }}</td>
+                        <td>{{ order.type }}</td>
+                        <td>{{ order.price|currency if order.price is not none else '-' }}</td>
+                        <td>{{ order.amount if order.amount is not none else '-' }}</td>
+                        <td>{{ order.remaining if order.remaining is not none else '-' }}</td>
+                        <td>{{ order.status }}</td>
+                        <td>{{ 'Yes' if order.reduce_only else 'No' }}</td>
+                        <td>{{ order.notional|currency if order.notional is not none else '-' }}</td>
+                        <td>{{ order.stop_price|currency if order.stop_price is not none else '-' }}</td>
+                        <td>{{ order.created_at or '-' }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% else %}
+              <p style="color: var(--muted);">No open orders.</p>
+            {% endif %}
+          </section>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="page-section" data-page-section="alerts" hidden>
+      <section class="card alerts">
+        <h2>Alerts</h2>
+        {% if snapshot.alerts %}
+          <ul data-alerts>
+            {% for alert in snapshot.alerts %}
+              <li>{{ alert }}</li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p data-alerts style="color: var(--muted);">No active alerts. All monitored metrics are within thresholds.</p>
+        {% endif %}
+      </section>
+
+      <section class="card notifications">
+        <h2>Notification channels</h2>
+        {% if snapshot.notifications %}
+          <ul data-notifications>
+            {% for channel in snapshot.notifications %}
+              <li>{{ channel }}</li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p data-notifications style="color: var(--muted);">No notification channels configured.</p>
+        {% endif %}
+      </section>
+    </div>
   </div>
-
-  <section class="card alerts">
-    <h2>Alerts</h2>
-    {% if snapshot.alerts %}
-      <ul data-alerts>
-        {% for alert in snapshot.alerts %}
-          <li>{{ alert }}</li>
-        {% endfor %}
-      </ul>
-    {% else %}
-      <p data-alerts style="color: var(--muted);">No active alerts. All monitored metrics are within thresholds.</p>
-    {% endif %}
-  </section>
-
-  <section class="card notifications">
-    <h2>Notification channels</h2>
-    {% if snapshot.notifications %}
-      <ul data-notifications>
-        {% for channel in snapshot.notifications %}
-          <li>{{ channel }}</li>
-        {% endfor %}
-      </ul>
-    {% else %}
-      <p data-notifications style="color: var(--muted);">No notification channels configured.</p>
-    {% endif %}
-  </section>
 {% endblock %}
 
 {% block generated_at %}{{ snapshot.generated_at }}{% endblock %}
@@ -256,6 +329,55 @@
 {% block scripts %}
   <script>
     const REFRESH_INTERVAL_MS = 10000;
+    const DEFAULT_PAGE = "overview";
+    const STORAGE_KEY = "risk-dashboard.activePage";
+
+    const pageSections = Array.from(document.querySelectorAll("[data-page-section]"));
+    const navButtons = Array.from(document.querySelectorAll("[data-page-target]"));
+
+    const setActivePage = (page) => {
+      const targetExists = pageSections.some(
+        (section) => section.getAttribute("data-page-section") === page,
+      );
+      const targetPage = targetExists ? page : DEFAULT_PAGE;
+
+      pageSections.forEach((section) => {
+        const isActive = section.getAttribute("data-page-section") === targetPage;
+        section.toggleAttribute("hidden", !isActive);
+        section.setAttribute("aria-hidden", String(!isActive));
+      });
+
+      navButtons.forEach((button) => {
+        const isActive = button.getAttribute("data-page-target") === targetPage;
+        button.classList.toggle("active", isActive);
+        button.setAttribute("aria-selected", String(isActive));
+      });
+
+      try {
+        window.localStorage.setItem(STORAGE_KEY, targetPage);
+      } catch (error) {
+        console.debug("Failed to persist active page", error);
+      }
+    };
+
+    navButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const target = button.getAttribute("data-page-target");
+        setActivePage(target || DEFAULT_PAGE);
+      });
+    });
+
+    try {
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        setActivePage(stored);
+      } else {
+        setActivePage(DEFAULT_PAGE);
+      }
+    } catch (error) {
+      console.debug("Failed to restore active page", error);
+      setActivePage(DEFAULT_PAGE);
+    }
 
     const formatCurrency = (value) => {
       const number = Number(value || 0);
@@ -275,12 +397,14 @@
     };
 
     const renderPortfolio = (snapshot) => {
-      const portfolioSection = document.querySelector("[data-portfolio]");
+      const portfolioSection = document.querySelector(
+        '[data-page-section="overview"] [data-portfolio]'
+      );
       if (!portfolioSection || !snapshot.portfolio) {
         return;
       }
       const portfolio = snapshot.portfolio;
-      const rows = (portfolio.symbols || [])
+      const rows = (Array.isArray(portfolio.symbols) ? portfolio.symbols : [])
         .map((entry) => `
           <tr>
             <td>${entry.symbol}</td>
@@ -339,13 +463,20 @@
     };
 
     const renderAccounts = (snapshot) => {
-      const accountsContainer = document.querySelector("[data-accounts]");
+      const accountsContainer = document.querySelector(
+        '[data-page-section="accounts"] [data-accounts]'
+      );
       if (!accountsContainer) {
         return;
       }
       accountsContainer.innerHTML = (snapshot.accounts || [])
         .map((account) => {
-          const exposuresRows = (account.symbol_exposures || [])
+          const exposures = Array.isArray(account.symbol_exposures)
+            ? account.symbol_exposures
+            : [];
+          const positions = Array.isArray(account.positions) ? account.positions : [];
+          const orders = Array.isArray(account.orders) ? account.orders : [];
+          const exposuresRows = exposures
             .map((exposure) => `
               <tr>
                 <td>${exposure.symbol}</td>
@@ -356,7 +487,7 @@
               </tr>
             `)
             .join("");
-          const positionsRows = (account.positions || [])
+          const positionsRows = positions
             .map((position) => {
               const pnlClass = Number(position.unrealized_pnl) >= 0 ? "gain" : "loss";
               const maxDd = position.max_drawdown_pct !== null && position.max_drawdown_pct !== undefined
@@ -379,7 +510,7 @@
               `;
             })
             .join("");
-          const ordersRows = (account.orders || [])
+          const ordersRows = orders
             .map((order) => `
               <tr>
                 <td>${order.order_id || "-"}</td>
@@ -403,8 +534,8 @@
                 <div style="display: flex; flex-direction: column; gap: 0.5rem;">
                   <h2 style="margin: 0;">${account.name}</h2>
                   <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                    <span class="badge">${account.positions.length} position${account.positions.length === 1 ? "" : "s"}</span>
-                    <span class="badge">${account.orders.length} order${account.orders.length === 1 ? "" : "s"}</span>
+                    <span class="badge">${positions.length} position${positions.length === 1 ? "" : "s"}</span>
+                    <span class="badge">${orders.length} order${orders.length === 1 ? "" : "s"}</span>
                   </div>
                 </div>
                 <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;">
@@ -449,7 +580,7 @@
                     </table>
                   </div>`
                 : ""}
-              ${account.positions.length > 0
+              ${positions.length > 0
                 ? `<div class="table-wrapper" style=\"overflow-x: auto;\">
                     <table>
                       <thead>
@@ -471,7 +602,7 @@
                     </table>
                   </div>`
                 : `<p style=\"color: var(--muted);\">No open positions.</p>`}
-              ${account.orders.length > 0
+              ${orders.length > 0
                 ? `<h3 style=\"margin-top: 1.5rem;\">Open orders</h3>
                     <div class="table-wrapper" style=\"overflow-x: auto;\">
                       <table>
@@ -502,7 +633,9 @@
     };
 
     const renderAlerts = (snapshot) => {
-      const alertsContainer = document.querySelector("[data-alerts]");
+      const alertsContainer = document.querySelector(
+        '[data-page-section="alerts"] [data-alerts]'
+      );
       if (!alertsContainer) {
         return;
       }
@@ -529,7 +662,9 @@
     };
 
     const renderNotifications = (snapshot) => {
-      const notificationsContainer = document.querySelector("[data-notifications]");
+      const notificationsContainer = document.querySelector(
+        '[data-page-section="alerts"] [data-notifications]'
+      );
       if (!notificationsContainer) {
         return;
       }
