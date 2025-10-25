@@ -113,6 +113,36 @@
       font-size: 0.9rem;
       margin: 0;
     }
+
+
+    .grafana-grid {
+      display: grid;
+      gap: 1.5rem;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    }
+
+    .grafana-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .grafana-panel iframe {
+      width: 100%;
+      border: none;
+      border-radius: 0.75rem;
+      background: rgba(15, 23, 42, 0.75);
+      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.35);
+    }
+
+    .grafana-panel__meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
   </style>
 {% endblock %}
 
@@ -154,6 +184,17 @@
     >
       Alerts &amp; notifications
     </button>
+    {% if grafana_dashboards %}
+      <button
+        type="button"
+        class="view-nav__button"
+        role="tab"
+        aria-selected="false"
+        data-page-target="analytics"
+      >
+        Analytics
+      </button>
+    {% endif %}
   </nav>
 
   <div class="page-sections">
@@ -411,6 +452,43 @@
         {% endif %}
       </section>
     </div>
+    {% if grafana_dashboards %}
+      <div class="page-section" data-page-section="analytics" hidden>
+        <section class="card">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;">
+            <div>
+              <h2 style="margin-bottom: 0.25rem;">Performance analytics</h2>
+              <p style="color: var(--muted); margin: 0;">Live Grafana dashboards embedded from your monitoring stack.</p>
+            </div>
+          </div>
+          <div class="grafana-grid" style="margin-top: 1.5rem;">
+            {% for dashboard in grafana_dashboards %}
+              <article class="grafana-panel">
+                <div class="grafana-panel__meta">
+                  <div>
+                    <h3 style="margin: 0 0 0.25rem;">{{ dashboard.title }}</h3>
+                    {% if dashboard.description %}
+                      <p style="margin: 0; color: var(--muted); font-size: 0.9rem;">{{ dashboard.description }}</p>
+                    {% endif %}
+                  </div>
+                  <a class="button secondary" href="{{ dashboard.url }}" target="_blank" rel="noopener">
+                    Open in Grafana
+                  </a>
+                </div>
+                <iframe
+                  src="{{ dashboard.url }}"
+                  title="{{ dashboard.title }}"
+                  height="{{ dashboard.height }}"
+                  loading="lazy"
+                  referrerpolicy="no-referrer-when-downgrade"
+                  allowfullscreen
+                ></iframe>
+              </article>
+            {% endfor %}
+          </div>
+        </section>
+      </div>
+    {% endif %}
   </div>
 {% endblock %}
 

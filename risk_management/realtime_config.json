@@ -6,6 +6,23 @@
     "autodiscover": false
   },
   "reports_dir": "../risk_reports",
+  "grafana": {
+    "base_url": "https://grafana.example.com/",
+    "default_height": 620,
+    "dashboards": [
+      {
+        "title": "Portfolio overview",
+        "url": "d-solo/abc123/portfolio-overview?orgId=1&from=now-7d&to=now&panelId=2&refresh=1m",
+        "description": "NAV, profit rate, and drawdown metrics across the portfolio."
+      },
+      {
+        "title": "Exposure & leverage",
+        "url": "d-solo/def456/portfolio-exposure?orgId=1&from=now-7d&to=now&panelId=6&refresh=1m",
+        "description": "Wallet exposure, leverage ratios, and asset allocation breakdowns."
+      }
+    ]
+  },
+
   "accounts": [
     {
       "name": "Binance Futures",

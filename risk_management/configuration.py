@@ -90,6 +90,26 @@ class EmailSettings:
 
 
 @dataclass()
+class GrafanaDashboardConfig:
+    """Description of a Grafana dashboard or panel to embed."""
+
+    title: str
+    url: str
+    description: str | None = None
+    height: int | None = None
+
+
+@dataclass()
+class GrafanaConfig:
+    """Settings for embedding Grafana dashboards in the web UI."""
+
+    dashboards: List[GrafanaDashboardConfig] = field(default_factory=list)
+    default_height: int = 600
+    theme: str = "dark"
+    base_url: str | None = None
+
+
+@dataclass()
 class RealtimeConfig:
     """Top level realtime configuration."""
 
@@ -103,6 +123,9 @@ class RealtimeConfig:
     config_root: Path | None = None
     debug_api_payloads: bool = False
     reports_dir: Path | None = None
+    grafana: GrafanaConfig | None = None
+
+
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -266,6 +289,79 @@ def _parse_email_settings(settings: Any) -> EmailSettings | None:
     )
 
 
+def _parse_grafana_config(settings: Any) -> GrafanaConfig | None:
+    """Return Grafana embedding settings from ``settings``."""
+
+    if settings is None:
+        return None
+    if not isinstance(settings, Mapping):
+        raise TypeError("Grafana settings must be provided as an object in the configuration file.")
+
+    dashboards_raw = settings.get("dashboards")
+    if dashboards_raw in (None, []):
+        return None
+    if not isinstance(dashboards_raw, Iterable):
+        raise TypeError("Grafana 'dashboards' must be an array of dashboard definitions.")
+
+    dashboards: List[GrafanaDashboardConfig] = []
+    for entry in dashboards_raw:
+        if not isinstance(entry, Mapping):
+            raise TypeError(
+                "Each Grafana dashboard entry must be an object with at least a title and url."
+            )
+        url_raw = entry.get("url")
+        if not url_raw or not str(url_raw).strip():
+            raise ValueError("Grafana dashboard entries require a non-empty 'url'.")
+        title_raw = entry.get("title", "Grafana dashboard")
+        description_raw = entry.get("description")
+        height_raw = entry.get("height")
+
+        height: int | None = None
+        if height_raw not in (None, ""):
+            try:
+                height = int(height_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "Grafana dashboard 'height' must be an integer when provided."
+                ) from exc
+            if height <= 0:
+                raise ValueError(
+                    "Grafana dashboard 'height' must be greater than zero when provided."
+                )
+
+        dashboards.append(
+            GrafanaDashboardConfig(
+                title=str(title_raw).strip() or "Grafana dashboard",
+                url=str(url_raw).strip(),
+                description=str(description_raw).strip()
+                if description_raw not in (None, "")
+                else None,
+                height=height,
+            )
+        )
+
+    default_height_raw = settings.get("default_height", 600)
+    try:
+        default_height = int(default_height_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Grafana 'default_height' must be an integer.") from exc
+    if default_height <= 0:
+        raise ValueError("Grafana 'default_height' must be greater than zero.")
+
+    theme_raw = settings.get("theme", "dark")
+    theme = str(theme_raw).strip() or "dark"
+
+    base_url_raw = settings.get("base_url")
+    base_url = str(base_url_raw).strip() if base_url_raw not in (None, "") else None
+
+    return GrafanaConfig(
+        dashboards=dashboards,
+        default_height=default_height,
+        theme=theme,
+        base_url=base_url,
+    )
+
+
 def _parse_accounts(
     accounts_raw: Iterable[Mapping[str, Any]],
     api_keys: Mapping[str, Mapping[str, Any]] | None,
@@ -382,6 +478,8 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     auth = _parse_auth(config.get("auth"))
     custom_endpoints = _parse_custom_endpoints(config.get("custom_endpoints"))
     email_settings = _parse_email_settings(config.get("email"))
+    grafana_settings = _parse_grafana_config(config.get("grafana"))
+
     reports_dir_value = config.get("reports_dir")
     reports_dir: Path | None = None
     if reports_dir_value:
@@ -413,4 +511,5 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
         config_root=config_root,
         debug_api_payloads=debug_api_payloads_default,
         reports_dir=reports_dir,
+        grafana=grafana_settings,
     )
