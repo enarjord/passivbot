@@ -1,426 +1,258 @@
 # Passivbot Risk Management Extension
 
-This directory contains a stand-alone risk management, portfolio monitoring,
-and alerting system designed to work *with* Passivbot without modifying the
-core trading bot.  The extension will grow iteratively.  In this iteration we
-ship a self-contained terminal dashboard that consumes a JSON snapshot and
-highlights portfolio exposure alongside simulated alert messages.  Everything
-can run without touching a live Passivbot environment so you can experiment
-freely.
+The risk management extension bundles portfolio monitoring, alerting, and a
+full web dashboard that plugs into an existing Passivbot deployment without
+modifying the core trading bot.  It consumes snapshots created either manually
+or from live exchange data and surfaces consolidated exposure metrics, account
+health, and automated notifications.
 
-## Quick start
+## Features at a glance
 
-1. (Optional) Bootstrap the isolated virtual environment so dependencies stay
-   separate from your trading installation:
+- **Terminal dashboard** – render JSON snapshots or live data in the console
+  with exposure summaries, alert status, and per-account health checks.
+- **Realtime data fetcher** – aggregate balances, positions, and orders across
+  multiple ccxt-supported venues while honouring custom endpoint overrides and
+  kill-switch commands.
+- **Web dashboard** – FastAPI application with authenticated access, TLS
+  support, report downloads, optional Grafana embeds, and kill-switch controls.
+- **Alerting helpers** – configurable thresholds, SMTP email delivery, and
+  human-readable notification channels shown alongside the dashboards.
 
-   ```bash
-   cd risk_management
-   ./scripts/install_passivbot.sh --upgrade-packaging
-   source .venv_passivbot_risk/bin/activate
-   ```
+## Prerequisites
 
-2. Render the dashboard using the included sample snapshot:
+- Python **3.9 or newer** available on the host system.
+- `bash` compatible shell (on Windows use WSL or Git Bash).
+- Access to the Passivbot repository (the extension expects to live inside the
+  checkout).
+- Exchange API credentials with reading permissions for balances and
+  positions.  (Trading permissions are only required when you enable the kill
+  switch.)
 
-   ```bash
-   python -m risk_management.dashboard
-   ```
+> ℹ️  The extension is intentionally isolated from the trading bot.  It runs in
+> its own virtual environment and imports Passivbot only when you explicitly
+> opt in via the installer flags described below.
 
-   The command prints a summary of two example accounts, their positions, and
-   any alerts triggered by the configured thresholds.  Edit
-   `risk_management/dashboard_config.json` to plug in your own numbers or point
-   the command to a custom snapshot via `--config /path/to/file.json`.
+## 1. Install the standalone environment
 
-3. To mimic continuous monitoring, add `--interval 5 --iterations 0` and update
-   the JSON file in another terminal.  The CLI will re-read the file on the
-   chosen cadence and immediately reflect the changes.
-
-## Realtime monitoring
-
-Provide exchange credentials via `risk_management/realtime_config.json` (see
-`realtime_config.example.json` for a complete template) and point the CLI at the
-file to fetch balances and positions directly from the exchanges:
+All tooling is packaged under `risk_management/`.  Bootstrap the virtual
+environment once and reuse it whenever you work on the dashboard or run the
+fetcher.
 
 ```bash
-python -m risk_management.dashboard --realtime-config risk_management/realtime_config.json --interval 30 --iterations 0
+cd risk_management
+./scripts/install_passivbot.sh --upgrade-packaging
+source .venv_passivbot_risk/bin/activate
 ```
 
-The command connects to each configured account, aggregates the portfolio
-metrics, and continuously renders the dashboard.  Any fetch issues are surfaced
-inline under the affected account.
+The helper script performs the following actions:
 
-### Example realtime configuration
+| Capability | Description |
+| --- | --- |
+| Virtualenv | Creates (or reuses) `.venv_passivbot_risk` under the module root. |
+| Packaging tools | Upgrades `pip`, `setuptools`, and `wheel` when `--upgrade-packaging` is supplied. |
+| Passivbot import path | Drops a `.pth` file that points to `../src`, making the Passivbot source tree importable without installing the package.  Override the location with `--link-passivbot /custom/path`. |
+| Editable install | Add `--install-passivbot` to install Passivbot into the environment (useful for publishing or integration testing).  Extra arguments after `--` are forwarded to `pip install`. |
 
-The sample file `risk_management/realtime_config.example.json` is ready to be
-copied and adjusted.  It expects API key entries named `binance_01`, `okx_01`,
-and `bybit_01` in the credentials file and demonstrates the venue-specific
-parameters required to fetch balances and positions.  When the `api_keys_file`
-field is omitted (as below) the loader walks up from the realtime config
-directory and uses the first `api-keys.json` it encounters, matching Passivbot's
-default layout.  Provide an explicit path when storing credentials elsewhere:
+After activation, verify the installation by rendering the sample dashboard:
 
-```json
-{
-  "custom_endpoints": {
-    "path": "../configs/custom_endpoints.json",
-    "autodiscover": false
-  },
-  "accounts": [
-    {
-      "name": "Binance Futures",
-      "exchange": "binanceusdm",
-      "api_key_id": "binance_01",
-      "settle_currency": "USDT"
-    },
-    {
-      "name": "OKX Futures",
-      "exchange": "okx",
-      "api_key_id": "okx_01",
-      "settle_currency": "USDT",
-      "params": {
-        "balance": {"type": "swap"},
-        "positions": {"type": "swap"}
-      }
-    },
-    {
-      "name": "Bybit USDT Perpetuals",
-      "exchange": "bybit",
-      "api_key_id": "bybit_01",
-      "settle_currency": "USDT",
-      "params": {
-        "balance": {"type": "swap"},
-        "positions": {"type": "swap"}
-      }
-    }
-  ],
-  "alert_thresholds": {
-    "wallet_exposure_pct": 0.65,
-    "position_wallet_exposure_pct": 0.25,
-    "max_drawdown_pct": 0.25,
-    "loss_threshold_pct": -0.08
-  },
-  "notification_channels": [
-    "email:risk-team@example.com",
-    "slack:#passivbot-risk-alerts"
-  ],
-  "auth": {
-    "secret_key": "replace-me-with-a-long-random-string",
-    "session_cookie_name": "risk_dashboard_session",
-    "https_only": true,
-    "users": {
-      "admin": "replace-with-bcrypt-hash"
-    }
-  }
-}
+```bash
+(risk) python -m risk_management.dashboard
 ```
 
-Replace the `api_key_id` values or append new blocks to match the entries in
+You should see two example accounts, simulated positions, and a list of alert
+thresholds.  Exit the environment later with `deactivate`.
 
-your API key store.  The loader accepts the same `api-keys.json` layout that
-Passivbot uses: direct top-level entries, a nested `users` object, and optional
-metadata such as `referrals`.  The optional `params.balance` and
-`params.positions` objects are forwarded to ccxt when invoking
-`fetch_balance()` and `fetch_positions()`, which is useful for exchanges (such
-as OKX and Bybit) that require the `type="swap"` hint to return futures data.
-Omitting the objects is fine for venues that default to USD-M perpetual
-endpoints.  Pass the realtime CLI a `--custom-endpoints` argument when you need
-to reuse the exact proxy file as your trading bot (for example,
-`--custom-endpoints ../configs/custom_endpoints.json`).
+### Manual installation (optional)
 
+If you prefer to manage dependencies yourself:
 
-The `https_only` flag inside the `auth` block is enabled by default to set
-secure, same-site session cookies and to redirect HTTP requests to HTTPS. Disable
-it only for development environments that cannot serve TLS. Supply
-`--ssl-certfile /path/to/fullchain.pem` and `--ssl-keyfile /path/to/privkey.pem`
-(optionally with `--ssl-keyfile-password`) when launching the web server to
-enable HTTPS directly. Both paths must be provided together or the server will
-refuse to start.
+```bash
+cd risk_management
+python -m venv .venv_passivbot_risk
+source .venv_passivbot_risk/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r ../requirements.txt
+python -m pip install -e ..  # optional: expose Passivbot modules
+```
 
-### Automating TLS with Let's Encrypt
+## 2. Configure realtime access
 
-Passivbot can request and renew certificates automatically through
-[`certbot`](https://certbot.eff.org/). Provide one or more `--letsencrypt-domain`
-flags and the server will invoke certbot in standalone mode before launching
-Uvicorn:
+Copy the template configuration and fill in your details:
+
+```bash
+cp risk_management/realtime_config.example.json risk_management/realtime_config.local.json
+```
+
+Update the new file with the following information.
+
+### Accounts
+
+- `accounts` – list of exchanges you want to monitor.  Each entry accepts:
+  - `name`: human-friendly label shown in dashboards.
+  - `exchange`: ccxt identifier (for example `binanceusdm`, `okx`, `bybit`).
+  - `api_key_id`: key within `api-keys.json`.  When present the loader pulls
+    credentials automatically and merges any overrides from the `credentials`
+    block.
+  - `settle_currency`: wallet currency used to compute exposures (default
+    `USDT`).
+  - `symbols`: optional allowlist of markets to fetch.
+  - `params.balance` / `params.positions`: forwarded verbatim to ccxt
+    (useful for venues that require `{"type": "swap"}`).
+  - `enabled`: set to `false` to temporarily disable an account without
+    removing the block.
+  - `debug_api_payloads`: enable verbose logging for a single account.
+
+### Credentials discovery
+
+Place your trading keys in `api-keys.json`.  The loader searches for the file in
+this order:
+
+1. Next to the realtime configuration file.
+2. Repository root (matching Passivbot's default location).
+
+Override the lookup with `"custom_endpoints": {"path": "../configs/custom_endpoints.json", "autodiscover": false}` to mirror the trading bot's proxy settings.  Pass `--custom-endpoints` on the CLI to force a particular behaviour (`auto`, `none`, or a file path).
+
+### Alerting and notifications
+
+- `alert_thresholds` – wallet-wide and per-position percentages that trigger
+  alerts in both the terminal and web dashboards.
+- `notification_channels` – free-form strings describing where alerts should be
+  sent.  Entries prefixed with `email:` are used for SMTP delivery when email
+  settings are provided; other values are displayed for situational awareness.
+- `email` – optional SMTP configuration.  Provide at least `host` and, if
+  required by your server, the `port`, `username`, `password`, and TLS options
+  (`use_tls`/`use_ssl`).  When missing, email alerts are skipped silently.
+
+### Authentication and TLS
+
+- `auth` – required for the web dashboard.  Supply a strong `secret_key`, a map
+  of `users` to bcrypt hashes, and (optionally) a custom
+  `session_cookie_name` or `https_only` flag.  Generate hashes with:
+  ```bash
+  python risk_management/scripts/hash_password.py
+  ```
+- `reports_dir` – directory where CSV exports generated by the web UI are
+  stored.  Defaults to `<config-directory>/reports`.
+- `grafana` – optional embed configuration with `dashboards` (title, url,
+  description, height) and `base_url` for relative links.
+
+### Debugging helpers
+
+Set `"debug_api_payloads": true` globally or per account to dump the raw JSON
+returned by ccxt.  Use this sparingly; responses include large payloads and
+secret values are not redacted automatically.
+
+## 3. Run the terminal dashboard
+
+The CLI consumes either a static snapshot or the realtime configuration created
+above.
+
+```bash
+# Render a static JSON snapshot repeatedly (update the file in another terminal)
+python -m risk_management.dashboard \
+  --config risk_management/dashboard_config.json \
+  --interval 5 --iterations 0
+
+# Fetch data from the exchanges defined in realtime_config.local.json
+python -m risk_management.dashboard \
+  --realtime-config risk_management/realtime_config.local.json \
+  --interval 30 --iterations 0
+```
+
+Use `Ctrl+C` to stop continuous runs.  When `--interval` is omitted the command
+renders exactly once.
+
+## 4. Launch the web dashboard
+
+Serve an authenticated dashboard backed by the realtime fetcher:
 
 ```bash
 python -m risk_management.web_server \
-  --config risk_management/realtime_config.json \
+  --config risk_management/realtime_config.local.json \
+  --host 0.0.0.0 --port 8000
+```
+
+Open `http://localhost:8000` and sign in using the credentials from the
+configuration file.  The page displays:
+
+- Portfolio and per-account exposure metrics.
+- Live funding and volatility snapshots.
+- Outstanding alerts and notification targets.
+- Kill-switch buttons (global, per account, or per position).
+- CSV report downloads (stored under `reports_dir`).
+- Optional Grafana panels embedded beneath the summary cards.
+
+### Enabling TLS
+
+Provide certificate files directly:
+
+```bash
+python -m risk_management.web_server \
+  --config risk_management/realtime_config.local.json \
+  --ssl-certfile /path/to/fullchain.pem \
+  --ssl-keyfile /path/to/privkey.pem
+```
+
+or let the helper obtain certificates through Let's Encrypt:
+
+```bash
+python -m risk_management.web_server \
+  --config risk_management/realtime_config.local.json \
   --letsencrypt-domain dashboard.example.com \
   --letsencrypt-email sre@example.com \
   --letsencrypt-http-port 80
 ```
 
-The helper reuses existing certificates until renewal is required (`certbot
---keep-until-expiring`). Set `--letsencrypt-staging` (optionally with
-`--letsencrypt-dry-run`) while testing to avoid production rate limits. To store
-certbot data outside the default `/etc/letsencrypt` directory, pass
-`--letsencrypt-config-dir`, `--letsencrypt-work-dir`, and `--letsencrypt-logs-dir`
-paths.
+Use `--letsencrypt-staging` and `--letsencrypt-dry-run` while testing to avoid
+production rate limits.  When `auth.https_only` is true the server enforces
+HTTPS and reminds you to supply certificates.
 
-When managing certificates separately, point `--letsencrypt-webroot` at the
-directory certbot writes `/.well-known/acme-challenge/*` files into. The web
-server exposes the directory automatically so http-01 challenges succeed during
-renewals triggered by external automation.
-endpoints.
+## 5. Exporting snapshots and reports
 
-your API key store.  The optional `params.balance` and `params.positions`
-objects are forwarded to ccxt when invoking `fetch_balance()` and
-`fetch_positions()`, which is useful for exchanges (such as OKX and Bybit) that
-require the `type="swap"` hint to return futures data.  Omitting the objects is
-fine for venues that default to USD-M perpetual endpoints.
+The web UI exposes a **Generate report** action for each account.  Reports are
+stored as timestamped CSV files inside `reports_dir`.  You can also build a
+presentable JSON snapshot programmatically via
+`risk_management.snapshot_utils.build_presentable_snapshot()` for downstream
+systems.
 
+## 6. Email alerts
 
+When the realtime fetcher detects alert conditions it sends an email to all
+`notification_channels` entries prefixed with `email:`.  Ensure the SMTP server
+allows the chosen sender address and credentials.  Errors are logged without
+interrupting the polling loop.
 
-The `https_only` flag inside the `auth` block is enabled by default to set
-secure, same-site session cookies and to redirect HTTP requests to HTTPS.
-Disable it only for development environments that cannot serve TLS. Supply
-`--ssl-certfile /path/to/fullchain.pem` and `--ssl-keyfile /path/to/privkey.pem`
-(optionally with `--ssl-keyfile-password`) when launching the web server to
-enable HTTPS directly. Both paths must be provided together or the server will
-refuse to start. When `https_only` remains enabled without TLS parameters the
-server now logs a warning at startup to remind you to either provide
-certificates or temporarily set the flag to `false`; browsers connecting over
-HTTPS to an HTTP-only instance will otherwise report "Invalid HTTP request"
-errors because the TLS handshake cannot complete.
+## 7. Verifying the installation
 
-### Debugging exchange payloads
-
-Set `"debug_api_payloads": true` at the top level of your realtime
-configuration to capture the raw JSON returned by `fetch_balance()` and
-`fetch_positions()` for every account. The payloads, along with the request
-parameters, are emitted at the DEBUG log level and can help compare responses
-between exchanges or custom endpoint variants. Toggle the flag back to `false`
-after finishing your investigation to avoid cluttering the logs.
-
-When only a subset of accounts requires verbose tracing, add
-`"debug_api_payloads": true` to the specific account blocks instead of the
-global setting. This keeps logging focused on the venues under review.
-
-
-
-## Web dashboard
-
-Launch the FastAPI web server to obtain an authenticated dashboard with live
-updates:
+Run the automated test suite to make sure all core behaviours work as expected:
 
 ```bash
-python -m risk_management.web_server --config risk_management/realtime_config.json --host 0.0.0.0 --port 8000
+pytest \
+  tests/test_risk_management_account_clients.py \
+  tests/test_risk_management_realtime.py \
+  tests/test_risk_management_web.py \
+  tests/risk_management
 ```
 
-Navigate to `http://localhost:8000` to sign in and view the interactive
-dashboard.  The page automatically polls for fresh data and updates account
-cards, alerts, and notification channels without a full refresh.
+The tests mock external services and can be executed without live exchange
+access.
 
-When TLS parameters are provided the server listens on HTTPS and the dashboard
-redirects any plain HTTP requests to the secure endpoint. Successful logins set
-secure, same-site session cookies so credentials are never transmitted without
-encryption.
+## 8. Troubleshooting
 
-### Portfolio analytics and kill switches
+- **`ModuleNotFoundError: custom_endpoint_overrides`** – run commands from the
+  repository root or activate the virtual environment created by the installer
+  so Passivbot modules are importable.
+- **`Authentication failed` messages** – double-check API keys, required
+  passphrases, and whether the credentials have the proper permissions.  The
+  realtime fetcher caches the last error per account and resumes automatically
+  when the issue is resolved.
+- **Email alerts not delivered** – confirm the `email` block contains the
+  correct server details and that `notification_channels` lists at least one
+  `email:` recipient.
+- **TLS errors** – ensure both `--ssl-certfile` and `--ssl-keyfile` are
+  provided.  For automatic provisioning, verify that `certbot` is installed and
+  reachable through the executable path supplied via `--letsencrypt-executable`.
 
-The overview card now includes rolling volatility and funding-rate snapshots
-for 4 hour, 24 hour, 3 day, and 7 day windows. The values are calculated per
-symbol and aggregated both at the portfolio level and for each exchange
-account, making it easy to spot regimes with rising volatility or punitive
-funding. Position tables expose the same metrics so individual trades can be
-evaluated in context.
-
-Portfolio managers can trigger the kill switch globally, per account, or for a
-single open position straight from the dashboard. Kill actions cancel all open
-orders and close positions with reduce-only limit orders resting at the best
-bid/ask, ensuring the exchange honours quantity reductions without relying on
-market orders.
-
-### Custom endpoint overrides
-
-If your Passivbot installation proxies REST requests through
-`configs/custom_endpoints.json`, mirror the same routing for the risk
-dashboard by declaring a `custom_endpoints` block in your realtime
-configuration.  The example below keeps automatic API key discovery and
-overrides only the endpoint file:
-
-```json
-{
-  "custom_endpoints": {
-    "path": "../configs/custom_endpoints.json",
-    "autodiscover": false
-  },
-  "accounts": [
-    { "name": "Binance Futures", "exchange": "binanceusdm" }
-  ],
-  "auth": { "secret_key": "...", "users": { "admin": "..." } }
-}
-```
-
-Providing a string value (for example
-`"custom_endpoints": "../configs/custom_endpoints.json"`) forces the loader
-to use that file, while the values `"none"`, `"off"`, or `"disable"` turn the
-feature off entirely.  Omitting the section keeps the default auto-discovery
-behaviour.  The loader first checks for `custom_endpoints.json` next to the
-realtime configuration file and then falls back to
-`configs/custom_endpoints.json` relative to your Passivbot checkout, matching
-the trading bot's lookup order.
-
-Alternatively, override the behaviour at launch time with
-`--custom-endpoints`.  For example, run the web server with
-`--custom-endpoints ../configs/custom_endpoints.json` to force the same proxy
-file Passivbot uses, `--custom-endpoints auto` to re-enable discovery, or
-`--custom-endpoints none` to disable overrides regardless of the configuration
-file.
-
-### Authentication
-
-The web UI requires bcrypt hashed passwords.  Use the helper script to generate
-hashes:
-
-```bash
-python risk_management/scripts/hash_password.py
-```
-
-Paste the resulting hash into the `auth.users` section of your realtime
-configuration file.
-
-The previous quick start guide that focused solely on creating the virtual
-environment is kept below for reference.
-
-## Installation Overview
-
-The risk management service is developed as a separate Python package that
-imports Passivbot as a library.  To keep concerns separated and avoid mutating
-existing Passivbot installations, we maintain an isolated virtual environment
-under `risk_management/.venv_passivbot_risk` and link it directly to the
-repository's source tree.
-
-Run the helper script to bootstrap the environment:
-
-```bash
-./scripts/install_passivbot.sh
-```
-
-The script prepares the virtual environment without touching your existing
-Passivbot installation.  By default it does **not** install Passivbot or link to
-its source tree, keeping the workspace fully isolated for the upcoming risk
-management utilities.
-
-If you want code inside the virtual environment to import Passivbot directly
-from a local checkout, provide the path to Passivbot's `src/` directory via
-`--link-passivbot`:
-
-```bash
-./scripts/install_passivbot.sh --link-passivbot /path/to/passivbot/src
-```
-
-This optional flag drops a `.pth` file into the environment's `site-packages`
-directory so modules under the supplied path become importable.  Skipping the
-flag leaves the environment unaware of Passivbot entirely, which can be useful
-if you plan to interact with Passivbot over APIs or other integration points
-instead of importing its Python modules.
-existing Passivbot installation requirements, we maintain an isolated virtual
-environment under `risk_management/.venv_passivbot_risk`.
-
-Run the helper script to bootstrap the environment and install Passivbot in
-editable mode:
-
-
-
-```bash
-./scripts/install_passivbot.sh
-```
-
-
-The script prepares the virtual environment and writes a `.pth` file so that
-`risk_management` code can import Passivbot modules directly from `../src`
-without reinstalling Passivbot.  This lets you keep running Passivbot from your
-existing environment while prototyping new risk tooling separately.
-
-If you want the helper to refresh `pip`, `setuptools`, and `wheel` inside the
-virtual environment, add `--upgrade-packaging` to the command.  Otherwise those
-tools are left untouched to avoid unnecessary downloads.
-
-The script upgrades core packaging tools inside the virtual environment and
-writes a `.pth` file so that `risk_management` code can import Passivbot
-modules directly from `../src` without a redundant pip installation.  This lets
-you keep running Passivbot from your existing environment while prototyping new
-risk tooling separately.
-
-If you *do* want Passivbot installed into the risk-management environment (for
-example, to publish the package to an index or test installation flows), pass
-`--install-passivbot`.  Any arguments after `--` are forwarded to `pip
-install`:
-
-```bash
-./scripts/install_passivbot.sh --install-passivbot -- --no-build-isolation
-```
-
-After bootstrapping the virtual environment you can activate it with `source
-.venv_passivbot_risk/bin/activate` and proceed with future iterations—portfolio
-analytics, monitoring, and alerting—while keeping the main Passivbot setup
-untouched.
-
-
-If you need to adjust the build invocation (for example, to pass additional
-flags to `pip install`), append them to the script call and they will be
-forwarded to the editable install step:
-
-```bash
-./scripts/install_passivbot.sh --no-build-isolation
-```
-
-After installation the virtual environment will be ready for future
-iterations—where portfolio analytics, monitoring, and alerting features will be
-added—to import Passivbot modules and configurations.
-
-
-
-
-## What the installer does
-
-* Creates (or reuses) the virtual environment at
-  `risk_management/.venv_passivbot_risk`.
-
-* Optionally writes a `.pth` file into the environment's `site-packages`
-  directory when `--link-passivbot` is supplied so the referenced Passivbot
-  source tree becomes importable without additional installation steps.
-* Optionally upgrades `pip`, `setuptools`, and `wheel` when
-  `--upgrade-packaging` is provided.
-
-* Drops a `.pth` file into the environment's `site-packages` directory so the
-  Passivbot source tree at `../src` is importable without additional
-  installation steps.
-* Optionally upgrades `pip`, `setuptools`, and `wheel` when
-  `--upgrade-packaging` is provided.
-
-* Upgrades `pip`, `setuptools`, and `wheel` to recent versions inside that
-  environment.
-* Drops a `.pth` file into the environment's `site-packages` directory so the
-  Passivbot source tree at `../src` is importable without additional
-  installation steps.
-* Optionally installs Passivbot into the environment when
-  `--install-passivbot` is requested, defaulting to a `pip install -e .
-  --use-pep517` invocation that still supports forwarding custom flags.
-
-* Upgrades `pip`, `setuptools`, and `wheel` to recent versions.
-
-* Installs Passivbot's build prerequisite `setuptools-rust` that is
-  required during editable installations of the core project.
-* Installs Passivbot from the repository root in editable mode with PEP 517
-  builds enabled by default, ensuring nested requirement files are resolved
-  correctly. Any extra flags passed to the script are forwarded to the `pip`
-  command so you can tailor the build locally.
-
-
-* Installs Passivbot's build prerequisite `setuptools-rust` that is
-  required during editable installations of the core project.
-
-* Installs Passivbot from the repository root in editable mode so that local
-  changes to Passivbot are instantly available to the risk management package.
-
-
-## Requirements
-
-* Python 3.9+ available on the host system.
-* `bash` compatible shell (for Windows users, WSL or Git Bash is recommended).
-
-Future iterations will introduce the risk management package itself, portfolio
-metrics calculations, monitoring pipelines, and alert integrations while
-respecting the isolation between Passivbot and the new tooling.
+With the configuration complete you can run the dashboard continuously,
+monitor exposure across all connected accounts, and trigger protective actions
+without touching the trading bot itself.
