@@ -388,7 +388,9 @@ def parse_overrides(config, verbose=True):
                 result["coin_overrides"][coinf] = deepcopy(result["coin_overrides"][coin])
                 _log_config(verbose, logging.INFO, "Renamed %s -> %s for coin_overrides", coin, coinf)
             else:
-                _log_config(verbose, logging.INFO, "Failed to format %s; removed from coin_overrides", coin)
+                _log_config(
+                    verbose, logging.INFO, "Failed to format %s; removed from coin_overrides", coin
+                )
             del result["coin_overrides"][coin]
     for coin, overrides in result["coin_overrides"].items():
         parsed_overrides = {}
@@ -404,7 +406,13 @@ def parse_overrides(config, verbose=True):
         )
 
         result.setdefault("coin_overrides", {})[coin] = parsed_overrides
-        _log_config(verbose, logging.INFO, "Added overrides for %s: %s", coin, sort_dict_keys(parsed_overrides))
+        _log_config(
+            verbose,
+            logging.INFO,
+            "Added overrides for %s: %s",
+            coin,
+            sort_dict_keys(parsed_overrides),
+        )
     return result
 
 
@@ -605,13 +613,17 @@ def _apply_backward_compatibility_renames(result: dict, verbose: bool = True) ->
             if old in bot_cfg:
                 if new not in bot_cfg:
                     bot_cfg[new] = bot_cfg[old]
-                    _log_config(verbose, logging.INFO, "renaming parameter bot.%s.%s -> %s", pside, old, new)
+                    _log_config(
+                        verbose, logging.INFO, "renaming parameter bot.%s.%s -> %s", pside, old, new
+                    )
                 del bot_cfg[old]
         for old, new in LEGACY_ENTRY_GRID_KEYS.items():
             if old in bot_cfg:
                 if new not in bot_cfg:
                     bot_cfg[new] = bot_cfg[old]
-                    _log_config(verbose, logging.INFO, "renaming parameter bot.%s.%s -> %s", pside, old, new)
+                    _log_config(
+                        verbose, logging.INFO, "renaming parameter bot.%s.%s -> %s", pside, old, new
+                    )
                 del bot_cfg[old]
 
     bounds = result.get("optimize", {}).get("bounds", {})
@@ -619,7 +631,9 @@ def _apply_backward_compatibility_renames(result: dict, verbose: bool = True) ->
         if old in bounds:
             if new not in bounds:
                 bounds[new] = bounds[old]
-                _log_config(verbose, logging.INFO, "renaming parameter optimize.bounds.%s -> %s", old, new)
+                _log_config(
+                    verbose, logging.INFO, "renaming parameter optimize.bounds.%s -> %s", old, new
+                )
             del bounds[old]
 
     live_cfg = result.get("live")
@@ -1002,7 +1016,9 @@ def remove_unused_keys_recursively(
             continue
         if k not in src:
             del dst[k]
-            _log_config(verbose, logging.INFO, "Removed unused key from config: %s", ".".join(current_path))
+            _log_config(
+                verbose, logging.INFO, "Removed unused key from config: %s", ".".join(current_path)
+            )
             continue
         src_val = src[k]
         dst_val = dst[k]
@@ -1211,7 +1227,9 @@ def recursive_config_update(config, key, value, path=None, verbose=False):
         coerced_value = _coerce_value(config[key], value)
         if coerced_value != config[key]:
             full_path = ".".join(path + [key])
-            _log_config(verbose, logging.INFO, "changed %s %s -> %s", full_path, config[key], coerced_value)
+            _log_config(
+                verbose, logging.INFO, "changed %s %s -> %s", full_path, config[key], coerced_value
+            )
             config[key] = coerced_value
         return True
 
