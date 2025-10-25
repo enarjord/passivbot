@@ -79,6 +79,7 @@ class AuthConfig:
     secret_key: str
     users: Mapping[str, str]
     session_cookie_name: str = "risk_dashboard_session"
+    https_only: bool = True
 
 
 @dataclass()

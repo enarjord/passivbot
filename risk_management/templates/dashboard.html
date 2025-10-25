@@ -145,8 +145,10 @@
 {% endblock %}
 
 {% block header_controls %}
-  <div style="display: flex; align-items: center; gap: 1rem;">
+  <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
     <span class="badge">Logged in as {{ user }}</span>
+    <button type="button" class="button danger" data-kill-portfolio>Kill portfolio</button>
+    <div class="status-message" data-kill-status="__portfolio__" hidden></div>
     <form method="post" action="/logout">
       <button type="submit">Logout</button>
     </form>
@@ -229,8 +231,34 @@
             <span class="subvalue {% if snapshot.portfolio.net_exposure_pct >= 0 %}gain{% else %}loss{% endif %}">{{ snapshot.portfolio.net_exposure_pct|pct }}</span>
           </div>
         </div>
+        {% set portfolio_vol = snapshot.portfolio.volatility if snapshot.portfolio.volatility is defined else {} %}
+        {% set portfolio_funding = snapshot.portfolio.funding_rates if snapshot.portfolio.funding_rates is defined else {} %}
+        {% if portfolio_vol or portfolio_funding %}
+          <div class="table-wrapper" style="margin-top: 1.5rem;">
+            <table class="compact">
+              <thead>
+                <tr>
+                  <th>Window</th>
+                  <th>Volatility</th>
+                  <th>Funding rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for window in ["4h", "24h", "3d", "7d"] %}
+                  <tr>
+                    <td>{{ window }}</td>
+                    {% set vol_value = portfolio_vol.get(window) if portfolio_vol else None %}
+                    {% set funding_value = portfolio_funding.get(window) if portfolio_funding else None %}
+                    <td>{% if vol_value is not none %}{{ vol_value|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if funding_value is not none %}{{ funding_value|pct }}{% else %}-{% endif %}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% endif %}
         {% if snapshot.portfolio.symbols %}
-          <div class="table-wrapper" style="overflow-x: auto; margin-top: 1.5rem;">
+          <div class="table-wrapper" style="margin-top: 1.5rem;">
             <table>
               <thead>
                 <tr>
@@ -239,16 +267,34 @@
                   <th>Gross %</th>
                   <th>Net Exposure</th>
                   <th>Net %</th>
+                  <th>Vol 4h</th>
+                  <th>Vol 24h</th>
+                  <th>Vol 3d</th>
+                  <th>Vol 7d</th>
+                  <th>Fund 4h</th>
+                  <th>Fund 24h</th>
+                  <th>Fund 3d</th>
+                  <th>Fund 7d</th>
                 </tr>
               </thead>
               <tbody>
                 {% for entry in snapshot.portfolio.symbols %}
+                  {% set symbol_vol = entry.volatility if entry.volatility is defined else {} %}
+                  {% set symbol_funding = entry.funding_rates if entry.funding_rates is defined else {} %}
                   <tr>
                     <td>{{ entry.symbol }}</td>
                     <td>{{ entry.gross_notional|currency }}</td>
                     <td>{{ entry.gross_pct|pct }}</td>
                     <td class="{% if entry.net_notional >= 0 %}gain{% else %}loss{% endif %}">{{ entry.net_notional|currency }}</td>
                     <td class="{% if entry.net_pct >= 0 %}gain{% else %}loss{% endif %}">{{ entry.net_pct|pct }}</td>
+                    <td>{% if symbol_vol and symbol_vol.get("4h") is not none %}{{ symbol_vol.get("4h")|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if symbol_vol and symbol_vol.get("24h") is not none %}{{ symbol_vol.get("24h")|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if symbol_vol and symbol_vol.get("3d") is not none %}{{ symbol_vol.get("3d")|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if symbol_vol and symbol_vol.get("7d") is not none %}{{ symbol_vol.get("7d")|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if symbol_funding and symbol_funding.get("4h") is not none %}{{ symbol_funding.get("4h")|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if symbol_funding and symbol_funding.get("24h") is not none %}{{ symbol_funding.get("24h")|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if symbol_funding and symbol_funding.get("3d") is not none %}{{ symbol_funding.get("3d")|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if symbol_funding and symbol_funding.get("7d") is not none %}{{ symbol_funding.get("7d")|pct }}{% else %}-{% endif %}</td>
                   </tr>
                 {% endfor %}
               </tbody>
@@ -300,8 +346,34 @@
                 <span class="value {% if account.unrealized_pnl >= 0 %}gain{% else %}loss{% endif %}">{{ account.unrealized_pnl|currency }}</span>
               </div>
             </div>
+            {% set account_vol = account.volatility if account.volatility is defined else {} %}
+            {% set account_funding = account.funding_rates if account.funding_rates is defined else {} %}
+            {% if account_vol or account_funding %}
+              <div class="table-wrapper" style="margin-bottom: 1.5rem;">
+                <table class="compact">
+                  <thead>
+                    <tr>
+                      <th>Window</th>
+                      <th>Volatility</th>
+                      <th>Funding rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for window in ["4h", "24h", "3d", "7d"] %}
+                      {% set vol_value = account_vol.get(window) if account_vol else None %}
+                      {% set funding_value = account_funding.get(window) if account_funding else None %}
+                      <tr>
+                        <td>{{ window }}</td>
+                        <td>{% if vol_value is not none %}{{ vol_value|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if funding_value is not none %}{{ funding_value|pct }}{% else %}-{% endif %}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% endif %}
             {% if account.symbol_exposures %}
-              <div class="table-wrapper" style="overflow-x: auto; margin-bottom: 1.5rem;">
+              <div class="table-wrapper" style="margin-bottom: 1.5rem;">
                 <table>
                   <thead>
                     <tr>
@@ -336,7 +408,7 @@
               </div>
             </div>
             {% if account.positions %}
-              <div class="table-wrapper" style="overflow-x: auto;">
+              <div class="table-wrapper">
                 <table>
                   <thead>
                     <tr>
@@ -351,10 +423,21 @@
                       <th>Max DD</th>
                       <th>TP</th>
                       <th>SL</th>
+                      <th>Vol 4h</th>
+                      <th>Vol 24h</th>
+                      <th>Vol 3d</th>
+                      <th>Vol 7d</th>
+                      <th>Fund 4h</th>
+                      <th>Fund 24h</th>
+                      <th>Fund 3d</th>
+                      <th>Fund 7d</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {% for position in account.positions %}
+                      {% set position_vol = position.volatility if position.volatility is defined else {} %}
+                      {% set position_funding = position.funding_rates if position.funding_rates is defined else {} %}
                       <tr>
                         <td>{{ position.symbol }}</td>
                         <td>{{ position.side }}</td>
@@ -367,6 +450,32 @@
                         <td>{% if position.max_drawdown_pct is not none %}{{ position.max_drawdown_pct|pct }}{% else %}-{% endif %}</td>
                         <td>{% if position.take_profit_price is not none %}{{ position.take_profit_price|currency }}{% else %}-{% endif %}</td>
                         <td>{% if position.stop_loss_price is not none %}{{ position.stop_loss_price|currency }}{% else %}-{% endif %}</td>
+                        <td>{% if position_vol and position_vol.get("4h") is not none %}{{ position_vol.get("4h")|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position_vol and position_vol.get("24h") is not none %}{{ position_vol.get("24h")|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position_vol and position_vol.get("3d") is not none %}{{ position_vol.get("3d")|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position_vol and position_vol.get("7d") is not none %}{{ position_vol.get("7d")|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position_funding and position_funding.get("4h") is not none %}{{ position_funding.get("4h")|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position_funding and position_funding.get("24h") is not none %}{{ position_funding.get("24h")|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position_funding and position_funding.get("3d") is not none %}{{ position_funding.get("3d")|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position_funding and position_funding.get("7d") is not none %}{{ position_funding.get("7d")|pct }}{% else %}-{% endif %}</td>
+                        <td>
+                          <div style="display: flex; flex-direction: column; gap: 0.35rem; min-width: 9rem;">
+                            <button
+                              type="button"
+                              class="button danger small"
+                              data-position-kill
+                              data-position-account="{{ account.name }}"
+                              data-position-symbol="{{ position.symbol }}"
+                            >
+                              Kill position
+                            </button>
+                            <div
+                              class="status-message"
+                              data-position-status="{{ account.name }}::{{ position.symbol }}"
+                              hidden
+                            ></div>
+                          </div>
+                        </td>
                       </tr>
                     {% endfor %}
                   </tbody>
@@ -499,6 +608,7 @@
     const REFRESH_INTERVAL_MS = 10000;
     const DEFAULT_PAGE = "overview";
     const STORAGE_KEY = "risk-dashboard.activePage";
+    const METRIC_WINDOWS = ["4h", "24h", "3d", "7d"];
 
     const pageSections = Array.from(document.querySelectorAll("[data-page-section]"));
     const navButtons = Array.from(document.querySelectorAll("[data-page-target]"));
@@ -564,6 +674,10 @@
       return `${number.toFixed(2)}%`;
     };
 
+    const isFiniteNumber = (value) => typeof value === "number" && Number.isFinite(value);
+
+    const formatMetricValue = (value) => (isFiniteNumber(value) ? formatPct(value) : "-");
+
     const formatBytes = (value) => {
       const number = Number(value);
       if (!Number.isFinite(number) || number <= 0) {
@@ -584,17 +698,74 @@
         return;
       }
       const portfolio = snapshot.portfolio;
-      const rows = (Array.isArray(portfolio.symbols) ? portfolio.symbols : [])
-        .map((entry) => `
+      const symbolRows = (Array.isArray(portfolio.symbols) ? portfolio.symbols : [])
+        .map((entry) => {
+          const volatility = entry.volatility || {};
+          const funding = entry.funding_rates || {};
+          return `
           <tr>
             <td>${entry.symbol}</td>
             <td>${formatCurrency(entry.gross_notional)}</td>
             <td>${formatPct(entry.gross_pct)}</td>
             <td class="${Number(entry.net_notional) >= 0 ? "gain" : "loss"}">${formatCurrency(entry.net_notional)}</td>
             <td class="${Number(entry.net_pct) >= 0 ? "gain" : "loss"}">${formatPct(entry.net_pct)}</td>
+            ${METRIC_WINDOWS.map((window) => `<td>${formatMetricValue(volatility?.[window])}</td>`).join("")}
+            ${METRIC_WINDOWS.map((window) => `<td>${formatMetricValue(funding?.[window])}</td>`).join("")}
           </tr>
-        `)
+        `;
+        })
         .join("");
+      const hasPortfolioMetrics = METRIC_WINDOWS.some(
+        (window) =>
+          isFiniteNumber(portfolio.volatility?.[window]) ||
+          isFiniteNumber(portfolio.funding_rates?.[window])
+      );
+      const metricsTable = hasPortfolioMetrics
+        ? `
+          <div class="table-wrapper" style="margin-top: 1.5rem;">
+            <table class="compact">
+              <thead>
+                <tr>
+                  <th>Window</th>
+                  <th>Volatility</th>
+                  <th>Funding rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${METRIC_WINDOWS.map(
+                  (window) => `
+                    <tr>
+                      <td>${window}</td>
+                      <td>${formatMetricValue(portfolio.volatility?.[window])}</td>
+                      <td>${formatMetricValue(portfolio.funding_rates?.[window])}</td>
+                    </tr>
+                  `
+                ).join("")}
+              </tbody>
+            </table>
+          </div>
+        `
+        : "";
+      const exposuresTable = symbolRows
+        ? `
+          <div class="table-wrapper" style="margin-top: 1.5rem;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Gross Exposure</th>
+                  <th>Gross %</th>
+                  <th>Net Exposure</th>
+                  <th>Net %</th>
+                  ${METRIC_WINDOWS.map((window) => `<th>Vol ${window}</th>`).join("")}
+                  ${METRIC_WINDOWS.map((window) => `<th>Fund ${window}</th>`).join("")}
+                </tr>
+              </thead>
+              <tbody>${symbolRows}</tbody>
+            </table>
+          </div>
+        `
+        : '<p style="color: var(--muted); margin-top: 1rem;">No active exposures.</p>';
       portfolioSection.innerHTML = `
         <div style="display: flex; justify-content: space-between; align-items: center;">
           <div>
@@ -623,22 +794,8 @@
             <span class="subvalue ${Number(portfolio.net_exposure_pct) >= 0 ? "gain" : "loss"}">${formatPct(portfolio.net_exposure_pct)}</span>
           </div>
         </div>
-        ${rows
-          ? `<div class="table-wrapper" style="overflow-x: auto; margin-top: 1.5rem;">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Symbol</th>
-                    <th>Gross Exposure</th>
-                    <th>Gross %</th>
-                    <th>Net Exposure</th>
-                    <th>Net %</th>
-                  </tr>
-                </thead>
-                <tbody>${rows}</tbody>
-              </table>
-            </div>`
-          : `<p style="color: var(--muted); margin-top: 1rem;">No active exposures.</p>`}
+        ${metricsTable}
+        ${exposuresTable}
       `;
     };
 
@@ -668,12 +825,47 @@
               </tr>
             `)
             .join("");
+          const accountVolatility = account.volatility || {};
+          const accountFunding = account.funding_rates || {};
+          const hasAccountMetrics = METRIC_WINDOWS.some(
+            (window) =>
+              isFiniteNumber(accountVolatility?.[window]) ||
+              isFiniteNumber(accountFunding?.[window])
+          );
+          const accountMetricsTable = hasAccountMetrics
+            ? `
+              <div class="table-wrapper" style="margin-bottom: 1.5rem;">
+                <table class="compact">
+                  <thead>
+                    <tr>
+                      <th>Window</th>
+                      <th>Volatility</th>
+                      <th>Funding rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${METRIC_WINDOWS.map(
+                      (window) => `
+                        <tr>
+                          <td>${window}</td>
+                          <td>${formatMetricValue(accountVolatility?.[window])}</td>
+                          <td>${formatMetricValue(accountFunding?.[window])}</td>
+                        </tr>
+                      `
+                    ).join("")}
+                  </tbody>
+                </table>
+              </div>
+            `
+            : "";
           const positionsRows = positions
             .map((position) => {
               const pnlClass = Number(position.unrealized_pnl) >= 0 ? "gain" : "loss";
               const maxDd = position.max_drawdown_pct !== null && position.max_drawdown_pct !== undefined
                 ? formatPct(position.max_drawdown_pct)
                 : "-";
+              const volatility = position.volatility || {};
+              const funding = position.funding_rates || {};
               return `
                 <tr>
                   <td>${position.symbol}</td>
@@ -687,6 +879,26 @@
                   <td>${maxDd}</td>
                   <td>${formatPrice(position.take_profit_price)}</td>
                   <td>${formatPrice(position.stop_loss_price)}</td>
+                  ${METRIC_WINDOWS.map((window) => `<td>${formatMetricValue(volatility?.[window])}</td>`).join("")}
+                  ${METRIC_WINDOWS.map((window) => `<td>${formatMetricValue(funding?.[window])}</td>`).join("")}
+                  <td>
+                    <div style="display: flex; flex-direction: column; gap: 0.35rem; min-width: 9rem;">
+                      <button
+                        type="button"
+                        class="button danger small"
+                        data-position-kill
+                        data-position-account="${account.name}"
+                        data-position-symbol="${position.symbol}"
+                      >
+                        Kill position
+                      </button>
+                      <div
+                        class="status-message"
+                        data-position-status="${account.name}::${position.symbol}"
+                        hidden
+                      ></div>
+                    </div>
+                  </td>
                 </tr>
               `;
             })
@@ -709,6 +921,77 @@
               </tr>
             `)
             .join("");
+          const exposuresTable = exposuresRows
+            ? `
+                <div class="table-wrapper" style="margin-bottom: 1.5rem;">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Symbol</th>
+                        <th>Gross Exposure</th>
+                        <th>Gross %</th>
+                        <th>Net Exposure</th>
+                        <th>Net %</th>
+                      </tr>
+                    </thead>
+                    <tbody>${exposuresRows}</tbody>
+                  </table>
+                </div>
+              `
+            : "";
+          const positionsTable = positions.length > 0
+            ? `
+                <div class="table-wrapper">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Notional</th>
+                        <th>Exposure %</th>
+                        <th>PnL</th>
+                        <th>Entry</th>
+                        <th>Mark</th>
+                        <th>Liq.</th>
+                        <th>Max DD</th>
+                        <th>TP</th>
+                        <th>SL</th>
+                        ${METRIC_WINDOWS.map((window) => `<th>Vol ${window}</th>`).join("")}
+                        ${METRIC_WINDOWS.map((window) => `<th>Fund ${window}</th>`).join("")}
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>${positionsRows}</tbody>
+                  </table>
+                </div>
+              `
+            : '<p style="color: var(--muted);">No open positions.</p>';
+          const ordersTable = orders.length > 0
+            ? `
+                <h3 style="margin-top: 1.5rem;">Open orders</h3>
+                <div class="table-wrapper" style="overflow-x: auto;">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Type</th>
+                        <th>Price</th>
+                        <th>Amount</th>
+                        <th>Remaining</th>
+                        <th>Status</th>
+                        <th>Reduce only</th>
+                        <th>Notional</th>
+                        <th>Stop price</th>
+                        <th>Created</th>
+                      </tr>
+                    </thead>
+                    <tbody>${ordersRows}</tbody>
+                  </table>
+                </div>
+              `
+            : '<p style="color: var(--muted);">No open orders.</p>';
           return `
             <section class="card" data-account="${account.name}">
               <div class="card-header" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
@@ -745,22 +1028,8 @@
                   <span class="value ${Number(account.unrealized_pnl) >= 0 ? "gain" : "loss"}">${formatCurrency(account.unrealized_pnl)}</span>
                 </div>
               </div>
-              ${exposuresRows
-                ? `<div class="table-wrapper" style="overflow-x: auto; margin-bottom: 1.5rem;">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Symbol</th>
-                          <th>Gross Exposure</th>
-                          <th>Gross %</th>
-                          <th>Net Exposure</th>
-                          <th>Net %</th>
-                        </tr>
-                      </thead>
-                      <tbody>${exposuresRows}</tbody>
-                    </table>
-                  </div>`
-                : ""}
+              ${accountMetricsTable}
+              ${exposuresTable}
               <div class="report-section">
                 <div class="report-actions">
                   <button type="button" class="button secondary" data-generate-report="${account.name}">Generate report</button>
@@ -770,52 +1039,8 @@
                   <p class="report-list__empty">No stored reports yet.</p>
                 </div>
               </div>
-              ${positions.length > 0
-                ? `<div class="table-wrapper" style="overflow-x: auto;">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Symbol</th>
-                          <th>Side</th>
-                          <th>Notional</th>
-                          <th>Exposure %</th>
-                          <th>PnL</th>
-                          <th>Entry</th>
-                          <th>Mark</th>
-                          <th>Liq.</th>
-                          <th>Max DD</th>
-                          <th>TP</th>
-                          <th>SL</th>
-                        </tr>
-                      </thead>
-                      <tbody>${positionsRows}</tbody>
-                    </table>
-                  </div>`
-                : `<p style="color: var(--muted);">No open positions.</p>`}
-              ${orders.length > 0
-                ? `<h3 style="margin-top: 1.5rem;">Open orders</h3>
-                    <div class="table-wrapper" style="overflow-x: auto;">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>ID</th>
-                            <th>Symbol</th>
-                            <th>Side</th>
-                            <th>Type</th>
-                            <th>Price</th>
-                            <th>Amount</th>
-                            <th>Remaining</th>
-                            <th>Status</th>
-                            <th>Reduce only</th>
-                            <th>Notional</th>
-                            <th>Stop price</th>
-                            <th>Created</th>
-                          </tr>
-                        </thead>
-                        <tbody>${ordersRows}</tbody>
-                      </table>
-                    </div>`
-                : `<p style="color: var(--muted);">No open orders.</p>`}
+              ${positionsTable}
+              ${ordersTable}
             </section>
           `;
         })
@@ -1048,19 +1273,27 @@
       }
     }
 
-    async function triggerKillSwitch(accountName, button) {
-      if (!accountName) {
-        return;
+    async function triggerKillSwitch(accountName, button, symbol) {
+      let endpoint = "/api/kill-switch";
+      let statusSelector = '[data-kill-status="__portfolio__"]';
+      if (accountName) {
+        if (symbol) {
+          endpoint = `/api/accounts/${encodeURIComponent(accountName)}/positions/${encodeURIComponent(symbol)}/kill-switch`;
+          statusSelector = `[data-position-status="${accountName}::${symbol}"]`;
+        } else {
+          endpoint = `/api/accounts/${encodeURIComponent(accountName)}/kill-switch`;
+          statusSelector = `[data-kill-status="${accountName}"]`;
+        }
       }
-      const statusEl = document.querySelector(`[data-kill-status="${accountName}"]`);
+      const statusEl = document.querySelector(statusSelector);
       if (statusEl) {
         statusEl.textContent = "Executing kill switch...";
-        statusEl.style.display = "block";
+        statusEl.hidden = false;
         statusEl.classList.remove("success");
       }
       if (button) button.disabled = true;
       try {
-        const response = await fetch(`/api/accounts/${encodeURIComponent(accountName)}/kill-switch`, {
+        const response = await fetch(endpoint, {
           method: "POST",
           credentials: "include",
         });
@@ -1085,10 +1318,22 @@
     }
 
     document.addEventListener("click", (event) => {
+      const portfolioKillButton = event.target.closest("[data-kill-portfolio]");
+      if (portfolioKillButton) {
+        triggerKillSwitch(null, portfolioKillButton);
+        return;
+      }
       const killButton = event.target.closest("[data-kill-switch]");
       if (killButton) {
         const accountName = killButton.getAttribute("data-kill-switch");
         triggerKillSwitch(accountName, killButton);
+        return;
+      }
+      const positionKillButton = event.target.closest("[data-position-kill]");
+      if (positionKillButton) {
+        const accountName = positionKillButton.getAttribute("data-position-account");
+        const symbol = positionKillButton.getAttribute("data-position-symbol");
+        triggerKillSwitch(accountName, positionKillButton, symbol);
         return;
       }
       const reportButton = event.target.closest("[data-generate-report]");

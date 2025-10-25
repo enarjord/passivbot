@@ -191,7 +191,9 @@ class RealtimeDataFetcher:
     async def close(self) -> None:
         await asyncio.gather(*(client.close() for client in self._account_clients))
 
-    async def execute_kill_switch(self, account_name: str | None = None) -> Dict[str, Any]:
+    async def execute_kill_switch(
+        self, account_name: str | None = None, symbol: str | None = None
+    ) -> Dict[str, Any]:
         targets: List[AccountClientProtocol] = []
         for client in self._account_clients:
             if account_name is None or client.config.name == account_name:
@@ -201,7 +203,7 @@ class RealtimeDataFetcher:
         results: Dict[str, Any] = {}
         for client in targets:
             try:
-                results[client.config.name] = await client.kill_switch()
+                results[client.config.name] = await client.kill_switch(symbol)
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.exception("Kill switch failed for %s", client.config.name, exc_info=exc)
                 results[client.config.name] = {"error": str(exc)}

@@ -42,6 +42,8 @@ class Position:
     stop_loss_price: float | None = None
     size: float | None = None
     signed_notional: float | None = None
+    volatility: Mapping[str, float] | None = None
+    funding_rates: Mapping[str, float] | None = None
 
     def exposure_relative_to(self, balance: float) -> float:
         if balance == 0:
@@ -199,6 +201,16 @@ def _parse_position(raw: Dict[str, Any]) -> Position:
         signed_notional=(
             float(signed_notional_raw)
             if signed_notional_raw not in (None, "")
+            else None
+        ),
+        volatility=(
+            {str(key): float(value) for key, value in raw.get("volatility", {}).items()}
+            if isinstance(raw.get("volatility"), Mapping)
+            else None
+        ),
+        funding_rates=(
+            {str(key): float(value) for key, value in raw.get("funding_rates", {}).items()}
+            if isinstance(raw.get("funding_rates"), Mapping)
             else None
         ),
     )

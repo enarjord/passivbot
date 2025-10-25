@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Sequence
+from typing import Any, Dict, List, Mapping, MutableMapping, Sequence
 
 from .dashboard import (
     Account,
@@ -58,14 +58,43 @@ def _build_portfolio_view(accounts: Sequence[Account]) -> Dict[str, Any]:
     total_balance = sum(account.balance for account in accounts)
     gross_notional = sum(account.total_abs_notional() for account in accounts)
     net_notional = sum(account.net_notional() for account in accounts)
-    symbols: Dict[str, Dict[str, float]] = {}
+
+    symbol_data: Dict[str, Dict[str, Any]] = {}
+    portfolio_volatility: Dict[str, float] = {}
+    portfolio_funding: Dict[str, float] = {}
+    volatility_weights: Dict[str, float] = {}
+    funding_weights: Dict[str, float] = {}
+
     for account in accounts:
-        for symbol, values in account.exposures_by_symbol().items():
-            entry = symbols.setdefault(symbol, {"gross": 0.0, "net": 0.0})
-            entry["gross"] += values["gross"]
-            entry["net"] += values["net"]
+        for position in account.positions:
+            signed = (
+                position.signed_notional
+                if position.signed_notional is not None
+                else position.notional if position.side.lower() == "long" else -position.notional
+            )
+            gross_value = abs(signed)
+            entry = symbol_data.setdefault(
+                position.symbol,
+                {
+                    "gross": 0.0,
+                    "net": 0.0,
+                    "volatility": {},
+                    "vol_weights": {},
+                    "funding": {},
+                    "funding_weights": {},
+                },
+            )
+            entry["gross"] += gross_value
+            entry["net"] += signed
+            weight = gross_value or abs(position.notional) or 0.0
+            if weight:
+                _accumulate_metric(entry["volatility"], entry["vol_weights"], position.volatility, weight)
+                _accumulate_metric(entry["funding"], entry["funding_weights"], position.funding_rates, weight)
+                _accumulate_metric(portfolio_volatility, volatility_weights, position.volatility, weight)
+                _accumulate_metric(portfolio_funding, funding_weights, position.funding_rates, weight)
+
     symbol_entries: List[Dict[str, Any]] = []
-    for symbol, values in symbols.items():
+    for symbol, values in symbol_data.items():
         gross_pct = values["gross"] / total_balance if total_balance else 0.0
         net_pct = values["net"] / total_balance if total_balance else 0.0
         symbol_entries.append(
@@ -75,6 +104,8 @@ def _build_portfolio_view(accounts: Sequence[Account]) -> Dict[str, Any]:
                 "net_notional": values["net"],
                 "gross_pct": gross_pct,
                 "net_pct": net_pct,
+                "volatility": _finalise_metric(values["volatility"], values["vol_weights"]),
+                "funding_rates": _finalise_metric(values["funding"], values["funding_weights"]),
             }
         )
     symbol_entries.sort(key=lambda item: item["gross_notional"], reverse=True)
@@ -86,6 +117,8 @@ def _build_portfolio_view(accounts: Sequence[Account]) -> Dict[str, Any]:
         "net_exposure": net_notional,
         "gross_exposure_pct": gross_pct_total,
         "net_exposure_pct": net_pct_total,
+        "volatility": _finalise_metric(portfolio_volatility, volatility_weights),
+        "funding_rates": _finalise_metric(portfolio_funding, funding_weights),
         "symbols": symbol_entries,
     }
 
@@ -95,6 +128,8 @@ def _build_account_view(account: Account, account_messages: Mapping[str, str]) -
     orders = [_build_order_view(order) for order in account.orders]
     message = account_messages.get(account.name)
     symbol_exposures = _build_symbol_exposures(account)
+    volatility = _aggregate_position_metrics(account.positions, "volatility")
+    funding_rates = _aggregate_position_metrics(account.positions, "funding_rates")
     return {
         "name": account.name,
         "balance": account.balance,
@@ -108,6 +143,8 @@ def _build_account_view(account: Account, account_messages: Mapping[str, str]) -
         "symbol_exposures": symbol_exposures,
         "orders": orders,
         "message": message,
+        "volatility": volatility,
+        "funding_rates": funding_rates,
     }
 
 
@@ -130,6 +167,8 @@ def _build_position_view(position: Position, balance: float) -> Dict[str, Any]:
         "stop_loss_price": position.stop_loss_price,
         "size": position.size,
         "signed_notional": position.signed_notional,
+        "volatility": dict(position.volatility) if position.volatility else {},
+        "funding_rates": dict(position.funding_rates) if position.funding_rates else {},
     }
 
 
@@ -153,6 +192,50 @@ def _build_symbol_exposures(account: Account) -> List[Dict[str, Any]]:
         )
     items.sort(key=lambda item: item["gross_notional"], reverse=True)
     return items
+
+
+def _accumulate_metric(
+    totals: MutableMapping[str, float],
+    weights: MutableMapping[str, float],
+    metrics: Mapping[str, float] | None,
+    weight: float,
+) -> None:
+    if not metrics or weight <= 0:
+        return
+    for key, value in metrics.items():
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        totals[key] = totals.get(key, 0.0) + numeric * weight
+        weights[key] = weights.get(key, 0.0) + weight
+
+
+def _finalise_metric(
+    totals: Mapping[str, float], weights: Mapping[str, float]
+) -> Dict[str, float]:
+    results: Dict[str, float] = {}
+    for key, total in totals.items():
+        weight = weights.get(key, 0.0)
+        if weight:
+            results[key] = total / weight
+    return results
+
+
+def _aggregate_position_metrics(
+    positions: Sequence[Position], attribute: str
+) -> Dict[str, float]:
+    totals: Dict[str, float] = {}
+    weights: Dict[str, float] = {}
+    for position in positions:
+        metrics = getattr(position, attribute, None)
+        if not metrics:
+            continue
+        weight = abs(position.notional) or abs(position.signed_notional or 0.0)
+        if not weight:
+            continue
+        _accumulate_metric(totals, weights, metrics, weight)
+    return _finalise_metric(totals, weights)
 
 
 def _build_order_view(order: Order) -> Dict[str, Any]:
