@@ -77,6 +77,19 @@ class AuthConfig:
 
 
 @dataclass()
+class EmailSettings:
+    """SMTP configuration used to dispatch alert emails."""
+
+    host: str
+    port: int = 587
+    username: str | None = None
+    password: str | None = None
+    use_tls: bool = True
+    use_ssl: bool = False
+    sender: str | None = None
+
+
+@dataclass()
 class RealtimeConfig:
     """Top level realtime configuration."""
 
@@ -86,6 +99,7 @@ class RealtimeConfig:
     auth: AuthConfig | None = None
     account_messages: Dict[str, str] = field(default_factory=dict)
     custom_endpoints: CustomEndpointSettings | None = None
+    email: EmailSettings | None = None
     config_root: Path | None = None
     debug_api_payloads: bool = False
 
@@ -215,6 +229,42 @@ def _parse_custom_endpoints(settings: Any) -> CustomEndpointSettings | None:
     return CustomEndpointSettings(path=value, autodiscover=False)
 
 
+def _parse_email_settings(settings: Any) -> EmailSettings | None:
+    """Return SMTP settings when provided in the realtime configuration."""
+
+    if settings is None:
+        return None
+    if not isinstance(settings, Mapping):
+        raise TypeError("Email settings must be provided as an object in the configuration file.")
+
+    host_raw = settings.get("host")
+    if not host_raw or not str(host_raw).strip():
+        raise ValueError("Email settings must include a non-empty 'host'.")
+    host = str(host_raw).strip()
+
+    port_raw = settings.get("port", 587)
+    try:
+        port = int(port_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Email settings 'port' must be an integer.") from exc
+
+    username = settings.get("username")
+    password = settings.get("password")
+    sender = settings.get("sender")
+    use_tls = _coerce_bool(settings.get("use_tls"), True)
+    use_ssl = _coerce_bool(settings.get("use_ssl"), False)
+
+    return EmailSettings(
+        host=host,
+        port=port,
+        username=str(username).strip() if username not in (None, "") else None,
+        password=str(password).strip() if password not in (None, "") else None,
+        sender=str(sender).strip() if sender not in (None, "") else None,
+        use_tls=use_tls,
+        use_ssl=use_ssl,
+    )
+
+
 def _parse_accounts(
     accounts_raw: Iterable[Mapping[str, Any]],
     api_keys: Mapping[str, Mapping[str, Any]] | None,
@@ -330,6 +380,7 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     notification_channels = [str(item) for item in config.get("notification_channels", [])]
     auth = _parse_auth(config.get("auth"))
     custom_endpoints = _parse_custom_endpoints(config.get("custom_endpoints"))
+    email_settings = _parse_email_settings(config.get("email"))
 
     if custom_endpoints and custom_endpoints.path:
         resolved_path = Path(custom_endpoints.path).expanduser()
@@ -348,6 +399,7 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
         notification_channels=notification_channels,
         auth=auth,
         custom_endpoints=custom_endpoints,
+        email=email_settings,
         config_root=config_root,
         debug_api_payloads=debug_api_payloads_default,
     )

@@ -26,6 +26,8 @@ except (ModuleNotFoundError, ImportError):  # pragma: no cover - ccxt is optiona
 
 from .account_clients import AccountClientProtocol, CCXTAccountClient
 from .configuration import CustomEndpointSettings, RealtimeConfig
+from .dashboard import evaluate_alerts, parse_snapshot
+from .email_notifications import EmailAlertSender
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +120,20 @@ class RealtimeDataFetcher:
                 logger.info(
                     "Debug API payload logging enabled for account %s", account.name
                 )
+        self._email_sender = EmailAlertSender(config.email) if config.email else None
+        self._email_recipients = self._extract_email_recipients()
+        self._active_alerts: set[str] = set()
+
+    def _extract_email_recipients(self) -> List[str]:
+        recipients: List[str] = []
+        for channel in self.config.notification_channels:
+            if not isinstance(channel, str):
+                continue
+            if channel.lower().startswith("email:"):
+                address = channel.split(":", 1)[1].strip()
+                if address:
+                    recipients.append(address)
+        return recipients
 
     async def fetch_snapshot(self) -> Dict[str, Any]:
         tasks = [client.fetch() for client in self._account_clients]
@@ -169,10 +185,53 @@ class RealtimeDataFetcher:
         }
         if account_messages:
             snapshot["account_messages"] = account_messages
+        self._dispatch_email_alerts(snapshot)
         return snapshot
 
     async def close(self) -> None:
         await asyncio.gather(*(client.close() for client in self._account_clients))
+
+    async def execute_kill_switch(self, account_name: str | None = None) -> Dict[str, Any]:
+        targets: List[AccountClientProtocol] = []
+        for client in self._account_clients:
+            if account_name is None or client.config.name == account_name:
+                targets.append(client)
+        if account_name is not None and not targets:
+            raise ValueError(f"Account '{account_name}' is not configured for realtime monitoring.")
+        results: Dict[str, Any] = {}
+        for client in targets:
+            try:
+                results[client.config.name] = await client.kill_switch()
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.exception("Kill switch failed for %s", client.config.name, exc_info=exc)
+                results[client.config.name] = {"error": str(exc)}
+        return results
+
+    def _dispatch_email_alerts(self, snapshot: Mapping[str, Any]) -> None:
+        if not self._email_sender or not self._email_recipients:
+            return
+        try:
+            _, accounts, thresholds, _ = parse_snapshot(dict(snapshot))
+            alerts = evaluate_alerts(accounts, thresholds)
+        except Exception as exc:  # pragma: no cover - snapshot parsing errors are logged for diagnostics
+            logger.debug("Skipping email alert dispatch due to parsing error: %s", exc, exc_info=True)
+            return
+        alerts_set = set(alerts)
+        new_alerts = [alert for alert in alerts if alert not in self._active_alerts]
+        self._active_alerts = alerts_set
+        if not new_alerts:
+            return
+        generated_at = snapshot.get("generated_at")
+        timestamp = (
+            generated_at
+            if isinstance(generated_at, str)
+            else datetime.now(timezone.utc).isoformat()
+        )
+        lines = [f"Exposure thresholds were exceeded at {timestamp}.", "", "Alerts:"]
+        lines.extend(f"- {alert}" for alert in new_alerts)
+        body = "\n".join(lines)
+        subject = "Risk alert: exposure threshold breached"
+        self._email_sender.send(subject, body, self._email_recipients)
 
 
 def _extract_balance(balance: Mapping[str, Any], settle_currency: str) -> float:
@@ -315,6 +374,14 @@ def _parse_position(position: Mapping[str, Any], balance: float) -> Dict[str, An
     if notional is None:
         reference_price = mark_price or entry_price or 0.0
         notional = abs(size) * contract_size * reference_price
+    notional_value = float(notional or 0.0)
+    if size < 0 and notional_value > 0:
+        signed_notional = -abs(notional_value)
+    elif size > 0 and notional_value < 0:
+        signed_notional = abs(notional_value)
+    else:
+        signed_notional = notional_value
+    abs_notional = abs(signed_notional)
     take_profit = _first_float(
         position.get("takeProfitPrice"),
         position.get("tpPrice"),
@@ -329,11 +396,11 @@ def _parse_position(position: Mapping[str, Any], balance: float) -> Dict[str, An
     )
     wallet_exposure = None
     if balance:
-        wallet_exposure = abs(notional) / balance if balance else None
+        wallet_exposure = abs_notional / balance if balance else None
     return {
         "symbol": str(position.get("symbol") or position.get("id") or "unknown"),
         "side": side,
-        "notional": float(notional or 0.0),
+        "notional": abs_notional,
         "entry_price": float(entry_price or 0.0),
         "mark_price": float(mark_price or 0.0),
         "liquidation_price": float(liquidation_price) if liquidation_price is not None else None,
@@ -342,6 +409,67 @@ def _parse_position(position: Mapping[str, Any], balance: float) -> Dict[str, An
         "max_drawdown_pct": None,
         "take_profit_price": float(take_profit) if take_profit is not None else None,
         "stop_loss_price": float(stop_loss) if stop_loss is not None else None,
+        "size": float(size),
+        "signed_notional": signed_notional,
+    }
+
+
+def _parse_order(order: Mapping[str, Any]) -> Dict[str, Any] | None:
+    if not isinstance(order, Mapping):
+        return None
+    symbol = order.get("symbol") or order.get("id")
+    if not symbol:
+        return None
+    price = _first_float(
+        order.get("price"),
+        order.get("triggerPrice"),
+        order.get("stopPrice"),
+        order.get("info", {}).get("price") if isinstance(order.get("info"), Mapping) else None,
+    )
+    amount = _first_float(
+        order.get("amount"),
+        order.get("contracts"),
+        order.get("size"),
+        order.get("info", {}).get("origQty") if isinstance(order.get("info"), Mapping) else None,
+    )
+    if amount is None:
+        return None
+    remaining = _first_float(
+        order.get("remaining"),
+        order.get("remainingAmount"),
+        order.get("info", {}).get("leavesQty") if isinstance(order.get("info"), Mapping) else None,
+    )
+    reduce_only_raw = order.get("reduceOnly")
+    if isinstance(order.get("info"), Mapping):
+        reduce_only_raw = reduce_only_raw or order["info"].get("reduceOnly")
+    reduce_only = bool(reduce_only_raw)
+    stop_price = _first_float(
+        order.get("stopPrice"),
+        order.get("triggerPrice"),
+        order.get("info", {}).get("stopPrice") if isinstance(order.get("info"), Mapping) else None,
+    )
+    timestamp_raw = order.get("timestamp")
+    created_at = None
+    if isinstance(timestamp_raw, (int, float)):
+        created_at = datetime.fromtimestamp(float(timestamp_raw) / 1000, timezone.utc).isoformat()
+    else:
+        datetime_str = order.get("datetime")
+        if isinstance(datetime_str, str) and datetime_str:
+            created_at = datetime_str
+    notional = price * amount if price is not None else None
+    return {
+        "order_id": str(order.get("id") or order.get("clientOrderId") or ""),
+        "symbol": str(symbol),
+        "side": str(order.get("side") or "").lower(),
+        "type": str(order.get("type") or "").lower(),
+        "price": price,
+        "amount": amount,
+        "remaining": remaining,
+        "status": str(order.get("status") or ""),
+        "reduce_only": reduce_only,
+        "stop_price": stop_price,
+        "notional": notional,
+        "created_at": created_at,
     }
 
 

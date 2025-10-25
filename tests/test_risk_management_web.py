@@ -25,12 +25,17 @@ class StubFetcher:
     def __init__(self, snapshot: dict) -> None:
         self.snapshot = snapshot
         self.closed = False
+        self.kill_requests: list[str | None] = []
 
     async def fetch_snapshot(self) -> dict:
         return self.snapshot
 
     async def close(self) -> None:
         self.closed = True
+
+    async def execute_kill_switch(self, account_name: str | None = None) -> dict:
+        self.kill_requests.append(account_name)
+        return {"status": "ok"}
 
 
 @pytest.fixture
@@ -117,3 +122,18 @@ def test_web_dashboard_auth_flow(sample_snapshot: dict, auth_manager: AuthManage
         assert logout_response.status_code in {302, 303}
 
     assert fetcher.closed
+
+
+def test_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) -> None:
+    client, fetcher = create_test_app(sample_snapshot, auth_manager)
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303}
+
+        response = client.post("/api/accounts/Demo%20Account/kill-switch")
+        assert response.status_code == 200
+        assert fetcher.kill_requests[-1] == "Demo Account"
