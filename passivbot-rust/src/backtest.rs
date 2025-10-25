@@ -3,12 +3,11 @@ use crate::closes::{
 };
 use crate::constants::{CLOSE, HIGH, LONG, LOW, NO_POS, SHORT, VOLUME};
 use crate::entries::{
-    calc_entries_long, calc_entries_short, calc_min_entry_qty, calc_next_entry_long,
-    calc_next_entry_short,
+    calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
 };
 use crate::risk::{
-    calc_twel_enforcer_actions, gate_entries_by_twel, GateEntriesCandidate, GateEntriesPosition,
-    TwelEnforcerInputPosition,
+    calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
+    GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
 };
 use crate::types::{
     BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities, ExchangeParams, Fill,
@@ -16,8 +15,7 @@ use crate::types::{
 };
 use crate::utils::{
     calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
-    calc_pprice_diff_int, calc_wallet_exposure, cost_to_qty, hysteresis_rounding, qty_to_cost,
-    round_, round_dn, round_up,
+    hysteresis_rounding, qty_to_cost, round_, round_dn,
 };
 use ndarray::{ArrayView1, ArrayView3};
 use std::cmp::Ordering;
@@ -1443,12 +1441,14 @@ impl<'a> Backtest<'a> {
     }
 
     fn calc_unstucking_close(&mut self, k: usize) -> (usize, usize, Order) {
-        let mut stuck_positions: Vec<(usize, usize, f64)> = Vec::new(); // (idx, pside, pprice_diff)
+        let balance = self.balance.usd_total_rounded;
+        if balance <= 0.0 {
+            return (NO_POS, NO_POS, Order::default());
+        }
 
-        // Calculate long unstuck allowance and check long positions
         let long_allowance = if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
             calc_auto_unstuck_allowance(
-                self.balance.usd_total_rounded,
+                balance,
                 self.bot_params_master.long.unstuck_loss_allowance_pct
                     * self.bot_params_master.long.total_wallet_exposure_limit,
                 self.pnl_cumsum_max,
@@ -1458,45 +1458,9 @@ impl<'a> Backtest<'a> {
             0.0
         };
 
-        if long_allowance > 0.0 {
-            for (&idx, position) in &self.positions.long {
-                if !self.coin_is_tradeable_at(idx, k) {
-                    continue;
-                }
-                let wallet_exposure = calc_wallet_exposure(
-                    self.exchange_params_list[idx].c_mult,
-                    self.balance.usd_total_rounded,
-                    position.size,
-                    position.price,
-                );
-
-                let unstuck_threshold = self.bp(idx, LONG).unstuck_threshold;
-                if unstuck_threshold < 0.0 {
-                    continue;
-                }
-                if self.bp(idx, LONG).wallet_exposure_limit == 0.0
-                    || wallet_exposure / self.bp(idx, LONG).wallet_exposure_limit
-                        > unstuck_threshold
-                {
-                    let ema_bands = self.emas[idx].compute_bands(LONG);
-                    let ema_price = round_up(
-                        ema_bands.upper * (1.0 + self.bp(idx, LONG).unstuck_ema_dist),
-                        self.exchange_params_list[idx].price_step,
-                    );
-
-                    let current_price = self.hlcvs[[k, idx, CLOSE]];
-                    if current_price >= ema_price {
-                        let pprice_diff = calc_pprice_diff_int(LONG, position.price, current_price);
-                        stuck_positions.push((idx, LONG, pprice_diff));
-                    }
-                }
-            }
-        }
-
-        // Calculate short unstuck allowance and check short positions
         let short_allowance = if self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0 {
             calc_auto_unstuck_allowance(
-                self.balance.usd_total_rounded,
+                balance,
                 self.bot_params_master.short.unstuck_loss_allowance_pct
                     * self.bot_params_master.short.total_wallet_exposure_limit,
                 self.pnl_cumsum_max,
@@ -1506,169 +1470,84 @@ impl<'a> Backtest<'a> {
             0.0
         };
 
-        if short_allowance > 0.0 {
-            for (&idx, position) in &self.positions.short {
-                if !self.coin_is_tradeable_at(idx, k) {
-                    continue;
-                }
-                let wallet_exposure = calc_wallet_exposure(
-                    self.exchange_params_list[idx].c_mult,
-                    self.balance.usd_total_rounded,
-                    position.size.abs(),
-                    position.price,
-                );
-
-                let unstuck_threshold = self.bp(idx, SHORT).unstuck_threshold;
-                if unstuck_threshold < 0.0 {
-                    continue;
-                }
-                if self.bp(idx, SHORT).wallet_exposure_limit == 0.0
-                    || wallet_exposure / self.bp(idx, SHORT).wallet_exposure_limit
-                        > unstuck_threshold
-                {
-                    let ema_bands = self.emas[idx].compute_bands(SHORT);
-                    let ema_price = round_dn(
-                        ema_bands.lower * (1.0 - self.bp(idx, SHORT).unstuck_ema_dist),
-                        self.exchange_params_list[idx].price_step,
-                    );
-
-                    let current_price = self.hlcvs[[k, idx, CLOSE]];
-                    if current_price <= ema_price {
-                        let pprice_diff =
-                            calc_pprice_diff_int(SHORT, position.price, current_price);
-                        stuck_positions.push((idx, SHORT, pprice_diff));
-                    }
-                }
-            }
-        }
-
-        if stuck_positions.is_empty() {
+        if long_allowance <= 0.0 && short_allowance <= 0.0 {
             return (NO_POS, NO_POS, Order::default());
         }
 
-        // Sort by pprice_diff, then by idx for deterministic ordering
-        stuck_positions.sort_by(|(i1, _, d1), (i2, _, d2)| {
-            match d1.partial_cmp(d2).unwrap_or(std::cmp::Ordering::Equal) {
-                std::cmp::Ordering::Equal => i1.cmp(i2),
-                other => other,
-            }
-        });
+        let mut inputs: Vec<UnstuckPositionInput> = Vec::new();
 
-        // Process stuck positions
-        for (idx, pside, _pprice_diff) in stuck_positions {
-            let close_price = self.hlcvs[[k, idx, CLOSE]];
-
-            if pside == LONG {
-                let min_entry_qty =
-                    calc_min_entry_qty(close_price, &self.exchange_params_list[idx]);
-                let mut close_qty = -f64::min(
-                    self.positions.long[&idx].size,
-                    f64::max(
-                        min_entry_qty,
-                        round_dn(
-                            cost_to_qty(
-                                self.balance.usd_total_rounded
-                                    * self.bp(idx, LONG).wallet_exposure_limit
-                                    * self.bp(idx, LONG).unstuck_close_pct,
-                                close_price,
-                                self.exchange_params_list[idx].c_mult,
-                            ),
-                            self.exchange_params_list[idx].qty_step,
-                        ),
-                    ),
-                );
-
-                if close_qty != 0.0 {
-                    let pnl_if_closed = calc_pnl_long(
-                        self.positions.long[&idx].price,
-                        close_price,
-                        close_qty,
-                        self.exchange_params_list[idx].c_mult,
-                    );
-                    let pnl_if_closed_abs = pnl_if_closed.abs();
-
-                    if pnl_if_closed < 0.0 && pnl_if_closed_abs > long_allowance {
-                        close_qty = -f64::min(
-                            self.positions.long[&idx].size,
-                            f64::max(
-                                min_entry_qty,
-                                round_dn(
-                                    close_qty.abs() * (long_allowance / pnl_if_closed_abs),
-                                    self.exchange_params_list[idx].qty_step,
-                                ),
-                            ),
-                        );
-                    }
-
-                    return (
-                        idx,
-                        LONG,
-                        Order {
-                            qty: close_qty,
-                            price: close_price,
-                            order_type: OrderType::CloseUnstuckLong,
-                        },
-                    );
+        if long_allowance > 0.0 {
+            let mut keys: Vec<usize> = self.positions.long.keys().cloned().collect();
+            keys.sort_unstable();
+            for idx in keys {
+                if !self.coin_is_tradeable_at(idx, k) {
+                    continue;
                 }
-            } else {
-                // SHORT
-                let min_entry_qty =
-                    calc_min_entry_qty(close_price, &self.exchange_params_list[idx]);
-                let mut close_qty = f64::min(
-                    self.positions.short[&idx].size.abs(),
-                    f64::max(
-                        min_entry_qty,
-                        round_dn(
-                            cost_to_qty(
-                                self.balance.usd_total_rounded
-                                    * self.bp(idx, SHORT).wallet_exposure_limit
-                                    * self.bp(idx, SHORT).unstuck_close_pct,
-                                close_price,
-                                self.exchange_params_list[idx].c_mult,
-                            ),
-                            self.exchange_params_list[idx].qty_step,
-                        ),
-                    ),
-                );
-
-                if close_qty != 0.0 {
-                    let pnl_if_closed = calc_pnl_short(
-                        self.positions.short[&idx].price,
-                        close_price,
-                        close_qty,
-                        self.exchange_params_list[idx].c_mult,
-                    );
-                    let pnl_if_closed_abs = pnl_if_closed.abs();
-
-                    if pnl_if_closed < 0.0 && pnl_if_closed_abs > short_allowance {
-                        close_qty = f64::min(
-                            self.positions.short[&idx].size.abs(),
-                            f64::max(
-                                min_entry_qty,
-                                round_dn(
-                                    close_qty * (short_allowance / pnl_if_closed_abs),
-                                    self.exchange_params_list[idx].qty_step,
-                                ),
-                            ),
-                        );
-                    }
-
-                    return (
+                if let Some(position) = self.positions.long.get(&idx) {
+                    let ema_bands = self.emas[idx].compute_bands(LONG);
+                    let current_price = self.hlcvs[[k, idx, CLOSE]];
+                    inputs.push(UnstuckPositionInput {
                         idx,
-                        SHORT,
-                        Order {
-                            qty: close_qty,
-                            price: close_price,
-                            order_type: OrderType::CloseUnstuckShort,
-                        },
-                    );
+                        side: LONG,
+                        position_size: position.size,
+                        position_price: position.price,
+                        wallet_exposure_limit: self.bp(idx, LONG).wallet_exposure_limit,
+                        unstuck_threshold: self.bp(idx, LONG).unstuck_threshold,
+                        unstuck_close_pct: self.bp(idx, LONG).unstuck_close_pct,
+                        unstuck_ema_dist: self.bp(idx, LONG).unstuck_ema_dist,
+                        ema_band_upper: ema_bands.upper,
+                        ema_band_lower: ema_bands.lower,
+                        current_price,
+                        price_step: self.exchange_params_list[idx].price_step,
+                        qty_step: self.exchange_params_list[idx].qty_step,
+                        min_qty: self.exchange_params_list[idx].min_qty,
+                        min_cost: self.exchange_params_list[idx].min_cost,
+                        c_mult: self.exchange_params_list[idx].c_mult,
+                    });
                 }
             }
+        }
+
+        if short_allowance > 0.0 {
+            let mut keys: Vec<usize> = self.positions.short.keys().cloned().collect();
+            keys.sort_unstable();
+            for idx in keys {
+                if !self.coin_is_tradeable_at(idx, k) {
+                    continue;
+                }
+                if let Some(position) = self.positions.short.get(&idx) {
+                    let ema_bands = self.emas[idx].compute_bands(SHORT);
+                    let current_price = self.hlcvs[[k, idx, CLOSE]];
+                    inputs.push(UnstuckPositionInput {
+                        idx,
+                        side: SHORT,
+                        position_size: position.size,
+                        position_price: position.price,
+                        wallet_exposure_limit: self.bp(idx, SHORT).wallet_exposure_limit,
+                        unstuck_threshold: self.bp(idx, SHORT).unstuck_threshold,
+                        unstuck_close_pct: self.bp(idx, SHORT).unstuck_close_pct,
+                        unstuck_ema_dist: self.bp(idx, SHORT).unstuck_ema_dist,
+                        ema_band_upper: ema_bands.upper,
+                        ema_band_lower: ema_bands.lower,
+                        current_price,
+                        price_step: self.exchange_params_list[idx].price_step,
+                        qty_step: self.exchange_params_list[idx].qty_step,
+                        min_qty: self.exchange_params_list[idx].min_qty,
+                        min_cost: self.exchange_params_list[idx].min_cost,
+                        c_mult: self.exchange_params_list[idx].c_mult,
+                    });
+                }
+            }
+        }
+
+        if let Some((idx, side, order)) =
+            calc_unstucking_action(balance, long_allowance, short_allowance, &inputs)
+        {
+            return (idx, side, order);
         }
 
         (NO_POS, NO_POS, Order::default())
     }
-
     fn calc_twel_enforcer_orders(
         &self,
         k: usize,
@@ -1726,25 +1605,31 @@ impl<'a> Backtest<'a> {
             if total_wel_long > 0.0 {
                 let mut inputs: Vec<TwelEnforcerInputPosition> =
                     Vec::with_capacity(self.positions.long.len());
-                for (&idx, position) in &self.positions.long {
+                let mut indices: Vec<usize> = self.positions.long.keys().cloned().collect();
+                indices.sort_unstable();
+                for idx in indices {
                     if wel_blocked_long.contains(&idx) {
                         continue;
                     }
-                    let market_price = self.hlcvs[[k, idx, CLOSE]];
-                    inputs.push(TwelEnforcerInputPosition {
-                        idx,
-                        position_size: position.size,
-                        position_price: position.price,
-                        market_price,
-                        base_wallet_exposure_limit: self.bp(idx, LONG).wallet_exposure_limit,
-                        risk_wel_enforcer_threshold: self.bp(idx, LONG).risk_wel_enforcer_threshold,
-                        risk_we_excess_allowance_pct: self
-                            .bp(idx, LONG)
-                            .risk_we_excess_allowance_pct,
-                        c_mult: self.exchange_params_list[idx].c_mult,
-                        qty_step: self.exchange_params_list[idx].qty_step,
-                        price_step: self.exchange_params_list[idx].price_step,
-                    });
+                    if let Some(position) = self.positions.long.get(&idx) {
+                        let market_price = self.hlcvs[[k, idx, CLOSE]];
+                        inputs.push(TwelEnforcerInputPosition {
+                            idx,
+                            position_size: position.size,
+                            position_price: position.price,
+                            market_price,
+                            base_wallet_exposure_limit: self.bp(idx, LONG).wallet_exposure_limit,
+                            risk_wel_enforcer_threshold: self
+                                .bp(idx, LONG)
+                                .risk_wel_enforcer_threshold,
+                            risk_we_excess_allowance_pct: self
+                                .bp(idx, LONG)
+                                .risk_we_excess_allowance_pct,
+                            c_mult: self.exchange_params_list[idx].c_mult,
+                            qty_step: self.exchange_params_list[idx].qty_step,
+                            price_step: self.exchange_params_list[idx].price_step,
+                        });
+                    }
                 }
                 let actions = calc_twel_enforcer_actions(
                     LONG,
@@ -1770,28 +1655,33 @@ impl<'a> Backtest<'a> {
             if total_wel_short > 0.0 {
                 let mut inputs: Vec<TwelEnforcerInputPosition> =
                     Vec::with_capacity(self.positions.short.len());
-                for (&idx, position) in &self.positions.short {
+                let mut indices: Vec<usize> = self.positions.short.keys().cloned().collect();
+                indices.sort_unstable();
+                for idx in indices {
                     if wel_blocked_short.contains(&idx) {
                         continue;
                     }
-                    let market_price = self.hlcvs[[k, idx, CLOSE]];
-                    inputs.push(TwelEnforcerInputPosition {
-                        idx,
-                        position_size: position.size,
-                        position_price: position.price,
-                        market_price,
-                        base_wallet_exposure_limit: self.bp(idx, SHORT).wallet_exposure_limit,
-                        risk_wel_enforcer_threshold: self
-                            .bp(idx, SHORT)
-                            .risk_wel_enforcer_threshold,
-                        risk_we_excess_allowance_pct: self
-                            .bp(idx, SHORT)
-                            .risk_we_excess_allowance_pct,
-                        c_mult: self.exchange_params_list[idx].c_mult,
-                        qty_step: self.exchange_params_list[idx].qty_step,
-                        price_step: self.exchange_params_list[idx].price_step,
-                    });
+                    if let Some(position) = self.positions.short.get(&idx) {
+                        let market_price = self.hlcvs[[k, idx, CLOSE]];
+                        inputs.push(TwelEnforcerInputPosition {
+                            idx,
+                            position_size: position.size,
+                            position_price: position.price,
+                            market_price,
+                            base_wallet_exposure_limit: self.bp(idx, SHORT).wallet_exposure_limit,
+                            risk_wel_enforcer_threshold: self
+                                .bp(idx, SHORT)
+                                .risk_wel_enforcer_threshold,
+                            risk_we_excess_allowance_pct: self
+                                .bp(idx, SHORT)
+                                .risk_we_excess_allowance_pct,
+                            c_mult: self.exchange_params_list[idx].c_mult,
+                            qty_step: self.exchange_params_list[idx].qty_step,
+                            price_step: self.exchange_params_list[idx].price_step,
+                        });
+                    }
                 }
+
                 let actions = calc_twel_enforcer_actions(
                     SHORT,
                     short_threshold,
@@ -1997,34 +1887,54 @@ impl<'a> Backtest<'a> {
             return;
         }
         let positions_payload: Vec<GateEntriesPosition> = match side {
-            LONG => self
-                .positions
-                .long
-                .iter()
-                .map(|(&idx, pos)| GateEntriesPosition {
-                    idx,
-                    position_size: pos.size,
-                    position_price: pos.price,
-                    c_mult: self.exchange_params_list[idx].c_mult,
-                })
-                .collect(),
-            SHORT => self
-                .positions
-                .short
-                .iter()
-                .map(|(&idx, pos)| GateEntriesPosition {
-                    idx,
-                    position_size: pos.size,
-                    position_price: pos.price,
-                    c_mult: self.exchange_params_list[idx].c_mult,
-                })
-                .collect(),
+            LONG => {
+                let mut indices: Vec<usize> = self.positions.long.keys().cloned().collect();
+                indices.sort_unstable();
+                indices
+                    .into_iter()
+                    .filter_map(|idx| {
+                        self.positions
+                            .long
+                            .get(&idx)
+                            .map(|pos| GateEntriesPosition {
+                                idx,
+                                position_size: pos.size,
+                                position_price: pos.price,
+                                c_mult: self.exchange_params_list[idx].c_mult,
+                            })
+                    })
+                    .collect()
+            }
+            SHORT => {
+                let mut indices: Vec<usize> = self.positions.short.keys().cloned().collect();
+                indices.sort_unstable();
+                indices
+                    .into_iter()
+                    .filter_map(|idx| {
+                        self.positions
+                            .short
+                            .get(&idx)
+                            .map(|pos| GateEntriesPosition {
+                                idx,
+                                position_size: pos.size,
+                                position_price: pos.price,
+                                c_mult: self.exchange_params_list[idx].c_mult,
+                            })
+                    })
+                    .collect()
+            }
             _ => Vec::new(),
         };
 
         let mut entry_candidates: Vec<GateEntriesCandidate> = Vec::new();
         {
-            for (&idx, bundle) in open_orders_side.iter() {
+            let mut order_indices: Vec<usize> = open_orders_side.keys().cloned().collect();
+            order_indices.sort_unstable();
+            for idx in order_indices {
+                let bundle = match open_orders_side.get(&idx) {
+                    Some(bundle) => bundle,
+                    None => continue,
+                };
                 if bundle.entries.is_empty() {
                     continue;
                 }
