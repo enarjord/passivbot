@@ -137,3 +137,18 @@ def test_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) 
         response = client.post("/api/accounts/Demo%20Account/kill-switch")
         assert response.status_code == 200
         assert fetcher.kill_requests[-1] == "Demo Account"
+
+
+def test_letsencrypt_challenge_mount(tmp_path: Path, auth_manager: AuthManager) -> None:
+    fetcher = StubFetcher({"generated_at": "", "accounts": [], "alert_thresholds": {}, "notification_channels": []})
+    service = RiskDashboardService(fetcher)  # type: ignore[arg-type]
+    config = RealtimeConfig(accounts=[AccountConfig(name="Demo", exchange="binance", credentials={})])
+    challenge_dir = tmp_path / "acme"
+    app = create_app(
+        config,
+        service=service,
+        auth_manager=auth_manager,
+        letsencrypt_challenge_dir=challenge_dir,
+    )
+    assert challenge_dir.exists()
+    assert any(route.path == "/.well-known/acme-challenge" for route in app.routes)

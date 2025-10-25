@@ -11,6 +11,7 @@ from pathlib import Path
 import uvicorn
 
 from .configuration import CustomEndpointSettings, load_realtime_config
+from .letsencrypt import LetsEncryptError, ensure_certificate
 
 
 def _determine_uvicorn_logging(config) -> tuple[dict | None, str]:
@@ -72,6 +73,67 @@ def main(argv: list[str] | None = None) -> None:
         "--ssl-keyfile-password",
         help="Password used to decrypt the TLS private key, if required",
     )
+    parser.add_argument(
+        "--letsencrypt-webroot",
+        type=Path,
+        help=(
+            "Serve ACME http-01 challenges from this directory. Useful when certbot "
+            "is executed separately with the --webroot plugin."
+        ),
+    )
+    parser.add_argument(
+        "--letsencrypt-domain",
+        action="append",
+        dest="letsencrypt_domains",
+        help=(
+            "Provision certificates automatically using certbot in standalone mode. "
+            "Specify one or more domains by repeating this flag."
+        ),
+    )
+    parser.add_argument(
+        "--letsencrypt-email",
+        help="Contact email used when registering with Let's Encrypt",
+    )
+    parser.add_argument(
+        "--letsencrypt-staging",
+        action="store_true",
+        help="Use the Let's Encrypt staging environment for testing",
+    )
+    parser.add_argument(
+        "--letsencrypt-http-port",
+        type=int,
+        default=80,
+        help="HTTP port used by certbot's standalone challenge server",
+    )
+    parser.add_argument(
+        "--letsencrypt-cert-name",
+        help="Override the certificate lineage name stored by certbot",
+    )
+    parser.add_argument(
+        "--letsencrypt-config-dir",
+        type=Path,
+        help="Custom directory for certbot configuration data",
+    )
+    parser.add_argument(
+        "--letsencrypt-work-dir",
+        type=Path,
+        help="Custom directory for certbot working files",
+    )
+    parser.add_argument(
+        "--letsencrypt-logs-dir",
+        type=Path,
+        help="Custom directory for certbot logs",
+    )
+    parser.add_argument(
+        "--letsencrypt-executable",
+        default="certbot",
+        help="Path to the certbot executable",
+    )
+    parser.add_argument(
+        "--letsencrypt-dry-run",
+        action="store_true",
+        help="Perform a dry-run against the ACME staging environment",
+    )
     args = parser.parse_args(argv)
 
     config = load_realtime_config(args.config)
@@ -96,9 +158,33 @@ def main(argv: list[str] | None = None) -> None:
     if bool(args.ssl_certfile) ^ bool(args.ssl_keyfile):
         parser.error("Both --ssl-certfile and --ssl-keyfile must be provided to enable HTTPS.")
 
-    app = create_app(config)
+    letsencrypt_domains = args.letsencrypt_domains or []
     ssl_certfile = str(args.ssl_certfile) if args.ssl_certfile else None
     ssl_keyfile = str(args.ssl_keyfile) if args.ssl_keyfile else None
+
+    if letsencrypt_domains:
+        if ssl_certfile or ssl_keyfile:
+            parser.error(
+                "Manual TLS parameters cannot be combined with automatic Let's Encrypt provisioning."
+            )
+        try:
+            cert_path, key_path = ensure_certificate(
+                executable=args.letsencrypt_executable,
+                domains=letsencrypt_domains,
+                email=args.letsencrypt_email,
+                staging=args.letsencrypt_staging or args.letsencrypt_dry_run,
+                http_port=args.letsencrypt_http_port,
+                cert_name=args.letsencrypt_cert_name,
+                config_dir=args.letsencrypt_config_dir,
+                work_dir=args.letsencrypt_work_dir,
+                logs_dir=args.letsencrypt_logs_dir,
+                dry_run=args.letsencrypt_dry_run,
+            )
+        except LetsEncryptError as exc:
+            parser.error(str(exc))
+        ssl_certfile, ssl_keyfile = str(cert_path), str(key_path)
+
+    app = create_app(config, letsencrypt_challenge_dir=args.letsencrypt_webroot)
 
     if (
         getattr(config, "auth", None)
