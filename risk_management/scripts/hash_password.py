@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import argparse
 import getpass
+from typing import Optional
 
 from passlib.context import CryptContext
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Generate a bcrypt hash for dashboard users")
     parser.add_argument("password", nargs="?", help="Optional password to hash. If omitted a prompt is used.")
     args = parser.parse_args(argv)

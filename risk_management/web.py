@@ -6,7 +6,7 @@ RealtimeDataFetcher utilities.
 
 from __future__ import annotations
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Optional
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -62,7 +62,7 @@ class RiskDashboardService:
         await self._fetcher.close()
 
     async def trigger_kill_switch(
-        self, account_name: str | None = None, symbol: str | None = None
+        self, account_name: Optional[str] = None, symbol: Optional[str] = None
     ) -> Dict[str, Any]:
         return await self._fetcher.execute_kill_switch(account_name, symbol)
 
@@ -70,10 +70,10 @@ class RiskDashboardService:
 def create_app(
     config: RealtimeConfig,
     *,
-    service: RiskDashboardService | None = None,
-    auth_manager: AuthManager | None = None,
-    templates_dir: Path | None = None,
-    letsencrypt_challenge_dir: Path | None = None,
+    service: Optional[RiskDashboardService] = None,
+    auth_manager: Optional[AuthManager] = None,
+    templates_dir: Optional[Path] = None,
+    letsencrypt_challenge_dir: Optional[Path] = None,
 ) -> FastAPI:
     if service is None:
         service = RiskDashboardService(RealtimeDataFetcher(config))
