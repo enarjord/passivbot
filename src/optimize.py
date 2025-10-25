@@ -142,6 +142,7 @@ class ResultRecorder:
         if self.results_file:
             self.results_file.close()
 
+
 logging.basicConfig(
     format="%(asctime)s %(processName)-12s %(levelname)-8s %(message)s",
     level=logging.INFO,
@@ -612,7 +613,8 @@ class Evaluator:
                 first_ts_ms = int(first_ts_list[0])
             except Exception:
                 logging.warning(
-                    "Evaluator: unable to parse first timestamp for %s from timestamps array", exchange
+                    "Evaluator: unable to parse first timestamp for %s from timestamps array",
+                    exchange,
                 )
                 first_ts_ms = 0
         if first_ts_ms == 0:
