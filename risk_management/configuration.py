@@ -23,6 +23,9 @@ def _debug_to_logging_level(debug_level: int) -> int:
 
 
 def _configure_default_logging(debug_level: int = 1) -> bool:
+
+def _configure_default_logging() -> bool:
+
     """Configure Passivbot-style logging if no handlers are present."""
 
     root_logger = logging.getLogger()
@@ -33,16 +36,25 @@ def _configure_default_logging(debug_level: int = 1) -> bool:
     except ModuleNotFoundError:  # pragma: no cover - fallback when package unavailable
         configure_logging = None  # type: ignore[assignment]
     if configure_logging is not None:
+      
         configure_logging(debug=debug_level)
     else:
         logging.basicConfig(level=_debug_to_logging_level(debug_level))
+
+        configure_logging(debug=2)
+    else:
+        logging.basicConfig(level=logging.DEBUG)
+
     return True
 
 
 def _ensure_debug_logging_enabled() -> None:
     """Raise logging verbosity when debug API payloads are requested."""
 
+
     _configure_default_logging(debug_level=2)
+    _configure_default_logging()
+
 
     root_logger = logging.getLogger()
     if root_logger.level in {
