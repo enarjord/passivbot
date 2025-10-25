@@ -1,5 +1,6 @@
 {
   "api_keys_file": "../api-keys.json",
+  "debug_api_payloads": false,
   "custom_endpoints": {
     "path": "../configs/custom_endpoints.json",
     "autodiscover": false

@@ -109,6 +109,15 @@ class RealtimeDataFetcher:
         else:
             self._account_clients = list(account_clients)
         self._last_auth_errors: Dict[str, str] = {}
+        if config.debug_api_payloads:
+            logger.info(
+                "Exchange API payload debug logging enabled for realtime fetcher"
+            )
+        for account in config.accounts:
+            if account.debug_api_payloads and not config.debug_api_payloads:
+                logger.info(
+                    "Debug API payload logging enabled for account %s", account.name
+                )
 
     async def fetch_snapshot(self) -> Dict[str, Any]:
         tasks = [client.fetch() for client in self._account_clients]
