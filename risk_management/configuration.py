@@ -12,8 +12,37 @@ from typing import Any, Dict, Iterable, List, Mapping, Set
 logger = logging.getLogger(__name__)
 
 
+def _debug_to_logging_level(debug_level: int) -> int:
+    """Translate Passivbot debug level values into logging module levels."""
+
+    if debug_level <= 0:
+        return logging.WARNING
+    if debug_level == 1:
+        return logging.INFO
+    return logging.DEBUG
+
+
+def _configure_default_logging(debug_level: int = 1) -> bool:
+    """Configure Passivbot-style logging if no handlers are present."""
+
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return False
+    try:  # Import lazily so the risk tools can run independently in tests
+        from logging_setup import configure_logging  # type: ignore
+    except ModuleNotFoundError:  # pragma: no cover - fallback when package unavailable
+        configure_logging = None  # type: ignore[assignment]
+    if configure_logging is not None:
+        configure_logging(debug=debug_level)
+    else:
+        logging.basicConfig(level=_debug_to_logging_level(debug_level))
+    return True
+
+
 def _ensure_debug_logging_enabled() -> None:
     """Raise logging verbosity when debug API payloads are requested."""
+
+    _configure_default_logging(debug_level=2)
 
     root_logger = logging.getLogger()
     if root_logger.level in {
@@ -23,10 +52,16 @@ def _ensure_debug_logging_enabled() -> None:
         logging.CRITICAL,
     } or root_logger.level > logging.DEBUG:
         root_logger.setLevel(logging.DEBUG)
+    for handler in root_logger.handlers:
+        if handler.level in {logging.NOTSET} or handler.level > logging.DEBUG:
+            handler.setLevel(logging.DEBUG)
 
     risk_logger = logging.getLogger("risk_management")
     if risk_logger.level in {logging.NOTSET} or risk_logger.level > logging.DEBUG:
         risk_logger.setLevel(logging.DEBUG)
+    for handler in risk_logger.handlers:
+        if handler.level in {logging.NOTSET} or handler.level > logging.DEBUG:
+            handler.setLevel(logging.DEBUG)
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -446,6 +481,8 @@ def _parse_auth(auth_raw: Mapping[str, Any] | None) -> AuthConfig | None:
 
 def load_realtime_config(path: Path) -> RealtimeConfig:
     """Load a realtime configuration file."""
+
+    _configure_default_logging(debug_level=1)
 
     config = _load_json(path)
     config_root = path.parent.resolve()
