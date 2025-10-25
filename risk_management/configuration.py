@@ -102,6 +102,7 @@ class RealtimeConfig:
     email: EmailSettings | None = None
     config_root: Path | None = None
     debug_api_payloads: bool = False
+    reports_dir: Path | None = None
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -381,6 +382,15 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     auth = _parse_auth(config.get("auth"))
     custom_endpoints = _parse_custom_endpoints(config.get("custom_endpoints"))
     email_settings = _parse_email_settings(config.get("email"))
+    reports_dir_value = config.get("reports_dir")
+    reports_dir: Path | None = None
+    if reports_dir_value:
+        candidate = Path(str(reports_dir_value)).expanduser()
+        if not candidate.is_absolute():
+            candidate = (path.parent / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+        reports_dir = candidate
 
     if custom_endpoints and custom_endpoints.path:
         resolved_path = Path(custom_endpoints.path).expanduser()
@@ -402,4 +412,5 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
         email=email_settings,
         config_root=config_root,
         debug_api_payloads=debug_api_payloads_default,
+        reports_dir=reports_dir,
     )
