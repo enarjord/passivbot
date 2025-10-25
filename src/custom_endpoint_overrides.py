@@ -136,18 +136,44 @@ class ResolvedEndpointOverride:
         return resolved_url
 
     def apply_to_api_urls(
-        self, urls: Mapping[str, str], *, hostname: Optional[str] = None
-    ) -> Dict[str, str]:
+        self, urls: Mapping[str, object], *, hostname: Optional[str] = None
+    ) -> Dict[str, object]:
         """
-        Return a new ``dict`` with REST URL overrides applied to the provided
-        ccxt ``urls['api']`` mapping.
+        Return a deep-copied mapping with REST URL overrides applied.
+
+        ccxt exchanges occasionally nest additional mappings inside
+        ``urls['api']`` (for example Bybit's ``{'public': {'linear': ...}}``
+        structure).  The previous implementation attempted to rewrite those
+        nested values as though they were strings which caused ``AttributeError``
+        exceptions and resulted in the override being skipped entirely.  The new
+        implementation performs a deep copy and recursively rewrites only string
+        values, leaving other data types untouched.
         """
-        updated = dict(urls)
+
+        def _clone(value: object) -> object:
+            if isinstance(value, Mapping):
+                return {k: _clone(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [_clone(item) for item in value]
+            if isinstance(value, tuple):
+                return tuple(_clone(item) for item in value)
+            return value
+
+        def _rewrite(value: object) -> object:
+            if isinstance(value, str):
+                return self.rewrite_url(value, hostname=hostname)
+            if isinstance(value, Mapping):
+                return {k: _rewrite(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [_rewrite(item) for item in value]
+            if isinstance(value, tuple):
+                return tuple(_rewrite(item) for item in value)
+            return value
+
+        updated: Dict[str, object] = _clone(urls)  # type: ignore[assignment]
         for key, value in self.rest_url_overrides.items():
             updated[key] = value
-        for key, value in list(updated.items()):
-            updated[key] = self.rewrite_url(value, hostname=hostname)
-        return updated
+        return {key: _rewrite(value) for key, value in updated.items()}
 
 
 class CustomEndpointConfig:
@@ -402,9 +428,9 @@ def apply_rest_overrides_to_ccxt(
         return
     try:
         urls = getattr(exchange, "urls", {})
+        hostname = getattr(exchange, "hostname", None)
         if isinstance(urls, Mapping) and "api" in urls:
             original_api = dict(urls["api"])
-            hostname = getattr(exchange, "hostname", None)
             updated = override.apply_to_api_urls(original_api, hostname=hostname)
             exchange.urls["api"] = updated
             for key, original_value in original_api.items():
@@ -425,6 +451,20 @@ def apply_rest_overrides_to_ccxt(
                         key,
                         updated[key],
                     )
+        if isinstance(urls, Mapping):
+            for key in ("host", "rest"):
+                if key in urls and isinstance(urls[key], str):
+                    original_value = urls[key]
+                    rewritten = override.rewrite_url(original_value, hostname=hostname)
+                    if rewritten != original_value:
+                        exchange.urls[key] = rewritten
+                        logger.info(
+                            "Custom endpoint active for %s.%s: %s -> %s",
+                            override.exchange_id,
+                            key,
+                            original_value,
+                            rewritten,
+                        )
         headers = getattr(exchange, "headers", {}) or {}
         if override.rest_extra_headers:
             merged = dict(headers)
