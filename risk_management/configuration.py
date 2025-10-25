@@ -126,8 +126,6 @@ class RealtimeConfig:
     grafana: GrafanaConfig | None = None
 
 
-
-
 def _load_json(path: Path) -> Dict[str, Any]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
