@@ -55,11 +55,14 @@ def ensure_certificate(
             f"Unable to locate the '{executable}' executable required for Let's Encrypt automation."
         )
 
+
     storage_dir = Path(config_dir) if config_dir else Path("/etc/letsencrypt")
     lineage = cert_name or normalized_domains[0]
 
     command: list[str] = [
+
         certbot_path,
+
         "certonly",
         "--non-interactive",
         "--agree-tos",
@@ -94,6 +97,44 @@ def ensure_certificate(
     for domain in normalized_domains:
         command.extend(["-d", domain])
 
+    certbot_path = shutil.which(executable)
+    if certbot_path is not None:
+        LOGGER.info(
+            "Requesting/renewing Let's Encrypt certificate for %s via %s",
+            ", ".join(normalized_domains),
+            certbot_path,
+        )
+        try:
+            subprocess.run(
+                [certbot_path, *command],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except subprocess.CalledProcessError as exc:  # pragma: no cover - exercised via unit tests
+            raise LetsEncryptError(
+                "Let's Encrypt provisioning failed; inspect certbot output for details."
+            ) from exc
+    else:
+        try:
+            from certbot import main as certbot_main  # type: ignore[import]
+        except ModuleNotFoundError as exc:  # pragma: no cover - handled in unit tests
+            raise LetsEncryptError(
+                "Unable to locate a certbot executable or importable module. Install certbot "
+                "(e.g. 'pip install certbot' or your OS package) or provide --letsencrypt-executable."
+            ) from exc
+
+        LOGGER.info(
+            "Requesting/renewing Let's Encrypt certificate for %s via certbot's Python module",
+            ", ".join(normalized_domains),
+        )
+
+        exit_code = certbot_main.main(command)
+        if exit_code != 0:
+            raise LetsEncryptError(
+                "Let's Encrypt provisioning failed; inspect certbot output for details."
+            )
+
     LOGGER.info(
         "Requesting/renewing Let's Encrypt certificate for %s via %s",
         ", ".join(normalized_domains),
@@ -106,6 +147,7 @@ def ensure_certificate(
         raise LetsEncryptError(
             "Let's Encrypt provisioning failed; inspect certbot output for details."
         ) from exc
+
 
     certfile = storage_dir / "live" / lineage / "fullchain.pem"
     keyfile = storage_dir / "live" / lineage / "privkey.pem"
