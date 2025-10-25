@@ -44,9 +44,7 @@ def _apply_entries_and_calc_twe(balance, positions, original_entries, gated_entr
             chosen_idx = 0  # fallback; shouldn't happen but keeps tests resilient
         candidate = candidates.pop(chosen_idx)
 
-        state = pos_state.setdefault(
-            idx, {"size": 0.0, "price": 0.0, "c_mult": candidate["c_mult"]}
-        )
+        state = pos_state.setdefault(idx, {"size": 0.0, "price": 0.0, "c_mult": candidate["c_mult"]})
         new_size, new_price = pbr.calc_new_psize_pprice(
             state["size"], state["price"], qty, price, candidate["qty_step"]
         )
@@ -63,7 +61,9 @@ def _apply_entries_and_calc_twe(balance, positions, original_entries, gated_entr
     return total_we
 
 
-@pytest.mark.skipif(pbr is None, reason="passivbot_rust extension not available; build and install in venv first")
+@pytest.mark.skipif(
+    pbr is None, reason="passivbot_rust extension not available; build and install in venv first"
+)
 def test_single_entry_is_trimmed_to_respect_twel():
     side = "long"
     balance = 1000.0
@@ -96,7 +96,9 @@ def test_single_entry_is_trimmed_to_respect_twel():
     assert twe_after < twel - 1e-12
 
 
-@pytest.mark.skipif(pbr is None, reason="passivbot_rust extension not available; build and install in venv first")
+@pytest.mark.skipif(
+    pbr is None, reason="passivbot_rust extension not available; build and install in venv first"
+)
 def test_blocks_when_current_twe_at_or_above_limit():
     side = "long"
     balance = 1000.0
@@ -136,7 +138,9 @@ def test_blocks_when_current_twe_at_or_above_limit():
     assert result == [], "Current TWE already exceeds the limit, so all entries should be blocked"
 
 
-@pytest.mark.skipif(pbr is None, reason="passivbot_rust extension not available; build and install in venv first")
+@pytest.mark.skipif(
+    pbr is None, reason="passivbot_rust extension not available; build and install in venv first"
+)
 def test_prunes_multiple_entries_until_exposure_safe():
     side = "long"
     balance = 1000.0
@@ -193,7 +197,9 @@ def test_prunes_multiple_entries_until_exposure_safe():
     assert total_granted <= total_requested
 
 
-@pytest.mark.skipif(pbr is None, reason="passivbot_rust extension not available; build and install in venv first")
+@pytest.mark.skipif(
+    pbr is None, reason="passivbot_rust extension not available; build and install in venv first"
+)
 def test_rebalances_quantities_but_keeps_eligible_orders():
     side = "long"
     balance = 1000.0
