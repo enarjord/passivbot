@@ -477,6 +477,7 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     custom_endpoints = _parse_custom_endpoints(config.get("custom_endpoints"))
     email_settings = _parse_email_settings(config.get("email"))
     grafana_settings = _parse_grafana_config(config.get("grafana"))
+
     reports_dir_value = config.get("reports_dir")
     reports_dir: Path | None = None
     if reports_dir_value:

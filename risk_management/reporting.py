@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -28,6 +29,20 @@ class StoredReport:
         self.path = path
         self.created_at = created_at
         self.size = size
+
+
+@dataclass()
+@dataclass(slots=True)
+
+class StoredReport:
+    """Metadata about a stored report."""
+
+    account: str
+    report_id: str
+    path: Path
+    created_at: datetime
+    size: int
+
 
     def to_view(self) -> dict[str, Any]:
         """Return a JSON serialisable representation."""
