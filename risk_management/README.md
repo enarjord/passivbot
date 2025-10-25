@@ -126,6 +126,7 @@ endpoints.  Pass the realtime CLI a `--custom-endpoints` argument when you need
 to reuse the exact proxy file as your trading bot (for example,
 `--custom-endpoints ../configs/custom_endpoints.json`).
 
+
 The `https_only` flag inside the `auth` block is enabled by default to set
 secure, same-site session cookies and to redirect HTTP requests to HTTPS. Disable
 it only for development environments that cannot serve TLS. Supply
@@ -142,6 +143,18 @@ require the `type="swap"` hint to return futures data.  Omitting the objects is
 fine for venues that default to USD-M perpetual endpoints.
 
 
+
+The `https_only` flag inside the `auth` block is enabled by default to set
+secure, same-site session cookies and to redirect HTTP requests to HTTPS.
+Disable it only for development environments that cannot serve TLS. Supply
+`--ssl-certfile /path/to/fullchain.pem` and `--ssl-keyfile /path/to/privkey.pem`
+(optionally with `--ssl-keyfile-password`) when launching the web server to
+enable HTTPS directly. Both paths must be provided together or the server will
+refuse to start. When `https_only` remains enabled without TLS parameters the
+server now logs a warning at startup to remind you to either provide
+certificates or temporarily set the flag to `false`; browsers connecting over
+HTTPS to an HTTP-only instance will otherwise report "Invalid HTTP request"
+errors because the TLS handshake cannot complete.
 
 ### Debugging exchange payloads
 
