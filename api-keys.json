@@ -11,8 +11,8 @@
     },
     "binance_01": {
         "exchange": "binance",
-        "key": "3a85ae8aghfghv",
-        "secret": "hvgvuhgj"
+        "key": "3a85ae8a-8384-4d72-b363-8a5daf4a9bc6",
+        "secret": "8778e084f476aaf6379ec9e33ac9ca133e82231c31a1cebdba5fc56b80066f04"
     },
     "bybit_01": {
         "exchange": "bybit",
