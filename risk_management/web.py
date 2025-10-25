@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from passlib.context import CryptContext
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
@@ -68,6 +69,7 @@ def create_app(
     service: RiskDashboardService | None = None,
     auth_manager: AuthManager | None = None,
     templates_dir: Path | None = None,
+    letsencrypt_challenge_dir: Path | None = None,
 ) -> FastAPI:
     if service is None:
         service = RiskDashboardService(RealtimeDataFetcher(config))
@@ -148,6 +150,15 @@ def create_app(
         https_only=auth_manager.https_only,
         same_site="lax",
     )
+
+    if letsencrypt_challenge_dir is not None:
+        challenge_dir = Path(letsencrypt_challenge_dir)
+        challenge_dir.mkdir(parents=True, exist_ok=True)
+        app.mount(
+            "/.well-known/acme-challenge",
+            StaticFiles(directory=str(challenge_dir), check_dir=False),
+            name="acme-challenge",
+        )
 
     def get_service(request: Request) -> RiskDashboardService:
         return request.app.state.service
