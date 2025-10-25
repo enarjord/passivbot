@@ -6,13 +6,15 @@ from pathlib import Path
 from typing import Any, Dict, Mapping
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from passlib.context import CryptContext
 from starlette.middleware.sessions import SessionMiddleware
+from urllib.parse import quote, urljoin
 
 from .configuration import RealtimeConfig
 from .realtime import RealtimeDataFetcher
+from .reporting import ReportManager
 from .snapshot_utils import build_presentable_snapshot
 
 
@@ -79,6 +81,38 @@ def create_app(
     app = FastAPI(title="Risk Management Dashboard")
     app.state.service = service
     app.state.auth_manager = auth_manager
+    reports_dir = config.reports_dir
+    if reports_dir is None:
+        base_root = config.config_root or Path.cwd()
+        reports_dir = base_root / "reports"
+    app.state.report_manager = ReportManager(reports_dir)
+
+    def resolve_grafana_context() -> dict[str, Any]:
+        grafana_cfg = config.grafana
+        if grafana_cfg is None:
+            return {"dashboards": [], "theme": None}
+
+        def resolve_url(raw_url: str) -> str:
+            url = raw_url.strip()
+            if grafana_cfg.base_url and not url.lower().startswith(("http://", "https://")):
+                base = grafana_cfg.base_url.rstrip("/") + "/"
+                return urljoin(base, url.lstrip("/"))
+            return url
+
+        dashboards: list[dict[str, Any]] = []
+        for dashboard in grafana_cfg.dashboards:
+            dashboards.append(
+                {
+                    "title": dashboard.title,
+                    "url": resolve_url(dashboard.url),
+                    "description": dashboard.description,
+                    "height": dashboard.height or grafana_cfg.default_height,
+                }
+            )
+
+        return {"dashboards": dashboards, "theme": grafana_cfg.theme}
+
+    app.state.grafana_context = resolve_grafana_context()
 
     templates_path = templates_dir or Path(__file__).with_name("templates")
     templates = Jinja2Templates(directory=str(templates_path))
@@ -115,6 +149,9 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
         return str(user)
 
+    def get_report_manager(request: Request) -> ReportManager:
+        return request.app.state.report_manager
+
     @app.get("/login", response_class=HTMLResponse)
     async def login_form(request: Request) -> HTMLResponse:
         if request.session.get("user"):
@@ -145,12 +182,15 @@ def create_app(
             return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
         snapshot = await service.fetch_snapshot()
         view_model = build_presentable_snapshot(snapshot)
+        grafana_context: dict[str, Any] = request.app.state.grafana_context
         return templates.TemplateResponse(
             "dashboard.html",
             {
                 "request": request,
                 "user": user,
                 "snapshot": view_model,
+                "grafana_dashboards": grafana_context.get("dashboards", []),
+                "grafana_theme": grafana_context.get("theme"),
             },
         )
 
@@ -179,6 +219,53 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         return JSONResponse(result)
+
+    @app.get("/api/accounts/{account_name}/reports", response_class=JSONResponse)
+    async def api_list_reports(
+        account_name: str,
+        manager: ReportManager = Depends(get_report_manager),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        reports = await manager.list_reports(account_name)
+        items = []
+        for report in reports:
+            data = report.to_view()
+            data["download_url"] = (
+                f"/api/accounts/{quote(account_name, safe='')}/reports/{quote(report.report_id, safe='')}"
+            )
+            items.append(data)
+        return JSONResponse({"account": account_name, "reports": items})
+
+    @app.post("/api/accounts/{account_name}/reports", response_class=JSONResponse)
+    async def api_generate_report(
+        account_name: str,
+        service: RiskDashboardService = Depends(get_service),
+        manager: ReportManager = Depends(get_report_manager),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        snapshot = await service.fetch_snapshot()
+        view_model = build_presentable_snapshot(snapshot)
+        try:
+            report = await manager.create_account_report(account_name, view_model)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        data = report.to_view()
+        data["download_url"] = (
+            f"/api/accounts/{quote(account_name, safe='')}/reports/{quote(report.report_id, safe='')}"
+        )
+        return JSONResponse(data)
+
+    @app.get("/api/accounts/{account_name}/reports/{report_id}")
+    async def api_download_report(
+        account_name: str,
+        report_id: str,
+        manager: ReportManager = Depends(get_report_manager),
+        _: str = Depends(require_user),
+    ) -> FileResponse:
+        path = await manager.get_report_path(account_name, report_id)
+        if path is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+        return FileResponse(path, media_type="text/csv", filename=path.name)
 
     @app.on_event("shutdown")
     async def shutdown() -> None:  # pragma: no cover - FastAPI lifecycle
