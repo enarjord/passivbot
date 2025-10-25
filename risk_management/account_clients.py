@@ -6,6 +6,9 @@ import abc
 import asyncio
 import json
 import logging
+import math
+import statistics
+import time
 from typing import Any, Dict, Iterable, Mapping, MutableMapping, Sequence
 
 try:  # pragma: no cover - optional dependency in some envs
@@ -58,6 +61,27 @@ def _stringify_payload(payload: Any) -> str:
         return repr(payload)
 
 
+def _first_float(*values: Any) -> float | None:
+    """Return the first value that can be coerced into ``float``."""
+
+    for value in values:
+        candidate = value
+        if candidate is None:
+            continue
+        if isinstance(candidate, (list, tuple)) and candidate:
+            candidate = candidate[0]
+        try:
+            return float(candidate)
+        except (TypeError, ValueError):
+            if isinstance(candidate, str):
+                try:
+                    return float(candidate.strip())
+                except (TypeError, ValueError):
+                    continue
+            continue
+    return None
+
+
 class AccountClientProtocol(abc.ABC):
     """Abstract interface for realtime account clients."""
 
@@ -72,8 +96,12 @@ class AccountClientProtocol(abc.ABC):
         """Close any open network connections."""
 
     @abc.abstractmethod
-    async def kill_switch(self) -> Dict[str, Any]:
-        """Cancel open orders and close all positions for the account."""
+    async def kill_switch(self, symbol: str | None = None) -> Dict[str, Any]:
+        """Cancel open orders and close positions for the account.
+
+        When ``symbol`` is provided, only orders and positions for that market are
+        touched. Otherwise every open position is targeted.
+        """
 
 
 def _set_exchange_field(client: Any, key: str, value: Any, aliases: Sequence[str]) -> None:
@@ -358,6 +386,16 @@ class CCXTAccountClient(AccountClientProtocol):
             parsed = _parse_position(position_raw, balance_value)
             if parsed is not None:
                 positions.append(parsed)
+        if positions:
+            symbols = [position.get("symbol") for position in positions if position.get("symbol")]
+            symbol_metrics = await self._collect_symbol_metrics(symbols)
+            for position in positions:
+                symbol = position.get("symbol")
+                if not symbol:
+                    continue
+                metrics = symbol_metrics.get(symbol)
+                if metrics:
+                    position.update(metrics)
         if not hasattr(self.client, "fetch_positions") and self._debug_api_payloads:
             logger.debug(
                 "[%s] fetch_positions not available on exchange client", self.config.name
@@ -425,7 +463,160 @@ class CCXTAccountClient(AccountClientProtocol):
     async def close(self) -> None:
         await self.client.close()
 
-    async def kill_switch(self) -> Dict[str, Any]:
+    async def _collect_symbol_metrics(
+        self, symbols: Iterable[str]
+    ) -> Dict[str, Dict[str, Dict[str, float]]]:
+        unique_symbols = [symbol for symbol in dict.fromkeys(symbols) if symbol]
+        if not unique_symbols:
+            return {}
+        results: Dict[str, Dict[str, Dict[str, float]]] = {}
+        tasks = [self._fetch_symbol_metrics(symbol) for symbol in unique_symbols]
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        for symbol, response in zip(unique_symbols, responses):
+            if isinstance(response, Exception):
+                logger.debug(
+                    "[%s] Failed to compute metrics for %s: %s",
+                    self.config.name,
+                    symbol,
+                    response,
+                    exc_info=True,
+                )
+                continue
+            if response:
+                results[symbol] = response
+        return results
+
+    async def _fetch_symbol_metrics(self, symbol: str) -> Dict[str, Dict[str, float]]:
+        metrics: Dict[str, Dict[str, float]] = {}
+        volatility = await self._fetch_symbol_volatility(symbol)
+        if volatility:
+            metrics["volatility"] = volatility
+        funding = await self._fetch_symbol_funding(symbol)
+        if funding:
+            metrics["funding_rates"] = funding
+        return metrics
+
+    async def _fetch_symbol_volatility(self, symbol: str) -> Dict[str, float] | None:
+        if not hasattr(self.client, "fetch_ohlcv"):
+            return None
+        try:
+            candles = await self.client.fetch_ohlcv(
+                symbol, timeframe="1h", limit=200, params=self._positions_params
+            )
+        except BaseError as exc:
+            logger.debug(
+                "[%s] fetch_ohlcv failed for %s: %s",
+                self.config.name,
+                symbol,
+                exc,
+                exc_info=True,
+            )
+            return None
+        if not candles or len(candles) < 2:
+            return None
+        closes: list[float] = []
+        for candle in candles:
+            price = _first_float(candle[4] if len(candle) > 4 else None)
+            if price is None or price <= 0:
+                continue
+            closes.append(price)
+        if len(closes) < 2:
+            return None
+        returns: list[float] = []
+        for previous, current in zip(closes, closes[1:]):
+            if previous <= 0 or current <= 0:
+                continue
+            returns.append(math.log(current / previous))
+        if len(returns) < 2:
+            return None
+        windows = {"4h": 4, "24h": 24, "3d": 72, "7d": 168}
+        volatilities: Dict[str, float] = {}
+        for key, length in windows.items():
+            if len(returns) < length:
+                continue
+            window = returns[-length:]
+            if len(window) < 2:
+                continue
+            std_dev = statistics.pstdev(window)
+            if std_dev is None:
+                continue
+            volatilities[key] = float(std_dev * math.sqrt(length))
+        return volatilities or None
+
+    async def _fetch_symbol_funding(self, symbol: str) -> Dict[str, float] | None:
+        if not hasattr(self.client, "fetch_funding_rate_history"):
+            return None
+        now_ms = int(time.time() * 1000)
+        try:
+            history = await self.client.fetch_funding_rate_history(
+                symbol, limit=200, params=self._positions_params
+            )
+        except BaseError as exc:
+            logger.debug(
+                "[%s] fetch_funding_rate_history failed for %s: %s",
+                self.config.name,
+                symbol,
+                exc,
+                exc_info=True,
+            )
+            return None
+        if not history:
+            return None
+
+        def _extract_rate(entry: Mapping[str, Any]) -> float | None:
+            rate = entry.get("fundingRate") or entry.get("funding_rate") or entry.get("rate")
+            if rate is None and isinstance(entry.get("info"), Mapping):
+                info = entry["info"]
+                rate = (
+                    info.get("fundingRate")
+                    or info.get("funding_rate")
+                    or info.get("rate")
+                    or info.get("lastFundingRate")
+                )
+            return _first_float(rate)
+
+        def _extract_timestamp(entry: Mapping[str, Any]) -> int | None:
+            ts = entry.get("timestamp") or entry.get("datetime")
+            ts_value = None
+            if isinstance(ts, (int, float)):
+                ts_value = int(ts)
+            elif isinstance(ts, str):
+                try:
+                    ts_value = int(ts)
+                except ValueError:
+                    ts_value = None
+            if ts_value is None and isinstance(entry.get("info"), Mapping):
+                raw = entry["info"].get("timestamp") or entry["info"].get("time")
+                if isinstance(raw, (int, float)):
+                    ts_value = int(raw)
+            return ts_value
+
+        windows = {
+            "4h": 4 * 60 * 60 * 1000,
+            "24h": 24 * 60 * 60 * 1000,
+            "3d": 3 * 24 * 60 * 60 * 1000,
+            "7d": 7 * 24 * 60 * 60 * 1000,
+        }
+        aggregated: Dict[str, list[float]] = {key: [] for key in windows}
+        for entry in history:
+            timestamp = _extract_timestamp(entry)
+            rate = _extract_rate(entry)
+            if timestamp is None or rate is None:
+                continue
+            for key, window in windows.items():
+                if timestamp >= now_ms - window:
+                    aggregated[key].append(rate)
+        results: Dict[str, float] = {}
+        for key, values in aggregated.items():
+            if not values:
+                continue
+            try:
+                results[key] = float(statistics.mean(values))
+            except statistics.StatisticsError:
+                continue
+        return results or None
+
+    async def kill_switch(self, symbol: str | None = None) -> Dict[str, Any]:
         await self._ensure_markets()
         summary: Dict[str, Any] = {
             "cancelled_orders": [],
@@ -433,14 +624,21 @@ class CCXTAccountClient(AccountClientProtocol):
             "closed_positions": [],
             "failed_position_closures": [],
         }
-        await self._cancel_open_orders(summary)
-        await self._close_positions(summary)
+        await self._cancel_open_orders(summary, symbol)
+        await self._close_positions(summary, symbol)
         return summary
 
-    async def _cancel_open_orders(self, summary: Dict[str, Any]) -> None:
+    async def _cancel_open_orders(
+        self, summary: Dict[str, Any], symbol_filter: str | None
+    ) -> None:
         if hasattr(self.client, "cancel_all_orders"):
             try:
-                if self.config.symbols:
+                if symbol_filter:
+                    await self.client.cancel_all_orders(
+                        symbol_filter, params=self._orders_params
+                    )
+                    summary["cancelled_orders"].append({"symbol": symbol_filter})
+                elif self.config.symbols:
                     for symbol in self.config.symbols:
                         await self.client.cancel_all_orders(symbol, params=self._orders_params)
                         summary["cancelled_orders"].append({"symbol": symbol})
@@ -461,7 +659,10 @@ class CCXTAccountClient(AccountClientProtocol):
 
         try:
             self._refresh_open_order_preferences()
-            symbols = self.config.symbols or [None]
+            if symbol_filter:
+                symbols = [symbol_filter]
+            else:
+                symbols = self.config.symbols or [None]
             for symbol in symbols:
                 params = dict(self._orders_params)
                 orders = await self.client.fetch_open_orders(symbol, params=params)
@@ -506,7 +707,9 @@ class CCXTAccountClient(AccountClientProtocol):
                     exc_info=True,
                 )
 
-    async def _close_positions(self, summary: Dict[str, Any]) -> None:
+    async def _close_positions(
+        self, summary: Dict[str, Any], symbol_filter: str | None
+    ) -> None:
         if not hasattr(self.client, "fetch_positions"):
             return
 
@@ -522,10 +725,13 @@ class CCXTAccountClient(AccountClientProtocol):
             summary["failed_position_closures"].append({"error": str(exc)})
             return
 
+        orderbook_cache: Dict[str, Dict[str, float]] = {}
         for position in positions or []:
             size = position.get("contracts") or position.get("size") or position.get("amount")
             symbol = position.get("symbol") or position.get("id")
             if not symbol:
+                continue
+            if symbol_filter and symbol != symbol_filter:
                 continue
             try:
                 qty = abs(float(size))
@@ -536,9 +742,27 @@ class CCXTAccountClient(AccountClientProtocol):
             side = "sell" if float(size) > 0 else "buy"
             params = dict(self._close_params)
             params.setdefault("reduceOnly", True)
+            mark_price = _first_float(
+                position.get("markPrice"),
+                position.get("mark_price"),
+                position.get("last"),
+                position.get("info", {}).get("markPrice")
+                if isinstance(position.get("info"), Mapping)
+                else None,
+                position.get("info", {}).get("lastPrice")
+                if isinstance(position.get("info"), Mapping)
+                else None,
+                position.get("entryPrice"),
+                position.get("entry_price"),
+            )
             try:
-                await self.client.create_order(symbol, "market", side, qty, params=params)
-                summary["closed_positions"].append({"symbol": symbol, "side": side, "amount": qty})
+                price = await self._determine_exit_price(symbol, side, orderbook_cache, mark_price)
+                if price is None:
+                    raise RuntimeError("Unable to determine exit price for limit kill switch order")
+                await self.client.create_order(symbol, "limit", side, qty, price, params=params)
+                summary["closed_positions"].append(
+                    {"symbol": symbol, "side": side, "amount": qty, "price": price}
+                )
             except BaseError as exc:
                 logger.warning(
                     "Failed to close position %s on %s: %s",
@@ -550,6 +774,51 @@ class CCXTAccountClient(AccountClientProtocol):
                 summary["failed_position_closures"].append(
                     {"symbol": symbol, "side": side, "amount": qty, "error": str(exc)}
                 )
+            except RuntimeError as exc:
+                logger.warning("Kill switch skipped %s: %s", symbol, exc, exc_info=True)
+                summary["failed_position_closures"].append(
+                    {"symbol": symbol, "side": side, "amount": qty, "error": str(exc)}
+                )
+
+    async def _determine_exit_price(
+        self,
+        symbol: str,
+        side: str,
+        cache: Dict[str, Dict[str, float]],
+        fallback: float | None,
+    ) -> float | None:
+        key = side.lower()
+        if symbol not in cache:
+            cache[symbol] = await self._fetch_best_prices(symbol) or {}
+        price = cache[symbol].get(key)
+        if price is not None:
+            return price
+        return fallback
+
+    async def _fetch_best_prices(self, symbol: str) -> Dict[str, float] | None:
+        if not hasattr(self.client, "fetch_order_book"):
+            return None
+        try:
+            order_book = await self.client.fetch_order_book(symbol)
+        except BaseError as exc:
+            logger.debug(
+                "[%s] fetch_order_book failed for %s: %s",
+                self.config.name,
+                symbol,
+                exc,
+                exc_info=True,
+            )
+            return None
+        bids = order_book.get("bids") if isinstance(order_book, Mapping) else None
+        asks = order_book.get("asks") if isinstance(order_book, Mapping) else None
+        best: Dict[str, float] = {}
+        bid_price = _first_float(bids[0][0]) if bids else None
+        ask_price = _first_float(asks[0][0]) if asks else None
+        if bid_price is not None:
+            best["sell"] = bid_price
+        if ask_price is not None:
+            best["buy"] = ask_price
+        return best
 
 
 __all__ = [
