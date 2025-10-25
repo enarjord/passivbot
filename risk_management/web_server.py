@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import copy
 import importlib
+import logging
+from pathlib import Path
 
 import uvicorn
 
@@ -65,6 +66,12 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument("--reload", action="store_true", help="Enable autoreload (development only)")
+    parser.add_argument("--ssl-certfile", type=Path, help="Path to the TLS certificate file")
+    parser.add_argument("--ssl-keyfile", type=Path, help="Path to the TLS private key file")
+    parser.add_argument(
+        "--ssl-keyfile-password",
+        help="Password used to decrypt the TLS private key, if required",
+    )
     args = parser.parse_args(argv)
 
     config = load_realtime_config(args.config)
@@ -86,7 +93,23 @@ def main(argv: list[str] | None = None) -> None:
                     path=override_normalized,
                     autodiscover=False,
                 )
+    if bool(args.ssl_certfile) ^ bool(args.ssl_keyfile):
+        parser.error("Both --ssl-certfile and --ssl-keyfile must be provided to enable HTTPS.")
+
     app = create_app(config)
+    ssl_certfile = str(args.ssl_certfile) if args.ssl_certfile else None
+    ssl_keyfile = str(args.ssl_keyfile) if args.ssl_keyfile else None
+    if (
+        getattr(config, "auth", None)
+        and getattr(config.auth, "https_only", False)
+        and not ssl_certfile
+        and not ssl_keyfile
+    ):
+        logging.getLogger("risk_management.web_server").warning(
+            "Authentication is configured for HTTPS-only sessions but no TLS certificate/key "
+            "were supplied. Either launch the server with --ssl-certfile/--ssl-keyfile or set "
+            "'auth.https_only' to false in the realtime configuration for non-TLS development environments."
+        )
     uvicorn.run(
         app,
         host=args.host,
@@ -94,6 +117,9 @@ def main(argv: list[str] | None = None) -> None:
         reload=args.reload,
         log_config=log_config,
         log_level=log_level,
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
+        ssl_keyfile_password=args.ssl_keyfile_password,
     )
 
 

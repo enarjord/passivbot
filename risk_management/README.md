@@ -105,6 +105,7 @@ default layout.  Provide an explicit path when storing credentials elsewhere:
   "auth": {
     "secret_key": "replace-me-with-a-long-random-string",
     "session_cookie_name": "risk_dashboard_session",
+    "https_only": true,
     "users": {
       "admin": "replace-with-bcrypt-hash"
     }
@@ -124,15 +125,18 @@ Omitting the objects is fine for venues that default to USD-M perpetual
 endpoints.  Pass the realtime CLI a `--custom-endpoints` argument when you need
 to reuse the exact proxy file as your trading bot (for example,
 `--custom-endpoints ../configs/custom_endpoints.json`).
-endpoints.
 
-your API key store.  The optional `params.balance` and `params.positions`
-objects are forwarded to ccxt when invoking `fetch_balance()` and
-`fetch_positions()`, which is useful for exchanges (such as OKX and Bybit) that
-require the `type="swap"` hint to return futures data.  Omitting the objects is
-fine for venues that default to USD-M perpetual endpoints.
-
-
+The `https_only` flag inside the `auth` block is enabled by default to set
+secure, same-site session cookies and to redirect HTTP requests to HTTPS.
+Disable it only for development environments that cannot serve TLS. Supply
+`--ssl-certfile /path/to/fullchain.pem` and `--ssl-keyfile /path/to/privkey.pem`
+(optionally with `--ssl-keyfile-password`) when launching the web server to
+enable HTTPS directly. Both paths must be provided together or the server will
+refuse to start. When `https_only` remains enabled without TLS parameters the
+server now logs a warning at startup to remind you to either provide
+certificates or temporarily set the flag to `false`; browsers connecting over
+HTTPS to an HTTP-only instance will otherwise report "Invalid HTTP request"
+errors because the TLS handshake cannot complete.
 
 ### Debugging exchange payloads
 
@@ -161,6 +165,26 @@ python -m risk_management.web_server --config risk_management/realtime_config.js
 Navigate to `http://localhost:8000` to sign in and view the interactive
 dashboard.  The page automatically polls for fresh data and updates account
 cards, alerts, and notification channels without a full refresh.
+
+When TLS parameters are provided the server listens on HTTPS and the dashboard
+redirects any plain HTTP requests to the secure endpoint. Successful logins set
+secure, same-site session cookies so credentials are never transmitted without
+encryption.
+
+### Portfolio analytics and kill switches
+
+The overview card now includes rolling volatility and funding-rate snapshots
+for 4 hour, 24 hour, 3 day, and 7 day windows. The values are calculated per
+symbol and aggregated both at the portfolio level and for each exchange
+account, making it easy to spot regimes with rising volatility or punitive
+funding. Position tables expose the same metrics so individual trades can be
+evaluated in context.
+
+Portfolio managers can trigger the kill switch globally, per account, or for a
+single open position straight from the dashboard. Kill actions cancel all open
+orders and close positions with reduce-only limit orders resting at the best
+bid/ask, ensuring the exchange honours quantity reductions without relying on
+market orders.
 
 ### Custom endpoint overrides
 
