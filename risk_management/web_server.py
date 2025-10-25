@@ -4,11 +4,51 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import copy
+import importlib
 
 import uvicorn
 
 from .configuration import CustomEndpointSettings, load_realtime_config
-from .web import create_app
+
+
+def _determine_uvicorn_logging(config) -> tuple[dict | None, str]:
+    """Return logging configuration overrides for uvicorn."""
+
+    debug_requested = config.debug_api_payloads or any(
+        account.debug_api_payloads for account in getattr(config, "accounts", [])
+    )
+    if not debug_requested:
+        return None, "info"
+    try:
+        uvicorn_config = importlib.import_module("uvicorn.config")
+    except ModuleNotFoundError:  # pragma: no cover - uvicorn not importable in tests
+        return None, "debug"
+    LOGGING_CONFIG = getattr(uvicorn_config, "LOGGING_CONFIG", None)
+    if LOGGING_CONFIG is None:  # pragma: no cover - unexpected configuration shape
+        return None, "debug"
+
+    log_config = copy.deepcopy(LOGGING_CONFIG)
+    loggers = log_config.setdefault("loggers", {})
+    root_logger = loggers.setdefault("", {"handlers": ["default"], "level": "INFO"})
+    root_logger["level"] = "DEBUG"
+
+    risk_logger = loggers.setdefault(
+        "risk_management", {"handlers": ["default"], "level": "INFO", "propagate": False}
+    )
+    if not risk_logger.get("handlers"):
+        risk_logger["handlers"] = ["default"]
+    risk_logger["level"] = "DEBUG"
+    risk_logger.setdefault("propagate", False)
+
+    # Make sure the namespace used by our modules inherits the debug level as well.
+    risk_root = loggers.setdefault(
+        "risk_management.realtime", {"handlers": ["default"], "level": "INFO", "propagate": False}
+    )
+    risk_root["level"] = "DEBUG"
+    risk_root.setdefault("propagate", False)
+
+    return log_config, "debug"
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -28,6 +68,8 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     config = load_realtime_config(args.config)
+    log_config, log_level = _determine_uvicorn_logging(config)
+    from .web import create_app  # imported lazily to avoid heavy dependencies at import time
     override = args.custom_endpoints
     if override is not None:
         override_normalized = override.strip()
@@ -45,7 +87,14 @@ def main(argv: list[str] | None = None) -> None:
                     autodiscover=False,
                 )
     app = create_app(config)
-    uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        log_config=log_config,
+        log_level=log_level,
+    )
 
 
 if __name__ == "__main__":

@@ -12,6 +12,18 @@ from typing import Any, Dict, Iterable, List, Mapping, Set
 logger = logging.getLogger(__name__)
 
 
+def _ensure_debug_logging_enabled() -> None:
+    """Raise logging verbosity when debug API payloads are requested."""
+
+    root_logger = logging.getLogger()
+    if root_logger.level in {logging.NOTSET, logging.WARNING, logging.ERROR, logging.CRITICAL} or root_logger.level > logging.DEBUG:
+        root_logger.setLevel(logging.DEBUG)
+
+    risk_logger = logging.getLogger("risk_management")
+    if risk_logger.level in {logging.NOTSET} or risk_logger.level > logging.DEBUG:
+        risk_logger.setLevel(logging.DEBUG)
+
+
 def _coerce_bool(value: Any, default: bool = False) -> bool:
     """Return a boolean for ``value`` supporting common string representations."""
 
@@ -209,6 +221,7 @@ def _parse_accounts(
     debug_api_payloads_default: bool = False,
 ) -> List[AccountConfig]:
     accounts: List[AccountConfig] = []
+    debug_requested = False
     for raw in accounts_raw:
         if not raw.get("enabled", True):
             continue
@@ -250,6 +263,10 @@ def _parse_accounts(
             debug_api_payloads=debug_api_payloads,
         )
         accounts.append(account)
+        if debug_api_payloads:
+            debug_requested = True
+    if debug_requested:
+        _ensure_debug_logging_enabled()
     return accounts
 
 
@@ -305,6 +322,9 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     if not accounts_raw:
         raise ValueError("Realtime configuration must include at least one account entry.")
     debug_api_payloads_default = _coerce_bool(config.get("debug_api_payloads"), False)
+    if debug_api_payloads_default:
+        _ensure_debug_logging_enabled()
+
     accounts = _parse_accounts(accounts_raw, api_keys, debug_api_payloads_default)
     alert_thresholds = {str(k): float(v) for k, v in config.get("alert_thresholds", {}).items()}
     notification_channels = [str(item) for item in config.get("notification_channels", [])]
