@@ -74,6 +74,7 @@ def _install_passivbot_rust_stub():
     stub.calc_entries_short_py = lambda *args, **kwargs: []
     stub.calc_closes_long_py = lambda *args, **kwargs: []
     stub.calc_closes_short_py = lambda *args, **kwargs: []
+    stub.calc_unstucking_close_py = lambda *args, **kwargs: None
 
     stub.get_order_id_type_from_string = lambda name: {
         "close_unstuck_long": 0x1234,
