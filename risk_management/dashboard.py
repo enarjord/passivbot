@@ -1,13 +1,15 @@
 """Terminal dashboard for monitoring trading portfolios.
 
 The module consumes a JSON snapshot describing one or more accounts along with
-alert thresholds.  It renders a textual dashboard summarising exposure, profit
+alert thresholds. It renders a textual dashboard summarising exposure, profit
 and loss, and risk metrics while also highlighting any triggered alerts.
 
 The command line interface can either read a static snapshot file or, when
 configured with realtime credentials, fetch fresh account information from the
 supported exchanges on a configurable interval.
-"""
+
+Additional helpers in this module support rendering and interacting with the
+CLI risk dashboard."""
 
 from __future__ import annotations
 

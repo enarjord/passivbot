@@ -86,6 +86,36 @@ def test_authentication_warning_resets_after_success(caplog) -> None:
     asyncio.run(fetcher.close())
 
 
+def test_snapshot_includes_configured_account_messages() -> None:
+    config = RealtimeConfig(
+        accounts=[AccountConfig(name="Test", exchange="test")],
+        account_messages={"Test": "Maintenance window"},
+    )
+    client = StubAccountClient([
+        {"name": "Test", "balance": 10.0, "positions": []},
+    ])
+    fetcher = RealtimeDataFetcher(config, account_clients=[client])
+
+    snapshot = asyncio.run(fetcher.fetch_snapshot())
+
+    assert snapshot["account_messages"]["Test"] == "Maintenance window"
+    asyncio.run(fetcher.close())
+
+
+def test_runtime_account_messages_override_configured_messages() -> None:
+    config = RealtimeConfig(
+        accounts=[AccountConfig(name="Test", exchange="test")],
+        account_messages={"Test": "Maintenance window"},
+    )
+    client = StubAccountClient([RuntimeError("boom")])
+    fetcher = RealtimeDataFetcher(config, account_clients=[client])
+
+    snapshot = asyncio.run(fetcher.fetch_snapshot())
+
+    assert snapshot["account_messages"]["Test"].startswith("Test: boom")
+    asyncio.run(fetcher.close())
+
+
 def test_configure_custom_endpoints_prefers_config_directory(tmp_path: Path) -> None:
     overrides_dir = tmp_path / "configs"
     overrides_dir.mkdir(parents=True)

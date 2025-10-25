@@ -1,4 +1,8 @@
-"""FastAPI powered web dashboard for live risk management."""
+"""FastAPI powered web dashboard for live risk management.
+
+The application exposes REST endpoints and templated views backed by the
+RealtimeDataFetcher utilities.
+"""
 
 from __future__ import annotations
 from pathlib import Path
