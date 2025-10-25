@@ -178,50 +178,93 @@ class RealtimeDataFetcher:
 def _extract_balance(balance: Mapping[str, Any], settle_currency: str) -> float:
     """Extract a numeric balance from ccxt balance payloads."""
 
-    total = balance.get("total") if isinstance(balance, Mapping) else None
-    if isinstance(total, Mapping) and total:
-        if settle_currency in total and total[settle_currency] is not None:
-            try:
-                return float(total[settle_currency])
-            except (TypeError, ValueError):
-                logger.debug("Non-numeric balance for %s: %s", settle_currency, total[settle_currency])
+    if not isinstance(balance, Mapping):
+        return 0.0
+
+    def _to_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
         try:
-            return float(sum(float(v or 0.0) for v in total.values()))
-        except (TypeError, ValueError):  # pragma: no cover - defensive
-            logger.debug("Unable to aggregate total balances: %s", total)
-    info = balance.get("info") if isinstance(balance, Mapping) else None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    aggregate_keys = (
+        "totalMarginBalance",
+        "totalEquity",
+        "totalWalletBalance",
+        "marginBalance",
+        "totalBalance",
+    )
+
+    def _find_nested_aggregate(value: Any) -> float | None:
+        if isinstance(value, Mapping):
+            for key in aggregate_keys:
+                candidate = _to_float(value.get(key))
+                if candidate is not None:
+                    return candidate
+            for child in value.values():
+                result = _find_nested_aggregate(child)
+                if result is not None:
+                    return result
+        elif isinstance(value, (list, tuple)):
+            for child in value:
+                result = _find_nested_aggregate(child)
+                if result is not None:
+                    return result
+        return None
+
+    # Some exchanges expose aggregate balances directly on the top-level payload.
+    for key in (*aggregate_keys, "equity"):
+        candidate = _to_float(balance.get(key))
+        if candidate is not None:
+            return candidate
+
+    info = balance.get("info")
     if isinstance(info, Mapping):
-        for key in (
-            "totalWalletBalance",
-            "totalMarginBalance",
-            "equity",
-            "totalEquity",
-            "marginBalance",
-            "totalBalance",
-        ):
-            value = info.get(key)
-            if value is not None:
-                try:
-                    return float(value)
-                except (TypeError, ValueError):
-                    logger.debug("Non-numeric balance info %s=%s", key, value)
-    balances = [
-        balance.get(settle_currency) if isinstance(balance, Mapping) else None,
-        balance.get("USDT") if isinstance(balance, Mapping) else None,
-    ]
-    for entry in balances:
-        if isinstance(entry, Mapping):
-            value = entry.get("total") or entry.get("free") or entry.get("used")
-            if value is not None:
-                try:
-                    return float(value)
-                except (TypeError, ValueError):
-                    continue
-        elif entry is not None:
-            try:
-                return float(entry)
-            except (TypeError, ValueError):
+        for key in (*aggregate_keys, "equity"):
+            candidate = _to_float(info.get(key))
+            if candidate is not None:
+                return candidate
+        nested = _find_nested_aggregate(info)
+        if nested is not None:
+            return nested
+
+    total = balance.get("total")
+    if isinstance(total, Mapping) and total:
+        if settle_currency in total:
+            candidate = _to_float(total.get(settle_currency))
+            if candidate is not None:
+                return candidate
+        summed = 0.0
+        found_value = False
+        for value in total.values():
+            candidate = _to_float(value)
+            if candidate is None:
                 continue
+            summed += candidate
+            found_value = True
+        if found_value:
+            return summed
+
+    for currency_key in (settle_currency, "USDT"):
+        entry = balance.get(currency_key)
+        if isinstance(entry, Mapping):
+            for key in ("total", "free", "used"):
+                candidate = _to_float(entry.get(key))
+                if candidate is not None:
+                    return candidate
+        else:
+            candidate = _to_float(entry)
+            if candidate is not None:
+                return candidate
+
     return 0.0
 
 
