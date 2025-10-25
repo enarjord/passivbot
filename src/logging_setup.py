@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TextIO
 
 TRACE_LEVEL = 5
 TRACE_LEVEL_NAME = "TRACE"
@@ -59,6 +60,7 @@ def configure_logging(
     max_bytes: int = 10 * 1024 * 1024,
     backup_count: int = 5,
     stream: bool = True,
+    stream_target: Optional[TextIO] = None,
     fmt: str = DEFAULT_FORMAT,
     datefmt: str = DEFAULT_DATEFMT,
 ) -> None:
@@ -71,7 +73,7 @@ def configure_logging(
     handlers: list[logging.Handler] = []
 
     if stream:
-        stream_handler = logging.StreamHandler()
+        stream_handler = logging.StreamHandler(stream_target or sys.stdout)
         stream_handler.setFormatter(formatter)
         stream_handler.setLevel(numeric_level)
         handlers.append(stream_handler)
