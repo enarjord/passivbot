@@ -212,6 +212,27 @@ def _disable_fetch_currencies(client: Any) -> None:
         has["fetchCurrencies"] = False
 
 
+def _suppress_open_orders_warning(client: Any) -> None:
+    """Prevent ccxt from escalating open-order symbol warnings to exceptions."""
+
+    options = getattr(client, "options", None)
+    if isinstance(options, MutableMapping):
+        options["warnOnFetchOpenOrdersWithoutSymbol"] = False
+    else:
+        setattr(client, "options", {"warnOnFetchOpenOrdersWithoutSymbol": False})
+
+
+def _is_symbol_specific_open_orders_warning(error: BaseError) -> bool:
+    """Return ``True`` when ``error`` is the ccxt warning about missing symbols."""
+
+    message = str(error)
+    return (
+        "fetchOpenOrders() WARNING" in message
+        and "without specifying a symbol" in message
+        and "warnOnFetchOpenOrdersWithoutSymbol" in message
+    )
+
+
 def _instantiate_ccxt_client(exchange_id: str, credentials: Mapping[str, Any]) -> Any:
     """Instantiate a ccxt async client honoring passivbot customisations when available."""
 
@@ -276,6 +297,16 @@ class CCXTAccountClient(AccountClientProtocol):
         self._close_params = dict(config.params.get("close", {}))
         self._markets_loaded: asyncio.Lock | None = None
         self._debug_api_payloads = bool(config.debug_api_payloads)
+
+    def _refresh_open_order_preferences(self) -> None:
+        """Re-apply exchange options that silence noisy open-order warnings."""
+
+        try:
+            _suppress_open_orders_warning(self.client)
+        except Exception:  # pragma: no cover - defensive
+            logger.debug(
+                "Failed to update open-order warning preference for %s", self.config.name
+            )
 
     def _log_exchange_payload(
         self, operation: str, payload: Any, params: Mapping[str, Any] | None
@@ -344,6 +375,7 @@ class CCXTAccountClient(AccountClientProtocol):
         open_orders: list[Dict[str, Any]] = []
         if hasattr(self.client, "fetch_open_orders"):
             try:
+                self._refresh_open_order_preferences()
                 raw_orders: Iterable[Mapping[str, Any]] | None = None
                 if self.config.symbols:
                     combined: list[Mapping[str, Any]] = []
@@ -368,9 +400,18 @@ class CCXTAccountClient(AccountClientProtocol):
                     if parsed_order is not None:
                         open_orders.append(parsed_order)
             except BaseError as exc:
-                logger.warning(
-                    "Failed to fetch open orders for %s: %s", self.config.name, exc, exc_info=True
-                )
+                if _is_symbol_specific_open_orders_warning(exc):
+                    logger.info(
+                        "Exchange %s requires a symbol when fetching open orders; skipping.",
+                        self.config.name,
+                    )
+                else:
+                    logger.warning(
+                        "Failed to fetch open orders for %s: %s",
+                        self.config.name,
+                        exc,
+                        exc_info=True,
+                    )
                 if self._debug_api_payloads:
                     logger.debug(
                         "[%s] fetch_open_orders params=%s raised=%s",
@@ -428,6 +469,7 @@ class CCXTAccountClient(AccountClientProtocol):
             return
 
         try:
+            self._refresh_open_order_preferences()
             symbols = self.config.symbols or [None]
             for symbol in symbols:
                 params = dict(self._orders_params)
@@ -460,9 +502,18 @@ class CCXTAccountClient(AccountClientProtocol):
                             }
                         )
         except BaseError as exc:
-            logger.warning(
-                "Failed to enumerate open orders for %s: %s", self.config.name, exc, exc_info=True
-            )
+            if _is_symbol_specific_open_orders_warning(exc):
+                logger.info(
+                    "Exchange %s requires a symbol when cancelling open orders; skipping.",
+                    self.config.name,
+                )
+            else:
+                logger.warning(
+                    "Failed to enumerate open orders for %s: %s",
+                    self.config.name,
+                    exc,
+                    exc_info=True,
+                )
 
     async def _close_positions(self, summary: Dict[str, Any]) -> None:
         if not hasattr(self.client, "fetch_positions"):
