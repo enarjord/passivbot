@@ -1,10 +1,7 @@
 {
-<<<<<<< HEAD
   "api_keys_file": "/root/passivbot/api-keys.json",
-=======
   "api_keys_file": "../api-keys.json",
-  "debug_api_payloads": false,
->>>>>>> c5457fbfb9cce568b96cd03459f1021610410748
+  "debug_api_payloads": true,
   "custom_endpoints": {
     "path": "/root/passivbot/configs/custom_endpoints.json",
     "autodiscover": false
