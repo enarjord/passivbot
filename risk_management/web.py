@@ -9,7 +9,6 @@ from fastapi.templating import Jinja2Templates
 from passlib.context import CryptContext
 from starlette.middleware.sessions import SessionMiddleware
 from urllib.parse import quote, urljoin
-from urllib.parse import quote
 
 from .configuration import RealtimeConfig
 from .realtime import RealtimeDataFetcher
