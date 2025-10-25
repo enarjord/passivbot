@@ -218,10 +218,20 @@ def _instantiate_ccxt_client(exchange_id: str, credentials: Mapping[str, Any]) -
     normalized = normalize_exchange_name(exchange_id)
     rate_limited = bool(credentials.get("enableRateLimit", True))
 
+    def _suppress_open_orders_warning(client: Any) -> None:
+        """Prevent ccxt from raising on informational open-order warnings."""
+
+        options = getattr(client, "options", None)
+        if isinstance(options, MutableMapping):
+            options.setdefault("warnOnFetchOpenOrdersWithoutSymbol", False)
+        else:
+            setattr(client, "options", {"warnOnFetchOpenOrdersWithoutSymbol": False})
+
     if load_ccxt_instance is not None:
         client = load_ccxt_instance(normalized, enable_rate_limit=rate_limited)
         _apply_credentials(client, credentials)
         _disable_fetch_currencies(client)
+        _suppress_open_orders_warning(client)
         override = resolve_custom_endpoint_override(normalized)
         apply_rest_overrides_to_ccxt(client, override)
         return client
@@ -241,6 +251,7 @@ def _instantiate_ccxt_client(exchange_id: str, credentials: Mapping[str, Any]) -
     client = exchange_class(params)
     _apply_credentials(client, credentials)
     _disable_fetch_currencies(client)
+    _suppress_open_orders_warning(client)
     override = resolve_custom_endpoint_override(normalized)
     apply_rest_overrides_to_ccxt(client, override)
     return client
