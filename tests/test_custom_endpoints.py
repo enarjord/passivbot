@@ -89,6 +89,36 @@ def test_apply_rest_overrides_to_ccxt_updates_urls_and_headers():
     assert exchange.headers["X-Test"] == "1"
 
 
+def test_apply_rest_overrides_handles_nested_api_urls_and_host():
+    override = ResolvedEndpointOverride(
+        exchange_id="bybit",
+        rest_domain_rewrites={"https://api.bybit.com": "https://proxy.example"},
+    )
+
+    class DummyBybit:
+        def __init__(self):
+            self.hostname = "bybit.com"
+            self.urls = {
+                "api": {
+                    "public": {
+                        "linear": "https://api.bybit.com/v5",
+                        "inverse": "https://api.bybit.com/v5",
+                    },
+                    "private": "https://api.bybit.com/v5",
+                },
+                "host": "https://api.bybit.com",
+            }
+            self.headers = {}
+
+    exchange = DummyBybit()
+    apply_rest_overrides_to_ccxt(exchange, override)
+
+    assert exchange.urls["api"]["public"]["linear"] == "https://proxy.example/v5"
+    assert exchange.urls["api"]["public"]["inverse"] == "https://proxy.example/v5"
+    assert exchange.urls["api"]["private"] == "https://proxy.example/v5"
+    assert exchange.urls["host"] == "https://proxy.example"
+
+
 def test_apply_rest_overrides_handles_hostname_placeholder():
     override = ResolvedEndpointOverride(
         exchange_id="bybit",
