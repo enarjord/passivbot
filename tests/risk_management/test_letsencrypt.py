@@ -8,6 +8,9 @@ from typing import Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from pathlib import Path
+from typing import Sequence
+
 import pytest
 
 from risk_management.letsencrypt import LetsEncryptError, ensure_certificate
@@ -45,6 +48,7 @@ def test_ensure_certificate_invokes_certbot(monkeypatch: pytest.MonkeyPatch, tmp
     )
 
     assert recorder.command is not None
+
     assert recorder.command[0] == "/usr/bin/certbot"
     assert "--staging" in recorder.command
     assert "-d" in recorder.command
@@ -63,6 +67,7 @@ def test_ensure_certificate_missing_certbot(monkeypatch: pytest.MonkeyPatch) -> 
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", raising_import)
+
     with pytest.raises(LetsEncryptError):
         ensure_certificate(domains=("example.com",))
 
