@@ -9,7 +9,7 @@ import logging
 import math
 import statistics
 import time
-from typing import Any, Dict, Iterable, Mapping, MutableMapping, Sequence
+from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional, Sequence
 
 try:  # pragma: no cover - optional dependency in some envs
     import ccxt.async_support as ccxt_async
@@ -61,7 +61,7 @@ def _stringify_payload(payload: Any) -> str:
         return repr(payload)
 
 
-def _first_float(*values: Any) -> float | None:
+def _first_float(*values: Any) -> Optional[float]:
     """Return the first value that can be coerced into ``float``."""
 
     for value in values:
@@ -96,7 +96,7 @@ class AccountClientProtocol(abc.ABC):
         """Close any open network connections."""
 
     @abc.abstractmethod
-    async def kill_switch(self, symbol: str | None = None) -> Dict[str, Any]:
+    async def kill_switch(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Cancel open orders and close positions for the account.
 
         When ``symbol`` is provided, only orders and positions for that market are
@@ -123,7 +123,7 @@ def _set_exchange_field(client: Any, key: str, value: Any, aliases: Sequence[str
 
 def _format_header_placeholders(
     headers: MutableMapping[str, Any], values: Mapping[str, Any]
-) -> Mapping[str, Any] | None:
+) -> Optional[Mapping[str, Any]]:
     """Expand placeholder tokens in ``headers`` using ``values`` as the source."""
 
     class _DefaultDict(dict):
@@ -314,7 +314,7 @@ class CCXTAccountClient(AccountClientProtocol):
         self._positions_params = dict(config.params.get("positions", {}))
         self._orders_params = dict(config.params.get("orders", {}))
         self._close_params = dict(config.params.get("close", {}))
-        self._markets_loaded: asyncio.Lock | None = None
+        self._markets_loaded: Optional[asyncio.Lock] = None
         self._debug_api_payloads = bool(config.debug_api_payloads)
 
     def _refresh_open_order_preferences(self) -> None:
@@ -328,7 +328,7 @@ class CCXTAccountClient(AccountClientProtocol):
             )
 
     def _log_exchange_payload(
-        self, operation: str, payload: Any, params: Mapping[str, Any] | None
+        self, operation: str, payload: Any, params: Optional[Mapping[str, Any]]
     ) -> None:
         if not self._debug_api_payloads:
             return
@@ -405,7 +405,7 @@ class CCXTAccountClient(AccountClientProtocol):
         if hasattr(self.client, "fetch_open_orders"):
             try:
                 self._refresh_open_order_preferences()
-                raw_orders: Iterable[Mapping[str, Any]] | None = None
+                raw_orders: Optional[Iterable[Mapping[str, Any]]] = None
                 if self.config.symbols:
                     combined: list[Mapping[str, Any]] = []
                     for symbol in self.config.symbols:
@@ -496,7 +496,7 @@ class CCXTAccountClient(AccountClientProtocol):
             metrics["funding_rates"] = funding
         return metrics
 
-    async def _fetch_symbol_volatility(self, symbol: str) -> Dict[str, float] | None:
+    async def _fetch_symbol_volatility(self, symbol: str) -> Optional[Dict[str, float]]:
         if not hasattr(self.client, "fetch_ohlcv"):
             return None
         try:
@@ -543,7 +543,7 @@ class CCXTAccountClient(AccountClientProtocol):
             volatilities[key] = float(std_dev * math.sqrt(length))
         return volatilities or None
 
-    async def _fetch_symbol_funding(self, symbol: str) -> Dict[str, float] | None:
+    async def _fetch_symbol_funding(self, symbol: str) -> Optional[Dict[str, float]]:
         if not hasattr(self.client, "fetch_funding_rate_history"):
             return None
         now_ms = int(time.time() * 1000)
@@ -563,7 +563,7 @@ class CCXTAccountClient(AccountClientProtocol):
         if not history:
             return None
 
-        def _extract_rate(entry: Mapping[str, Any]) -> float | None:
+        def _extract_rate(entry: Mapping[str, Any]) -> Optional[float]:
             rate = entry.get("fundingRate") or entry.get("funding_rate") or entry.get("rate")
             if rate is None and isinstance(entry.get("info"), Mapping):
                 info = entry["info"]
@@ -575,7 +575,7 @@ class CCXTAccountClient(AccountClientProtocol):
                 )
             return _first_float(rate)
 
-        def _extract_timestamp(entry: Mapping[str, Any]) -> int | None:
+        def _extract_timestamp(entry: Mapping[str, Any]) -> Optional[int]:
             ts = entry.get("timestamp") or entry.get("datetime")
             ts_value = None
             if isinstance(ts, (int, float)):
@@ -616,7 +616,7 @@ class CCXTAccountClient(AccountClientProtocol):
                 continue
         return results or None
 
-    async def kill_switch(self, symbol: str | None = None) -> Dict[str, Any]:
+    async def kill_switch(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         await self._ensure_markets()
         scope = f" for {symbol}" if symbol else ""
         logger.info("[%s] Executing kill switch%s", self.config.name, scope)
@@ -641,7 +641,7 @@ class CCXTAccountClient(AccountClientProtocol):
         return summary
 
     async def _cancel_open_orders(
-        self, summary: Dict[str, Any], symbol_filter: str | None
+        self, summary: Dict[str, Any], symbol_filter: Optional[str]
     ) -> None:
         if hasattr(self.client, "cancel_all_orders"):
             try:
@@ -720,7 +720,7 @@ class CCXTAccountClient(AccountClientProtocol):
                 )
 
     async def _close_positions(
-        self, summary: Dict[str, Any], symbol_filter: str | None
+        self, summary: Dict[str, Any], symbol_filter: Optional[str]
     ) -> None:
         if not hasattr(self.client, "fetch_positions"):
             return
@@ -797,8 +797,8 @@ class CCXTAccountClient(AccountClientProtocol):
         symbol: str,
         side: str,
         cache: Dict[str, Dict[str, float]],
-        fallback: float | None,
-    ) -> float | None:
+        fallback: Optional[float],
+    ) -> Optional[float]:
         key = side.lower()
         prices = cache.setdefault(symbol, {})
         if not prices:
@@ -818,7 +818,7 @@ class CCXTAccountClient(AccountClientProtocol):
                 return price
         return fallback
 
-    async def _fetch_best_prices(self, symbol: str) -> Dict[str, float] | None:
+    async def _fetch_best_prices(self, symbol: str) -> Optional[Dict[str, float]]:
         if not hasattr(self.client, "fetch_order_book"):
             return None
         try:
@@ -843,7 +843,7 @@ class CCXTAccountClient(AccountClientProtocol):
             best["buy"] = ask_price
         return best or None
 
-    async def _fetch_ticker_prices(self, symbol: str) -> Dict[str, float] | None:
+    async def _fetch_ticker_prices(self, symbol: str) -> Optional[Dict[str, float]]:
         if not hasattr(self.client, "fetch_ticker"):
             return None
         try:

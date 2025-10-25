@@ -6,6 +6,7 @@ import argparse
 import copy
 import importlib
 import logging
+from typing import Optional
 from pathlib import Path
 
 import uvicorn
@@ -14,7 +15,7 @@ from .configuration import CustomEndpointSettings, load_realtime_config
 from .letsencrypt import LetsEncryptError, ensure_certificate
 
 
-def _determine_uvicorn_logging(config) -> tuple[dict | None, str]:
+def _determine_uvicorn_logging(config) -> tuple[Optional[dict], str]:
     """Return logging configuration overrides for uvicorn."""
 
     debug_requested = config.debug_api_payloads or any(
@@ -53,7 +54,7 @@ def _determine_uvicorn_logging(config) -> tuple[dict | None, str]:
     return log_config, "debug"
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Launch the risk dashboard web UI")
     parser.add_argument("--config", type=Path, required=True, help="Path to the realtime configuration file")
     parser.add_argument("--host", default="0.0.0.0", help="Host address for the web server")

@@ -9,7 +9,9 @@ import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Set
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Set
+
 
 
 logger = logging.getLogger(__name__)
@@ -25,14 +27,14 @@ def _debug_to_logging_level(debug_level: int) -> int:
     return logging.DEBUG
 
 
-def _resolve_passivbot_logging_configurator() -> Callable[..., Any] | None:
+def _resolve_passivbot_logging_configurator() -> Optional[Callable[..., Any]]:
     """Return Passivbot's logging configurator when the package is available."""
 
     return _cached_passivbot_logging_configurator()
 
 
 @lru_cache(maxsize=1)
-def _cached_passivbot_logging_configurator() -> Callable[..., Any] | None:
+def _cached_passivbot_logging_configurator() -> Optional[Callable[..., Any]]:
     spec = importlib.util.find_spec("logging_setup")
     if spec is None:  # pragma: no cover - Passivbot package missing in unit tests
         return None
@@ -134,7 +136,7 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
 class CustomEndpointSettings:
     """Settings controlling how custom endpoint overrides are loaded."""
 
-    path: str | None = None
+    path: Optional[str] = None
     autodiscover: bool = True
 
 
@@ -145,9 +147,9 @@ class AccountConfig:
     name: str
     exchange: str
     settle_currency: str = "USDT"
-    api_key_id: str | None = None
+    api_key_id: Optional[str] = None
     credentials: Dict[str, Any] = field(default_factory=dict)
-    symbols: List[str] | None = None
+    symbols: Optional[List[str]] = None
     params: Dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
     debug_api_payloads: bool = False
@@ -169,11 +171,11 @@ class EmailSettings:
 
     host: str
     port: int = 587
-    username: str | None = None
-    password: str | None = None
+    username: Optional[str] = None
+    password: Optional[str] = None
     use_tls: bool = True
     use_ssl: bool = False
-    sender: str | None = None
+    sender: Optional[str] = None
 
 
 @dataclass()
@@ -182,8 +184,8 @@ class GrafanaDashboardConfig:
 
     title: str
     url: str
-    description: str | None = None
-    height: int | None = None
+    description: Optional[str] = None
+    height: Optional[int] = None
 
 
 @dataclass()
@@ -193,7 +195,7 @@ class GrafanaConfig:
     dashboards: List[GrafanaDashboardConfig] = field(default_factory=list)
     default_height: int = 600
     theme: str = "dark"
-    base_url: str | None = None
+    base_url: Optional[str] = None
 
 
 @dataclass()
@@ -203,14 +205,14 @@ class RealtimeConfig:
     accounts: List[AccountConfig]
     alert_thresholds: Dict[str, float] = field(default_factory=dict)
     notification_channels: List[str] = field(default_factory=list)
-    auth: AuthConfig | None = None
+    auth: Optional[AuthConfig] = None
     account_messages: Dict[str, str] = field(default_factory=dict)
-    custom_endpoints: CustomEndpointSettings | None = None
-    email: EmailSettings | None = None
-    config_root: Path | None = None
+    custom_endpoints: Optional[CustomEndpointSettings] = None
+    email: Optional[EmailSettings] = None
+    config_root: Optional[Path] = None
     debug_api_payloads: bool = False
-    reports_dir: Path | None = None
-    grafana: GrafanaConfig | None = None
+    reports_dir: Optional[Path] = None
+    grafana: Optional[GrafanaConfig] = None
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -307,7 +309,7 @@ def _merge_credentials(primary: Mapping[str, Any], secondary: Mapping[str, Any])
     return merged
 
 
-def _iter_candidate_roots(config_root: Path | None) -> Iterable[Path]:
+def _iter_candidate_roots(config_root: Optional[Path]) -> Iterable[Path]:
     """Yield directories to inspect when auto-discovering shared files."""
 
     module_root = Path(__file__).resolve().parent
@@ -334,7 +336,7 @@ def _iter_candidate_roots(config_root: Path | None) -> Iterable[Path]:
             yield parent
 
 
-def _discover_api_keys_path(config_root: Path | None) -> Path | None:
+def _discover_api_keys_path(config_root: Optional[Path]) -> Optional[Path]:
     """Return the first ``api-keys.json`` found relative to common roots."""
 
     for root in _iter_candidate_roots(config_root):
@@ -344,7 +346,7 @@ def _discover_api_keys_path(config_root: Path | None) -> Path | None:
     return None
 
 
-def _parse_custom_endpoints(settings: Any) -> CustomEndpointSettings | None:
+def _parse_custom_endpoints(settings: Any) -> Optional[CustomEndpointSettings]:
     """Return structured custom endpoint settings from ``settings``."""
 
     if settings is None:
@@ -363,7 +365,7 @@ def _parse_custom_endpoints(settings: Any) -> CustomEndpointSettings | None:
     return CustomEndpointSettings(path=value, autodiscover=False)
 
 
-def _parse_email_settings(settings: Any) -> EmailSettings | None:
+def _parse_email_settings(settings: Any) -> Optional[EmailSettings]:
     """Return SMTP settings when provided in the realtime configuration."""
 
     if settings is None:
@@ -399,7 +401,7 @@ def _parse_email_settings(settings: Any) -> EmailSettings | None:
     )
 
 
-def _parse_grafana_config(settings: Any) -> GrafanaConfig | None:
+def _parse_grafana_config(settings: Any) -> Optional[GrafanaConfig]:
     """Return Grafana embedding settings from ``settings``."""
 
     if settings is None:
@@ -426,7 +428,7 @@ def _parse_grafana_config(settings: Any) -> GrafanaConfig | None:
         description_raw = entry.get("description")
         height_raw = entry.get("height")
 
-        height: int | None = None
+        height: Optional[int] = None
         if height_raw not in (None, ""):
             try:
                 height = int(height_raw)
@@ -474,7 +476,7 @@ def _parse_grafana_config(settings: Any) -> GrafanaConfig | None:
 
 def _parse_accounts(
     accounts_raw: Iterable[Mapping[str, Any]],
-    api_keys: Mapping[str, Mapping[str, Any]] | None,
+    api_keys: Optional[Mapping[str, Mapping[str, Any]]],
     debug_api_payloads_default: bool = False,
 ) -> List[AccountConfig]:
     accounts: List[AccountConfig] = []
@@ -529,7 +531,7 @@ def _parse_accounts(
     return accounts
 
 
-def _parse_auth(auth_raw: Mapping[str, Any] | None) -> AuthConfig | None:
+def _parse_auth(auth_raw: Optional[Mapping[str, Any]]) -> Optional[AuthConfig]:
     if not auth_raw:
         return None
     secret_key = auth_raw.get("secret_key")
@@ -596,8 +598,8 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     config = _ensure_mapping(config_payload, description="Realtime configuration")
     config_root = path.parent.resolve()
     api_keys_file = config.get("api_keys_file")
-    api_keys: Dict[str, Mapping[str, Any]] | None = None
-    api_keys_path: Path | None = None
+    api_keys: Optional[Dict[str, Mapping[str, Any]]] = None
+    api_keys_path: Optional[Path] = None
     if api_keys_file:
         api_keys_path = _resolve_path_relative_to(path.parent, api_keys_file)
     else:
@@ -637,7 +639,7 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     email_settings = _parse_email_settings(config.get("email"))
     grafana_settings = _parse_grafana_config(config.get("grafana"))
     reports_dir_value = config.get("reports_dir")
-    reports_dir: Path | None = None
+    reports_dir: Optional[Path] = None
     if reports_dir_value:
         reports_dir = _resolve_path_relative_to(path.parent, reports_dir_value)
 

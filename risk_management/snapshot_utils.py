@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, MutableMapping, Sequence
+from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence
 
 from .dashboard import (
     Account,
@@ -197,7 +197,7 @@ def _build_symbol_exposures(account: Account) -> List[Dict[str, Any]]:
 def _accumulate_metric(
     totals: MutableMapping[str, float],
     weights: MutableMapping[str, float],
-    metrics: Mapping[str, float] | None,
+    metrics: Optional[Mapping[str, float]],
     weight: float,
 ) -> None:
     if not metrics or weight <= 0:

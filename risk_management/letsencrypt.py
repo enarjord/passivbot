@@ -6,7 +6,7 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Optional, Sequence
 
 LOGGER = logging.getLogger(__name__)
 
@@ -29,13 +29,13 @@ def ensure_certificate(
     *,
     executable: str = "certbot",
     domains: Sequence[str],
-    email: str | None = None,
+    email: Optional[str] = None,
     staging: bool = False,
     http_port: int = 80,
-    cert_name: str | None = None,
-    config_dir: Path | None = None,
-    work_dir: Path | None = None,
-    logs_dir: Path | None = None,
+    cert_name: Optional[str] = None,
+    config_dir: Optional[Path] = None,
+    work_dir: Optional[Path] = None,
+    logs_dir: Optional[Path] = None,
     dry_run: bool = False,
 ) -> tuple[Path, Path]:
     """Ensure a Let's Encrypt certificate exists and return its paths.
