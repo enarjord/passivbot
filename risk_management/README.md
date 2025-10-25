@@ -155,7 +155,6 @@ format used by Passivbot's trading and backtesting commands so payloads respect
 `TRACE`/`DEBUG` verbosity and include timestamps.  Use this sparingly; responses
 include large payloads and secret values are not redacted automatically.
 
-
 ## 3. Run the terminal dashboard
 
 The CLI consumes either a static snapshot or the realtime configuration created
