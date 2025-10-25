@@ -134,6 +134,21 @@ fine for venues that default to USD-M perpetual endpoints.
 
 
 
+### Debugging exchange payloads
+
+Set `"debug_api_payloads": true` at the top level of your realtime
+configuration to capture the raw JSON returned by `fetch_balance()` and
+`fetch_positions()` for every account. The payloads, along with the request
+parameters, are emitted at the DEBUG log level and can help compare responses
+between exchanges or custom endpoint variants. Toggle the flag back to `false`
+after finishing your investigation to avoid cluttering the logs.
+
+When only a subset of accounts requires verbose tracing, add
+`"debug_api_payloads": true` to the specific account blocks instead of the
+global setting. This keeps logging focused on the venues under review.
+
+
+
 ## Web dashboard
 
 Launch the FastAPI web server to obtain an authenticated dashboard with live

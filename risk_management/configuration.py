@@ -12,6 +12,26 @@ from typing import Any, Dict, Iterable, List, Mapping, Set
 logger = logging.getLogger(__name__)
 
 
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    """Return a boolean for ``value`` supporting common string representations."""
+
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"", "default", "auto"}:
+            return default
+        if lowered in {"1", "true", "yes", "on", "enabled", "enable"}:
+            return True
+        if lowered in {"0", "false", "no", "off", "disabled", "disable"}:
+            return False
+    return bool(value)
+
+
 @dataclass()
 class CustomEndpointSettings:
     """Settings controlling how custom endpoint overrides are loaded."""
@@ -32,6 +52,7 @@ class AccountConfig:
     symbols: List[str] | None = None
     params: Dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
+    debug_api_payloads: bool = False
 
 
 @dataclass()
@@ -54,6 +75,7 @@ class RealtimeConfig:
     account_messages: Dict[str, str] = field(default_factory=dict)
     custom_endpoints: CustomEndpointSettings | None = None
     config_root: Path | None = None
+    debug_api_payloads: bool = False
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -184,6 +206,7 @@ def _parse_custom_endpoints(settings: Any) -> CustomEndpointSettings | None:
 def _parse_accounts(
     accounts_raw: Iterable[Mapping[str, Any]],
     api_keys: Mapping[str, Mapping[str, Any]] | None,
+    debug_api_payloads_default: bool = False,
 ) -> List[AccountConfig]:
     accounts: List[AccountConfig] = []
     for raw in accounts_raw:
@@ -211,6 +234,10 @@ def _parse_accounts(
             raise ValueError(
                 f"Account '{raw.get('name')}' must specify an exchange either directly or via the api key entry."
             )
+        debug_api_payloads = _coerce_bool(
+            raw.get("debug_api_payloads"), debug_api_payloads_default
+        )
+
         account = AccountConfig(
             name=str(raw.get("name", exchange)),
             exchange=str(exchange),
@@ -220,6 +247,7 @@ def _parse_accounts(
             symbols=list(raw.get("symbols") or []) or None,
             params=dict(raw.get("params", {})),
             enabled=bool(raw.get("enabled", True)),
+            debug_api_payloads=debug_api_payloads,
         )
         accounts.append(account)
     return accounts
@@ -276,7 +304,8 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     accounts_raw = config.get("accounts")
     if not accounts_raw:
         raise ValueError("Realtime configuration must include at least one account entry.")
-    accounts = _parse_accounts(accounts_raw, api_keys)
+    debug_api_payloads_default = _coerce_bool(config.get("debug_api_payloads"), False)
+    accounts = _parse_accounts(accounts_raw, api_keys, debug_api_payloads_default)
     alert_thresholds = {str(k): float(v) for k, v in config.get("alert_thresholds", {}).items()}
     notification_channels = [str(item) for item in config.get("notification_channels", [])]
     auth = _parse_auth(config.get("auth"))
@@ -300,4 +329,5 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
         auth=auth,
         custom_endpoints=custom_endpoints,
         config_root=config_root,
+        debug_api_payloads=debug_api_payloads_default,
     )

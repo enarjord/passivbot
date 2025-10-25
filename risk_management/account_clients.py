@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import json
 import logging
 from typing import Any, Dict, Iterable, Mapping, MutableMapping, Sequence
 
@@ -28,6 +29,28 @@ except (ModuleNotFoundError, ImportError):  # pragma: no cover - allow running w
 
 
 logger = logging.getLogger(__name__)
+
+
+def _json_default(value: Any) -> Any:
+    """Coerce non-serialisable objects into JSON-compatible types."""
+
+    if isinstance(value, (set, frozenset, tuple)):
+        return list(value)
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except UnicodeDecodeError:
+            return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _stringify_payload(payload: Any) -> str:
+    """Return a JSON string representation for logging purposes."""
+
+    try:
+        return json.dumps(payload, ensure_ascii=False, default=_json_default, sort_keys=True)
+    except (TypeError, ValueError):  # pragma: no cover - defensive fallback
+        return repr(payload)
 
 
 class AccountClientProtocol(abc.ABC):
@@ -226,6 +249,22 @@ class CCXTAccountClient(AccountClientProtocol):
         self._balance_params = dict(config.params.get("balance", {}))
         self._positions_params = dict(config.params.get("positions", {}))
         self._markets_loaded: asyncio.Lock | None = None
+        self._debug_api_payloads = bool(config.debug_api_payloads)
+
+    def _log_exchange_payload(
+        self, operation: str, payload: Any, params: Mapping[str, Any] | None
+    ) -> None:
+        if not self._debug_api_payloads:
+            return
+        params_repr = _stringify_payload(params or {}) if params else "{}"
+        payload_repr = _stringify_payload(payload)
+        logger.debug(
+            "[%s] %s response params=%s payload=%s",
+            self.config.name,
+            operation,
+            params_repr,
+            payload_repr,
+        )
 
     async def _ensure_markets(self) -> None:
         lock = self._markets_loaded
@@ -240,6 +279,7 @@ class CCXTAccountClient(AccountClientProtocol):
     async def fetch(self) -> Dict[str, Any]:
         await self._ensure_markets()
         balance_raw = await self.client.fetch_balance(params=self._balance_params)
+        self._log_exchange_payload("fetch_balance", balance_raw, self._balance_params)
         from .realtime import _extract_balance, _parse_position  # circular safe import
 
         balance_value = _extract_balance(balance_raw, self.config.settle_currency)
@@ -248,14 +288,28 @@ class CCXTAccountClient(AccountClientProtocol):
         if hasattr(self.client, "fetch_positions"):
             try:
                 positions_raw = await self.client.fetch_positions(params=self._positions_params)
+                self._log_exchange_payload(
+                    "fetch_positions", positions_raw, self._positions_params
+                )
             except BaseError as exc:
                 logger.warning(
                     "Failed to fetch positions for %s: %s", self.config.name, exc, exc_info=True
                 )
+                if self._debug_api_payloads:
+                    logger.debug(
+                        "[%s] fetch_positions params=%s raised=%s",
+                        self.config.name,
+                        _stringify_payload(self._positions_params),
+                        exc,
+                    )
         for position_raw in positions_raw or []:
             parsed = _parse_position(position_raw, balance_value)
             if parsed is not None:
                 positions.append(parsed)
+        if not hasattr(self.client, "fetch_positions") and self._debug_api_payloads:
+            logger.debug(
+                "[%s] fetch_positions not available on exchange client", self.config.name
+            )
         return {
             "name": self.config.name,
             "balance": balance_value,
