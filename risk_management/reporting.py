@@ -11,7 +11,10 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 
+
 @dataclass()
+@dataclass(slots=True)
+
 class StoredReport:
     """Metadata about a stored report."""
 

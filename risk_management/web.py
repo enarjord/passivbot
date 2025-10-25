@@ -11,6 +11,8 @@ from fastapi.templating import Jinja2Templates
 from passlib.context import CryptContext
 from starlette.middleware.sessions import SessionMiddleware
 from urllib.parse import quote, urljoin
+from urllib.parse import quote
+
 
 from .configuration import RealtimeConfig
 from .realtime import RealtimeDataFetcher
@@ -87,6 +89,7 @@ def create_app(
         reports_dir = base_root / "reports"
     app.state.report_manager = ReportManager(reports_dir)
 
+
     def resolve_grafana_context() -> dict[str, Any]:
         grafana_cfg = config.grafana
         if grafana_cfg is None:
@@ -113,6 +116,7 @@ def create_app(
         return {"dashboards": dashboards, "theme": grafana_cfg.theme}
 
     app.state.grafana_context = resolve_grafana_context()
+
 
     templates_path = templates_dir or Path(__file__).with_name("templates")
     templates = Jinja2Templates(directory=str(templates_path))
