@@ -69,8 +69,14 @@ class SharedArrayManager:
         """
         Close and unlink all owned shared memory segments. Optionally limit to a subset.
         """
-        to_cleanup = specs if specs is not None else [SharedArraySpec(name, array.shape, array.dtype.str)
-                                                      for name, array in self._arrays.items()]
+        to_cleanup = (
+            specs
+            if specs is not None
+            else [
+                SharedArraySpec(name, array.shape, array.dtype.str)
+                for name, array in self._arrays.items()
+            ]
+        )
         names = {spec.name for spec in to_cleanup}
         for name in list(self._owned_blocks.keys()):
             if name in names:
