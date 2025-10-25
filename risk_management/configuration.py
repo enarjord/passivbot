@@ -16,7 +16,12 @@ def _ensure_debug_logging_enabled() -> None:
     """Raise logging verbosity when debug API payloads are requested."""
 
     root_logger = logging.getLogger()
-    if root_logger.level in {logging.NOTSET, logging.WARNING, logging.ERROR, logging.CRITICAL} or root_logger.level > logging.DEBUG:
+    if root_logger.level in {
+        logging.NOTSET,
+        logging.WARNING,
+        logging.ERROR,
+        logging.CRITICAL,
+    } or root_logger.level > logging.DEBUG:
         root_logger.setLevel(logging.DEBUG)
 
     risk_logger = logging.getLogger("risk_management")
