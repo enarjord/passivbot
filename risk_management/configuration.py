@@ -72,11 +72,10 @@ def _configure_default_logging(debug_level: int = 1) -> bool:
     _ensure_logger_level(risk_logger, desired_level)
 
     return not already_configured
-<<<<<<< HEAD
 
 def _configure_default_logging(debug_level: int = 1) -> bool:
 
-def _configure_default_logging() -> bool:
+    def _configure_default_logging() -> bool:
 
     """Configure Passivbot-style logging if no handlers are present."""
 
@@ -98,8 +97,6 @@ def _configure_default_logging() -> bool:
         logging.basicConfig(level=logging.DEBUG)
 
     return True
-=======
->>>>>>> 2153c64b521b8566e5c169c78cb0e6098a8ad30c
 
 
 def _ensure_debug_logging_enabled() -> None:
