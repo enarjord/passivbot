@@ -9,7 +9,7 @@ import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Set
+from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Set
 
 
 logger = logging.getLogger(__name__)
@@ -222,6 +222,27 @@ def _load_json(path: Path) -> Dict[str, Any]:
         raise FileNotFoundError(f"Configuration file not found: {path}") from exc
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON in configuration file {path}: {exc}") from exc
+
+
+def _ensure_mapping(payload: Any, *, description: str) -> MutableMapping[str, Any]:
+    """Return ``payload`` when it is a mapping, otherwise raise ``TypeError``."""
+
+    if isinstance(payload, MutableMapping):
+        return payload
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    raise TypeError(f"{description} must be a JSON object, not {type(payload).__name__}.")
+
+
+def _resolve_path_relative_to(base: Path, candidate: Any) -> Path:
+    """Return an absolute path for ``candidate`` relative to ``base`` when required."""
+
+    path = Path(str(candidate)).expanduser()
+    if not path.is_absolute():
+        path = (base / path).resolve()
+    else:
+        path = path.resolve()
+    return path
 
 
 def _normalise_credentials(data: Mapping[str, Any]) -> Dict[str, Any]:
@@ -571,23 +592,21 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
 
     _configure_default_logging(debug_level=1)
 
-    config = _load_json(path)
+    config_payload = _load_json(path)
+    config = _ensure_mapping(config_payload, description="Realtime configuration")
     config_root = path.parent.resolve()
     api_keys_file = config.get("api_keys_file")
     api_keys: Dict[str, Mapping[str, Any]] | None = None
     api_keys_path: Path | None = None
     if api_keys_file:
-        api_keys_path = Path(str(api_keys_file)).expanduser()
-        if not api_keys_path.is_absolute():
-            api_keys_path = (path.parent / api_keys_path).resolve()
-        else:
-            api_keys_path = api_keys_path.resolve()
+        api_keys_path = _resolve_path_relative_to(path.parent, api_keys_file)
     else:
         api_keys_path = _discover_api_keys_path(config_root)
         if api_keys_path:
             logger.info("Using api keys from %s", api_keys_path)
     if api_keys_path:
-        api_keys_raw = _load_json(api_keys_path)
+        api_keys_payload = _load_json(api_keys_path)
+        api_keys_raw = _ensure_mapping(api_keys_payload, description="API key configuration")
         flattened: Dict[str, Mapping[str, Any]] = {}
         for key, value in api_keys_raw.items():
             if key == "referrals" or not isinstance(value, Mapping):
@@ -620,23 +639,26 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
     reports_dir_value = config.get("reports_dir")
     reports_dir: Path | None = None
     if reports_dir_value:
-        candidate = Path(str(reports_dir_value)).expanduser()
-        if not candidate.is_absolute():
-            candidate = (path.parent / candidate).resolve()
-        else:
-            candidate = candidate.resolve()
-        reports_dir = candidate
+        reports_dir = _resolve_path_relative_to(path.parent, reports_dir_value)
 
     if custom_endpoints and custom_endpoints.path:
-        resolved_path = Path(custom_endpoints.path).expanduser()
-        if not resolved_path.is_absolute():
-            resolved_path = (path.parent / resolved_path).resolve()
-        else:
-            resolved_path = resolved_path.resolve()
+        resolved_path = _resolve_path_relative_to(path.parent, custom_endpoints.path)
         custom_endpoints = CustomEndpointSettings(
             path=str(resolved_path),
             autodiscover=custom_endpoints.autodiscover,
         )
+
+    account_messages_payload = config.get("account_messages", {})
+    account_messages: Dict[str, str] = {}
+    if account_messages_payload:
+        messages_mapping = _ensure_mapping(
+            account_messages_payload,
+            description="Realtime configuration 'account_messages'",
+        )
+        for name, message in messages_mapping.items():
+            if message is None:
+                continue
+            account_messages[str(name)] = str(message)
 
     return RealtimeConfig(
         accounts=accounts,
@@ -649,4 +671,5 @@ def load_realtime_config(path: Path) -> RealtimeConfig:
         debug_api_payloads=debug_api_payloads_default,
         reports_dir=reports_dir,
         grafana=grafana_settings,
+        account_messages=account_messages,
     )
