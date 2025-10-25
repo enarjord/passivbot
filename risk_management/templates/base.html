@@ -74,6 +74,27 @@
         overflow: hidden;
       }
 
+      .table-wrapper {
+        position: relative;
+        overflow: auto;
+        max-height: 24rem;
+        border-radius: 0.75rem;
+      }
+
+      .table-wrapper::-webkit-scrollbar {
+        height: 8px;
+        width: 8px;
+      }
+
+      .table-wrapper::-webkit-scrollbar-thumb {
+        background-color: rgba(148, 163, 184, 0.4);
+        border-radius: 999px;
+      }
+
+      .table-wrapper::-webkit-scrollbar-track {
+        background: rgba(15, 23, 42, 0.5);
+      }
+
       th,
       td {
         padding: 0.75rem 1rem;
@@ -94,6 +115,12 @@
 
       tbody tr:nth-child(even) {
         background: rgba(15, 23, 42, 0.6);
+      }
+
+      table.compact th,
+      table.compact td {
+        padding: 0.5rem 0.75rem;
+        font-size: 0.85rem;
       }
 
       .card {
@@ -172,6 +199,12 @@
       button.danger:hover,
       .button.danger:hover {
         box-shadow: 0 10px 25px rgba(248, 113, 113, 0.25);
+      }
+
+      button.small,
+      .button.small {
+        padding: 0.4rem 0.75rem;
+        font-size: 0.85rem;
       }
 
       .alerts,

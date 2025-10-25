@@ -7,6 +7,7 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from passlib.context import CryptContext
+from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from urllib.parse import quote, urljoin
 
@@ -24,6 +25,7 @@ class AuthManager:
         secret_key: str,
         users: Mapping[str, str],
         session_cookie_name: str = "risk_dashboard_session",
+        https_only: bool = True,
     ) -> None:
         if not secret_key:
             raise ValueError("Authentication requires a non-empty secret key.")
@@ -32,6 +34,7 @@ class AuthManager:
         self.secret_key = secret_key
         self.users = dict(users)
         self.session_cookie_name = session_cookie_name
+        self.https_only = https_only
         self._password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
     def authenticate(self, username: str, password: str) -> bool:
@@ -53,8 +56,10 @@ class RiskDashboardService:
     async def close(self) -> None:
         await self._fetcher.close()
 
-    async def trigger_kill_switch(self, account_name: str | None = None) -> Dict[str, Any]:
-        return await self._fetcher.execute_kill_switch(account_name)
+    async def trigger_kill_switch(
+        self, account_name: str | None = None, symbol: str | None = None
+    ) -> Dict[str, Any]:
+        return await self._fetcher.execute_kill_switch(account_name, symbol)
 
 
 def create_app(
@@ -73,6 +78,7 @@ def create_app(
             config.auth.secret_key,
             config.auth.users,
             session_cookie_name=config.auth.session_cookie_name,
+            https_only=config.auth.https_only,
         )
     assert auth_manager is not None  # for mypy/static tools
 
@@ -132,10 +138,15 @@ def create_app(
     templates.env.filters.setdefault("currency", currency_filter)
     templates.env.filters.setdefault("pct", pct_filter)
 
+    if auth_manager.https_only:
+        app.add_middleware(HTTPSRedirectMiddleware)
+
     app.add_middleware(
         SessionMiddleware,
         secret_key=auth_manager.secret_key,
         session_cookie=auth_manager.session_cookie_name,
+        https_only=auth_manager.https_only,
+        same_site="lax",
     )
 
     def get_service(request: Request) -> RiskDashboardService:
@@ -202,18 +213,51 @@ def create_app(
         view_model = build_presentable_snapshot(snapshot)
         return JSONResponse(view_model)
 
+    @app.post("/api/kill-switch", response_class=JSONResponse)
+    async def api_global_kill_switch(
+        service: RiskDashboardService = Depends(get_service),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        result = await service.trigger_kill_switch()
+        return JSONResponse(result)
+
     @app.post("/api/accounts/{account_name}/kill-switch", response_class=JSONResponse)
     async def api_kill_switch(
+        request: Request,
         account_name: str,
         service: RiskDashboardService = Depends(get_service),
         _: str = Depends(require_user),
     ) -> JSONResponse:
         target = account_name.strip()
+        symbol = request.query_params.get("symbol")
+        if symbol:
+            symbol = symbol.strip()
+            if symbol.lower() == "all":
+                symbol = None
         try:
             if not target or target.lower() == "all":
-                result = await service.trigger_kill_switch()
+                result = await service.trigger_kill_switch(symbol=symbol)
             else:
-                result = await service.trigger_kill_switch(target)
+                result = await service.trigger_kill_switch(target, symbol=symbol)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        return JSONResponse(result)
+
+    @app.post("/api/accounts/{account_name}/positions/{symbol}/kill-switch", response_class=JSONResponse)
+    async def api_position_kill_switch(
+        account_name: str,
+        symbol: str,
+        service: RiskDashboardService = Depends(get_service),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        target_symbol = symbol.strip()
+        if not target_symbol:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Symbol is required")
+        target_account = account_name.strip()
+        if not target_account or target_account.lower() == "all":
+            target_account = None
+        try:
+            result = await service.trigger_kill_switch(target_account, symbol=target_symbol)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         return JSONResponse(result)
