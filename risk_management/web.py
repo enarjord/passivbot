@@ -1,16 +1,15 @@
 """FastAPI powered web dashboard for live risk management."""
 
 from __future__ import annotations
-
 from pathlib import Path
 from typing import Any, Dict, Mapping
-
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from passlib.context import CryptContext
 from starlette.middleware.sessions import SessionMiddleware
 from urllib.parse import quote, urljoin
+from urllib.parse import quote
 
 from .configuration import RealtimeConfig
 from .realtime import RealtimeDataFetcher

@@ -11,6 +11,38 @@ from typing import Any, Iterable, Mapping, NamedTuple
 
 
 class StoredReport(NamedTuple):
+  
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable, Mapping
+
+
+class StoredReport:
+    """Metadata about a stored report."""
+
+    __slots__ = ("account", "report_id", "path", "created_at", "size")
+
+    def __init__(
+        self,
+        account: str,
+        report_id: str,
+        path: Path,
+        created_at: datetime,
+        size: int,
+    ) -> None:
+        self.account = account
+        self.report_id = report_id
+        self.path = path
+        self.created_at = created_at
+        self.size = size
+
+
+@dataclass()
+@dataclass(slots=True)
+
+class StoredReport:
+
     """Metadata about a stored report."""
 
     account: str
@@ -18,6 +50,9 @@ class StoredReport(NamedTuple):
     path: Path
     created_at: datetime
     size: int
+
+
+
 
     def to_view(self) -> dict[str, Any]:
         """Return a JSON serialisable representation."""

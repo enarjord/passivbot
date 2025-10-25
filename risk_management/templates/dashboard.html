@@ -207,7 +207,7 @@
           </div>
           <span class="badge {% if snapshot.alerts %}alert{% else %}ok{% endif %}" data-alert-summary>
             {% if snapshot.alerts %}
-              {{ snapshot.alerts|length }} active alert{{ 's' if snapshot.alerts|length != 1 }}
+              {{ snapshot.alerts|length }} active alert{{ 's' if snapshot.alerts|length != 1 else '' }}
             {% else %}
               All clear
             {% endif %}
@@ -268,8 +268,8 @@
               <div style="display: flex; flex-direction: column; gap: 0.5rem;">
                 <h2 style="margin: 0;">{{ account.name }}</h2>
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                  <span class="badge">{{ account.positions|length }} position{{ 's' if account.positions|length != 1 }}</span>
-                  <span class="badge">{{ account.orders|length }} order{{ 's' if account.orders|length != 1 }}</span>
+                  <span class="badge">{{ account.positions|length }} position{{ 's' if account.positions|length != 1 else '' }}</span>
+                  <span class="badge">{{ account.orders|length }} order{{ 's' if account.orders|length != 1 else '' }}</span>
                 </div>
               </div>
               <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;">
@@ -450,6 +450,7 @@
         {% endif %}
       </section>
     </div>
+
     {% if grafana_dashboards %}
       <div class="page-section" data-page-section="analytics" hidden>
         <section class="card">
@@ -458,6 +459,7 @@
               <h2 style="margin-bottom: 0.25rem;">Performance analytics</h2>
               <p style="color: var(--muted); margin: 0;">Live Grafana dashboards embedded from your monitoring stack.</p>
             </div>
+            <!-- Optional: add a last-refreshed badge target for JS if desired -->
           </div>
           <div class="grafana-grid" style="margin-top: 1.5rem;">
             {% for dashboard in grafana_dashboards %}
@@ -744,7 +746,7 @@
                 </div>
               </div>
               ${exposuresRows
-                ? `<div class="table-wrapper" style=\"overflow-x: auto; margin-bottom: 1.5rem;\">
+                ? `<div class="table-wrapper" style="overflow-x: auto; margin-bottom: 1.5rem;">
                     <table>
                       <thead>
                         <tr>
@@ -769,7 +771,7 @@
                 </div>
               </div>
               ${positions.length > 0
-                ? `<div class="table-wrapper" style=\"overflow-x: auto;\">
+                ? `<div class="table-wrapper" style="overflow-x: auto;">
                     <table>
                       <thead>
                         <tr>
@@ -789,10 +791,10 @@
                       <tbody>${positionsRows}</tbody>
                     </table>
                   </div>`
-                : `<p style=\"color: var(--muted);\">No open positions.</p>`}
+                : `<p style="color: var(--muted);">No open positions.</p>`}
               ${orders.length > 0
-                ? `<h3 style=\"margin-top: 1.5rem;\">Open orders</h3>
-                    <div class="table-wrapper" style=\"overflow-x: auto;\">
+                ? `<h3 style="margin-top: 1.5rem;">Open orders</h3>
+                    <div class="table-wrapper" style="overflow-x: auto;">
                       <table>
                         <thead>
                           <tr>
@@ -813,7 +815,7 @@
                         <tbody>${ordersRows}</tbody>
                       </table>
                     </div>`
-                : `<p style=\"color: var(--muted);\">No open orders.</p>`}
+                : `<p style="color: var(--muted);">No open orders.</p>`}
             </section>
           `;
         })
@@ -1024,7 +1026,7 @@
 
     const renderSnapshot = (snapshot) => {
       const generatedAtEl = document.querySelector("[data-generated-at]");
-      if (generatedAtEl) {
+      if (generatedAtEl && snapshot.generated_at) {
         generatedAtEl.textContent = new Date(snapshot.generated_at).toLocaleString();
       }
       renderPortfolio(snapshot);
@@ -1056,7 +1058,7 @@
         statusEl.style.display = "block";
         statusEl.classList.remove("success");
       }
-      button.disabled = true;
+      if (button) button.disabled = true;
       try {
         const response = await fetch(`/api/accounts/${encodeURIComponent(accountName)}/kill-switch`, {
           method: "POST",
@@ -1078,7 +1080,7 @@
           statusEl.classList.remove("success");
         }
       } finally {
-        button.disabled = false;
+        if (button) button.disabled = false;
       }
     }
 
