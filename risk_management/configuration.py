@@ -221,6 +221,7 @@ def _parse_accounts(
     debug_api_payloads_default: bool = False,
 ) -> List[AccountConfig]:
     accounts: List[AccountConfig] = []
+    debug_requested = False
     for raw in accounts_raw:
         if not raw.get("enabled", True):
             continue
@@ -262,6 +263,10 @@ def _parse_accounts(
             debug_api_payloads=debug_api_payloads,
         )
         accounts.append(account)
+        if debug_api_payloads:
+            debug_requested = True
+    if debug_requested:
+        _ensure_debug_logging_enabled()
     return accounts
 
 
