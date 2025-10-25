@@ -12,8 +12,27 @@ from typing import Any, Dict, Iterable, List, Mapping, Set
 logger = logging.getLogger(__name__)
 
 
+def _configure_default_logging() -> bool:
+    """Configure Passivbot-style logging if no handlers are present."""
+
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return False
+    try:  # Import lazily so the risk tools can run independently in tests
+        from logging_setup import configure_logging  # type: ignore
+    except ModuleNotFoundError:  # pragma: no cover - fallback when package unavailable
+        configure_logging = None  # type: ignore[assignment]
+    if configure_logging is not None:
+        configure_logging(debug=2)
+    else:
+        logging.basicConfig(level=logging.DEBUG)
+    return True
+
+
 def _ensure_debug_logging_enabled() -> None:
     """Raise logging verbosity when debug API payloads are requested."""
+
+    _configure_default_logging()
 
     root_logger = logging.getLogger()
     if root_logger.level in {
@@ -23,10 +42,16 @@ def _ensure_debug_logging_enabled() -> None:
         logging.CRITICAL,
     } or root_logger.level > logging.DEBUG:
         root_logger.setLevel(logging.DEBUG)
+    for handler in root_logger.handlers:
+        if handler.level in {logging.NOTSET} or handler.level > logging.DEBUG:
+            handler.setLevel(logging.DEBUG)
 
     risk_logger = logging.getLogger("risk_management")
     if risk_logger.level in {logging.NOTSET} or risk_logger.level > logging.DEBUG:
         risk_logger.setLevel(logging.DEBUG)
+    for handler in risk_logger.handlers:
+        if handler.level in {logging.NOTSET} or handler.level > logging.DEBUG:
+            handler.setLevel(logging.DEBUG)
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
