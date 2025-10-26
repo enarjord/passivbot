@@ -36,6 +36,7 @@ CURRENCY_METRICS = {
     "equity_choppiness_w",
     "equity_jerkiness",
     "equity_jerkiness_w",
+    "equity_peak_recovery_hours",
     "expected_shortfall_1pct",
     "exponential_fit_error",
     "exponential_fit_error_w",
@@ -68,7 +69,6 @@ SHARED_METRICS = {
     "position_held_hours_max",
     "position_held_hours_median",
     "position_unchanged_hours_max",
-    "flat_btc_balance_hours",
     "volume_pct_per_day_avg",
     "volume_pct_per_day_avg_w",
 }
