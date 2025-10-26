@@ -152,6 +152,22 @@ python3 -m jupyter lab
 - Python >= 3.8
 - [requirements.txt](requirements.txt) dependencies
 
+## Running tests
+
+Install the testing dependencies from the repository root so that `pytest` and its asyncio plugin are available:
+
+```sh
+python -m pip install -r requirements.txt
+```
+
+Then execute the suite with:
+
+```sh
+python -m pytest
+```
+
+Running the installation command from a subdirectory will not find `requirements.txt`, so make sure you are in the project root before invoking it.
+
 ## Pre-optimized configurations
 
 Coming soon...
