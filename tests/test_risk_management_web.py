@@ -1,5 +1,7 @@
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -7,16 +9,8 @@ pytest.importorskip("fastapi")
 pytest.importorskip("passlib")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import pytest
-
-pytest.importorskip("fastapi")
-pytest.importorskip("passlib")
-
-from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
-from passlib.context import CryptContext
-
 from risk_management.configuration import AccountConfig, RealtimeConfig
 from risk_management.web import AuthManager, RiskDashboardService, create_app
 
@@ -25,7 +19,7 @@ class StubFetcher:
     def __init__(self, snapshot: dict) -> None:
         self.snapshot = snapshot
         self.closed = False
-        self.kill_requests: list[str | None] = []
+        self.kill_requests: list[Optional[str]] = []
 
     async def fetch_snapshot(self) -> dict:
         return self.snapshot
@@ -33,7 +27,7 @@ class StubFetcher:
     async def close(self) -> None:
         self.closed = True
 
-    async def execute_kill_switch(self, account_name: str | None = None) -> dict:
+    async def execute_kill_switch(self, account_name: Optional[str] = None) -> dict:
         self.kill_requests.append(account_name)
         return {"status": "ok"}
 
@@ -74,8 +68,8 @@ def sample_snapshot() -> dict:
 
 @pytest.fixture
 def auth_manager() -> AuthManager:
-    context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    password_hash = context.hash("admin123")
+    # Pre-generated bcrypt hash for the password "admin123".
+    password_hash = "$2b$12$KIX0dYvEhvdZ4InENa9e6uU30IoqRxG7Pecg/6tiTZeVOw13K9IRG"
     return AuthManager(secret_key="super-secret", users={"admin": password_hash})
 
 
