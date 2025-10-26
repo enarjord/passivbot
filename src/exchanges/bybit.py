@@ -344,7 +344,7 @@ class BybitBot(Passivbot):
     async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
         """Return canonical fill events for equity reconstruction (draft implementation)."""
 
-        def extract_fill_event_from_ph_bybit(elm):
+        def extract_fill_event_from_ph(elm):
             event = {
                 "id": elm["info"]["orderId"],
                 "timestamp": int(float(elm.get("lastUpdateTimestamp", elm.get("timestamp", 0.0)))),
@@ -364,7 +364,7 @@ class BybitBot(Passivbot):
                 raise Exception(f"malformed side {event['side']}")
             return event
 
-        def extract_fill_event_from_mt_bybit(elm):
+        def extract_fill_event_from_mt(elm):
             event = {
                 "id": elm["info"]["orderId"],
                 "timestamp": elm["timestamp"],
@@ -389,47 +389,44 @@ class BybitBot(Passivbot):
                 raise Exception(f"malformed side {event['side']}")
             return event
 
+        def is_equal(x0, x1):
+            for key in ["id", "symbol", "qty", "side", "position_side", "price"]:
+                if x0[key] != x1[key]:
+                    return False
+            return True
+
+        def merge_events(x0, x1):
+            merged_list = []
+            if is_equal(x0, x1):
+                event = {}
+                for key in x0:
+                    event[key] = x0.get(key, x1.get(key))
+                return [event]
+            else:
+                return [x0, x1]
+
+        def get_dedup_key(event):
+            return tuple(
+                [event[k] for k in ["id", "symbol", "qty", "side", "position_side", "price"]]
+            )
+
         events: List[dict] = []
+        # fetch my_trades first
         try:
-            fills = await self.fetch_fills(start_time=start_time, end_time=end_time, limit=limit)
-        except Exception as exc:
-            logging.error(f"error gathering fill events (bybit/fetch_fills) {exc}")
-            return events
-
-        if not fills:
-            return events
-
-        events_by_order: DefaultDict[str, List[dict]] = defaultdict(list)
-        for fill in fills:
-            event = extract_fill_event_from_mt_bybit(fill)
-            events.append(event)
-            events_by_order[event["id"]].append(event)
-
-        ph_since = start_time or max(0, fills[0]["timestamp"] - 1000 * 60)
-        ph_until = end_time or (fills[-1]["timestamp"] + 1000 * 60)
-        try:
-            pos_history = await self.cca.fetch_positions_history(
-                since=int(ph_since),
-                limit=limit,
-                params={"until": int(ph_until), "subType": "linear"},
+            my_trades, positions_history = await asyncio.gather(
+                self.cca.fetch_my_trades(), self.cca.fetch_positions_history()
             )
         except Exception as exc:
-            logging.error(f"error gathering fill events (bybit/fetch_positions_history) {exc}")
-            pos_history = []
-
-        for entry in pos_history or []:
-            event = extract_fill_event_from_ph_bybit(entry)
-            order_id = event["id"]
-            if order_id in events_by_order:
-                candidates = events_by_order[order_id]
-                target = next((evt for evt in reversed(candidates) if evt.get("pnl") is None), None)
-                if target:
-                    target["pnl"] = event["pnl"]
-                    continue
-            events.append(event)
-
-        events.sort(key=lambda x: x["timestamp"])
-        return events
+            logging.error(f"error fetching my_trades, positions_history {exc}")
+            my_trades, positions_history = [], []
+        events = [extract_fill_event_from_ph(x) for x in positions_history]
+        eventsd = {get_dedup_key(event): event for event in events}
+        for mt in my_trades:
+            event = extract_fill_event_from_mt(mt)
+            dedup_key = get_dedup_key(event)
+            if dedup_key not in eventsd:
+                eventsd[dedup_key] = event
+        return sorted(eventsd.values(), key=lambda x: x["timestamp"])
 
     def determine_pos_side(self, x):
         if x["side"] == "buy":
