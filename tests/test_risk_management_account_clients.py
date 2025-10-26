@@ -157,3 +157,5 @@ def test_kill_switch_drops_reduce_only_from_configured_close_params():
     assert order["params"].get("foo") == "bar"
     assert "reduceOnly" not in order["params"]
     assert "reduceonly" not in order["params"]
+    assert order["params"]["reduceOnly"] is True
+
