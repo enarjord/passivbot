@@ -54,6 +54,7 @@ class StubFetcher:
         self.kill_requests: List[Tuple[Optional[str], Optional[str]]] = []
         self._kill_switch_responses: List[dict] = list(kill_switch_responses or [])
 
+
     async def fetch_snapshot(self) -> dict:
         return self.snapshot
 
@@ -66,8 +67,10 @@ class StubFetcher:
         symbol: Optional[str] = None,
     ) -> dict:
         self.kill_requests.append((account_name, symbol))
+
         if self._kill_switch_responses:
             return self._kill_switch_responses.pop(0)
+
         return {"status": "ok"}
 
 
@@ -134,6 +137,9 @@ def create_test_app(
     kill_switch_responses: Optional[List[dict]] = None,
 ) -> tuple[TestClient, StubFetcher]:
     fetcher = StubFetcher(snapshot, kill_switch_responses=kill_switch_responses)
+
+def create_test_app(snapshot: dict, auth_manager: AuthManager) -> tuple[TestClient, StubFetcher]:
+    fetcher = StubFetcher(snapshot)
     service = RiskDashboardService(fetcher)  # type: ignore[arg-type]
     config = RealtimeConfig(accounts=[AccountConfig(name="Demo", exchange="binance", credentials={})])
     app = create_app(config, service=service, auth_manager=auth_manager)
@@ -284,6 +290,23 @@ def test_kill_switch_endpoint_reports_failures(
             for error in payload["errors"]
         )
         assert fetcher.kill_requests[-1] == ("Demo Account", None)
+
+
+def test_position_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) -> None:
+    client, fetcher = create_test_app(sample_snapshot, auth_manager)
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        response = client.post(
+            "/api/accounts/Demo%20Account/positions/BTC%2FUSDT%3AUSDT/kill-switch"
+        )
+        assert response.status_code == 200
+        assert fetcher.kill_requests[-1] == ("Demo Account", "BTC/USDT:USDT")
 
 
 def test_letsencrypt_challenge_mount(tmp_path: Path, auth_manager: AuthManager) -> None:
