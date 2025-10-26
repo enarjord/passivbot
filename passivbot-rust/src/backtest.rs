@@ -204,6 +204,12 @@ pub struct Backtest<'a> {
     n_coins: usize,
     ema_alphas: Vec<EmaAlphas>,
     emas: Vec<EMAs>,
+    needs_volume_ema_long: bool,
+    needs_volume_ema_short: bool,
+    needs_log_range_long: bool,
+    needs_log_range_short: bool,
+    needs_grid_log_range_long: bool,
+    needs_grid_log_range_short: bool,
     coin_first_valid_idx: Vec<usize>,
     coin_last_valid_idx: Vec<usize>,
     coin_trade_start_idx: Vec<usize>,
@@ -433,6 +439,30 @@ impl<'a> Backtest<'a> {
             n_coins,
             ema_alphas,
             emas: initial_emas,
+            needs_volume_ema_long: bot_params
+                .iter()
+                .any(|bp| bp.long.filter_volume_drop_pct != 0.0),
+            needs_volume_ema_short: bot_params
+                .iter()
+                .any(|bp| bp.short.filter_volume_drop_pct != 0.0),
+            needs_log_range_long: bot_params.iter().any(|bp| {
+                bp.long.entry_grid_spacing_log_weight != 0.0
+                    || bp.long.entry_trailing_threshold_log_weight != 0.0
+                    || bp.long.entry_trailing_retracement_log_weight != 0.0
+                    || bp.long.entry_trailing_grid_ratio != 0.0
+            }),
+            needs_log_range_short: bot_params.iter().any(|bp| {
+                bp.short.entry_grid_spacing_log_weight != 0.0
+                    || bp.short.entry_trailing_threshold_log_weight != 0.0
+                    || bp.short.entry_trailing_retracement_log_weight != 0.0
+                    || bp.short.entry_trailing_grid_ratio != 0.0
+            }),
+            needs_grid_log_range_long: bot_params
+                .iter()
+                .any(|bp| bp.long.entry_log_range_ema_span_hours > 0.0),
+            needs_grid_log_range_short: bot_params
+                .iter()
+                .any(|bp| bp.short.entry_log_range_ema_span_hours > 0.0),
             coin_first_valid_idx: first_valid_idx,
             coin_last_valid_idx: last_valid_idx,
             coin_trade_start_idx: trade_start_idx,
@@ -544,7 +574,9 @@ impl<'a> Backtest<'a> {
                 self.update_equities(k);
             }
         }
-        (self.fills.clone(), self.equities.clone())
+        let fills = std::mem::take(&mut self.fills);
+        let equities = std::mem::take(&mut self.equities);
+        (fills, equities)
     }
 
     fn update_n_positions_and_wallet_exposure_limits(&mut self, k: usize) {
@@ -667,26 +699,38 @@ impl<'a> Backtest<'a> {
     fn filter_by_relative_volume(&mut self, pside: usize) -> Vec<usize> {
         // Use EMA volume (alpha precomputed in `calc_ema_alphas`) to rank coins by
         // recent activity and return the top n eligible symbols.
-        let mut volume_indices: Vec<(f64, usize)> = Vec::with_capacity(self.n_coins);
-        for idx in 0..self.n_coins {
-            let vol = match pside {
-                LONG => self.emas[idx].vol_long,
-                SHORT => self.emas[idx].vol_short,
-                _ => panic!("Invalid pside"),
-            };
-            volume_indices.push((vol, idx));
-        }
-        volume_indices.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+        let mut volume_indices: Vec<(f64, usize)> = (0..self.n_coins)
+            .map(|idx| {
+                let vol = match pside {
+                    LONG => self.emas[idx].vol_long,
+                    SHORT => self.emas[idx].vol_short,
+                    _ => panic!("Invalid pside"),
+                };
+                (vol, idx)
+            })
+            .collect();
         let n_eligible = match pside {
             LONG => self.n_eligible_long,
             SHORT => self.n_eligible_short,
             _ => panic!("Invalid pside"),
         };
-        volume_indices
-            .into_iter()
-            .take(n_eligible.min(self.n_coins))
-            .map(|(_, idx)| idx)
-            .collect()
+        let take = n_eligible.min(self.n_coins);
+        if take == 0 {
+            return Vec::new();
+        }
+        if take < volume_indices.len() {
+            let nth_index = take - 1;
+            volume_indices.select_nth_unstable_by(nth_index, |a, b| {
+                b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal)
+            });
+            let top_slice = &mut volume_indices[..take];
+            top_slice.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+            top_slice.iter().map(|(_, idx)| *idx).collect()
+        } else {
+            volume_indices
+                .sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+            volume_indices.into_iter().map(|(_, idx)| idx).collect()
+        }
     }
 
     fn rank_by_log_range(&self, candidates: &[usize], pside: usize) -> Vec<usize> {
@@ -1700,7 +1744,8 @@ impl<'a> Backtest<'a> {
     }
 
     fn update_open_orders_all(&mut self, k: usize) {
-        self.open_orders = OpenOrders::default();
+        self.open_orders.long.clear();
+        self.open_orders.short.clear();
         if self.trading_enabled.long {
             let mut active_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
             if self.positions.long.len() != self.effective_n_positions.long {
@@ -2118,37 +2163,39 @@ impl<'a> Backtest<'a> {
             self.last_hour_boundary_ms = hour_boundary;
 
             // Update hourly log-range EMAs for grid spacing adjustments
-            for i in 0..self.n_coins {
-                if self.coin_valid_range(i).is_none() {
-                    continue;
-                }
-                let bucket = &self.latest_hour[i];
-                if bucket.high <= 0.0
-                    || bucket.low <= 0.0
-                    || !bucket.high.is_finite()
-                    || !bucket.low.is_finite()
-                {
-                    continue;
-                }
-                let hour_log_range = (bucket.high / bucket.low).ln();
-                let grid_alpha_long = self.ema_alphas[i].grid_log_range_alpha_long;
-                let grid_alpha_short = self.ema_alphas[i].grid_log_range_alpha_short;
-                let emas = &mut self.emas[i];
-                if grid_alpha_long > 0.0 {
-                    emas.grid_log_range_long = update_adjusted_ema(
-                        hour_log_range,
-                        grid_alpha_long,
-                        &mut emas.grid_log_range_long_num,
-                        &mut emas.grid_log_range_long_den,
-                    );
-                }
-                if grid_alpha_short > 0.0 {
-                    emas.grid_log_range_short = update_adjusted_ema(
-                        hour_log_range,
-                        grid_alpha_short,
-                        &mut emas.grid_log_range_short_num,
-                        &mut emas.grid_log_range_short_den,
-                    );
+            if self.needs_grid_log_range_long || self.needs_grid_log_range_short {
+                for i in 0..self.n_coins {
+                    if self.coin_valid_range(i).is_none() {
+                        continue;
+                    }
+                    let bucket = &self.latest_hour[i];
+                    if bucket.high <= 0.0
+                        || bucket.low <= 0.0
+                        || !bucket.high.is_finite()
+                        || !bucket.low.is_finite()
+                    {
+                        continue;
+                    }
+                    let hour_log_range = (bucket.high / bucket.low).ln();
+                    let grid_alpha_long = self.ema_alphas[i].grid_log_range_alpha_long;
+                    let grid_alpha_short = self.ema_alphas[i].grid_log_range_alpha_short;
+                    let emas = &mut self.emas[i];
+                    if self.needs_grid_log_range_long && grid_alpha_long > 0.0 {
+                        emas.grid_log_range_long = update_adjusted_ema(
+                            hour_log_range,
+                            grid_alpha_long,
+                            &mut emas.grid_log_range_long_num,
+                            &mut emas.grid_log_range_long_den,
+                        );
+                    }
+                    if self.needs_grid_log_range_short && grid_alpha_short > 0.0 {
+                        emas.grid_log_range_short = update_adjusted_ema(
+                            hour_log_range,
+                            grid_alpha_short,
+                            &mut emas.grid_log_range_short_num,
+                            &mut emas.grid_log_range_short_den,
+                        );
+                    }
                 }
             }
         }
@@ -2194,39 +2241,51 @@ impl<'a> Backtest<'a> {
             }
 
             // volume EMAs (single value per pside)
-            let vol_alpha_long = self.ema_alphas[i].vol_alpha_long;
-            let vol_alpha_short = self.ema_alphas[i].vol_alpha_short;
-            emas.vol_long = update_adjusted_ema(
-                vol,
-                vol_alpha_long,
-                &mut emas.vol_long_num,
-                &mut emas.vol_long_den,
-            );
-            emas.vol_short = update_adjusted_ema(
-                vol,
-                vol_alpha_short,
-                &mut emas.vol_short_num,
-                &mut emas.vol_short_den,
-            );
+            if self.needs_volume_ema_long || self.needs_volume_ema_short {
+                if self.needs_volume_ema_long {
+                    let vol_alpha_long = self.ema_alphas[i].vol_alpha_long;
+                    emas.vol_long = update_adjusted_ema(
+                        vol,
+                        vol_alpha_long,
+                        &mut emas.vol_long_num,
+                        &mut emas.vol_long_den,
+                    );
+                }
+                if self.needs_volume_ema_short {
+                    let vol_alpha_short = self.ema_alphas[i].vol_alpha_short;
+                    emas.vol_short = update_adjusted_ema(
+                        vol,
+                        vol_alpha_short,
+                        &mut emas.vol_short_num,
+                        &mut emas.vol_short_den,
+                    );
+                }
+            }
 
             // log range metric: ln(high / low)
-            let log_range = if high > 0.0 && low > 0.0 {
-                (high / low).ln()
-            } else {
-                0.0
-            };
-            emas.log_range_long = update_adjusted_ema(
-                log_range,
-                self.ema_alphas[i].log_range_alpha_long,
-                &mut emas.log_range_long_num,
-                &mut emas.log_range_long_den,
-            );
-            emas.log_range_short = update_adjusted_ema(
-                log_range,
-                self.ema_alphas[i].log_range_alpha_short,
-                &mut emas.log_range_short_num,
-                &mut emas.log_range_short_den,
-            );
+            if self.needs_log_range_long || self.needs_log_range_short {
+                let log_range = if high > 0.0 && low > 0.0 {
+                    (high / low).ln()
+                } else {
+                    0.0
+                };
+                if self.needs_log_range_long {
+                    emas.log_range_long = update_adjusted_ema(
+                        log_range,
+                        self.ema_alphas[i].log_range_alpha_long,
+                        &mut emas.log_range_long_num,
+                        &mut emas.log_range_long_den,
+                    );
+                }
+                if self.needs_log_range_short {
+                    emas.log_range_short = update_adjusted_ema(
+                        log_range,
+                        self.ema_alphas[i].log_range_alpha_short,
+                        &mut emas.log_range_short_num,
+                        &mut emas.log_range_short_den,
+                    );
+                }
+            }
         }
     }
 }

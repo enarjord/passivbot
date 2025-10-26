@@ -39,6 +39,7 @@ pub struct BacktestParams {
     pub global_warmup_bars: usize,
     pub btc_collateral_cap: f64,
     pub btc_collateral_ltv_cap: Option<f64>,
+    pub metrics_only: bool,
 }
 
 #[derive(Default, Debug, Clone, Copy)]

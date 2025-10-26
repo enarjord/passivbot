@@ -21,6 +21,7 @@ use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray3};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+use pyo3::PyObject;
 use serde::Serialize;
 use std::str::FromStr;
 
@@ -346,12 +347,7 @@ pub fn run_backtest(
     bot_params: &PyAny,           // Bot parameters per coin
     exchange_params_list: &PyAny, // Exchange parameters
     backtest_params_dict: &PyDict, // Backtest parameters
-) -> PyResult<(
-    Py<PyArray2<PyObject>>,
-    Py<PyArray2<f64>>,
-    Py<PyDict>,
-    Py<PyDict>,
-)> {
+) -> PyResult<(PyObject, PyObject, Py<PyDict>, Py<PyDict>)> {
     let hlcvs_rust = hlcvs.as_array();
     let btc_usd_rust = btc_usd.as_array();
 
@@ -405,6 +401,7 @@ pub fn run_backtest(
     };
 
     let backtest_params = backtest_params_from_dict(backtest_params_dict)?;
+    let metrics_only = backtest_params.metrics_only;
     let mut backtest = Backtest::new(
         &hlcvs_rust,
         &btc_usd_rust,
@@ -421,6 +418,14 @@ pub fn run_backtest(
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
         let py_analysis_btc = struct_to_py_dict(py, &analysis_btc)?;
+        if metrics_only {
+            return Ok((
+                py.None().into_py(py),
+                py.None().into_py(py),
+                py_analysis_usd.into(),
+                py_analysis_btc.into(),
+            ));
+        }
         let mut py_fills = Array2::from_elem((fills.len(), 14), py.None());
         for (i, fill) in fills.iter().enumerate() {
             py_fills[(i, 0)] = fill.index.into_py(py);
@@ -448,9 +453,10 @@ pub fn run_backtest(
             })
             .into_pyarray_bound(py)
             .unbind();
+        let fills_array = py_fills.into_pyarray_bound(py).unbind();
         Ok((
-            py_fills.into_pyarray_bound(py).unbind(),
-            equities_array,
+            fills_array.into_py(py),
+            equities_array.into_py(py),
             py_analysis_usd.into(),
             py_analysis_btc.into(),
         ))
@@ -511,6 +517,11 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             Some(item) if !item.is_none() => Some(item.extract::<f64>()?),
             _ => None,
         },
+        metrics_only: dict
+            .get_item("metrics_only")?
+            .map(|item| item.extract::<bool>())
+            .transpose()?
+            .unwrap_or(false),
     })
 }
 
