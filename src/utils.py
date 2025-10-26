@@ -9,8 +9,8 @@ import hjson
 import inspect
 import time
 from collections import defaultdict
-from typing import Dict, Any, List, Union, Optional
-import re
+from pathlib import Path
+from typing import Dict, Any, Iterable, List, Mapping, Union, Optional
 import logging
 from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
@@ -27,6 +27,8 @@ logging.basicConfig(
 # In-memory caches for symbol/coin maps with on-disk change detection
 _COIN_TO_SYMBOL_CACHE = {}  # {exchange: {"map": dict, "mtime_ns": int, "size": int}}
 _SYMBOL_TO_COIN_CACHE = {"map": None, "mtime_ns": None, "size": None}
+
+_COIN_SIDES = ("long", "short")
 
 
 def _require_live_value(config: Dict[str, Any], key: str):
@@ -582,125 +584,144 @@ async def format_approved_ignored_coins(config, exchanges: [str]):
     }
 
 
+def _is_long_short_mapping(value: Any) -> bool:
+    """Return ``True`` if *value* looks like a ``{"long": ..., "short": ...}`` mapping."""
+
+    if not isinstance(value, Mapping):
+        return False
+    return set(value.keys()) == set(_COIN_SIDES)
+
+
+def _expand_coin_entries(seq: Iterable[Any]) -> List[str]:
+    """Flatten *seq* into a normalised list of stripped coin strings."""
+
+    expanded: List[str] = []
+    for item in seq:
+        if isinstance(item, (list, tuple, set)):
+            expanded.extend(_expand_coin_entries(item))
+        elif isinstance(item, str):
+            expanded.extend(token.strip() for token in item.split(",") if token.strip())
+        elif item is not None:
+            token = str(item).strip()
+            if token:
+                expanded.append(token)
+    return expanded
+
+
+def _resolve_coin_file(value: Any) -> Optional[Path]:
+    """Return ``Path`` for *value* if it references an existing file."""
+
+    candidate: Optional[Path] = None
+    if isinstance(value, (str, os.PathLike)):
+        candidate = Path(value)
+    elif (
+        isinstance(value, (list, tuple))
+        and len(value) == 1
+        and isinstance(value[0], (str, os.PathLike))
+    ):
+        candidate = Path(value[0])
+
+    if candidate and candidate.exists():
+        return candidate
+    return None
+
+
+def _maybe_load_coin_source(value: Any) -> Any:
+    """Load *value* from disk when it references a coin list file."""
+
+    path = _resolve_coin_file(value)
+    if path is None:
+        return value
+    try:
+        return read_external_coins_lists(path)
+    except Exception:
+        return value
+
+
+def _normalize_coin_side(value: Any, side: str) -> List[str]:
+    """Normalise a single *side* entry into a list of coin symbols."""
+
+    loaded = _maybe_load_coin_source(value)
+    if _is_long_short_mapping(loaded):
+        loaded = loaded.get(side, [])
+    if not isinstance(loaded, (list, tuple, set)):
+        loaded = [loaded]
+    return _expand_coin_entries(loaded)
+
+
 def normalize_coins_source(src):
     """
-    Always return: {'long': [symbols…], 'short': [symbols…]}
-    – Handles:
-        • direct coin lists or comma-separated strings
-        • lists/tuples containing paths or strings
-        • dicts with 'long' / 'short' keys whose values may themselves
-          be strings, lists, or paths to external lists
+    Always return a mapping ``{"long": [...], "short": [...]}`` for *src*.
+
+    The helper accepts comma-separated strings, nested iterables, dictionaries
+    that already contain ``long``/``short`` keys, or file paths pointing to
+    external coin lists.
     """
 
-    # --------------------------------------------------------------------- #
-    #  Helpers                                                              #
-    # --------------------------------------------------------------------- #
-    def _expand(seq):
-        """Flatten seq and split any comma-delimited strings it contains."""
-        out = []
-        for item in seq:
-            if isinstance(item, (list, tuple, set)):
-                out.extend(_expand(item))  # recurse
-            elif isinstance(item, str):
-                out.extend(x.strip() for x in item.split(",") if x.strip())
-            elif item is not None:
-                out.append(str(item).strip())
-        return out
+    src = _maybe_load_coin_source(src)
+    if _is_long_short_mapping(src):
+        return {side: _normalize_coin_side(src.get(side, []), side) for side in _COIN_SIDES}
+    return {side: _normalize_coin_side(src, side) for side in _COIN_SIDES}
 
-    def _load_if_file(x):
-        """
-        If *x* (or *x[0]* when x is a single-item list/tuple) is a
-        readable file path, load it with `read_external_coins_lists`.
-        Otherwise just return *x* unchanged.
-        """
-        if isinstance(x, str) and os.path.exists(x):
-            return read_external_coins_lists(x)
 
-        if (
-            isinstance(x, (list, tuple))
-            and len(x) == 1
-            and isinstance(x[0], str)
-            and os.path.exists(x[0])
-        ):
-            return read_external_coins_lists(x[0])
+def _ensure_coin_strings(values: Iterable[str]) -> List[str]:
+    """Return a list of stripped coin strings from *values*."""
 
-        return x
+    result: List[str] = []
+    for value in values:
+        token = value.strip() if isinstance(value, str) else str(value).strip()
+        if token:
+            result.append(token)
+    return result
 
-    def _normalize_side(value, side):
-        """
-        Resolve one *long*/*short* entry:
-        1. Load from file if necessary.
-        2. If the loader returned a dict, pluck the correct side.
-        3. Flatten & split with _expand so we end up with a clean list.
-        """
-        value = _load_if_file(value)
 
-        if isinstance(value, dict) and sorted(value.keys()) == ["long", "short"]:
-            value = value.get(side, [])
+def _tokenize_coin_file_content(content: str) -> List[str]:
+    """Parse flexible text formats from user supplied coin lists."""
 
-        # guarantee a sensible sequence for _expand
-        if not isinstance(value, (list, tuple)):
-            value = [value]
+    stripped = content.strip()
+    if not stripped:
+        return []
 
-        return _expand(value)
+    if stripped.startswith("[") and stripped.endswith("]"):
+        tokens = [item.strip().strip("\"'") for item in stripped[1:-1].split(",")]
+        return [token for token in tokens if token]
 
-    # --------------------------------------------------------------------- #
-    #  Main logic                                                           #
-    # --------------------------------------------------------------------- #
-    src = _load_if_file(src)  # try to load *src* itself
+    lines = [line.strip() for line in stripped.splitlines() if line.strip()]
+    if lines and all(line[0] in {'"', "'"} and line[-1] == line[0] for line in lines):
+        return [line.strip("\"'") for line in lines]
 
-    # Case 1 – already a dict with 'long' & 'short' keys
-    if isinstance(src, dict) and sorted(src.keys()) == ["long", "short"]:
-        return {
-            "long": _normalize_side(src.get("long", []), "long"),
-            "short": _normalize_side(src.get("short", []), "short"),
-        }
-
-    # Case 2 – anything else is treated the same for both sides
-    return {
-        "long": _normalize_side(src, "long"),
-        "short": _normalize_side(src, "short"),
-    }
+    tokens = []
+    for chunk in stripped.replace(",", " ").split():
+        token = chunk.strip().strip("\"'")
+        if token:
+            tokens.append(token)
+    return tokens
 
 
 def read_external_coins_lists(filepath) -> dict:
-    """
-    reads filepath and returns dict {'long': [str], 'short': [str]}
-    """
+    """Return ``{"long": [...], "short": [...]}`` parsed from *filepath*."""
+
+    path = Path(filepath)
     try:
-        with open(filepath, "r") as f:
-            content = hjson.load(f)
-        if isinstance(content, list) and all(isinstance(x, str) for x in content):
-            return {"long": content, "short": content}
-        if isinstance(content, dict) and all(
-            pside in content
-            and isinstance(content[pside], list)
-            and all(isinstance(x, str) for x in content[pside])
-            for pside in ["long", "short"]
-        ):
-            return content
+        with path.open("r") as handle:
+            content = hjson.load(handle)
     except Exception:
-        # fallback to plain-text reading below
-        pass
-    with open(filepath, "r") as file:
-        content = file.read().strip()
-    # Check if the content is in list format
-    if content.startswith("[") and content.endswith("]"):
-        # Remove brackets and split by comma
-        items = content[1:-1].split(",")
-        # Remove quotes and whitespace
-        items = [item.strip().strip("\"'") for item in items if item.strip()]
-    elif all(
-        line.strip().startswith('"') and line.strip().endswith('"')
-        for line in content.split("\n")
-        if line.strip()
-    ):
-        # Split by newline, remove quotes and whitespace
-        items = [line.strip().strip("\"'") for line in content.split("\n") if line.strip()]
+        content = None
     else:
-        # Split by newline, comma, and/or space, and filter out empty strings
-        items = [item.strip() for item in content.replace(",", " ").split() if item.strip()]
-    return {"long": items, "short": items}
+        if isinstance(content, list) and all(isinstance(item, str) for item in content):
+            coins = _ensure_coin_strings(content)
+            return {side: coins for side in _COIN_SIDES}
+        if _is_long_short_mapping(content) and all(
+            isinstance(content[side], list)
+            and all(isinstance(item, str) for item in content[side])
+            for side in _COIN_SIDES
+        ):
+            return {side: _ensure_coin_strings(content[side]) for side in _COIN_SIDES}
+
+    with path.open("r") as handle:
+        raw = handle.read()
+    coins = _tokenize_coin_file_content(raw)
+    return {side: coins for side in _COIN_SIDES}
 
 
 async def get_first_ohlcv_iteratively(cc, symbol):
