@@ -1300,7 +1300,13 @@
         if (!response.ok) {
           throw new Error(`Kill switch failed (${response.status})`);
         }
-        await response.json();
+        const payload = await response.json();
+        if (payload && payload.success === false) {
+          const details = Array.isArray(payload.errors) && payload.errors.length
+            ? payload.errors.join("; ")
+            : "Kill switch encountered errors.";
+          throw new Error(details);
+        }
         if (statusEl) {
           statusEl.textContent = "Kill switch executed.";
           statusEl.classList.add("success");
