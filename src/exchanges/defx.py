@@ -195,6 +195,31 @@ class DefxBot(Passivbot):
                 raise Exception(f"invalid side {res[i]}")
         return res
 
+    async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
+        """Return canonical fill events for dYdX/DeFX adapter (draft placeholder)."""
+        events = []
+        try:
+            fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
+        except Exception as exc:
+            logging.error(f"error gathering fill events (defx) {exc}")
+            return events
+        for fill in fills:
+            events.append(
+                {
+                    "id": fill.get("id"),
+                    "timestamp": fill.get("timestamp"),
+                    "symbol": fill.get("symbol"),
+                    "side": fill.get("side"),
+                    "position_side": fill.get("position_side"),
+                    "qty": fill.get("qty"),
+                    "price": fill.get("price"),
+                    "pnl": fill.get("pnl"),
+                    "fee": fill.get("fee"),
+                    "info": fill.get("info"),
+                }
+            )
+        return events
+
     def get_order_execution_params(self, order: dict) -> dict:
         # defined for each exchange
         return {

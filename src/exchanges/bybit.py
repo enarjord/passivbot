@@ -341,6 +341,31 @@ class BybitBot(Passivbot):
         joined = {x["info"]["execId"]: x for x in flatten(fillsd.values())}
         return sorted(joined.values(), key=lambda x: x["timestamp"])
 
+    async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
+        """Return canonical fill events for equity reconstruction (draft implementation)."""
+        events = []
+        try:
+            fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
+        except Exception as exc:
+            logging.error(f"error gathering fill events (bybit) {exc}")
+            return events
+        for fill in fills:
+            events.append(
+                {
+                    "id": fill.get("id") or fill.get("orderId"),
+                    "timestamp": fill.get("timestamp"),
+                    "symbol": fill.get("symbol"),
+                    "side": fill.get("side"),
+                    "position_side": fill.get("position_side"),
+                    "qty": fill.get("qty") or fill.get("amount"),
+                    "price": fill.get("price"),
+                    "pnl": fill.get("pnl"),
+                    "fee": fill.get("fee"),
+                    "info": fill.get("info"),
+                }
+            )
+        return events
+
     def determine_pos_side(self, x):
         if x["side"] == "buy":
             return "short" if float(x["info"]["closedSize"]) != 0.0 else "long"
