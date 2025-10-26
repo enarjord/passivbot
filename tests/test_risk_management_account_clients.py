@@ -23,6 +23,7 @@ class StubExchange:
         last: Optional[float] = None,
         position_info: Optional[dict] = None,
         position_overrides: Optional[dict] = None,
+
     ) -> None:
         self._bid = bid
         self._ask = ask
@@ -208,3 +209,4 @@ def test_kill_switch_uses_position_idx_from_position_payload():
     assert order["params"]["positionIdx"] == 1
     assert "reduceOnly" not in order["params"]
     assert "reduceonly" not in order["params"]
+    assert order["params"]["reduceOnly"] is True
