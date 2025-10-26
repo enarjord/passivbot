@@ -59,68 +59,11 @@ import traceback
 from logging_setup import configure_logging
 
 
-plt.rcParams["figure.figsize"] = [29, 18]
+plt.rcParams["figure.figsize"] = [21, 13]
 
 
 def oj(*x):
     return os.path.join(*x)
-
-
-def _equity_peak_recovery_hours(equities_array, column_index: int) -> float:
-    """
-    Longest duration (in hours) spent below the prior equity peak until that peak was
-    reclaimed. Measures max drawdown duration using equity samples in either USD or BTC.
-    """
-    if equities_array is None:
-        return 0.0
-    try:
-        arr = np.asarray(equities_array, dtype=np.float64)
-    except (TypeError, ValueError):
-        return 0.0
-    if arr.ndim != 2 or arr.shape[0] == 0 or column_index >= arr.shape[1]:
-        return 0.0
-    timestamps = arr[:, 0]
-    values = arr[:, column_index]
-    mask = np.isfinite(timestamps) & np.isfinite(values)
-    if not np.any(mask):
-        return 0.0
-    timestamps = timestamps[mask]
-    values = values[mask]
-    order = np.argsort(timestamps, kind="mergesort")
-    timestamps = timestamps[order]
-    values = values[order]
-    peak_value = values[0]
-    peak_time = timestamps[0]
-    longest_ms = 0.0
-    drawdown_active = False
-
-    def tol(val: float) -> float:
-        return max(1e-9, abs(val) * 1e-9)
-
-    for ts, value in zip(timestamps, values):
-        current_tol = tol(peak_value)
-        if value > peak_value + current_tol:
-            peak_value = value
-            peak_time = ts
-            drawdown_active = False
-            continue
-        if value >= peak_value - current_tol:
-            if drawdown_active:
-                duration = ts - peak_time
-                if duration > longest_ms:
-                    longest_ms = duration
-                drawdown_active = False
-            peak_time = ts
-            peak_value = max(peak_value, value)
-            continue
-        if not drawdown_active:
-            drawdown_active = True
-
-    if drawdown_active:
-        tail_duration = timestamps[-1] - peak_time
-        if tail_duration > longest_ms:
-            longest_ms = tail_duration
-    return float(longest_ms / 3_600_000.0)
 
 
 def process_forager_fills(
@@ -554,10 +497,6 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
 def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
     analysis_usd = dict(analysis_usd)
     analysis_btc = dict(analysis_btc)
-    usd_recovery_hours = _equity_peak_recovery_hours(equities_array, 1)
-    btc_recovery_hours = _equity_peak_recovery_hours(equities_array, 2)
-    analysis_usd["equity_peak_recovery_hours"] = usd_recovery_hours
-    analysis_btc["equity_peak_recovery_hours"] = btc_recovery_hours
     keys = ["adg", "adg_w", "mdg", "mdg_w", "gain"]
     for pside in ["long", "short"]:
         twel = float(require_config_value(config, f"bot.{pside}.total_wallet_exposure_limit"))

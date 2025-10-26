@@ -293,6 +293,7 @@ pub struct Analysis {
     pub equity_balance_diff_pos_max: f64,
     pub equity_balance_diff_pos_mean: f64,
     pub loss_profit_ratio: f64,
+    pub equity_peak_recovery_hours: f64,
 
     pub equity_choppiness: f64,
     pub equity_jerkiness: f64,
@@ -338,6 +339,7 @@ impl Default for Analysis {
             equity_balance_diff_pos_max: 1.0,
             equity_balance_diff_pos_mean: 1.0,
             loss_profit_ratio: 1.0,
+            equity_peak_recovery_hours: 0.0,
             equity_choppiness: 1.0,
             equity_jerkiness: 1.0,
             exponential_fit_error: 1.0,

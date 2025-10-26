@@ -350,6 +350,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     let exponential_fit_error = calc_exponential_fit_error(&daily_eqs);
 
     let volume_pct_per_day_avg = calc_avg_volume_pct_per_day(fills);
+    let equity_peak_recovery_hours = calc_equity_peak_recovery_hours(equities);
 
     let mut analysis = Analysis::default();
     analysis.adg = adg;
@@ -377,6 +378,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     analysis.equity_jerkiness = equity_jerkiness;
     analysis.exponential_fit_error = exponential_fit_error;
     analysis.volume_pct_per_day_avg = volume_pct_per_day_avg;
+    analysis.equity_peak_recovery_hours = equity_peak_recovery_hours;
 
     analysis
 }
@@ -518,6 +520,26 @@ pub fn calc_equity_choppiness(equity: &[f64]) -> f64 {
         return f64::INFINITY; // Prevent division by near-zero
     }
     variation / net_gain.abs()
+}
+
+fn calc_equity_peak_recovery_hours(equity: &[f64]) -> f64 {
+    if equity.is_empty() {
+        return 0.0;
+    }
+    let mut peak = f64::NEG_INFINITY;
+    let mut peak_index: isize = 0;
+    let mut max_duration: isize = 0;
+    for (i, &value) in equity.iter().enumerate() {
+        if value >= peak {
+            let duration = i as isize - peak_index;
+            if duration > max_duration {
+                max_duration = duration;
+            }
+            peak = value;
+            peak_index = i as isize;
+        }
+    }
+    (max_duration as f64) / 60.0
 }
 
 /// Calculates the normalized mean absolute second derivative
