@@ -137,9 +137,6 @@ def create_test_app(
     kill_switch_responses: Optional[List[dict]] = None,
 ) -> tuple[TestClient, StubFetcher]:
     fetcher = StubFetcher(snapshot, kill_switch_responses=kill_switch_responses)
-
-def create_test_app(snapshot: dict, auth_manager: AuthManager) -> tuple[TestClient, StubFetcher]:
-    fetcher = StubFetcher(snapshot)
     service = RiskDashboardService(fetcher)  # type: ignore[arg-type]
     config = RealtimeConfig(accounts=[AccountConfig(name="Demo", exchange="binance", credentials={})])
     app = create_app(config, service=service, auth_manager=auth_manager)
