@@ -2267,7 +2267,7 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
         log_range_alpha_long: 2.0 / (bot_params_pair.long.filter_log_range_ema_span as f64 + 1.0),
         log_range_alpha_short: 2.0 / (bot_params_pair.short.filter_log_range_ema_span as f64 + 1.0),
         grid_log_range_alpha_long: {
-            let span = bot_params_pair.long.entry_grid_spacing_log_span_hours;
+            let span = bot_params_pair.long.entry_log_range_ema_span_hours;
             if span > 0.0 {
                 2.0 / (span + 1.0)
             } else {
@@ -2275,7 +2275,7 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
             }
         },
         grid_log_range_alpha_short: {
-            let span = bot_params_pair.short.entry_grid_spacing_log_span_hours;
+            let span = bot_params_pair.short.entry_log_range_ema_span_hours;
             if span > 0.0 {
                 2.0 / (span + 1.0)
             } else {
@@ -2294,14 +2294,14 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair]) -> usize {
             pair.long.ema_span_1,
             pair.long.filter_volume_ema_span as f64,
             pair.long.filter_log_range_ema_span as f64,
-            pair.long.entry_grid_spacing_log_span_hours * 60.0,
+            pair.long.entry_log_range_ema_span_hours * 60.0,
         ];
         let spans_short = [
             pair.short.ema_span_0,
             pair.short.ema_span_1,
             pair.short.filter_volume_ema_span as f64,
             pair.short.filter_log_range_ema_span as f64,
-            pair.short.entry_grid_spacing_log_span_hours * 60.0,
+            pair.short.entry_log_range_ema_span_hours * 60.0,
         ];
         for span in spans_long.iter().chain(spans_short.iter()) {
             if span.is_finite() {

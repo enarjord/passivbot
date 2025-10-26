@@ -561,10 +561,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         entry_grid_spacing_log_weight: extract_value(dict, "entry_grid_spacing_log_weight")?,
         entry_grid_spacing_we_weight: extract_grid_spacing_we_weight(dict)?,
         entry_grid_spacing_pct: extract_value(dict, "entry_grid_spacing_pct")?,
-        entry_grid_spacing_log_span_hours: extract_value(
-            dict,
-            "entry_grid_spacing_log_span_hours",
-        )?,
+        entry_log_range_ema_span_hours: extract_value(dict, "entry_log_range_ema_span_hours")?,
         entry_initial_ema_dist: extract_value(dict, "entry_initial_ema_dist")?,
         entry_initial_qty_pct: extract_value(dict, "entry_initial_qty_pct")?,
         entry_trailing_double_down_factor: extract_value(

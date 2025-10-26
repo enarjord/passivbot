@@ -231,7 +231,7 @@ def get_allowed_modifications():
                 "ema_span_1": True,
                 "entry_grid_double_down_factor": True,
                 "entry_grid_spacing_pct": True,
-                "entry_grid_spacing_log_span_hours": True,
+                "entry_log_range_ema_span_hours": True,
                 "entry_grid_spacing_log_weight": True,
                 "entry_grid_spacing_we_weight": True,
                 "entry_initial_ema_dist": True,
@@ -264,7 +264,7 @@ def get_allowed_modifications():
                 "ema_span_1": True,
                 "entry_grid_double_down_factor": True,
                 "entry_grid_spacing_pct": True,
-                "entry_grid_spacing_log_span_hours": True,
+                "entry_log_range_ema_span_hours": True,
                 "entry_grid_spacing_log_weight": True,
                 "entry_grid_spacing_we_weight": True,
                 "entry_initial_ema_dist": True,
@@ -589,6 +589,7 @@ LEGACY_FILTER_KEYS = {
 
 LEGACY_ENTRY_GRID_KEYS = {
     "entry_grid_spacing_weight": "entry_grid_spacing_we_weight",
+    "entry_grid_spacing_log_span_hours": "entry_log_range_ema_span_hours",
 }
 
 LEGACY_BOUNDS_KEYS = {
@@ -600,6 +601,8 @@ LEGACY_BOUNDS_KEYS = {
     "short_filter_volume_rolling_window": "short_filter_volume_ema_span",
     "long_entry_grid_spacing_weight": "long_entry_grid_spacing_we_weight",
     "short_entry_grid_spacing_weight": "short_entry_grid_spacing_we_weight",
+    "long_entry_grid_spacing_log_span_hours": "long_entry_log_range_ema_span_hours",
+    "short_entry_grid_spacing_log_span_hours": "short_entry_log_range_ema_span_hours",
 }
 
 
@@ -1325,7 +1328,7 @@ def get_template_config(passivbot_mode="v7"):
                 "ema_span_0": 1318.0,
                 "ema_span_1": 1435.0,
                 "entry_grid_double_down_factor": 0.894,
-                "entry_grid_spacing_log_span_hours": 72,
+                "entry_log_range_ema_span_hours": 72,
                 "entry_grid_spacing_log_weight": 0.0,
                 "entry_grid_spacing_pct": 0.04,
                 "entry_grid_spacing_we_weight": 0.697,
@@ -1363,7 +1366,7 @@ def get_template_config(passivbot_mode="v7"):
                 "ema_span_0": 1318.0,
                 "ema_span_1": 1435.0,
                 "entry_grid_double_down_factor": 0.894,
-                "entry_grid_spacing_log_span_hours": 72,
+                "entry_log_range_ema_span_hours": 72,
                 "entry_grid_spacing_log_weight": 0.0,
                 "entry_grid_spacing_pct": 0.04,
                 "entry_grid_spacing_we_weight": 0.697,
@@ -1430,7 +1433,7 @@ def get_template_config(passivbot_mode="v7"):
                 "long_ema_span_1": [200.0, 1440.0],
                 "long_entry_grid_double_down_factor": [0.1, 3.0],
                 "long_entry_grid_spacing_pct": [0.005, 0.12],
-                "long_entry_grid_spacing_log_span_hours": [24.0, 336.0],
+                "long_entry_log_range_ema_span_hours": [24.0, 336.0],
                 "long_entry_grid_spacing_log_weight": [0.0, 400.0],
                 "long_entry_grid_spacing_we_weight": [0.0, 20.0],
                 "long_entry_initial_ema_dist": [-0.1, 0.002],
@@ -1466,7 +1469,7 @@ def get_template_config(passivbot_mode="v7"):
                 "short_ema_span_1": [200.0, 1440.0],
                 "short_entry_grid_double_down_factor": [0.1, 3.0],
                 "short_entry_grid_spacing_pct": [0.005, 0.12],
-                "short_entry_grid_spacing_log_span_hours": [24.0, 336.0],
+                "short_entry_log_range_ema_span_hours": [24.0, 336.0],
                 "short_entry_grid_spacing_log_weight": [0.0, 400.0],
                 "short_entry_grid_spacing_we_weight": [0.0, 20.0],
                 "short_entry_initial_ema_dist": [-0.1, 0.002],

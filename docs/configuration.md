@@ -59,10 +59,10 @@ Passivbot can be configured to create a grid of entry orders, with prices and qu
     - `next_reentry_price_short = pos_price * (1 + entry_grid_spacing_pct * multiplier)`
   - `multiplier = 1 + (wallet_exposure / wallet_exposure_limit) * entry_grid_spacing_we_weight + log_component`
   - Setting `entry_grid_spacing_we_weight` > 0 widens spacing as the position approaches the wallet exposure limit; negative values tighten spacing when exposure is small.
-- **entry_grid_spacing_log_weight**, **entry_grid_spacing_log_span_hours**:
+- **entry_grid_spacing_log_weight**, **entry_log_range_ema_span_hours**:
   - The `log_component` in the multiplier above is derived from the EMA of the per-candle log range `ln(high/low)`.
   - `entry_grid_spacing_log_weight` controls how strongly the recent log range widens or narrows spacing. A value of `0` disables the log-based adjustment.
-  - `entry_grid_spacing_log_span_hours` sets the EMA span (in hours) used when smoothing the log-range signal before applying the weight.
+  - `entry_log_range_ema_span_hours` sets the EMA span (in hours) used when smoothing the log-range signal before applying the weight. The same log-range EMA also powers the volatility multipliers for `entry_trailing_threshold_log_weight` and `entry_trailing_retracement_log_weight`.
 - **entry_initial_ema_dist**:
   - Offset from lower/upper EMA band.
   - Long initial entry/short unstuck close prices are lower EMA band minus offset.
@@ -77,7 +77,7 @@ Passivbot can be configured to create a grid of entry orders, with prices and qu
 - **entry_trailing_threshold_we_weight**, **entry_trailing_retracement_we_weight**:
   - Extra scaling based on wallet exposure. As exposure approaches the per-symbol limit, positive weights widen the trailing bands to slow additional entries. Set to `0.0` to disable the adjustment.
 - **entry_trailing_threshold_log_weight**, **entry_trailing_retracement_log_weight**:
-  - Adds sensitivity to recent volatility (EMA of log range). Positive weights increase the thresholds in choppy markets; `0.0` removes the volatility modulation.
+  - Adds sensitivity to recent volatility using the shared `entry_log_range_ema_span_hours` EMA of log range. Positive weights increase the thresholds in choppy markets; `0.0` removes the volatility modulation.
 
 ### Trailing Parameters
 
@@ -173,7 +173,7 @@ Coins selected for trading are filtered by volume and log range. First, filter c
         close_grid_markup_end, close_grid_markup_start, close_grid_qty_pct, close_trailing_grid_ratio, close_trailing_qty_pct,
         close_trailing_retracement_pct, close_trailing_threshold_pct, ema_span_0, ema_span_1, enforce_exposure_limit,
         entry_grid_double_down_factor, entry_grid_spacing_pct, entry_grid_spacing_we_weight,
-        entry_grid_spacing_log_weight, entry_grid_spacing_log_span_hours, entry_initial_ema_dist,
+        entry_grid_spacing_log_weight, entry_log_range_ema_span_hours, entry_initial_ema_dist,
         entry_initial_qty_pct, entry_trailing_double_down_factor, entry_trailing_grid_ratio, entry_trailing_retracement_pct,
         entry_trailing_threshold_pct, unstuck_close_pct, unstuck_ema_dist, unstuck_threshold, wallet_exposure_limit
       ]

@@ -109,7 +109,7 @@ pub struct BotParams {
     pub entry_grid_spacing_log_weight: f64,
     pub entry_grid_spacing_we_weight: f64,
     pub entry_grid_spacing_pct: f64,
-    pub entry_grid_spacing_log_span_hours: f64,
+    pub entry_log_range_ema_span_hours: f64,
     pub entry_initial_ema_dist: f64,
     pub entry_initial_qty_pct: f64,
     pub entry_trailing_double_down_factor: f64,

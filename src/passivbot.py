@@ -2334,7 +2334,7 @@ class Passivbot:
                     to_update_last_prices.add(symbol)
                     if self.bp(pside, "entry_grid_spacing_log_weight", symbol) != 0.0:
                         grid_log_span_hours = float(
-                            self.bp(pside, "entry_grid_spacing_log_span_hours", symbol)
+                            self.bp(pside, "entry_log_range_ema_span_hours", symbol)
                         )
                         if grid_log_span_hours > 0.0:
                             to_update_grid_log_ranges[pside][symbol] = max(1e-6, grid_log_span_hours)

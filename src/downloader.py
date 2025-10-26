@@ -142,7 +142,7 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         for params in (long_params, short_params):
             for field in minute_fields:
                 max_minutes = max(max_minutes, _to_float(params.get(field)))
-            log_span_minutes = _to_float(params.get("entry_grid_spacing_log_span_hours")) * 60.0
+            log_span_minutes = _to_float(params.get("entry_log_range_ema_span_hours")) * 60.0
             max_minutes = max(max_minutes, log_span_minutes)
 
     bounds = config.get("optimize", {}).get("bounds", {})
@@ -157,8 +157,8 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         "short_filter_log_range_ema_span",
     ]
     bound_keys_hours = [
-        "long_entry_grid_spacing_log_span_hours",
-        "short_entry_grid_spacing_log_span_hours",
+        "long_entry_log_range_ema_span_hours",
+        "short_entry_log_range_ema_span_hours",
     ]
 
     for key in bound_keys_minutes:
@@ -194,7 +194,7 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
                 max_minutes = max(max_minutes, _to_float(params.get(field)))
             max_minutes = max(
                 max_minutes,
-                _to_float(params.get("entry_grid_spacing_log_span_hours")) * 60.0,
+                _to_float(params.get("entry_log_range_ema_span_hours")) * 60.0,
             )
         if not math.isfinite(max_minutes):
             per_coin[coin] = 0
