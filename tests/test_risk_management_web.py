@@ -3,7 +3,7 @@ import inspect
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 import pytest
@@ -48,11 +48,22 @@ _patch_httpx_for_starlette()
 
 
 class StubFetcher:
-    def __init__(self, snapshot: dict, *, kill_switch_responses: Optional[List[dict]] = None) -> None:
+    def __init__(
+        self,
+        snapshot: dict,
+        *,
+        kill_switch_responses: Optional[List[dict]] = None,
+        order_types: Optional[Sequence[str]] = None,
+    ) -> None:
         self.snapshot = snapshot
         self.closed = False
         self.kill_requests: List[Tuple[Optional[str], Optional[str]]] = []
         self._kill_switch_responses: List[dict] = list(kill_switch_responses or [])
+        self.order_types = list(order_types or ["limit", "market"])
+        self.placed_orders: List[Tuple[str, Dict[str, Any]]] = []
+        self.cancelled_orders: List[Tuple[str, str, Optional[str]]] = []
+        self.closed_positions: List[Tuple[str, str]] = []
+        self.stop_loss: Optional[Dict[str, Any]] = None
 
 
     async def fetch_snapshot(self) -> dict:
@@ -72,6 +83,62 @@ class StubFetcher:
             return self._kill_switch_responses.pop(0)
 
         return {"status": "ok"}
+
+    async def place_order(
+        self,
+        account_name: str,
+        *,
+        symbol: str,
+        order_type: str,
+        side: str,
+        amount: float,
+        price: Optional[float] = None,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> Mapping[str, Any]:
+        payload = {
+            "symbol": symbol,
+            "order_type": order_type,
+            "side": side,
+            "amount": amount,
+            "price": price,
+            "params": dict(params) if isinstance(params, Mapping) else None,
+        }
+        self.placed_orders.append((account_name, payload))
+        return {"order": {"symbol": symbol, "side": side, "type": order_type}, "raw": payload}
+
+    async def cancel_order(
+        self,
+        account_name: str,
+        order_id: str,
+        *,
+        symbol: Optional[str] = None,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> Mapping[str, Any]:
+        self.cancelled_orders.append((account_name, order_id, symbol))
+        return {"cancelled": True}
+
+    async def close_position(self, account_name: str, symbol: str) -> Mapping[str, Any]:
+        self.closed_positions.append((account_name, symbol))
+        return {"closed_positions": [{"symbol": symbol}]}
+
+    async def list_order_types(self, account_name: str) -> Sequence[str]:
+        return list(self.order_types)
+
+    def get_portfolio_stop_loss(self) -> Optional[Dict[str, Any]]:
+        return dict(self.stop_loss) if self.stop_loss else None
+
+    async def set_portfolio_stop_loss(self, threshold_pct: float) -> Dict[str, Any]:
+        self.stop_loss = {
+            "threshold_pct": float(threshold_pct),
+            "baseline_balance": 1000.0,
+            "triggered": False,
+            "triggered_at": None,
+            "active": True,
+        }
+        return dict(self.stop_loss)
+
+    async def clear_portfolio_stop_loss(self) -> None:
+        self.stop_loss = None
 
 
 @pytest.fixture
@@ -93,9 +160,11 @@ def sample_snapshot() -> dict:
                         "liquidation_price": 52_000,
                         "wallet_exposure_pct": 0.25,
                         "unrealized_pnl": 210,
+                        "daily_realized_pnl": 15,
                         "max_drawdown_pct": 0.12,
                     }
                 ],
+                "daily_realized_pnl": 15,
             }
         ],
         "alert_thresholds": {
@@ -208,6 +277,21 @@ def test_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) 
         assert payload["success"] is True
         assert payload["results"] == kill_response
         assert fetcher.kill_requests[-1] == ("Demo Account", None)
+
+
+def test_trading_panel_page(sample_snapshot: dict, auth_manager: AuthManager) -> None:
+    client, _ = create_test_app(sample_snapshot, auth_manager)
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        response = client.get("/trading-panel")
+        assert response.status_code == 200
+        assert "Trading panel" in response.text
 
 
 def test_position_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) -> None:
