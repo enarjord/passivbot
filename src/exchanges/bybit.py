@@ -354,6 +354,7 @@ class BybitBot(Passivbot):
                 "price": float(elm.get("lastPrice", elm.get("price", 0.0))),
                 "pnl": float(elm.get("realizedPnl", 0.0)),
                 "fee": None,
+                "custom_id": elm.get("info", {}).get("orderLinkId"),
                 "position_side": None,
             }
             if event["side"] == "buy":
@@ -374,6 +375,7 @@ class BybitBot(Passivbot):
                 "price": float(elm["price"]),
                 "pnl": None,
                 "fee": elm.get("fee"),
+                "custom_id": elm.get("info", {}).get("orderLinkId"),
                 "position_side": None,
             }
             closed_size = float(elm["info"].get("closedSize", 0.0))
@@ -410,23 +412,100 @@ class BybitBot(Passivbot):
                 [event[k] for k in ["id", "symbol", "qty", "side", "position_side", "price"]]
             )
 
-        events: List[dict] = []
-        # fetch my_trades first
+        if end_time is None:
+            end_time = int(self.get_exchange_time() + 1000 * 60 * 60)
+        if start_time is None:
+            start_time = end_time - 1000 * 60 * 60 * 24 * 3
+
+        # fetch concurrently
         try:
             my_trades, positions_history = await asyncio.gather(
-                self.cca.fetch_my_trades(), self.cca.fetch_positions_history()
+                self.fetch_my_trades(start_time, end_time),
+                self.fetch_positions_history(start_time, end_time),
             )
         except Exception as exc:
             logging.error(f"error fetching my_trades, positions_history {exc}")
             my_trades, positions_history = [], []
-        events = [extract_fill_event_from_ph(x) for x in positions_history]
-        eventsd = {get_dedup_key(event): event for event in events}
-        for mt in my_trades:
-            event = extract_fill_event_from_mt(mt)
-            dedup_key = get_dedup_key(event)
-            if dedup_key not in eventsd:
-                eventsd[dedup_key] = event
-        return sorted(eventsd.values(), key=lambda x: x["timestamp"])
+
+        # extract events
+        mt_events = [extract_fill_event_from_mt(x) for x in my_trades]
+        ph_events = [extract_fill_event_from_ph(x) for x in positions_history]
+        events = sorted(mt_events + ph_events, key=lambda x: x["timestamp"])
+        return events
+
+    async def fetch_my_trades(self, start_time, end_time, limit=100):
+        # limit is max 100
+        # The time range between startTime and endTime cannot exceed 7 days
+        # if start time is given without end time, will fetch fills closes to one week after start time
+        # strategy: fetch backwards from end time to start time
+        limit = min(limit, 100)
+        max_n_fetches = 200
+        week_with_buffer_ms = int(1000 * 60 * 60 * 24 * 6.5)
+        end_time = int(utc_ms() + 3600000 if end_time is None else end_time)
+        params = {"type": "swap", "subType": "linear", "limit": limit, "endTime": end_time}
+        my_trades_all = []
+        count = 0
+        while True:
+            count += 1
+            my_trades = await self.cca.fetch_my_trades(params=params)
+            my_trades_all.extend(my_trades)
+            if len(my_trades) < limit:
+                logging.debug(f"broke loop fetch_my_trades on n my_trades {len(my_trades)}")
+                break
+            if start_time is None or my_trades[0]["timestamp"] < start_time:
+                logging.debug(f"broke loop fetch_my_trades on start time exceeded")
+                break
+            if params["endTime"] == my_trades[0]["timestamp"]:
+                logging.debug(f"broke loop fetch_my_trades on two successive identical endTimes")
+                break
+            params["endTime"] = int(my_trades[0]["timestamp"])
+            if count > 1:
+                logging.info(
+                    f"fetched {len(my_trades)} fills from {my_trades[0]['datetime'][:19]} to {my_trades[-1]['datetime'][:19]}"
+                )
+        return sorted(my_trades_all, key=lambda x: x["timestamp"])
+
+    async def fetch_positions_history(self, start_time, end_time, limit=100):
+        # limit is max 100
+
+        # The start timestamp (ms)
+        # startTime and endTime are not passed, return 7 days by default
+        # Only startTime is passed, return range between startTime and startTime+7 days
+        # Only endTime is passed, return range between endTime-7 days and endTime
+        # If both are passed, the rule is endTime - startTime <= 7 days
+
+        # The time range between startTime and endTime cannot exceed 7 days
+        # if start time is given without end time, will fetch positions closes to one week after start time
+        # strategy: fetch backwards from end time to start time
+        limit = min(limit, 100)
+        max_n_fetches = 200
+        week_with_buffer_ms = int(1000 * 60 * 60 * 24 * 6.5)
+        end_time = int(utc_ms() + 3600000 if end_time is None else end_time)
+        params = {"limit": limit, "endTime": end_time}
+        positions_history_all = []
+        count = 0
+        while True:
+            count += 1
+            positions_history = await self.cca.fetch_positions_history(params=params)
+            positions_history.sort(key=lambda x: x["timestamp"])
+            positions_history_all.extend(positions_history)
+            if len(positions_history) < limit:
+                logging.debug(f"broke loop fetch_positions_history on n {len(positions_history)}")
+                break
+            if start_time is None or positions_history[0]["timestamp"] < start_time:
+                logging.debug("broke loop fetch_positions_history on start time exceeded")
+                break
+            if params["endTime"] == positions_history[0]["timestamp"]:
+                logging.debug(
+                    "broke loop fetch_positions_history on two successive identical endTimes"
+                )
+                break
+            params["endTime"] = int(positions_history[0]["timestamp"])
+            if count > 1:
+                logging.info(
+                    f"fetched {len(positions_history)} positions_history from {positions_history[0]['datetime'][:19]} to {positions_history[-1]['datetime'][:19]}"
+                )
+        return sorted(positions_history_all, key=lambda x: x["timestamp"])
 
     def determine_pos_side(self, x):
         if x["side"] == "buy":
