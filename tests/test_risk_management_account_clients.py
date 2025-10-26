@@ -21,6 +21,7 @@ class StubExchange:
         bid: Optional[float] = None,
         ask: Optional[float] = None,
         last: Optional[float] = None,
+        position_info: Optional[dict] = None,
     ) -> None:
         self._bid = bid
         self._ask = ask
@@ -28,6 +29,7 @@ class StubExchange:
         self._cancel_calls = []
         self._orders = []
         self.markets = True
+        self._position_info = dict(position_info or {})
 
     async def cancel_all_orders(self, symbol=None, params=None):
         self._cancel_calls.append({"symbol": symbol, "params": params})
@@ -37,7 +39,7 @@ class StubExchange:
             {
                 "symbol": "BTC/USDT",
                 "contracts": 1,
-                "info": {},
+                "info": dict(self._position_info),
             }
         ]
 
@@ -112,3 +114,23 @@ def test_kill_switch_logs_failures_when_price_missing(caplog):
     assert any("Kill switch completed" in record.message for record in caplog.records)
     # Debug details are only emitted when failures occur
     assert any("Kill switch details" in record.message for record in caplog.records)
+
+
+def test_kill_switch_uses_position_side_from_exchange_payload():
+    exchange = StubExchange(bid=99.5, position_info={"positionSide": "LONG"})
+    client = CCXTAccountClient.__new__(CCXTAccountClient)
+    client.config = SimpleNamespace(name="Demo", symbols=None)
+    client.client = exchange
+    client._balance_params = {}
+    client._positions_params = {}
+    client._orders_params = {}
+    client._close_params = {}
+    client._markets_loaded = None
+    client._debug_api_payloads = False
+
+    summary = asyncio.run(client.kill_switch("BTC/USDT"))
+
+    assert summary["closed_positions"], "Kill switch should attempt to close the position"
+    order = exchange._orders[0]
+    assert order["params"]["positionSide"] == "LONG"
+    assert order["params"]["reduceOnly"] is True

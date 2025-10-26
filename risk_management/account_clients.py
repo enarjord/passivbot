@@ -754,6 +754,22 @@ class CCXTAccountClient(AccountClientProtocol):
             side = "sell" if float(size) > 0 else "buy"
             params = dict(self._close_params)
             params.setdefault("reduceOnly", True)
+            position_side: Optional[str] = None
+            info = position.get("info")
+            if isinstance(info, Mapping):
+                raw_position_side = info.get("positionSide") or info.get("position_side")
+                if isinstance(raw_position_side, str):
+                    normalized = raw_position_side.upper()
+                    if normalized in {"LONG", "SHORT", "BOTH"}:
+                        position_side = normalized
+            if position_side is None:
+                raw_position_side = position.get("positionSide") or position.get("position_side")
+                if isinstance(raw_position_side, str):
+                    normalized = raw_position_side.upper()
+                    if normalized in {"LONG", "SHORT", "BOTH"}:
+                        position_side = normalized
+            if position_side and "positionSide" not in params:
+                params["positionSide"] = position_side
             mark_price = _first_float(
                 position.get("markPrice"),
                 position.get("mark_price"),
