@@ -48,10 +48,12 @@ _patch_httpx_for_starlette()
 
 
 class StubFetcher:
-    def __init__(self, snapshot: dict) -> None:
+    def __init__(self, snapshot: dict, *, kill_switch_responses: Optional[List[dict]] = None) -> None:
         self.snapshot = snapshot
         self.closed = False
         self.kill_requests: List[Tuple[Optional[str], Optional[str]]] = []
+        self._kill_switch_responses: List[dict] = list(kill_switch_responses or [])
+
 
     async def fetch_snapshot(self) -> dict:
         return self.snapshot
@@ -65,6 +67,10 @@ class StubFetcher:
         symbol: Optional[str] = None,
     ) -> dict:
         self.kill_requests.append((account_name, symbol))
+
+        if self._kill_switch_responses:
+            return self._kill_switch_responses.pop(0)
+
         return {"status": "ok"}
 
 
@@ -124,6 +130,14 @@ def auth_manager() -> AuthManager:
     return _TestingAuthManager()
 
 
+def create_test_app(
+    snapshot: dict,
+    auth_manager: AuthManager,
+    *,
+    kill_switch_responses: Optional[List[dict]] = None,
+) -> tuple[TestClient, StubFetcher]:
+    fetcher = StubFetcher(snapshot, kill_switch_responses=kill_switch_responses)
+
 def create_test_app(snapshot: dict, auth_manager: AuthManager) -> tuple[TestClient, StubFetcher]:
     fetcher = StubFetcher(snapshot)
     service = RiskDashboardService(fetcher)  # type: ignore[arg-type]
@@ -172,7 +186,17 @@ def test_web_dashboard_auth_flow(sample_snapshot: dict, auth_manager: AuthManage
 
 
 def test_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) -> None:
-    client, fetcher = create_test_app(sample_snapshot, auth_manager)
+    kill_response = {
+        "Demo Account": {
+            "cancelled_orders": [],
+            "failed_order_cancellations": [],
+            "closed_positions": [],
+            "failed_position_closures": [],
+        }
+    }
+    client, fetcher = create_test_app(
+        sample_snapshot, auth_manager, kill_switch_responses=[kill_response]
+    )
     with client:
         login_response = client.post(
             "/login",
@@ -183,6 +207,88 @@ def test_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) 
 
         response = client.post("/api/accounts/Demo%20Account/kill-switch")
         assert response.status_code == 200
+        payload = response.json()
+        assert payload["success"] is True
+        assert payload["results"] == kill_response
+        assert fetcher.kill_requests[-1] == ("Demo Account", None)
+
+
+def test_position_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) -> None:
+    kill_response = {
+        "Demo Account": {
+            "cancelled_orders": [],
+            "failed_order_cancellations": [],
+            "closed_positions": [
+                {"symbol": "BTC/USDT:USDT", "side": "sell", "amount": 1, "price": 62_000}
+            ],
+            "failed_position_closures": [],
+        }
+    }
+    client, fetcher = create_test_app(
+        sample_snapshot, auth_manager, kill_switch_responses=[kill_response]
+    )
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        response = client.post(
+            "/api/accounts/Demo%20Account/positions/BTC%2FUSDT%3AUSDT/kill-switch"
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["success"] is True
+        assert payload["results"] == kill_response
+        assert fetcher.kill_requests[-1] == ("Demo Account", "BTC/USDT:USDT")
+
+
+def test_kill_switch_endpoint_reports_failures(
+    sample_snapshot: dict, auth_manager: AuthManager
+) -> None:
+    failure_response = {
+        "Demo Account": {
+            "cancelled_orders": [],
+            "failed_order_cancellations": [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "order_id": "123",
+                    "error": "Something went wrong",
+                }
+            ],
+            "closed_positions": [],
+            "failed_position_closures": [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "sell",
+                    "amount": 1,
+                    "error": "Order's position side does not match user's setting.",
+                }
+            ],
+        }
+    }
+    client, fetcher = create_test_app(
+        sample_snapshot, auth_manager, kill_switch_responses=[failure_response]
+    )
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        response = client.post("/api/accounts/Demo%20Account/kill-switch")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["success"] is False
+        assert payload["results"] == failure_response
+        assert any(
+            "Failed to close position" in error or "Failed to close" in error
+            for error in payload["errors"]
+        )
         assert fetcher.kill_requests[-1] == ("Demo Account", None)
 
 

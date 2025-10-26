@@ -5,8 +5,9 @@ RealtimeDataFetcher utilities.
 """
 
 from __future__ import annotations
+from collections.abc import Iterable as IterableABC
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -65,6 +66,62 @@ class RiskDashboardService:
         self, account_name: Optional[str] = None, symbol: Optional[str] = None
     ) -> Dict[str, Any]:
         return await self._fetcher.execute_kill_switch(account_name, symbol)
+
+
+def _format_kill_switch_failure(account: str, action: str, payload: Mapping[str, Any]) -> str:
+    symbol = payload.get("symbol")
+    side = payload.get("side")
+    order_id = payload.get("order_id")
+    target: Optional[str] = None
+    if symbol and side:
+        target = f"{symbol} ({side})"
+    elif symbol:
+        target = str(symbol)
+    elif order_id:
+        target = f"order {order_id}"
+    error_message = payload.get("error") or "Unknown error"
+    if target:
+        return f"[{account}] Failed to {action} {target}: {error_message}"
+    return f"[{account}] Failed to {action}: {error_message}"
+
+
+def _collect_kill_switch_errors(results: Any) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(results, Mapping):
+        return errors
+
+    def _extend_with_failures(account: str, failures: Iterable[Mapping[str, Any]], action: str) -> None:
+        for failure in failures:
+            if isinstance(failure, Mapping):
+                errors.append(_format_kill_switch_failure(account, action, failure))
+            else:
+                errors.append(f"[{account}] Failed to {action}: {failure}")
+
+    for account, details in results.items():
+        if not isinstance(details, Mapping):
+            continue
+        top_level_error = details.get("error")
+        if top_level_error:
+            errors.append(f"[{account}] {top_level_error}")
+        failed_order_cancellations = details.get("failed_order_cancellations")
+        if isinstance(failed_order_cancellations, IterableABC) and not isinstance(
+            failed_order_cancellations, (str, bytes)
+        ):
+            _extend_with_failures(account, failed_order_cancellations, "cancel order")
+        failed_position_closures = details.get("failed_position_closures")
+        if isinstance(failed_position_closures, IterableABC) and not isinstance(
+            failed_position_closures, (str, bytes)
+        ):
+            _extend_with_failures(account, failed_position_closures, "close position")
+    return errors
+
+
+def _build_kill_switch_response(results: Any) -> Dict[str, Any]:
+    errors = _collect_kill_switch_errors(results)
+    payload: Dict[str, Any] = {"success": not errors, "results": results}
+    if errors:
+        payload["errors"] = errors
+    return payload
 
 
 def create_app(
@@ -233,8 +290,9 @@ def create_app(
         service: RiskDashboardService = Depends(get_service),
         _: str = Depends(require_user),
     ) -> JSONResponse:
-        result = await service.trigger_kill_switch()
-        return JSONResponse(result)
+        results = await service.trigger_kill_switch()
+        payload = _build_kill_switch_response(results)
+        return JSONResponse(payload)
 
     @app.post("/api/accounts/{account_name}/kill-switch", response_class=JSONResponse)
     async def api_kill_switch(
@@ -251,12 +309,13 @@ def create_app(
                 symbol = None
         try:
             if not target or target.lower() == "all":
-                result = await service.trigger_kill_switch(symbol=symbol)
+                results = await service.trigger_kill_switch(symbol=symbol)
             else:
-                result = await service.trigger_kill_switch(target, symbol=symbol)
+                results = await service.trigger_kill_switch(target, symbol=symbol)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-        return JSONResponse(result)
+        payload = _build_kill_switch_response(results)
+        return JSONResponse(payload)
 
     @app.post(
         "/api/accounts/{account_name}/positions/{symbol:path}/kill-switch",
@@ -275,10 +334,11 @@ def create_app(
         if not target_account or target_account.lower() == "all":
             target_account = None
         try:
-            result = await service.trigger_kill_switch(target_account, symbol=target_symbol)
+            results = await service.trigger_kill_switch(target_account, symbol=target_symbol)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-        return JSONResponse(result)
+        payload = _build_kill_switch_response(results)
+        return JSONResponse(payload)
 
     @app.get("/api/accounts/{account_name}/reports", response_class=JSONResponse)
     async def api_list_reports(
