@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
 import types
 
@@ -70,6 +71,15 @@ def test_determine_uvicorn_logging_uses_uvicorn_config(monkeypatch) -> None:
 def test_determine_uvicorn_logging_handles_missing_uvicorn(monkeypatch) -> None:
     monkeypatch.delitem(sys.modules, "uvicorn", raising=False)
     monkeypatch.delitem(sys.modules, "uvicorn.config", raising=False)
+
+    original_import = importlib.import_module
+
+    def fake_import(name, package=None):
+        if name == "uvicorn.config":
+            raise ModuleNotFoundError("uvicorn unavailable")
+        return original_import(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", fake_import)
 
     config = _make_config(account_debug=True)
 
