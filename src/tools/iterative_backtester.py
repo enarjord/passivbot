@@ -565,10 +565,14 @@ class IterativeBacktestSession:
             "modifier": run.modifier,
             "results_path": str(run.results_path),
             "backtest_signature": self.backtest_signature,
-            "best_run_index": (self.best_run_index + 1) if self.best_run_index is not None else run.index,
-            "is_best": self.best_run_index == len(self.history) - 1
-            if self.best_run_index is not None
-            else True,
+            "best_run_index": (
+                (self.best_run_index + 1) if self.best_run_index is not None else run.index
+            ),
+            "is_best": (
+                self.best_run_index == len(self.history) - 1
+                if self.best_run_index is not None
+                else True
+            ),
         }
         payload["limits"] = {
             name: {

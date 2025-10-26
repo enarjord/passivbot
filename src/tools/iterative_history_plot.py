@@ -124,7 +124,9 @@ def plot_scatter(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Plot metrics from iterative backtester history logs.")
+    parser = argparse.ArgumentParser(
+        description="Plot metrics from iterative backtester history logs."
+    )
     parser.add_argument(
         "history_paths",
         nargs="+",
