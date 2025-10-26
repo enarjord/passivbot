@@ -683,8 +683,18 @@ def post_process(
     if not config["disable_plotting"]:
         try:
             coins = require_config_value(config, f"backtest.coins.{exchange}")
-            coin_figs = create_forager_coin_figures(coins, fdf, hlcvs)
-            save_figures(coin_figs, oj(results_path, "fills_plots"))
+            fills_plot_dir = oj(results_path, "fills_plots")
+
+            def _save_coin_figure(name, fig):
+                save_figures({name: fig}, fills_plot_dir, close=True)
+
+            create_forager_coin_figures(
+                coins,
+                fdf,
+                hlcvs,
+                on_figure=_save_coin_figure,
+                close_after_callback=False,
+            )
         except Exception as e:
             logging.info(f"Error creating fill plots: {e}")
 

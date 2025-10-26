@@ -1,8 +1,10 @@
 import json
 import re
 import os
+from typing import Callable, Optional, Dict
 
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 import pandas as pd
 import numpy as np
 import time
@@ -543,8 +545,10 @@ def create_forager_coin_figures(
     start_pct=0.0,
     end_pct=1.0,
     coin=None,
+    on_figure: Optional[Callable[[str, Figure], None]] = None,
+    close_after_callback: bool = True,
 ) -> dict:
-    figures = {}
+    figures: Dict[str, Figure] = {}
     if hlcvs is None:
         return figures
     for idx, coin_ in enumerate(coins):
@@ -561,7 +565,12 @@ def create_forager_coin_figures(
         ax.set_title(f"Fills {coin_}")
         ax.set_xlabel("Minute")
         ax.set_ylabel("Price")
-        figures[coin_] = fig
+        if on_figure is not None:
+            on_figure(coin_, fig)
+            if close_after_callback:
+                plt.close(fig)
+        else:
+            figures[coin_] = fig
     return figures
 
 
