@@ -57,7 +57,6 @@ from main import manage_rust_compilation  # noqa: E402
 # Constants mirroring optimizer scoring preferences
 # ---------------------------------------------------------------------------
 SHARED_METRIC_WEIGHTS = {
-    "flat_btc_balance_hours": 1.0,
     "positions_held_per_day": 1.0,
     "position_held_hours_mean": 1.0,
     "position_held_hours_max": 1.0,
@@ -84,6 +83,7 @@ CURRENCY_METRIC_WEIGHTS = {
     "equity_choppiness_w": 1.0,
     "equity_jerkiness": 1.0,
     "equity_jerkiness_w": 1.0,
+    "equity_peak_recovery_hours": 1.0,
     "expected_shortfall_1pct": 1.0,
     "exponential_fit_error": 1.0,
     "exponential_fit_error_w": 1.0,
