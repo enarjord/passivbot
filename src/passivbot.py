@@ -21,8 +21,8 @@ import inspect
 import passivbot_rust as pbr
 import logging
 import math
-from candlestick_manager import CandlestickManager
-from typing import Dict, Iterable, Tuple, List, Optional
+from candlestick_manager import CandlestickManager, CANDLE_DTYPE
+from typing import Dict, Iterable, Tuple, List, Optional, Any
 from logging_setup import configure_logging
 from utils import (
     load_markets,
@@ -1789,6 +1789,276 @@ class Passivbot:
         old_pnls_compressed = {(x[k] for k in keys) for x in old_pnls}
         new_pnls_compressed = [(x[k] for k in keys) for x in new_pnls]
         added_pnls = [x for x in new_pnls_compressed if x not in old_pnls_compressed]
+
+    async def get_balance_equity_history(
+        self, fill_events: Optional[List[dict]] = None, current_balance: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """Replay canonical fill events to produce historical balance/equity curves."""
+
+        await self.init_pnls()
+
+        def _safe_float(val: Any, default: float = 0.0) -> float:
+            try:
+                if val is None:
+                    return default
+                return float(val)
+            except Exception:
+                return default
+
+        def _normalize_symbol(symbol: Any) -> str:
+            sym = str(symbol) if symbol else ""
+            if not sym:
+                return ""
+            if sym in self.c_mults:
+                return sym
+            try:
+                converted = self.get_symbol_id_inv(sym)
+                if converted:
+                    return converted
+            except Exception:
+                pass
+            return sym
+
+        def _ensure_slot(container: Dict[str, Dict[str, Dict[str, float]]], symbol: str):
+            if symbol not in container:
+                container[symbol] = {
+                    "long": {"size": 0.0, "price": 0.0},
+                    "short": {"size": 0.0, "price": 0.0},
+                }
+            return container[symbol]
+
+        def _determine_action(pside: str, side: str, qty_signed: Optional[float], explicit: Optional[str]):
+            if explicit in ("increase", "decrease"):
+                return explicit
+            if qty_signed is not None and qty_signed != 0.0:
+                return "increase" if qty_signed > 0 else "decrease"
+            side = side.lower()
+            if pside == "long":
+                return "increase" if side == "buy" else "decrease"
+            return "increase" if side == "sell" else "decrease"
+
+        def _extract_events(source: List[dict]) -> List[dict]:
+            out = []
+            for fill in source:
+                ts_raw = fill.get("timestamp")
+                if ts_raw is None:
+                    continue
+                try:
+                    ts = int(ensure_millis(ts_raw))
+                except Exception:
+                    continue
+                symbol = _normalize_symbol(fill.get("symbol"))
+                if not symbol:
+                    continue
+                pside = str(fill.get("position_side", fill.get("pside", "long"))).lower()
+                if pside not in ("long", "short"):
+                    pside = "long"
+                qty_signed = fill.get("qty_signed")
+                qty_fallback_keys = ("qty", "amount", "size", "contracts")
+                qty_val = _safe_float(
+                    qty_signed if qty_signed is not None else next(
+                        (fill.get(k) for k in qty_fallback_keys if fill.get(k) is not None), 0.0
+                    ),
+                    0.0,
+                )
+                qty = abs(qty_val)
+                if qty <= 0.0:
+                    continue
+                price_keys = ("price", "avgPrice", "average", "avg_price", "execPrice")
+                price = next((fill.get(k) for k in price_keys if fill.get(k) is not None), None)
+                if price is None:
+                    info = fill.get("info", {})
+                    price = info.get("avgPrice") or info.get("execPrice") or info.get("avg_exec_price")
+                price = _safe_float(price, 0.0)
+                if price <= 0.0:
+                    continue
+                pnl_val = _safe_float(fill.get("pnl", 0.0), 0.0)
+                fee_cost = 0.0
+                fee_obj = fill.get("fee")
+                if isinstance(fee_obj, dict):
+                    fee_cost = _safe_float(fee_obj.get("cost", 0.0), 0.0)
+                elif isinstance(fee_obj, (int, float, str)):
+                    fee_cost = _safe_float(fee_obj, 0.0)
+                elif isinstance(fill.get("fees"), (list, tuple)):
+                    fee_cost = sum(_safe_float(x.get("cost", 0.0), 0.0) for x in fill["fees"] if isinstance(x, dict))
+                side = str(fill.get("side", "")).lower()
+                action = _determine_action(pside, side, qty_signed, fill.get("action"))
+                out.append(
+                    {
+                        "timestamp": ts,
+                        "symbol": symbol,
+                        "pside": pside,
+                        "qty": qty,
+                        "price": price,
+                        "action": action,
+                        "pnl": pnl_val,
+                        "fee": fee_cost,
+                        "c_mult": float(self.c_mults.get(symbol, 1.0)),
+                    }
+                )
+            return sorted(out, key=lambda x: x["timestamp"])
+
+        if fill_events is None:
+            fill_events = getattr(self, "pnls", [])
+
+        events = _extract_events(fill_events)
+        if not events:
+            ts_now = self.get_exchange_time()
+            balance_now = float(current_balance) if current_balance is not None else float(self.balance)
+            point = {
+                "timestamp": ts_now,
+                "balance": balance_now,
+                "equity": balance_now,
+                "unrealized_pnl": 0.0,
+                "realized_pnl": 0.0,
+            }
+            return {
+                "timeline": [point],
+                "balances": [{"timestamp": point["timestamp"], "balance": balance_now}],
+                "equities": [{"timestamp": point["timestamp"], "equity": balance_now, "unrealized_pnl": 0.0}],
+                "metadata": {
+                    "lookback_days": float(self.live_value("pnls_max_lookback_days")),
+                    "resolution_ms": ONE_MIN_MS,
+                    "events_used": 0,
+                    "symbols_covered": [],
+                    "missing_price_symbols": [],
+                },
+            }
+
+        lookback_days = float(self.live_value("pnls_max_lookback_days"))
+        ts_now = self.get_exchange_time()
+        lookback_ms = max(lookback_days, 0.0) * 24 * 60 * 60 * 1000
+        lookback_start = ts_now - lookback_ms
+
+        balance_now = float(current_balance) if current_balance is not None else float(self.balance)
+        balance_now = max(balance_now, 0.0)
+        total_realised = sum(evt["pnl"] + evt.get("fee", 0.0) for evt in events if evt["timestamp"] <= ts_now)
+        baseline_balance = balance_now - total_realised
+
+        start_ts = min(ensure_millis(events[0]["timestamp"]), lookback_start)
+        start_minute = int(math.floor(start_ts / ONE_MIN_MS) * ONE_MIN_MS)
+        record_start_minute = int(math.floor(lookback_start / ONE_MIN_MS) * ONE_MIN_MS)
+        end_minute = int(math.floor(ts_now / ONE_MIN_MS) * ONE_MIN_MS)
+        if end_minute < record_start_minute:
+            end_minute = record_start_minute
+
+        symbols = {evt["symbol"] for evt in events if evt["symbol"]}
+        price_lookup: Dict[str, Dict[int, float]] = {}
+        if symbols and getattr(self, "cm", None) is not None:
+            tasks = {
+                sym: asyncio.create_task(
+                    self.cm.get_candles(sym, start_ts=start_minute, end_ts=end_minute, strict=False)
+                )
+                for sym in symbols
+            }
+            for sym, task in tasks.items():
+                try:
+                    arr = await task
+                except Exception as exc:
+                    logging.error(f"error fetching candles for {sym} {exc}")
+                    arr = np.empty((0,), dtype=CANDLE_DTYPE)
+                price_lookup[sym] = {int(row["ts"]): float(row["c"]) for row in arr if float(row["c"]) > 0.0}
+        else:
+            price_lookup = {sym: {} for sym in symbols}
+
+        positions: Dict[str, Dict[str, Dict[str, float]]] = {}
+        active_symbols: set[str] = set()
+        timeline: List[Dict[str, float]] = []
+        missing_price_symbols: set[str] = set()
+
+        def _apply_event(evt: dict):
+            slot = _ensure_slot(positions, evt["symbol"])[evt["pside"]]
+            qty = evt["qty"]
+            price = evt["price"]
+            if evt["action"] == "increase":
+                old_size = slot["size"]
+                new_size = old_size + qty
+                if new_size <= 0.0:
+                    slot["size"], slot["price"] = 0.0, 0.0
+                elif old_size <= 0.0:
+                    slot["size"], slot["price"] = new_size, price
+                else:
+                    slot["price"] = max((old_size * slot["price"] + qty * price) / new_size, 0.0)
+                    slot["size"] = new_size
+            else:
+                slot["size"] = max(slot["size"] - qty, 0.0)
+                if slot["size"] <= 0.0:
+                    slot["price"] = 0.0
+            has_pos = slot["size"] > 1e-12
+            if has_pos:
+                active_symbols.add(evt["symbol"])
+            elif not any(positions[evt["symbol"]][ps]["size"] > 1e-12 for ps in ("long", "short")):
+                active_symbols.discard(evt["symbol"])
+
+        balance = baseline_balance
+        event_idx = 0
+        last_price: Dict[str, float] = {}
+
+        minute = start_minute
+        while minute <= end_minute:
+            boundary = minute + ONE_MIN_MS
+            while event_idx < len(events) and events[event_idx]["timestamp"] < boundary:
+                evt = events[event_idx]
+                _apply_event(evt)
+                balance += evt["pnl"] + evt.get("fee", 0.0)
+                event_idx += 1
+            upnl = 0.0
+            for symbol in list(active_symbols):
+                price = price_lookup.get(symbol, {}).get(minute)
+                if price is None:
+                    price = last_price.get(symbol)
+                else:
+                    last_price[symbol] = price
+                if price is None or price <= 0.0:
+                    missing_price_symbols.add(symbol)
+                    continue
+                slot = positions.get(symbol)
+                if not slot:
+                    continue
+                for pside in ("long", "short"):
+                    size = slot[pside]["size"]
+                    if size <= 0.0:
+                        continue
+                    avg_price = slot[pside]["price"]
+                    if avg_price <= 0.0:
+                        continue
+                    c_mult = self.c_mults.get(symbol, 1.0)
+                    upnl += calc_pnl(pside, avg_price, price, size, self.inverse, c_mult)
+            if minute >= record_start_minute:
+                timeline.append(
+                    {
+                        "timestamp": minute,
+                        "balance": balance,
+                        "equity": balance + upnl,
+                        "unrealized_pnl": upnl,
+                        "realized_pnl": balance - baseline_balance,
+                    }
+                )
+            minute += ONE_MIN_MS
+
+        if not timeline:
+            point = {
+                "timestamp": ts_now,
+                "balance": balance_now,
+                "equity": balance_now,
+                "unrealized_pnl": 0.0,
+                "realized_pnl": 0.0,
+            }
+            timeline = [point]
+
+        balances = [{"timestamp": row["timestamp"], "balance": row["balance"]} for row in timeline]
+        equities = [
+            {"timestamp": row["timestamp"], "equity": row["equity"], "unrealized_pnl": row["unrealized_pnl"]}
+            for row in timeline
+        ]
+        metadata = {
+            "lookback_days": lookback_days,
+            "resolution_ms": ONE_MIN_MS,
+            "events_used": len(events),
+            "symbols_covered": sorted(symbols),
+            "missing_price_symbols": sorted(missing_price_symbols),
+        }
+        return {"timeline": timeline, "balances": balances, "equities": equities, "metadata": metadata}
 
     async def update_open_orders(self):
         """Refresh open orders from the exchange and reconcile the local cache."""
