@@ -1827,7 +1827,9 @@ class Passivbot:
                 }
             return container[symbol]
 
-        def _determine_action(pside: str, side: str, qty_signed: Optional[float], explicit: Optional[str]):
+        def _determine_action(
+            pside: str, side: str, qty_signed: Optional[float], explicit: Optional[str]
+        ):
             if explicit in ("increase", "decrease"):
                 return explicit
             if qty_signed is not None and qty_signed != 0.0:
@@ -1856,8 +1858,12 @@ class Passivbot:
                 qty_signed = fill.get("qty_signed")
                 qty_fallback_keys = ("qty", "amount", "size", "contracts")
                 qty_val = _safe_float(
-                    qty_signed if qty_signed is not None else next(
-                        (fill.get(k) for k in qty_fallback_keys if fill.get(k) is not None), 0.0
+                    (
+                        qty_signed
+                        if qty_signed is not None
+                        else next(
+                            (fill.get(k) for k in qty_fallback_keys if fill.get(k) is not None), 0.0
+                        )
                     ),
                     0.0,
                 )
@@ -1868,7 +1874,9 @@ class Passivbot:
                 price = next((fill.get(k) for k in price_keys if fill.get(k) is not None), None)
                 if price is None:
                     info = fill.get("info", {})
-                    price = info.get("avgPrice") or info.get("execPrice") or info.get("avg_exec_price")
+                    price = (
+                        info.get("avgPrice") or info.get("execPrice") or info.get("avg_exec_price")
+                    )
                 price = _safe_float(price, 0.0)
                 if price <= 0.0:
                     continue
@@ -1880,7 +1888,11 @@ class Passivbot:
                 elif isinstance(fee_obj, (int, float, str)):
                     fee_cost = _safe_float(fee_obj, 0.0)
                 elif isinstance(fill.get("fees"), (list, tuple)):
-                    fee_cost = sum(_safe_float(x.get("cost", 0.0), 0.0) for x in fill["fees"] if isinstance(x, dict))
+                    fee_cost = sum(
+                        _safe_float(x.get("cost", 0.0), 0.0)
+                        for x in fill["fees"]
+                        if isinstance(x, dict)
+                    )
                 side = str(fill.get("side", "")).lower()
                 action = _determine_action(pside, side, qty_signed, fill.get("action"))
                 out.append(
@@ -1904,7 +1916,9 @@ class Passivbot:
         events = _extract_events(fill_events)
         if not events:
             ts_now = self.get_exchange_time()
-            balance_now = float(current_balance) if current_balance is not None else float(self.balance)
+            balance_now = (
+                float(current_balance) if current_balance is not None else float(self.balance)
+            )
             point = {
                 "timestamp": ts_now,
                 "balance": balance_now,
@@ -1915,7 +1929,9 @@ class Passivbot:
             return {
                 "timeline": [point],
                 "balances": [{"timestamp": point["timestamp"], "balance": balance_now}],
-                "equities": [{"timestamp": point["timestamp"], "equity": balance_now, "unrealized_pnl": 0.0}],
+                "equities": [
+                    {"timestamp": point["timestamp"], "equity": balance_now, "unrealized_pnl": 0.0}
+                ],
                 "metadata": {
                     "lookback_days": float(self.live_value("pnls_max_lookback_days")),
                     "resolution_ms": ONE_MIN_MS,
@@ -1932,7 +1948,9 @@ class Passivbot:
 
         balance_now = float(current_balance) if current_balance is not None else float(self.balance)
         balance_now = max(balance_now, 0.0)
-        total_realised = sum(evt["pnl"] + evt.get("fee", 0.0) for evt in events if evt["timestamp"] <= ts_now)
+        total_realised = sum(
+            evt["pnl"] + evt.get("fee", 0.0) for evt in events if evt["timestamp"] <= ts_now
+        )
         baseline_balance = balance_now - total_realised
 
         start_ts = min(ensure_millis(events[0]["timestamp"]), lookback_start)
@@ -1957,7 +1975,9 @@ class Passivbot:
                 except Exception as exc:
                     logging.error(f"error fetching candles for {sym} {exc}")
                     arr = np.empty((0,), dtype=CANDLE_DTYPE)
-                price_lookup[sym] = {int(row["ts"]): float(row["c"]) for row in arr if float(row["c"]) > 0.0}
+                price_lookup[sym] = {
+                    int(row["ts"]): float(row["c"]) for row in arr if float(row["c"]) > 0.0
+                }
         else:
             price_lookup = {sym: {} for sym in symbols}
 
@@ -2048,7 +2068,11 @@ class Passivbot:
 
         balances = [{"timestamp": row["timestamp"], "balance": row["balance"]} for row in timeline]
         equities = [
-            {"timestamp": row["timestamp"], "equity": row["equity"], "unrealized_pnl": row["unrealized_pnl"]}
+            {
+                "timestamp": row["timestamp"],
+                "equity": row["equity"],
+                "unrealized_pnl": row["unrealized_pnl"],
+            }
             for row in timeline
         ]
         metadata = {
@@ -2058,7 +2082,12 @@ class Passivbot:
             "symbols_covered": sorted(symbols),
             "missing_price_symbols": sorted(missing_price_symbols),
         }
-        return {"timeline": timeline, "balances": balances, "equities": equities, "metadata": metadata}
+        return {
+            "timeline": timeline,
+            "balances": balances,
+            "equities": equities,
+            "metadata": metadata,
+        }
 
     async def update_open_orders(self):
         """Refresh open orders from the exchange and reconcile the local cache."""
