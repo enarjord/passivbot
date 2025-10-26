@@ -34,6 +34,9 @@ def build_presentable_snapshot(snapshot: Mapping[str, Any]) -> Dict[str, Any]:
 
     if account_views["hidden"]:
         payload["hidden_accounts"] = account_views["hidden"]
+    stop_loss = snapshot.get("portfolio_stop_loss") if isinstance(snapshot, Mapping) else None
+    if isinstance(stop_loss, Mapping):
+        payload["portfolio_stop_loss"] = dict(stop_loss)
 
     return payload
 
@@ -58,6 +61,7 @@ def _build_portfolio_view(accounts: Sequence[Account]) -> Dict[str, Any]:
     total_balance = sum(account.balance for account in accounts)
     gross_notional = sum(account.total_abs_notional() for account in accounts)
     net_notional = sum(account.net_notional() for account in accounts)
+    daily_realized = sum(account.total_daily_realized() for account in accounts)
 
     symbol_data: Dict[str, Dict[str, Any]] = {}
     portfolio_volatility: Dict[str, float] = {}
@@ -117,6 +121,7 @@ def _build_portfolio_view(accounts: Sequence[Account]) -> Dict[str, Any]:
         "net_exposure": net_notional,
         "gross_exposure_pct": gross_pct_total,
         "net_exposure_pct": net_pct_total,
+        "daily_realized_pnl": daily_realized,
         "volatility": _finalise_metric(portfolio_volatility, volatility_weights),
         "funding_rates": _finalise_metric(portfolio_funding, funding_weights),
         "symbols": symbol_entries,
@@ -139,6 +144,7 @@ def _build_account_view(account: Account, account_messages: Mapping[str, str]) -
         "net_exposure": account.net_exposure_pct(),
         "net_exposure_notional": account.net_notional(),
         "unrealized_pnl": account.total_unrealized(),
+        "daily_realized_pnl": account.daily_realized_pnl or account.total_daily_realized(),
         "positions": positions,
         "symbol_exposures": symbol_exposures,
         "orders": orders,
@@ -167,6 +173,7 @@ def _build_position_view(position: Position, balance: float) -> Dict[str, Any]:
         "stop_loss_price": position.stop_loss_price,
         "size": position.size,
         "signed_notional": position.signed_notional,
+        "daily_realized_pnl": position.daily_realized_pnl,
         "volatility": dict(position.volatility) if position.volatility else {},
         "funding_rates": dict(position.funding_rates) if position.funding_rates else {},
     }

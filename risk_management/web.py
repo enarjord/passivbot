@@ -7,7 +7,7 @@ RealtimeDataFetcher utilities.
 from __future__ import annotations
 from collections.abc import Iterable as IterableABC
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -66,6 +66,55 @@ class RiskDashboardService:
         self, account_name: Optional[str] = None, symbol: Optional[str] = None
     ) -> Dict[str, Any]:
         return await self._fetcher.execute_kill_switch(account_name, symbol)
+
+    async def place_order(
+        self,
+        account_name: str,
+        *,
+        symbol: str,
+        order_type: str,
+        side: str,
+        amount: float,
+        price: Optional[float] = None,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> Mapping[str, Any]:
+        return await self._fetcher.place_order(
+            account_name,
+            symbol=symbol,
+            order_type=order_type,
+            side=side,
+            amount=amount,
+            price=price,
+            params=params,
+        )
+
+    async def cancel_order(
+        self,
+        account_name: str,
+        order_id: str,
+        *,
+        symbol: Optional[str] = None,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> Mapping[str, Any]:
+        return await self._fetcher.cancel_order(
+            account_name, order_id, symbol=symbol, params=params
+        )
+
+    async def close_position(self, account_name: str, symbol: str) -> Mapping[str, Any]:
+        return await self._fetcher.close_position(account_name, symbol)
+
+    async def list_order_types(self, account_name: str) -> Sequence[str]:
+        return await self._fetcher.list_order_types(account_name)
+
+    def get_portfolio_stop_loss(self) -> Optional[Dict[str, Any]]:
+        state = self._fetcher.get_portfolio_stop_loss()
+        return dict(state) if state is not None else None
+
+    async def set_portfolio_stop_loss(self, threshold_pct: float) -> Dict[str, Any]:
+        return await self._fetcher.set_portfolio_stop_loss(threshold_pct)
+
+    async def clear_portfolio_stop_loss(self) -> None:
+        await self._fetcher.clear_portfolio_stop_loss()
 
 
 def _format_kill_switch_failure(account: str, action: str, payload: Mapping[str, Any]) -> str:
@@ -275,6 +324,27 @@ def create_app(
             },
         )
 
+    @app.get("/trading-panel", response_class=HTMLResponse)
+    async def trading_panel(
+        request: Request, service: RiskDashboardService = Depends(get_service)
+    ) -> HTMLResponse:
+        user = request.session.get("user")
+        if not user:
+            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+        snapshot = await service.fetch_snapshot()
+        view_model = build_presentable_snapshot(snapshot)
+        grafana_context: dict[str, Any] = request.app.state.grafana_context
+        return templates.TemplateResponse(
+            "trading_panel.html",
+            {
+                "request": request,
+                "user": user,
+                "snapshot": view_model,
+                "grafana_dashboards": grafana_context.get("dashboards", []),
+                "grafana_theme": grafana_context.get("theme"),
+            },
+        )
+
     @app.get("/api/snapshot", response_class=JSONResponse)
     async def api_snapshot(
         request: Request,
@@ -284,6 +354,168 @@ def create_app(
         snapshot = await service.fetch_snapshot()
         view_model = build_presentable_snapshot(snapshot)
         return JSONResponse(view_model)
+
+    @app.get(
+        "/api/trading/accounts/{account_name}/order-types",
+        response_class=JSONResponse,
+    )
+    async def api_list_order_types(
+        account_name: str,
+        service: RiskDashboardService = Depends(get_service),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        try:
+            order_types = await service.list_order_types(account_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        return JSONResponse({"account": account_name, "order_types": list(order_types)})
+
+    @app.post(
+        "/api/trading/accounts/{account_name}/orders",
+        response_class=JSONResponse,
+    )
+    async def api_place_order(
+        account_name: str,
+        request: Request,
+        service: RiskDashboardService = Depends(get_service),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        try:
+            payload = await request.json()
+        except Exception as exc:  # pragma: no cover - invalid JSON yields 400
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload") from exc
+        if not isinstance(payload, Mapping):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Order payload must be an object")
+        symbol = str(payload.get("symbol", "")).strip()
+        order_type = str(payload.get("order_type", "")).strip()
+        side = str(payload.get("side", "")).strip().lower()
+        if not symbol or not order_type or side not in {"buy", "sell"}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid order parameters")
+        try:
+            amount = float(payload.get("amount"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Amount must be numeric")
+        if amount <= 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Amount must be greater than zero")
+        price_raw = payload.get("price")
+        price_value: Optional[float]
+        if price_raw in (None, ""):
+            price_value = None
+        else:
+            try:
+                price_value = float(price_raw)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Price must be numeric")
+            if price_value <= 0:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Price must be greater than zero")
+        params = payload.get("params")
+        if not isinstance(params, Mapping):
+            params = None
+        try:
+            result = await service.place_order(
+                account_name,
+                symbol=symbol,
+                order_type=order_type,
+                side=side,
+                amount=amount,
+                price=price_value,
+                params=params,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return JSONResponse(result)
+
+    @app.delete(
+        "/api/trading/accounts/{account_name}/orders/{order_id}",
+        response_class=JSONResponse,
+    )
+    async def api_cancel_order(
+        account_name: str,
+        order_id: str,
+        request: Request,
+        service: RiskDashboardService = Depends(get_service),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        params: Optional[Mapping[str, Any]] = None
+        symbol: Optional[str] = None
+        if request.headers.get("content-length") not in (None, "0"):
+            try:
+                payload = await request.json()
+            except Exception as exc:  # pragma: no cover - invalid JSON yields 400
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload") from exc
+            if isinstance(payload, Mapping):
+                raw_symbol = payload.get("symbol")
+                symbol = str(raw_symbol).strip() if raw_symbol is not None else None
+                params_candidate = payload.get("params")
+                if isinstance(params_candidate, Mapping):
+                    params = params_candidate
+        try:
+            result = await service.cancel_order(account_name, order_id, symbol=symbol, params=params)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return JSONResponse(result)
+
+    @app.post(
+        "/api/trading/accounts/{account_name}/positions/{symbol:path}/close",
+        response_class=JSONResponse,
+    )
+    async def api_close_position(
+        account_name: str,
+        symbol: str,
+        service: RiskDashboardService = Depends(get_service),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        if not symbol:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Symbol is required")
+        try:
+            result = await service.close_position(account_name, symbol)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return JSONResponse(result)
+
+    @app.get("/api/trading/portfolio/stop-loss", response_class=JSONResponse)
+    async def api_get_portfolio_stop_loss(
+        service: RiskDashboardService = Depends(get_service),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        state = service.get_portfolio_stop_loss()
+        return JSONResponse({"stop_loss": state})
+
+    @app.post("/api/trading/portfolio/stop-loss", response_class=JSONResponse)
+    async def api_set_portfolio_stop_loss(
+        request: Request,
+        service: RiskDashboardService = Depends(get_service),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        try:
+            payload = await request.json()
+        except Exception as exc:  # pragma: no cover
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload") from exc
+        if not isinstance(payload, Mapping):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payload must be an object")
+        try:
+            threshold = float(payload.get("threshold_pct"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="threshold_pct must be numeric")
+        try:
+            state = await service.set_portfolio_stop_loss(threshold)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return JSONResponse(state)
+
+    @app.delete("/api/trading/portfolio/stop-loss", response_class=JSONResponse)
+    async def api_clear_portfolio_stop_loss(
+        service: RiskDashboardService = Depends(get_service),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        await service.clear_portfolio_stop_loss()
+        return JSONResponse({"status": "cleared"})
 
     @app.post("/api/kill-switch", response_class=JSONResponse)
     async def api_global_kill_switch(

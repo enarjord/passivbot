@@ -46,6 +46,7 @@ class Position:
     signed_notional: Optional[float] = None
     volatility: Optional[Mapping[str, float]] = None
     funding_rates: Optional[Mapping[str, float]] = None
+    daily_realized_pnl: float = 0.0
 
     def exposure_relative_to(self, balance: float) -> float:
         if balance == 0:
@@ -84,12 +85,16 @@ class Account:
     balance: float
     positions: Sequence[Position]
     orders: Sequence[Order] = ()
+    daily_realized_pnl: float = 0.0
 
     def total_abs_notional(self) -> float:
         return sum(abs(p.notional) for p in self.positions)
 
     def total_unrealized(self) -> float:
         return sum(p.unrealized_pnl for p in self.positions)
+
+    def total_daily_realized(self) -> float:
+        return sum(p.daily_realized_pnl for p in self.positions)
 
     def exposure_pct(self) -> float:
         if self.balance == 0:
@@ -215,6 +220,7 @@ def _parse_position(raw: Dict[str, Any]) -> Position:
             if isinstance(raw.get("funding_rates"), Mapping)
             else None
         ),
+        daily_realized_pnl=float(raw.get("daily_realized_pnl", 0.0)),
     )
 
 
@@ -226,11 +232,20 @@ def _parse_account(raw: Dict[str, Any]) -> Account:
     positions = [_parse_position(pos) for pos in positions_raw]
     orders_raw = raw.get("open_orders") or raw.get("orders") or []
     orders = [_parse_order(order) for order in orders_raw]
+    daily_realized_raw = raw.get("daily_realized_pnl")
+    if daily_realized_raw is None:
+        daily_realized = sum(position.daily_realized_pnl for position in positions)
+    else:
+        try:
+            daily_realized = float(daily_realized_raw)
+        except (TypeError, ValueError):
+            daily_realized = sum(position.daily_realized_pnl for position in positions)
     return Account(
         name=str(raw["name"]),
         balance=float(raw["balance"]),
         positions=positions,
         orders=orders,
+        daily_realized_pnl=float(daily_realized),
     )
 
 
@@ -351,6 +366,7 @@ def render_dashboard(
         lines.append(f"  Balance: {_format_currency(account.balance)}")
         lines.append(f"  Exposure: {_format_pct(account.exposure_pct())}")
         lines.append(f"  Unrealized PnL: {_format_currency(account.total_unrealized())}")
+        lines.append(f"  Daily realized PnL: {_format_currency(account.daily_realized_pnl)}")
         status_message = account_messages.get(account.name)
         if status_message:
             lines.append(f"  Status: {status_message}")

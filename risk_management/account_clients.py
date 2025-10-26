@@ -150,6 +150,32 @@ class AccountClientProtocol(abc.ABC):
         touched. Otherwise every open position is targeted.
         """
 
+    @abc.abstractmethod
+    async def create_order(
+        self,
+        symbol: str,
+        order_type: str,
+        side: str,
+        amount: float,
+        price: Optional[float] = None,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> Mapping[str, Any]:
+        """Place an order on the underlying exchange."""
+
+    @abc.abstractmethod
+    async def cancel_order(
+        self, order_id: str, symbol: Optional[str] = None, params: Optional[Mapping[str, Any]] = None
+    ) -> Mapping[str, Any]:
+        """Cancel an existing order."""
+
+    @abc.abstractmethod
+    async def close_position(self, symbol: str) -> Mapping[str, Any]:
+        """Close the open position for ``symbol`` if one exists."""
+
+    @abc.abstractmethod
+    async def list_order_types(self) -> Sequence[str]:
+        """Return supported order types for the account exchange."""
+
 
 def _set_exchange_field(client: Any, key: str, value: Any, aliases: Sequence[str]) -> None:
     """Assign ``value`` to ``key`` on ``client`` and store aliases when possible."""
@@ -505,6 +531,9 @@ class CCXTAccountClient(AccountClientProtocol):
             "balance": balance_value,
             "positions": positions,
             "open_orders": open_orders,
+            "daily_realized_pnl": sum(
+                float(position.get("daily_realized_pnl", 0.0)) for position in positions
+            ),
         }
 
     async def close(self) -> None:
@@ -686,6 +715,111 @@ class CCXTAccountClient(AccountClientProtocol):
         if failures:
             logger.debug("[%s] Kill switch details: %s", self.config.name, _stringify_payload(summary))
         return summary
+
+    async def create_order(
+        self,
+        symbol: str,
+        order_type: str,
+        side: str,
+        amount: float,
+        price: Optional[float] = None,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> Mapping[str, Any]:
+        await self._ensure_markets()
+        request_params = dict(self._orders_params)
+        if params:
+            request_params.update(dict(params))
+        payload = {
+            "symbol": symbol,
+            "type": order_type,
+            "side": side,
+            "amount": amount,
+        }
+        if price is not None:
+            payload["price"] = price
+        try:
+            response = await self.client.create_order(
+                symbol,
+                order_type,
+                side,
+                amount,
+                price,
+                params=request_params,
+            )
+        except BaseError as exc:
+            logger.warning(
+                "Failed to create order on %s: %s",
+                self.config.name,
+                exc,
+                exc_info=True,
+            )
+            raise RuntimeError(f"Exchange order placement failed: {exc}") from exc
+        self._log_exchange_payload("create_order", response, {**request_params, **payload})
+        from .realtime import _parse_order  # circular safe import
+
+        normalized = _parse_order(response) if response else None
+        return {"order": normalized, "raw": response or {}}
+
+    async def cancel_order(
+        self,
+        order_id: str,
+        symbol: Optional[str] = None,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> Mapping[str, Any]:
+        await self._ensure_markets()
+        request_params = dict(self._orders_params)
+        if params:
+            request_params.update(dict(params))
+        try:
+            if symbol:
+                response = await self.client.cancel_order(order_id, symbol, params=request_params)
+            else:
+                response = await self.client.cancel_order(order_id, params=request_params)
+        except BaseError as exc:
+            logger.warning(
+                "Failed to cancel order %s on %s: %s",
+                order_id,
+                self.config.name,
+                exc,
+                exc_info=True,
+            )
+            raise RuntimeError(f"Exchange order cancellation failed: {exc}") from exc
+        payload_meta = {"order_id": order_id, "symbol": symbol}
+        self._log_exchange_payload("cancel_order", response, {**request_params, **payload_meta})
+        from .realtime import _parse_order  # circular safe import
+
+        normalized = _parse_order(response) if response else None
+        return {"order": normalized, "raw": response or {}}
+
+    async def close_position(self, symbol: str) -> Mapping[str, Any]:
+        await self._ensure_markets()
+        summary: Dict[str, Any] = {"closed_positions": [], "failed_position_closures": []}
+        await self._close_positions(summary, symbol)
+        return summary
+
+    async def list_order_types(self) -> Sequence[str]:
+        await self._ensure_markets()
+        supported: Dict[str, None] = {}
+        options = getattr(self.client, "options", {})
+        if isinstance(options, Mapping):
+            for key in ("defaultType", "defaultSubType"):
+                value = options.get(key)
+                if isinstance(value, str) and value:
+                    supported.setdefault(value.lower(), None)
+            raw_types = options.get("orderTypes") or options.get("types")
+            if isinstance(raw_types, Mapping):
+                raw_types = raw_types.values()
+            if isinstance(raw_types, Iterable):
+                for candidate in raw_types:
+                    if isinstance(candidate, str) and candidate:
+                        supported.setdefault(candidate.lower(), None)
+        if hasattr(self.client, "has") and isinstance(self.client.has, Mapping):
+            if self.client.has.get("createOrder"):
+                supported.setdefault("limit", None)
+                supported.setdefault("market", None)
+        if not supported:
+            supported = {"limit": None, "market": None}
+        return sorted(supported)
 
     async def _cancel_open_orders(
         self, summary: Dict[str, Any], symbol_filter: Optional[str]
