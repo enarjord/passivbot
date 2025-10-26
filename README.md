@@ -6,6 +6,19 @@
 
 v7.4.2
 
+## Branching Strategy
+
+The repository now maintains two primary long-lived branches:
+
+* `stable` &mdash; tracks the latest confirmed stable release. Once a version has
+  been validated, create or update this branch from the commit to preserve the
+  known-good state.
+* `dev` &mdash; the default branch for ongoing work. Continue running tests and
+  landing new features here while keeping the stable branch untouched.
+
+To cut a new stable release, checkout `dev`, ensure it is green, and fast-forward
+the `stable` branch to the desired commit.
+
 
 ## Overview
 
