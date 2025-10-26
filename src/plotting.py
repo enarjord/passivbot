@@ -160,7 +160,7 @@ def dump_plots(
     disable_plotting: bool = False,
 ):
     init(autoreset=True)
-    plt.rcParams["figure.figsize"] = [32, 19]
+    plt.rcParams["figure.figsize"] = [21, 13]
     try:
         pd.set_option("display.precision", 10)
     except Exception as e:
@@ -498,7 +498,7 @@ def plot_fills_forager(
 
 def create_forager_balance_figures(
     bal_eq: pd.DataFrame,
-    figsize=(32, 19),
+    figsize=(21, 13),
     autoplot: bool = False,
 ) -> dict:
     figures = {}
@@ -539,7 +539,7 @@ def create_forager_coin_figures(
     coins: list,
     fdf: pd.DataFrame,
     hlcvs: np.ndarray,
-    figsize=(32, 19),
+    figsize=(21, 13),
     start_pct=0.0,
     end_pct=1.0,
     coin=None,
