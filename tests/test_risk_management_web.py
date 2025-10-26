@@ -186,6 +186,23 @@ def test_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) 
         assert fetcher.kill_requests[-1] == ("Demo Account", None)
 
 
+def test_position_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) -> None:
+    client, fetcher = create_test_app(sample_snapshot, auth_manager)
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        response = client.post(
+            "/api/accounts/Demo%20Account/positions/BTC%2FUSDT%3AUSDT/kill-switch"
+        )
+        assert response.status_code == 200
+        assert fetcher.kill_requests[-1] == ("Demo Account", "BTC/USDT:USDT")
+
+
 def test_letsencrypt_challenge_mount(tmp_path: Path, auth_manager: AuthManager) -> None:
     fetcher = StubFetcher({"generated_at": "", "accounts": [], "alert_thresholds": {}, "notification_channels": []})
     service = RiskDashboardService(fetcher)  # type: ignore[arg-type]
