@@ -11,8 +11,6 @@ pytest.importorskip("passlib")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi.testclient import TestClient
-from passlib.context import CryptContext
-
 from risk_management.configuration import AccountConfig, RealtimeConfig
 from risk_management.web import AuthManager, RiskDashboardService, create_app
 
@@ -70,8 +68,8 @@ def sample_snapshot() -> dict:
 
 @pytest.fixture
 def auth_manager() -> AuthManager:
-    context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    password_hash = context.hash("admin123")
+    # Pre-generated bcrypt hash for the password "admin123".
+    password_hash = "$2b$12$KIX0dYvEhvdZ4InENa9e6uU30IoqRxG7Pecg/6tiTZeVOw13K9IRG"
     return AuthManager(secret_key="super-secret", users={"admin": password_hash})
 
 
