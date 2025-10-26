@@ -1,3 +1,4 @@
+import hmac
 import inspect
 import sys
 from datetime import datetime, timezone
@@ -5,12 +6,19 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+import pytest
+
+pytest.importorskip("fastapi")
+pytest.importorskip("passlib")
+pytest.importorskip("httpx")
+
 
 import pytest
 
 pytest.importorskip("fastapi")
 pytest.importorskip("passlib")
 pytest.importorskip("httpx")
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -97,8 +105,28 @@ def sample_snapshot() -> dict:
     }
 
 
+class _TestingAuthManager(AuthManager):
+    """Simplified AuthManager that avoids bcrypt backend requirements."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            secret_key="super-secret",
+            users={"admin": "admin123"},
+            https_only=False,
+        )
+
+    def authenticate(self, username: str, password: str) -> bool:  # type: ignore[override]
+        stored = self.users.get(username)
+        if stored is None:
+            return False
+        return hmac.compare_digest(stored, password)
+
+
 @pytest.fixture
 def auth_manager() -> AuthManager:
+
+    return _TestingAuthManager()
+
     # Pre-generated bcrypt hash for the password "admin123".
     password_hash = "$2b$12$KIX0dYvEhvdZ4InENa9e6uU30IoqRxG7Pecg/6tiTZeVOw13K9IRG"
     # Disable HTTPS-only cookies/redirection so the in-process TestClient can
@@ -110,6 +138,7 @@ def auth_manager() -> AuthManager:
     )
 
     return AuthManager(secret_key="super-secret", users={"admin": password_hash})
+
 
 
 def create_test_app(snapshot: dict, auth_manager: AuthManager) -> tuple[TestClient, StubFetcher]:
@@ -130,7 +159,11 @@ def test_web_dashboard_auth_flow(sample_snapshot: dict, auth_manager: AuthManage
 
         assert urlparse(response.headers["location"]).path == "/login"
 
+
+        assert urlparse(response.headers["location"]).path == "/login"
+
         assert response.headers["location"].endswith("/login")
+
 
         response = client.get("/login")
         assert response.status_code == 200
