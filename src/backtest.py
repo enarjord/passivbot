@@ -490,6 +490,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "warmup_minutes": [],
             "trade_start_indices": [],
             "global_warmup_bars": 0,
+            "metrics_only": False,
         }
     return bot_params_list, exchange_params, backtest_params
 
