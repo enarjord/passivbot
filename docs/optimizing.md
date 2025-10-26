@@ -148,7 +148,7 @@ over all exchanges before scoring.
 | `position_held_hours_{mean,median,max}` | Holding-time statistics in hours |
 | `position_unchanged_hours_max` | Longest span without modifying an existing position |
 | `volume_pct_per_day_avg`, `volume_pct_per_day_avg_w` | Average traded volume as % of account per day, with recency bias |
-| `flat_btc_balance_hours` | Hours spent with the BTC collateral balance flat while USD debt is being worked down (BTC collateral mode pays off USD borrow first, so long plateaus here highlight stretches where losses took time to recover before fresh BTC could be accumulated). Available for scoring and limit checks (use `penalize_if_greater_than_flat_btc_balance_hours`). |
+| `equity_peak_recovery_hours_usd`, `_btc` | Longest time (in hours) the equity curve stayed below its prior peak before recovering, per denomination. Available for scoring and limit checks (e.g. `penalize_if_greater_than_equity_peak_recovery_hours_usd`). |
 
 ### Equity Curve Quality
 | Metric | Description |
