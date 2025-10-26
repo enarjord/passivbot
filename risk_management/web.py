@@ -258,7 +258,10 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         return JSONResponse(result)
 
-    @app.post("/api/accounts/{account_name}/positions/{symbol}/kill-switch", response_class=JSONResponse)
+    @app.post(
+        "/api/accounts/{account_name}/positions/{symbol:path}/kill-switch",
+        response_class=JSONResponse,
+    )
     async def api_position_kill_switch(
         account_name: str,
         symbol: str,
