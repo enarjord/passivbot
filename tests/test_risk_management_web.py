@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -108,6 +109,8 @@ def auth_manager() -> AuthManager:
         https_only=False,
     )
 
+    return AuthManager(secret_key="super-secret", users={"admin": password_hash})
+
 
 def create_test_app(snapshot: dict, auth_manager: AuthManager) -> tuple[TestClient, StubFetcher]:
     fetcher = StubFetcher(snapshot)
@@ -124,7 +127,10 @@ def test_web_dashboard_auth_flow(sample_snapshot: dict, auth_manager: AuthManage
         # Starlette's TestClient may surface a 307 redirect when working with
         # newer httpx releases, while older stacks returned 302/303.
         assert response.status_code in {302, 303, 307}
+
         assert urlparse(response.headers["location"]).path == "/login"
+
+        assert response.headers["location"].endswith("/login")
 
         response = client.get("/login")
         assert response.status_code == 200
