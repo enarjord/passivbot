@@ -509,6 +509,7 @@ class Evaluator:
             _, self.exchange_params[exchange], self.backtest_params[exchange] = prep_backtest_args(
                 config, self.msss[exchange], exchange
             )
+            self.backtest_params[exchange]["metrics_only"] = True
 
         self.config = config
         logging.debug("Evaluator initialization complete.")
