@@ -1,31 +1,54 @@
+import inspect
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
 pytest.importorskip("fastapi")
 pytest.importorskip("passlib")
+pytest.importorskip("httpx")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import pytest
 
-pytest.importorskip("fastapi")
-pytest.importorskip("passlib")
-
-from datetime import datetime, timezone
-
+import httpx
 from fastapi.testclient import TestClient
-from passlib.context import CryptContext
-
 from risk_management.configuration import AccountConfig, RealtimeConfig
 from risk_management.web import AuthManager, RiskDashboardService, create_app
+
+
+def _patch_httpx_for_starlette() -> None:
+    """Allow Starlette's TestClient to run against legacy httpx releases.
+
+    Older httpx versions (e.g. <0.25) do not accept the ``app`` keyword that
+    newer Starlette/FastAPI releases pass when initialising ``httpx.Client``.
+    When that happens the constructor raises ``TypeError: unexpected keyword``
+    and the tests crash during collection.  We patch ``httpx.Client.__init__``
+    to accept the extra parameter and delegate to the original implementation
+    so the rest of the behaviour stays untouched.
+    """
+
+    parameters = inspect.signature(httpx.Client.__init__).parameters
+    if "app" in parameters:
+        return
+
+    original_init = httpx.Client.__init__
+
+    def _compat_init(self, *args, app=None, **kwargs):  # type: ignore[override]
+        return original_init(self, *args, **kwargs)
+
+    httpx.Client.__init__ = _compat_init  # type: ignore[assignment]
+
+
+_patch_httpx_for_starlette()
 
 
 class StubFetcher:
     def __init__(self, snapshot: dict) -> None:
         self.snapshot = snapshot
         self.closed = False
-        self.kill_requests: list[str | None] = []
+        self.kill_requests: list[Optional[str]] = []
 
     async def fetch_snapshot(self) -> dict:
         return self.snapshot
@@ -33,7 +56,7 @@ class StubFetcher:
     async def close(self) -> None:
         self.closed = True
 
-    async def execute_kill_switch(self, account_name: str | None = None) -> dict:
+    async def execute_kill_switch(self, account_name: Optional[str] = None) -> dict:
         self.kill_requests.append(account_name)
         return {"status": "ok"}
 
@@ -74,8 +97,8 @@ def sample_snapshot() -> dict:
 
 @pytest.fixture
 def auth_manager() -> AuthManager:
-    context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    password_hash = context.hash("admin123")
+    # Pre-generated bcrypt hash for the password "admin123".
+    password_hash = "$2b$12$KIX0dYvEhvdZ4InENa9e6uU30IoqRxG7Pecg/6tiTZeVOw13K9IRG"
     return AuthManager(secret_key="super-secret", users={"admin": password_hash})
 
 
