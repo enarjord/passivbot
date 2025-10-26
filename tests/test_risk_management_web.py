@@ -3,7 +3,11 @@ import inspect
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+from typing import List, Optional, Tuple
+
 from typing import Optional
+
 from urllib.parse import urlparse
 
 import pytest
@@ -25,7 +29,6 @@ pytest.importorskip("httpx")
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 
 import httpx
 from fastapi.testclient import TestClient
@@ -63,6 +66,9 @@ class StubFetcher:
     def __init__(self, snapshot: dict) -> None:
         self.snapshot = snapshot
         self.closed = False
+
+        self.kill_requests: List[Tuple[Optional[str], Optional[str]]] = []
+
         self.kill_requests: list[Optional[str]] = []
 
     async def fetch_snapshot(self) -> dict:
@@ -71,6 +77,12 @@ class StubFetcher:
     async def close(self) -> None:
         self.closed = True
 
+    async def execute_kill_switch(
+        self,
+        account_name: Optional[str] = None,
+        symbol: Optional[str] = None,
+    ) -> dict:
+        self.kill_requests.append((account_name, symbol))
 
     async def execute_kill_switch(
         self, account_name: Optional[str] = None, symbol: Optional[str] = None
@@ -140,6 +152,8 @@ def auth_manager() -> AuthManager:
 
     return _TestingAuthManager()
 
+    return _TestingAuthManager()
+
     # Pre-generated bcrypt hash for the password "admin123".
     password_hash = "$2b$12$KIX0dYvEhvdZ4InENa9e6uU30IoqRxG7Pecg/6tiTZeVOw13K9IRG"
     # Disable HTTPS-only cookies/redirection so the in-process TestClient can
@@ -169,6 +183,8 @@ def test_web_dashboard_auth_flow(sample_snapshot: dict, auth_manager: AuthManage
         # Starlette's TestClient may surface a 307 redirect when working with
         # newer httpx releases, while older stacks returned 302/303.
         assert response.status_code in {302, 303, 307}
+
+        assert urlparse(response.headers["location"]).path == "/login"
 
         assert urlparse(response.headers["location"]).path == "/login"
 
@@ -223,7 +239,7 @@ def test_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) 
 
         response = client.post("/api/accounts/Demo%20Account/kill-switch")
         assert response.status_code == 200
-        assert fetcher.kill_requests[-1] == "Demo Account"
+        assert fetcher.kill_requests[-1] == ("Demo Account", None)
 
 
 def test_letsencrypt_challenge_mount(tmp_path: Path, auth_manager: AuthManager) -> None:
