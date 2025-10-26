@@ -3,6 +3,7 @@ import logging
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Optional
 
 import pytest
 
@@ -14,7 +15,13 @@ from risk_management.account_clients import CCXTAccountClient, BaseError
 
 
 class StubExchange:
-    def __init__(self, *, bid: float | None = None, ask: float | None = None, last: float | None = None):
+    def __init__(
+        self,
+        *,
+        bid: Optional[float] = None,
+        ask: Optional[float] = None,
+        last: Optional[float] = None,
+    ) -> None:
         self._bid = bid
         self._ask = ask
         self._last = last
