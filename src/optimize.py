@@ -522,7 +522,6 @@ class Evaluator:
             self._populate_backtest_metadata(exchange)
 
         shared_metric_weights = {
-            "flat_btc_balance_hours": 1.0,
             "positions_held_per_day": 1.0,
             "position_held_hours_mean": 1.0,
             "position_held_hours_max": 1.0,
@@ -549,6 +548,7 @@ class Evaluator:
             "equity_choppiness_w": 1.0,
             "equity_jerkiness": 1.0,
             "equity_jerkiness_w": 1.0,
+            "equity_peak_recovery_hours": 1.0,
             "expected_shortfall_1pct": 1.0,
             "exponential_fit_error": 1.0,
             "exponential_fit_error_w": 1.0,
@@ -826,7 +826,9 @@ class Evaluator:
                 fills, equities_array, _, analysis_usd, analysis_btc = run_result
             else:
                 fills, equities_array, analysis_usd, analysis_btc = run_result
-            analyses[exchange] = expand_analysis(analysis_usd, analysis_btc, fills, config)
+            analyses[exchange] = expand_analysis(
+                analysis_usd, analysis_btc, fills, equities_array, config
+            )
 
             # Explicitly drop large intermediate arrays to keep worker RSS low.
             del fills
