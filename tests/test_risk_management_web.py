@@ -3,11 +3,7 @@ import inspect
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-
 from typing import List, Optional, Tuple
-
-from typing import Optional
-
 from urllib.parse import urlparse
 
 import pytest
@@ -18,20 +14,9 @@ pytest.importorskip("httpx")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-
-
-
-import pytest
-
-pytest.importorskip("fastapi")
-pytest.importorskip("passlib")
-pytest.importorskip("httpx")
-
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 import httpx
 from fastapi.testclient import TestClient
+
 from risk_management.configuration import AccountConfig, RealtimeConfig
 from risk_management.web import AuthManager, RiskDashboardService, create_app
 
@@ -66,10 +51,7 @@ class StubFetcher:
     def __init__(self, snapshot: dict) -> None:
         self.snapshot = snapshot
         self.closed = False
-
         self.kill_requests: List[Tuple[Optional[str], Optional[str]]] = []
-
-        self.kill_requests: list[Optional[str]] = []
 
     async def fetch_snapshot(self) -> dict:
         return self.snapshot
@@ -83,14 +65,6 @@ class StubFetcher:
         symbol: Optional[str] = None,
     ) -> dict:
         self.kill_requests.append((account_name, symbol))
-
-    async def execute_kill_switch(
-        self, account_name: Optional[str] = None, symbol: Optional[str] = None
-    ) -> dict:
-
-    async def execute_kill_switch(self, account_name: Optional[str] = None) -> dict:
-
-        self.kill_requests.append(account_name)
         return {"status": "ok"}
 
 
@@ -147,25 +121,7 @@ class _TestingAuthManager(AuthManager):
 
 @pytest.fixture
 def auth_manager() -> AuthManager:
-
     return _TestingAuthManager()
-
-    return _TestingAuthManager()
-
-    return _TestingAuthManager()
-
-    # Pre-generated bcrypt hash for the password "admin123".
-    password_hash = "$2b$12$KIX0dYvEhvdZ4InENa9e6uU30IoqRxG7Pecg/6tiTZeVOw13K9IRG"
-    # Disable HTTPS-only cookies/redirection so the in-process TestClient can
-    # authenticate over plain HTTP without tripping the redirect middleware.
-    return AuthManager(
-        secret_key="super-secret",
-        users={"admin": password_hash},
-        https_only=False,
-    )
-
-    return AuthManager(secret_key="super-secret", users={"admin": password_hash})
-
 
 
 def create_test_app(snapshot: dict, auth_manager: AuthManager) -> tuple[TestClient, StubFetcher]:
@@ -183,19 +139,7 @@ def test_web_dashboard_auth_flow(sample_snapshot: dict, auth_manager: AuthManage
         # Starlette's TestClient may surface a 307 redirect when working with
         # newer httpx releases, while older stacks returned 302/303.
         assert response.status_code in {302, 303, 307}
-
         assert urlparse(response.headers["location"]).path == "/login"
-
-        assert urlparse(response.headers["location"]).path == "/login"
-
-
-        assert urlparse(response.headers["location"]).path == "/login"
-
-
-        assert urlparse(response.headers["location"]).path == "/login"
-
-        assert response.headers["location"].endswith("/login")
-
 
         response = client.get("/login")
         assert response.status_code == 200
@@ -240,6 +184,23 @@ def test_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) 
         response = client.post("/api/accounts/Demo%20Account/kill-switch")
         assert response.status_code == 200
         assert fetcher.kill_requests[-1] == ("Demo Account", None)
+
+
+def test_position_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) -> None:
+    client, fetcher = create_test_app(sample_snapshot, auth_manager)
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        response = client.post(
+            "/api/accounts/Demo%20Account/positions/BTC%2FUSDT%3AUSDT/kill-switch"
+        )
+        assert response.status_code == 200
+        assert fetcher.kill_requests[-1] == ("Demo Account", "BTC/USDT:USDT")
 
 
 def test_letsencrypt_challenge_mount(tmp_path: Path, auth_manager: AuthManager) -> None:
