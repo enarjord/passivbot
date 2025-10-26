@@ -9,7 +9,7 @@ import logging
 import math
 import statistics
 import time
-from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 try:  # pragma: no cover - optional dependency in some envs
     import ccxt.async_support as ccxt_async
@@ -80,6 +80,53 @@ def _first_float(*values: Any) -> Optional[float]:
                     continue
             continue
     return None
+
+
+def _normalize_position_side(value: Any) -> Optional[str]:
+    """Return the normalised hedge-mode side when available."""
+
+    if isinstance(value, str):
+        candidate = value.strip().upper()
+        if candidate in {"LONG", "SHORT", "BOTH"}:
+            return candidate
+    return None
+
+
+def _extract_position_details(position: Mapping[str, Any]) -> Tuple[Optional[str], Optional[int]]:
+    """Return the detected hedge side and index from a position mapping."""
+
+    position_side = _normalize_position_side(position.get("positionSide"))
+    if position_side is None:
+        position_side = _normalize_position_side(position.get("position_side"))
+
+    def _position_idx_from(obj: Any) -> Optional[int]:
+        if not isinstance(obj, Mapping):
+            return None
+        raw_idx = obj.get("positionIdx", obj.get("position_idx"))
+        if raw_idx is None:
+            return None
+        try:
+            value = int(float(raw_idx))
+        except (TypeError, ValueError):
+            return None
+        if value in {0, 1, 2}:
+            return value
+        return None
+
+    position_idx = _position_idx_from(position)
+    info = position.get("info")
+    if position_idx is None and isinstance(info, Mapping):
+        position_idx = _position_idx_from(info)
+
+    if position_side is None and position_idx in {1, 2}:
+        position_side = "LONG" if position_idx == 1 else "SHORT"
+
+    if position_side is None and isinstance(info, Mapping):
+        position_side = _normalize_position_side(
+            info.get("positionSide") or info.get("position_side")
+        )
+
+    return position_side, position_idx
 
 
 class AccountClientProtocol(abc.ABC):
@@ -753,7 +800,19 @@ class CCXTAccountClient(AccountClientProtocol):
                 continue
             side = "sell" if float(size) > 0 else "buy"
             params = dict(self._close_params)
-            params.setdefault("reduceOnly", True)
+            position_side, position_idx = _extract_position_details(position)
+            if position_side and "positionSide" not in params:
+                params["positionSide"] = position_side
+            if position_idx is not None and "positionIdx" not in params:
+                params["positionIdx"] = position_idx
+            if position_side in {"LONG", "SHORT"}:
+                params.pop("reduceOnly", None)
+                params.pop("reduceonly", None)
+            elif position_idx in {1, 2}:
+                params.pop("reduceOnly", None)
+                params.pop("reduceonly", None)
+            elif "reduceOnly" not in params and "reduceonly" not in params:
+                params["reduceOnly"] = True
             mark_price = _first_float(
                 position.get("markPrice"),
                 position.get("mark_price"),
