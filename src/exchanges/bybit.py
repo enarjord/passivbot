@@ -343,27 +343,92 @@ class BybitBot(Passivbot):
 
     async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
         """Return canonical fill events for equity reconstruction (draft implementation)."""
-        events = []
+
+        def extract_fill_event_from_ph_bybit(elm):
+            event = {
+                "id": elm["info"]["orderId"],
+                "timestamp": int(float(elm.get("lastUpdateTimestamp", elm.get("timestamp", 0.0)))),
+                "symbol": elm["symbol"],
+                "side": str(elm["info"].get("side", "")).lower(),
+                "qty": float(elm.get("contracts", elm.get("qty", 0.0))),
+                "price": float(elm.get("lastPrice", elm.get("price", 0.0))),
+                "pnl": float(elm.get("realizedPnl", 0.0)),
+                "fee": None,
+                "position_side": None,
+            }
+            if event["side"] == "buy":
+                event["position_side"] = "long" if event["pnl"] == 0.0 else "short"
+            elif event["side"] == "sell":
+                event["position_side"] = "short" if event["pnl"] == 0.0 else "long"
+            else:
+                raise Exception(f"malformed side {event['side']}")
+            return event
+
+        def extract_fill_event_from_mt_bybit(elm):
+            event = {
+                "id": elm["info"]["orderId"],
+                "timestamp": elm["timestamp"],
+                "symbol": elm["symbol"],
+                "side": elm["side"],
+                "qty": float(elm["amount"]),
+                "price": float(elm["price"]),
+                "pnl": None,
+                "fee": elm.get("fee"),
+                "position_side": None,
+            }
+            closed_size = float(elm["info"].get("closedSize", 0.0))
+            if event["side"] == "buy":
+                event["position_side"] = "long" if closed_size == 0.0 else "short"
+                if closed_size == 0.0:
+                    event["pnl"] = 0.0
+            elif event["side"] == "sell":
+                event["position_side"] = "short" if closed_size == 0.0 else "long"
+                if closed_size == 0.0:
+                    event["pnl"] = 0.0
+            else:
+                raise Exception(f"malformed side {event['side']}")
+            return event
+
+        events: List[dict] = []
         try:
-            fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
+            fills = await self.fetch_fills(start_time=start_time, end_time=end_time, limit=limit)
         except Exception as exc:
-            logging.error(f"error gathering fill events (bybit) {exc}")
+            logging.error(f"error gathering fill events (bybit/fetch_fills) {exc}")
             return events
+
+        if not fills:
+            return events
+
+        events_by_order: DefaultDict[str, List[dict]] = defaultdict(list)
         for fill in fills:
-            events.append(
-                {
-                    "id": fill.get("id") or fill.get("orderId"),
-                    "timestamp": fill.get("timestamp"),
-                    "symbol": fill.get("symbol"),
-                    "side": fill.get("side"),
-                    "position_side": fill.get("position_side"),
-                    "qty": fill.get("qty") or fill.get("amount"),
-                    "price": fill.get("price"),
-                    "pnl": fill.get("pnl"),
-                    "fee": fill.get("fee"),
-                    "info": fill.get("info"),
-                }
+            event = extract_fill_event_from_mt_bybit(fill)
+            events.append(event)
+            events_by_order[event["id"]].append(event)
+
+        ph_since = start_time or max(0, fills[0]["timestamp"] - 1000 * 60)
+        ph_until = end_time or (fills[-1]["timestamp"] + 1000 * 60)
+        try:
+            pos_history = await self.cca.fetch_positions_history(
+                since=int(ph_since),
+                limit=limit,
+                params={"until": int(ph_until), "subType": "linear"},
             )
+        except Exception as exc:
+            logging.error(f"error gathering fill events (bybit/fetch_positions_history) {exc}")
+            pos_history = []
+
+        for entry in pos_history or []:
+            event = extract_fill_event_from_ph_bybit(entry)
+            order_id = event["id"]
+            if order_id in events_by_order:
+                candidates = events_by_order[order_id]
+                target = next((evt for evt in reversed(candidates) if evt.get("pnl") is None), None)
+                if target:
+                    target["pnl"] = event["pnl"]
+                    continue
+            events.append(event)
+
+        events.sort(key=lambda x: x["timestamp"])
         return events
 
     def determine_pos_side(self, x):
