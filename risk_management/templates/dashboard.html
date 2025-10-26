@@ -56,64 +56,6 @@
       color: var(--danger);
     }
 
-    .report-section {
-      margin-top: 1.5rem;
-      display: flex;
-      flex-direction: column;
-      gap: 0.75rem;
-    }
-
-    .report-actions {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 0.5rem;
-    }
-
-    .report-list {
-      width: 100%;
-      background: rgba(15, 23, 42, 0.5);
-      border-radius: 0.75rem;
-      padding: 0.75rem 1rem;
-    }
-
-    .report-list__items {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
-    }
-
-    .report-list__item {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      gap: 0.75rem;
-      border-bottom: 1px solid rgba(148, 163, 184, 0.15);
-      padding-bottom: 0.5rem;
-    }
-
-    .report-list__item:last-child {
-      border-bottom: none;
-      padding-bottom: 0;
-    }
-
-    .report-list__meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.75rem;
-      color: var(--muted);
-      font-size: 0.85rem;
-    }
-
-    .report-list__empty {
-      color: var(--muted);
-      font-size: 0.9rem;
-      margin: 0;
-    }
-
     .grafana-grid {
       display: grid;
       gap: 1.5rem;
@@ -147,6 +89,7 @@
 {% block header_controls %}
   <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
     <span class="badge">Logged in as {{ user }}</span>
+    <a href="/trading-panel" class="button secondary">Trading panel</a>
     <button type="button" class="button danger" data-kill-portfolio>Kill portfolio</button>
     <div class="status-message" data-kill-status="__portfolio__" hidden></div>
     <form method="post" action="/logout">
@@ -219,6 +162,12 @@
           <div class="metric">
             <span class="label">Total Balance</span>
             <span class="value">{{ snapshot.portfolio.balance|currency }}</span>
+          </div>
+          <div class="metric">
+            <span class="label">Daily Realised PnL</span>
+            <span class="value {% if snapshot.portfolio.daily_realized_pnl >= 0 %}gain{% else %}loss{% endif %}">
+              {{ snapshot.portfolio.daily_realized_pnl|currency }}
+            </span>
           </div>
           <div class="metric">
             <span class="label">Gross Exposure</span>
@@ -332,6 +281,10 @@
                 <span class="value">{{ account.balance|currency }}</span>
               </div>
               <div class="metric">
+                <span class="label">Daily Realised PnL</span>
+                <span class="value {% if account.daily_realized_pnl >= 0 %}gain{% else %}loss{% endif %}">{{ account.daily_realized_pnl|currency }}</span>
+              </div>
+              <div class="metric">
                 <span class="label">Gross Exposure</span>
                 <span class="value">{{ account.gross_exposure_notional|currency }}</span>
                 <span class="subvalue">{{ account.gross_exposure|pct }}</span>
@@ -398,15 +351,10 @@
                 </table>
               </div>
             {% endif %}
-            <div class="report-section">
-              <div class="report-actions">
+              <div class="report-actions" style="margin: 1.5rem 0;">
                 <button type="button" class="button secondary" data-generate-report="{{ account.name }}">Generate report</button>
                 <div class="status-message" data-report-status="{{ account.name }}" hidden></div>
               </div>
-              <div class="report-list" data-report-list="{{ account.name }}">
-                <p class="report-list__empty">No stored reports yet.</p>
-              </div>
-            </div>
             {% if account.positions %}
               <div class="table-wrapper">
                 <table>
@@ -417,6 +365,7 @@
                       <th>Notional</th>
                       <th>Exposure %</th>
                       <th>PnL</th>
+                      <th>Daily realised PnL</th>
                       <th>Entry</th>
                       <th>Mark</th>
                       <th>Liq.</th>
@@ -444,6 +393,7 @@
                         <td>{{ position.notional|currency }}</td>
                         <td>{{ position.exposure|pct }}</td>
                         <td class="{% if position.unrealized_pnl >= 0 %}gain{% else %}loss{% endif %}">{{ position.unrealized_pnl|currency }} ({{ position.pnl_pct|pct }})</td>
+                        <td class="{% if position.daily_realized_pnl >= 0 %}gain{% else %}loss{% endif %}">{{ position.daily_realized_pnl|currency }}</td>
                         <td>{{ position.entry_price|currency }}</td>
                         <td>{{ position.mark_price|currency }}</td>
                         <td>{% if position.liquidation_price is not none %}{{ position.liquidation_price|currency }}{% else %}-{% endif %}</td>
@@ -784,6 +734,10 @@
             <span class="value">${formatCurrency(portfolio.balance)}</span>
           </div>
           <div class="metric">
+            <span class="label">Daily Realised PnL</span>
+            <span class="value ${Number(portfolio.daily_realized_pnl) >= 0 ? "gain" : "loss"}">${formatCurrency(portfolio.daily_realized_pnl)}</span>
+          </div>
+          <div class="metric">
             <span class="label">Gross Exposure</span>
             <span class="value">${formatCurrency(portfolio.gross_exposure)}</span>
             <span class="subvalue">${formatPct(portfolio.gross_exposure_pct)}</span>
@@ -861,6 +815,7 @@
           const positionsRows = positions
             .map((position) => {
               const pnlClass = Number(position.unrealized_pnl) >= 0 ? "gain" : "loss";
+              const realizedClass = Number(position.daily_realized_pnl) >= 0 ? "gain" : "loss";
               const maxDd = position.max_drawdown_pct !== null && position.max_drawdown_pct !== undefined
                 ? formatPct(position.max_drawdown_pct)
                 : "-";
@@ -873,6 +828,7 @@
                   <td>${formatCurrency(position.notional)}</td>
                   <td>${formatPct(position.exposure)}</td>
                   <td class="${pnlClass}">${formatCurrency(position.unrealized_pnl)} (${formatPct(position.pnl_pct)})</td>
+                  <td class="${realizedClass}">${formatCurrency(position.daily_realized_pnl)}</td>
                   <td>${formatPrice(position.entry_price)}</td>
                   <td>${formatPrice(position.mark_price)}</td>
                   <td>${formatPrice(position.liquidation_price)}</td>
@@ -950,6 +906,7 @@
                         <th>Notional</th>
                         <th>Exposure %</th>
                         <th>PnL</th>
+                        <th>Daily realised PnL</th>
                         <th>Entry</th>
                         <th>Mark</th>
                         <th>Liq.</th>
@@ -1014,6 +971,10 @@
                   <span class="value">${formatCurrency(account.balance)}</span>
                 </div>
                 <div class="metric">
+                  <span class="label">Daily Realised PnL</span>
+                  <span class="value ${Number(account.daily_realized_pnl) >= 0 ? "gain" : "loss"}">${formatCurrency(account.daily_realized_pnl)}</span>
+                </div>
+                <div class="metric">
                   <span class="label">Gross Exposure</span>
                   <span class="value">${formatCurrency(account.gross_exposure_notional)}</span>
                   <span class="subvalue">${formatPct(account.gross_exposure)}</span>
@@ -1030,14 +991,9 @@
               </div>
               ${accountMetricsTable}
               ${exposuresTable}
-              <div class="report-section">
-                <div class="report-actions">
-                  <button type="button" class="button secondary" data-generate-report="${account.name}">Generate report</button>
-                  <div class="status-message" data-report-status="${account.name}" hidden></div>
-                </div>
-                <div class="report-list" data-report-list="${account.name}">
-                  <p class="report-list__empty">No stored reports yet.</p>
-                </div>
+              <div class="report-actions" style="margin: 1.5rem 0;">
+                <button type="button" class="button secondary" data-generate-report="${account.name}">Generate report</button>
+                <div class="status-message" data-report-status="${account.name}" hidden></div>
               </div>
               ${positionsTable}
               ${ordersTable}
@@ -1045,11 +1001,6 @@
           `;
         })
         .join("");
-      accountsData.forEach((account) => {
-        if (account && account.name) {
-          loadAccountReports(account.name);
-        }
-      });
     };
 
     const setReportStatus = (accountName, message, variant = "info") => {
@@ -1069,65 +1020,6 @@
         statusEl.classList.add("success");
       } else if (variant === "error") {
         statusEl.classList.add("error");
-      }
-    };
-
-    const renderReportList = (accountName, reports) => {
-      const container = document.querySelector(`[data-report-list="${accountName}"]`);
-      if (!container) {
-        return;
-      }
-      if (!Array.isArray(reports) || reports.length === 0) {
-        container.innerHTML = '<p class="report-list__empty">No stored reports yet.</p>';
-        return;
-      }
-      const items = reports
-        .map((report) => {
-          const timestamp = report.created_at
-            ? new Date(report.created_at).toLocaleString()
-            : "";
-          const size = formatBytes(report.size ?? 0);
-          const filename = report.filename || `report-${report.report_id}.csv`;
-          const downloadUrl = report.download_url || "#";
-          return `
-            <li class="report-list__item">
-              <div>
-                <a href="${downloadUrl}" class="button" style="padding: 0.4rem 0.9rem;" download="${filename}">
-                  Download
-                </a>
-                <span style="margin-left: 0.75rem; font-weight: 600;">${filename}</span>
-              </div>
-              <div class="report-list__meta">
-                <span>${timestamp}</span>
-                <span>${size}</span>
-              </div>
-            </li>
-          `;
-        })
-        .join("");
-      container.innerHTML = `<ul class="report-list__items">${items}</ul>`;
-    };
-
-    const loadAccountReports = async (accountName) => {
-      if (!accountName) {
-        return;
-      }
-      try {
-        const response = await fetch(`/api/accounts/${encodeURIComponent(accountName)}/reports`, {
-          credentials: "include",
-        });
-        if (!response.ok) {
-          throw new Error(`Failed to load reports (${response.status})`);
-        }
-        const payload = await response.json();
-        renderReportList(accountName, payload.reports || []);
-        const statusEl = document.querySelector(`[data-report-status="${accountName}"]`);
-        if (statusEl && statusEl.classList.contains("error")) {
-          setReportStatus(accountName, "");
-        }
-      } catch (error) {
-        console.error(error);
-        setReportStatus(accountName, "Unable to load stored reports.", "error");
       }
     };
 
@@ -1174,7 +1066,6 @@
           statusEl.classList.remove("error");
           statusEl.classList.add("success");
         }
-        await loadAccountReports(accountName);
         triggerReportDownload(payload.download_url, payload.filename);
       } catch (error) {
         console.error(error);
@@ -1348,15 +1239,6 @@
         generateAccountReport(accountName, reportButton);
       }
     });
-
-    document
-      .querySelectorAll('[data-page-section="accounts"] [data-report-list]')
-      .forEach((element) => {
-        const accountName = element.getAttribute("data-report-list");
-        if (accountName) {
-          loadAccountReports(accountName);
-        }
-      });
 
     setInterval(poll, REFRESH_INTERVAL_MS);
     poll();

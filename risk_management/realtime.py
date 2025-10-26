@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, time
 from types import TracebackType
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from zoneinfo import ZoneInfo
 
 from custom_endpoint_overrides import (
     CustomEndpointConfigError,
@@ -29,6 +30,7 @@ from .account_clients import AccountClientProtocol, CCXTAccountClient
 from .configuration import CustomEndpointSettings, RealtimeConfig
 from .dashboard import evaluate_alerts, parse_snapshot
 from .email_notifications import EmailAlertSender
+from .telegram_notifications import TelegramNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +132,13 @@ class RealtimeDataFetcher:
                 )
         self._email_sender = EmailAlertSender(config.email) if config.email else None
         self._email_recipients = self._extract_email_recipients()
+        self._telegram_targets = self._extract_telegram_targets()
+        self._telegram_notifier = TelegramNotifier() if self._telegram_targets else None
         self._active_alerts: set[str] = set()
+        self._daily_snapshot_tz = ZoneInfo("America/New_York")
+        self._daily_snapshot_sent_date: Optional[date] = None
+        self._portfolio_stop_loss: Optional[Dict[str, Any]] = None
+        self._last_portfolio_balance: Optional[float] = None
 
     def _extract_email_recipients(self) -> List[str]:
         recipients: List[str] = []
@@ -142,6 +150,30 @@ class RealtimeDataFetcher:
                 if address:
                     recipients.append(address)
         return recipients
+
+    def _extract_telegram_targets(self) -> List[tuple[str, str]]:
+        targets: List[tuple[str, str]] = []
+        for channel in self.config.notification_channels:
+            if not isinstance(channel, str):
+                continue
+            if not channel.lower().startswith("telegram:"):
+                continue
+            payload = channel.split(":", 1)[1]
+            token = ""
+            chat_id = ""
+            if "@" in payload:
+                token, _, chat_id = payload.partition("@")
+            elif "/" in payload:
+                token, _, chat_id = payload.partition("/")
+            else:
+                parts = payload.split(":", 1)
+                if len(parts) == 2:
+                    token, chat_id = parts
+            token = token.strip()
+            chat_id = chat_id.strip()
+            if token and chat_id:
+                targets.append((token, chat_id))
+        return targets
 
     async def fetch_snapshot(self) -> Dict[str, Any]:
         tasks = [client.fetch() for client in self._account_clients]
@@ -195,7 +227,15 @@ class RealtimeDataFetcher:
         }
         if account_messages:
             snapshot["account_messages"] = account_messages
-        self._dispatch_email_alerts(snapshot)
+        portfolio_balance = sum(
+            float(account.get("balance", 0.0)) for account in accounts_payload
+        )
+        self._last_portfolio_balance = portfolio_balance
+        stop_loss_state = self._update_portfolio_stop_loss_state(portfolio_balance)
+        if stop_loss_state:
+            snapshot["portfolio_stop_loss"] = stop_loss_state
+        self._maybe_send_daily_balance_snapshot(snapshot, portfolio_balance)
+        self._dispatch_notifications(snapshot)
         return snapshot
 
     async def close(self) -> None:
@@ -223,8 +263,8 @@ class RealtimeDataFetcher:
         logger.info("Kill switch completed for %s", scope)
         return results
 
-    def _dispatch_email_alerts(self, snapshot: Mapping[str, Any]) -> None:
-        if not self._email_sender or not self._email_recipients:
+    def _dispatch_notifications(self, snapshot: Mapping[str, Any]) -> None:
+        if not (self._email_sender or self._telegram_notifier):
             return
         try:
             _, accounts, thresholds, _ = parse_snapshot(dict(snapshot))
@@ -247,7 +287,141 @@ class RealtimeDataFetcher:
         lines.extend(f"- {alert}" for alert in new_alerts)
         body = "\n".join(lines)
         subject = "Risk alert: exposure threshold breached"
+        if self._email_sender and self._email_recipients:
+            self._email_sender.send(subject, body, self._email_recipients)
+        if self._telegram_notifier and self._telegram_targets:
+            message = f"Exposure alert at {timestamp}\n" + "\n".join(new_alerts)
+            for token, chat_id in self._telegram_targets:
+                self._telegram_notifier.send(token, chat_id, message)
+
+    def _maybe_send_daily_balance_snapshot(
+        self, snapshot: Mapping[str, Any], portfolio_balance: float
+    ) -> None:
+        if not self._email_sender or not self._email_recipients:
+            return
+        now_ny = datetime.now(self._daily_snapshot_tz)
+        current_date = now_ny.date()
+        if self._daily_snapshot_sent_date and current_date > self._daily_snapshot_sent_date:
+            self._daily_snapshot_sent_date = None
+        if now_ny.time() < time(16, 0):
+            return
+        if self._daily_snapshot_sent_date == current_date:
+            return
+        accounts = snapshot.get("accounts", [])
+        lines = [
+            f"Daily portfolio snapshot ({now_ny.strftime('%Y-%m-%d')} 16:00 ET)",
+            f"Total balance: ${portfolio_balance:,.2f}",
+            "",
+            "Accounts:",
+        ]
+        for account in accounts or []:
+            if not isinstance(account, Mapping):
+                continue
+            name = str(account.get("name", "unknown"))
+            balance = float(account.get("balance", 0.0))
+            realised = float(account.get("daily_realized_pnl", 0.0))
+            lines.append(
+                f"- {name}: balance ${balance:,.2f}, daily realised PnL ${realised:,.2f}"
+            )
+        body = "\n".join(lines)
+        subject = "Daily portfolio balance snapshot"
         self._email_sender.send(subject, body, self._email_recipients)
+        self._daily_snapshot_sent_date = current_date
+
+    def _update_portfolio_stop_loss_state(
+        self, portfolio_balance: float
+    ) -> Optional[Dict[str, Any]]:
+        if self._portfolio_stop_loss is None:
+            return None
+        state = dict(self._portfolio_stop_loss)
+        state.setdefault("active", True)
+        state.setdefault("triggered", False)
+        state.setdefault("threshold_pct", 0.0)
+        if state.get("baseline_balance") is None and portfolio_balance:
+            state["baseline_balance"] = portfolio_balance
+        baseline = state.get("baseline_balance")
+        threshold_pct = state.get("threshold_pct")
+        drawdown: Optional[float] = None
+        if baseline and baseline > 0:
+            drawdown = max(0.0, (baseline - portfolio_balance) / baseline)
+        state["current_balance"] = portfolio_balance
+        state["current_drawdown_pct"] = drawdown
+        if (
+            isinstance(threshold_pct, (int, float))
+            and threshold_pct > 0
+            and drawdown is not None
+            and drawdown >= float(threshold_pct) / 100.0
+            and not state.get("triggered")
+        ):
+            state["triggered"] = True
+            state["triggered_at"] = datetime.now(timezone.utc).isoformat()
+        self._portfolio_stop_loss = state
+        return dict(state)
+
+    def get_portfolio_stop_loss(self) -> Optional[Dict[str, Any]]:
+        if self._portfolio_stop_loss is None:
+            return None
+        return dict(self._portfolio_stop_loss)
+
+    async def set_portfolio_stop_loss(self, threshold_pct: float) -> Dict[str, Any]:
+        if threshold_pct <= 0:
+            raise ValueError("Portfolio stop loss threshold must be greater than zero.")
+        state = {
+            "threshold_pct": float(threshold_pct),
+            "baseline_balance": self._last_portfolio_balance,
+            "triggered": False,
+            "triggered_at": None,
+            "active": True,
+        }
+        self._portfolio_stop_loss = state
+        return dict(state)
+
+    async def clear_portfolio_stop_loss(self) -> None:
+        self._portfolio_stop_loss = None
+
+    def _resolve_account_client(self, account_name: str) -> AccountClientProtocol:
+        for client in self._account_clients:
+            if client.config.name == account_name:
+                return client
+        raise ValueError(f"Account '{account_name}' is not configured for realtime monitoring.")
+
+    async def place_order(
+        self,
+        account_name: str,
+        *,
+        symbol: str,
+        order_type: str,
+        side: str,
+        amount: float,
+        price: Optional[float] = None,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> Mapping[str, Any]:
+        client = self._resolve_account_client(account_name)
+        normalized_amount = float(amount)
+        normalized_price = float(price) if price is not None else None
+        return await client.create_order(
+            symbol, order_type, side, normalized_amount, normalized_price, params=params
+        )
+
+    async def cancel_order(
+        self,
+        account_name: str,
+        order_id: str,
+        *,
+        symbol: Optional[str] = None,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> Mapping[str, Any]:
+        client = self._resolve_account_client(account_name)
+        normalized_id = str(order_id)
+        return await client.cancel_order(normalized_id, symbol, params=params)
+
+    async def close_position(self, account_name: str, symbol: str) -> Mapping[str, Any]:
+        client = self._resolve_account_client(account_name)
+        return await client.close_position(symbol)
+
+    async def list_order_types(self, account_name: str) -> Sequence[str]:
+        client = self._resolve_account_client(account_name)
+        return await client.list_order_types()
 
 
 def _extract_balance(balance: Mapping[str, Any], settle_currency: str) -> float:
@@ -376,6 +550,16 @@ def _parse_position(position: Mapping[str, Any], balance: float) -> Optional[Dic
         position.get("info", {}).get("unrealisedPnl") if isinstance(position.get("info"), Mapping) else None,
         position.get("info", {}).get("upl") if isinstance(position.get("info"), Mapping) else None,
     ) or 0.0
+    realized = _first_float(
+        position.get("dailyRealizedPnl"),
+        position.get("realizedPnl"),
+        position.get("realisedPnl"),
+        position.get("info", {}).get("dailyRealizedPnl")
+        if isinstance(position.get("info"), Mapping)
+        else None,
+        position.get("info", {}).get("realizedPnl") if isinstance(position.get("info"), Mapping) else None,
+        position.get("info", {}).get("realisedPnl") if isinstance(position.get("info"), Mapping) else None,
+    ) or 0.0
     contract_size = _first_float(
         position.get("contractSize"),
         position.get("info", {}).get("contractSize") if isinstance(position.get("info"), Mapping) else None,
@@ -422,6 +606,7 @@ def _parse_position(position: Mapping[str, Any], balance: float) -> Optional[Dic
         "liquidation_price": float(liquidation_price) if liquidation_price is not None else None,
         "wallet_exposure_pct": float(wallet_exposure) if wallet_exposure is not None else None,
         "unrealized_pnl": float(unrealized),
+        "daily_realized_pnl": float(realized),
         "max_drawdown_pct": None,
         "take_profit_price": float(take_profit) if take_profit is not None else None,
         "stop_loss_price": float(stop_loss) if stop_loss is not None else None,

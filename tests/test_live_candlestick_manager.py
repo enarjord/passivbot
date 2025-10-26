@@ -1,8 +1,10 @@
+import asyncio
 import os
 import time
-import asyncio
+
 import pytest
-import numpy as np
+
+np = pytest.importorskip("numpy", reason="numpy is required for candlestick manager tests")
 
 LIVE = os.getenv("LIVE_CANDLE_TESTS", "0") == "1"
 
