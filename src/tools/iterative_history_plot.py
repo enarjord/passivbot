@@ -133,8 +133,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--x-metric",
-        default="flat_btc_balance_hours",
-        help="Metric to plot on X axis (default: flat_btc_balance_hours).",
+        default="equity_peak_recovery_hours_usd",
+        help="Metric to plot on X axis (default: equity_peak_recovery_hours_usd).",
     )
     parser.add_argument(
         "--y-metric",
