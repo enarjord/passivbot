@@ -181,7 +181,7 @@ def test_kill_switch_includes_position_idx_from_info():
     order = exchange._orders[0]
     assert order["params"]["positionSide"] == "SHORT"
     assert order["params"]["positionIdx"] == 2
-    assert "reduceOnly" not in order["params"]
+    assert order["params"]["reduceOnly"] is True
     assert "reduceonly" not in order["params"]
 
 
@@ -207,6 +207,5 @@ def test_kill_switch_uses_position_idx_from_position_payload():
     order = exchange._orders[0]
     assert order["params"]["positionSide"] == "LONG"
     assert order["params"]["positionIdx"] == 1
-    assert "reduceOnly" not in order["params"]
-    assert "reduceonly" not in order["params"]
     assert order["params"]["reduceOnly"] is True
+    assert "reduceonly" not in order["params"]
