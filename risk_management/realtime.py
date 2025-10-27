@@ -5,11 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone, date, time
+from datetime import datetime, timezone
 from types import TracebackType
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
-from zoneinfo import ZoneInfo
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from custom_endpoint_overrides import (
     CustomEndpointConfigError,
@@ -26,11 +25,14 @@ except (ModuleNotFoundError, ImportError):  # pragma: no cover - ccxt is optiona
 
         pass
 
+from ._notifications import NotificationCoordinator
+from ._parsing import (
+    extract_balance as _extract_balance,
+    parse_order as _parse_order,
+    parse_position as _parse_position,
+)
 from .account_clients import AccountClientProtocol, CCXTAccountClient
 from .configuration import CustomEndpointSettings, RealtimeConfig
-from .dashboard import evaluate_alerts, parse_snapshot
-from .email_notifications import EmailAlertSender
-from .telegram_notifications import TelegramNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -130,50 +132,9 @@ class RealtimeDataFetcher:
                 logger.info(
                     "Debug API payload logging enabled for account %s", account.name
                 )
-        self._email_sender = EmailAlertSender(config.email) if config.email else None
-        self._email_recipients = self._extract_email_recipients()
-        self._telegram_targets = self._extract_telegram_targets()
-        self._telegram_notifier = TelegramNotifier() if self._telegram_targets else None
-        self._active_alerts: set[str] = set()
-        self._daily_snapshot_tz = ZoneInfo("America/New_York")
-        self._daily_snapshot_sent_date: Optional[date] = None
+        self._notifications = NotificationCoordinator(config)
         self._portfolio_stop_loss: Optional[Dict[str, Any]] = None
         self._last_portfolio_balance: Optional[float] = None
-
-    def _extract_email_recipients(self) -> List[str]:
-        recipients: List[str] = []
-        for channel in self.config.notification_channels:
-            if not isinstance(channel, str):
-                continue
-            if channel.lower().startswith("email:"):
-                address = channel.split(":", 1)[1].strip()
-                if address:
-                    recipients.append(address)
-        return recipients
-
-    def _extract_telegram_targets(self) -> List[tuple[str, str]]:
-        targets: List[tuple[str, str]] = []
-        for channel in self.config.notification_channels:
-            if not isinstance(channel, str):
-                continue
-            if not channel.lower().startswith("telegram:"):
-                continue
-            payload = channel.split(":", 1)[1]
-            token = ""
-            chat_id = ""
-            if "@" in payload:
-                token, _, chat_id = payload.partition("@")
-            elif "/" in payload:
-                token, _, chat_id = payload.partition("/")
-            else:
-                parts = payload.split(":", 1)
-                if len(parts) == 2:
-                    token, chat_id = parts
-            token = token.strip()
-            chat_id = chat_id.strip()
-            if token and chat_id:
-                targets.append((token, chat_id))
-        return targets
 
     async def fetch_snapshot(self) -> Dict[str, Any]:
         tasks = [client.fetch() for client in self._account_clients]
@@ -234,8 +195,8 @@ class RealtimeDataFetcher:
         stop_loss_state = self._update_portfolio_stop_loss_state(portfolio_balance)
         if stop_loss_state:
             snapshot["portfolio_stop_loss"] = stop_loss_state
-        self._maybe_send_daily_balance_snapshot(snapshot, portfolio_balance)
-        self._dispatch_notifications(snapshot)
+        self._notifications.send_daily_snapshot(snapshot, portfolio_balance)
+        self._notifications.dispatch_alerts(snapshot)
         return snapshot
 
     async def close(self) -> None:
@@ -262,71 +223,6 @@ class RealtimeDataFetcher:
                 results[client.config.name] = {"error": str(exc)}
         logger.info("Kill switch completed for %s", scope)
         return results
-
-    def _dispatch_notifications(self, snapshot: Mapping[str, Any]) -> None:
-        if not (self._email_sender or self._telegram_notifier):
-            return
-        try:
-            _, accounts, thresholds, _ = parse_snapshot(dict(snapshot))
-            alerts = evaluate_alerts(accounts, thresholds)
-        except Exception as exc:  # pragma: no cover - snapshot parsing errors are logged for diagnostics
-            logger.debug("Skipping email alert dispatch due to parsing error: %s", exc, exc_info=True)
-            return
-        alerts_set = set(alerts)
-        new_alerts = [alert for alert in alerts if alert not in self._active_alerts]
-        self._active_alerts = alerts_set
-        if not new_alerts:
-            return
-        generated_at = snapshot.get("generated_at")
-        timestamp = (
-            generated_at
-            if isinstance(generated_at, str)
-            else datetime.now(timezone.utc).isoformat()
-        )
-        lines = [f"Exposure thresholds were exceeded at {timestamp}.", "", "Alerts:"]
-        lines.extend(f"- {alert}" for alert in new_alerts)
-        body = "\n".join(lines)
-        subject = "Risk alert: exposure threshold breached"
-        if self._email_sender and self._email_recipients:
-            self._email_sender.send(subject, body, self._email_recipients)
-        if self._telegram_notifier and self._telegram_targets:
-            message = f"Exposure alert at {timestamp}\n" + "\n".join(new_alerts)
-            for token, chat_id in self._telegram_targets:
-                self._telegram_notifier.send(token, chat_id, message)
-
-    def _maybe_send_daily_balance_snapshot(
-        self, snapshot: Mapping[str, Any], portfolio_balance: float
-    ) -> None:
-        if not self._email_sender or not self._email_recipients:
-            return
-        now_ny = datetime.now(self._daily_snapshot_tz)
-        current_date = now_ny.date()
-        if self._daily_snapshot_sent_date and current_date > self._daily_snapshot_sent_date:
-            self._daily_snapshot_sent_date = None
-        if now_ny.time() < time(16, 0):
-            return
-        if self._daily_snapshot_sent_date == current_date:
-            return
-        accounts = snapshot.get("accounts", [])
-        lines = [
-            f"Daily portfolio snapshot ({now_ny.strftime('%Y-%m-%d')} 16:00 ET)",
-            f"Total balance: ${portfolio_balance:,.2f}",
-            "",
-            "Accounts:",
-        ]
-        for account in accounts or []:
-            if not isinstance(account, Mapping):
-                continue
-            name = str(account.get("name", "unknown"))
-            balance = float(account.get("balance", 0.0))
-            realised = float(account.get("daily_realized_pnl", 0.0))
-            lines.append(
-                f"- {name}: balance ${balance:,.2f}, daily realised PnL ${realised:,.2f}"
-            )
-        body = "\n".join(lines)
-        subject = "Daily portfolio balance snapshot"
-        self._email_sender.send(subject, body, self._email_recipients)
-        self._daily_snapshot_sent_date = current_date
 
     def _update_portfolio_stop_loss_state(
         self, portfolio_balance: float
@@ -422,264 +318,3 @@ class RealtimeDataFetcher:
     async def list_order_types(self, account_name: str) -> Sequence[str]:
         client = self._resolve_account_client(account_name)
         return await client.list_order_types()
-
-
-def _extract_balance(balance: Mapping[str, Any], settle_currency: str) -> float:
-    """Extract a numeric balance from ccxt balance payloads."""
-
-    if not isinstance(balance, Mapping):
-        return 0.0
-
-    def _to_float(value: Any) -> Optional[float]:
-        if value is None:
-            return None
-        if isinstance(value, (int, float)):
-            return float(value)
-        if isinstance(value, str):
-            value = value.strip()
-            if not value:
-                return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
-    aggregate_keys = (
-        "totalMarginBalance",
-        "totalEquity",
-        "totalWalletBalance",
-        "marginBalance",
-        "totalBalance",
-    )
-
-    def _find_nested_aggregate(value: Any) -> Optional[float]:
-        if isinstance(value, Mapping):
-            for key in aggregate_keys:
-                candidate = _to_float(value.get(key))
-                if candidate is not None:
-                    return candidate
-            for child in value.values():
-                result = _find_nested_aggregate(child)
-                if result is not None:
-                    return result
-        elif isinstance(value, (list, tuple)):
-            for child in value:
-                result = _find_nested_aggregate(child)
-                if result is not None:
-                    return result
-        return None
-
-    # Some exchanges expose aggregate balances directly on the top-level payload.
-    for key in (*aggregate_keys, "equity"):
-        candidate = _to_float(balance.get(key))
-        if candidate is not None:
-            return candidate
-
-    info = balance.get("info")
-    if isinstance(info, Mapping):
-        for key in (*aggregate_keys, "equity"):
-            candidate = _to_float(info.get(key))
-            if candidate is not None:
-                return candidate
-        nested = _find_nested_aggregate(info)
-        if nested is not None:
-            return nested
-
-    total = balance.get("total")
-    if isinstance(total, Mapping) and total:
-        if settle_currency in total:
-            candidate = _to_float(total.get(settle_currency))
-            if candidate is not None:
-                return candidate
-        summed = 0.0
-        found_value = False
-        for value in total.values():
-            candidate = _to_float(value)
-            if candidate is None:
-                continue
-            summed += candidate
-            found_value = True
-        if found_value:
-            return summed
-
-    for currency_key in (settle_currency, "USDT"):
-        entry = balance.get(currency_key)
-        if isinstance(entry, Mapping):
-            for key in ("total", "free", "used"):
-                candidate = _to_float(entry.get(key))
-                if candidate is not None:
-                    return candidate
-        else:
-            candidate = _to_float(entry)
-            if candidate is not None:
-                return candidate
-
-    return 0.0
-
-
-def _parse_position(position: Mapping[str, Any], balance: float) -> Optional[Dict[str, Any]]:
-    size = _first_float(
-        position.get("contracts"),
-        position.get("size"),
-        position.get("amount"),
-        position.get("info", {}).get("positionAmt") if isinstance(position.get("info"), Mapping) else None,
-        position.get("info", {}).get("size") if isinstance(position.get("info"), Mapping) else None,
-    )
-    if size is None or abs(size) < 1e-12:
-        return None
-    side = "long" if size > 0 else "short"
-    entry_price = _first_float(
-        position.get("entryPrice"),
-        position.get("entry_price"),
-        position.get("info", {}).get("entryPrice") if isinstance(position.get("info"), Mapping) else None,
-        position.get("info", {}).get("avgEntryPrice") if isinstance(position.get("info"), Mapping) else None,
-    )
-    mark_price = _first_float(
-        position.get("markPrice"),
-        position.get("mark_price"),
-        position.get("info", {}).get("markPrice") if isinstance(position.get("info"), Mapping) else None,
-        position.get("info", {}).get("last") if isinstance(position.get("info"), Mapping) else None,
-    )
-    liquidation_price = _first_float(
-        position.get("liquidationPrice"),
-        position.get("info", {}).get("liquidationPrice") if isinstance(position.get("info"), Mapping) else None,
-    )
-    unrealized = _first_float(
-        position.get("unrealizedPnl"),
-        position.get("info", {}).get("unRealizedProfit") if isinstance(position.get("info"), Mapping) else None,
-        position.get("info", {}).get("unrealisedPnl") if isinstance(position.get("info"), Mapping) else None,
-        position.get("info", {}).get("upl") if isinstance(position.get("info"), Mapping) else None,
-    ) or 0.0
-    realized = _first_float(
-        position.get("dailyRealizedPnl"),
-        position.get("realizedPnl"),
-        position.get("realisedPnl"),
-        position.get("info", {}).get("dailyRealizedPnl")
-        if isinstance(position.get("info"), Mapping)
-        else None,
-        position.get("info", {}).get("realizedPnl") if isinstance(position.get("info"), Mapping) else None,
-        position.get("info", {}).get("realisedPnl") if isinstance(position.get("info"), Mapping) else None,
-    ) or 0.0
-    contract_size = _first_float(
-        position.get("contractSize"),
-        position.get("info", {}).get("contractSize") if isinstance(position.get("info"), Mapping) else None,
-        position.get("info", {}).get("ctVal") if isinstance(position.get("info"), Mapping) else None,
-    ) or 1.0
-    notional = _first_float(
-        position.get("notional"),
-        position.get("notionalValue"),
-        position.get("info", {}).get("notionalValue") if isinstance(position.get("info"), Mapping) else None,
-        position.get("info", {}).get("notionalUsd") if isinstance(position.get("info"), Mapping) else None,
-    )
-    if notional is None:
-        reference_price = mark_price or entry_price or 0.0
-        notional = abs(size) * contract_size * reference_price
-    notional_value = float(notional or 0.0)
-    if size < 0 and notional_value > 0:
-        signed_notional = -abs(notional_value)
-    elif size > 0 and notional_value < 0:
-        signed_notional = abs(notional_value)
-    else:
-        signed_notional = notional_value
-    abs_notional = abs(signed_notional)
-    take_profit = _first_float(
-        position.get("takeProfitPrice"),
-        position.get("tpPrice"),
-        position.get("info", {}).get("takeProfitPrice") if isinstance(position.get("info"), Mapping) else None,
-        position.get("info", {}).get("tpTriggerPx") if isinstance(position.get("info"), Mapping) else None,
-    )
-    stop_loss = _first_float(
-        position.get("stopLossPrice"),
-        position.get("slPrice"),
-        position.get("info", {}).get("stopLossPrice") if isinstance(position.get("info"), Mapping) else None,
-        position.get("info", {}).get("slTriggerPx") if isinstance(position.get("info"), Mapping) else None,
-    )
-    wallet_exposure = None
-    if balance:
-        wallet_exposure = abs_notional / balance if balance else None
-    return {
-        "symbol": str(position.get("symbol") or position.get("id") or "unknown"),
-        "side": side,
-        "notional": abs_notional,
-        "entry_price": float(entry_price or 0.0),
-        "mark_price": float(mark_price or 0.0),
-        "liquidation_price": float(liquidation_price) if liquidation_price is not None else None,
-        "wallet_exposure_pct": float(wallet_exposure) if wallet_exposure is not None else None,
-        "unrealized_pnl": float(unrealized),
-        "daily_realized_pnl": float(realized),
-        "max_drawdown_pct": None,
-        "take_profit_price": float(take_profit) if take_profit is not None else None,
-        "stop_loss_price": float(stop_loss) if stop_loss is not None else None,
-        "size": float(size),
-        "signed_notional": signed_notional,
-    }
-
-
-def _parse_order(order: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
-    if not isinstance(order, Mapping):
-        return None
-    symbol = order.get("symbol") or order.get("id")
-    if not symbol:
-        return None
-    price = _first_float(
-        order.get("price"),
-        order.get("triggerPrice"),
-        order.get("stopPrice"),
-        order.get("info", {}).get("price") if isinstance(order.get("info"), Mapping) else None,
-    )
-    amount = _first_float(
-        order.get("amount"),
-        order.get("contracts"),
-        order.get("size"),
-        order.get("info", {}).get("origQty") if isinstance(order.get("info"), Mapping) else None,
-    )
-    if amount is None:
-        return None
-    remaining = _first_float(
-        order.get("remaining"),
-        order.get("remainingAmount"),
-        order.get("info", {}).get("leavesQty") if isinstance(order.get("info"), Mapping) else None,
-    )
-    reduce_only_raw = order.get("reduceOnly")
-    if isinstance(order.get("info"), Mapping):
-        reduce_only_raw = reduce_only_raw or order["info"].get("reduceOnly")
-    reduce_only = bool(reduce_only_raw)
-    stop_price = _first_float(
-        order.get("stopPrice"),
-        order.get("triggerPrice"),
-        order.get("info", {}).get("stopPrice") if isinstance(order.get("info"), Mapping) else None,
-    )
-    timestamp_raw = order.get("timestamp")
-    created_at = None
-    if isinstance(timestamp_raw, (int, float)):
-        created_at = datetime.fromtimestamp(float(timestamp_raw) / 1000, timezone.utc).isoformat()
-    else:
-        datetime_str = order.get("datetime")
-        if isinstance(datetime_str, str) and datetime_str:
-            created_at = datetime_str
-    notional = price * amount if price is not None else None
-    return {
-        "order_id": str(order.get("id") or order.get("clientOrderId") or ""),
-        "symbol": str(symbol),
-        "side": str(order.get("side") or "").lower(),
-        "type": str(order.get("type") or "").lower(),
-        "price": price,
-        "amount": amount,
-        "remaining": remaining,
-        "status": str(order.get("status") or ""),
-        "reduce_only": reduce_only,
-        "stop_price": stop_price,
-        "notional": notional,
-        "created_at": created_at,
-    }
-
-
-def _first_float(*values: Any) -> Optional[float]:
-    for value in values:
-        if value in (None, ""):
-            continue
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            continue
-    return None
