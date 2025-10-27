@@ -27,6 +27,7 @@ from custom_endpoint_overrides import (
     resolve_custom_endpoint_override,
 )
 
+from risk_management.configuration import AccountConfig
 from .realized_pnl import fetch_realized_pnl_history
 
 try:  # pragma: no cover - passivbot is optional when running tests
@@ -83,6 +84,7 @@ def _first_float(*values: Any) -> Optional[float]:
             continue
     return None
 
+
 def _coerce_float(value: Any) -> Optional[float]:
     """Return ``value`` converted to ``float`` when possible."""
 
@@ -94,25 +96,6 @@ def _coerce_float(value: Any) -> Optional[float]:
         if isinstance(value, str):
             try:
                 return float(value.strip())
-            except (TypeError, ValueError):
-                return None
-    return None
-
-def _coerce_int(value: Any) -> Optional[int]:
-    """Return ``value`` converted to ``int`` when possible."""
-
-    if value is None:
-        return None
-
-    if isinstance(value, bool):
-        return int(value)
-
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        if isinstance(value, str):
-            try:
-                return int(float(value.strip()))
             except (TypeError, ValueError):
                 return None
     return None
@@ -427,9 +410,7 @@ def _instantiate_ccxt_client(exchange_id: str, credentials: Mapping[str, Any]) -
 class CCXTAccountClient(AccountClientProtocol):
     """Realtime account client backed by ccxt asynchronous exchanges."""
 
-    def __init__(self, config: "AccountConfig") -> None:
-        from .configuration import AccountConfig  # lazy import to avoid cycle
-
+    def __init__(self, config: AccountConfig) -> None:
         if not isinstance(config, AccountConfig):  # pragma: no cover - defensive
             raise TypeError("config must be an AccountConfig instance")
 
@@ -438,7 +419,6 @@ class CCXTAccountClient(AccountClientProtocol):
         credentials = dict(config.credentials)
         credentials.setdefault("enableRateLimit", True)
         self.client = _instantiate_ccxt_client(config.exchange, credentials)
-        self._normalized_exchange = normalize_exchange_name(config.exchange)
         self._balance_params = dict(config.params.get("balance", {}))
         self._positions_params = dict(config.params.get("positions", {}))
         self._orders_params = dict(config.params.get("orders", {}))
@@ -797,114 +777,27 @@ class CCXTAccountClient(AccountClientProtocol):
                 "[%s] fetch_open_orders not available on exchange client", self.config.name
             )
 
-        realized_cfg = self.config.params.get("realized_pnl")
-        cfg_mapping = realized_cfg if isinstance(realized_cfg, Mapping) else None
-        fetch_realized_always = bool(cfg_mapping and cfg_mapping.get("mode") == "always")
+        realized_cfg_raw = self.config.params.get("realized_pnl")
+        realized_cfg = realized_cfg_raw if isinstance(realized_cfg_raw, Mapping) else None
+        tolerance_raw = realized_cfg.get("fallback_tolerance") if realized_cfg else None
+        try:
+            abs_tol = abs(float(tolerance_raw)) if tolerance_raw is not None else 1e-9
+        except (TypeError, ValueError):
+            abs_tol = 1e-9
+
         realized_from_positions = sum(
             float(position.get("daily_realized_pnl", 0.0)) for position in positions
         )
         realized_total = realized_from_positions
 
-        realized_cfg_raw = self.config.params.get("realized_pnl")
-        realized_cfg = realized_cfg_raw if isinstance(realized_cfg_raw, Mapping) else None
-        if realized_cfg:
-            mode_value = realized_cfg.get("mode")
-            fetch_mode = str(mode_value).lower() if isinstance(mode_value, str) else ""
-            fetch_always = fetch_mode == "always"
-            fetch_never = fetch_mode == "never"
-            tolerance_raw = realized_cfg.get("fallback_tolerance")
-            try:
-                abs_tol = abs(float(tolerance_raw)) if tolerance_raw is not None else 1e-9
-            except (TypeError, ValueError):
-                abs_tol = 1e-9
+        fetch_mode = str(realized_cfg.get("mode", "")).lower() if realized_cfg else ""
+        fetch_always = fetch_mode == "always"
+        fetch_never = fetch_mode == "never"
 
-            lookback_ms = _coerce_int(realized_cfg.get("lookback_ms"))
-            if lookback_ms is None:
-                hours = _coerce_int(realized_cfg.get("lookback_hours"))
-                if hours is not None:
-                    lookback_ms = hours * 60 * 60 * 1000
-            if lookback_ms is None:
-                minutes = _coerce_int(realized_cfg.get("lookback_minutes"))
-                if minutes is not None:
-                    lookback_ms = minutes * 60 * 1000
-            if lookback_ms is None or lookback_ms <= 0:
-                lookback_ms = 24 * 60 * 60 * 1000
+        should_fetch = False
+        if realized_cfg and not fetch_never:
+            should_fetch = fetch_always or math.isclose(realized_from_positions, 0.0, abs_tol=abs_tol)
 
-            now_ms = int(time.time() * 1000)
-            since = (
-                _coerce_int(realized_cfg.get("since_ms"))
-                or _coerce_int(realized_cfg.get("start_time_ms"))
-                or _coerce_int(realized_cfg.get("since"))
-            )
-            if since is None:
-                since = max(0, now_ms - lookback_ms)
-            until = (
-                _coerce_int(realized_cfg.get("until_ms"))
-                or _coerce_int(realized_cfg.get("end_time_ms"))
-                or _coerce_int(realized_cfg.get("until"))
-            )
-            if until is None or until <= 0:
-                until = now_ms
-
-            if not fetch_never and since < until:
-                params_raw = realized_cfg.get("params")
-                params = dict(params_raw) if isinstance(params_raw, Mapping) else {}
-                limit = _coerce_int(realized_cfg.get("limit"))
-
-                symbols_cfg = realized_cfg.get("symbols")
-                symbols: Optional[Sequence[str]]
-                if isinstance(symbols_cfg, str) and symbols_cfg:
-                    symbols = [symbols_cfg]
-                elif isinstance(symbols_cfg, Sequence):
-                    symbols = [
-                        str(symbol)
-                        for symbol in symbols_cfg
-                        if isinstance(symbol, str) and symbol
-                    ]
-                else:
-                    dedup: list[str] = []
-                    for position in positions:
-                        symbol = position.get("symbol")
-                        if isinstance(symbol, str) and symbol and symbol not in dedup:
-                            dedup.append(symbol)
-                    if dedup:
-                        symbols = dedup
-                    elif self.config.symbols:
-                        symbols = list(dict.fromkeys(self.config.symbols))
-                    else:
-                        symbols = None
-
-                should_fetch = fetch_always or math.isclose(
-                    realized_from_positions, 0.0, abs_tol=abs_tol
-                )
-                if should_fetch:
-                    try:
-                        realized_override = await fetch_realized_pnl_history(
-                            self._normalized_exchange,
-                            self.client,
-                            since=since,
-                            until=until,
-                            params=params,
-                            limit=limit,
-                            symbols=symbols,
-                            account_name=self.config.name,
-                            log=logger,
-                            debug_api_payloads=self._debug_api_payloads,
-                        )
-                    except Exception as exc:  # pragma: no cover - defensive
-                        logger.debug(
-                            "[%s] realised PnL helper failed: %s",
-                            self.config.name,
-                            exc,
-                            exc_info=self._debug_api_payloads,
-                        )
-                    else:
-                        if realized_override is not None:
-                            realized_total = realized_override
-
-        should_fetch = cfg_mapping is not None and (
-            fetch_realized_always or abs(realized_from_positions) < 1e-9
-        )
         if should_fetch:
             realized_override = await self._fetch_realized_pnl(positions)
             if realized_override is not None:
@@ -1326,31 +1219,6 @@ class CCXTAccountClient(AccountClientProtocol):
                 params.pop("reduceOnly", None)
                 params.pop("reduceonly", None)
             elif position_idx in {1, 2}:
-                params.pop("reduceOnly", None)
-                params.pop("reduceonly", None)
-            elif "reduceOnly" not in params and "reduceonly" not in params:
-                params["reduceOnly"] = True
-
-            params.setdefault("reduceOnly", True)
-
-            position_side: Optional[str] = None
-            info = position.get("info")
-            if isinstance(info, Mapping):
-                raw_position_side = info.get("positionSide") or info.get("position_side")
-                if isinstance(raw_position_side, str):
-                    normalized = raw_position_side.upper()
-                    if normalized in {"LONG", "SHORT", "BOTH"}:
-                        position_side = normalized
-            if position_side is None:
-                raw_position_side = position.get("positionSide") or position.get("position_side")
-                if isinstance(raw_position_side, str):
-                    normalized = raw_position_side.upper()
-                    if normalized in {"LONG", "SHORT", "BOTH"}:
-                        position_side = normalized
-            if position_side and "positionSide" not in params:
-                params["positionSide"] = position_side
-
-            if position_side in {"LONG", "SHORT"}:
                 params.pop("reduceOnly", None)
                 params.pop("reduceonly", None)
             elif "reduceOnly" not in params and "reduceonly" not in params:

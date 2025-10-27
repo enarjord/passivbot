@@ -2,7 +2,7 @@ import asyncio
 import sys
 from pathlib import Path
 from typing import Any, Awaitable, Mapping, TypeVar
-from typing import Any, Mapping
+
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -113,12 +113,9 @@ def test_instantiate_ccxt_client_applies_custom_endpoints(monkeypatch) -> None:
     assert client.urls["api"]["public"] == "https://proxy.example/v5"
     assert client.urls["host"] == "https://proxy.example"
 
+
 def test_fetch_realized_pnl_history_binance_uses_income_endpoint(monkeypatch) -> None:
     class DummyIncomeClient:
-def test_fetch_realized_pnl_history_binance_uses_income_endpoint(monkeypatch) -> None:
-    class DummyIncomeClient:
-def test_fetch_realized_pnl_binance_uses_income_endpoint(monkeypatch) -> None:
-    class DummyClient:
         def __init__(self) -> None:
             self.calls: list[Mapping[str, Any]] = []
 
@@ -132,7 +129,6 @@ def test_fetch_realized_pnl_binance_uses_income_endpoint(monkeypatch) -> None:
     dummy = DummyIncomeClient()
 
     realized = run_async(
-    realized = asyncio.run(
         fetch_realized_pnl_history(
             "binanceusdm",
             dummy,
@@ -141,24 +137,6 @@ def test_fetch_realized_pnl_binance_uses_income_endpoint(monkeypatch) -> None:
         )
     )
 
-    dummy = DummyClient()
-
-    def fake_instantiate(exchange: str, credentials: Mapping[str, Any]):
-        assert exchange == "binanceusdm"
-        return dummy
-
-    monkeypatch.setattr(module, "_instantiate_ccxt_client", fake_instantiate)
-
-    config = AccountConfig(
-        name="Binance",
-        exchange="binanceusdm",
-        settle_currency="USDT",
-        credentials={},
-        params={"realized_pnl": {"lookback_ms": 60_000}},
-    )
-
-    client = module.CCXTAccountClient(config)
-    realized = asyncio.run(client._fetch_realized_pnl([], now_ms=1_000_000))
     assert realized == pytest.approx(2.0)
     assert dummy.calls, "fetch_income should have been called"
     params = dummy.calls[-1]
@@ -166,15 +144,9 @@ def test_fetch_realized_pnl_binance_uses_income_endpoint(monkeypatch) -> None:
     assert params["startTime"] == 940_000
     assert params["endTime"] == 1_000_000
 
+
 def test_fetch_realized_pnl_history_bybit_paginates_closed_pnl() -> None:
     class DummyBybitClient:
-      
-def test_fetch_realized_pnl_history_bybit_paginates_closed_pnl() -> None:
-    class DummyBybitClient:
-      
-def test_fetch_realized_pnl_bybit_paginates_closed_pnl(monkeypatch) -> None:
-    class DummyClient:
-      
         def __init__(self) -> None:
             self.calls: list[Mapping[str, Any]] = []
             self._responses = [
@@ -194,9 +166,6 @@ def test_fetch_realized_pnl_bybit_paginates_closed_pnl(monkeypatch) -> None:
     dummy = DummyBybitClient()
 
     realized = run_async(
-
-    realized = asyncio.run(
-
         fetch_realized_pnl_history(
             "bybit",
             dummy,
@@ -206,41 +175,14 @@ def test_fetch_realized_pnl_bybit_paginates_closed_pnl(monkeypatch) -> None:
         )
     )
 
-
-    dummy = DummyClient()
-
-    def fake_instantiate(exchange: str, credentials: Mapping[str, Any]):
-        assert exchange == "bybit"
-        return dummy
-
-    monkeypatch.setattr(module, "_instantiate_ccxt_client", fake_instantiate)
-
-    config = AccountConfig(
-        name="Bybit",
-        exchange="bybit",
-        settle_currency="USDT",
-        credentials={},
-        params={"realized_pnl": {"lookback_ms": 60_000, "limit": 100}},
-    )
-
-    client = module.CCXTAccountClient(config)
-    realized = asyncio.run(client._fetch_realized_pnl([], now_ms=2_000_000))
-
-
     assert realized == pytest.approx(1.3)
     assert len(dummy.calls) == 2
     assert dummy.calls[0]["limit"] == 100
     assert dummy.calls[1]["cursor"] == "cursor123"
 
 
-def test_fetch_realized_pnl_history_okx_sums_trade_pnl(monkeypatch) -> None:
+def test_fetch_realized_pnl_history_okx_sums_trade_pnl() -> None:
     class DummyOkxClient:
-
-def test_fetch_realized_pnl_history_okx_sums_trade_pnl(monkeypatch) -> None:
-    class DummyOkxClient:
-def test_fetch_realized_pnl_okx_sums_trade_pnl(monkeypatch) -> None:
-    class DummyClient:
-
         def __init__(self) -> None:
             self.calls: list[tuple[Any, Any, Any, Mapping[str, Any]]] = []
 
@@ -254,11 +196,7 @@ def test_fetch_realized_pnl_okx_sums_trade_pnl(monkeypatch) -> None:
 
     dummy = DummyOkxClient()
 
-
     realized = run_async(
-
-    realized = asyncio.run(
-
         fetch_realized_pnl_history(
             "okx",
             dummy,
@@ -321,57 +259,31 @@ def test_account_fetch_uses_realized_history_when_requested(monkeypatch) -> None
 
     monkeypatch.setattr(module.CCXTAccountClient, "_collect_symbol_metrics", fake_collect)
 
-    async def fake_fetch_realized(exchange_id, client, **kwargs):  # type: ignore[override]
-        assert exchange_id == "bybit"
-        assert kwargs["account_name"] == "Bybit"
-        assert kwargs["since"] == 1_940_000
-        assert kwargs["until"] == 2_000_000
+    async def fake_fetch_realized(self, positions, *, now_ms=None):  # type: ignore[override]
+        assert len(positions) == 1
+        assert positions[0]["symbol"] == "BTCUSDT"
         return 7.5
 
-    monkeypatch.setattr(module, "fetch_realized_pnl_history", fake_fetch_realized)
+    monkeypatch.setattr(module.CCXTAccountClient, "_fetch_realized_pnl", fake_fetch_realized)
 
     config = AccountConfig(
         name="Bybit",
         exchange="bybit",
-   
-    dummy = DummyClient()
-
-    def fake_instantiate(exchange: str, credentials: Mapping[str, Any]):
-        assert exchange == "okx"
-        return dummy
-
-    monkeypatch.setattr(module, "_instantiate_ccxt_client", fake_instantiate)
-
-    config = AccountConfig(
-        name="OKX",
-        exchange="okx",
         settle_currency="USDT",
         credentials={},
         params={
             "realized_pnl": {
-             
                 "mode": "always",
                 "lookback_ms": 60_000,
                 "since_ms": 1_940_000,
                 "until_ms": 2_000_000,
-
-                "lookback_ms": 60_000,
-                "symbols": ["BTC/USDT:USDT"],
             }
         },
     )
 
     client = module.CCXTAccountClient(config)
 
-    result = asyncio.run(client.fetch())
+    result = run_async(client.fetch())
 
     assert result["daily_realized_pnl"] == pytest.approx(7.5)
     assert result["positions"][0]["daily_realized_pnl"] == 0.0
-    positions = [{"symbol": "BTC/USDT:USDT"}]
-    realized = asyncio.run(client._fetch_realized_pnl(positions, now_ms=500_000))
-
-    assert realized == pytest.approx(0.3)
-    assert dummy.calls
-    symbol, since, limit, params = dummy.calls[-1]
-    assert symbol == "BTC/USDT:USDT"
-    assert params["until"] == 500_000
