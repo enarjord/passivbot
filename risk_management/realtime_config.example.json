@@ -1,78 +1,99 @@
 {
-  "custom_endpoints": {
-    "path": "../configs/custom_endpoints.json",
-    "autodiscover": false
-  },
-  "reports_dir": "../risk_reports",
-  "grafana": {
-    "base_url": "https://grafana.example.com/",
-    "default_height": 620,
-    "dashboards": [
-      {
-        "title": "Portfolio overview",
-        "url": "d-solo/abc123/portfolio-overview?orgId=1&from=now-7d&to=now&panelId=2&refresh=1m",
-        "description": "NAV, profit rate, and drawdown metrics across the portfolio."
-      },
-      {
-        "title": "Exposure & leverage",
-        "url": "d-solo/def456/portfolio-exposure?orgId=1&from=now-7d&to=now&panelId=6&refresh=1m",
-        "description": "Wallet exposure, leverage ratios, and asset allocation breakdowns."
-      }
-    ]
-  },
-
-  "debug_api_payloads": false,
-  "accounts": [
-    {
-      "name": "Binance Futures",
-      "exchange": "binanceusdm",
-      "api_key_id": "binance_01",
-      "settle_currency": "USDT"
+    "api_keys_file": "../api-keys.json.example",
+    "debug_api_payloads": false,
+    "custom_endpoints": {
+        "path": "../configs/custom_endpoints.json.example",
+        "autodiscover": false
     },
-    {
-      "name": "OKX Futures",
-      "exchange": "okx",
-      "api_key_id": "okx_01",
-      "settle_currency": "USDT",
-      "params": {
-        "balance": {"type": "swap"},
-        "positions": {"type": "swap"}
-      }
+    "reports_dir": "../risk_reports",
+    "grafana": {
+        "base_url": "https://grafana.example.com/",
+        "default_height": 620,
+        "dashboards": [
+            {
+                "title": "Portfolio overview",
+                "url": "d-solo/abc123/portfolio-overview?orgId=1&from=now-7d&to=now&panelId=2&refresh=1m",
+                "description": "NAV, profit rate, and drawdown metrics across the portfolio."
+            },
+            {
+                "title": "Exposure & leverage",
+                "url": "d-solo/def456/portfolio-exposure?orgId=1&from=now-7d&to=now&panelId=6&refresh=1m",
+                "description": "Wallet exposure, leverage ratios, and asset allocation breakdowns."
+            }
+        ]
     },
-    {
-      "name": "Bybit USDT Perpetuals",
-      "exchange": "bybit",
-      "api_key_id": "bybit_01",
-      "settle_currency": "USDT",
-      "params": {
-        "balance": {"type": "swap"},
-        "positions": {"type": "swap"}
-      }
+    "accounts": [
+        {
+            "name": "Binance Futures (sample)",
+            "exchange": "binanceusdm",
+            "api_key_id": "binance_01",
+            "settle_currency": "USDT",
+            "enabled": false,
+            "params": {
+                "balance": {
+                    "type": "swap"
+                },
+                "positions": {
+                    "type": "swap"
+                }
+            }
+        },
+        {
+            "name": "OKX Futures (sample)",
+            "exchange": "okx",
+            "api_key_id": "okx_01",
+            "settle_currency": "USDT",
+            "enabled": false,
+            "params": {
+                "balance": {
+                    "type": "swap"
+                },
+                "positions": {
+                    "type": "swap"
+                }
+            }
+        },
+        {
+            "name": "Bybit USDT Perpetuals (sample)",
+            "exchange": "bybit",
+            "api_key_id": "bybit_01",
+            "settle_currency": "USDT",
+            "enabled": false,
+            "params": {
+                "balance": {
+                    "type": "swap"
+                },
+                "positions": {
+                    "type": "swap"
+                }
+            }
+        }
+    ],
+    "alert_thresholds": {
+        "wallet_exposure_pct": 0.65,
+        "position_wallet_exposure_pct": 0.25,
+        "max_drawdown_pct": 0.25,
+        "loss_threshold_pct": -0.08
+    },
+    "email": {
+        "host": "smtp.example.com",
+        "port": 587,
+        "username": "alerts@example.com",
+        "password": "replace-with-app-password",
+        "sender": "alerts@example.com",
+        "use_tls": true
+    },
+    "notification_channels": [
+        "email:risk-team@example.com",
+        "telegram:bot-token@chat-id",
+        "slack:#passivbot-risk-alerts"
+    ],
+    "auth": {
+        "secret_key": "replace-with-a-long-random-string",
+        "session_cookie_name": "risk_dashboard_session",
+        "https_only": true,
+        "users": {
+            "admin": "$2b$12$0ZCLkFp6iuhlEFshgPCBz.0dXxmRCV4vcjxHfRh0qKtzc79Pj9c5W"
+        }
     }
-  ],
-  "alert_thresholds": {
-    "wallet_exposure_pct": 0.65,
-    "position_wallet_exposure_pct": 0.25,
-    "max_drawdown_pct": 0.25,
-    "loss_threshold_pct": -0.08
-  },
-  "email": {
-    "host": "smtp.example.com",
-    "port": 587,
-    "username": "alerts@example.com",
-    "password": "replace-with-app-password",
-    "sender": "alerts@example.com",
-    "use_tls": true
-  },
-  "notification_channels": [
-    "email:risk-team@example.com",
-    "slack:#passivbot-risk-alerts"
-  ],
-  "auth": {
-    "secret_key": "replace-me-with-a-long-random-string",
-    "session_cookie_name": "risk_dashboard_session",
-    "users": {
-      "admin": "replace-with-bcrypt-hash"
-    }
-  }
 }
