@@ -6,10 +6,11 @@ RealtimeDataFetcher utilities.
 
 from __future__ import annotations
 from collections.abc import Iterable as IterableABC
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from passlib.context import CryptContext
@@ -19,6 +20,7 @@ from urllib.parse import quote, urljoin
 
 from .configuration import RealtimeConfig
 from .realtime import RealtimeDataFetcher
+from .history import PortfolioHistoryStore
 from .reporting import ReportManager
 from .snapshot_utils import build_presentable_snapshot
 
@@ -203,6 +205,9 @@ def create_app(
         reports_dir = base_root / "reports"
     app.state.report_manager = ReportManager(reports_dir)
 
+    history_dir = config.history_dir or (Path(reports_dir) / "history")
+    app.state.history_manager = PortfolioHistoryStore(history_dir)
+
     def resolve_grafana_context() -> dict[str, Any]:
         grafana_cfg = config.grafana
         if grafana_cfg is None:
@@ -282,6 +287,25 @@ def create_app(
     def get_report_manager(request: Request) -> ReportManager:
         return request.app.state.report_manager
 
+    def get_history_manager(request: Request) -> PortfolioHistoryStore:
+        history = getattr(request.app.state, "history_manager", None)
+        if history is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Portfolio history tracking is not configured.",
+            )
+        return history
+
+    async def build_view_model_response(
+        request: Request, service: RiskDashboardService
+    ) -> Dict[str, Any]:
+        snapshot = await service.fetch_snapshot()
+        view_model = build_presentable_snapshot(snapshot)
+        history: Optional[PortfolioHistoryStore] = getattr(request.app.state, "history_manager", None)
+        if history is not None:
+            await history.record_async(view_model)
+        return view_model
+
     @app.get("/login", response_class=HTMLResponse)
     async def login_form(request: Request) -> HTMLResponse:
         if request.session.get("user"):
@@ -310,8 +334,7 @@ def create_app(
         user = request.session.get("user")
         if not user:
             return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-        snapshot = await service.fetch_snapshot()
-        view_model = build_presentable_snapshot(snapshot)
+        view_model = await build_view_model_response(request, service)
         grafana_context: dict[str, Any] = request.app.state.grafana_context
         return templates.TemplateResponse(
             "dashboard.html",
@@ -351,8 +374,7 @@ def create_app(
         service: RiskDashboardService = Depends(get_service),
         _: str = Depends(require_user),
     ) -> JSONResponse:
-        snapshot = await service.fetch_snapshot()
-        view_model = build_presentable_snapshot(snapshot)
+        view_model = await build_view_model_response(request, service)
         return JSONResponse(view_model)
 
     @app.get(
@@ -590,13 +612,13 @@ def create_app(
 
     @app.post("/api/accounts/{account_name}/reports", response_class=JSONResponse)
     async def api_generate_report(
+        request: Request,
         account_name: str,
         service: RiskDashboardService = Depends(get_service),
         manager: ReportManager = Depends(get_report_manager),
         _: str = Depends(require_user),
     ) -> JSONResponse:
-        snapshot = await service.fetch_snapshot()
-        view_model = build_presentable_snapshot(snapshot)
+        view_model = await build_view_model_response(request, service)
         try:
             report = await manager.create_account_report(account_name, view_model)
         except ValueError as exc:
@@ -618,6 +640,80 @@ def create_app(
         if path is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
         return FileResponse(path, media_type="text/csv", filename=path.name)
+
+    @app.get("/api/history/portfolio", response_class=JSONResponse)
+    async def api_portfolio_history(
+        window: str = "24h",
+        history: PortfolioHistoryStore = Depends(get_history_manager),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        try:
+            payload = await history.fetch_range_async(window)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return JSONResponse(payload)
+
+    @app.get("/api/history/cashflows", response_class=JSONResponse)
+    async def api_list_cashflows(
+        limit: int = 100,
+        history: PortfolioHistoryStore = Depends(get_history_manager),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        records = await history.list_cashflows_async(limit=limit)
+        return JSONResponse({"cashflows": records})
+
+    @app.post("/api/history/cashflows", response_class=JSONResponse)
+    async def api_create_cashflow(
+        request: Request,
+        history: PortfolioHistoryStore = Depends(get_history_manager),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload") from exc
+        if not isinstance(payload, Mapping):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payload must be an object")
+        flow_type = str(payload.get("type", "")).strip().lower()
+        try:
+            amount = float(payload.get("amount"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Amount must be numeric")
+        currency = str(payload.get("currency", "USDT") or "USDT")
+        account = payload.get("account")
+        note = payload.get("note")
+        timestamp_raw = payload.get("timestamp")
+        timestamp_value: Optional[datetime] = None
+        if timestamp_raw:
+            try:
+                timestamp_value = PortfolioHistoryStore._parse_datetime(timestamp_raw)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid timestamp format") from exc
+        try:
+            record = await history.add_cashflow_async(
+                flow_type=flow_type,
+                amount=amount,
+                currency=currency,
+                timestamp=timestamp_value,
+                account=str(account) if account else None,
+                note=str(note) if note else None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return JSONResponse(record, status_code=status.HTTP_201_CREATED)
+
+    @app.get("/api/reports/portfolio")
+    async def api_download_portfolio_report(
+        window: str = "30d",
+        history: PortfolioHistoryStore = Depends(get_history_manager),
+        _: str = Depends(require_user),
+    ) -> Response:
+        try:
+            filename, contents = await history.build_portfolio_report_async(window)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+        return Response(contents, media_type="text/csv", headers=headers)
 
     @app.on_event("shutdown")
     async def shutdown() -> None:  # pragma: no cover - FastAPI lifecycle
