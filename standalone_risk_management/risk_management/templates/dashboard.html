@@ -1,0 +1,1246 @@
+{% extends "base.html" %}
+
+{% block head %}
+  <style>
+    .view-nav {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    .view-nav__button {
+      background: rgba(148, 163, 184, 0.15);
+      color: var(--text);
+      border-radius: 0.75rem;
+      padding: 0.6rem 1.25rem;
+      border: 1px solid transparent;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .view-nav__button:hover {
+      background: rgba(148, 163, 184, 0.25);
+    }
+
+    .view-nav__button.active {
+      background: var(--accent);
+      color: #0f172a;
+      border-color: transparent;
+    }
+
+    .page-section[hidden] {
+      display: none;
+    }
+
+    .button.secondary {
+      background: rgba(148, 163, 184, 0.2);
+      color: var(--text);
+    }
+
+    .button.secondary:hover {
+      background: rgba(148, 163, 184, 0.3);
+      box-shadow: 0 8px 20px rgba(148, 163, 184, 0.2);
+    }
+
+    .status-message {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .status-message.success {
+      color: var(--success);
+    }
+
+    .status-message.error {
+      color: var(--danger);
+    }
+
+    .grafana-grid {
+      display: grid;
+      gap: 1.5rem;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    }
+
+    .grafana-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .grafana-panel iframe {
+      width: 100%;
+      border: none;
+      border-radius: 0.75rem;
+      background: rgba(15, 23, 42, 0.75);
+      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.35);
+    }
+
+    .grafana-panel__meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+  </style>
+{% endblock %}
+
+{% block header_controls %}
+  <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
+    <span class="badge">Logged in as {{ user }}</span>
+    <a href="/trading-panel" class="button secondary">Trading panel</a>
+    <button type="button" class="button danger" data-kill-portfolio>Kill portfolio</button>
+    <div class="status-message" data-kill-status="__portfolio__" hidden></div>
+    <form method="post" action="/logout">
+      <button type="submit">Logout</button>
+    </form>
+  </div>
+{% endblock %}
+
+{% block content %}
+  <nav class="view-nav" role="tablist" aria-label="Dashboard sections">
+    <button
+      type="button"
+      class="view-nav__button active"
+      role="tab"
+      aria-selected="true"
+      data-page-target="overview"
+    >
+      Overview
+    </button>
+    <button
+      type="button"
+      class="view-nav__button"
+      role="tab"
+      aria-selected="false"
+      data-page-target="accounts"
+    >
+      Accounts
+    </button>
+    <button
+      type="button"
+      class="view-nav__button"
+      role="tab"
+      aria-selected="false"
+      data-page-target="alerts"
+    >
+      Alerts &amp; notifications
+    </button>
+    {% if grafana_dashboards %}
+      <button
+        type="button"
+        class="view-nav__button"
+        role="tab"
+        aria-selected="false"
+        data-page-target="analytics"
+      >
+        Analytics
+      </button>
+    {% endif %}
+  </nav>
+
+  <div class="page-sections">
+    <div class="page-section" data-page-section="overview">
+      <section class="card" data-portfolio>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <h2 style="margin-bottom: 0.5rem;">Portfolio overview</h2>
+            <p style="color: var(--muted); margin: 0;">
+              Snapshot generated at <strong data-overview-generated>{{ snapshot.generated_at }}</strong>
+            </p>
+          </div>
+          <span class="badge {% if snapshot.alerts %}alert{% else %}ok{% endif %}" data-alert-summary>
+            {% if snapshot.alerts %}
+              {{ snapshot.alerts|length }} active alert{{ 's' if snapshot.alerts|length != 1 else '' }}
+            {% else %}
+              All clear
+            {% endif %}
+          </span>
+        </div>
+        <div class="metrics" style="margin-top: 1.5rem;">
+          <div class="metric">
+            <span class="label">Total Balance</span>
+            <span class="value">{{ snapshot.portfolio.balance|currency }}</span>
+          </div>
+          <div class="metric">
+            <span class="label">Daily Realised PnL</span>
+            <span class="value {% if snapshot.portfolio.daily_realized_pnl >= 0 %}gain{% else %}loss{% endif %}">
+              {{ snapshot.portfolio.daily_realized_pnl|currency }}
+            </span>
+          </div>
+          <div class="metric">
+            <span class="label">Gross Exposure</span>
+            <span class="value">{{ snapshot.portfolio.gross_exposure|currency }}</span>
+            <span class="subvalue">{{ snapshot.portfolio.gross_exposure_pct|pct }}</span>
+          </div>
+          <div class="metric">
+            <span class="label">Net Exposure</span>
+            <span class="value {% if snapshot.portfolio.net_exposure >= 0 %}gain{% else %}loss{% endif %}">{{ snapshot.portfolio.net_exposure|currency }}</span>
+            <span class="subvalue {% if snapshot.portfolio.net_exposure_pct >= 0 %}gain{% else %}loss{% endif %}">{{ snapshot.portfolio.net_exposure_pct|pct }}</span>
+          </div>
+        </div>
+        {% set portfolio_vol = snapshot.portfolio.volatility if snapshot.portfolio.volatility is defined else {} %}
+        {% set portfolio_funding = snapshot.portfolio.funding_rates if snapshot.portfolio.funding_rates is defined else {} %}
+        {% if portfolio_vol or portfolio_funding %}
+          <div class="table-wrapper" style="margin-top: 1.5rem;">
+            <table class="compact">
+              <thead>
+                <tr>
+                  <th>Window</th>
+                  <th>Volatility</th>
+                  <th>Funding rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for window in ["4h", "24h", "3d", "7d"] %}
+                  <tr>
+                    <td>{{ window }}</td>
+                    {% set vol_value = portfolio_vol.get(window) if portfolio_vol else None %}
+                    {% set funding_value = portfolio_funding.get(window) if portfolio_funding else None %}
+                    <td>{% if vol_value is not none %}{{ vol_value|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if funding_value is not none %}{{ funding_value|pct }}{% else %}-{% endif %}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% endif %}
+        {% if snapshot.portfolio.symbols %}
+          <div class="table-wrapper" style="margin-top: 1.5rem;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Gross Exposure</th>
+                  <th>Gross %</th>
+                  <th>Net Exposure</th>
+                  <th>Net %</th>
+                  <th>Vol 4h</th>
+                  <th>Vol 24h</th>
+                  <th>Vol 3d</th>
+                  <th>Vol 7d</th>
+                  <th>Fund 4h</th>
+                  <th>Fund 24h</th>
+                  <th>Fund 3d</th>
+                  <th>Fund 7d</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for entry in snapshot.portfolio.symbols %}
+                  {% set symbol_vol = entry.volatility if entry.volatility is defined else {} %}
+                  {% set symbol_funding = entry.funding_rates if entry.funding_rates is defined else {} %}
+                  <tr>
+                    <td>{{ entry.symbol }}</td>
+                    <td>{{ entry.gross_notional|currency }}</td>
+                    <td>{{ entry.gross_pct|pct }}</td>
+                    <td class="{% if entry.net_notional >= 0 %}gain{% else %}loss{% endif %}">{{ entry.net_notional|currency }}</td>
+                    <td class="{% if entry.net_pct >= 0 %}gain{% else %}loss{% endif %}">{{ entry.net_pct|pct }}</td>
+                    <td>{% if symbol_vol and symbol_vol.get("4h") is not none %}{{ symbol_vol.get("4h")|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if symbol_vol and symbol_vol.get("24h") is not none %}{{ symbol_vol.get("24h")|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if symbol_vol and symbol_vol.get("3d") is not none %}{{ symbol_vol.get("3d")|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if symbol_vol and symbol_vol.get("7d") is not none %}{{ symbol_vol.get("7d")|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if symbol_funding and symbol_funding.get("4h") is not none %}{{ symbol_funding.get("4h")|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if symbol_funding and symbol_funding.get("24h") is not none %}{{ symbol_funding.get("24h")|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if symbol_funding and symbol_funding.get("3d") is not none %}{{ symbol_funding.get("3d")|pct }}{% else %}-{% endif %}</td>
+                    <td>{% if symbol_funding and symbol_funding.get("7d") is not none %}{{ symbol_funding.get("7d")|pct }}{% else %}-{% endif %}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p style="color: var(--muted); margin-top: 1rem;">No active exposures.</p>
+        {% endif %}
+      </section>
+    </div>
+
+    <div class="page-section" data-page-section="accounts" hidden>
+      <div data-accounts>
+        {% for account in snapshot.accounts %}
+          <section class="card" data-account="{{ account.name }}">
+            <div class="card-header" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
+              <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                <h2 style="margin: 0;">{{ account.name }}</h2>
+                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                  <span class="badge">{{ account.positions|length }} position{{ 's' if account.positions|length != 1 else '' }}</span>
+                  <span class="badge">{{ account.orders|length }} order{{ 's' if account.orders|length != 1 else '' }}</span>
+                </div>
+              </div>
+              <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;">
+                <button type="button" class="button danger" data-kill-switch="{{ account.name }}">Kill switch</button>
+                <div class="status-message" data-kill-status="{{ account.name }}" hidden></div>
+              </div>
+            </div>
+            {% if account.message %}
+              <div class="status">{{ account.message }}</div>
+            {% endif %}
+            <div class="metrics">
+              <div class="metric">
+                <span class="label">Balance</span>
+                <span class="value">{{ account.balance|currency }}</span>
+              </div>
+              <div class="metric">
+                <span class="label">Daily Realised PnL</span>
+                <span class="value {% if account.daily_realized_pnl >= 0 %}gain{% else %}loss{% endif %}">{{ account.daily_realized_pnl|currency }}</span>
+              </div>
+              <div class="metric">
+                <span class="label">Gross Exposure</span>
+                <span class="value">{{ account.gross_exposure_notional|currency }}</span>
+                <span class="subvalue">{{ account.gross_exposure|pct }}</span>
+              </div>
+              <div class="metric">
+                <span class="label">Net Exposure</span>
+                <span class="value {% if account.net_exposure_notional >= 0 %}gain{% else %}loss{% endif %}">{{ account.net_exposure_notional|currency }}</span>
+                <span class="subvalue {% if account.net_exposure >= 0 %}gain{% else %}loss{% endif %}">{{ account.net_exposure|pct }}</span>
+              </div>
+              <div class="metric">
+                <span class="label">Unrealized PnL</span>
+                <span class="value {% if account.unrealized_pnl >= 0 %}gain{% else %}loss{% endif %}">{{ account.unrealized_pnl|currency }}</span>
+              </div>
+            </div>
+            {% set account_vol = account.volatility if account.volatility is defined else {} %}
+            {% set account_funding = account.funding_rates if account.funding_rates is defined else {} %}
+            {% if account_vol or account_funding %}
+              <div class="table-wrapper" style="margin-bottom: 1.5rem;">
+                <table class="compact">
+                  <thead>
+                    <tr>
+                      <th>Window</th>
+                      <th>Volatility</th>
+                      <th>Funding rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for window in ["4h", "24h", "3d", "7d"] %}
+                      {% set vol_value = account_vol.get(window) if account_vol else None %}
+                      {% set funding_value = account_funding.get(window) if account_funding else None %}
+                      <tr>
+                        <td>{{ window }}</td>
+                        <td>{% if vol_value is not none %}{{ vol_value|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if funding_value is not none %}{{ funding_value|pct }}{% else %}-{% endif %}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% endif %}
+            {% if account.symbol_exposures %}
+              <div class="table-wrapper" style="margin-bottom: 1.5rem;">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      <th>Gross Exposure</th>
+                      <th>Gross %</th>
+                      <th>Net Exposure</th>
+                      <th>Net %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for exposure in account.symbol_exposures %}
+                      <tr>
+                        <td>{{ exposure.symbol }}</td>
+                        <td>{{ exposure.gross_notional|currency }}</td>
+                        <td>{{ exposure.gross_pct|pct }}</td>
+                        <td class="{% if exposure.net_notional >= 0 %}gain{% else %}loss{% endif %}">{{ exposure.net_notional|currency }}</td>
+                        <td class="{% if exposure.net_pct >= 0 %}gain{% else %}loss{% endif %}">{{ exposure.net_pct|pct }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% endif %}
+              <div class="report-actions" style="margin: 1.5rem 0;">
+                <button type="button" class="button secondary" data-generate-report="{{ account.name }}">Generate report</button>
+                <div class="status-message" data-report-status="{{ account.name }}" hidden></div>
+              </div>
+            {% if account.positions %}
+              <div class="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      <th>Side</th>
+                      <th>Notional</th>
+                      <th>Exposure %</th>
+                      <th>PnL</th>
+                      <th>Daily realised PnL</th>
+                      <th>Entry</th>
+                      <th>Mark</th>
+                      <th>Liq.</th>
+                      <th>Max DD</th>
+                      <th>TP</th>
+                      <th>SL</th>
+                      <th>Vol 4h</th>
+                      <th>Vol 24h</th>
+                      <th>Vol 3d</th>
+                      <th>Vol 7d</th>
+                      <th>Fund 4h</th>
+                      <th>Fund 24h</th>
+                      <th>Fund 3d</th>
+                      <th>Fund 7d</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for position in account.positions %}
+                      {% set position_vol = position.volatility if position.volatility is defined else {} %}
+                      {% set position_funding = position.funding_rates if position.funding_rates is defined else {} %}
+                      <tr>
+                        <td>{{ position.symbol }}</td>
+                        <td>{{ position.side }}</td>
+                        <td>{{ position.notional|currency }}</td>
+                        <td>{{ position.exposure|pct }}</td>
+                        <td class="{% if position.unrealized_pnl >= 0 %}gain{% else %}loss{% endif %}">{{ position.unrealized_pnl|currency }} ({{ position.pnl_pct|pct }})</td>
+                        <td class="{% if position.daily_realized_pnl >= 0 %}gain{% else %}loss{% endif %}">{{ position.daily_realized_pnl|currency }}</td>
+                        <td>{{ position.entry_price|currency }}</td>
+                        <td>{{ position.mark_price|currency }}</td>
+                        <td>{% if position.liquidation_price is not none %}{{ position.liquidation_price|currency }}{% else %}-{% endif %}</td>
+                        <td>{% if position.max_drawdown_pct is not none %}{{ position.max_drawdown_pct|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position.take_profit_price is not none %}{{ position.take_profit_price|currency }}{% else %}-{% endif %}</td>
+                        <td>{% if position.stop_loss_price is not none %}{{ position.stop_loss_price|currency }}{% else %}-{% endif %}</td>
+                        <td>{% if position_vol and position_vol.get("4h") is not none %}{{ position_vol.get("4h")|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position_vol and position_vol.get("24h") is not none %}{{ position_vol.get("24h")|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position_vol and position_vol.get("3d") is not none %}{{ position_vol.get("3d")|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position_vol and position_vol.get("7d") is not none %}{{ position_vol.get("7d")|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position_funding and position_funding.get("4h") is not none %}{{ position_funding.get("4h")|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position_funding and position_funding.get("24h") is not none %}{{ position_funding.get("24h")|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position_funding and position_funding.get("3d") is not none %}{{ position_funding.get("3d")|pct }}{% else %}-{% endif %}</td>
+                        <td>{% if position_funding and position_funding.get("7d") is not none %}{{ position_funding.get("7d")|pct }}{% else %}-{% endif %}</td>
+                        <td>
+                          <div style="display: flex; flex-direction: column; gap: 0.35rem; min-width: 9rem;">
+                            <button
+                              type="button"
+                              class="button danger small"
+                              data-position-kill
+                              data-position-account="{{ account.name }}"
+                              data-position-symbol="{{ position.symbol }}"
+                            >
+                              Kill position
+                            </button>
+                            <div
+                              class="status-message"
+                              data-position-status="{{ account.name }}::{{ position.symbol }}"
+                              hidden
+                            ></div>
+                          </div>
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% else %}
+              <p style="color: var(--muted);">No open positions.</p>
+            {% endif %}
+            {% if account.orders %}
+              <h3 style="margin-top: 1.5rem;">Open orders</h3>
+              <div class="table-wrapper" style="overflow-x: auto;">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Symbol</th>
+                      <th>Side</th>
+                      <th>Type</th>
+                      <th>Price</th>
+                      <th>Amount</th>
+                      <th>Remaining</th>
+                      <th>Status</th>
+                      <th>Reduce only</th>
+                      <th>Notional</th>
+                      <th>Stop price</th>
+                      <th>Created</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for order in account.orders %}
+                      <tr>
+                        <td>{{ order.order_id or '-' }}</td>
+                        <td>{{ order.symbol }}</td>
+                        <td>{{ order.side }}</td>
+                        <td>{{ order.type }}</td>
+                        <td>{{ order.price|currency if order.price is not none else '-' }}</td>
+                        <td>{{ order.amount if order.amount is not none else '-' }}</td>
+                        <td>{{ order.remaining if order.remaining is not none else '-' }}</td>
+                        <td>{{ order.status }}</td>
+                        <td>{{ 'Yes' if order.reduce_only else 'No' }}</td>
+                        <td>{{ order.notional|currency if order.notional is not none else '-' }}</td>
+                        <td>{{ order.stop_price|currency if order.stop_price is not none else '-' }}</td>
+                        <td>{{ order.created_at or '-' }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% else %}
+              <p style="color: var(--muted);">No open orders.</p>
+            {% endif %}
+          </section>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="page-section" data-page-section="alerts" hidden>
+      <section class="card alerts">
+        <h2>Alerts</h2>
+        {% if snapshot.alerts %}
+          <ul data-alerts>
+            {% for alert in snapshot.alerts %}
+              <li>{{ alert }}</li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p data-alerts style="color: var(--muted);">No active alerts. All monitored metrics are within thresholds.</p>
+        {% endif %}
+      </section>
+
+      <section class="card notifications">
+        <h2>Notification channels</h2>
+        {% if snapshot.notifications %}
+          <ul data-notifications>
+            {% for channel in snapshot.notifications %}
+              <li>{{ channel }}</li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p data-notifications style="color: var(--muted);">No notification channels configured.</p>
+        {% endif %}
+      </section>
+    </div>
+
+    {% if grafana_dashboards %}
+      <div class="page-section" data-page-section="analytics" hidden>
+        <section class="card">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;">
+            <div>
+              <h2 style="margin-bottom: 0.25rem;">Performance analytics</h2>
+              <p style="color: var(--muted); margin: 0;">Live Grafana dashboards embedded from your monitoring stack.</p>
+            </div>
+            <!-- Optional: add a last-refreshed badge target for JS if desired -->
+          </div>
+          <div class="grafana-grid" style="margin-top: 1.5rem;">
+            {% for dashboard in grafana_dashboards %}
+              <article class="grafana-panel">
+                <div class="grafana-panel__meta">
+                  <div>
+                    <h3 style="margin: 0 0 0.25rem;">{{ dashboard.title }}</h3>
+                    {% if dashboard.description %}
+                      <p style="margin: 0; color: var(--muted); font-size: 0.9rem;">{{ dashboard.description }}</p>
+                    {% endif %}
+                  </div>
+                  <a class="button secondary" href="{{ dashboard.url }}" target="_blank" rel="noopener">
+                    Open in Grafana
+                  </a>
+                </div>
+                <iframe
+                  src="{{ dashboard.url }}"
+                  title="{{ dashboard.title }}"
+                  height="{{ dashboard.height }}"
+                  loading="lazy"
+                  referrerpolicy="no-referrer-when-downgrade"
+                  allowfullscreen
+                ></iframe>
+              </article>
+            {% endfor %}
+          </div>
+        </section>
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}
+
+{% block generated_at %}{{ snapshot.generated_at }}{% endblock %}
+
+{% block scripts %}
+  <script>
+    const REFRESH_INTERVAL_MS = 10000;
+    const DEFAULT_PAGE = "overview";
+    const STORAGE_KEY = "risk-dashboard.activePage";
+    const METRIC_WINDOWS = ["4h", "24h", "3d", "7d"];
+
+    const pageSections = Array.from(document.querySelectorAll("[data-page-section]"));
+    const navButtons = Array.from(document.querySelectorAll("[data-page-target]"));
+
+    const setActivePage = (page) => {
+      const targetExists = pageSections.some(
+        (section) => section.getAttribute("data-page-section") === page,
+      );
+      const targetPage = targetExists ? page : DEFAULT_PAGE;
+
+      pageSections.forEach((section) => {
+        const isActive = section.getAttribute("data-page-section") === targetPage;
+        section.toggleAttribute("hidden", !isActive);
+        section.setAttribute("aria-hidden", String(!isActive));
+      });
+
+      navButtons.forEach((button) => {
+        const isActive = button.getAttribute("data-page-target") === targetPage;
+        button.classList.toggle("active", isActive);
+        button.setAttribute("aria-selected", String(isActive));
+      });
+
+      try {
+        window.localStorage.setItem(STORAGE_KEY, targetPage);
+      } catch (error) {
+        console.debug("Failed to persist active page", error);
+      }
+    };
+
+    navButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const target = button.getAttribute("data-page-target");
+        setActivePage(target || DEFAULT_PAGE);
+      });
+    });
+
+    try {
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        setActivePage(stored);
+      } else {
+        setActivePage(DEFAULT_PAGE);
+      }
+    } catch (error) {
+      console.debug("Failed to restore active page", error);
+      setActivePage(DEFAULT_PAGE);
+    }
+
+    const formatCurrency = (value) => {
+      const number = Number(value || 0);
+      return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(number);
+    };
+
+    const formatPrice = (value) => {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) {
+        return "-";
+      }
+      return Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 });
+    };
+
+    const formatPct = (value) => {
+      const number = Number(value || 0) * 100;
+      return `${number.toFixed(2)}%`;
+    };
+
+    const isFiniteNumber = (value) => typeof value === "number" && Number.isFinite(value);
+
+    const formatMetricValue = (value) => (isFiniteNumber(value) ? formatPct(value) : "-");
+
+    const formatBytes = (value) => {
+      const number = Number(value);
+      if (!Number.isFinite(number) || number <= 0) {
+        return "0 B";
+      }
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      const exponent = Math.min(Math.floor(Math.log(number) / Math.log(1024)), units.length - 1);
+      const size = number / 1024 ** exponent;
+      const precision = exponent === 0 ? 0 : 2;
+      return `${size.toFixed(precision)} ${units[exponent]}`;
+    };
+
+    const renderPortfolio = (snapshot) => {
+      const portfolioSection = document.querySelector(
+        '[data-page-section="overview"] [data-portfolio]'
+      );
+      if (!portfolioSection || !snapshot.portfolio) {
+        return;
+      }
+      const portfolio = snapshot.portfolio;
+      const symbolRows = (Array.isArray(portfolio.symbols) ? portfolio.symbols : [])
+        .map((entry) => {
+          const volatility = entry.volatility || {};
+          const funding = entry.funding_rates || {};
+          return `
+          <tr>
+            <td>${entry.symbol}</td>
+            <td>${formatCurrency(entry.gross_notional)}</td>
+            <td>${formatPct(entry.gross_pct)}</td>
+            <td class="${Number(entry.net_notional) >= 0 ? "gain" : "loss"}">${formatCurrency(entry.net_notional)}</td>
+            <td class="${Number(entry.net_pct) >= 0 ? "gain" : "loss"}">${formatPct(entry.net_pct)}</td>
+            ${METRIC_WINDOWS.map((window) => `<td>${formatMetricValue(volatility?.[window])}</td>`).join("")}
+            ${METRIC_WINDOWS.map((window) => `<td>${formatMetricValue(funding?.[window])}</td>`).join("")}
+          </tr>
+        `;
+        })
+        .join("");
+      const hasPortfolioMetrics = METRIC_WINDOWS.some(
+        (window) =>
+          isFiniteNumber(portfolio.volatility?.[window]) ||
+          isFiniteNumber(portfolio.funding_rates?.[window])
+      );
+      const metricsTable = hasPortfolioMetrics
+        ? `
+          <div class="table-wrapper" style="margin-top: 1.5rem;">
+            <table class="compact">
+              <thead>
+                <tr>
+                  <th>Window</th>
+                  <th>Volatility</th>
+                  <th>Funding rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${METRIC_WINDOWS.map(
+                  (window) => `
+                    <tr>
+                      <td>${window}</td>
+                      <td>${formatMetricValue(portfolio.volatility?.[window])}</td>
+                      <td>${formatMetricValue(portfolio.funding_rates?.[window])}</td>
+                    </tr>
+                  `
+                ).join("")}
+              </tbody>
+            </table>
+          </div>
+        `
+        : "";
+      const exposuresTable = symbolRows
+        ? `
+          <div class="table-wrapper" style="margin-top: 1.5rem;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Gross Exposure</th>
+                  <th>Gross %</th>
+                  <th>Net Exposure</th>
+                  <th>Net %</th>
+                  ${METRIC_WINDOWS.map((window) => `<th>Vol ${window}</th>`).join("")}
+                  ${METRIC_WINDOWS.map((window) => `<th>Fund ${window}</th>`).join("")}
+                </tr>
+              </thead>
+              <tbody>${symbolRows}</tbody>
+            </table>
+          </div>
+        `
+        : '<p style="color: var(--muted); margin-top: 1rem;">No active exposures.</p>';
+      portfolioSection.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <h2 style="margin-bottom: 0.5rem;">Portfolio overview</h2>
+            <p style="color: var(--muted); margin: 0;">
+              Snapshot generated at <strong data-overview-generated>${new Date(snapshot.generated_at).toLocaleString()}</strong>
+            </p>
+          </div>
+          <span class="badge ${Array.isArray(snapshot.alerts) && snapshot.alerts.length > 0 ? "alert" : "ok"}" data-alert-summary>
+            ${Array.isArray(snapshot.alerts) && snapshot.alerts.length > 0 ? `${snapshot.alerts.length} active alert${snapshot.alerts.length === 1 ? "" : "s"}` : "All clear"}
+          </span>
+        </div>
+        <div class="metrics" style="margin-top: 1.5rem;">
+          <div class="metric">
+            <span class="label">Total Balance</span>
+            <span class="value">${formatCurrency(portfolio.balance)}</span>
+          </div>
+          <div class="metric">
+            <span class="label">Daily Realised PnL</span>
+            <span class="value ${Number(portfolio.daily_realized_pnl) >= 0 ? "gain" : "loss"}">${formatCurrency(portfolio.daily_realized_pnl)}</span>
+          </div>
+          <div class="metric">
+            <span class="label">Gross Exposure</span>
+            <span class="value">${formatCurrency(portfolio.gross_exposure)}</span>
+            <span class="subvalue">${formatPct(portfolio.gross_exposure_pct)}</span>
+          </div>
+          <div class="metric">
+            <span class="label">Net Exposure</span>
+            <span class="value ${Number(portfolio.net_exposure) >= 0 ? "gain" : "loss"}">${formatCurrency(portfolio.net_exposure)}</span>
+            <span class="subvalue ${Number(portfolio.net_exposure_pct) >= 0 ? "gain" : "loss"}">${formatPct(portfolio.net_exposure_pct)}</span>
+          </div>
+        </div>
+        ${metricsTable}
+        ${exposuresTable}
+      `;
+    };
+
+    const renderAccounts = (snapshot) => {
+      const accountsContainer = document.querySelector(
+        '[data-page-section="accounts"] [data-accounts]'
+      );
+      if (!accountsContainer) {
+        return;
+      }
+      const accountsData = Array.isArray(snapshot.accounts) ? snapshot.accounts : [];
+      accountsContainer.innerHTML = accountsData
+        .map((account) => {
+          const exposures = Array.isArray(account.symbol_exposures)
+            ? account.symbol_exposures
+            : [];
+          const positions = Array.isArray(account.positions) ? account.positions : [];
+          const orders = Array.isArray(account.orders) ? account.orders : [];
+          const exposuresRows = exposures
+            .map((exposure) => `
+              <tr>
+                <td>${exposure.symbol}</td>
+                <td>${formatCurrency(exposure.gross_notional)}</td>
+                <td>${formatPct(exposure.gross_pct)}</td>
+                <td class="${Number(exposure.net_notional) >= 0 ? "gain" : "loss"}">${formatCurrency(exposure.net_notional)}</td>
+                <td class="${Number(exposure.net_pct) >= 0 ? "gain" : "loss"}">${formatPct(exposure.net_pct)}</td>
+              </tr>
+            `)
+            .join("");
+          const accountVolatility = account.volatility || {};
+          const accountFunding = account.funding_rates || {};
+          const hasAccountMetrics = METRIC_WINDOWS.some(
+            (window) =>
+              isFiniteNumber(accountVolatility?.[window]) ||
+              isFiniteNumber(accountFunding?.[window])
+          );
+          const accountMetricsTable = hasAccountMetrics
+            ? `
+              <div class="table-wrapper" style="margin-bottom: 1.5rem;">
+                <table class="compact">
+                  <thead>
+                    <tr>
+                      <th>Window</th>
+                      <th>Volatility</th>
+                      <th>Funding rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${METRIC_WINDOWS.map(
+                      (window) => `
+                        <tr>
+                          <td>${window}</td>
+                          <td>${formatMetricValue(accountVolatility?.[window])}</td>
+                          <td>${formatMetricValue(accountFunding?.[window])}</td>
+                        </tr>
+                      `
+                    ).join("")}
+                  </tbody>
+                </table>
+              </div>
+            `
+            : "";
+          const positionsRows = positions
+            .map((position) => {
+              const pnlClass = Number(position.unrealized_pnl) >= 0 ? "gain" : "loss";
+              const realizedClass = Number(position.daily_realized_pnl) >= 0 ? "gain" : "loss";
+              const maxDd = position.max_drawdown_pct !== null && position.max_drawdown_pct !== undefined
+                ? formatPct(position.max_drawdown_pct)
+                : "-";
+              const volatility = position.volatility || {};
+              const funding = position.funding_rates || {};
+              return `
+                <tr>
+                  <td>${position.symbol}</td>
+                  <td>${position.side}</td>
+                  <td>${formatCurrency(position.notional)}</td>
+                  <td>${formatPct(position.exposure)}</td>
+                  <td class="${pnlClass}">${formatCurrency(position.unrealized_pnl)} (${formatPct(position.pnl_pct)})</td>
+                  <td class="${realizedClass}">${formatCurrency(position.daily_realized_pnl)}</td>
+                  <td>${formatPrice(position.entry_price)}</td>
+                  <td>${formatPrice(position.mark_price)}</td>
+                  <td>${formatPrice(position.liquidation_price)}</td>
+                  <td>${maxDd}</td>
+                  <td>${formatPrice(position.take_profit_price)}</td>
+                  <td>${formatPrice(position.stop_loss_price)}</td>
+                  ${METRIC_WINDOWS.map((window) => `<td>${formatMetricValue(volatility?.[window])}</td>`).join("")}
+                  ${METRIC_WINDOWS.map((window) => `<td>${formatMetricValue(funding?.[window])}</td>`).join("")}
+                  <td>
+                    <div style="display: flex; flex-direction: column; gap: 0.35rem; min-width: 9rem;">
+                      <button
+                        type="button"
+                        class="button danger small"
+                        data-position-kill
+                        data-position-account="${account.name}"
+                        data-position-symbol="${position.symbol}"
+                      >
+                        Kill position
+                      </button>
+                      <div
+                        class="status-message"
+                        data-position-status="${account.name}::${position.symbol}"
+                        hidden
+                      ></div>
+                    </div>
+                  </td>
+                </tr>
+              `;
+            })
+            .join("");
+          const ordersRows = orders
+            .map((order) => `
+              <tr>
+                <td>${order.order_id || "-"}</td>
+                <td>${order.symbol}</td>
+                <td>${order.side}</td>
+                <td>${order.type}</td>
+                <td>${order.price !== null && order.price !== undefined ? formatCurrency(order.price) : "-"}</td>
+                <td>${order.amount ?? "-"}</td>
+                <td>${order.remaining ?? "-"}</td>
+                <td>${order.status || "-"}</td>
+                <td>${order.reduce_only ? "Yes" : "No"}</td>
+                <td>${order.notional !== null && order.notional !== undefined ? formatCurrency(order.notional) : "-"}</td>
+                <td>${order.stop_price !== null && order.stop_price !== undefined ? formatCurrency(order.stop_price) : "-"}</td>
+                <td>${order.created_at || "-"}</td>
+              </tr>
+            `)
+            .join("");
+          const exposuresTable = exposuresRows
+            ? `
+                <div class="table-wrapper" style="margin-bottom: 1.5rem;">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Symbol</th>
+                        <th>Gross Exposure</th>
+                        <th>Gross %</th>
+                        <th>Net Exposure</th>
+                        <th>Net %</th>
+                      </tr>
+                    </thead>
+                    <tbody>${exposuresRows}</tbody>
+                  </table>
+                </div>
+              `
+            : "";
+          const positionsTable = positions.length > 0
+            ? `
+                <div class="table-wrapper">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Notional</th>
+                        <th>Exposure %</th>
+                        <th>PnL</th>
+                        <th>Daily realised PnL</th>
+                        <th>Entry</th>
+                        <th>Mark</th>
+                        <th>Liq.</th>
+                        <th>Max DD</th>
+                        <th>TP</th>
+                        <th>SL</th>
+                        ${METRIC_WINDOWS.map((window) => `<th>Vol ${window}</th>`).join("")}
+                        ${METRIC_WINDOWS.map((window) => `<th>Fund ${window}</th>`).join("")}
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>${positionsRows}</tbody>
+                  </table>
+                </div>
+              `
+            : '<p style="color: var(--muted);">No open positions.</p>';
+          const ordersTable = orders.length > 0
+            ? `
+                <h3 style="margin-top: 1.5rem;">Open orders</h3>
+                <div class="table-wrapper" style="overflow-x: auto;">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Type</th>
+                        <th>Price</th>
+                        <th>Amount</th>
+                        <th>Remaining</th>
+                        <th>Status</th>
+                        <th>Reduce only</th>
+                        <th>Notional</th>
+                        <th>Stop price</th>
+                        <th>Created</th>
+                      </tr>
+                    </thead>
+                    <tbody>${ordersRows}</tbody>
+                  </table>
+                </div>
+              `
+            : '<p style="color: var(--muted);">No open orders.</p>';
+          return `
+            <section class="card" data-account="${account.name}">
+              <div class="card-header" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
+                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                  <h2 style="margin: 0;">${account.name}</h2>
+                  <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <span class="badge">${positions.length} position${positions.length === 1 ? "" : "s"}</span>
+                    <span class="badge">${orders.length} order${orders.length === 1 ? "" : "s"}</span>
+                  </div>
+                </div>
+                <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;">
+                  <button type="button" class="button danger" data-kill-switch="${account.name}">Kill switch</button>
+                  <div class="status-message" data-kill-status="${account.name}" hidden></div>
+                </div>
+              </div>
+              ${account.message ? `<div class="status">${account.message}</div>` : ""}
+              <div class="metrics">
+                <div class="metric">
+                  <span class="label">Balance</span>
+                  <span class="value">${formatCurrency(account.balance)}</span>
+                </div>
+                <div class="metric">
+                  <span class="label">Daily Realised PnL</span>
+                  <span class="value ${Number(account.daily_realized_pnl) >= 0 ? "gain" : "loss"}">${formatCurrency(account.daily_realized_pnl)}</span>
+                </div>
+                <div class="metric">
+                  <span class="label">Gross Exposure</span>
+                  <span class="value">${formatCurrency(account.gross_exposure_notional)}</span>
+                  <span class="subvalue">${formatPct(account.gross_exposure)}</span>
+                </div>
+                <div class="metric">
+                  <span class="label">Net Exposure</span>
+                  <span class="value ${Number(account.net_exposure_notional) >= 0 ? "gain" : "loss"}">${formatCurrency(account.net_exposure_notional)}</span>
+                  <span class="subvalue ${Number(account.net_exposure) >= 0 ? "gain" : "loss"}">${formatPct(account.net_exposure)}</span>
+                </div>
+                <div class="metric">
+                  <span class="label">Unrealized PnL</span>
+                  <span class="value ${Number(account.unrealized_pnl) >= 0 ? "gain" : "loss"}">${formatCurrency(account.unrealized_pnl)}</span>
+                </div>
+              </div>
+              ${accountMetricsTable}
+              ${exposuresTable}
+              <div class="report-actions" style="margin: 1.5rem 0;">
+                <button type="button" class="button secondary" data-generate-report="${account.name}">Generate report</button>
+                <div class="status-message" data-report-status="${account.name}" hidden></div>
+              </div>
+              ${positionsTable}
+              ${ordersTable}
+            </section>
+          `;
+        })
+        .join("");
+    };
+
+    const setReportStatus = (accountName, message, variant = "info") => {
+      const statusEl = document.querySelector(`[data-report-status="${accountName}"]`);
+      if (!statusEl) {
+        return;
+      }
+      statusEl.classList.remove("success", "error");
+      if (!message) {
+        statusEl.textContent = "";
+        statusEl.hidden = true;
+        return;
+      }
+      statusEl.textContent = message;
+      statusEl.hidden = false;
+      if (variant === "success") {
+        statusEl.classList.add("success");
+      } else if (variant === "error") {
+        statusEl.classList.add("error");
+      }
+    };
+
+    const triggerReportDownload = (downloadUrl, filename) => {
+      if (!downloadUrl) {
+        return;
+      }
+      const anchor = document.createElement("a");
+      anchor.href = downloadUrl;
+      if (filename) {
+        anchor.download = filename;
+      }
+      anchor.rel = "noopener";
+      anchor.style.display = "none";
+      document.body.appendChild(anchor);
+      anchor.click();
+      requestAnimationFrame(() => anchor.remove());
+    };
+
+    const generateAccountReport = async (accountName, button) => {
+      if (!accountName) {
+        return;
+      }
+      const statusEl = document.querySelector(`[data-report-status="${accountName}"]`);
+      if (statusEl) {
+        statusEl.hidden = false;
+        statusEl.classList.remove("success", "error");
+        statusEl.textContent = "Generating report...";
+      }
+      if (button) {
+        button.disabled = true;
+      }
+      try {
+        const response = await fetch(`/api/accounts/${encodeURIComponent(accountName)}/reports`, {
+          method: "POST",
+          credentials: "include",
+        });
+        if (!response.ok) {
+          throw new Error(`Failed to generate report (${response.status})`);
+        }
+        const payload = await response.json();
+        if (statusEl) {
+          statusEl.textContent = "Report generated.";
+          statusEl.classList.remove("error");
+          statusEl.classList.add("success");
+        }
+        triggerReportDownload(payload.download_url, payload.filename);
+      } catch (error) {
+        console.error(error);
+        if (statusEl) {
+          statusEl.textContent = `Report generation failed: ${error.message}`;
+          statusEl.classList.remove("success");
+          statusEl.classList.add("error");
+          statusEl.hidden = false;
+        }
+      } finally {
+        if (button) {
+          button.disabled = false;
+        }
+      }
+    };
+
+    const renderAlerts = (snapshot) => {
+      const alertsContainer = document.querySelector(
+        '[data-page-section="alerts"] [data-alerts]'
+      );
+      if (!alertsContainer) {
+        return;
+      }
+      if (Array.isArray(snapshot.alerts) && snapshot.alerts.length > 0) {
+        if (alertsContainer.tagName === "UL") {
+          alertsContainer.innerHTML = snapshot.alerts.map((alert) => `<li>${alert}</li>`).join("");
+        } else {
+          const ul = document.createElement("ul");
+          ul.innerHTML = snapshot.alerts.map((alert) => `<li>${alert}</li>`).join("");
+          alertsContainer.replaceWith(ul);
+          ul.setAttribute("data-alerts", "");
+        }
+      } else if (alertsContainer) {
+        if (alertsContainer.tagName === "UL") {
+          const replacement = document.createElement("p");
+          replacement.textContent = "No active alerts. All monitored metrics are within thresholds.";
+          replacement.style.color = "var(--muted)";
+          replacement.setAttribute("data-alerts", "");
+          alertsContainer.replaceWith(replacement);
+        } else {
+          alertsContainer.textContent = "No active alerts. All monitored metrics are within thresholds.";
+        }
+      }
+    };
+
+    const renderNotifications = (snapshot) => {
+      const notificationsContainer = document.querySelector(
+        '[data-page-section="alerts"] [data-notifications]'
+      );
+      if (!notificationsContainer) {
+        return;
+      }
+      if (Array.isArray(snapshot.notifications) && snapshot.notifications.length > 0) {
+        if (notificationsContainer.tagName === "UL") {
+          notificationsContainer.innerHTML = snapshot.notifications.map((channel) => `<li>${channel}</li>`).join("");
+        } else {
+          const ul = document.createElement("ul");
+          ul.innerHTML = snapshot.notifications.map((channel) => `<li>${channel}</li>`).join("");
+          notificationsContainer.replaceWith(ul);
+          ul.setAttribute("data-notifications", "");
+        }
+      } else if (notificationsContainer) {
+        if (notificationsContainer.tagName === "UL") {
+          const replacement = document.createElement("p");
+          replacement.textContent = "No notification channels configured.";
+          replacement.style.color = "var(--muted)";
+          replacement.setAttribute("data-notifications", "");
+          notificationsContainer.replaceWith(replacement);
+        } else {
+          notificationsContainer.textContent = "No notification channels configured.";
+        }
+      }
+    };
+
+    const renderSnapshot = (snapshot) => {
+      const generatedAtEl = document.querySelector("[data-generated-at]");
+      if (generatedAtEl && snapshot.generated_at) {
+        generatedAtEl.textContent = new Date(snapshot.generated_at).toLocaleString();
+      }
+      renderPortfolio(snapshot);
+      renderAccounts(snapshot);
+      renderAlerts(snapshot);
+      renderNotifications(snapshot);
+    };
+
+    async function poll() {
+      try {
+        const response = await fetch("/api/snapshot", { credentials: "include" });
+        if (!response.ok) {
+          return;
+        }
+        const snapshot = await response.json();
+        renderSnapshot(snapshot);
+      } catch (error) {
+        console.error("Failed to refresh snapshot", error);
+      }
+    }
+
+    async function triggerKillSwitch(accountName, button, symbol) {
+      let endpoint = "/api/kill-switch";
+      let statusSelector = '[data-kill-status="__portfolio__"]';
+      if (accountName) {
+        if (symbol) {
+          endpoint = `/api/accounts/${encodeURIComponent(accountName)}/positions/${encodeURIComponent(symbol)}/kill-switch`;
+          statusSelector = `[data-position-status="${accountName}::${symbol}"]`;
+        } else {
+          endpoint = `/api/accounts/${encodeURIComponent(accountName)}/kill-switch`;
+          statusSelector = `[data-kill-status="${accountName}"]`;
+        }
+      }
+      const statusEl = document.querySelector(statusSelector);
+      if (statusEl) {
+        statusEl.textContent = "Executing kill switch...";
+        statusEl.hidden = false;
+        statusEl.classList.remove("success");
+      }
+      if (button) button.disabled = true;
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          credentials: "include",
+        });
+        if (!response.ok) {
+          throw new Error(`Kill switch failed (${response.status})`);
+        }
+        const payload = await response.json();
+        if (payload && payload.success === false) {
+          const details = Array.isArray(payload.errors) && payload.errors.length
+            ? payload.errors.join("; ")
+            : "Kill switch encountered errors.";
+          throw new Error(details);
+        }
+        if (statusEl) {
+          statusEl.textContent = "Kill switch executed.";
+          statusEl.classList.add("success");
+        }
+        await poll();
+      } catch (error) {
+        console.error(error);
+        if (statusEl) {
+          statusEl.textContent = `Kill switch failed: ${error.message}`;
+          statusEl.classList.remove("success");
+        }
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
+
+    document.addEventListener("click", (event) => {
+      const portfolioKillButton = event.target.closest("[data-kill-portfolio]");
+      if (portfolioKillButton) {
+        triggerKillSwitch(null, portfolioKillButton);
+        return;
+      }
+      const killButton = event.target.closest("[data-kill-switch]");
+      if (killButton) {
+        const accountName = killButton.getAttribute("data-kill-switch");
+        triggerKillSwitch(accountName, killButton);
+        return;
+      }
+      const positionKillButton = event.target.closest("[data-position-kill]");
+      if (positionKillButton) {
+        const accountName = positionKillButton.getAttribute("data-position-account");
+        const symbol = positionKillButton.getAttribute("data-position-symbol");
+        triggerKillSwitch(accountName, positionKillButton, symbol);
+        return;
+      }
+      const reportButton = event.target.closest("[data-generate-report]");
+      if (reportButton) {
+        const accountName = reportButton.getAttribute("data-generate-report");
+        generateAccountReport(accountName, reportButton);
+      }
+    });
+
+    setInterval(poll, REFRESH_INTERVAL_MS);
+    poll();
+  </script>
+{% endblock %}

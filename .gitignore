@@ -383,3 +383,5 @@ Cargo.lock
 /api-keys.json
 /caches
 /optimize_results
+# Standalone risk archive artifact
+standalone-risk.zip

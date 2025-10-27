@@ -1,0 +1,31 @@
+{
+  "api_keys_file": "./api-keys.json",
+  "debug_api_payloads": false,
+  "custom_endpoints": {
+    "path": "./configs/custom_endpoints.json",
+    "autodiscover": true
+  },
+  "reports_dir": "./reports",
+  "accounts": [
+    {
+      "name": "Example Futures",
+      "exchange": "bybit",
+      "api_key_id": "example_bybit",
+      "settle_currency": "USDT",
+      "params": {
+        "balance": {"type": "swap"},
+        "positions": {"type": "swap"}
+      }
+    }
+  ],
+  "alert_thresholds": {
+    "wallet_exposure_pct": 0.6,
+    "position_wallet_exposure_pct": 0.3,
+    "max_drawdown_pct": 0.3,
+    "loss_threshold_pct": -0.1
+  },
+  "notification_channels": [
+    "email:alerts@example.com",
+    "slack:#risk-alerts"
+  ]
+}
