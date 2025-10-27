@@ -27,6 +27,8 @@ from custom_endpoint_overrides import (
     resolve_custom_endpoint_override,
 )
 
+from .realized_pnl import fetch_realized_pnl_history
+
 try:  # pragma: no cover - passivbot is optional when running tests
     from passivbot.utils import load_ccxt_instance, normalize_exchange_name
 except (ModuleNotFoundError, ImportError):  # pragma: no cover - allow running without passivbot
@@ -79,6 +81,24 @@ def _first_float(*values: Any) -> Optional[float]:
                 except (TypeError, ValueError):
                     continue
             continue
+    return None
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    """Return ``value`` converted to ``int`` when possible."""
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        if isinstance(value, str):
+            try:
+                return int(float(value.strip()))
+            except (TypeError, ValueError):
+                return None
     return None
 
 
@@ -380,6 +400,7 @@ class CCXTAccountClient(AccountClientProtocol):
             raise TypeError("config must be an AccountConfig instance")
 
         self.config = config
+        self._normalized_exchange = normalize_exchange_name(config.exchange)
         credentials = dict(config.credentials)
         credentials.setdefault("enableRateLimit", True)
         self.client = _instantiate_ccxt_client(config.exchange, credentials)
@@ -526,14 +547,114 @@ class CCXTAccountClient(AccountClientProtocol):
                 "[%s] fetch_open_orders not available on exchange client", self.config.name
             )
 
+        realized_from_positions = sum(
+            float(position.get("daily_realized_pnl", 0.0)) for position in positions
+        )
+        realized_total = realized_from_positions
+
+        realized_cfg_raw = self.config.params.get("realized_pnl")
+        realized_cfg = realized_cfg_raw if isinstance(realized_cfg_raw, Mapping) else None
+        if realized_cfg:
+            mode_value = realized_cfg.get("mode")
+            fetch_mode = str(mode_value).lower() if isinstance(mode_value, str) else ""
+            fetch_always = fetch_mode == "always"
+            fetch_never = fetch_mode == "never"
+            tolerance_raw = realized_cfg.get("fallback_tolerance")
+            try:
+                abs_tol = abs(float(tolerance_raw)) if tolerance_raw is not None else 1e-9
+            except (TypeError, ValueError):
+                abs_tol = 1e-9
+
+            lookback_ms = _coerce_int(realized_cfg.get("lookback_ms"))
+            if lookback_ms is None:
+                hours = _coerce_int(realized_cfg.get("lookback_hours"))
+                if hours is not None:
+                    lookback_ms = hours * 60 * 60 * 1000
+            if lookback_ms is None:
+                minutes = _coerce_int(realized_cfg.get("lookback_minutes"))
+                if minutes is not None:
+                    lookback_ms = minutes * 60 * 1000
+            if lookback_ms is None or lookback_ms <= 0:
+                lookback_ms = 24 * 60 * 60 * 1000
+
+            now_ms = int(time.time() * 1000)
+            since = (
+                _coerce_int(realized_cfg.get("since_ms"))
+                or _coerce_int(realized_cfg.get("start_time_ms"))
+                or _coerce_int(realized_cfg.get("since"))
+            )
+            if since is None:
+                since = max(0, now_ms - lookback_ms)
+            until = (
+                _coerce_int(realized_cfg.get("until_ms"))
+                or _coerce_int(realized_cfg.get("end_time_ms"))
+                or _coerce_int(realized_cfg.get("until"))
+            )
+            if until is None or until <= 0:
+                until = now_ms
+
+            if not fetch_never and since < until:
+                params_raw = realized_cfg.get("params")
+                params = dict(params_raw) if isinstance(params_raw, Mapping) else {}
+                limit = _coerce_int(realized_cfg.get("limit"))
+
+                symbols_cfg = realized_cfg.get("symbols")
+                symbols: Optional[Sequence[str]]
+                if isinstance(symbols_cfg, str) and symbols_cfg:
+                    symbols = [symbols_cfg]
+                elif isinstance(symbols_cfg, Sequence):
+                    symbols = [
+                        str(symbol)
+                        for symbol in symbols_cfg
+                        if isinstance(symbol, str) and symbol
+                    ]
+                else:
+                    dedup: list[str] = []
+                    for position in positions:
+                        symbol = position.get("symbol")
+                        if isinstance(symbol, str) and symbol and symbol not in dedup:
+                            dedup.append(symbol)
+                    if dedup:
+                        symbols = dedup
+                    elif self.config.symbols:
+                        symbols = list(dict.fromkeys(self.config.symbols))
+                    else:
+                        symbols = None
+
+                should_fetch = fetch_always or math.isclose(
+                    realized_from_positions, 0.0, abs_tol=abs_tol
+                )
+                if should_fetch:
+                    try:
+                        realized_override = await fetch_realized_pnl_history(
+                            self._normalized_exchange,
+                            self.client,
+                            since=since,
+                            until=until,
+                            params=params,
+                            limit=limit,
+                            symbols=symbols,
+                            account_name=self.config.name,
+                            log=logger,
+                            debug_api_payloads=self._debug_api_payloads,
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.debug(
+                            "[%s] realised PnL helper failed: %s",
+                            self.config.name,
+                            exc,
+                            exc_info=self._debug_api_payloads,
+                        )
+                    else:
+                        if realized_override is not None:
+                            realized_total = realized_override
+
         return {
             "name": self.config.name,
             "balance": balance_value,
             "positions": positions,
             "open_orders": open_orders,
-            "daily_realized_pnl": sum(
-                float(position.get("daily_realized_pnl", 0.0)) for position in positions
-            ),
+            "daily_realized_pnl": realized_total,
         }
 
     async def close(self) -> None:
