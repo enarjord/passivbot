@@ -15,6 +15,8 @@ health, and automated notifications.
   kill-switch commands.
 - **Web dashboard** – FastAPI application with authenticated access, TLS
   support, report downloads, optional Grafana embeds, and kill-switch controls.
+- **Performance analytics** – rolling NAV history with timeframe filters,
+  realised/unrealised decomposition, equity charts, and enriched CSV reports.
 - **Alerting helpers** – configurable thresholds, SMTP email delivery, and
   human-readable notification channels shown alongside the dashboards.
 
@@ -190,10 +192,14 @@ configuration file.  The page displays:
 
 - Portfolio and per-account exposure metrics.
 - Live funding and volatility snapshots.
+- Performance card with selectable 1h–30d windows, NAV charting, and realised/unrealised splits.
 - Outstanding alerts and notification targets.
 - Kill-switch buttons (global, per account, or per position).
 - CSV report downloads (stored under `reports_dir`).
 - Optional Grafana panels embedded beneath the summary cards.
+
+Use `GET /api/analytics?timeframe=7d` to retrieve the aggregated metrics and
+time-series data powering the performance card programmatically.
 
 ### Enabling TLS
 
