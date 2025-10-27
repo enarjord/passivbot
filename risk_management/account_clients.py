@@ -118,6 +118,24 @@ def _coerce_int(value: Any) -> Optional[int]:
     return None
 
 
+def _coerce_int(value: Any) -> Optional[int]:
+    """Return ``value`` converted to ``int`` when possible."""
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        if isinstance(value, str):
+            try:
+                return int(float(value.strip()))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def _normalize_position_side(value: Any) -> Optional[str]:
     """Return the normalised hedge-mode side when available."""
 

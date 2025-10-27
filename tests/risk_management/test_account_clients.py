@@ -1,8 +1,8 @@
 import asyncio
 import sys
 from pathlib import Path
+from typing import Any, Awaitable, Mapping, TypeVar
 from typing import Any, Mapping
-
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,6 +14,24 @@ from risk_management import account_clients as module
 from risk_management.account_clients import _apply_credentials, _instantiate_ccxt_client
 from risk_management.configuration import AccountConfig
 from risk_management.realized_pnl import fetch_realized_pnl_history
+
+
+T = TypeVar("T")
+
+
+def run_async(coro: Awaitable[T]) -> T:
+    """Execute ``coro`` in a fresh event loop to avoid cross-test interference."""
+
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
 
 
 class DummyClient:
@@ -97,6 +115,8 @@ def test_instantiate_ccxt_client_applies_custom_endpoints(monkeypatch) -> None:
 
 def test_fetch_realized_pnl_history_binance_uses_income_endpoint(monkeypatch) -> None:
     class DummyIncomeClient:
+def test_fetch_realized_pnl_history_binance_uses_income_endpoint(monkeypatch) -> None:
+    class DummyIncomeClient:
 def test_fetch_realized_pnl_binance_uses_income_endpoint(monkeypatch) -> None:
     class DummyClient:
         def __init__(self) -> None:
@@ -111,6 +131,7 @@ def test_fetch_realized_pnl_binance_uses_income_endpoint(monkeypatch) -> None:
 
     dummy = DummyIncomeClient()
 
+    realized = run_async(
     realized = asyncio.run(
         fetch_realized_pnl_history(
             "binanceusdm",
@@ -147,9 +168,13 @@ def test_fetch_realized_pnl_binance_uses_income_endpoint(monkeypatch) -> None:
 
 def test_fetch_realized_pnl_history_bybit_paginates_closed_pnl() -> None:
     class DummyBybitClient:
-
+      
+def test_fetch_realized_pnl_history_bybit_paginates_closed_pnl() -> None:
+    class DummyBybitClient:
+      
 def test_fetch_realized_pnl_bybit_paginates_closed_pnl(monkeypatch) -> None:
     class DummyClient:
+      
         def __init__(self) -> None:
             self.calls: list[Mapping[str, Any]] = []
             self._responses = [
@@ -168,7 +193,10 @@ def test_fetch_realized_pnl_bybit_paginates_closed_pnl(monkeypatch) -> None:
 
     dummy = DummyBybitClient()
 
+    realized = run_async(
+
     realized = asyncio.run(
+
         fetch_realized_pnl_history(
             "bybit",
             dummy,
@@ -177,6 +205,7 @@ def test_fetch_realized_pnl_bybit_paginates_closed_pnl(monkeypatch) -> None:
             limit=100,
         )
     )
+
 
     dummy = DummyClient()
 
@@ -197,15 +226,21 @@ def test_fetch_realized_pnl_bybit_paginates_closed_pnl(monkeypatch) -> None:
     client = module.CCXTAccountClient(config)
     realized = asyncio.run(client._fetch_realized_pnl([], now_ms=2_000_000))
 
+
     assert realized == pytest.approx(1.3)
     assert len(dummy.calls) == 2
     assert dummy.calls[0]["limit"] == 100
     assert dummy.calls[1]["cursor"] == "cursor123"
 
+
+def test_fetch_realized_pnl_history_okx_sums_trade_pnl(monkeypatch) -> None:
+    class DummyOkxClient:
+
 def test_fetch_realized_pnl_history_okx_sums_trade_pnl(monkeypatch) -> None:
     class DummyOkxClient:
 def test_fetch_realized_pnl_okx_sums_trade_pnl(monkeypatch) -> None:
     class DummyClient:
+
         def __init__(self) -> None:
             self.calls: list[tuple[Any, Any, Any, Mapping[str, Any]]] = []
 
@@ -219,7 +254,11 @@ def test_fetch_realized_pnl_okx_sums_trade_pnl(monkeypatch) -> None:
 
     dummy = DummyOkxClient()
 
+
+    realized = run_async(
+
     realized = asyncio.run(
+
         fetch_realized_pnl_history(
             "okx",
             dummy,
@@ -294,6 +333,7 @@ def test_account_fetch_uses_realized_history_when_requested(monkeypatch) -> None
     config = AccountConfig(
         name="Bybit",
         exchange="bybit",
+   
     dummy = DummyClient()
 
     def fake_instantiate(exchange: str, credentials: Mapping[str, Any]):
@@ -309,7 +349,7 @@ def test_account_fetch_uses_realized_history_when_requested(monkeypatch) -> None
         credentials={},
         params={
             "realized_pnl": {
-
+             
                 "mode": "always",
                 "lookback_ms": 60_000,
                 "since_ms": 1_940_000,
