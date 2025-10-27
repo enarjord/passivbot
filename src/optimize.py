@@ -380,18 +380,46 @@ def ea_mu_plus_lambda_stream(
         total_evals += completed
         return completed
 
+    dup_prev_total = 0
+    dup_prev_resolved = 0
+    dup_prev_reused = 0
+
     def log_generation(gen, nevals, record):
+        nonlocal dup_prev_total, dup_prev_resolved, dup_prev_reused
         best = record.get("min") if record else None
         front_size = len(halloffame) if halloffame is not None else 0
+        dup_tot = duplicate_counter["total"]
+        dup_res = duplicate_counter["resolved"]
+        dup_reuse = duplicate_counter["reused"]
+        dup_ratio = (dup_tot / total_evals) if total_evals else 0.0
+        dup_delta = dup_tot - dup_prev_total
+        dup_res_delta = dup_res - dup_prev_resolved
+        dup_reuse_delta = dup_reuse - dup_prev_reused
+        dup_gen_ratio = (dup_delta / nevals) if nevals else 0.0
         logging.info(
-            "Gen %d complete | evals=%d | total=%d | front=%d | best=%s | elapsed=%.1fs",
+            (
+                "Gen %d complete | evals=%d | total=%d | front=%d | best=%s | "
+                "dups=%d (resolved=%d reused=%d) | dup_delta=%d (res=%d reuse=%d) | "
+                "dup_ratio=%.2f%% | dup_gen=%.2f%% | elapsed=%.1fs"
+            ),
             gen,
             nevals,
             total_evals,
             front_size,
             _format_objectives(best),
+            dup_tot,
+            dup_res,
+            dup_reuse,
+            dup_delta,
+            dup_res_delta,
+            dup_reuse_delta,
+            dup_ratio * 100.0,
+            dup_gen_ratio * 100.0,
             time.time() - start_time,
         )
+        dup_prev_total = dup_tot
+        dup_prev_resolved = dup_res
+        dup_prev_reused = dup_reuse
         if verbose and record:
             logging.debug("Logbook: %s", " ".join(f"{k}={v}" for k, v in record.items()))
 
@@ -773,8 +801,7 @@ class Evaluator:
         individual_hash = calc_hash(individual)
         if individual_hash in self.seen_hashes:
             existing_score = self.seen_hashes[individual_hash]
-            self.duplicate_counter["count"] += 1
-            dup_ct = self.duplicate_counter["count"]
+            self.duplicate_counter["total"] += 1
             perturbation_funcs = [
                 self.perturb_x_pct,
                 self.perturb_step_digits,
@@ -788,21 +815,16 @@ class Evaluator:
                 perturbed = enforce_bounds(perturbed, self.bounds, self.sig_digits)
                 new_hash = calc_hash(perturbed)
                 if new_hash not in self.seen_hashes:
-                    logging.debug(
-                        "[DUPLICATE %d] resolved with %s -> %s",
-                        dup_ct,
-                        perturb_fn.__name__,
-                        new_hash,
-                    )
                     individual[:] = perturbed
                     self.seen_hashes[new_hash] = None
                     config = individual_to_config(
                         perturbed, optimizer_overrides, overrides_list, self.config
                     )
+                    self.duplicate_counter["resolved"] += 1
                     break
             else:
-                logging.debug("[DUPLICATE %d] All perturbations failed.", dup_ct)
                 if existing_score is not None:
+                    self.duplicate_counter["reused"] += 1
                     return existing_score
         else:
             self.seen_hashes[individual_hash] = None
@@ -1255,7 +1277,9 @@ async def main():
         manager = multiprocessing.Manager()
         seen_hashes = manager.dict()
         duplicate_counter = manager.dict()
-        duplicate_counter["count"] = 0
+        duplicate_counter["total"] = 0
+        duplicate_counter["resolved"] = 0
+        duplicate_counter["reused"] = 0
 
         # Initialize evaluator with shared memory references
         evaluator = Evaluator(
