@@ -14,62 +14,13 @@ except Exception:  # pragma: no cover - fallback when ccxt is missing
         pass
 
 
+from ._utils import (
+    coerce_float as _coerce_float,
+    coerce_int as _coerce_int,
+    first_float as _first_float,
+)
+
 logger = logging.getLogger(__name__)
-
-
-def _first_float(*values: Any) -> Optional[float]:
-    """Return the first value that can be coerced into ``float``."""
-
-    for value in values:
-        candidate = value
-        if candidate is None:
-            continue
-        if isinstance(candidate, (list, tuple)) and candidate:
-            candidate = candidate[0]
-        try:
-            return float(candidate)
-        except (TypeError, ValueError):
-            if isinstance(candidate, str):
-                try:
-                    return float(candidate.strip())
-                except (TypeError, ValueError):
-                    continue
-            continue
-    return None
-
-
-def _coerce_float(value: Any) -> Optional[float]:
-    """Return ``value`` converted to ``float`` when possible."""
-
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        if isinstance(value, str):
-            try:
-                return float(value.strip())
-            except (TypeError, ValueError):
-                return None
-    return None
-
-
-def _coerce_int(value: Any) -> Optional[int]:
-    """Return ``value`` converted to ``int`` when possible."""
-
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return int(value)
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        if isinstance(value, str):
-            try:
-                return int(float(value.strip()))
-            except (TypeError, ValueError):
-                return None
-    return None
 
 
 def _dedupe_symbols(symbols: Optional[Sequence[Optional[str]]]) -> Sequence[Optional[str]]:
