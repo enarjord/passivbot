@@ -724,16 +724,13 @@ impl<'a> Backtest<'a> {
                 ord => ord,
             }
         };
-        if take < volume_indices.len() {
-            let nth_index = take - 1;
-            volume_indices.select_nth_unstable_by(nth_index, |a, b| cmp(a, b));
-            let top_slice = &mut volume_indices[..take];
-            top_slice.sort_unstable_by(|a, b| cmp(a, b));
-            top_slice.iter().map(|(_, idx)| *idx).collect()
-        } else {
-            volume_indices.sort_unstable_by(|a, b| cmp(a, b));
-            volume_indices.into_iter().map(|(_, idx)| idx).collect()
-        }
+        volume_indices.sort_unstable_by(|a, b| cmp(a, b));
+        let take = take.min(volume_indices.len());
+        volume_indices
+            .into_iter()
+            .take(take)
+            .map(|(_, idx)| idx)
+            .collect()
     }
 
     fn rank_by_log_range(&self, candidates: &[usize], pside: usize) -> Vec<usize> {
