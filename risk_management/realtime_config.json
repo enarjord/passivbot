@@ -25,7 +25,7 @@
 
   "accounts": [
     {
-      "name": "Binance Futures TheAlter",
+      "name": "Binance Futures Alpha Mint",
       "exchange": "binanceusdm",
       "api_key_id": "binance_01",
       "settle_currency": "USDT"
@@ -41,7 +41,7 @@
       }
     },
     {
-      "name": "Bybit USDT Perpetuals AlphaMint",
+      "name": "Bybit USDT Perpetuals The Alter",
       "exchange": "bybit",
       "api_key_id": "bybit_01",
       "settle_currency": "USDT",
@@ -67,6 +67,7 @@
   },
   "notification_channels": [
     "email:admin@plezna.com",
+    "telegram:8167125177:AAG-dOUQ9rgvAyvYRRZ9m73nnffErz-7ABE-751365364", 
     "slack:#passivbot-risk-alerts"
   ],
   "auth": {

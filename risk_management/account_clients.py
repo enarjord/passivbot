@@ -82,6 +82,47 @@ def _first_float(*values: Any) -> Optional[float]:
     return None
 
 
+def _coerce_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_daily_realized_from_balance(balance: Mapping[str, Any]) -> Optional[float]:
+    """Attempt to read 24h realised PnL values from balance payloads."""
+
+    if not isinstance(balance, Mapping):
+        return None
+
+    candidate_keys = (
+        "daily_realized_pnl",
+        "dailyRealizedPnl",
+        "realizedPnl24h",
+        "realisedPnl24h",
+        "todayRealizedPnl",
+        "todaysRealizedPnl",
+        "realizedProfit24h",
+        "profitRealized24h",
+        "profitRealized",
+        "dailyPnl",
+        "pnl24h",
+    )
+    for key in candidate_keys:
+        if key in balance:
+            numeric = _coerce_float(balance.get(key))
+            if numeric is not None:
+                return numeric
+
+    info = balance.get("info")
+    if isinstance(info, Mapping):
+        nested = _extract_daily_realized_from_balance(info)
+        if nested is not None:
+            return nested
+
+    return None
+
+
 def _normalize_position_side(value: Any) -> Optional[str]:
     """Return the normalised hedge-mode side when available."""
 
@@ -526,14 +567,20 @@ class CCXTAccountClient(AccountClientProtocol):
                 "[%s] fetch_open_orders not available on exchange client", self.config.name
             )
 
+        daily_realized_total = sum(
+            float(position.get("daily_realized_pnl", 0.0)) for position in positions
+        )
+        if abs(daily_realized_total) < 1e-9:
+            fallback_realized = _extract_daily_realized_from_balance(balance_raw)
+            if fallback_realized is not None:
+                daily_realized_total = float(fallback_realized)
+
         return {
             "name": self.config.name,
             "balance": balance_value,
             "positions": positions,
             "open_orders": open_orders,
-            "daily_realized_pnl": sum(
-                float(position.get("daily_realized_pnl", 0.0)) for position in positions
-            ),
+            "daily_realized_pnl": daily_realized_total,
         }
 
     async def close(self) -> None:
