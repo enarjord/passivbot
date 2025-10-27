@@ -83,11 +83,6 @@ Copy the template configuration and fill in your details:
 cp risk_management/realtime_config.example.json risk_management/realtime_config.local.json
 ```
 
-The bundled template keeps every sample account disabled and points to
-`api-keys.json.example` so you can run the CLI without real exchange access or
-ccxt installed.  Replace the placeholder credentials with your own keys and set
-`"enabled": true` on each account before attempting to fetch live data.
-
 Update the new file with the following information.
 
 ### Accounts
