@@ -1222,7 +1222,14 @@ class CCXTAccountClient(AccountClientProtocol):
                 params["positionSide"] = position_side
             if position_idx is not None and "positionIdx" not in params:
                 params["positionIdx"] = position_idx
+
             if side_explicit:
+
+            if position_side in {"LONG", "SHORT"}:
+                params.pop("reduceOnly", None)
+                params.pop("reduceonly", None)
+            elif position_idx in {1, 2}:
+
                 params.pop("reduceOnly", None)
                 params.pop("reduceonly", None)
             elif "reduceOnly" not in params and "reduceonly" not in params:
