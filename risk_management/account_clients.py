@@ -129,12 +129,18 @@ def _normalize_position_side(value: Any) -> Optional[str]:
     return None
 
 
-def _extract_position_details(position: Mapping[str, Any]) -> Tuple[Optional[str], Optional[int]]:
-    """Return the detected hedge side and index from a position mapping."""
+def _extract_position_details(
+    position: Mapping[str, Any]
+) -> Tuple[Optional[str], Optional[int], bool]:
+    """Return the detected hedge side, index, and whether the side was explicit."""
 
     position_side = _normalize_position_side(position.get("positionSide"))
+    side_explicit = position_side is not None
     if position_side is None:
-        position_side = _normalize_position_side(position.get("position_side"))
+        alt_side = _normalize_position_side(position.get("position_side"))
+        if alt_side is not None:
+            position_side = alt_side
+            side_explicit = True
 
     def _position_idx_from(obj: Any) -> Optional[int]:
         if not isinstance(obj, Mapping):
@@ -155,15 +161,16 @@ def _extract_position_details(position: Mapping[str, Any]) -> Tuple[Optional[str
     if position_idx is None and isinstance(info, Mapping):
         position_idx = _position_idx_from(info)
 
+    if position_side is None and isinstance(info, Mapping):
+        info_side = _normalize_position_side(info.get("positionSide") or info.get("position_side"))
+        if info_side is not None:
+            position_side = info_side
+            side_explicit = True
+
     if position_side is None and position_idx in {1, 2}:
         position_side = "LONG" if position_idx == 1 else "SHORT"
 
-    if position_side is None and isinstance(info, Mapping):
-        position_side = _normalize_position_side(
-            info.get("positionSide") or info.get("position_side")
-        )
-
-    return position_side, position_idx
+    return position_side, position_idx, side_explicit
 
 
 class AccountClientProtocol(abc.ABC):
@@ -1210,15 +1217,19 @@ class CCXTAccountClient(AccountClientProtocol):
             side = "sell" if float(size) > 0 else "buy"
             params = dict(self._close_params)
 
-            position_side, position_idx = _extract_position_details(position)
+            position_side, position_idx, side_explicit = _extract_position_details(position)
             if position_side and "positionSide" not in params:
                 params["positionSide"] = position_side
             if position_idx is not None and "positionIdx" not in params:
                 params["positionIdx"] = position_idx
+
+            if side_explicit:
+
             if position_side in {"LONG", "SHORT"}:
                 params.pop("reduceOnly", None)
                 params.pop("reduceonly", None)
             elif position_idx in {1, 2}:
+
                 params.pop("reduceOnly", None)
                 params.pop("reduceonly", None)
             elif "reduceOnly" not in params and "reduceonly" not in params:
