@@ -294,6 +294,31 @@ def test_trading_panel_page(sample_snapshot: dict, auth_manager: AuthManager) ->
         assert "Trading panel" in response.text
 
 
+def test_analytics_endpoint(sample_snapshot: dict, auth_manager: AuthManager) -> None:
+    client, _ = create_test_app(sample_snapshot, auth_manager)
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        snapshot_response = client.get("/api/snapshot")
+        assert snapshot_response.status_code == 200
+
+        analytics_response = client.get("/api/analytics?timeframe=24h")
+        assert analytics_response.status_code == 200
+        payload = analytics_response.json()
+        assert payload["timeframe"] == "24h"
+        assert "summary" in payload
+        assert "available_timeframes" in payload
+        assert isinstance(payload.get("series"), list)
+
+        invalid_response = client.get("/api/analytics?timeframe=invalid")
+        assert invalid_response.status_code == 400
+
+
 def test_position_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) -> None:
     kill_response = {
         "Demo Account": {

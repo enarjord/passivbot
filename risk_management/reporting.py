@@ -44,7 +44,11 @@ class ReportManager:
         self.base_directory.mkdir(parents=True, exist_ok=True)
 
     async def create_account_report(
-        self, account_name: str, snapshot: Mapping[str, Any]
+        self,
+        account_name: str,
+        snapshot: Mapping[str, Any],
+        *,
+        analytics: Optional[Mapping[str, Mapping[str, Any]]] = None,
     ) -> StoredReport:
         """Generate and store a CSV report for ``account_name``."""
 
@@ -52,6 +56,7 @@ class ReportManager:
             self._create_account_report_sync,
             account_name,
             snapshot,
+            analytics,
         )
 
     async def list_reports(self, account_name: str) -> list[StoredReport]:
@@ -67,7 +72,10 @@ class ReportManager:
     # --- internal helpers -------------------------------------------------
 
     def _create_account_report_sync(
-        self, account_name: str, snapshot: Mapping[str, Any]
+        self,
+        account_name: str,
+        snapshot: Mapping[str, Any],
+        analytics: Optional[Mapping[str, Mapping[str, Any]]] = None,
     ) -> StoredReport:
         account = self._extract_account(snapshot.get("accounts"), account_name)
         if account is None:
@@ -93,7 +101,15 @@ class ReportManager:
         alerts = snapshot.get("alerts") if isinstance(snapshot, Mapping) else None
 
         rows: list[list[str]] = []
-        rows.extend(self._build_summary_rows(account_name, account, portfolio, alerts))
+        rows.extend(
+            self._build_summary_rows(
+                account_name,
+                account,
+                portfolio,
+                alerts,
+                analytics=analytics,
+            )
+        )
         rows.extend(self._build_exposure_rows(account.get("symbol_exposures")))
         rows.extend(self._build_positions_rows(account.get("positions")))
         rows.extend(self._build_orders_rows(account.get("orders")))
@@ -177,6 +193,8 @@ class ReportManager:
         account: Mapping[str, Any],
         portfolio: Optional[Mapping[str, Any]],
         alerts: Optional[Iterable[str]],
+        *,
+        analytics: Optional[Mapping[str, Mapping[str, Any]]] = None,
     ) -> list[list[str]]:
         balance = account.get("balance", 0.0)
         gross_notional = account.get("gross_exposure_notional", 0.0)
@@ -195,7 +213,7 @@ class ReportManager:
         balance_share = (
             balance / portfolio_balance if portfolio_balance else None
         )
-        rows = [
+        rows: list[list[str]] = [
             [
                 "Account",
                 "Balance",
@@ -224,6 +242,30 @@ class ReportManager:
             ],
             [],
         ]
+        if analytics:
+            rows.append(
+                [
+                    "Performance period",
+                    "PnL",
+                    "PnL %",
+                    "Realized",
+                    "Unrealized",
+                    "Drawdown",
+                ]
+            )
+            for identifier, metrics in analytics.items():
+                if not isinstance(metrics, Mapping):
+                    continue
+                summary = metrics.get("summary")
+                summary_data = summary if isinstance(summary, Mapping) else metrics
+                label = str(metrics.get("label", identifier))
+                pnl = self._format_currency(summary_data.get("nav_change", 0.0))
+                pnl_pct = self._format_pct(summary_data.get("nav_change_pct", 0.0))
+                realized = self._format_currency(summary_data.get("realized_change", 0.0))
+                unrealized_change = self._format_currency(summary_data.get("unrealized_change", 0.0))
+                drawdown = self._format_pct(summary_data.get("drawdown_pct", 0.0))
+                rows.append([label, pnl, pnl_pct, realized, unrealized_change, drawdown])
+            rows.append([])
         return rows
 
     def _build_exposure_rows(self, exposures: Any) -> list[list[str]]:
