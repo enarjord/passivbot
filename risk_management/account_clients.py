@@ -83,6 +83,40 @@ def _first_float(*values: Any) -> Optional[float]:
             continue
     return None
 
+def _coerce_float(value: Any) -> Optional[float]:
+    """Return ``value`` converted to ``float`` when possible."""
+
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        if isinstance(value, str):
+            try:
+                return float(value.strip())
+            except (TypeError, ValueError):
+                return None
+    return None
+
+def _coerce_int(value: Any) -> Optional[int]:
+    """Return ``value`` converted to ``int`` when possible."""
+
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        return int(value)
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        if isinstance(value, str):
+            try:
+                return int(float(value.strip()))
+            except (TypeError, ValueError):
+                return None
+    return None
+
 
 def _coerce_int(value: Any) -> Optional[int]:
     """Return ``value`` converted to ``int`` when possible."""
@@ -404,6 +438,7 @@ class CCXTAccountClient(AccountClientProtocol):
         credentials = dict(config.credentials)
         credentials.setdefault("enableRateLimit", True)
         self.client = _instantiate_ccxt_client(config.exchange, credentials)
+        self._normalized_exchange = normalize_exchange_name(config.exchange)
         self._balance_params = dict(config.params.get("balance", {}))
         self._positions_params = dict(config.params.get("positions", {}))
         self._orders_params = dict(config.params.get("orders", {}))
@@ -445,6 +480,221 @@ class CCXTAccountClient(AccountClientProtocol):
             if getattr(self.client, "markets", None):
                 return
             await self.client.load_markets()
+
+    async def _fetch_realized_pnl(
+        self,
+        positions: Sequence[Mapping[str, Any]],
+        *,
+        now_ms: Optional[int] = None,
+    ) -> Optional[float]:
+        """Return realised PnL for supported venues within a configurable window."""
+
+        params_cfg_raw = self.config.params.get("realized_pnl")
+        params_cfg: Mapping[str, Any]
+        if isinstance(params_cfg_raw, Mapping):
+            params_cfg = params_cfg_raw
+        else:
+            return None
+        if params_cfg.get("enabled", True) is False:
+            return None
+
+        lookback_ms = _coerce_int(params_cfg.get("lookback_ms"))
+        if lookback_ms is None:
+            lookback_hours = _coerce_int(params_cfg.get("lookback_hours"))
+            if lookback_hours is not None:
+                lookback_ms = lookback_hours * 60 * 60 * 1000
+        if lookback_ms is None:
+            lookback_minutes = _coerce_int(params_cfg.get("lookback_minutes"))
+            if lookback_minutes is not None:
+                lookback_ms = lookback_minutes * 60 * 1000
+        if lookback_ms is None or lookback_ms <= 0:
+            lookback_ms = 24 * 60 * 60 * 1000
+
+        now_ms = now_ms or int(time.time() * 1000)
+        since = (
+            _coerce_int(params_cfg.get("since_ms"))
+            or _coerce_int(params_cfg.get("start_time_ms"))
+            or _coerce_int(params_cfg.get("since"))
+        )
+        if since is None:
+            since = max(0, now_ms - lookback_ms)
+        until = (
+            _coerce_int(params_cfg.get("until_ms"))
+            or _coerce_int(params_cfg.get("end_time_ms"))
+            or _coerce_int(params_cfg.get("until"))
+        )
+        if until is None or until <= 0:
+            until = now_ms
+        if since >= until:
+            return 0.0
+
+        params_base = (
+            dict(params_cfg.get("params", {}))
+            if isinstance(params_cfg.get("params"), Mapping)
+            else {}
+        )
+
+        try:
+            exchange_id = self._normalized_exchange
+            if exchange_id in {"binanceusdm", "binancecoinm", "binancecm"}:
+                fetch_income = getattr(self.client, "fetch_income", None)
+                if fetch_income is None:
+                    return None
+                request = dict(params_base)
+                request.setdefault("incomeType", "REALIZED_PNL")
+                request.setdefault("startTime", since)
+                request.setdefault("endTime", until)
+                symbol_override = params_cfg.get("symbol")
+                if isinstance(symbol_override, str) and symbol_override:
+                    request.setdefault("symbol", symbol_override)
+                elif self.config.symbols and len(self.config.symbols) == 1:
+                    request.setdefault("symbol", self.config.symbols[0])
+                incomes = await fetch_income(params=request)
+                total = 0.0
+                for entry in incomes or []:
+                    amount = _coerce_float(entry.get("amount"))
+                    if amount is None and isinstance(entry.get("info"), Mapping):
+                        info = entry["info"]
+                        amount = _first_float(
+                            info.get("amount"),
+                            info.get("income"),
+                            info.get("realizedPnl"),
+                            info.get("realisedPnl"),
+                        )
+                    if amount is None:
+                        continue
+                    total += float(amount)
+                return total
+
+            if exchange_id == "bybit":
+                fetch_closed_pnl = getattr(
+                    self.client, "private_get_v5_position_closed_pnl", None
+                )
+                if fetch_closed_pnl is None:
+                    return None
+                limit = _coerce_int(params_cfg.get("limit")) or _coerce_int(
+                    params_base.get("limit")
+                )
+                if limit is None or limit <= 0:
+                    limit = 200
+                total = 0.0
+                cursor: Optional[str] = None
+                while True:
+                    request = dict(params_base)
+                    request.setdefault("startTime", since)
+                    request.setdefault("endTime", until)
+                    request.setdefault("limit", limit)
+                    if cursor:
+                        request["cursor"] = cursor
+                    response = await fetch_closed_pnl(request)
+                    result = response.get("result") if isinstance(response, Mapping) else None
+                    rows = result.get("list") if isinstance(result, Mapping) else None
+                    entries = rows or []
+                    for entry in entries:
+                        pnl = _first_float(
+                            entry.get("pnl"),
+                            entry.get("closedPnl"),
+                        )
+                        if pnl is None:
+                            continue
+                        total += float(pnl)
+                    cursor = (
+                        result.get("nextPageCursor")
+                        if isinstance(result, Mapping)
+                        else None
+                    )
+                    if not cursor or not entries:
+                        break
+                return total
+
+            if exchange_id == "okx":
+                fetch_trades = getattr(self.client, "fetch_my_trades", None)
+                if fetch_trades is None:
+                    return None
+                limit = _coerce_int(params_cfg.get("limit")) or _coerce_int(
+                    params_base.get("limit")
+                )
+                if limit is None or limit <= 0:
+                    limit = 200
+                params_base.setdefault("until", until)
+
+                symbols_cfg = params_cfg.get("symbols")
+                if isinstance(symbols_cfg, str) and symbols_cfg:
+                    symbols: Sequence[Optional[str]] = [symbols_cfg]
+                elif isinstance(symbols_cfg, Sequence):
+                    symbols = [
+                        str(symbol)
+                        for symbol in symbols_cfg
+                        if isinstance(symbol, str) and symbol
+                    ]
+                else:
+                    dedup: list[str] = []
+                    for position in positions:
+                        symbol = position.get("symbol")
+                        if isinstance(symbol, str) and symbol and symbol not in dedup:
+                            dedup.append(symbol)
+                    if dedup:
+                        symbols = dedup
+                    elif self.config.symbols:
+                        symbols = list(dict.fromkeys(self.config.symbols))
+                    else:
+                        symbols = [None]
+
+                total = 0.0
+                for symbol in symbols:
+                    request = dict(params_base)
+                    try:
+                        trades = await fetch_trades(
+                            symbol,
+                            since=since,
+                            limit=limit,
+                            params=request,
+                        )
+                    except BaseError as exc:
+                        logger.debug(
+                            "[%s] fetch_my_trades failed for %s: %s",
+                            self.config.name,
+                            symbol or "*",
+                            exc,
+                            exc_info=self._debug_api_payloads,
+                        )
+                        continue
+                    if not trades:
+                        continue
+                    for trade in trades:
+                        pnl = _first_float(
+                            trade.get("pnl"),
+                            trade.get("realizedPnl"),
+                            trade.get("realisedPnl"),
+                        )
+                        info = trade.get("info") if isinstance(trade.get("info"), Mapping) else None
+                        if pnl is None and info:
+                            pnl = _first_float(
+                                info.get("fillPnl"),
+                                info.get("pnl"),
+                                info.get("realizedPnl"),
+                                info.get("realisedPnl"),
+                            )
+                        if pnl is None:
+                            continue
+                        total += float(pnl)
+                return total
+
+        except BaseError as exc:
+            logger.debug(
+                "[%s] Failed to fetch realised PnL via history: %s",
+                self.config.name,
+                exc,
+                exc_info=self._debug_api_payloads,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(
+                "[%s] Unexpected error while fetching realised PnL: %s",
+                self.config.name,
+                exc,
+                exc_info=self._debug_api_payloads,
+            )
+        return None
 
     async def fetch(self) -> Dict[str, Any]:
         await self._ensure_markets()
@@ -547,6 +797,9 @@ class CCXTAccountClient(AccountClientProtocol):
                 "[%s] fetch_open_orders not available on exchange client", self.config.name
             )
 
+        realized_cfg = self.config.params.get("realized_pnl")
+        cfg_mapping = realized_cfg if isinstance(realized_cfg, Mapping) else None
+        fetch_realized_always = bool(cfg_mapping and cfg_mapping.get("mode") == "always")
         realized_from_positions = sum(
             float(position.get("daily_realized_pnl", 0.0)) for position in positions
         )
@@ -648,6 +901,14 @@ class CCXTAccountClient(AccountClientProtocol):
                     else:
                         if realized_override is not None:
                             realized_total = realized_override
+
+        should_fetch = cfg_mapping is not None and (
+            fetch_realized_always or abs(realized_from_positions) < 1e-9
+        )
+        if should_fetch:
+            realized_override = await self._fetch_realized_pnl(positions)
+            if realized_override is not None:
+                realized_total = realized_override
 
         return {
             "name": self.config.name,
