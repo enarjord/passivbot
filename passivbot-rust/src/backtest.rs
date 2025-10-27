@@ -718,17 +718,20 @@ impl<'a> Backtest<'a> {
         if take == 0 {
             return Vec::new();
         }
+        let cmp = |a: &(f64, usize), b: &(f64, usize)| -> Ordering {
+            match b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal) {
+                Ordering::Equal => a.1.cmp(&b.1),
+                ord => ord,
+            }
+        };
         if take < volume_indices.len() {
             let nth_index = take - 1;
-            volume_indices.select_nth_unstable_by(nth_index, |a, b| {
-                b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal)
-            });
+            volume_indices.select_nth_unstable_by(nth_index, |a, b| cmp(a, b));
             let top_slice = &mut volume_indices[..take];
-            top_slice.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+            top_slice.sort_unstable_by(|a, b| cmp(a, b));
             top_slice.iter().map(|(_, idx)| *idx).collect()
         } else {
-            volume_indices
-                .sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+            volume_indices.sort_unstable_by(|a, b| cmp(a, b));
             volume_indices.into_iter().map(|(_, idx)| idx).collect()
         }
     }
@@ -748,7 +751,12 @@ impl<'a> Backtest<'a> {
             })
             .collect();
 
-        log_ranges.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+        log_ranges.sort_unstable_by(|a, b| {
+            match b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal) {
+                Ordering::Equal => a.1.cmp(&b.1),
+                ord => ord,
+            }
+        });
         log_ranges.into_iter().map(|(_, idx)| idx).collect()
     }
 
