@@ -1224,16 +1224,13 @@ class CCXTAccountClient(AccountClientProtocol):
                 params["positionIdx"] = position_idx
 
             if side_explicit:
-
-            if position_side in {"LONG", "SHORT"}:
                 params.pop("reduceOnly", None)
                 params.pop("reduceonly", None)
-            elif position_idx in {1, 2}:
-
-                params.pop("reduceOnly", None)
-                params.pop("reduceonly", None)
-            elif "reduceOnly" not in params and "reduceonly" not in params:
-                params["reduceOnly"] = True
+            else:
+                if "reduceonly" in params:
+                    params["reduceOnly"] = params.pop("reduceonly")
+                if "reduceOnly" not in params:
+                    params["reduceOnly"] = True
 
             mark_price = _first_float(
                 position.get("markPrice"),
