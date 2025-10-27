@@ -19,7 +19,7 @@ use crate::utils::{
 };
 use ndarray::{ArrayView1, ArrayView3};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Clone, Default, Copy, Debug)]
 pub struct EmaAlphas {
@@ -156,8 +156,8 @@ fn update_adjusted_ema(value: f64, alpha: f64, numerator: &mut f64, denominator:
 
 #[derive(Debug, Default)]
 pub struct OpenOrders {
-    pub long: HashMap<usize, OpenOrderBundle>,
-    pub short: HashMap<usize, OpenOrderBundle>,
+    pub long: BTreeMap<usize, OpenOrderBundle>,
+    pub short: BTreeMap<usize, OpenOrderBundle>,
 }
 
 #[derive(Debug, Default)]
