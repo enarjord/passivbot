@@ -1,10 +1,4 @@
 {
-
-    "api_keys_file": "../api-keys.json",
-    "debug_api_payloads": false,
-    "custom_endpoints": {
-        "path": "../configs/custom_endpoints.json",
-        "autodiscover": false
   "api_keys_file": "/root/passivbot/api-keys.json",
   "debug_api_payloads": false,
   "custom_endpoints": {
@@ -31,7 +25,7 @@
 
   "accounts": [
     {
-      "name": "Binance Futures Alpha Mint",
+      "name": "Binance Futures TheAlter",
       "exchange": "binanceusdm",
       "api_key_id": "binance_01",
       "settle_currency": "USDT"
@@ -46,82 +40,8 @@
         "positions": {"type": "swap"}
       }
     },
-
-    "accounts": [
-        {
-            "name": "Binance Futures",
-            "exchange": "binanceusdm",
-            "api_key_id": "binance_01",
-            "settle_currency": "USDT",
-            "enabled": true,
-            "params": {
-                "balance": {
-                    "type": "swap"
-                },
-                "positions": {
-                    "type": "swap"
-                }
-            }
-        },
-        {
-            "name": "OKX Futures",
-            "exchange": "okx",
-            "api_key_id": "okx_01",
-            "settle_currency": "USDT",
-            "enabled": true,
-            "params": {
-                "balance": {
-                    "type": "swap"
-                },
-                "positions": {
-                    "type": "swap"
-                }
-            }
-        },
-        {
-            "name": "Bybit USDT Perpetuals",
-            "exchange": "bybit",
-            "api_key_id": "bybit_01",
-            "settle_currency": "USDT",
-            "enabled": true,
-            "params": {
-                "balance": {
-                    "type": "swap"
-                },
-                "positions": {
-                    "type": "swap"
-                }
-            }
-        }
-    ],
-    "alert_thresholds": {
-        "wallet_exposure_pct": 0.65,
-        "position_wallet_exposure_pct": 0.25,
-        "max_drawdown_pct": 0.25,
-        "loss_threshold_pct": -0.08
-    },
-    "email": {
-        "host": "smtp.example.com",
-        "port": 587,
-        "username": "alerts@example.com",
-        "password": "replace-with-app-password",
-        "sender": "alerts@example.com",
-        "use_tls": true
-    },
-    "notification_channels": [
-        "email:risk-team@example.com",
-        "telegram:bot-token@chat-id",
-        "slack:#passivbot-risk-alerts"
-    ],
-    "auth": {
-        "secret_key": "replace-with-a-long-random-string",
-        "session_cookie_name": "risk_dashboard_session",
-        "https_only": true,
-        "users": {
-            "admin": "$2b$12$0ZCLkFp6iuhlEFshgPCBz.0dXxmRCV4vcjxHfRh0qKtzc79Pj9c5W"
-        }
     {
-      "name": "Bybit USDT Perpetuals The Alter",
+      "name": "Bybit USDT Perpetuals AlphaMint",
       "exchange": "bybit",
       "api_key_id": "bybit_01",
       "settle_currency": "USDT",
@@ -147,7 +67,6 @@
   },
   "notification_channels": [
     "email:admin@plezna.com",
-    "telegram:8167125177:AAG-dOUQ9rgvAyvYRRZ9m73nnffErz-7ABE-751365364", 
     "slack:#passivbot-risk-alerts"
   ],
   "auth": {
