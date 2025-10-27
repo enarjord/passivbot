@@ -182,7 +182,7 @@ def process_forager_fills(
         )
         if sample_divider > 1 and not bal_eq.empty:
             try:
-                bal_eq = bal_eq.resample(f"{sample_divider}T").last()
+                bal_eq = bal_eq.resample(f"{sample_divider}min").last()
             except ValueError:
                 bal_eq = bal_eq.iloc[::sample_divider]
             bal_eq = bal_eq.dropna(how="all").ffill().bfill()
