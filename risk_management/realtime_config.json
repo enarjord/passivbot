@@ -1,8 +1,8 @@
 {
-    "api_keys_file": "../api-keys.json.example",
+    "api_keys_file": "../api-keys.json",
     "debug_api_payloads": false,
     "custom_endpoints": {
-        "path": "../configs/custom_endpoints.json.example",
+        "path": "../configs/custom_endpoints.json",
         "autodiscover": false
     },
     "reports_dir": "../risk_reports",
@@ -24,11 +24,11 @@
     },
     "accounts": [
         {
-            "name": "Binance Futures (sample)",
+            "name": "Binance Futures",
             "exchange": "binanceusdm",
             "api_key_id": "binance_01",
             "settle_currency": "USDT",
-            "enabled": false,
+            "enabled": true,
             "params": {
                 "balance": {
                     "type": "swap"
@@ -39,11 +39,11 @@
             }
         },
         {
-            "name": "OKX Futures (sample)",
+            "name": "OKX Futures",
             "exchange": "okx",
             "api_key_id": "okx_01",
             "settle_currency": "USDT",
-            "enabled": false,
+            "enabled": true,
             "params": {
                 "balance": {
                     "type": "swap"
@@ -54,11 +54,11 @@
             }
         },
         {
-            "name": "Bybit USDT Perpetuals (sample)",
+            "name": "Bybit USDT Perpetuals",
             "exchange": "bybit",
             "api_key_id": "bybit_01",
             "settle_currency": "USDT",
-            "enabled": false,
+            "enabled": true,
             "params": {
                 "balance": {
                     "type": "swap"
