@@ -1,0 +1,64 @@
+{
+  "api_keys_file": "./api-keys.json",
+  "debug_api_payloads": false,
+  "custom_endpoints": {
+    "path": "./configs/custom_endpoints.json",
+    "autodiscover": true
+  },
+  "reports_dir": "./reports",
+  "grafana": {
+    "base_url": "https://grafana.example.com/",
+    "default_height": 600,
+    "dashboards": [
+      {
+        "title": "Portfolio overview",
+        "url": "d-solo/portfolio/main?orgId=1&panelId=2",
+        "description": "NAV, profit rate, and drawdown metrics across the portfolio."
+      }
+    ]
+  },
+  "accounts": [
+    {
+      "name": "Binance Perps",
+      "exchange": "binance",
+      "api_key_id": "binance_01",
+      "settle_currency": "USDT"
+    },
+    {
+      "name": "OKX Futures",
+      "exchange": "okx",
+      "api_key_id": "okx_01",
+      "settle_currency": "USDT",
+      "params": {
+        "balance": {"type": "swap"},
+        "positions": {"type": "swap"}
+      }
+    }
+  ],
+  "alert_thresholds": {
+    "wallet_exposure_pct": 0.65,
+    "position_wallet_exposure_pct": 0.25,
+    "max_drawdown_pct": 0.25,
+    "loss_threshold_pct": -0.08
+  },
+  "email": {
+    "host": "smtp.example.com",
+    "port": 587,
+    "username": "alerts@example.com",
+    "password": "changeme",
+    "sender": "alerts@example.com",
+    "use_tls": true
+  },
+  "notification_channels": [
+    "email:alerts@example.com",
+    "slack:#risk-alerts"
+  ],
+  "auth": {
+    "secret_key": "replace-me",
+    "session_cookie_name": "risk_dashboard_session",
+    "https_only": true,
+    "users": {
+      "admin": "$2b$12$examplehashreplacewithgeneratedvalue"
+    }
+  }
+}
