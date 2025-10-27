@@ -196,6 +196,7 @@ class RealtimeConfig:
     debug_api_payloads: bool = False
     reports_dir: Optional[Path] = None
     grafana: Optional[GrafanaConfig] = None
+    history_dir: Optional[Path] = None
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -655,6 +656,11 @@ def load_realtime_config(path: Path | str) -> RealtimeConfig:
     if reports_dir_value:
         reports_dir = _resolve_path_relative_to(path.parent, reports_dir_value)
 
+    history_dir_value = config.get("history_dir")
+    history_dir: Optional[Path] = None
+    if history_dir_value:
+        history_dir = _resolve_path_relative_to(path.parent, history_dir_value)
+
     if custom_endpoints and custom_endpoints.path:
         resolved_path = _resolve_path_relative_to(path.parent, custom_endpoints.path)
         custom_endpoints = CustomEndpointSettings(
@@ -686,4 +692,5 @@ def load_realtime_config(path: Path | str) -> RealtimeConfig:
         reports_dir=reports_dir,
         grafana=grafana_settings,
         account_messages=account_messages,
+        history_dir=history_dir,
     )

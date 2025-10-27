@@ -403,3 +403,46 @@ def test_letsencrypt_challenge_mount(tmp_path: Path, auth_manager: AuthManager) 
     )
     assert challenge_dir.exists()
     assert any(route.path == "/.well-known/acme-challenge" for route in app.routes)
+
+
+def test_portfolio_history_and_cashflows(
+    sample_snapshot: dict, auth_manager: AuthManager
+) -> None:
+    client, fetcher = create_test_app(sample_snapshot, auth_manager)
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        snapshot_response = client.get("/api/snapshot")
+        assert snapshot_response.status_code == 200
+
+        history_response = client.get("/api/history/portfolio")
+        assert history_response.status_code == 200
+        payload = history_response.json()
+        assert "summary" in payload
+        assert "series" in payload
+
+        create_cashflow = client.post(
+            "/api/history/cashflows",
+            json={
+                "type": "deposit",
+                "amount": 1250,
+                "currency": "USDT",
+                "account": "Fund A",
+                "note": "Initial funding",
+            },
+        )
+        assert create_cashflow.status_code == 201
+
+        list_response = client.get("/api/history/cashflows")
+        assert list_response.status_code == 200
+        entries = list_response.json().get("cashflows", [])
+        assert any(entry.get("note") == "Initial funding" for entry in entries)
+
+        report_response = client.get("/api/reports/portfolio")
+        assert report_response.status_code == 200
+        assert report_response.headers["content-type"].startswith("text/csv")
