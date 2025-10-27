@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Iterable as IterableABC
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
-from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -18,7 +18,6 @@ from starlette.middleware.sessions import SessionMiddleware
 from urllib.parse import quote, urljoin
 
 from .configuration import RealtimeConfig
-from .analytics import PortfolioHistory, TIMEFRAMES
 from .realtime import RealtimeDataFetcher
 from .reporting import ReportManager
 from .snapshot_utils import build_presentable_snapshot
@@ -54,58 +53,11 @@ class AuthManager:
 class RiskDashboardService:
     """Wrap a realtime fetcher to expose snapshot data."""
 
-    def __init__(
-        self,
-        fetcher: RealtimeDataFetcher,
-        *,
-        history: Optional[PortfolioHistory] = None,
-    ) -> None:
+    def __init__(self, fetcher: RealtimeDataFetcher) -> None:
         self._fetcher = fetcher
-        self._history = history or PortfolioHistory()
-        self._latest_view: Optional[Dict[str, Any]] = None
 
     async def fetch_snapshot(self) -> Dict[str, Any]:
-        raw = await self._fetcher.fetch_snapshot()
-        view = build_presentable_snapshot(raw)
-        self._history.record_snapshot(view)
-        self._inject_derived_daily_realized(view)
-        self._latest_view = view
-        return view
-
-    def _inject_derived_daily_realized(self, view: Dict[str, Any]) -> None:
-        portfolio = view.get("portfolio")
-        if not isinstance(portfolio, Mapping):
-            return
-        try:
-            portfolio_summary = self._history.portfolio_summary("24h", include_series=False)
-        except ValueError:
-            return
-        daily_summary = portfolio_summary.get("summary", {}) if isinstance(portfolio_summary, Mapping) else {}
-        derived_realized = float(daily_summary.get("realized_change", 0.0)) if isinstance(daily_summary, Mapping) else 0.0
-        existing_portfolio_realized = float(portfolio.get("daily_realized_pnl", 0.0))
-        if abs(existing_portfolio_realized) < 1e-9 and abs(derived_realized) > 0:
-            portfolio["daily_realized_pnl"] = derived_realized
-        accounts = view.get("accounts")
-        if not isinstance(accounts, list):
-            return
-        for account in accounts:
-            if not isinstance(account, dict):
-                continue
-            existing = float(account.get("daily_realized_pnl", 0.0))
-            if abs(existing) >= 1e-9:
-                continue
-            name = account.get("name")
-            if not isinstance(name, str) or not name:
-                continue
-            account_summary = self._history.account_summary(name, "24h", include_series=False)
-            if not account_summary or not isinstance(account_summary, Mapping):
-                continue
-            account_summary_data = account_summary.get("summary")
-            if not isinstance(account_summary_data, Mapping):
-                continue
-            derived_account_realized = float(account_summary_data.get("realized_change", 0.0))
-            if abs(derived_account_realized) > 0:
-                account["daily_realized_pnl"] = derived_account_realized
+        return await self._fetcher.fetch_snapshot()
 
     async def close(self) -> None:
         await self._fetcher.close()
@@ -163,26 +115,6 @@ class RiskDashboardService:
 
     async def clear_portfolio_stop_loss(self) -> None:
         await self._fetcher.clear_portfolio_stop_loss()
-
-    def get_portfolio_analytics(self, timeframe: str) -> Dict[str, Any]:
-        payload = self._history.portfolio_summary(timeframe)
-        available = self._history.available_timeframes()
-        payload["available_timeframes"] = available
-        payload["comparisons"] = self._history.portfolio_overview(
-            [identifier for identifier, *_ in TIMEFRAMES]
-        )
-        latest = self._latest_view or {}
-        payload["latest_snapshot"] = (
-            latest.get("generated_at") if isinstance(latest, Mapping) else None
-        )
-        return payload
-
-    def get_account_analytics(
-        self, account_name: str, timeframes: Optional[Sequence[str]] = None
-    ) -> Dict[str, Dict[str, Any]]:
-        if timeframes is None:
-            timeframes = [identifier for identifier, *_ in TIMEFRAMES]
-        return self._history.account_overview(account_name, timeframes)
 
 
 def _format_kill_switch_failure(account: str, action: str, payload: Mapping[str, Any]) -> str:
@@ -378,7 +310,8 @@ def create_app(
         user = request.session.get("user")
         if not user:
             return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-        view_model = await service.fetch_snapshot()
+        snapshot = await service.fetch_snapshot()
+        view_model = build_presentable_snapshot(snapshot)
         grafana_context: dict[str, Any] = request.app.state.grafana_context
         return templates.TemplateResponse(
             "dashboard.html",
@@ -398,7 +331,8 @@ def create_app(
         user = request.session.get("user")
         if not user:
             return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-        view_model = await service.fetch_snapshot()
+        snapshot = await service.fetch_snapshot()
+        view_model = build_presentable_snapshot(snapshot)
         grafana_context: dict[str, Any] = request.app.state.grafana_context
         return templates.TemplateResponse(
             "trading_panel.html",
@@ -417,20 +351,9 @@ def create_app(
         service: RiskDashboardService = Depends(get_service),
         _: str = Depends(require_user),
     ) -> JSONResponse:
-        view_model = await service.fetch_snapshot()
+        snapshot = await service.fetch_snapshot()
+        view_model = build_presentable_snapshot(snapshot)
         return JSONResponse(view_model)
-
-    @app.get("/api/analytics", response_class=JSONResponse)
-    async def api_portfolio_analytics(
-        timeframe: str = Query("24h"),
-        service: RiskDashboardService = Depends(get_service),
-        _: str = Depends(require_user),
-    ) -> JSONResponse:
-        try:
-            analytics = service.get_portfolio_analytics(timeframe)
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        return JSONResponse(analytics)
 
     @app.get(
         "/api/trading/accounts/{account_name}/order-types",
@@ -672,14 +595,10 @@ def create_app(
         manager: ReportManager = Depends(get_report_manager),
         _: str = Depends(require_user),
     ) -> JSONResponse:
-        view_model = await service.fetch_snapshot()
-        account_analytics = service.get_account_analytics(account_name)
+        snapshot = await service.fetch_snapshot()
+        view_model = build_presentable_snapshot(snapshot)
         try:
-            report = await manager.create_account_report(
-                account_name,
-                view_model,
-                analytics=account_analytics,
-            )
+            report = await manager.create_account_report(account_name, view_model)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         data = report.to_view()
