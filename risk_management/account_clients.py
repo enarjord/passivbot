@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import json
 import logging
 import math
 import statistics
@@ -12,7 +13,7 @@ from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional, Seque
 
 try:  # pragma: no cover - optional dependency in some envs
     import ccxt.async_support as ccxt_async
-    from ccxt.base.errors import BaseError
+    from ccxt.base.errors import AuthenticationError, BaseError
 except ModuleNotFoundError:  # pragma: no cover - allow tests without ccxt
     ccxt_async = None  # type: ignore[assignment]
 
@@ -21,8 +22,15 @@ except ModuleNotFoundError:  # pragma: no cover - allow tests without ccxt
 
         pass
 
+    class AuthenticationError(BaseError):
+        """Fallback authentication error when ccxt is unavailable."""
+
+        pass
+
 from custom_endpoint_overrides import (
+    ResolvedEndpointOverride,
     apply_rest_overrides_to_ccxt,
+    get_custom_endpoint_source,
     resolve_custom_endpoint_override,
 )
 
@@ -257,18 +265,34 @@ def _is_symbol_specific_open_orders_warning(error: BaseError) -> bool:
     )
 
 
-def _instantiate_ccxt_client(exchange_id: str, credentials: Mapping[str, Any]) -> Any:
+_DEFAULT_OVERRIDE_SENTINEL = object()
+
+
+def _instantiate_ccxt_client(
+    exchange_id: str,
+    credentials: Mapping[str, Any],
+    *,
+    custom_endpoint_override: object = _DEFAULT_OVERRIDE_SENTINEL,
+) -> Any:
     """Instantiate a ccxt async client honoring passivbot customisations when available."""
 
     normalized = normalize_exchange_name(exchange_id)
     rate_limited = bool(credentials.get("enableRateLimit", True))
 
     if load_ccxt_instance is not None:
-        client = load_ccxt_instance(normalized, enable_rate_limit=rate_limited)
+        client = load_ccxt_instance(
+            normalized,
+            enable_rate_limit=rate_limited,
+            apply_custom_endpoints=False,
+        )
         _apply_credentials(client, credentials)
         _disable_fetch_currencies(client)
         _suppress_open_orders_warning(client)
-        override = resolve_custom_endpoint_override(normalized)
+        override: Optional[ResolvedEndpointOverride]
+        if custom_endpoint_override is _DEFAULT_OVERRIDE_SENTINEL:
+            override = resolve_custom_endpoint_override(normalized)
+        else:
+            override = custom_endpoint_override  # type: ignore[assignment]
         apply_rest_overrides_to_ccxt(client, override)
         return client
 
@@ -288,7 +312,11 @@ def _instantiate_ccxt_client(exchange_id: str, credentials: Mapping[str, Any]) -
     _apply_credentials(client, credentials)
     _disable_fetch_currencies(client)
     _suppress_open_orders_warning(client)
-    override = resolve_custom_endpoint_override(normalized)
+    override: Optional[ResolvedEndpointOverride]
+    if custom_endpoint_override is _DEFAULT_OVERRIDE_SENTINEL:
+        override = resolve_custom_endpoint_override(normalized)
+    else:
+        override = custom_endpoint_override  # type: ignore[assignment]
     apply_rest_overrides_to_ccxt(client, override)
     return client
 
@@ -304,13 +332,39 @@ class CCXTAccountClient(AccountClientProtocol):
         self._normalized_exchange = normalize_exchange_name(config.exchange)
         credentials = dict(config.credentials)
         credentials.setdefault("enableRateLimit", True)
-        self.client = _instantiate_ccxt_client(config.exchange, credentials)
+        available_override = resolve_custom_endpoint_override(self._normalized_exchange)
+        apply_override: Optional[ResolvedEndpointOverride]
+        if config.use_custom_endpoints is False:
+            apply_override = None
+            if available_override and not available_override.is_noop():
+                logger.info(
+                    "Custom endpoint override for %s disabled by account configuration",
+                    self.config.name,
+                )
+        else:
+            apply_override = available_override
+            if config.use_custom_endpoints is True and not available_override:
+                logger.info(
+                    "Account %s requested custom endpoints but none are configured for %s",
+                    self.config.name,
+                    self._normalized_exchange,
+                )
+
+        self.client = _instantiate_ccxt_client(
+            config.exchange,
+            credentials,
+            custom_endpoint_override=apply_override,
+        )
         self._balance_params = dict(config.params.get("balance", {}))
         self._positions_params = dict(config.params.get("positions", {}))
         self._orders_params = dict(config.params.get("orders", {}))
         self._close_params = dict(config.params.get("close", {}))
         self._markets_loaded: Optional[asyncio.Lock] = None
         self._debug_api_payloads = bool(config.debug_api_payloads)
+        self._custom_endpoint_override = apply_override
+        self._using_custom_endpoints = bool(apply_override and not apply_override.is_noop())
+        source_path = get_custom_endpoint_source()
+        self._custom_endpoint_source = str(source_path) if source_path else None
 
     def _refresh_open_order_preferences(self) -> None:
         """Re-apply exchange options that silence noisy open-order warnings."""
@@ -563,8 +617,11 @@ class CCXTAccountClient(AccountClientProtocol):
         return None
 
     async def fetch(self) -> Dict[str, Any]:
-        await self._ensure_markets()
-        balance_raw = await self.client.fetch_balance(params=self._balance_params)
+        try:
+            await self._ensure_markets()
+            balance_raw = await self.client.fetch_balance(params=self._balance_params)
+        except BaseError as exc:
+            raise self._translate_ccxt_error(exc) from exc
         self._log_exchange_payload("fetch_balance", balance_raw, self._balance_params)
         balance_value = _extract_balance(balance_raw, self.config.settle_currency)
         positions_raw: Iterable[Mapping[str, Any]] = []
@@ -693,6 +750,107 @@ class CCXTAccountClient(AccountClientProtocol):
 
     async def close(self) -> None:
         await self.client.close()
+
+    def _translate_ccxt_error(self, error: BaseError) -> Exception:
+        message = str(error)
+        payload, prefix = self._extract_error_payload(message)
+        detail = self._extract_error_detail(payload)
+        hint = self._custom_endpoint_hint(payload)
+
+        if self._is_authentication_error(message, detail):
+            description = detail or "The exchange rejected the API credentials"
+            description = description.rstrip(".")
+            description += ". Please verify the API key, secret, permissions, and any IP whitelist settings."
+            if hint:
+                description += " " + hint
+            return AuthenticationError(description)
+
+        summary = detail or prefix or "An unexpected error was returned by the exchange"
+        summary = summary.rstrip(".") + ". See logs for full error details."
+        if hint:
+            summary += " " + hint
+        return RuntimeError(summary)
+
+    @staticmethod
+    def _extract_error_payload(message: str) -> Tuple[Optional[Mapping[str, Any]], str]:
+        idx = message.find("{")
+        if idx == -1:
+            return None, message.strip()
+        json_segment = message[idx:]
+        try:
+            payload = json.loads(json_segment)
+        except json.JSONDecodeError:
+            return None, message.strip()
+        prefix = message[:idx].strip()
+        return payload, prefix
+
+    @classmethod
+    def _extract_error_detail(cls, payload: Optional[Mapping[str, Any]]) -> Optional[str]:
+        if not payload:
+            return None
+        candidates = (
+            payload.get("msg"),
+            payload.get("message"),
+            payload.get("retMsg"),
+            payload.get("ret_msg"),
+            payload.get("result"),
+            payload.get("error"),
+            payload.get("reason"),
+            payload.get("desc"),
+            payload.get("detail"),
+        )
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        for candidate in payload.values():
+            if isinstance(candidate, Mapping):
+                nested = cls._extract_error_detail(candidate)
+                if nested:
+                    return nested
+        return None
+
+    def _custom_endpoint_hint(self, payload: Optional[Mapping[str, Any]]) -> Optional[str]:
+        source: Optional[str] = None
+        if payload:
+            for key in ("source", "proxy", "origin", "endpoint"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    source = value.strip()
+                    break
+        if source:
+            return f"Requests for this account are routed through the '{source}' custom endpoint."
+        if not self._using_custom_endpoints:
+            return None
+        if self._custom_endpoint_source:
+            return (
+                "Custom endpoint overrides from "
+                f"{self._custom_endpoint_source} are active for this account."
+            )
+        return "Custom endpoint overrides discovered automatically are active for this account."
+
+    @staticmethod
+    def _is_authentication_error(message: str, detail: Optional[str]) -> bool:
+        lowered = message.lower()
+        tokens = (
+            "invalid api key",
+            "invalid api-key",
+            "api key not found",
+            "api-key not found",
+            "api-key format is invalid",
+            "api key format is invalid",
+            "invalid signature",
+            "signature for this request is not valid",
+            "signature verification failed",
+            "authentication failed",
+            "not authorized",
+            "access denied",
+        )
+        if any(token in lowered for token in tokens):
+            return True
+        if detail:
+            lowered_detail = detail.lower()
+            return any(token in lowered_detail for token in tokens)
+        return False
 
     async def _collect_symbol_metrics(
         self, symbols: Iterable[str]

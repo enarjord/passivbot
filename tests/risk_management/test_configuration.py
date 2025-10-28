@@ -127,6 +127,60 @@ def test_merge_credentials_prioritises_primary_values() -> None:
     assert "exchange" not in merged
 
 
+def test_account_can_disable_custom_endpoints(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["accounts"][0]["use_custom_endpoints"] = False
+    config_path = _write_config(tmp_path, payload)
+
+    config = load_realtime_config(config_path)
+
+    assert config.accounts[0].use_custom_endpoints is False
+
+
+def test_api_key_custom_endpoint_preference(tmp_path: Path) -> None:
+    payload = {
+        "api_keys_file": "../api-keys.json",
+        "accounts": [
+            {
+                "name": "Example",
+                "api_key_id": "binance_01",
+                "exchange": "binanceusdm",
+            }
+        ],
+    }
+    config_path = _write_config(tmp_path, payload)
+
+    api_keys_path = config_path.parent.parent / "api-keys.json"
+    api_keys_path.write_text(
+        json.dumps(
+            {
+                "binance_01": {
+                    "exchange": "binanceusdm",
+                    "key": "abc",
+                    "secret": "def",
+                    "use_custom_endpoints": "false",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_realtime_config(config_path)
+
+    account = config.accounts[0]
+    assert account.use_custom_endpoints is False
+    assert "use_custom_endpoints" not in account.credentials
+
+
+def test_account_use_custom_endpoints_invalid(tmp_path: Path) -> None:
+    payload = _base_payload()
+    payload["accounts"][0]["use_custom_endpoints"] = "sometimes"
+    config_path = _write_config(tmp_path, payload)
+
+    with pytest.raises(ValueError, match="invalid 'use_custom_endpoints'"):
+        load_realtime_config(config_path)
+
+
 def test_load_realtime_config_supports_nested_user_entries(tmp_path: Path) -> None:
     api_keys_path = tmp_path / "api-keys.json"
     api_keys_path.write_text(

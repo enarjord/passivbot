@@ -115,6 +115,29 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
+def _parse_use_custom_endpoints(value: Any) -> Optional[bool]:
+    """Return an optional boolean describing custom endpoint preferences."""
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"", "default", "auto", "inherit"}:
+            return None
+        if lowered in {"1", "true", "yes", "on", "enable", "enabled", "force"}:
+            return True
+        if lowered in {"0", "false", "no", "off", "disable", "disabled", "none"}:
+            return False
+        raise ValueError(
+            "must be one of: auto, inherit, default, true, false, yes, no, on, off, enable, disable"
+        )
+    raise ValueError("custom endpoint preference must be a boolean or string value")
+
+
 @dataclass()
 class CustomEndpointSettings:
     """Settings controlling how custom endpoint overrides are loaded."""
@@ -136,6 +159,7 @@ class AccountConfig:
     params: Dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
     debug_api_payloads: bool = False
+    use_custom_endpoints: Optional[bool] = None
 
 
 @dataclass()
@@ -486,6 +510,8 @@ def _parse_accounts(
         api_key_id = raw.get("api_key_id")
         credentials: Mapping[str, Any] = raw.get("credentials", {})
         exchange = raw.get("exchange")
+        use_custom_endpoints_pref: Optional[bool] = None
+        key_payload: Optional[Mapping[str, Any]] = None
         if api_key_id:
             if api_keys is None:
                 raise ValueError(
@@ -499,6 +525,16 @@ def _parse_accounts(
             if not exchange:
                 exchange = key_payload.get("exchange")
             credentials = _merge_credentials(credentials, key_payload)
+            key_pref_raw = key_payload.get("use_custom_endpoints") if isinstance(key_payload, Mapping) else None
+            if key_pref_raw is not None:
+                try:
+                    key_pref = _parse_use_custom_endpoints(key_pref_raw)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"API key '{api_key_id}' has invalid 'use_custom_endpoints' value: {exc}"
+                    ) from exc
+                if key_pref is not None:
+                    use_custom_endpoints_pref = key_pref
         else:
             credentials = _normalise_credentials(credentials)
         if not exchange:
@@ -509,16 +545,39 @@ def _parse_accounts(
             raw.get("debug_api_payloads"), debug_api_payloads_default
         )
 
+        credentials_dict = dict(credentials)
+        embedded_pref_raw = credentials_dict.pop("use_custom_endpoints", None)
+        if embedded_pref_raw is not None:
+            try:
+                embedded_pref = _parse_use_custom_endpoints(embedded_pref_raw)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Account '{raw.get('name')}' has invalid credential 'use_custom_endpoints' value: {exc}"
+                ) from exc
+            if embedded_pref is not None:
+                use_custom_endpoints_pref = embedded_pref
+
+        account_pref_raw = raw.get("use_custom_endpoints")
+        if account_pref_raw is not None:
+            try:
+                account_pref = _parse_use_custom_endpoints(account_pref_raw)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Account '{raw.get('name')}' has invalid 'use_custom_endpoints' value: {exc}"
+                ) from exc
+            use_custom_endpoints_pref = account_pref
+
         account = AccountConfig(
             name=str(raw.get("name", exchange)),
             exchange=str(exchange),
             settle_currency=str(raw.get("settle_currency", "USDT")),
             api_key_id=api_key_id,
-            credentials=dict(credentials),
+            credentials=credentials_dict,
             symbols=list(raw.get("symbols") or []) or None,
             params=dict(raw.get("params", {})),
             enabled=bool(raw.get("enabled", True)),
             debug_api_payloads=debug_api_payloads,
+            use_custom_endpoints=use_custom_endpoints_pref,
         )
         accounts.append(account)
         if debug_api_payloads:
