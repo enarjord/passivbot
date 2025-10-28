@@ -431,9 +431,12 @@ class BybitBot(Passivbot):
         mt_events = [extract_fill_event_from_mt(x) for x in my_trades]
         ph_events = [extract_fill_event_from_ph(x) for x in positions_history]
         events = sorted(mt_events + ph_events, key=lambda x: x["timestamp"])
+
         return events
 
     async def fetch_my_trades(self, start_time, end_time, limit=100):
+        # wrapper for ccxt.fetch_my_trades
+        # multiple fetches to find all fills inside given date range
         # limit is max 100
         # The time range between startTime and endTime cannot exceed 7 days
         # if start time is given without end time, will fetch fills closes to one week after start time
@@ -450,8 +453,12 @@ class BybitBot(Passivbot):
             my_trades = await self.cca.fetch_my_trades(params=params)
             my_trades_all.extend(my_trades)
             if len(my_trades) < limit:
-                logging.debug(f"broke loop fetch_my_trades on n my_trades {len(my_trades)}")
-                break
+                if start_time is None or params["endTime"] - start_time < week_with_buffer_ms:
+                    logging.debug(f"broke loop fetch_my_trades on n my_trades {len(my_trades)}")
+                    break
+                else:
+                    params["endTime"] = int(params["endTime"] - week_with_buffer_ms)
+                    continue
             if start_time is None or my_trades[0]["timestamp"] < start_time:
                 logging.debug(f"broke loop fetch_my_trades on start time exceeded")
                 break
@@ -466,6 +473,7 @@ class BybitBot(Passivbot):
         return sorted(my_trades_all, key=lambda x: x["timestamp"])
 
     async def fetch_positions_history(self, start_time, end_time, limit=100):
+        # wrapper for ccxt.fetch_positions_history
         # limit is max 100
 
         # The start timestamp (ms)
@@ -490,8 +498,12 @@ class BybitBot(Passivbot):
             positions_history.sort(key=lambda x: x["timestamp"])
             positions_history_all.extend(positions_history)
             if len(positions_history) < limit:
-                logging.debug(f"broke loop fetch_positions_history on n {len(positions_history)}")
-                break
+                if start_time is None or params["endTime"] - start_time < week_with_buffer_ms:
+                    logging.debug(f"broke loop fetch_positions_history on n {len(positions_history)}")
+                    break
+                else:
+                    params["endTime"] = int(params["endTime"] - week_with_buffer_ms)
+                    continue
             if start_time is None or positions_history[0]["timestamp"] < start_time:
                 logging.debug("broke loop fetch_positions_history on start time exceeded")
                 break
