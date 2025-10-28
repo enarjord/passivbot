@@ -9,6 +9,7 @@ use crate::risk::{
     calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
     GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
 };
+use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle};
 use crate::types::{
     BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities, ExchangeParams, Fill,
     Order, OrderBook, OrderType, Position, Positions, StateParams, TrailingPriceBundle,
@@ -1258,25 +1259,13 @@ impl<'a> Backtest<'a> {
                 }
                 let bundle = self.trailing_prices.long.entry(idx).or_default();
                 if self.did_fill_long.contains(&idx) {
-                    *bundle = TrailingPriceBundle::default();
+                    reset_trailing_bundle(bundle);
                 } else {
                     let low = self.hlcvs[[k, idx, LOW]];
                     let high = self.hlcvs[[k, idx, HIGH]];
                     let close = self.hlcvs[[k, idx, CLOSE]];
 
-                    if low < bundle.min_since_open {
-                        bundle.min_since_open = low;
-                        bundle.max_since_min = close;
-                    } else {
-                        bundle.max_since_min = bundle.max_since_min.max(high);
-                    }
-
-                    if high > bundle.max_since_open {
-                        bundle.max_since_open = high;
-                        bundle.min_since_max = close;
-                    } else {
-                        bundle.min_since_max = bundle.min_since_max.min(low);
-                    }
+                    update_trailing_bundle_with_candle(bundle, high, low, close);
                 }
             }
         }
@@ -1292,25 +1281,13 @@ impl<'a> Backtest<'a> {
                 }
                 let bundle = self.trailing_prices.short.entry(idx).or_default();
                 if self.did_fill_short.contains(&idx) {
-                    *bundle = TrailingPriceBundle::default();
+                    reset_trailing_bundle(bundle);
                 } else {
                     let low = self.hlcvs[[k, idx, LOW]];
                     let high = self.hlcvs[[k, idx, HIGH]];
                     let close = self.hlcvs[[k, idx, CLOSE]];
 
-                    if low < bundle.min_since_open {
-                        bundle.min_since_open = low;
-                        bundle.max_since_min = close;
-                    } else {
-                        bundle.max_since_min = bundle.max_since_min.max(high);
-                    }
-
-                    if high > bundle.max_since_open {
-                        bundle.max_since_open = high;
-                        bundle.min_since_max = close;
-                    } else {
-                        bundle.min_since_max = bundle.min_since_max.min(low);
-                    }
+                    update_trailing_bundle_with_candle(bundle, high, low, close);
                 }
             }
         }

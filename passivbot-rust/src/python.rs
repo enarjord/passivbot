@@ -11,19 +11,57 @@ use crate::risk::{
     calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
     GateEntriesDecision, GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
 };
+use crate::trailing::{
+    trailing_bundle_to_tuple, tuple_to_trailing_bundle, update_trailing_bundle_sequence,
+};
 use crate::types::OrderType;
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, Position,
     StateParams, TrailingPriceBundle,
 };
 use ndarray::Array2;
-use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray3};
+use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray3};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use pyo3::PyObject;
 use serde::Serialize;
 use std::str::FromStr;
+
+#[pyfunction]
+pub fn trailing_bundle_default_py() -> (f64, f64, f64, f64) {
+    let bundle = TrailingPriceBundle::default();
+    trailing_bundle_to_tuple(&bundle)
+}
+
+#[pyfunction]
+#[pyo3(signature = (highs, lows, closes, bundle=None))]
+pub fn update_trailing_bundle_py(
+    highs: PyReadonlyArray1<'_, f64>,
+    lows: PyReadonlyArray1<'_, f64>,
+    closes: PyReadonlyArray1<'_, f64>,
+    bundle: Option<(f64, f64, f64, f64)>,
+) -> PyResult<(f64, f64, f64, f64)> {
+    let highs = highs.as_slice()?;
+    let lows = lows.as_slice()?;
+    let closes = closes.as_slice()?;
+
+    let len = highs.len();
+    if lows.len() != len || closes.len() != len {
+        return Err(PyValueError::new_err(
+            "highs, lows, and closes must have the same length",
+        ));
+    }
+
+    let mut bundle = match bundle {
+        Some(values) => tuple_to_trailing_bundle(values),
+        None => TrailingPriceBundle::default(),
+    };
+
+    update_trailing_bundle_sequence(&mut bundle, highs, lows, closes);
+
+    Ok(trailing_bundle_to_tuple(&bundle))
+}
 
 #[pyfunction]
 pub fn gate_entries_by_twel_py(
