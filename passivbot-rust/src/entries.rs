@@ -6,6 +6,15 @@ use crate::utils::{
     calc_wallet_exposure_if_filled, cost_to_qty, interpolate, round_, round_dn, round_up,
 };
 
+pub fn wallet_exposure_limit_with_allowance(bot_params: &BotParams) -> f64 {
+    let base = bot_params.wallet_exposure_limit;
+    if base <= 0.0 {
+        base
+    } else {
+        base * (1.0 + bot_params.risk_we_excess_allowance_pct.max(0.0))
+    }
+}
+
 pub fn calc_initial_entry_qty(
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
@@ -16,7 +25,9 @@ pub fn calc_initial_entry_qty(
         calc_min_entry_qty(entry_price, &exchange_params),
         round_(
             cost_to_qty(
-                balance * bot_params.wallet_exposure_limit * bot_params.entry_initial_qty_pct,
+                balance
+                    * wallet_exposure_limit_with_allowance(bot_params)
+                    * bot_params.entry_initial_qty_pct,
                 entry_price,
                 exchange_params.c_mult,
             ),
@@ -37,15 +48,6 @@ pub fn calc_min_entry_qty(entry_price: f64, exchange_params: &ExchangeParams) ->
             exchange_params.qty_step,
         ),
     )
-}
-
-pub fn wallet_exposure_limit_with_allowance(bot_params: &BotParams) -> f64 {
-    let base_limit = bot_params.wallet_exposure_limit;
-    if base_limit <= 0.0 {
-        base_limit
-    } else {
-        base_limit * (1.0 + bot_params.risk_we_excess_allowance_pct.max(0.0))
-    }
 }
 
 pub fn calc_cropped_reentry_qty(
@@ -201,7 +203,7 @@ pub fn calc_grid_entry_long(
     position: &Position,
     wallet_exposure_limit_cap: f64,
 ) -> Order {
-    if bot_params.wallet_exposure_limit == 0.0 || state_params.balance <= 0.0 {
+    if wallet_exposure_limit_with_allowance(bot_params) == 0.0 || state_params.balance <= 0.0 {
         return Order::default();
     }
     let initial_entry_price = calc_ema_price_bid(
@@ -366,7 +368,7 @@ pub fn calc_next_entry_long(
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
     // determines whether trailing or grid order, returns Order
-    let base_wallet_exposure_limit = bot_params.wallet_exposure_limit;
+    let base_wallet_exposure_limit = wallet_exposure_limit_with_allowance(bot_params);
     if base_wallet_exposure_limit == 0.0 || state_params.balance <= 0.0 {
         // no orders
         return Order::default();
@@ -627,7 +629,7 @@ pub fn calc_grid_entry_short(
     position: &Position,
     wallet_exposure_limit_cap: f64,
 ) -> Order {
-    if bot_params.wallet_exposure_limit == 0.0 || state_params.balance <= 0.0 {
+    if wallet_exposure_limit_with_allowance(bot_params) == 0.0 || state_params.balance <= 0.0 {
         return Order::default();
     }
     let initial_entry_price = calc_ema_price_ask(
@@ -961,7 +963,7 @@ pub fn calc_next_entry_short(
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
     // determines whether trailing or grid order, returns Order
-    let base_wallet_exposure_limit = bot_params.wallet_exposure_limit;
+    let base_wallet_exposure_limit = wallet_exposure_limit_with_allowance(bot_params);
     if base_wallet_exposure_limit == 0.0 || state_params.balance <= 0.0 {
         // no orders
         return Order::default();

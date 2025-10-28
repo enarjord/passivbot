@@ -13,7 +13,7 @@ pub fn calc_close_qty(
     close_price: f64,
 ) -> f64 {
     let full_psize = cost_to_qty(
-        balance * bot_params.wallet_exposure_limit,
+        balance * wallet_exposure_limit_with_allowance(bot_params),
         position.price,
         exchange_params.c_mult,
     );
@@ -250,7 +250,7 @@ pub fn calc_grid_close_long(
         position.size,
         position.price,
     );
-    let wallet_exposure_ratio = wallet_exposure / bot_params.wallet_exposure_limit;
+    let wallet_exposure_ratio = wallet_exposure / wallet_exposure_limit_with_allowance(bot_params);
     let close_price = if wallet_exposure_ratio > 1.0 {
         f64::max(
             state_params.order_book.ask,
@@ -407,10 +407,10 @@ pub fn calc_next_close_long(
     ) {
         return order;
     }
-    let wallet_exposure_ratio = if bot_params.wallet_exposure_limit <= 0.0 {
+    let wallet_exposure_ratio = if wallet_exposure_limit_with_allowance(bot_params) <= 0.0 {
         10.0
     } else {
-        wallet_exposure / bot_params.wallet_exposure_limit
+        wallet_exposure / wallet_exposure_limit_with_allowance(bot_params)
     };
     if bot_params.close_trailing_grid_ratio >= 1.0 || bot_params.close_trailing_grid_ratio <= -1.0 {
         // return trailing only
@@ -441,7 +441,7 @@ pub fn calc_next_close_long(
             // return grid order, but leave full_psize * close_trailing_grid_ratio for trailing close
             let mut trailing_allocation = cost_to_qty(
                 state_params.balance
-                    * bot_params.wallet_exposure_limit
+                    * wallet_exposure_limit_with_allowance(bot_params)
                     * bot_params.close_trailing_grid_ratio,
                 position.price,
                 exchange_params.c_mult,
@@ -469,7 +469,7 @@ pub fn calc_next_close_long(
             // return trailing order, but leave full_psize * (1.0 + close_trailing_grid_ratio) for grid close
             let mut grid_allocation = cost_to_qty(
                 state_params.balance
-                    * bot_params.wallet_exposure_limit
+                    * wallet_exposure_limit_with_allowance(bot_params)
                     * (1.0 + bot_params.close_trailing_grid_ratio),
                 position.price,
                 exchange_params.c_mult,
@@ -543,7 +543,7 @@ pub fn calc_grid_close_short(
         state_params.balance,
         position_size_abs,
         position.price,
-    ) / bot_params.wallet_exposure_limit;
+    ) / wallet_exposure_limit_with_allowance(bot_params);
     let close_price = if wallet_exposure_ratio > 1.0 {
         f64::min(
             state_params.order_book.bid,
@@ -701,11 +701,6 @@ pub fn calc_next_close_short(
     ) {
         return order;
     }
-    let wallet_exposure_ratio = if bot_params.wallet_exposure_limit <= 0.0 {
-        10.0
-    } else {
-        wallet_exposure / bot_params.wallet_exposure_limit
-    };
     if bot_params.close_trailing_grid_ratio >= 1.0 || bot_params.close_trailing_grid_ratio <= -1.0 {
         // return trailing only
         return calc_trailing_close_short(
@@ -725,7 +720,7 @@ pub fn calc_next_close_short(
         state_params.balance,
         position_size_abs,
         position.price,
-    ) / bot_params.wallet_exposure_limit;
+    ) / wallet_exposure_limit_with_allowance(bot_params);
     if bot_params.close_trailing_grid_ratio > 0.0 {
         // trailing first
         if wallet_exposure_ratio < bot_params.close_trailing_grid_ratio {
@@ -741,7 +736,7 @@ pub fn calc_next_close_short(
             // return grid order, but leave full_psize * close_trailing_grid_ratio for trailing close
             let mut trailing_allocation = cost_to_qty(
                 state_params.balance
-                    * bot_params.wallet_exposure_limit
+                    * wallet_exposure_limit_with_allowance(bot_params)
                     * bot_params.close_trailing_grid_ratio,
                 position.price,
                 exchange_params.c_mult,
@@ -768,7 +763,7 @@ pub fn calc_next_close_short(
             // return trailing order, but leave full_psize * (1.0 + close_trailing_grid_ratio) for grid close
             let mut grid_allocation = cost_to_qty(
                 state_params.balance
-                    * bot_params.wallet_exposure_limit
+                    * wallet_exposure_limit_with_allowance(bot_params)
                     * (1.0 + bot_params.close_trailing_grid_ratio),
                 position.price,
                 exchange_params.c_mult,

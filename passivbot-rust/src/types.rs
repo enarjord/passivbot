@@ -128,7 +128,7 @@ pub struct BotParams {
     pub ema_span_1: f64,
     pub n_positions: usize,
     pub total_wallet_exposure_limit: f64,
-    pub wallet_exposure_limit: f64, // is total_wallet_exposure_limit / n_positions
+    pub wallet_exposure_limit: f64, // per-position base limit (without excess allowance)
     pub risk_wel_enforcer_threshold: f64,
     pub risk_twel_enforcer_threshold: f64,
     pub risk_we_excess_allowance_pct: f64,

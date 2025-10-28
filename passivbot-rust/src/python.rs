@@ -306,10 +306,12 @@ pub fn calc_unstucking_close_py(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pyo3::prepare_freethreaded_python;
     use pyo3::types::{PyDict, PyList};
 
     #[test]
     fn test_gate_entries_blocks_when_twe_if_filled_exceeds() {
+        prepare_freethreaded_python();
         Python::with_gil(|py| {
             let side = "long";
             let balance = 1000.0;
@@ -597,6 +599,20 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         Some(item) => item.extract::<f64>()?,
         None => 1.0,
     };
+    let risk_we_excess_allowance_pct: f64 = extract_value(dict, "risk_we_excess_allowance_pct")?;
+    let total_wallet_exposure_limit: f64 = extract_value(dict, "total_wallet_exposure_limit")?;
+    let wallet_exposure_limit_raw: f64 = extract_value(dict, "wallet_exposure_limit")?;
+    let n_positions_float: f64 = extract_value(dict, "n_positions")?;
+    let n_positions = n_positions_float.round() as usize;
+    let wallet_exposure_limit = if wallet_exposure_limit_raw < 0.0 {
+        wallet_exposure_limit_raw
+    } else if wallet_exposure_limit_raw > 0.0 {
+        wallet_exposure_limit_raw
+    } else if n_positions > 0 {
+        total_wallet_exposure_limit / n_positions as f64
+    } else {
+        0.0
+    };
 
     Ok(BotParams {
         close_grid_markup_end: extract_value(dict, "close_grid_markup_end")?,
@@ -641,15 +657,12 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         filter_volume_drop_pct: extract_value(dict, "filter_volume_drop_pct")?,
         ema_span_0: extract_value(dict, "ema_span_0")?,
         ema_span_1: extract_value(dict, "ema_span_1")?,
-        n_positions: {
-            let n_positions_float: f64 = extract_value(dict, "n_positions")?;
-            n_positions_float.round() as usize
-        },
-        total_wallet_exposure_limit: extract_value(dict, "total_wallet_exposure_limit")?,
-        wallet_exposure_limit: extract_value(dict, "wallet_exposure_limit")?,
+        n_positions,
+        total_wallet_exposure_limit,
+        wallet_exposure_limit,
         risk_wel_enforcer_threshold,
         risk_twel_enforcer_threshold,
-        risk_we_excess_allowance_pct: extract_value(dict, "risk_we_excess_allowance_pct")?,
+        risk_we_excess_allowance_pct,
         unstuck_close_pct: extract_value(dict, "unstuck_close_pct")?,
         unstuck_ema_dist: extract_value(dict, "unstuck_ema_dist")?,
         unstuck_loss_allowance_pct: extract_value(dict, "unstuck_loss_allowance_pct")?,
@@ -1411,6 +1424,7 @@ pub fn calc_twel_enforcer_orders_py(
     side: &str,
     threshold: f64,
     total_wallet_exposure_limit: f64,
+    effective_n_positions: usize,
     balance: f64,
     positions: &PyList,
     skip_idx: Option<usize>,
@@ -1458,22 +1472,6 @@ pub fn calc_twel_enforcer_orders_py(
                     )
                 })?
                 .extract::<f64>()?,
-            risk_wel_enforcer_threshold: dict
-                .get_item("risk_wel_enforcer_threshold")?
-                .ok_or_else(|| {
-                    PyValueError::new_err(
-                        "twel enforcer position missing 'risk_wel_enforcer_threshold'",
-                    )
-                })?
-                .extract::<f64>()?,
-            risk_we_excess_allowance_pct: dict
-                .get_item("risk_we_excess_allowance_pct")?
-                .ok_or_else(|| {
-                    PyValueError::new_err(
-                        "twel enforcer position missing 'risk_we_excess_allowance_pct'",
-                    )
-                })?
-                .extract::<f64>()?,
             c_mult: dict
                 .get_item("c_mult")?
                 .ok_or_else(|| PyValueError::new_err("twel enforcer position missing 'c_mult'"))?
@@ -1488,6 +1486,10 @@ pub fn calc_twel_enforcer_orders_py(
                     PyValueError::new_err("twel enforcer position missing 'price_step'")
                 })?
                 .extract::<f64>()?,
+            min_qty: dict
+                .get_item("min_qty")?
+                .ok_or_else(|| PyValueError::new_err("twel enforcer position missing 'min_qty'"))?
+                .extract::<f64>()?,
         });
     }
 
@@ -1495,6 +1497,7 @@ pub fn calc_twel_enforcer_orders_py(
         side_code,
         threshold,
         total_wallet_exposure_limit,
+        effective_n_positions,
         balance,
         &parsed_positions,
         skip_idx,

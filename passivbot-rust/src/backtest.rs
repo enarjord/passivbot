@@ -37,7 +37,6 @@ pub struct EmaAlphas {
 #[derive(Clone, Default, Copy, Debug)]
 pub struct Alphas {
     pub alphas: [f64; 3],
-    pub alphas_inv: [f64; 3],
 }
 
 #[derive(Debug)]
@@ -72,8 +71,6 @@ pub struct EMAs {
 pub struct HourBucket {
     pub high: f64,
     pub low: f64,
-    pub close: f64,
-    pub quote_volume: f64,
 }
 
 impl Default for HourBucket {
@@ -81,8 +78,6 @@ impl Default for HourBucket {
         HourBucket {
             high: 0.0,
             low: 0.0,
-            close: 0.0,
-            quote_volume: 0.0,
         }
     }
 }
@@ -324,17 +319,6 @@ impl<'a> Backtest<'a> {
                 "trade start index mismatch for coin {}: expected {} but got {}",
                 i, expected_trade_idx, trade_idx
             );
-            let coin_name = backtest_params
-                .coins
-                .get(i)
-                .map(|s| s.as_str())
-                .unwrap_or("<unknown>");
-            /*
-            println!(
-                "[warmup-debug] init coin {} (idx {}): first={} last={} warm_minutes={} trade_start={}",
-                coin_name, i, first, last, warm, trade_idx
-            );
-            */
             trade_activation_logged[i] = false;
         }
 
@@ -533,25 +517,6 @@ impl<'a> Backtest<'a> {
         for k in 1..(n_timesteps - 1) {
             for idx in 0..self.n_coins {
                 if !self.trade_activation_logged[idx] && self.coin_is_tradeable_at(idx, k) {
-                    let coin_name = self
-                        .backtest_params
-                        .coins
-                        .get(idx)
-                        .map(|s| s.as_str())
-                        .unwrap_or("<unknown>");
-                    let first = self.coin_first_valid_idx[idx];
-                    let trade_start = self.coin_trade_start_idx[idx];
-                    /*
-                    println!(
-                        "[warmup-debug] coin {} (idx {}) became tradeable at k={} (first={}, trade_start={}, warmup={})",
-                        coin_name,
-                        idx,
-                        k,
-                        first,
-                        trade_start,
-                        trade_start.saturating_sub(first)
-                    );
-                    */
                     self.trade_activation_logged[idx] = true;
                 }
                 if k < self.coin_trade_start_idx[idx] && self.coin_is_valid_at(idx, k) {
@@ -601,13 +566,13 @@ impl<'a> Backtest<'a> {
         }
 
         // ---------- 3. dynamic WELs ----------
-        let dyn_wel_long = if self.effective_n_positions.long > 0 {
+        let dyn_wel_long_base = if self.effective_n_positions.long > 0 {
             self.bot_params_master.long.total_wallet_exposure_limit
                 / self.effective_n_positions.long as f64
         } else {
             0.0
         };
-        let dyn_wel_short = if self.effective_n_positions.short > 0 {
+        let dyn_wel_short_base = if self.effective_n_positions.short > 0 {
             self.bot_params_master.short.total_wallet_exposure_limit
                 / self.effective_n_positions.short as f64
         } else {
@@ -618,11 +583,11 @@ impl<'a> Backtest<'a> {
         for &idx in &eligible {
             // long side
             if self.bot_params_original[idx].long.wallet_exposure_limit < 0.0 {
-                self.bot_params[idx].long.wallet_exposure_limit = dyn_wel_long;
+                self.bot_params[idx].long.wallet_exposure_limit = dyn_wel_long_base;
             }
             // short side
             if self.bot_params_original[idx].short.wallet_exposure_limit < 0.0 {
-                self.bot_params[idx].short.wallet_exposure_limit = dyn_wel_short;
+                self.bot_params[idx].short.wallet_exposure_limit = dyn_wel_short_base;
             }
         }
     }
@@ -801,7 +766,6 @@ impl<'a> Backtest<'a> {
                 };
                 let ltv = debt / equity;
 
-                let mut usd_to_spend = 0.0;
                 if target_cap > 0.0 && current_ratio + 1e-12 < target_cap {
                     let ltv_allows = match self.balance.btc_collateral_ltv_cap {
                         Some(cap) if cap.is_finite() && cap > 0.0 => ltv + 1e-12 < cap,
@@ -809,7 +773,7 @@ impl<'a> Backtest<'a> {
                     };
 
                     if ltv_allows {
-                        usd_to_spend = (target_cap - current_ratio) * equity;
+                        let mut usd_to_spend = (target_cap - current_ratio) * equity;
 
                         if let Some(cap) = self.balance.btc_collateral_ltv_cap {
                             if cap.is_finite() && cap > 0.0 {
@@ -1645,15 +1609,10 @@ impl<'a> Backtest<'a> {
                             position_price: position.price,
                             market_price,
                             base_wallet_exposure_limit: self.bp(idx, LONG).wallet_exposure_limit,
-                            risk_wel_enforcer_threshold: self
-                                .bp(idx, LONG)
-                                .risk_wel_enforcer_threshold,
-                            risk_we_excess_allowance_pct: self
-                                .bp(idx, LONG)
-                                .risk_we_excess_allowance_pct,
                             c_mult: self.exchange_params_list[idx].c_mult,
                             qty_step: self.exchange_params_list[idx].qty_step,
                             price_step: self.exchange_params_list[idx].price_step,
+                            min_qty: self.exchange_params_list[idx].min_qty,
                         });
                     }
                 }
@@ -1661,6 +1620,7 @@ impl<'a> Backtest<'a> {
                     LONG,
                     long_threshold,
                     total_wel_long,
+                    self.effective_n_positions.long.max(1),
                     balance,
                     &inputs,
                     skip_long,
@@ -1695,15 +1655,10 @@ impl<'a> Backtest<'a> {
                             position_price: position.price,
                             market_price,
                             base_wallet_exposure_limit: self.bp(idx, SHORT).wallet_exposure_limit,
-                            risk_wel_enforcer_threshold: self
-                                .bp(idx, SHORT)
-                                .risk_wel_enforcer_threshold,
-                            risk_we_excess_allowance_pct: self
-                                .bp(idx, SHORT)
-                                .risk_we_excess_allowance_pct,
                             c_mult: self.exchange_params_list[idx].c_mult,
                             qty_step: self.exchange_params_list[idx].qty_step,
                             price_step: self.exchange_params_list[idx].price_step,
+                            min_qty: self.exchange_params_list[idx].min_qty,
                         });
                     }
                 }
@@ -1712,6 +1667,7 @@ impl<'a> Backtest<'a> {
                     SHORT,
                     short_threshold,
                     total_wel_short,
+                    self.effective_n_positions.short.max(1),
                     balance,
                     &inputs,
                     skip_short,
@@ -2105,18 +2061,12 @@ impl<'a> Backtest<'a> {
                             }
                             let mut h = f64::MIN;
                             let mut l = f64::MAX;
-                            let mut qv = 0.0f64;
                             let mut seen = false;
                             for j in start..=end {
                                 let high = self.hlcvs[[j, i, HIGH]];
                                 let low = self.hlcvs[[j, i, LOW]];
-                                let close = self.hlcvs[[j, i, CLOSE]];
-                                if !(high.is_finite() && low.is_finite() && close.is_finite()) {
+                                if !(high.is_finite() && low.is_finite()) {
                                     continue;
-                                }
-                                let mut qvol = self.hlcvs[[j, i, VOLUME]];
-                                if !qvol.is_finite() || qvol < 0.0 {
-                                    qvol = 0.0;
                                 }
                                 if high > h {
                                     h = high;
@@ -2124,20 +2074,12 @@ impl<'a> Backtest<'a> {
                                 if low < l {
                                     l = low;
                                 }
-                                qv += qvol;
                                 seen = true;
                             }
                             if !seen {
                                 continue;
                             }
-                            let close = self.hlcvs[[end, i, CLOSE]];
-                            let close = if close.is_finite() { close } else { 0.0 };
-                            self.latest_hour[i] = HourBucket {
-                                high: h,
-                                low: l,
-                                close,
-                                quote_volume: qv.max(0.0),
-                            };
+                            self.latest_hour[i] = HourBucket { high: h, low: l };
                         }
                     }
                 }
@@ -2288,19 +2230,15 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
     ema_spans_short.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
     let ema_alphas_long = ema_spans_long.map(|x| 2.0 / (x + 1.0));
-    let ema_alphas_long_inv = ema_alphas_long.map(|x| 1.0 - x);
 
     let ema_alphas_short = ema_spans_short.map(|x| 2.0 / (x + 1.0));
-    let ema_alphas_short_inv = ema_alphas_short.map(|x| 1.0 - x);
 
     EmaAlphas {
         long: Alphas {
             alphas: ema_alphas_long,
-            alphas_inv: ema_alphas_long_inv,
         },
         short: Alphas {
             alphas: ema_alphas_short,
-            alphas_inv: ema_alphas_short_inv,
         },
         // EMA spans for the volume/log range filters (alphas precomputed from spans)
         vol_alpha_long: 2.0 / (bot_params_pair.long.filter_volume_ema_span as f64 + 1.0),
