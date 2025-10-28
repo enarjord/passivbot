@@ -268,7 +268,12 @@ def normalize_exchange_name(exchange: str) -> str:
     return ex
 
 
-def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True):
+def load_ccxt_instance(
+    exchange_id: str,
+    enable_rate_limit: bool = True,
+    *,
+    apply_custom_endpoints: bool = True,
+):
     """
     Return a ccxt async-support exchange instance for the given exchange id.
 
@@ -283,11 +288,12 @@ def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True):
         cc.options["defaultType"] = "swap"
     except Exception:
         pass
-    try:
-        override = resolve_custom_endpoint_override(ex)
-        apply_rest_overrides_to_ccxt(cc, override)
-    except Exception as exc:
-        logging.warning("Failed to apply custom endpoint override for %s: %s", ex, exc)
+    if apply_custom_endpoints:
+        try:
+            override = resolve_custom_endpoint_override(ex)
+            apply_rest_overrides_to_ccxt(cc, override)
+        except Exception as exc:
+            logging.warning("Failed to apply custom endpoint override for %s: %s", ex, exc)
     return cc
 
 

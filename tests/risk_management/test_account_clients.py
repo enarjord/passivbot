@@ -1,7 +1,7 @@
 import asyncio
 import sys
 from pathlib import Path
-from typing import Any, Awaitable, Mapping, TypeVar
+from typing import Any, Awaitable, Dict, Mapping, TypeVar
 
 import pytest
 
@@ -112,6 +112,110 @@ def test_instantiate_ccxt_client_applies_custom_endpoints(monkeypatch) -> None:
 
     assert client.urls["api"]["public"] == "https://proxy.example/v5"
     assert client.urls["host"] == "https://proxy.example"
+
+
+def test_instantiate_ccxt_client_respects_load_helper_override(monkeypatch) -> None:
+    class DummyExchange:
+        def __init__(self) -> None:
+            self.hostname = "binance.com"
+            self.urls = {
+                "api": {"public": "https://api.binance.com/v3"},
+                "host": "https://api.binance.com",
+            }
+            self.headers: Dict[str, str] = {}
+            self.options: Dict[str, Any] = {}
+            self.has: Dict[str, Any] = {}
+
+    calls: list[Dict[str, Any]] = []
+
+    def fake_load(exchange_id: str, enable_rate_limit: bool = True, apply_custom_endpoints: bool = True):
+        calls.append(
+            {
+                "exchange_id": exchange_id,
+                "enable_rate_limit": enable_rate_limit,
+                "apply_custom_endpoints": apply_custom_endpoints,
+            }
+        )
+        return DummyExchange()
+
+    monkeypatch.setattr(module, "load_ccxt_instance", fake_load)
+    monkeypatch.setattr(module, "ccxt_async", None)
+    monkeypatch.setattr(module, "normalize_exchange_name", lambda exchange: "binanceusdm")
+
+    override = ResolvedEndpointOverride(
+        exchange_id="binanceusdm",
+        rest_domain_rewrites={"https://api.binance.com": "https://proxy.example"},
+    )
+
+    client = module._instantiate_ccxt_client(
+        "binanceusdm",
+        {},
+        custom_endpoint_override=override,
+    )
+
+    assert calls and calls[-1]["apply_custom_endpoints"] is False
+    assert client.urls["api"]["public"] == "https://proxy.example/v3"
+    assert client.urls["host"] == "https://proxy.example"
+
+    direct_client = module._instantiate_ccxt_client(
+        "binanceusdm",
+        {},
+        custom_endpoint_override=None,
+    )
+
+    assert len(calls) == 2
+    assert calls[-1]["apply_custom_endpoints"] is False
+    assert direct_client.urls["api"]["public"] == "https://api.binance.com/v3"
+    assert direct_client.urls["host"] == "https://api.binance.com"
+
+
+def test_translate_ccxt_error_auth(monkeypatch) -> None:
+    dummy_client = object()
+
+    def fake_instantiate(exchange: str, credentials: Mapping[str, Any], **kwargs):
+        return dummy_client
+
+    override = ResolvedEndpointOverride(exchange_id="binanceusdm")
+
+    monkeypatch.setattr(module, "_instantiate_ccxt_client", fake_instantiate)
+    monkeypatch.setattr(module, "resolve_custom_endpoint_override", lambda exch: override)
+    monkeypatch.setattr(module, "get_custom_endpoint_source", lambda: Path("/tmp/custom.json"))
+
+    config = AccountConfig(name="Binance", exchange="binanceusdm", credentials={})
+    client = module.CCXTAccountClient(config)
+
+    error = module.BaseError('binanceusdm {"msg":"Invalid API key","source":"mltech"}')
+
+    translated = client._translate_ccxt_error(error)
+
+    assert isinstance(translated, module.AuthenticationError)
+    message = str(translated)
+    assert "Invalid API key" in message
+    assert "mltech" in message
+    assert "API key" in message
+
+
+def test_translate_ccxt_error_generic(monkeypatch) -> None:
+    dummy_client = object()
+
+    def fake_instantiate(exchange: str, credentials: Mapping[str, Any], **kwargs):
+        return dummy_client
+
+    monkeypatch.setattr(module, "_instantiate_ccxt_client", fake_instantiate)
+    monkeypatch.setattr(module, "resolve_custom_endpoint_override", lambda exch: None)
+    monkeypatch.setattr(module, "get_custom_endpoint_source", lambda: None)
+
+    config = AccountConfig(name="Binance", exchange="binanceusdm", credentials={})
+    client = module.CCXTAccountClient(config)
+
+    error = module.BaseError("binanceusdm {\"message\":\"rate limit exceeded\"}")
+
+    translated = client._translate_ccxt_error(error)
+
+    assert isinstance(translated, RuntimeError)
+    message = str(translated)
+    assert "rate limit exceeded" in message
+    assert "See logs" in message
 
 
 def test_fetch_realized_pnl_history_binance_uses_income_endpoint(monkeypatch) -> None:
@@ -248,8 +352,9 @@ def test_account_fetch_uses_realized_history_when_requested(monkeypatch) -> None
 
     dummy_client = DummyExchange()
 
-    def fake_instantiate(exchange: str, credentials: Mapping[str, Any]):
+    def fake_instantiate(exchange: str, credentials: Mapping[str, Any], **kwargs):
         assert exchange == "bybit"
+        assert "custom_endpoint_override" in kwargs
         return dummy_client
 
     monkeypatch.setattr(module, "_instantiate_ccxt_client", fake_instantiate)
