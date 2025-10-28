@@ -20,7 +20,15 @@ from urllib.parse import quote, urljoin
 from .configuration import RealtimeConfig
 from .realtime import RealtimeDataFetcher
 from .reporting import ReportManager
-from .snapshot_utils import build_presentable_snapshot
+from .snapshot_utils import (
+    ACCOUNT_SORT_FIELDS,
+    DEFAULT_ACCOUNT_SORT_KEY,
+    DEFAULT_ACCOUNT_SORT_ORDER,
+    DEFAULT_ACCOUNTS_PAGE_SIZE,
+    EXPOSURE_FILTERS,
+    MAX_ACCOUNTS_PAGE_SIZE,
+    build_presentable_snapshot,
+)
 
 
 class AuthManager:
@@ -135,6 +143,65 @@ class RiskDashboardService:
         self, account_name: str, symbol: Optional[str] = None
     ) -> Mapping[str, Any]:
         return await self._fetcher.close_all_positions(account_name, symbol)
+
+
+def _parse_positive_int(value: Optional[str], name: str, *, maximum: Optional[int] = None) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{name} must be an integer",
+        ) from exc
+    if parsed <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{name} must be greater than zero",
+        )
+    if maximum is not None and parsed > maximum:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{name} cannot exceed {maximum}",
+        )
+    return parsed
+
+
+def _normalise_sort_key(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    key = value.lower()
+    if key not in ACCOUNT_SORT_FIELDS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported sort key '{value}'",
+        )
+    return key
+
+
+def _normalise_sort_order(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    order = value.lower()
+    if order not in {"asc", "desc"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="sort_order must be 'asc' or 'desc'",
+        )
+    return order
+
+
+def _normalise_exposure_filter(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    mode = value.lower()
+    if mode not in EXPOSURE_FILTERS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported exposure filter '{value}'",
+        )
+    return mode
 
 
 def _format_kill_switch_failure(account: str, action: str, payload: Mapping[str, Any]) -> str:
@@ -331,7 +398,13 @@ def create_app(
         if not user:
             return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
         snapshot = await service.fetch_snapshot()
-        view_model = build_presentable_snapshot(snapshot)
+        view_model = build_presentable_snapshot(
+            snapshot,
+            page=1,
+            page_size=DEFAULT_ACCOUNTS_PAGE_SIZE,
+            sort_key=DEFAULT_ACCOUNT_SORT_KEY,
+            sort_order=DEFAULT_ACCOUNT_SORT_ORDER,
+        )
         grafana_context: dict[str, Any] = request.app.state.grafana_context
         return templates.TemplateResponse(
             "dashboard.html",
@@ -352,7 +425,13 @@ def create_app(
         if not user:
             return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
         snapshot = await service.fetch_snapshot()
-        view_model = build_presentable_snapshot(snapshot)
+        view_model = build_presentable_snapshot(
+            snapshot,
+            page=1,
+            page_size=DEFAULT_ACCOUNTS_PAGE_SIZE,
+            sort_key=DEFAULT_ACCOUNT_SORT_KEY,
+            sort_order=DEFAULT_ACCOUNT_SORT_ORDER,
+        )
         grafana_context: dict[str, Any] = request.app.state.grafana_context
         return templates.TemplateResponse(
             "trading_panel.html",
@@ -372,7 +451,28 @@ def create_app(
         _: str = Depends(require_user),
     ) -> JSONResponse:
         snapshot = await service.fetch_snapshot()
-        view_model = build_presentable_snapshot(snapshot)
+        params = request.query_params
+        account_param = params.get("account")
+        search_param = params.get("search")
+        exposure_param = _normalise_exposure_filter(params.get("exposure"))
+        sort_param = _normalise_sort_key(params.get("sort"))
+        sort_order_param = _normalise_sort_order(params.get("sort_order"))
+        page_param = _parse_positive_int(params.get("page"), "page")
+        page_size_param = _parse_positive_int(
+            params.get("page_size"),
+            "page_size",
+            maximum=MAX_ACCOUNTS_PAGE_SIZE,
+        )
+        view_model = build_presentable_snapshot(
+            snapshot,
+            account_name=account_param,
+            search=search_param,
+            exposure_filter=exposure_param,
+            page=page_param,
+            page_size=page_size_param,
+            sort_key=sort_param,
+            sort_order=sort_order_param,
+        )
         return JSONResponse(view_model)
 
     @app.get(

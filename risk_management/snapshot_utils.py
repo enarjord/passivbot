@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from .dashboard import (
     Account,
@@ -14,7 +14,33 @@ from .dashboard import (
 )
 
 
-def build_presentable_snapshot(snapshot: Mapping[str, Any]) -> Dict[str, Any]:
+DEFAULT_ACCOUNTS_PAGE_SIZE = 25
+MAX_ACCOUNTS_PAGE_SIZE = 200
+DEFAULT_ACCOUNT_SORT_KEY = "balance"
+DEFAULT_ACCOUNT_SORT_ORDER = "desc"
+ACCOUNT_SORT_FIELDS: Dict[str, Callable[[Mapping[str, Any]], Any]] = {
+    "name": lambda account: str(account.get("name", "")),
+    "balance": lambda account: float(account.get("balance", 0.0)),
+    "gross": lambda account: float(account.get("gross_exposure_notional", 0.0)),
+    "net": lambda account: float(account.get("net_exposure_notional", 0.0)),
+    "unrealized": lambda account: float(account.get("unrealized_pnl", 0.0)),
+    "daily_realized": lambda account: float(account.get("daily_realized_pnl", 0.0)),
+}
+
+EXPOSURE_FILTERS = {"any", "gross", "net_long", "net_short", "flat"}
+
+
+def build_presentable_snapshot(
+    snapshot: Mapping[str, Any],
+    *,
+    account_name: Optional[str] = None,
+    search: Optional[str] = None,
+    exposure_filter: Optional[str] = None,
+    page: Optional[int] = None,
+    page_size: Optional[int] = None,
+    sort_key: Optional[str] = None,
+    sort_order: Optional[str] = None,
+) -> Dict[str, Any]:
     """Convert a snapshot payload into UI friendly structures."""
 
     generated_at, accounts, thresholds, notifications = parse_snapshot(dict(snapshot))
@@ -58,7 +84,137 @@ def build_presentable_snapshot(snapshot: Mapping[str, Any]) -> Dict[str, Any]:
     if account_stop_loss_view:
         payload["account_stop_losses"] = account_stop_loss_view
 
+    (accounts_page, meta) = _slice_accounts(
+        account_views["visible"],
+        account_name=account_name,
+        search=search,
+        exposure_filter=exposure_filter,
+        page=page,
+        page_size=page_size,
+        sort_key=sort_key,
+        sort_order=sort_order,
+    )
+    payload["accounts"] = accounts_page
+    payload["accounts_meta"] = meta
+
     return payload
+
+
+def _slice_accounts(
+    accounts: Sequence[Mapping[str, Any]],
+    *,
+    account_name: Optional[str] = None,
+    search: Optional[str] = None,
+    exposure_filter: Optional[str] = None,
+    page: Optional[int] = None,
+    page_size: Optional[int] = None,
+    sort_key: Optional[str] = None,
+    sort_order: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Apply filtering, sorting and pagination to the account list."""
+
+    all_accounts = list(accounts)
+    total_accounts = len(all_accounts)
+
+    requested_sort_key = sort_key or DEFAULT_ACCOUNT_SORT_KEY
+    if requested_sort_key not in ACCOUNT_SORT_FIELDS:
+        requested_sort_key = DEFAULT_ACCOUNT_SORT_KEY
+
+    requested_sort_order = (sort_order or DEFAULT_ACCOUNT_SORT_ORDER).lower()
+    if requested_sort_order not in {"asc", "desc"}:
+        requested_sort_order = DEFAULT_ACCOUNT_SORT_ORDER
+
+    requested_page_size = page_size or DEFAULT_ACCOUNTS_PAGE_SIZE
+    if requested_page_size <= 0:
+        requested_page_size = DEFAULT_ACCOUNTS_PAGE_SIZE
+    requested_page_size = min(requested_page_size, MAX_ACCOUNTS_PAGE_SIZE)
+
+    requested_page = page or 1
+    if requested_page <= 0:
+        requested_page = 1
+
+    account_name_normalised = account_name.lower() if account_name else None
+    exposure_mode = (exposure_filter or "any").lower()
+    if exposure_mode not in EXPOSURE_FILTERS:
+        exposure_mode = "any"
+
+    def _matches_account_filter(account: Mapping[str, Any]) -> bool:
+        if account_name_normalised and account.get("name", "").lower() != account_name_normalised:
+            return False
+        if exposure_mode != "any" and not _matches_exposure_filter(account, exposure_mode):
+            return False
+        if search:
+            return _matches_search(account, search)
+        return True
+
+    filtered_accounts = [account for account in all_accounts if _matches_account_filter(account)]
+    filtered_count = len(filtered_accounts)
+
+    key_function = ACCOUNT_SORT_FIELDS[requested_sort_key]
+    sorted_accounts = sorted(
+        filtered_accounts,
+        key=lambda account: key_function(account),
+        reverse=requested_sort_order == "desc",
+    )
+
+    total_pages = (filtered_count + requested_page_size - 1) // requested_page_size if filtered_count else 1
+    if total_pages <= 0:
+        total_pages = 1
+    current_page = min(max(1, requested_page), total_pages)
+
+    start_index = (current_page - 1) * requested_page_size
+    end_index = start_index + requested_page_size
+    page_accounts = [dict(account) for account in sorted_accounts[start_index:end_index]]
+
+    meta: Dict[str, Any] = {
+        "total": total_accounts,
+        "filtered": filtered_count,
+        "page": current_page,
+        "pages": total_pages,
+        "page_size": requested_page_size,
+        "sort_key": requested_sort_key,
+        "sort_order": requested_sort_order,
+        "account": account_name,
+        "search": search or "",
+        "exposure_filter": exposure_mode,
+        "has_next": current_page < total_pages,
+        "has_previous": current_page > 1,
+    }
+
+    return page_accounts, meta
+
+
+def _matches_search(account: Mapping[str, Any], raw_query: str) -> bool:
+    query = raw_query.lower()
+    if query in str(account.get("name", "")).lower():
+        return True
+    for key in ("symbol_exposures", "positions", "orders"):
+        items = account.get(key)
+        if not isinstance(items, Iterable):
+            continue
+        for item in items:
+            symbol = ""
+            if isinstance(item, Mapping):
+                symbol = str(item.get("symbol", ""))
+            elif hasattr(item, "get"):
+                symbol = str(item.get("symbol", ""))  # type: ignore[attr-defined]
+            if query and query in symbol.lower():
+                return True
+    return False
+
+
+def _matches_exposure_filter(account: Mapping[str, Any], mode: str) -> bool:
+    gross_notional = float(account.get("gross_exposure_notional", 0.0) or 0.0)
+    net_notional = float(account.get("net_exposure_notional", 0.0) or 0.0)
+    if mode == "gross":
+        return abs(gross_notional) > 0.0
+    if mode == "net_long":
+        return net_notional > 0.0
+    if mode == "net_short":
+        return net_notional < 0.0
+    if mode == "flat":
+        return abs(gross_notional) == 0.0 and abs(net_notional) == 0.0
+    return True
 
 
 def _build_account_views(
