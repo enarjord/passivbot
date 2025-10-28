@@ -33,6 +33,7 @@ from ._parsing import (
 )
 from .account_clients import AccountClientProtocol, CCXTAccountClient
 from .configuration import CustomEndpointSettings, RealtimeConfig
+from .performance import PerformanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -135,12 +136,20 @@ class RealtimeDataFetcher:
         self._notifications = NotificationCoordinator(config)
         self._portfolio_stop_loss: Optional[Dict[str, Any]] = None
         self._last_portfolio_balance: Optional[float] = None
+        self._account_stop_losses: Dict[str, Dict[str, Any]] = {}
+        self._last_account_balances: Dict[str, float] = {}
+        reports_dir = config.reports_dir
+        if reports_dir is None:
+            base_root = Path(__file__).resolve().parent
+            reports_dir = base_root / "reports"
+        self._performance_tracker = PerformanceTracker(Path(reports_dir))
 
     async def fetch_snapshot(self) -> Dict[str, Any]:
         tasks = [client.fetch() for client in self._account_clients]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         accounts_payload: List[Dict[str, Any]] = []
         account_messages: Dict[str, str] = dict(self.config.account_messages)
+        account_balances: Dict[str, float] = {}
         for account_config, result in zip(self.config.accounts, results):
             if isinstance(result, Exception):
                 if isinstance(result, AuthenticationError):
@@ -172,29 +181,60 @@ class RealtimeDataFetcher:
                         exc_info=_exception_info(result),
                     )
                 account_messages[account_config.name] = message
-                accounts_payload.append({"name": account_config.name, "balance": 0.0, "positions": []})
+                payload = {"name": account_config.name, "balance": 0.0, "positions": []}
+                accounts_payload.append(payload)
+                account_balances[account_config.name] = 0.0
             else:
-                accounts_payload.append(result)
+                if isinstance(result, Mapping):
+                    payload = dict(result)
+                else:
+                    payload = {
+                        "name": account_config.name,
+                        "balance": 0.0,
+                        "positions": [],
+                    }
+                accounts_payload.append(payload)
+                balance_value = 0.0
+                if isinstance(payload, Mapping):
+                    try:
+                        balance_value = float(payload.get("balance", 0.0))
+                    except (TypeError, ValueError):
+                        balance_value = 0.0
+                account_balances[account_config.name] = balance_value
                 if account_config.name in self._last_auth_errors:
                     logger.info(
                         "Authentication for %s restored", account_config.name
                     )
                     self._last_auth_errors.pop(account_config.name, None)
+        generated_at_dt = datetime.now(timezone.utc)
         snapshot = {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": generated_at_dt.isoformat(),
             "accounts": accounts_payload,
             "alert_thresholds": self.config.alert_thresholds,
             "notification_channels": self.config.notification_channels,
         }
         if account_messages:
             snapshot["account_messages"] = account_messages
-        portfolio_balance = sum(
-            float(account.get("balance", 0.0)) for account in accounts_payload
-        )
+        self._last_account_balances = account_balances
+        portfolio_balance = sum(account_balances.values())
         self._last_portfolio_balance = portfolio_balance
         stop_loss_state = self._update_portfolio_stop_loss_state(portfolio_balance)
         if stop_loss_state:
             snapshot["portfolio_stop_loss"] = stop_loss_state
+        account_stop_losses: Dict[str, Dict[str, Any]] = {}
+        for account_name, balance in account_balances.items():
+            state = self._update_account_stop_loss_state(account_name, balance)
+            if state:
+                account_stop_losses[account_name] = state
+        if account_stop_losses:
+            snapshot["account_stop_losses"] = account_stop_losses
+        performance_summary = self._performance_tracker.record(
+            generated_at=generated_at_dt,
+            portfolio_balance=portfolio_balance,
+            account_balances=account_balances,
+        )
+        if performance_summary:
+            snapshot["performance"] = performance_summary
         self._notifications.send_daily_snapshot(snapshot, portfolio_balance)
         self._notifications.dispatch_alerts(snapshot)
         return snapshot
@@ -275,6 +315,61 @@ class RealtimeDataFetcher:
     async def clear_portfolio_stop_loss(self) -> None:
         self._portfolio_stop_loss = None
 
+    def _update_account_stop_loss_state(
+        self, account_name: str, balance: float
+    ) -> Optional[Dict[str, Any]]:
+        state = self._account_stop_losses.get(account_name)
+        if state is None:
+            return None
+        state = dict(state)
+        state.setdefault("active", True)
+        state.setdefault("triggered", False)
+        state.setdefault("threshold_pct", 0.0)
+        if state.get("baseline_balance") is None and balance:
+            state["baseline_balance"] = balance
+        baseline = state.get("baseline_balance")
+        drawdown: Optional[float] = None
+        if baseline and baseline > 0:
+            drawdown = max(0.0, (baseline - balance) / baseline)
+        state["current_balance"] = balance
+        state["current_drawdown_pct"] = drawdown
+        threshold_pct = state.get("threshold_pct")
+        if (
+            isinstance(threshold_pct, (int, float))
+            and threshold_pct > 0
+            and drawdown is not None
+            and drawdown >= float(threshold_pct) / 100.0
+            and not state.get("triggered")
+        ):
+            state["triggered"] = True
+            state["triggered_at"] = datetime.now(timezone.utc).isoformat()
+        self._account_stop_losses[account_name] = state
+        return dict(state)
+
+    def get_account_stop_loss(self, account_name: str) -> Optional[Dict[str, Any]]:
+        self._resolve_account_client(account_name)
+        state = self._account_stop_losses.get(account_name)
+        return dict(state) if state is not None else None
+
+    async def set_account_stop_loss(self, account_name: str, threshold_pct: float) -> Dict[str, Any]:
+        if threshold_pct <= 0:
+            raise ValueError("Account stop loss threshold must be greater than zero.")
+        self._resolve_account_client(account_name)
+        baseline = self._last_account_balances.get(account_name)
+        state = {
+            "threshold_pct": float(threshold_pct),
+            "baseline_balance": baseline,
+            "triggered": False,
+            "triggered_at": None,
+            "active": True,
+        }
+        self._account_stop_losses[account_name] = state
+        return dict(state)
+
+    async def clear_account_stop_loss(self, account_name: str) -> None:
+        self._resolve_account_client(account_name)
+        self._account_stop_losses.pop(account_name, None)
+
     def _resolve_account_client(self, account_name: str) -> AccountClientProtocol:
         for client in self._account_clients:
             if client.config.name == account_name:
@@ -318,3 +413,15 @@ class RealtimeDataFetcher:
     async def list_order_types(self, account_name: str) -> Sequence[str]:
         client = self._resolve_account_client(account_name)
         return await client.list_order_types()
+
+    async def cancel_all_orders(
+        self, account_name: str, symbol: Optional[str] = None
+    ) -> Mapping[str, Any]:
+        client = self._resolve_account_client(account_name)
+        return await client.cancel_all_orders(symbol)
+
+    async def close_all_positions(
+        self, account_name: str, symbol: Optional[str] = None
+    ) -> Mapping[str, Any]:
+        client = self._resolve_account_client(account_name)
+        return await client.close_all_positions(symbol)

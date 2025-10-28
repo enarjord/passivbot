@@ -165,12 +165,38 @@
         </div>
       </form>
     </section>
+
+    <section class="card" id="account-stop-loss-card">
+      <h3 style="margin-top: 0;">Account stop loss</h3>
+      <p style="color: var(--muted);" id="account-stop-loss-summary"></p>
+      <form id="account-stop-loss-form" style="display: flex; flex-direction: column; gap: 1rem;">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="account-stop-loss-threshold">Drawdown threshold (%)</label>
+            <input
+              id="account-stop-loss-threshold"
+              name="threshold"
+              type="number"
+              step="0.1"
+              min="0"
+              required
+            />
+          </div>
+        </div>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+          <button type="submit" class="button">Set threshold</button>
+          <button type="button" class="button secondary" id="account-stop-loss-clear">Clear</button>
+          <div class="status-message" id="account-stop-loss-status" hidden></div>
+        </div>
+      </form>
+    </section>
   </section>
 
   <section class="card" style="margin-top: 1.5rem;" id="positions-card">
-    <div style="display: flex; justify-content: space-between; align-items: center;">
+    <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
       <h3 style="margin: 0;">Positions</h3>
       <span id="positions-summary" style="color: var(--muted);"></span>
+      <button type="button" class="button secondary small" id="close-all-positions">Close all positions</button>
     </div>
     <div class="table-wrapper">
       <table id="positions-table">
@@ -185,6 +211,9 @@
             <th>Entry</th>
             <th>Mark</th>
             <th>Liq.</th>
+            <th>Max DD</th>
+            <th>TP</th>
+            <th>SL</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -194,9 +223,10 @@
   </section>
 
   <section class="card" style="margin-top: 1.5rem;" id="orders-card">
-    <div style="display: flex; justify-content: space-between; align-items: center;">
+    <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
       <h3 style="margin: 0;">Open orders</h3>
       <span id="orders-summary" style="color: var(--muted);"></span>
+      <button type="button" class="button secondary small" id="cancel-all-orders">Cancel all orders</button>
     </div>
     <div class="table-wrapper">
       <table id="orders-table">
@@ -237,7 +267,13 @@
     const ordersSummary = document.getElementById("orders-summary");
     const stopLossSummary = document.getElementById("stop-loss-summary");
     const stopLossStatus = document.getElementById("stop-loss-status");
+    const accountStopLossSummary = document.getElementById("account-stop-loss-summary");
+    const accountStopLossStatus = document.getElementById("account-stop-loss-status");
+    const accountStopLossThreshold = document.getElementById("account-stop-loss-threshold");
+    const accountStopLossClear = document.getElementById("account-stop-loss-clear");
     const refreshButton = document.getElementById("refresh-button");
+    const cancelAllOrdersButton = document.getElementById("cancel-all-orders");
+    const closeAllPositionsButton = document.getElementById("close-all-positions");
 
     const formatCurrency = (value) => {
       const number = Number(value);
@@ -315,6 +351,9 @@
               <td>${formatCurrency(position.entry_price)}</td>
               <td>${formatCurrency(position.mark_price)}</td>
               <td>${position.liquidation_price !== null && position.liquidation_price !== undefined ? formatCurrency(position.liquidation_price) : "-"}</td>
+              <td>${position.max_drawdown_pct !== null && position.max_drawdown_pct !== undefined ? formatPct(position.max_drawdown_pct) : "-"}</td>
+              <td>${position.take_profit_price !== null && position.take_profit_price !== undefined ? formatCurrency(position.take_profit_price) : "-"}</td>
+              <td>${position.stop_loss_price !== null && position.stop_loss_price !== undefined ? formatCurrency(position.stop_loss_price) : "-"}</td>
               <td>
                 <div class="actions-column">
                   <button type="button" class="button danger small" data-close-position data-symbol="${position.symbol}">Close</button>
@@ -325,7 +364,7 @@
         })
         .join("");
       if (positions.length === 0) {
-        positionsTableBody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--muted);">No open positions.</td></tr>';
+        positionsTableBody.innerHTML = '<tr><td colspan="13" style="text-align: center; color: var(--muted);">No open positions.</td></tr>';
       }
     };
 
@@ -383,12 +422,46 @@
       }
     };
 
+    const renderAccountStopLoss = () => {
+      if (!accountStopLossSummary) {
+        return;
+      }
+      const accounts = Array.isArray(state.snapshot.accounts) ? state.snapshot.accounts : [];
+      const account = accounts.find((item) => item.name === state.currentAccount);
+      if (!account) {
+        accountStopLossSummary.textContent = "No account selected.";
+        if (accountStopLossThreshold) {
+          accountStopLossThreshold.value = "";
+        }
+        return;
+      }
+      const stopLoss = account.stop_loss || (state.snapshot.account_stop_losses && state.snapshot.account_stop_losses[account.name]);
+      if (!stopLoss) {
+        accountStopLossSummary.textContent = `No active stop loss for ${account.name}.`;
+        if (accountStopLossThreshold) {
+          accountStopLossThreshold.value = "";
+        }
+        return;
+      }
+      const threshold = Number(stopLoss.threshold_pct ?? 0);
+      const baseline = stopLoss.baseline_balance !== undefined && stopLoss.baseline_balance !== null ? formatCurrency(stopLoss.baseline_balance) : "-";
+      const currentBalance = stopLoss.current_balance !== undefined && stopLoss.current_balance !== null ? formatCurrency(stopLoss.current_balance) : formatCurrency(account.balance);
+      const drawdown = Number(stopLoss.current_drawdown_pct ?? NaN);
+      const drawdownStr = Number.isFinite(drawdown) ? `${(drawdown * 100).toFixed(2)}%` : "-";
+      const status = stopLoss.triggered ? "Triggered" : "Active";
+      accountStopLossSummary.textContent = `${account.name}: ${status}. Threshold ${threshold.toFixed(2)}%. Baseline ${baseline}, current ${currentBalance}, drawdown ${drawdownStr}.`;
+      if (!stopLoss.triggered && threshold > 0 && accountStopLossThreshold) {
+        accountStopLossThreshold.value = threshold;
+      }
+    };
+
     const renderAll = () => {
       renderAccountOptions();
       renderOrderTypes();
       renderPositions();
       renderOrders();
       renderStopLoss();
+      renderAccountStopLoss();
     };
 
     const parseParams = (raw) => {
@@ -447,6 +520,7 @@
       renderPositions();
       renderOrders();
       await fetchOrderTypes(state.currentAccount);
+      renderAccountStopLoss();
     };
 
     if (accountSelect) {
@@ -539,6 +613,66 @@
       }
     });
 
+    document.getElementById("account-stop-loss-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!state.currentAccount) {
+        showStatus(accountStopLossStatus, "Select an account first.", "error");
+        return;
+      }
+      const threshold = Number(accountStopLossThreshold.value);
+      if (!Number.isFinite(threshold) || threshold <= 0) {
+        showStatus(accountStopLossStatus, "Threshold must be greater than zero.", "error");
+        return;
+      }
+      showStatus(accountStopLossStatus, "Updating stop loss...");
+      try {
+        const response = await fetch(
+          `/api/trading/accounts/${encodeURIComponent(state.currentAccount)}/stop-loss`,
+          {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ threshold_pct: threshold }),
+          }
+        );
+        if (!response.ok) {
+          const errorPayload = await response.json().catch(() => ({}));
+          throw new Error(errorPayload.detail || `Update failed (${response.status})`);
+        }
+        showStatus(accountStopLossStatus, "Stop loss updated.", "success");
+        await refreshSnapshot();
+      } catch (error) {
+        console.error(error);
+        showStatus(accountStopLossStatus, error.message, "error");
+      }
+    });
+
+    accountStopLossClear.addEventListener("click", async () => {
+      if (!state.currentAccount) {
+        showStatus(accountStopLossStatus, "Select an account first.", "error");
+        return;
+      }
+      showStatus(accountStopLossStatus, "Clearing stop loss...");
+      try {
+        const response = await fetch(
+          `/api/trading/accounts/${encodeURIComponent(state.currentAccount)}/stop-loss`,
+          {
+            method: "DELETE",
+            credentials: "include",
+          }
+        );
+        if (!response.ok) {
+          const errorPayload = await response.json().catch(() => ({}));
+          throw new Error(errorPayload.detail || `Unable to clear (${response.status})`);
+        }
+        showStatus(accountStopLossStatus, "Stop loss cleared.", "success");
+        await refreshSnapshot();
+      } catch (error) {
+        console.error(error);
+        showStatus(accountStopLossStatus, error.message, "error");
+      }
+    });
+
     document.addEventListener("click", async (event) => {
       const cancelButton = event.target.closest("[data-cancel-order]");
       if (cancelButton) {
@@ -597,6 +731,66 @@
       await refreshSnapshot();
       showStatus(orderStatus, "Snapshot updated.", "success");
     });
+
+    if (cancelAllOrdersButton) {
+      cancelAllOrdersButton.addEventListener("click", async () => {
+        if (!state.currentAccount) {
+          showStatus(orderStatus, "Select an account first.", "error");
+          return;
+        }
+        showStatus(orderStatus, "Cancelling all orders...");
+        try {
+          const response = await fetch(
+            `/api/trading/accounts/${encodeURIComponent(state.currentAccount)}/orders/cancel-all`,
+            {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({}),
+            }
+          );
+          if (!response.ok) {
+            const errorPayload = await response.json().catch(() => ({}));
+            throw new Error(errorPayload.detail || `Cancel failed (${response.status})`);
+          }
+          showStatus(orderStatus, "All orders cancelled.", "success");
+          await refreshSnapshot();
+        } catch (error) {
+          console.error(error);
+          showStatus(orderStatus, error.message, "error");
+        }
+      });
+    }
+
+    if (closeAllPositionsButton) {
+      closeAllPositionsButton.addEventListener("click", async () => {
+        if (!state.currentAccount) {
+          showStatus(orderStatus, "Select an account first.", "error");
+          return;
+        }
+        showStatus(orderStatus, "Closing all positions...");
+        try {
+          const response = await fetch(
+            `/api/trading/accounts/${encodeURIComponent(state.currentAccount)}/positions/close-all`,
+            {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({}),
+            }
+          );
+          if (!response.ok) {
+            const errorPayload = await response.json().catch(() => ({}));
+            throw new Error(errorPayload.detail || `Close failed (${response.status})`);
+          }
+          showStatus(orderStatus, "Close requests submitted.", "success");
+          await refreshSnapshot();
+        } catch (error) {
+          console.error(error);
+          showStatus(orderStatus, error.message, "error");
+        }
+      });
+    }
 
     renderAll();
     fetchOrderTypes(state.currentAccount);

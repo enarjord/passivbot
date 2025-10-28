@@ -180,6 +180,35 @@
             <span class="subvalue {% if snapshot.portfolio.net_exposure_pct >= 0 %}gain{% else %}loss{% endif %}">{{ snapshot.portfolio.net_exposure_pct|pct }}</span>
           </div>
         </div>
+        {% set portfolio_performance = snapshot.portfolio.performance if snapshot.portfolio.performance is defined else None %}
+        {% if portfolio_performance %}
+          <div class="metrics" style="margin-top: 1.5rem;">
+            {% set daily = portfolio_performance.daily %}
+            {% set daily_class = 'gain' if daily is not none and daily >= 0 else ('loss' if daily is not none else '') %}
+            <div class="metric">
+              <span class="label">Daily PnL (4pm)</span>
+              <span class="value {{ daily_class }}">{% if daily is not none %}{{ daily|currency }}{% else %}-{% endif %}</span>
+              {% set daily_since = portfolio_performance.since.daily if portfolio_performance.since is defined and portfolio_performance.since %}
+              <span class="subvalue">{% if daily_since %}Since {{ daily_since }}{% else %}&nbsp;{% endif %}</span>
+            </div>
+            {% set weekly = portfolio_performance.weekly %}
+            {% set weekly_class = 'gain' if weekly is not none and weekly >= 0 else ('loss' if weekly is not none else '') %}
+            <div class="metric">
+              <span class="label">Weekly PnL</span>
+              <span class="value {{ weekly_class }}">{% if weekly is not none %}{{ weekly|currency }}{% else %}-{% endif %}</span>
+              {% set weekly_since = portfolio_performance.since.weekly if portfolio_performance.since is defined and portfolio_performance.since %}
+              <span class="subvalue">{% if weekly_since %}Since {{ weekly_since }}{% else %}&nbsp;{% endif %}</span>
+            </div>
+            {% set monthly = portfolio_performance.monthly %}
+            {% set monthly_class = 'gain' if monthly is not none and monthly >= 0 else ('loss' if monthly is not none else '') %}
+            <div class="metric">
+              <span class="label">Monthly PnL</span>
+              <span class="value {{ monthly_class }}">{% if monthly is not none %}{{ monthly|currency }}{% else %}-{% endif %}</span>
+              {% set monthly_since = portfolio_performance.since.monthly if portfolio_performance.since is defined and portfolio_performance.since %}
+              <span class="subvalue">{% if monthly_since %}Since {{ monthly_since }}{% else %}&nbsp;{% endif %}</span>
+            </div>
+          </div>
+        {% endif %}
         {% set portfolio_vol = snapshot.portfolio.volatility if snapshot.portfolio.volatility is defined else {} %}
         {% set portfolio_funding = snapshot.portfolio.funding_rates if snapshot.portfolio.funding_rates is defined else {} %}
         {% if portfolio_vol or portfolio_funding %}
@@ -299,6 +328,51 @@
                 <span class="value {% if account.unrealized_pnl >= 0 %}gain{% else %}loss{% endif %}">{{ account.unrealized_pnl|currency }}</span>
               </div>
             </div>
+            {% set account_performance = account.performance if account.performance is defined else None %}
+            {% if account_performance %}
+              <div class="metrics" style="margin-top: 1.5rem;">
+                {% set daily = account_performance.daily %}
+                {% set daily_class = 'gain' if daily is not none and daily >= 0 else ('loss' if daily is not none else '') %}
+                <div class="metric">
+                  <span class="label">Daily PnL (4pm)</span>
+                  <span class="value {{ daily_class }}">{% if daily is not none %}{{ daily|currency }}{% else %}-{% endif %}</span>
+                  {% set daily_since = account_performance.since.daily if account_performance.since is defined and account_performance.since %}
+                  <span class="subvalue">{% if daily_since %}Since {{ daily_since }}{% else %}&nbsp;{% endif %}</span>
+                </div>
+                {% set weekly = account_performance.weekly %}
+                {% set weekly_class = 'gain' if weekly is not none and weekly >= 0 else ('loss' if weekly is not none else '') %}
+                <div class="metric">
+                  <span class="label">Weekly PnL</span>
+                  <span class="value {{ weekly_class }}">{% if weekly is not none %}{{ weekly|currency }}{% else %}-{% endif %}</span>
+                  {% set weekly_since = account_performance.since.weekly if account_performance.since is defined and account_performance.since %}
+                  <span class="subvalue">{% if weekly_since %}Since {{ weekly_since }}{% else %}&nbsp;{% endif %}</span>
+                </div>
+                {% set monthly = account_performance.monthly %}
+                {% set monthly_class = 'gain' if monthly is not none and monthly >= 0 else ('loss' if monthly is not none else '') %}
+                <div class="metric">
+                  <span class="label">Monthly PnL</span>
+                  <span class="value {{ monthly_class }}">{% if monthly is not none %}{{ monthly|currency }}{% else %}-{% endif %}</span>
+                  {% set monthly_since = account_performance.since.monthly if account_performance.since is defined and account_performance.since %}
+                  <span class="subvalue">{% if monthly_since %}Since {{ monthly_since }}{% else %}&nbsp;{% endif %}</span>
+                </div>
+              </div>
+            {% endif %}
+            {% if account.stop_loss %}
+              {% set sl = account.stop_loss %}
+              <div class="status" style="margin-top: 1rem;">
+                Stop loss {% if sl.triggered %}<strong>triggered</strong>{% else %}active{% endif %} at
+                {% if sl.threshold_pct is not none %}{{ sl.threshold_pct|round(2) }}%{% else %}?%{% endif %}.
+                {% if sl.current_drawdown_pct is not none %}
+                  Current drawdown {{ (sl.current_drawdown_pct * 100)|round(2) }}%.
+                {% endif %}
+                {% if sl.baseline_balance is not none %}
+                  Baseline {{ sl.baseline_balance|currency }}.
+                {% endif %}
+                {% if sl.triggered_at %}
+                  Triggered at {{ sl.triggered_at }}.
+                {% endif %}
+              </div>
+            {% endif %}
             {% set account_vol = account.volatility if account.volatility is defined else {} %}
             {% set account_funding = account.funding_rates if account.funding_rates is defined else {} %}
             {% if account_vol or account_funding %}

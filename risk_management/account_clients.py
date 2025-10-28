@@ -107,6 +107,14 @@ class AccountClientProtocol(abc.ABC):
     async def list_order_types(self) -> Sequence[str]:
         """Return supported order types for the account exchange."""
 
+    @abc.abstractmethod
+    async def cancel_all_orders(self, symbol: Optional[str] = None) -> Mapping[str, Any]:
+        """Cancel every open order for the account, optionally filtered by symbol."""
+
+    @abc.abstractmethod
+    async def close_all_positions(self, symbol: Optional[str] = None) -> Mapping[str, Any]:
+        """Close all open positions for the account, optionally filtered by symbol."""
+
 
 def _set_exchange_field(client: Any, key: str, value: Any, aliases: Sequence[str]) -> None:
     """Assign ``value`` to ``key`` on ``client`` and store aliases when possible."""
@@ -1027,6 +1035,24 @@ class CCXTAccountClient(AccountClientProtocol):
         )
         if failures:
             logger.debug("[%s] Kill switch details: %s", self.config.name, _stringify_payload(summary))
+        return summary
+
+    async def cancel_all_orders(self, symbol: Optional[str] = None) -> Mapping[str, Any]:
+        await self._ensure_markets()
+        summary: Dict[str, Any] = {
+            "cancelled_orders": [],
+            "failed_order_cancellations": [],
+        }
+        await self._cancel_open_orders(summary, symbol)
+        return summary
+
+    async def close_all_positions(self, symbol: Optional[str] = None) -> Mapping[str, Any]:
+        await self._ensure_markets()
+        summary: Dict[str, Any] = {
+            "closed_positions": [],
+            "failed_position_closures": [],
+        }
+        await self._close_positions(summary, symbol)
         return summary
 
     async def create_order(

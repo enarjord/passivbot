@@ -64,6 +64,9 @@ class StubFetcher:
         self.cancelled_orders: List[Tuple[str, str, Optional[str]]] = []
         self.closed_positions: List[Tuple[str, str]] = []
         self.stop_loss: Optional[Dict[str, Any]] = None
+        self.account_stop_losses: Dict[str, Dict[str, Any]] = {}
+        self.cancel_all_orders_calls: List[Tuple[str, Optional[str]]] = []
+        self.close_all_positions_calls: List[Tuple[str, Optional[str]]] = []
 
 
     async def fetch_snapshot(self) -> dict:
@@ -139,6 +142,40 @@ class StubFetcher:
 
     async def clear_portfolio_stop_loss(self) -> None:
         self.stop_loss = None
+
+    def get_account_stop_loss(self, account_name: str) -> Optional[Dict[str, Any]]:
+        if not any(acc.get("name") == account_name for acc in self.snapshot.get("accounts", [])):
+            raise ValueError(f"Account '{account_name}' not found")
+        state = self.account_stop_losses.get(account_name)
+        return dict(state) if state is not None else None
+
+    async def set_account_stop_loss(self, account_name: str, threshold_pct: float) -> Dict[str, Any]:
+        if not any(acc.get("name") == account_name for acc in self.snapshot.get("accounts", [])):
+            raise ValueError(f"Account '{account_name}' not found")
+        state = {
+            "threshold_pct": float(threshold_pct),
+            "baseline_balance": 1000.0,
+            "current_balance": 1000.0,
+            "current_drawdown_pct": 0.0,
+            "triggered": False,
+            "triggered_at": None,
+            "active": True,
+        }
+        self.account_stop_losses[account_name] = state
+        return dict(state)
+
+    async def clear_account_stop_loss(self, account_name: str) -> None:
+        if not any(acc.get("name") == account_name for acc in self.snapshot.get("accounts", [])):
+            raise ValueError(f"Account '{account_name}' not found")
+        self.account_stop_losses.pop(account_name, None)
+
+    async def cancel_all_orders(self, account_name: str, symbol: Optional[str] = None) -> Mapping[str, Any]:
+        self.cancel_all_orders_calls.append((account_name, symbol))
+        return {"cancelled_orders": [], "failed_order_cancellations": []}
+
+    async def close_all_positions(self, account_name: str, symbol: Optional[str] = None) -> Mapping[str, Any]:
+        self.close_all_positions_calls.append((account_name, symbol))
+        return {"closed_positions": [], "failed_position_closures": []}
 
 
 @pytest.fixture
@@ -388,6 +425,67 @@ def test_position_kill_switch_endpoint(sample_snapshot: dict, auth_manager: Auth
         )
         assert response.status_code == 200
         assert fetcher.kill_requests[-1] == ("Demo Account", "BTC/USDT:USDT")
+
+
+def test_account_stop_loss_endpoints(sample_snapshot: dict, auth_manager: AuthManager) -> None:
+    client, fetcher = create_test_app(sample_snapshot, auth_manager)
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        response = client.get("/api/trading/accounts/Demo%20Account/stop-loss")
+        assert response.status_code == 200
+        assert response.json()["stop_loss"] is None
+
+        response = client.post(
+            "/api/trading/accounts/Demo%20Account/stop-loss",
+            json={"threshold_pct": 7.5},
+        )
+        assert response.status_code == 200
+        assert fetcher.account_stop_losses["Demo Account"]["threshold_pct"] == 7.5
+
+        response = client.get("/api/trading/accounts/Demo%20Account/stop-loss")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["stop_loss"]["threshold_pct"] == 7.5
+
+        response = client.delete("/api/trading/accounts/Demo%20Account/stop-loss")
+        assert response.status_code == 200
+        assert "Demo Account" not in fetcher.account_stop_losses
+
+
+def test_cancel_all_orders_endpoint(sample_snapshot: dict, auth_manager: AuthManager) -> None:
+    client, fetcher = create_test_app(sample_snapshot, auth_manager)
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        response = client.post("/api/trading/accounts/Demo%20Account/orders/cancel-all")
+        assert response.status_code == 200
+        assert fetcher.cancel_all_orders_calls[-1] == ("Demo Account", None)
+
+
+def test_close_all_positions_endpoint(sample_snapshot: dict, auth_manager: AuthManager) -> None:
+    client, fetcher = create_test_app(sample_snapshot, auth_manager)
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        response = client.post("/api/trading/accounts/Demo%20Account/positions/close-all")
+        assert response.status_code == 200
+        assert fetcher.close_all_positions_calls[-1] == ("Demo Account", None)
 
 
 def test_letsencrypt_challenge_mount(tmp_path: Path, auth_manager: AuthManager) -> None:
