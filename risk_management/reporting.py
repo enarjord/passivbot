@@ -195,6 +195,17 @@ class ReportManager:
         balance_share = (
             balance / portfolio_balance if portfolio_balance else None
         )
+        performance = account.get("performance") if isinstance(account, Mapping) else None
+        daily_pnl = None
+        weekly_pnl = None
+        monthly_pnl = None
+        if isinstance(performance, Mapping):
+            daily_value = performance.get("daily")
+            weekly_value = performance.get("weekly")
+            monthly_value = performance.get("monthly")
+            daily_pnl = float(daily_value) if isinstance(daily_value, (int, float)) else None
+            weekly_pnl = float(weekly_value) if isinstance(weekly_value, (int, float)) else None
+            monthly_pnl = float(monthly_value) if isinstance(monthly_value, (int, float)) else None
         rows = [
             [
                 "Account",
@@ -208,6 +219,9 @@ class ReportManager:
                 "Orders",
                 "Alerts",
                 "Portfolio Share",
+                "Daily PnL",
+                "Weekly PnL",
+                "Monthly PnL",
             ],
             [
                 account_name,
@@ -221,6 +235,9 @@ class ReportManager:
                 str(orders_count),
                 alerts_summary,
                 self._format_pct(balance_share) if balance_share is not None else "-",
+                self._format_currency(daily_pnl) if daily_pnl is not None else "-",
+                self._format_currency(weekly_pnl) if weekly_pnl is not None else "-",
+                self._format_currency(monthly_pnl) if monthly_pnl is not None else "-",
             ],
             [],
         ]

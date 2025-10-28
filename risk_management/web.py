@@ -116,6 +116,26 @@ class RiskDashboardService:
     async def clear_portfolio_stop_loss(self) -> None:
         await self._fetcher.clear_portfolio_stop_loss()
 
+    def get_account_stop_loss(self, account_name: str) -> Optional[Dict[str, Any]]:
+        state = self._fetcher.get_account_stop_loss(account_name)
+        return dict(state) if state is not None else None
+
+    async def set_account_stop_loss(self, account_name: str, threshold_pct: float) -> Dict[str, Any]:
+        return await self._fetcher.set_account_stop_loss(account_name, threshold_pct)
+
+    async def clear_account_stop_loss(self, account_name: str) -> None:
+        await self._fetcher.clear_account_stop_loss(account_name)
+
+    async def cancel_all_orders(
+        self, account_name: str, symbol: Optional[str] = None
+    ) -> Mapping[str, Any]:
+        return await self._fetcher.cancel_all_orders(account_name, symbol)
+
+    async def close_all_positions(
+        self, account_name: str, symbol: Optional[str] = None
+    ) -> Mapping[str, Any]:
+        return await self._fetcher.close_all_positions(account_name, symbol)
+
 
 def _format_kill_switch_failure(account: str, action: str, payload: Mapping[str, Any]) -> str:
     symbol = payload.get("symbol")
@@ -473,6 +493,116 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Symbol is required")
         try:
             result = await service.close_position(account_name, symbol)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return JSONResponse(result)
+
+    @app.get(
+        "/api/trading/accounts/{account_name}/stop-loss",
+        response_class=JSONResponse,
+    )
+    async def api_get_account_stop_loss(
+        account_name: str,
+        service: RiskDashboardService = Depends(get_service),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        try:
+            state = service.get_account_stop_loss(account_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        return JSONResponse({"account": account_name, "stop_loss": state})
+
+    @app.post(
+        "/api/trading/accounts/{account_name}/stop-loss",
+        response_class=JSONResponse,
+    )
+    async def api_set_account_stop_loss(
+        account_name: str,
+        request: Request,
+        service: RiskDashboardService = Depends(get_service),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        try:
+            payload = await request.json()
+        except Exception as exc:  # pragma: no cover
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload") from exc
+        if not isinstance(payload, Mapping):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payload must be an object")
+        try:
+            threshold = float(payload.get("threshold_pct"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="threshold_pct must be numeric")
+        try:
+            state = await service.set_account_stop_loss(account_name, threshold)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return JSONResponse(state)
+
+    @app.delete(
+        "/api/trading/accounts/{account_name}/stop-loss",
+        response_class=JSONResponse,
+    )
+    async def api_clear_account_stop_loss(
+        account_name: str,
+        service: RiskDashboardService = Depends(get_service),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        try:
+            await service.clear_account_stop_loss(account_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        return JSONResponse({"status": "cleared"})
+
+    @app.post(
+        "/api/trading/accounts/{account_name}/orders/cancel-all",
+        response_class=JSONResponse,
+    )
+    async def api_cancel_all_orders(
+        account_name: str,
+        request: Request,
+        service: RiskDashboardService = Depends(get_service),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        symbol: Optional[str] = None
+        if request.headers.get("content-length") not in (None, "0"):
+            try:
+                payload = await request.json()
+            except Exception as exc:  # pragma: no cover
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload") from exc
+            if isinstance(payload, Mapping):
+                raw_symbol = payload.get("symbol")
+                symbol = str(raw_symbol).strip() if raw_symbol is not None else None
+        try:
+            result = await service.cancel_all_orders(account_name, symbol=symbol)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return JSONResponse(result)
+
+    @app.post(
+        "/api/trading/accounts/{account_name}/positions/close-all",
+        response_class=JSONResponse,
+    )
+    async def api_close_all_positions(
+        account_name: str,
+        request: Request,
+        service: RiskDashboardService = Depends(get_service),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        symbol: Optional[str] = None
+        if request.headers.get("content-length") not in (None, "0"):
+            try:
+                payload = await request.json()
+            except Exception as exc:  # pragma: no cover
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload") from exc
+            if isinstance(payload, Mapping):
+                raw_symbol = payload.get("symbol")
+                symbol = str(raw_symbol).strip() if raw_symbol is not None else None
+        try:
+            result = await service.close_all_positions(account_name, symbol=symbol)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         except RuntimeError as exc:

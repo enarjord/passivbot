@@ -20,8 +20,25 @@ def build_presentable_snapshot(snapshot: Mapping[str, Any]) -> Dict[str, Any]:
     generated_at, accounts, thresholds, notifications = parse_snapshot(dict(snapshot))
     alerts = evaluate_alerts(accounts, thresholds)
     account_messages = snapshot.get("account_messages", {}) if isinstance(snapshot, Mapping) else {}
-    account_views = _build_account_views(accounts, account_messages)
-    portfolio = _build_portfolio_view(accounts)
+    performance = snapshot.get("performance") if isinstance(snapshot, Mapping) else None
+    account_performance = (
+        performance.get("accounts")
+        if isinstance(performance, Mapping)
+        else {}
+    )
+    portfolio_performance = (
+        performance.get("portfolio") if isinstance(performance, Mapping) else None
+    )
+    account_stop_losses = (
+        snapshot.get("account_stop_losses") if isinstance(snapshot, Mapping) else None
+    )
+    account_views = _build_account_views(
+        accounts,
+        account_messages,
+        account_stop_losses,
+        account_performance,
+    )
+    portfolio = _build_portfolio_view(accounts, portfolio_performance)
 
     payload: Dict[str, Any] = {
         "generated_at": generated_at.isoformat(),
@@ -37,18 +54,29 @@ def build_presentable_snapshot(snapshot: Mapping[str, Any]) -> Dict[str, Any]:
     stop_loss = snapshot.get("portfolio_stop_loss") if isinstance(snapshot, Mapping) else None
     if isinstance(stop_loss, Mapping):
         payload["portfolio_stop_loss"] = dict(stop_loss)
+    account_stop_loss_view = _normalise_account_stop_losses(account_stop_losses)
+    if account_stop_loss_view:
+        payload["account_stop_losses"] = account_stop_loss_view
 
     return payload
 
 
 def _build_account_views(
-    accounts: Sequence[Account], account_messages: Mapping[str, str]
+    accounts: Sequence[Account],
+    account_messages: Mapping[str, str],
+    account_stop_losses: Any,
+    account_performance: Any,
 ) -> Dict[str, list[Dict[str, Any]]]:
     visible_accounts: list[Dict[str, Any]] = []
     hidden_accounts: list[Dict[str, Any]] = []
 
     for account in accounts:
-        view = _build_account_view(account, account_messages)
+        view = _build_account_view(
+            account,
+            account_messages,
+            account_stop_losses,
+            account_performance,
+        )
         if view["message"]:
             hidden_accounts.append({"name": view["name"], "message": view["message"]})
             continue
@@ -57,7 +85,9 @@ def _build_account_views(
     return {"visible": visible_accounts, "hidden": hidden_accounts}
 
 
-def _build_portfolio_view(accounts: Sequence[Account]) -> Dict[str, Any]:
+def _build_portfolio_view(
+    accounts: Sequence[Account], performance: Optional[Mapping[str, Any]] = None
+) -> Dict[str, Any]:
     total_balance = sum(account.balance for account in accounts)
     gross_notional = sum(account.total_abs_notional() for account in accounts)
     net_notional = sum(account.net_notional() for account in accounts)
@@ -115,7 +145,7 @@ def _build_portfolio_view(accounts: Sequence[Account]) -> Dict[str, Any]:
     symbol_entries.sort(key=lambda item: item["gross_notional"], reverse=True)
     gross_pct_total = gross_notional / total_balance if total_balance else 0.0
     net_pct_total = net_notional / total_balance if total_balance else 0.0
-    return {
+    payload: Dict[str, Any] = {
         "balance": total_balance,
         "gross_exposure": gross_notional,
         "net_exposure": net_notional,
@@ -126,15 +156,30 @@ def _build_portfolio_view(accounts: Sequence[Account]) -> Dict[str, Any]:
         "funding_rates": _finalise_metric(portfolio_funding, funding_weights),
         "symbols": symbol_entries,
     }
+    if performance:
+        payload["performance"] = _normalise_performance(performance)
+    return payload
 
 
-def _build_account_view(account: Account, account_messages: Mapping[str, str]) -> Dict[str, Any]:
+def _build_account_view(
+    account: Account,
+    account_messages: Mapping[str, str],
+    account_stop_losses: Any,
+    account_performance: Any,
+) -> Dict[str, Any]:
     positions = [_build_position_view(position, account.balance) for position in account.positions]
     orders = [_build_order_view(order) for order in account.orders]
     message = account_messages.get(account.name)
     symbol_exposures = _build_symbol_exposures(account)
     volatility = _aggregate_position_metrics(account.positions, "volatility")
     funding_rates = _aggregate_position_metrics(account.positions, "funding_rates")
+    stop_loss_state = None
+    if isinstance(account_stop_losses, Mapping):
+        raw_stop_loss = account_stop_losses.get(account.name)
+        stop_loss_state = _normalise_stop_loss(raw_stop_loss)
+    performance_state = None
+    if isinstance(account_performance, Mapping):
+        performance_state = _normalise_performance(account_performance.get(account.name))
     return {
         "name": account.name,
         "balance": account.balance,
@@ -151,6 +196,8 @@ def _build_account_view(account: Account, account_messages: Mapping[str, str]) -
         "message": message,
         "volatility": volatility,
         "funding_rates": funding_rates,
+        "stop_loss": stop_loss_state,
+        "performance": performance_state,
     }
 
 
@@ -199,6 +246,81 @@ def _build_symbol_exposures(account: Account) -> List[Dict[str, Any]]:
         )
     items.sort(key=lambda item: item["gross_notional"], reverse=True)
     return items
+
+
+def _normalise_account_stop_losses(data: Any) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(data, Mapping):
+        return {}
+    normalised: Dict[str, Dict[str, Any]] = {}
+    for name, value in data.items():
+        state = _normalise_stop_loss(value)
+        if state is not None:
+            normalised[str(name)] = state
+    return normalised
+
+
+def _normalise_stop_loss(data: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(data, Mapping):
+        return None
+    result: Dict[str, Any] = {
+        "threshold_pct": _to_optional_float(data.get("threshold_pct")),
+        "baseline_balance": _to_optional_float(data.get("baseline_balance")),
+        "current_balance": _to_optional_float(data.get("current_balance")),
+        "current_drawdown_pct": _to_optional_float(data.get("current_drawdown_pct")),
+        "triggered": bool(data.get("triggered")),
+        "active": bool(data.get("active", True)),
+        "triggered_at": data.get("triggered_at"),
+    }
+    return result
+
+
+def _normalise_performance(data: Any) -> Dict[str, Any]:
+    if not isinstance(data, Mapping):
+        return {}
+    summary: Dict[str, Any] = {
+        "current_balance": _to_optional_float(data.get("current_balance")),
+        "latest_snapshot": None,
+        "daily": None,
+        "weekly": None,
+        "monthly": None,
+    }
+    latest = data.get("latest_snapshot")
+    if isinstance(latest, Mapping):
+        summary["latest_snapshot"] = {
+            "date": latest.get("date"),
+            "timestamp": latest.get("timestamp"),
+            "balance": _to_optional_float(latest.get("balance")),
+        }
+    since_map: Dict[str, Any] = {}
+    reference_balances: Dict[str, Any] = {}
+    for key in ("daily", "weekly", "monthly"):
+        change = data.get(key)
+        if isinstance(change, Mapping):
+            pnl = change.get("pnl")
+            if pnl is not None:
+                summary[key] = float(pnl)
+                if change.get("since") is not None:
+                    since_map[key] = change.get("since")
+                if change.get("reference_balance") is not None:
+                    reference_balances[key] = float(change.get("reference_balance"))
+            else:
+                summary[key] = None
+        elif isinstance(change, (int, float)):
+            summary[key] = float(change)
+        else:
+            summary[key] = None
+    if since_map:
+        summary["since"] = since_map
+    if reference_balances:
+        summary["reference_balances"] = reference_balances
+    return summary
+
+
+def _to_optional_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _accumulate_metric(
