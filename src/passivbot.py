@@ -2657,6 +2657,11 @@ class Passivbot:
                 total_wel = self.bot_value(pside, "total_wallet_exposure_limit")
                 if total_wel is None or total_wel <= 0.0:
                     continue
+                effective_n_positions = int(
+                    round(self.bot_value(pside, "n_positions") or 0.0)
+                )
+                if effective_n_positions <= 0:
+                    effective_n_positions = max(1, len(self.positions))
                 positions_payload = []
                 symbol_idx_map = {}
                 idx_counter = 0
@@ -2679,15 +2684,10 @@ class Passivbot:
                             "base_wallet_exposure_limit": float(
                                 self.bp(pside, "wallet_exposure_limit", symbol)
                             ),
-                            "risk_wel_enforcer_threshold": float(
-                                self.bp(pside, "risk_wel_enforcer_threshold", symbol)
-                            ),
-                            "risk_we_excess_allowance_pct": float(
-                                self.bp(pside, "risk_we_excess_allowance_pct", symbol)
-                            ),
                             "c_mult": float(self.c_mults[symbol]),
                             "qty_step": float(self.qty_steps[symbol]),
                             "price_step": float(self.price_steps[symbol]),
+                            "min_qty": float(self.min_qtys[symbol]),
                         }
                     )
                     symbol_idx_map[idx_counter] = symbol
@@ -2704,6 +2704,7 @@ class Passivbot:
                     pside,
                     float(threshold),
                     float(total_wel),
+                    int(effective_n_positions),
                     float(self.balance),
                     positions_payload,
                     skip_idx,
