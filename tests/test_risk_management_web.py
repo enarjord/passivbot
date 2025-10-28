@@ -249,6 +249,79 @@ def create_test_app(
     return TestClient(app), fetcher
 
 
+def _build_accounts_snapshot() -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "generated_at": now,
+        "accounts": [
+            {
+                "name": "Alpha",
+                "balance": 15_000,
+                "daily_realized_pnl": 120,
+                "positions": [
+                    {
+                        "symbol": "BTCUSDT",
+                        "side": "long",
+                        "notional": 5_000,
+                        "entry_price": 48_000,
+                        "mark_price": 49_200,
+                        "liquidation_price": 35_000,
+                        "wallet_exposure_pct": 0.2,
+                        "unrealized_pnl": 150,
+                        "daily_realized_pnl": 25,
+                        "max_drawdown_pct": 0.1,
+                    }
+                ],
+            },
+            {
+                "name": "Bravo",
+                "balance": 12_500,
+                "daily_realized_pnl": -50,
+                "positions": [
+                    {
+                        "symbol": "ETHUSDT",
+                        "side": "short",
+                        "notional": 3_500,
+                        "entry_price": 3_200,
+                        "mark_price": 3_150,
+                        "liquidation_price": 3_800,
+                        "wallet_exposure_pct": 0.28,
+                        "unrealized_pnl": 80,
+                        "daily_realized_pnl": -15,
+                        "max_drawdown_pct": 0.22,
+                    }
+                ],
+            },
+            {
+                "name": "Charlie",
+                "balance": 9_800,
+                "daily_realized_pnl": 40,
+                "positions": [
+                    {
+                        "symbol": "SOLUSDT",
+                        "side": "long",
+                        "notional": 1_200,
+                        "entry_price": 95,
+                        "mark_price": 101,
+                        "liquidation_price": 60,
+                        "wallet_exposure_pct": 0.12,
+                        "unrealized_pnl": 72,
+                        "daily_realized_pnl": 18,
+                        "max_drawdown_pct": 0.05,
+                    }
+                ],
+            },
+        ],
+        "alert_thresholds": {
+            "wallet_exposure_pct": 0.65,
+            "position_wallet_exposure_pct": 0.25,
+            "max_drawdown_pct": 0.3,
+            "loss_threshold_pct": -0.08,
+        },
+        "notification_channels": [],
+    }
+
+
 def test_web_dashboard_auth_flow(sample_snapshot: dict, auth_manager: AuthManager) -> None:
     client, fetcher = create_test_app(sample_snapshot, auth_manager)
     with client:
@@ -329,6 +402,79 @@ def test_trading_panel_page(sample_snapshot: dict, auth_manager: AuthManager) ->
         response = client.get("/trading-panel")
         assert response.status_code == 200
         assert "Trading panel" in response.text
+
+
+def test_snapshot_api_paginates_and_sorts(auth_manager: AuthManager) -> None:
+    snapshot = _build_accounts_snapshot()
+    client, _ = create_test_app(snapshot, auth_manager)
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        first_page = client.get("/api/snapshot", params={"page_size": 2, "sort": "name", "sort_order": "asc"})
+        assert first_page.status_code == 200
+        payload = first_page.json()
+        assert payload["accounts"][0]["name"] == "Alpha"
+        assert payload["accounts"][1]["name"] == "Bravo"
+        assert payload["accounts_meta"]["page"] == 1
+        assert payload["accounts_meta"]["pages"] == 2
+
+        second_page = client.get("/api/snapshot", params={"page_size": 2, "page": 2, "sort": "name", "sort_order": "asc"})
+        assert second_page.status_code == 200
+        second_payload = second_page.json()
+        assert len(second_payload["accounts"]) == 1
+        assert second_payload["accounts"][0]["name"] == "Charlie"
+        assert second_payload["accounts_meta"]["page"] == 2
+
+
+def test_snapshot_api_filters_by_search_and_exposure(auth_manager: AuthManager) -> None:
+    snapshot = _build_accounts_snapshot()
+    client, _ = create_test_app(snapshot, auth_manager)
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        search_response = client.get("/api/snapshot", params={"search": "eth", "page_size": 5})
+        assert search_response.status_code == 200
+        search_payload = search_response.json()
+        assert len(search_payload["accounts"]) == 1
+        assert search_payload["accounts"][0]["name"] == "Bravo"
+        assert search_payload["accounts_meta"]["filtered"] == 1
+
+        short_response = client.get("/api/snapshot", params={"exposure": "net_short", "page_size": 5})
+        assert short_response.status_code == 200
+        short_payload = short_response.json()
+        assert len(short_payload["accounts"]) == 1
+        assert short_payload["accounts"][0]["name"] == "Bravo"
+
+
+def test_snapshot_api_validates_query_params(auth_manager: AuthManager) -> None:
+    snapshot = _build_accounts_snapshot()
+    client, _ = create_test_app(snapshot, auth_manager)
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        invalid_sort = client.get("/api/snapshot", params={"sort": "invalid"})
+        assert invalid_sort.status_code == 400
+
+        invalid_page = client.get("/api/snapshot", params={"page": 0})
+        assert invalid_page.status_code == 400
+
+        too_large_page_size = client.get("/api/snapshot", params={"page_size": 10_000})
+        assert too_large_page_size.status_code == 400
 
 
 def test_position_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) -> None:

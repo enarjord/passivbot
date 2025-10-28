@@ -83,6 +83,147 @@
       gap: 0.75rem;
       flex-wrap: wrap;
     }
+
+    .accounts-controls {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .accounts-controls__row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .accounts-controls .field {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      min-width: 180px;
+    }
+
+    .accounts-controls .field > span {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .accounts-controls input[type="search"],
+    .accounts-controls select {
+      background: rgba(148, 163, 184, 0.1);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 0.5rem;
+      padding: 0.6rem 0.75rem;
+      color: inherit;
+    }
+
+    .chip-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .chip {
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      background: rgba(148, 163, 184, 0.12);
+      border-radius: 999px;
+      padding: 0.4rem 0.9rem;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+
+    .chip[aria-pressed="true"],
+    .chip.active {
+      background: var(--accent);
+      color: #0f172a;
+      border-color: transparent;
+    }
+
+    .accounts-sort {
+      display: grid;
+      gap: 0.35rem;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    }
+
+    .accounts-sort__button {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(148, 163, 184, 0.12);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 0.6rem;
+      padding: 0.55rem 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+
+    .accounts-sort__button:hover {
+      background: rgba(148, 163, 184, 0.2);
+    }
+
+    .accounts-sort__button[data-active="true"] {
+      background: var(--accent);
+      color: #0f172a;
+      border-color: transparent;
+    }
+
+    .accounts-summary {
+      margin-bottom: 1rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .pagination {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 1.5rem;
+    }
+
+    .pagination button {
+      border-radius: 0.5rem;
+      background: rgba(148, 163, 184, 0.12);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      padding: 0.45rem 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .pagination button[disabled] {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .table-pagination {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.35rem;
+      margin-top: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .table-pagination button {
+      border-radius: 0.5rem;
+      background: rgba(148, 163, 184, 0.12);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      padding: 0.3rem 0.6rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+
+    .table-pagination button[disabled] {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
   </style>
 {% endblock %}
 
@@ -233,6 +374,11 @@
                 {% endfor %}
               </tbody>
             </table>
+            <div class="table-pagination" aria-label="Portfolio metrics">
+              <button type="button" disabled>Prev</button>
+              <span>4 rows</span>
+              <button type="button" disabled>Next</button>
+            </div>
           </div>
         {% endif %}
         {% if snapshot.portfolio.symbols %}
@@ -277,6 +423,13 @@
                 {% endfor %}
               </tbody>
             </table>
+            <div class="table-pagination" aria-label="Portfolio exposures">
+              <button type="button" disabled>Prev</button>
+              <span>
+                {{ snapshot.portfolio.symbols|length }} row{{ 's' if snapshot.portfolio.symbols|length != 1 else '' }}
+              </span>
+              <button type="button" disabled>Next</button>
+            </div>
           </div>
         {% else %}
           <p style="color: var(--muted); margin-top: 1rem;">No active exposures.</p>
@@ -285,6 +438,100 @@
     </div>
 
     <div class="page-section" data-page-section="accounts" hidden>
+      <div class="accounts-controls" data-accounts-controls>
+        <div class="accounts-controls__row">
+          <label class="field">
+            <span>Search</span>
+            <input
+              type="search"
+              name="accounts-search"
+              placeholder="Search account or symbol"
+              autocomplete="off"
+              data-accounts-search
+            />
+          </label>
+          <label class="field">
+            <span>Exposure filter</span>
+            <select name="accounts-exposure" data-accounts-exposure>
+              <option value="any">All accounts</option>
+              <option value="gross">With gross exposure</option>
+              <option value="net_long">Net long</option>
+              <option value="net_short">Net short</option>
+              <option value="flat">Flat</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Page size</span>
+            <select name="accounts-page-size" data-accounts-page-size>
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+        </div>
+        <div class="accounts-controls__row">
+          <div class="chip-group" role="group" aria-label="Hide empty sections">
+            <button type="button" class="chip" data-hide-empty="exposures">Hide empty exposures</button>
+            <button type="button" class="chip" data-hide-empty="positions">Hide empty positions</button>
+            <button type="button" class="chip" data-hide-empty="orders">Hide empty orders</button>
+          </div>
+        </div>
+        <div class="accounts-sort" role="group" aria-label="Sort accounts">
+          <button type="button" class="accounts-sort__button" data-sort-key="name">
+            Account
+            <span aria-hidden="true">↕</span>
+          </button>
+          <button type="button" class="accounts-sort__button" data-sort-key="balance">
+            Balance
+            <span aria-hidden="true">↕</span>
+          </button>
+          <button type="button" class="accounts-sort__button" data-sort-key="gross">
+            Gross exposure
+            <span aria-hidden="true">↕</span>
+          </button>
+          <button type="button" class="accounts-sort__button" data-sort-key="net">
+            Net exposure
+            <span aria-hidden="true">↕</span>
+          </button>
+          <button type="button" class="accounts-sort__button" data-sort-key="unrealized">
+            Unrealized PnL
+            <span aria-hidden="true">↕</span>
+          </button>
+          <button type="button" class="accounts-sort__button" data-sort-key="daily_realized">
+            Daily realised PnL
+            <span aria-hidden="true">↕</span>
+          </button>
+        </div>
+      </div>
+      {% set accounts_meta = snapshot.accounts_meta if snapshot.accounts_meta is defined else {} %}
+      {% set current_page = accounts_meta.page if accounts_meta.page is defined else 1 %}
+      {% set total_pages = accounts_meta.pages if accounts_meta.pages is defined else 1 %}
+      {% set page_size = accounts_meta.page_size if accounts_meta.page_size is defined else snapshot.accounts|length %}
+      {% set filtered_total = accounts_meta.filtered if accounts_meta.filtered is defined else snapshot.accounts|length %}
+      {% set start_index = ((current_page - 1) * page_size + 1) if filtered_total else 0 %}
+      {% set end_index = (start_index + snapshot.accounts|length - 1) if filtered_total else 0 %}
+      {% set sort_labels = {
+        'name': 'Account',
+        'balance': 'Balance',
+        'gross': 'Gross exposure',
+        'net': 'Net exposure',
+        'unrealized': 'Unrealized PnL',
+        'daily_realized': 'Daily realised PnL'
+      } %}
+      <div class="accounts-summary" data-accounts-summary>
+        <span>
+          {% if filtered_total %}
+            Showing {{ start_index }}–{{ end_index }} of {{ filtered_total }} account{{ 's' if filtered_total != 1 else '' }}
+          {% else %}
+            No accounts match the selected filters.
+          {% endif %}
+        </span>
+        <span>
+          Sorted by {{ sort_labels.get(accounts_meta.sort_key, 'Balance') }}
+          ({{ 'ascending' if accounts_meta.sort_order == 'asc' else 'descending' }})
+        </span>
+      </div>
       <div data-accounts>
         {% for account in snapshot.accounts %}
           <section class="card" data-account="{{ account.name }}">
@@ -423,6 +670,13 @@
                     {% endfor %}
                   </tbody>
                 </table>
+                <div class="table-pagination" aria-label="{{ account.name }} exposures">
+                  <button type="button" disabled>Prev</button>
+                  <span>
+                    {{ account.symbol_exposures|length }} row{{ 's' if account.symbol_exposures|length != 1 else '' }}
+                  </span>
+                  <button type="button" disabled>Next</button>
+                </div>
               </div>
             {% endif %}
               <div class="report-actions" style="margin: 1.5rem 0;">
@@ -504,6 +758,13 @@
                     {% endfor %}
                   </tbody>
                 </table>
+                <div class="table-pagination" aria-label="{{ account.name }} positions">
+                  <button type="button" disabled>Prev</button>
+                  <span>
+                    {{ account.positions|length }} row{{ 's' if account.positions|length != 1 else '' }}
+                  </span>
+                  <button type="button" disabled>Next</button>
+                </div>
               </div>
             {% else %}
               <p style="color: var(--muted);">No open positions.</p>
@@ -547,12 +808,24 @@
                     {% endfor %}
                   </tbody>
                 </table>
+                <div class="table-pagination" aria-label="{{ account.name }} orders">
+                  <button type="button" disabled>Prev</button>
+                  <span>
+                    {{ account.orders|length }} row{{ 's' if account.orders|length != 1 else '' }}
+                  </span>
+                  <button type="button" disabled>Next</button>
+                </div>
               </div>
             {% else %}
               <p style="color: var(--muted);">No open orders.</p>
             {% endif %}
           </section>
         {% endfor %}
+      </div>
+      <div class="pagination" data-accounts-pagination>
+        <button type="button" data-page="prev" {% if not accounts_meta.has_previous %}disabled{% endif %}>Previous</button>
+        <span>Page {{ current_page }} of {{ total_pages }}</span>
+        <button type="button" data-page="next" {% if not accounts_meta.has_next %}disabled{% endif %}>Next</button>
       </div>
     </div>
 
@@ -633,9 +906,104 @@
     const DEFAULT_PAGE = "overview";
     const STORAGE_KEY = "risk-dashboard.activePage";
     const METRIC_WINDOWS = ["4h", "24h", "3d", "7d"];
+    const DEFAULT_SORT_KEY = "balance";
+    const DEFAULT_SORT_ORDER = "desc";
+    const SORT_LABELS = {
+      name: "Account",
+      balance: "Balance",
+      gross: "Gross exposure",
+      net: "Net exposure",
+      unrealized: "Unrealized PnL",
+      daily_realized: "Daily realised PnL",
+    };
+    const DEFAULT_ACCOUNTS_STATE = {
+      search: "",
+      exposure: "any",
+      hideEmpty: {
+        exposures: false,
+        positions: false,
+        orders: false,
+      },
+      sortKey: DEFAULT_SORT_KEY,
+      sortOrder: DEFAULT_SORT_ORDER,
+      page: 1,
+      pageSize: 25,
+    };
+
+    const loadPersistedState = () => {
+      const baseState = {
+        activePage: DEFAULT_PAGE,
+        accounts: { ...DEFAULT_ACCOUNTS_STATE },
+      };
+      try {
+        const stored = window.localStorage.getItem(STORAGE_KEY);
+        if (!stored) {
+          return baseState;
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(stored);
+        } catch (error) {
+          if (typeof stored === "string") {
+            return { ...baseState, activePage: stored };
+          }
+          return baseState;
+        }
+        if (typeof parsed === "string") {
+          return { ...baseState, activePage: parsed };
+        }
+        if (parsed && typeof parsed === "object") {
+          const activePage = typeof parsed.activePage === "string" ? parsed.activePage : baseState.activePage;
+          const accountsState = parsed.accounts && typeof parsed.accounts === "object" ? parsed.accounts : {};
+          return {
+            activePage,
+            accounts: {
+              ...DEFAULT_ACCOUNTS_STATE,
+              ...accountsState,
+              hideEmpty: {
+                ...DEFAULT_ACCOUNTS_STATE.hideEmpty,
+                ...(accountsState.hideEmpty || {}),
+              },
+            },
+          };
+        }
+      } catch (error) {
+        console.debug("Failed to restore dashboard state", error);
+      }
+      return baseState;
+    };
+
+    let state = loadPersistedState();
+    let latestSnapshot = null;
+    let lastAccountsMeta = null;
+    let isFetchingSnapshot = false;
+    let fetchQueued = false;
+    let searchDebounceHandle = null;
 
     const pageSections = Array.from(document.querySelectorAll("[data-page-section]"));
     const navButtons = Array.from(document.querySelectorAll("[data-page-target]"));
+    const accountsSection = document.querySelector('[data-page-section="accounts"]');
+    const accountsContainer = accountsSection ? accountsSection.querySelector("[data-accounts]") : null;
+    const accountsControlsElement = document.querySelector("[data-accounts-controls]");
+    const accountsSummaryEl = document.querySelector("[data-accounts-summary]");
+    const paginationContainer = document.querySelector("[data-accounts-pagination]");
+    const searchInput = accountsControlsElement ? accountsControlsElement.querySelector("[data-accounts-search]") : null;
+    const exposureSelect = accountsControlsElement ? accountsControlsElement.querySelector("[data-accounts-exposure]") : null;
+    const pageSizeSelect = accountsControlsElement ? accountsControlsElement.querySelector("[data-accounts-page-size]") : null;
+    const hideEmptyChips = accountsControlsElement
+      ? Array.from(accountsControlsElement.querySelectorAll("[data-hide-empty]"))
+      : [];
+    const sortButtons = accountsControlsElement
+      ? Array.from(accountsControlsElement.querySelectorAll("[data-sort-key]"))
+      : [];
+
+    const persistState = () => {
+      try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch (error) {
+        console.debug("Failed to persist dashboard state", error);
+      }
+    };
 
     const setActivePage = (page) => {
       const targetExists = pageSections.some(
@@ -655,11 +1023,8 @@
         button.setAttribute("aria-selected", String(isActive));
       });
 
-      try {
-        window.localStorage.setItem(STORAGE_KEY, targetPage);
-      } catch (error) {
-        console.debug("Failed to persist active page", error);
-      }
+      state.activePage = targetPage;
+      persistState();
     };
 
     navButtons.forEach((button) => {
@@ -669,17 +1034,54 @@
       });
     });
 
-    try {
-      const stored = window.localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        setActivePage(stored);
-      } else {
-        setActivePage(DEFAULT_PAGE);
+    setActivePage(state.activePage || DEFAULT_PAGE);
+
+    const updateSortButtons = () => {
+      sortButtons.forEach((button) => {
+        const key = button.getAttribute("data-sort-key");
+        const indicator = button.querySelector("span");
+        const isActive = key === state.accounts.sortKey;
+        button.dataset.active = String(isActive);
+        if (indicator) {
+          indicator.textContent = isActive
+            ? state.accounts.sortOrder === "asc"
+              ? "↑"
+              : "↓"
+            : "↕";
+        }
+      });
+    };
+
+    const updateHideEmptyChips = () => {
+      hideEmptyChips.forEach((chip) => {
+        const key = chip.getAttribute("data-hide-empty");
+        const pressed = Boolean(state.accounts.hideEmpty?.[key]);
+        chip.classList.toggle("active", pressed);
+        chip.setAttribute("aria-pressed", String(pressed));
+      });
+    };
+
+    const applyAccountsControlsFromState = () => {
+      if (searchInput && searchInput.value !== state.accounts.search) {
+        searchInput.value = state.accounts.search;
       }
-    } catch (error) {
-      console.debug("Failed to restore active page", error);
-      setActivePage(DEFAULT_PAGE);
-    }
+      if (exposureSelect) {
+        const targetValue = state.accounts.exposure || "any";
+        if (exposureSelect.value !== targetValue) {
+          exposureSelect.value = targetValue;
+        }
+      }
+      if (pageSizeSelect) {
+        const pageSizeValue = String(state.accounts.pageSize || DEFAULT_ACCOUNTS_STATE.pageSize);
+        if (pageSizeSelect.value !== pageSizeValue) {
+          pageSizeSelect.value = pageSizeValue;
+        }
+      }
+      updateHideEmptyChips();
+      updateSortButtons();
+    };
+
+    applyAccountsControlsFromState();
 
     const formatCurrency = (value) => {
       const number = Number(value || 0);
@@ -714,15 +1116,63 @@
       return `${size.toFixed(precision)} ${units[exponent]}`;
     };
 
+    const renderTablePaginationFooter = (label, count) => `
+      <div class="table-pagination" role="navigation" aria-label="${label}">
+        <button type="button" disabled>Prev</button>
+        <span>${count} row${count === 1 ? "" : "s"}</span>
+        <button type="button" disabled>Next</button>
+      </div>
+    `;
+
+    const updateAccountsSummary = (meta, visibleCount) => {
+      if (!accountsSummaryEl) {
+        return;
+      }
+      const filtered = Number(meta?.filtered ?? 0);
+      const page = Number(meta?.page ?? state.accounts.page ?? 1);
+      const pageSize = Number(meta?.page_size ?? state.accounts.pageSize ?? DEFAULT_ACCOUNTS_STATE.pageSize);
+      let summaryText = "No accounts match the selected filters.";
+      if (filtered && visibleCount) {
+        const start = (page - 1) * pageSize + 1;
+        const end = start + visibleCount - 1;
+        summaryText = `Showing ${start}–${end} of ${filtered} account${filtered === 1 ? "" : "s"}`;
+      }
+      const sortKey = meta?.sort_key || state.accounts.sortKey || DEFAULT_SORT_KEY;
+      const sortOrder = (meta?.sort_order || state.accounts.sortOrder || DEFAULT_SORT_ORDER).toLowerCase() === "asc"
+        ? "ascending"
+        : "descending";
+      const sortLabel = SORT_LABELS[sortKey] || SORT_LABELS[DEFAULT_SORT_KEY];
+      accountsSummaryEl.innerHTML = `
+        <span>${summaryText}</span>
+        <span>Sorted by ${sortLabel} (${sortOrder})</span>
+      `;
+    };
+
+    const updateAccountsPagination = (meta) => {
+      if (!paginationContainer) {
+        return;
+      }
+      const page = Number(meta?.page ?? state.accounts.page ?? 1);
+      const pages = Math.max(1, Number(meta?.pages ?? 1));
+      const hasPrev = Boolean(meta?.has_previous ?? page > 1);
+      const hasNext = Boolean(meta?.has_next ?? page < pages);
+      paginationContainer.innerHTML = `
+        <button type="button" data-page="prev"${hasPrev ? "" : " disabled"}>Previous</button>
+        <span>Page ${page} of ${pages}</span>
+        <button type="button" data-page="next"${hasNext ? "" : " disabled"}>Next</button>
+      `;
+    };
+
     const renderPortfolio = (snapshot) => {
       const portfolioSection = document.querySelector(
-        '[data-page-section="overview"] [data-portfolio]'
+        '[data-page-section="overview"] [data-portfolio]',
       );
       if (!portfolioSection || !snapshot.portfolio) {
         return;
       }
       const portfolio = snapshot.portfolio;
-      const symbolRows = (Array.isArray(portfolio.symbols) ? portfolio.symbols : [])
+      const symbolEntries = Array.isArray(portfolio.symbols) ? portfolio.symbols : [];
+      const symbolRows = symbolEntries
         .map((entry) => {
           const volatility = entry.volatility || {};
           const funding = entry.funding_rates || {};
@@ -742,7 +1192,7 @@
       const hasPortfolioMetrics = METRIC_WINDOWS.some(
         (window) =>
           isFiniteNumber(portfolio.volatility?.[window]) ||
-          isFiniteNumber(portfolio.funding_rates?.[window])
+          isFiniteNumber(portfolio.funding_rates?.[window]),
       );
       const metricsTable = hasPortfolioMetrics
         ? `
@@ -763,10 +1213,11 @@
                       <td>${formatMetricValue(portfolio.volatility?.[window])}</td>
                       <td>${formatMetricValue(portfolio.funding_rates?.[window])}</td>
                     </tr>
-                  `
+                  `,
                 ).join("")}
               </tbody>
             </table>
+            ${renderTablePaginationFooter("Portfolio metrics", METRIC_WINDOWS.length)}
           </div>
         `
         : "";
@@ -787,6 +1238,7 @@
               </thead>
               <tbody>${symbolRows}</tbody>
             </table>
+            ${renderTablePaginationFooter("Portfolio exposures", symbolEntries.length)}
           </div>
         `
         : '<p style="color: var(--muted); margin-top: 1rem;">No active exposures.</p>';
@@ -828,18 +1280,15 @@
     };
 
     const renderAccounts = (snapshot) => {
-      const accountsContainer = document.querySelector(
-        '[data-page-section="accounts"] [data-accounts]'
-      );
       if (!accountsContainer) {
         return;
       }
       const accountsData = Array.isArray(snapshot.accounts) ? snapshot.accounts : [];
+      const hideEmpty = state.accounts.hideEmpty || {};
+
       accountsContainer.innerHTML = accountsData
         .map((account) => {
-          const exposures = Array.isArray(account.symbol_exposures)
-            ? account.symbol_exposures
-            : [];
+          const exposures = Array.isArray(account.symbol_exposures) ? account.symbol_exposures : [];
           const positions = Array.isArray(account.positions) ? account.positions : [];
           const orders = Array.isArray(account.orders) ? account.orders : [];
           const exposuresRows = exposures
@@ -858,10 +1307,11 @@
           const hasAccountMetrics = METRIC_WINDOWS.some(
             (window) =>
               isFiniteNumber(accountVolatility?.[window]) ||
-              isFiniteNumber(accountFunding?.[window])
+              isFiniteNumber(accountFunding?.[window]),
           );
-          const accountMetricsTable = hasAccountMetrics
-            ? `
+          let accountMetricsTable = "";
+          if (hasAccountMetrics) {
+            accountMetricsTable = `
               <div class="table-wrapper" style="margin-bottom: 1.5rem;">
                 <table class="compact">
                   <thead>
@@ -879,13 +1329,14 @@
                           <td>${formatMetricValue(accountVolatility?.[window])}</td>
                           <td>${formatMetricValue(accountFunding?.[window])}</td>
                         </tr>
-                      `
+                      `,
                     ).join("")}
                   </tbody>
                 </table>
+                ${renderTablePaginationFooter(`${account.name} metrics`, METRIC_WINDOWS.length)}
               </div>
-            `
-            : "";
+            `;
+          }
           const positionsRows = positions
             .map((position) => {
               const pnlClass = Number(position.unrealized_pnl) >= 0 ? "gain" : "loss";
@@ -951,6 +1402,9 @@
               </tr>
             `)
             .join("");
+          const showEmptyExposures = !hideEmpty.exposures;
+          const showEmptyPositions = !hideEmpty.positions;
+          const showEmptyOrders = !hideEmpty.orders;
           const exposuresTable = exposuresRows
             ? `
                 <div class="table-wrapper" style="margin-bottom: 1.5rem;">
@@ -966,9 +1420,12 @@
                     </thead>
                     <tbody>${exposuresRows}</tbody>
                   </table>
+                  ${renderTablePaginationFooter(`${account.name} exposures`, exposures.length)}
                 </div>
               `
-            : "";
+            : showEmptyExposures
+              ? '<p style="color: var(--muted); margin: 0;">No symbol exposures.</p>'
+              : "";
           const positionsTable = positions.length > 0
             ? `
                 <div class="table-wrapper">
@@ -994,9 +1451,12 @@
                     </thead>
                     <tbody>${positionsRows}</tbody>
                   </table>
+                  ${renderTablePaginationFooter(`${account.name} positions`, positions.length)}
                 </div>
               `
-            : '<p style="color: var(--muted);">No open positions.</p>';
+            : showEmptyPositions
+              ? '<p style="color: var(--muted);">No open positions.</p>'
+              : "";
           const ordersTable = orders.length > 0
             ? `
                 <h3 style="margin-top: 1.5rem;">Open orders</h3>
@@ -1020,9 +1480,73 @@
                     </thead>
                     <tbody>${ordersRows}</tbody>
                   </table>
+                  ${renderTablePaginationFooter(`${account.name} orders`, orders.length)}
                 </div>
               `
-            : '<p style="color: var(--muted);">No open orders.</p>';
+            : showEmptyOrders
+              ? `
+                <h3 style="margin-top: 1.5rem;">Open orders</h3>
+                <p style="color: var(--muted);">No open orders.</p>
+              `
+              : "";
+
+          const accountPerformance = account.performance || null;
+          let performanceBlock = "";
+          if (accountPerformance) {
+            const daily = accountPerformance.daily;
+            const dailyClass = daily !== null && daily !== undefined ? (Number(daily) >= 0 ? "gain" : "loss") : "";
+            const dailyValue = daily !== null && daily !== undefined ? formatCurrency(daily) : "-";
+            const dailySince = accountPerformance.since?.daily ? `Since ${accountPerformance.since.daily}` : "&nbsp;";
+            const weekly = accountPerformance.weekly;
+            const weeklyClass = weekly !== null && weekly !== undefined ? (Number(weekly) >= 0 ? "gain" : "loss") : "";
+            const weeklyValue = weekly !== null && weekly !== undefined ? formatCurrency(weekly) : "-";
+            const weeklySince = accountPerformance.since?.weekly ? `Since ${accountPerformance.since.weekly}` : "&nbsp;";
+            const monthly = accountPerformance.monthly;
+            const monthlyClass = monthly !== null && monthly !== undefined ? (Number(monthly) >= 0 ? "gain" : "loss") : "";
+            const monthlyValue = monthly !== null && monthly !== undefined ? formatCurrency(monthly) : "-";
+            const monthlySince = accountPerformance.since?.monthly ? `Since ${accountPerformance.since.monthly}` : "&nbsp;";
+            performanceBlock = `
+              <div class="metrics" style="margin-top: 1.5rem;">
+                <div class="metric">
+                  <span class="label">Daily PnL (4pm)</span>
+                  <span class="value ${dailyClass}">${dailyValue}</span>
+                  <span class="subvalue">${dailySince}</span>
+                </div>
+                <div class="metric">
+                  <span class="label">Weekly PnL</span>
+                  <span class="value ${weeklyClass}">${weeklyValue}</span>
+                  <span class="subvalue">${weeklySince}</span>
+                </div>
+                <div class="metric">
+                  <span class="label">Monthly PnL</span>
+                  <span class="value ${monthlyClass}">${monthlyValue}</span>
+                  <span class="subvalue">${monthlySince}</span>
+                </div>
+              </div>
+            `;
+          }
+
+          const stopLoss = account.stop_loss;
+          let stopLossBlock = "";
+          if (stopLoss) {
+            const threshold = stopLoss.threshold_pct !== null && stopLoss.threshold_pct !== undefined
+              ? `${Number(stopLoss.threshold_pct).toFixed(2)}%`
+              : "?%";
+            const drawdown = stopLoss.current_drawdown_pct !== null && stopLoss.current_drawdown_pct !== undefined
+              ? ` Current drawdown ${(Number(stopLoss.current_drawdown_pct) * 100).toFixed(2)}%.`
+              : "";
+            const baseline = stopLoss.baseline_balance !== null && stopLoss.baseline_balance !== undefined
+              ? ` Baseline ${formatCurrency(stopLoss.baseline_balance)}.`
+              : "";
+            const triggeredAt = stopLoss.triggered_at ? ` Triggered at ${stopLoss.triggered_at}.` : "";
+            const stateLabel = stopLoss.triggered ? "<strong>triggered</strong>" : "active";
+            stopLossBlock = `
+              <div class="status" style="margin-top: 1rem;">
+                Stop loss ${stateLabel} at ${threshold}.${drawdown}${baseline}${triggeredAt}
+              </div>
+            `;
+          }
+
           return `
             <section class="card" data-account="${account.name}">
               <div class="card-header" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
@@ -1063,6 +1587,8 @@
                   <span class="value ${Number(account.unrealized_pnl) >= 0 ? "gain" : "loss"}">${formatCurrency(account.unrealized_pnl)}</span>
                 </div>
               </div>
+              ${performanceBlock}
+              ${stopLossBlock}
               ${accountMetricsTable}
               ${exposuresTable}
               <div class="report-actions" style="margin: 1.5rem 0;">
@@ -1075,6 +1601,25 @@
           `;
         })
         .join("");
+
+      const meta = snapshot.accounts_meta || {};
+      lastAccountsMeta = meta;
+      if (typeof meta.page === "number") {
+        state.accounts.page = meta.page;
+      }
+      if (typeof meta.page_size === "number") {
+        state.accounts.pageSize = meta.page_size;
+      }
+      if (typeof meta.sort_key === "string") {
+        state.accounts.sortKey = meta.sort_key;
+      }
+      if (typeof meta.sort_order === "string") {
+        state.accounts.sortOrder = meta.sort_order;
+      }
+      updateAccountsSummary(meta, accountsData.length);
+      updateAccountsPagination(meta);
+      applyAccountsControlsFromState();
+      persistState();
     };
 
     const setReportStatus = (accountName, message, variant = "info") => {
@@ -1158,7 +1703,7 @@
 
     const renderAlerts = (snapshot) => {
       const alertsContainer = document.querySelector(
-        '[data-page-section="alerts"] [data-alerts]'
+        '[data-page-section="alerts"] [data-alerts]',
       );
       if (!alertsContainer) {
         return;
@@ -1187,7 +1732,7 @@
 
     const renderNotifications = (snapshot) => {
       const notificationsContainer = document.querySelector(
-        '[data-page-section="alerts"] [data-notifications]'
+        '[data-page-section="alerts"] [data-notifications]',
       );
       if (!notificationsContainer) {
         return;
@@ -1215,6 +1760,7 @@
     };
 
     const renderSnapshot = (snapshot) => {
+      latestSnapshot = snapshot;
       const generatedAtEl = document.querySelector("[data-generated-at]");
       if (generatedAtEl && snapshot.generated_at) {
         generatedAtEl.textContent = new Date(snapshot.generated_at).toLocaleString();
@@ -1225,20 +1771,59 @@
       renderNotifications(snapshot);
     };
 
-    async function poll() {
+    const buildSnapshotParams = () => {
+      const params = new URLSearchParams();
+      const accountsState = state.accounts;
+      const page = Math.max(1, Number(accountsState.page || 1));
+      params.set("page", String(page));
+      params.set("page_size", String(Math.max(1, Number(accountsState.pageSize || DEFAULT_ACCOUNTS_STATE.pageSize))));
+      if (accountsState.search) {
+        params.set("search", accountsState.search);
+      }
+      if (accountsState.exposure && accountsState.exposure !== "any") {
+        params.set("exposure", accountsState.exposure);
+      }
+      if (accountsState.sortKey && accountsState.sortKey !== DEFAULT_SORT_KEY) {
+        params.set("sort", accountsState.sortKey);
+      }
+      if (accountsState.sortOrder && accountsState.sortOrder !== DEFAULT_SORT_ORDER) {
+        params.set("sort_order", accountsState.sortOrder);
+      }
+      return params;
+    };
+
+    const fetchSnapshot = async () => {
+      const params = buildSnapshotParams();
+      const query = params.toString();
+      const url = query ? `/api/snapshot?${query}` : "/api/snapshot";
+      const response = await fetch(url, { credentials: "include" });
+      if (!response.ok) {
+        throw new Error(`Snapshot request failed (${response.status})`);
+      }
+      return response.json();
+    };
+
+    const requestSnapshot = async () => {
+      if (isFetchingSnapshot) {
+        fetchQueued = true;
+        return;
+      }
+      isFetchingSnapshot = true;
       try {
-        const response = await fetch("/api/snapshot", { credentials: "include" });
-        if (!response.ok) {
-          return;
-        }
-        const snapshot = await response.json();
+        const snapshot = await fetchSnapshot();
         renderSnapshot(snapshot);
       } catch (error) {
         console.error("Failed to refresh snapshot", error);
+      } finally {
+        isFetchingSnapshot = false;
+        if (fetchQueued) {
+          fetchQueued = false;
+          requestSnapshot();
+        }
       }
-    }
+    };
 
-    async function triggerKillSwitch(accountName, button, symbol) {
+    const triggerKillSwitch = async (accountName, button, symbol) => {
       let endpoint = "/api/kill-switch";
       let statusSelector = '[data-kill-status="__portfolio__"]';
       if (accountName) {
@@ -1276,7 +1861,7 @@
           statusEl.textContent = "Kill switch executed.";
           statusEl.classList.add("success");
         }
-        await poll();
+        await requestSnapshot();
       } catch (error) {
         console.error(error);
         if (statusEl) {
@@ -1286,6 +1871,103 @@
       } finally {
         if (button) button.disabled = false;
       }
+    };
+
+    if (searchInput) {
+      searchInput.addEventListener("input", (event) => {
+        const { value } = event.target;
+        if (searchDebounceHandle) {
+          window.clearTimeout(searchDebounceHandle);
+        }
+        searchDebounceHandle = window.setTimeout(() => {
+          state.accounts.search = value.trim();
+          state.accounts.page = 1;
+          persistState();
+          requestSnapshot();
+        }, 250);
+      });
+    }
+
+    if (exposureSelect) {
+      exposureSelect.addEventListener("change", () => {
+        state.accounts.exposure = exposureSelect.value || "any";
+        state.accounts.page = 1;
+        persistState();
+        requestSnapshot();
+      });
+    }
+
+    if (pageSizeSelect) {
+      pageSizeSelect.addEventListener("change", () => {
+        const parsed = Number.parseInt(pageSizeSelect.value, 10);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+          return;
+        }
+        state.accounts.pageSize = parsed;
+        state.accounts.page = 1;
+        persistState();
+        requestSnapshot();
+      });
+    }
+
+    hideEmptyChips.forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const key = chip.getAttribute("data-hide-empty");
+        if (!key) {
+          return;
+        }
+        const current = Boolean(state.accounts.hideEmpty?.[key]);
+        state.accounts.hideEmpty[key] = !current;
+        persistState();
+        updateHideEmptyChips();
+        if (latestSnapshot) {
+          renderAccounts(latestSnapshot);
+        }
+      });
+    });
+
+    sortButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const key = button.getAttribute("data-sort-key");
+        if (!key) {
+          return;
+        }
+        if (state.accounts.sortKey === key) {
+          state.accounts.sortOrder = state.accounts.sortOrder === "asc" ? "desc" : "asc";
+        } else {
+          state.accounts.sortKey = key;
+          state.accounts.sortOrder = key === "name" ? "asc" : DEFAULT_SORT_ORDER;
+        }
+        state.accounts.page = 1;
+        updateSortButtons();
+        persistState();
+        requestSnapshot();
+      });
+    });
+
+    if (paginationContainer) {
+      paginationContainer.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-page]");
+        if (!button || button.hasAttribute("disabled")) {
+          return;
+        }
+        const direction = button.getAttribute("data-page");
+        if (!direction) {
+          return;
+        }
+        const meta = lastAccountsMeta || {};
+        const currentPage = Number(state.accounts.page || meta.page || 1);
+        const totalPages = Math.max(1, Number(meta.pages || currentPage));
+        if (direction === "prev" && currentPage > 1) {
+          state.accounts.page = currentPage - 1;
+        } else if (direction === "next" && currentPage < totalPages) {
+          state.accounts.page = currentPage + 1;
+        } else if (direction === "next") {
+          state.accounts.page = currentPage + 1;
+        }
+        persistState();
+        requestSnapshot();
+      });
     }
 
     document.addEventListener("click", (event) => {
@@ -1314,7 +1996,9 @@
       }
     });
 
-    setInterval(poll, REFRESH_INTERVAL_MS);
-    poll();
+    setInterval(() => {
+      requestSnapshot();
+    }, REFRESH_INTERVAL_MS);
+    requestSnapshot();
   </script>
 {% endblock %}

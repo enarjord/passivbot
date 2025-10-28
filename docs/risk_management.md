@@ -59,3 +59,14 @@ While correlation is observed in most markets in general and in crypto markets i
 
 A thousand coin flips will converge on 500 heads and 500 tails. One single coin flip will be either heads or tails. So it may be more desirable to end up with 3 out of 10 bots stuck, each with wallet_exposure==0.1, than with 1 single bot stuck with wallet_exposure==1.0.
 
+## Dashboard controls
+
+The risk dashboard now ships with a persistent controls bar above the accounts list. Operators can:
+
+* Search for accounts or symbols using the free-text search input.
+* Filter accounts by exposure profile (gross activity, net-long, net-short, or flat).
+* Hide empty exposures, positions, or order tables via toggle chips to reduce on-screen noise.
+* Change the page size and navigate through paginated account results with sortable column headers.
+
+All chosen options are saved in the browser so the view is restored after refreshes, and the backend API honours the same filters to avoid transferring unused account data.
+
