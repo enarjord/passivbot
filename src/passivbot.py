@@ -165,6 +165,32 @@ def snake_of(type_id: int) -> str:
 # Legacy EMA helper removed; CandlestickManager provides EMA utilities
 
 
+def _trailing_bundle_tuple_to_dict(bundle_tuple: tuple[float, float, float, float]) -> dict:
+    min_since_open, max_since_min, max_since_open, min_since_max = bundle_tuple
+    return {
+        "min_since_open": float(min_since_open),
+        "max_since_min": float(max_since_min),
+        "max_since_open": float(max_since_open),
+        "min_since_max": float(min_since_max),
+    }
+
+
+def _trailing_bundle_default_dict() -> dict:
+    return _trailing_bundle_tuple_to_dict(pbr.trailing_bundle_default_py())
+
+
+def _trailing_bundle_from_arrays(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray) -> dict:
+    if highs.size == 0:
+        return _trailing_bundle_default_dict()
+    bundle_tuple = pbr.update_trailing_bundle_py(
+        np.asarray(highs, dtype=np.float64),
+        np.asarray(lows, dtype=np.float64),
+        np.asarray(closes, dtype=np.float64),
+        bundle=None,
+    )
+    return _trailing_bundle_tuple_to_dict(bundle_tuple)
+
+
 def calc_pnl(position_side, entry_price, close_price, qty, inverse, c_mult):
     """Calculate trade PnL by delegating to the appropriate Rust helper."""
     try:
@@ -1268,20 +1294,9 @@ class Passivbot:
 
         # Initialize containers for all symbols first
         for symbol in symbols:
-            # Initialize containers
             self.trailing_prices[symbol] = {
-                "long": {
-                    "max_since_open": 0.0,
-                    "min_since_max": np.inf,
-                    "min_since_open": np.inf,
-                    "max_since_min": 0.0,
-                },
-                "short": {
-                    "max_since_open": 0.0,
-                    "min_since_max": np.inf,
-                    "min_since_open": np.inf,
-                    "max_since_min": 0.0,
-                },
+                "long": _trailing_bundle_default_dict(),
+                "short": _trailing_bundle_default_dict(),
             }
 
         # Build concurrent fetches per symbol that has position changes
@@ -1313,29 +1328,21 @@ class Passivbot:
         for symbol, arr in results.items():
             if arr is None or arr.size == 0:
                 continue
+            if symbol not in last_position_changes:
+                continue
             arr = np.sort(arr, order="ts")
             for pside, changed_ts in last_position_changes[symbol].items():
-                for row in arr:
-                    ts = int(row["ts"])  # only after change
-                    if ts <= int(changed_ts):
-                        continue
-                    high = float(row["h"]) if "h" in row.dtype.names else float("nan")
-                    low = float(row["l"]) if "l" in row.dtype.names else float("nan")
-                    close = float(row["c"]) if "c" in row.dtype.names else float("nan")
-                    if high > self.trailing_prices[symbol][pside]["max_since_open"]:
-                        self.trailing_prices[symbol][pside]["max_since_open"] = high
-                        self.trailing_prices[symbol][pside]["min_since_max"] = close
-                    else:
-                        self.trailing_prices[symbol][pside]["min_since_max"] = min(
-                            self.trailing_prices[symbol][pside]["min_since_max"], low
-                        )
-                    if low < self.trailing_prices[symbol][pside]["min_since_open"]:
-                        self.trailing_prices[symbol][pside]["min_since_open"] = low
-                        self.trailing_prices[symbol][pside]["max_since_min"] = close
-                    else:
-                        self.trailing_prices[symbol][pside]["max_since_min"] = max(
-                            self.trailing_prices[symbol][pside]["max_since_min"], high
-                        )
+                mask = arr["ts"] > int(changed_ts)
+                if not np.any(mask):
+                    continue
+                subset = arr[mask]
+                try:
+                    bundle = _trailing_bundle_from_arrays(subset["h"], subset["l"], subset["c"])
+                    self.trailing_prices[symbol][pside] = bundle
+                except Exception as e:
+                    logging.info(
+                        f"debug: failed to compute trailing bundle for {symbol} {pside}: {e}"
+                    )
 
     def symbol_is_eligible(self, symbol):
         """Return True when the symbol passes exchange-specific eligibility rules."""
@@ -1642,10 +1649,12 @@ class Passivbot:
         """Check whether the symbol meets the effective minimum cost requirement."""
         if not self.live_value("filter_by_min_effective_cost"):
             return True
+        base_limit = self.get_wallet_exposure_limit(pside, symbol)
+        allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
+        allowance_multiplier = 1.0 + max(0.0, allowance_pct)
+        effective_limit = base_limit * allowance_multiplier
         return (
-            self.balance
-            * self.get_wallet_exposure_limit(pside, symbol)
-            * self.bp(pside, "entry_initial_qty_pct", symbol)
+            self.balance * effective_limit * self.bp(pside, "entry_initial_qty_pct", symbol)
             >= self.effective_min_cost[symbol]
         )
 
@@ -2217,11 +2226,10 @@ class Passivbot:
                 if new["size"] != 0
                 else 0.0
             )
-            try:
-                wel = self.bp(pside, "wallet_exposure_limit", symbol)
-                WE_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
-            except:
-                WE_ratio = 0.0
+            wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
+            allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
+            effective_wel = wel * (1.0 + max(0.0, allowance_pct))
+            WE_ratio = wallet_exposure / effective_wel if effective_wel > 0.0 else 0.0
 
             last_price = await self.cm.get_current_close(symbol, max_age_ms=60_000)
             try:
