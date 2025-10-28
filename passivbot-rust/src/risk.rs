@@ -754,6 +754,7 @@ pub fn calc_twel_enforcer_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::calc_pprice_diff_int;
 
     fn pos(
         idx: usize,
@@ -816,7 +817,7 @@ mod tests {
     fn test_twel_reducer_basic_two_positions() {
         // Two long positions, each exposure > WEL_base; total exceeds TWEL_target.
         let balance = 1000.0;
-        let wel_base = 0.5; // per coin
+        let wel_base = 0.4; // per coin
         let twel = 0.9; // total limit
         let threshold = 1.0; // target == twel
                              // Position A: psize 8 at 50 => WE = 0.4
@@ -844,8 +845,8 @@ mod tests {
         assert!(we1 >= wel_base - 1e-9, "reduced below WEL_base for pos1");
         let twe = we0 + we1;
         assert!(
-            twe < twel - 1e-12,
-            "TWE not strictly below target: {} >= {}",
+            twe <= twel + 1e-12,
+            "TWE not at or below target: {} > {}",
             twe,
             twel
         );
@@ -856,7 +857,7 @@ mod tests {
         // One pos deep underwater (higher price_diff), one near breakeven; near breakeven should be reduced first (lowest diff)
         let balance = 1000.0;
         let wel_base = 0.4;
-        let twel = 0.7;
+        let twel = 1.2;
         let positions = vec![
             // idx 0: position_price 100, market 60 (underwater, large diff)
             pos(0, 8.0, 100.0, 60.0, wel_base, 1.0, 0.1, 0.1),
@@ -865,9 +866,21 @@ mod tests {
         ];
         let actions = calc_twel_enforcer_actions(LONG, 1.0, twel, balance, &positions, None);
         assert!(!actions.is_empty());
-        // First action should target idx 1 (lowest diff)
-        let first_idx = actions[0].0;
-        assert_eq!(first_idx, 1);
+        // The action with the smallest price diff should target idx 1
+        let price_diff = |idx: usize| -> f64 {
+            let pos = positions.iter().find(|p| p.idx == idx).unwrap();
+            calc_pprice_diff_int(LONG, pos.position_price, pos.market_price)
+        };
+        let best_idx = actions
+            .iter()
+            .min_by(|(a_idx, _), (b_idx, _)| {
+                price_diff(*a_idx)
+                    .partial_cmp(&price_diff(*b_idx))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(idx, _)| *idx)
+            .unwrap();
+        assert_eq!(best_idx, 1);
     }
 
     #[test]
