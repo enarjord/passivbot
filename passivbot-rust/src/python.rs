@@ -201,7 +201,8 @@ pub fn calc_unstucking_close_py(
     positions: &Bound<'_, PyList>,
 ) -> PyResult<Option<(usize, usize, f64, f64, u16)>> {
     let positions = positions.as_ref();
-    let mut inputs: Vec<UnstuckPositionInput> = Vec::with_capacity(positions.len()?);
+    let positions_len = positions.len()?;
+    let mut inputs: Vec<UnstuckPositionInput> = Vec::with_capacity(positions_len);
     for item in positions.iter()? {
         let item = item?;
         let dict = item.downcast::<PyDict>()?;
@@ -384,9 +385,9 @@ mod tests {
 pub fn run_backtest(
     hlcvs: PyReadonlyArray3<f64>, // Shared HLCV data (timesteps x coins x features)
     btc_usd: PyReadonlyArray1<f64>, // Shared BTC/USD collateral prices
-    bot_params: &PyAny,           // Bot parameters per coin
-    exchange_params_list: &PyAny, // Exchange parameters
-    backtest_params_dict: &PyDict, // Backtest parameters
+    bot_params: &Bound<'_, PyAny>, // Bot parameters per coin
+    exchange_params_list: &Bound<'_, PyAny>, // Exchange parameters
+    backtest_params_dict: &Bound<'_, PyDict>, // Backtest parameters
 ) -> PyResult<(PyObject, PyObject, Py<PyDict>, Py<PyDict>)> {
     let hlcvs_rust = hlcvs.as_array();
     let btc_usd_rust = btc_usd.as_array();
@@ -407,40 +408,34 @@ pub fn run_backtest(
         )));
     }
 
-    let bot_params_py_list = bot_params
+    let bot_params_py_list_bound = bot_params
         .downcast::<PyList>()
         .map_err(|_| PyValueError::new_err("bot_params must be a list[dict] (one per coin)"))?;
+    let bot_params_py_list = bot_params_py_list_bound.as_gil_ref();
 
-    let mut bot_params_vec = Vec::with_capacity(bot_params_py_list.len());
-    for item in bot_params_py_list {
+    let bot_params_len = bot_params_py_list.len();
+    let mut bot_params_vec = Vec::with_capacity(bot_params_len);
+    for item in bot_params_py_list.iter() {
         let dict = item
             .downcast::<PyDict>()
             .map_err(|_| PyValueError::new_err("each bot_params element must be a dict"))?;
         bot_params_vec.push(bot_params_pair_from_dict(dict)?);
     }
 
-    let exchange_params = {
-        let mut params_vec = Vec::new();
-        if let Ok(py_list) = exchange_params_list.downcast::<PyList>() {
-            for py_dict in py_list.iter() {
-                if let Ok(dict) = py_dict.downcast::<PyDict>() {
-                    let params = exchange_params_from_dict(dict)?;
-                    params_vec.push(params);
-                } else {
-                    return Err(PyValueError::new_err(
-                        "Unsupported data type in exchange_params_list",
-                    ));
-                }
-            }
-        } else {
-            return Err(PyValueError::new_err(
-                "Unsupported data type for exchange_params_list",
-            ));
-        }
-        params_vec
-    };
+    let exchange_params_list_bound = exchange_params_list
+        .downcast::<PyList>()
+        .map_err(|_| PyValueError::new_err("Unsupported data type for exchange_params_list"))?;
+    let exchange_params_list = exchange_params_list_bound.as_gil_ref();
+    let list_len = exchange_params_list.len();
+    let mut exchange_params = Vec::with_capacity(list_len);
+    for item in exchange_params_list.iter() {
+        let dict = item
+            .downcast::<PyDict>()
+            .map_err(|_| PyValueError::new_err("Unsupported data type in exchange_params_list"))?;
+        exchange_params.push(exchange_params_from_dict(dict)?);
+    }
 
-    let backtest_params = backtest_params_from_dict(backtest_params_dict)?;
+    let backtest_params = backtest_params_from_dict(backtest_params_dict.as_gil_ref())?;
     let metrics_only = backtest_params.metrics_only;
     let mut backtest = Backtest::new(
         &hlcvs_rust,
@@ -462,8 +457,8 @@ pub fn run_backtest(
             return Ok((
                 py.None().into_py(py),
                 py.None().into_py(py),
-                py_analysis_usd.into(),
-                py_analysis_btc.into(),
+                py_analysis_usd,
+                py_analysis_btc,
             ));
         }
         let mut py_fills = Array2::from_elem((fills.len(), 14), py.None());
@@ -497,29 +492,28 @@ pub fn run_backtest(
         Ok((
             fills_array.into_py(py),
             equities_array.into_py(py),
-            py_analysis_usd.into(),
-            py_analysis_btc.into(),
+            py_analysis_usd,
+            py_analysis_btc,
         ))
     })
 }
 
-fn struct_to_py_dict<'py, T: Serialize + ?Sized>(
-    py: Python<'py>,
-    obj: &T,
-) -> PyResult<&'py PyDict> {
+fn struct_to_py_dict<T: Serialize + ?Sized>(py: Python<'_>, obj: &T) -> PyResult<Py<PyDict>> {
     // Convert struct to JSON string
     let json_str = serde_json::to_string(obj).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("JSON serialization error: {}", e))
     })?;
 
     // Use Python's json module to convert to a Python dict
-    let json = py.import("json")?;
-    let py_obj = json.call_method1("loads", (json_str,))?;
+    let json = py.import_bound("json")?;
+    let py_obj_any = json.call_method1("loads", (json_str,))?.unbind();
+    let py_obj_bound = py_obj_any.bind(py);
 
     // Convert to PyDict
-    py_obj.downcast::<PyDict>().map_err(|_| {
+    let py_dict_bound = py_obj_bound.downcast::<PyDict>().map_err(|_| {
         PyErr::new::<pyo3::exceptions::PyTypeError, _>("Failed to convert to Python dict")
-    })
+    })?;
+    Ok(py_dict_bound.clone().unbind())
 }
 
 fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
@@ -1426,9 +1420,10 @@ pub fn calc_twel_enforcer_orders_py(
     total_wallet_exposure_limit: f64,
     effective_n_positions: usize,
     balance: f64,
-    positions: &PyList,
+    positions: &Bound<'_, PyList>,
     skip_idx: Option<usize>,
 ) -> PyResult<Vec<(usize, f64, f64, u16)>> {
+    let positions = positions.as_ref();
     let side_code = match side {
         "long" => LONG,
         "short" => SHORT,
@@ -1438,8 +1433,10 @@ pub fn calc_twel_enforcer_orders_py(
             ))
         }
     };
-    let mut parsed_positions: Vec<TwelEnforcerInputPosition> = Vec::with_capacity(positions.len());
-    for item in positions {
+    let positions_len = positions.len()?;
+    let mut parsed_positions: Vec<TwelEnforcerInputPosition> = Vec::with_capacity(positions_len);
+    for item in positions.iter()? {
+        let item = item?;
         let dict = item.downcast::<PyDict>()?;
         parsed_positions.push(TwelEnforcerInputPosition {
             idx: dict
@@ -1518,12 +1515,12 @@ pub fn order_type_id_to_snake(id: u16) -> PyResult<String> {
 #[pyfunction]
 pub fn all_order_types_ids(py: Python<'_>) -> PyResult<Py<PyDict>> {
     use strum::IntoEnumIterator;
-    let d = PyDict::new(py);
+    let d = PyDict::new_bound(py);
     for ot in OrderType::iter() {
         let id: u16 = ot.into();
         d.set_item(id, ot.to_string())?;
     }
-    Ok(d.into())
+    Ok(d.unbind())
 }
 
 #[pyfunction]
