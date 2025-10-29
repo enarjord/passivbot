@@ -2868,134 +2868,178 @@ class Passivbot:
         allow_new_unstuck = not self.has_open_unstuck_order()
         ideal_orders = await self.calc_ideal_orders(allow_unstuck=allow_new_unstuck)
 
-        # Sanity check: ideal orders should contain at most one unstuck order
         unstuck_names = {"close_unstuck_long", "close_unstuck_short"}
-        unstuck_ideal_count = 0
-        for orders in ideal_orders.values():
-            for order in orders:
-                custom_id = order.get("custom_id", "")
-                order_type_id = try_decode_type_id_from_custom_id(custom_id)
-                if order_type_id is None:
-                    continue
-                if snake_of(order_type_id) in unstuck_names:
-                    unstuck_ideal_count += 1
-        if unstuck_ideal_count > 1:
-            logging.warning(
-                "ideal_orders contains %s unstuck orders; trimming to one", unstuck_ideal_count
-            )
-            # keep the first encountered order, drop the rest
-            keep_one = True
-            for symbol, orders in ideal_orders.items():
-                new_orders = []
-                for order in orders:
-                    custom_id = order.get("custom_id", "")
-                    order_type_id = try_decode_type_id_from_custom_id(custom_id)
-                    order_type = snake_of(order_type_id) if order_type_id is not None else ""
-                    if order_type in unstuck_names:
-                        if keep_one:
-                            new_orders.append(order)
-                            keep_one = False
-                        else:
-                            continue
-                    else:
-                        new_orders.append(order)
-                ideal_orders[symbol] = new_orders
-        actual_orders = {}
-        for symbol in self.active_symbols:
-            actual_orders[symbol] = []
-            for x in self.open_orders[symbol] if symbol in self.open_orders else []:
-                try:
-                    actual_orders[symbol].append(
-                        {
-                            "symbol": x["symbol"],
-                            "side": x["side"],
-                            "position_side": x["position_side"],
-                            "qty": abs(x["qty"]),
-                            "price": x["price"],
-                            "reduce_only": (x["position_side"] == "long" and x["side"] == "sell")
-                            or (x["position_side"] == "short" and x["side"] == "buy"),
-                            "id": x.get("id"),
-                            "custom_id": x.get("custom_id"),
-                        }
-                    )
-                except Exception as e:
-                    logging.error(f"error in calc_orders_to_cancel_and_create {e}")
-                    traceback.print_exc()
-                    print(x)
+        ideal_orders = self._trim_extra_unstuck_orders(ideal_orders, unstuck_names)
+
+        actual_orders = self._snapshot_actual_orders()
         keys = ("symbol", "side", "position_side", "qty", "price")
         to_cancel, to_create = [], []
-        for symbol in actual_orders:
-            # Some symbols may have no ideal orders for this cycle; treat as empty list
+        for symbol, symbol_orders in actual_orders.items():
             ideal_list = ideal_orders.get(symbol, []) if isinstance(ideal_orders, dict) else []
-            to_cancel_, to_create_ = filter_orders(actual_orders[symbol], ideal_list, keys)
-            seen_unstuck = False
-            filtered_to_create = []
-            for order in to_create_:
+            cancel_, create_ = self._reconcile_symbol_orders(
+                symbol, symbol_orders, ideal_list, keys, unstuck_names
+            )
+            to_cancel += cancel_
+            to_create += create_
+
+        to_cancel = await self._sort_orders_by_market_diff(to_cancel, "to_cancel")
+        to_create = await self._sort_orders_by_market_diff(to_create, "to_create")
+        return to_cancel, to_create
+
+    def _trim_extra_unstuck_orders(
+        self, ideal_orders: dict, unstuck_names: set[str]
+    ) -> dict[str, list[dict]]:
+        """Ensure at most one unstuck order exists across all symbols."""
+        trimmed: dict[str, list[dict]] = {}
+        allow_unstuck = True
+        for symbol, orders in ideal_orders.items():
+            new_orders = []
+            for order in orders:
                 custom_id = order.get("custom_id", "")
                 order_type_id = try_decode_type_id_from_custom_id(custom_id)
                 order_type = snake_of(order_type_id) if order_type_id is not None else ""
                 if order_type in unstuck_names:
-                    if seen_unstuck:
+                    if allow_unstuck:
+                        new_orders.append(order)
+                        allow_unstuck = False
+                    else:
                         continue
-                    seen_unstuck = True
-                filtered_to_create.append(order)
-            to_create_ = filtered_to_create
-            for pside in ["long", "short"]:
-                if self.PB_modes[pside][symbol] == "manual":
-                    # neither create nor cancel orders
-                    to_cancel_ = [x for x in to_cancel_ if x["position_side"] != pside]
-                    to_create_ = [x for x in to_create_ if x["position_side"] != pside]
-                elif self.PB_modes[pside][symbol] == "tp_only":
-                    # if take profit only mode, neither cancel nor create entries
-                    to_cancel_ = [
-                        x
-                        for x in to_cancel_
-                        if (
-                            x["position_side"] != pside
-                            or (x["position_side"] == pside and x["reduce_only"])
-                        )
-                    ]
-                    to_create_ = [
-                        x
-                        for x in to_create_
-                        if (
-                            x["position_side"] != pside
-                            or (x["position_side"] == pside and x["reduce_only"])
-                        )
-                    ]
-            to_cancel += to_cancel_
-            to_create += to_create_
-        to_create_with_mprice_diff = []
-        for x in to_create:
-            try:
-                market_price = await self.cm.get_current_close(x["symbol"], max_age_ms=10_000)
-                to_create_with_mprice_diff.append(
-                    (
-                        order_market_diff(x["side"], x["price"], market_price),
-                        x,
+                else:
+                    new_orders.append(order)
+            trimmed[symbol] = new_orders
+        return trimmed
+
+    def _snapshot_actual_orders(self) -> dict[str, list[dict]]:
+        """Return a normalized snapshot of currently open orders keyed by symbol."""
+        actual_orders: dict[str, list[dict]] = {}
+        for symbol in self.active_symbols:
+            symbol_orders = []
+            for order in self.open_orders.get(symbol, []):
+                try:
+                    symbol_orders.append(
+                        {
+                            "symbol": order["symbol"],
+                            "side": order["side"],
+                            "position_side": order["position_side"],
+                            "qty": abs(order["qty"]),
+                            "price": order["price"],
+                            "reduce_only": (order["position_side"] == "long" and order["side"] == "sell")
+                            or (order["position_side"] == "short" and order["side"] == "buy"),
+                            "id": order.get("id"),
+                            "custom_id": order.get("custom_id"),
+                        }
                     )
-                )
-            except Exception as e:
-                logging.info(f"debug: price missing sort to_create by mprice_diff {x} {e}")
-                to_create_with_mprice_diff.append((0.0, x))
-        to_create_with_mprice_diff.sort(key=lambda x: x[0])
-        to_cancel_with_mprice_diff = []
-        for x in to_cancel:
-            try:
-                market_price = await self.cm.get_current_close(x["symbol"], max_age_ms=10_000)
-                to_cancel_with_mprice_diff.append(
-                    (
-                        order_market_diff(x["side"], x["price"], market_price),
-                        x,
-                    )
-                )
-            except Exception as e:
-                logging.info(f"debug: price missing sort to_cancel by mprice_diff {x} {e}")
-                to_cancel_with_mprice_diff.append((0.0, x))
-        to_cancel_with_mprice_diff.sort(key=lambda x: x[0])
-        to_cancel = [x[1] for x in to_cancel_with_mprice_diff]
-        to_create = [x[1] for x in to_create_with_mprice_diff]
+                except Exception as exc:
+                    logging.error(f"error in calc_orders_to_cancel_and_create {exc}")
+                    traceback.print_exc()
+                    print(order)
+            actual_orders[symbol] = symbol_orders
+        return actual_orders
+
+    def _reconcile_symbol_orders(
+        self,
+        symbol: str,
+        actual_orders: list[dict],
+        ideal_orders: list,
+        keys: tuple[str, ...],
+        unstuck_names: set[str],
+    ) -> tuple[list[dict], list[dict]]:
+        """Return cancel/create lists for a single symbol after mode filtering."""
+        to_cancel, to_create = filter_orders(actual_orders, ideal_orders, keys)
+        to_create = self._dedupe_unstuck_orders(to_create, unstuck_names)
+        to_cancel, to_create = self._apply_mode_filters(symbol, to_cancel, to_create)
         return to_cancel, to_create
+
+    def _dedupe_unstuck_orders(
+        self, orders: list[dict], unstuck_names: set[str]
+    ) -> list[dict]:
+        """Keep at most one unstuck order within a list of orders."""
+        filtered: list[dict] = []
+        seen_unstuck = False
+        for order in orders:
+            custom_id = order.get("custom_id", "")
+            order_type_id = try_decode_type_id_from_custom_id(custom_id)
+            order_type = snake_of(order_type_id) if order_type_id is not None else ""
+            if order_type in unstuck_names:
+                if seen_unstuck:
+                    continue
+                seen_unstuck = True
+            filtered.append(order)
+        return filtered
+
+    def _apply_mode_filters(
+        self,
+        symbol: str,
+        to_cancel: list[dict],
+        to_create: list[dict],
+    ) -> tuple[list[dict], list[dict]]:
+        """Apply manual/tp_only mode rules to cancel/create order lists."""
+        for pside in ["long", "short"]:
+            mode = self.PB_modes[pside].get(symbol)
+            if mode == "manual":
+                to_cancel = [x for x in to_cancel if x["position_side"] != pside]
+                to_create = [x for x in to_create if x["position_side"] != pside]
+            elif mode == "tp_only":
+                to_cancel = [
+                    x
+                    for x in to_cancel
+                    if (
+                        x["position_side"] != pside
+                        or (x["position_side"] == pside and x["reduce_only"])
+                    )
+                ]
+                to_create = [
+                    x
+                    for x in to_create
+                    if (
+                        x["position_side"] != pside
+                        or (x["position_side"] == pside and x["reduce_only"])
+                    )
+                ]
+        return to_cancel, to_create
+
+    async def _sort_orders_by_market_diff(
+        self, orders: list[dict], log_label: str
+    ) -> list[dict]:
+        """Return orders sorted by market diff, fetching prices concurrently."""
+        if not orders:
+            return []
+        market_prices = await self._fetch_market_prices({order["symbol"] for order in orders})
+        entries = []
+        for order in orders:
+            market_price = market_prices.get(order["symbol"])
+            if market_price is None:
+                logging.info(
+                    f"debug: price missing sort {log_label} by mprice_diff {order}"
+                )
+                diff = 0.0
+            else:
+                diff = order_market_diff(order["side"], order["price"], market_price)
+            entries.append((diff, order))
+        entries.sort(key=lambda item: item[0])
+        return [order for _, order in entries]
+
+    async def _fetch_market_prices(self, symbols: set[str]) -> dict[str, float | None]:
+        """Fetch current close prices for the supplied symbols."""
+        results: dict[str, float | None] = {}
+        tasks: dict[str, asyncio.Task] = {}
+        for symbol in symbols:
+            try:
+                fetch_result = self.cm.get_current_close(symbol, max_age_ms=10_000)
+                if inspect.isawaitable(fetch_result):
+                    tasks[symbol] = asyncio.create_task(fetch_result)
+                else:
+                    results[symbol] = fetch_result
+            except Exception as exc:
+                logging.info(f"debug: failed fetching mprice for {symbol}: {exc}")
+                results[symbol] = None
+        for symbol, task in tasks.items():
+            try:
+                results[symbol] = await task
+            except Exception as exc:
+                logging.info(f"debug: failed fetching mprice for {symbol}: {exc}")
+                results[symbol] = None
+        return results
 
     async def restart_bot_on_too_many_errors(self):
         """Restart the bot if the hourly execution error budget is exhausted."""
