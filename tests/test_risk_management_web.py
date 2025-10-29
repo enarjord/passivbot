@@ -47,7 +47,7 @@ def _patch_httpx_for_starlette() -> None:
 _patch_httpx_for_starlette()
 
 
-class StubFetcher:
+class StubRiskService:
     def __init__(
         self,
         snapshot: dict,
@@ -75,7 +75,7 @@ class StubFetcher:
     async def close(self) -> None:
         self.closed = True
 
-    async def execute_kill_switch(
+    async def trigger_kill_switch(
         self,
         account_name: Optional[str] = None,
         symbol: Optional[str] = None,
@@ -241,8 +241,8 @@ def create_test_app(
     auth_manager: AuthManager,
     *,
     kill_switch_responses: Optional[List[dict]] = None,
-) -> tuple[TestClient, StubFetcher]:
-    fetcher = StubFetcher(snapshot, kill_switch_responses=kill_switch_responses)
+    ) -> tuple[TestClient, StubRiskService]:
+    fetcher = StubRiskService(snapshot, kill_switch_responses=kill_switch_responses)
     service = RiskDashboardService(fetcher)  # type: ignore[arg-type]
     config = RealtimeConfig(accounts=[AccountConfig(name="Demo", exchange="binance", credentials={})])
     app = create_app(config, service=service, auth_manager=auth_manager)
@@ -635,7 +635,7 @@ def test_close_all_positions_endpoint(sample_snapshot: dict, auth_manager: AuthM
 
 
 def test_letsencrypt_challenge_mount(tmp_path: Path, auth_manager: AuthManager) -> None:
-    fetcher = StubFetcher({"generated_at": "", "accounts": [], "alert_thresholds": {}, "notification_channels": []})
+    fetcher = StubRiskService({"generated_at": "", "accounts": [], "alert_thresholds": {}, "notification_channels": []})
     service = RiskDashboardService(fetcher)  # type: ignore[arg-type]
     config = RealtimeConfig(accounts=[AccountConfig(name="Demo", exchange="binance", credentials={})])
     challenge_dir = tmp_path / "acme"
