@@ -81,20 +81,29 @@ def _install_passivbot_rust_stub():
     stub.calc_closes_short_py = lambda *args, **kwargs: []
     stub.calc_unstucking_close_py = lambda *args, **kwargs: None
 
-    stub.get_order_id_type_from_string = lambda name: {
+    _order_map = {
         "close_unstuck_long": 0x1234,
         "close_unstuck_short": 0x1235,
-    }.get(name, 0)
+        "entry_initial_normal_long": 0x2001,
+        "entry_initial_normal_short": 0x2002,
+        "entry_grid_normal_long": 0x2003,
+        "entry_grid_normal_short": 0x2004,
+        "close_grid_long": 0x3001,
+        "close_grid_short": 0x3002,
+        "close_auto_reduce_wel_long": 0x3003,
+        "close_auto_reduce_wel_short": 0x3004,
+        "close_panic_long": 0x3005,
+        "close_panic_short": 0x3006,
+    }
+    stub.get_order_id_type_from_string = lambda name: _order_map.get(name, 0)
     stub.order_type_id_to_snake = lambda type_id: {
-        0x1234: "close_unstuck_long",
-        0x1235: "close_unstuck_short",
+        v: k for k, v in _order_map.items()
     }.get(type_id, "other")
-    stub.order_type_snake_to_id = lambda name: {
-        "close_unstuck_long": 0x1234,
-        "close_unstuck_short": 0x1235,
-    }.get(name, 0)
+    stub.order_type_snake_to_id = lambda name: _order_map.get(name, 0)
 
     stub.run_backtest = lambda *args, **kwargs: {}
+    stub.gate_entries_by_twel_py = lambda *args, **kwargs: []
+    stub.calc_twel_enforcer_orders_py = lambda *args, **kwargs: []
 
     sys.modules["passivbot_rust"] = stub
 
