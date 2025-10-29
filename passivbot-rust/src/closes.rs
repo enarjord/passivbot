@@ -2,7 +2,9 @@ use crate::entries::{calc_min_entry_qty, wallet_exposure_limit_with_allowance};
 use crate::types::{
     BotParams, ExchangeParams, Order, OrderType, Position, StateParams, TrailingPriceBundle,
 };
-use crate::utils::{calc_wallet_exposure, cost_to_qty, round_, round_dn, round_up};
+use crate::utils::{
+    calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty, round_, round_dn, round_up,
+};
 
 pub fn calc_close_qty(
     exchange_params: &ExchangeParams,
@@ -895,13 +897,15 @@ pub fn calc_closes_long(
             size: psize,
             price: position.price,
         };
-        let close = calc_next_close_long(
+        let mut close = calc_next_close_long(
             exchange_params,
             &state_params,
             bot_params,
             &position_mod,
             &trailing_price_bundle,
         );
+        close.price = quantize_price(close.price, exchange_params.price_step);
+        close.qty = quantize_qty(close.qty, exchange_params.qty_step);
         if close.qty == 0.0 {
             break;
         }
@@ -920,6 +924,9 @@ pub fn calc_closes_long(
                     price: close.price,
                     order_type: close.order_type,
                 };
+                let mut merged_close = merged_close;
+                merged_close.price = quantize_price(merged_close.price, exchange_params.price_step);
+                merged_close.qty = quantize_qty(merged_close.qty, exchange_params.qty_step);
                 closes.push(merged_close);
                 continue;
             }
@@ -944,13 +951,15 @@ pub fn calc_closes_short(
             size: psize,
             price: position.price,
         };
-        let close = calc_next_close_short(
+        let mut close = calc_next_close_short(
             exchange_params,
             &state_params,
             bot_params,
             &position_mod,
             &trailing_price_bundle,
         );
+        close.price = quantize_price(close.price, exchange_params.price_step);
+        close.qty = quantize_qty(close.qty, exchange_params.qty_step);
         if close.qty == 0.0 {
             break;
         }
@@ -969,6 +978,9 @@ pub fn calc_closes_short(
                     price: close.price,
                     order_type: close.order_type,
                 };
+                let mut merged_close = merged_close;
+                merged_close.price = quantize_price(merged_close.price, exchange_params.price_step);
+                merged_close.qty = quantize_qty(merged_close.qty, exchange_params.qty_step);
                 closes.push(merged_close);
                 continue;
             }

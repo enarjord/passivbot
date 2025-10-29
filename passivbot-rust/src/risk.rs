@@ -3,7 +3,8 @@ use crate::entries::calc_min_entry_qty;
 use crate::types::{ExchangeParams, Order, OrderType};
 use crate::utils::{
     calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, calc_pprice_diff_int,
-    calc_pside_price_diff_int, calc_wallet_exposure, cost_to_qty, round_dn, round_up,
+    calc_pside_price_diff_int, calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty,
+    round_dn, round_up,
 };
 use std::collections::HashMap;
 
@@ -862,13 +863,16 @@ pub fn calc_twel_enforcer_actions(
             SHORT => OrderType::CloseAutoReduceTwelShort,
             _ => OrderType::Empty,
         };
+        let mut order = Order {
+            qty,
+            price,
+            order_type,
+        };
+        order.price = quantize_price(order.price, candidate.price_step);
+        order.qty = quantize_qty(order.qty, candidate.qty_step);
         actions.push((
             candidate.idx,
-            Order {
-                qty,
-                price,
-                order_type,
-            },
+            order,
         ));
     }
     actions

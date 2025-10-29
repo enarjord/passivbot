@@ -7,6 +7,7 @@ try:
 except Exception:  # pragma: no cover - exercised when rust extension missing
     pbr = None
 
+pbr_is_stub = bool(getattr(pbr, "__is_stub__", False)) if pbr is not None else False
 
 def _build_position(
     *,
@@ -55,14 +56,18 @@ def _build_position(
     }
 
 
-@pytest.mark.skipif(pbr is None, reason="passivbot_rust extension not available")
+@pytest.mark.skipif(
+    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
+)
 def test_unstucking_returns_none_when_allowance_zero():
     positions = [_build_position()]
     result = pbr.calc_unstucking_close_py(1000.0, 0.0, 0.0, positions)
     assert result is None
 
 
-@pytest.mark.skipif(pbr is None, reason="passivbot_rust extension not available")
+@pytest.mark.skipif(
+    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
+)
 def test_unstucking_emits_long_order_when_triggered():
     positions = [
         _build_position(
@@ -84,7 +89,9 @@ def test_unstucking_emits_long_order_when_triggered():
     assert math.isclose(qty, expected_qty, rel_tol=1e-9)
 
 
-@pytest.mark.skipif(pbr is None, reason="passivbot_rust extension not available")
+@pytest.mark.skipif(
+    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
+)
 def test_unstucking_emits_short_order_when_triggered():
     positions = [
         _build_position(

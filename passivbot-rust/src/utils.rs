@@ -30,6 +30,22 @@ pub fn round_dn(n: f64, step: f64) -> f64 {
     round_to_decimal_places(result, 10)
 }
 
+pub fn quantize_price(price: f64, price_step: f64) -> f64 {
+    if price_step > 0.0 && price.is_finite() {
+        round_(price, price_step)
+    } else {
+        price
+    }
+}
+
+pub fn quantize_qty(qty: f64, qty_step: f64) -> f64 {
+    if qty_step > 0.0 && qty.is_finite() {
+        round_(qty, qty_step)
+    } else {
+        qty
+    }
+}
+
 #[pyfunction]
 pub fn round_dynamic(n: f64, d: i32) -> f64 {
     if n == 0.0 {

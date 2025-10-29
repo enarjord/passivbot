@@ -23,6 +23,7 @@ def _install_passivbot_rust_stub():
         pass
 
     stub = types.ModuleType("passivbot_rust")
+    stub.__is_stub__ = True
 
     def _identity(x, *_args, **_kwargs):
         return x

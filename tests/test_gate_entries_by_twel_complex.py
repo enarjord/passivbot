@@ -8,6 +8,7 @@ try:
 except Exception:  # pragma: no cover - exercised when the extension is unavailable
     pbr = None
 
+pbr_is_stub = bool(getattr(pbr, "__is_stub__", False)) if pbr is not None else False
 
 def _apply_entries_and_calc_twe(balance, positions, original_entries, gated_entries):
     """
@@ -62,7 +63,8 @@ def _apply_entries_and_calc_twe(balance, positions, original_entries, gated_entr
 
 
 @pytest.mark.skipif(
-    pbr is None, reason="passivbot_rust extension not available; build and install in venv first"
+    pbr is None or pbr_is_stub,
+    reason="passivbot_rust extension not available; build and install in venv first",
 )
 def test_single_entry_is_trimmed_to_respect_twel():
     side = "long"
@@ -97,7 +99,8 @@ def test_single_entry_is_trimmed_to_respect_twel():
 
 
 @pytest.mark.skipif(
-    pbr is None, reason="passivbot_rust extension not available; build and install in venv first"
+    pbr is None or pbr_is_stub,
+    reason="passivbot_rust extension not available; build and install in venv first",
 )
 def test_blocks_when_current_twe_at_or_above_limit():
     side = "long"
@@ -139,7 +142,8 @@ def test_blocks_when_current_twe_at_or_above_limit():
 
 
 @pytest.mark.skipif(
-    pbr is None, reason="passivbot_rust extension not available; build and install in venv first"
+    pbr is None or pbr_is_stub,
+    reason="passivbot_rust extension not available; build and install in venv first",
 )
 def test_prunes_multiple_entries_until_exposure_safe():
     side = "long"
@@ -198,7 +202,8 @@ def test_prunes_multiple_entries_until_exposure_safe():
 
 
 @pytest.mark.skipif(
-    pbr is None, reason="passivbot_rust extension not available; build and install in venv first"
+    pbr is None or pbr_is_stub,
+    reason="passivbot_rust extension not available; build and install in venv first",
 )
 def test_rebalances_quantities_but_keeps_eligible_orders():
     side = "long"
