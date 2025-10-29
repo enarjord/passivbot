@@ -481,9 +481,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 
 async def _run_cli(args: argparse.Namespace) -> int:
-    from .realtime import RealtimeDataFetcher
+    from .services import RiskService
 
-    realtime_fetcher: Optional[RealtimeDataFetcher] = None
+    realtime_service: Optional[RiskService] = None
     if args.realtime_config:
         realtime_config = load_realtime_config(Path(args.realtime_config))
         override = args.custom_endpoints
@@ -505,14 +505,14 @@ async def _run_cli(args: argparse.Namespace) -> int:
                     realtime_config.custom_endpoints = CustomEndpointSettings(
                         path=override_normalized, autodiscover=False
                     )
-        realtime_fetcher = RealtimeDataFetcher(realtime_config)
+        realtime_service = RiskService.from_config(realtime_config)
         logger.info("Starting realtime dashboard using %s", args.realtime_config)
 
     try:
         iteration = 0
         while True:
-            if realtime_fetcher is not None:
-                snapshot = await realtime_fetcher.fetch_snapshot()
+            if realtime_service is not None:
+                snapshot = await realtime_service.fetch_snapshot()
             else:
                 snapshot = load_snapshot(Path(args.config))
             dashboard = build_dashboard(snapshot)
@@ -525,8 +525,8 @@ async def _run_cli(args: argparse.Namespace) -> int:
             await asyncio.sleep(args.interval)
         return 0
     finally:
-        if realtime_fetcher is not None:
-            await realtime_fetcher.close()
+        if realtime_service is not None:
+            await realtime_service.close()
 
 
 if __name__ == "__main__":
