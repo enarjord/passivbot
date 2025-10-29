@@ -230,8 +230,15 @@ class PerformanceTracker:
             if reference is None:
                 continue
             reference_balance = float(reference["balance"])
+            pnl = float(current_balance) - reference_balance
+            pct_change: Optional[float]
+            if reference_balance == 0:
+                pct_change = None
+            else:
+                pct_change = (pnl / reference_balance) * 100.0
             summary[label] = {
-                "pnl": float(current_balance) - reference_balance,
+                "pnl": pnl,
+                "pct_change": pct_change,
                 "since": reference["date"],
                 "reference_balance": reference_balance,
             }
