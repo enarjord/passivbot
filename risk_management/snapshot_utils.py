@@ -4,14 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
-from .dashboard import (
-    Account,
-    AlertThresholds,
-    Order,
-    Position,
-    evaluate_alerts,
-    parse_snapshot,
-)
+from .dashboard import evaluate_alerts, parse_snapshot
+from .domain.models import Account, AlertThresholds, Order, Position
 
 
 DEFAULT_ACCOUNTS_PAGE_SIZE = 25
