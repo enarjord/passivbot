@@ -3,7 +3,8 @@ import inspect
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 import pytest
@@ -47,13 +48,14 @@ def _patch_httpx_for_starlette() -> None:
 _patch_httpx_for_starlette()
 
 
-class StubFetcher:
+class StubRiskService:
     def __init__(
         self,
         snapshot: dict,
         *,
         kill_switch_responses: Optional[List[dict]] = None,
         order_types: Optional[Sequence[str]] = None,
+        error_sequences: Optional[Mapping[str, Sequence[Exception]]] = None,
     ) -> None:
         self.snapshot = snapshot
         self.closed = False
@@ -67,6 +69,9 @@ class StubFetcher:
         self.account_stop_losses: Dict[str, Dict[str, Any]] = {}
         self.cancel_all_orders_calls: List[Tuple[str, Optional[str]]] = []
         self.close_all_positions_calls: List[Tuple[str, Optional[str]]] = []
+        self._error_sequences: Dict[str, List[Exception]] = {
+            key: list(seq) for key, seq in (error_sequences or {}).items()
+        }
 
 
     async def fetch_snapshot(self) -> dict:
@@ -75,7 +80,7 @@ class StubFetcher:
     async def close(self) -> None:
         self.closed = True
 
-    async def execute_kill_switch(
+    async def trigger_kill_switch(
         self,
         account_name: Optional[str] = None,
         symbol: Optional[str] = None,
@@ -98,6 +103,7 @@ class StubFetcher:
         price: Optional[float] = None,
         params: Optional[Mapping[str, Any]] = None,
     ) -> Mapping[str, Any]:
+        self._maybe_raise("place_order")
         payload = {
             "symbol": symbol,
             "order_type": order_type,
@@ -117,10 +123,12 @@ class StubFetcher:
         symbol: Optional[str] = None,
         params: Optional[Mapping[str, Any]] = None,
     ) -> Mapping[str, Any]:
+        self._maybe_raise("cancel_order")
         self.cancelled_orders.append((account_name, order_id, symbol))
         return {"cancelled": True}
 
     async def close_position(self, account_name: str, symbol: str) -> Mapping[str, Any]:
+        self._maybe_raise("close_position")
         self.closed_positions.append((account_name, symbol))
         return {"closed_positions": [{"symbol": symbol}]}
 
@@ -170,12 +178,23 @@ class StubFetcher:
         self.account_stop_losses.pop(account_name, None)
 
     async def cancel_all_orders(self, account_name: str, symbol: Optional[str] = None) -> Mapping[str, Any]:
+        self._maybe_raise("cancel_all_orders")
         self.cancel_all_orders_calls.append((account_name, symbol))
         return {"cancelled_orders": [], "failed_order_cancellations": []}
 
     async def close_all_positions(self, account_name: str, symbol: Optional[str] = None) -> Mapping[str, Any]:
+        self._maybe_raise("close_all_positions")
         self.close_all_positions_calls.append((account_name, symbol))
         return {"closed_positions": [], "failed_position_closures": []}
+
+    def _maybe_raise(self, key: str) -> None:
+        queue = self._error_sequences.get(key)
+        if not queue:
+            return
+        exc = queue.pop(0)
+        if not queue:
+            self._error_sequences.pop(key, None)
+        raise exc
 
 
 class StubPerformanceRepository:
@@ -292,6 +311,8 @@ def create_test_app(
     performance_repository: Optional[Any] = None,
 ) -> tuple[TestClient, StubFetcher]:
     fetcher = StubFetcher(snapshot, kill_switch_responses=kill_switch_responses)
+    ) -> tuple[TestClient, StubRiskService]:
+    fetcher = StubRiskService(snapshot, kill_switch_responses=kill_switch_responses)
     service = RiskDashboardService(fetcher)  # type: ignore[arg-type]
     config = RealtimeConfig(accounts=[AccountConfig(name="Demo", exchange="binance", credentials={})])
     app = create_app(
@@ -301,6 +322,203 @@ def create_test_app(
         performance_repository=performance_repository,
     )
     return TestClient(app), fetcher
+
+
+def create_async_test_app(
+    snapshot: dict,
+    auth_manager: AuthManager,
+    *,
+    kill_switch_responses: Optional[List[dict]] = None,
+    error_sequences: Optional[Mapping[str, Sequence[Exception]]] = None,
+) -> tuple[httpx.AsyncClient, StubFetcher]:
+    fetcher = StubFetcher(
+        snapshot,
+        kill_switch_responses=kill_switch_responses,
+        error_sequences=error_sequences,
+    )
+    service = RiskDashboardService(fetcher)  # type: ignore[arg-type]
+    config = RealtimeConfig(accounts=[AccountConfig(name="Demo", exchange="binance", credentials={})])
+    app = create_app(config, service=service, auth_manager=auth_manager)
+    transport = getattr(httpx, "ASGITransport", None)
+    if transport is not None:
+        client = httpx.AsyncClient(transport=transport(app=app), base_url="http://testserver")
+    else:  # pragma: no cover - legacy httpx fallback
+        client = httpx.AsyncClient(app=app, base_url="http://testserver")
+    return client, fetcher
+
+
+AssertionFn = Callable[[StubFetcher, httpx.Response], None]
+
+
+@dataclass(frozen=True)
+class AsyncFlowScenario:
+    identifier: str
+    method: str
+    path: str
+    payload: Optional[Mapping[str, Any]]
+    error_sequences: Optional[Mapping[str, Sequence[Exception]]]
+    expected_status: int
+    assertion: AssertionFn
+
+
+def _assert_place_order_success(fetcher: StubFetcher, response: httpx.Response) -> None:
+    payload = response.json()
+    assert payload["order"]["type"] == "limit"
+    assert fetcher.placed_orders[-1][0] == "Demo Account"
+    assert fetcher.placed_orders[-1][1]["symbol"] == "BTCUSDT"
+
+
+def _assert_error_detail(expected: str) -> AssertionFn:
+    def _checker(_fetcher: StubFetcher, response: httpx.Response) -> None:
+        assert response.json()["detail"] == expected
+
+    return _checker
+
+
+def _assert_cancel_success(fetcher: StubFetcher, response: httpx.Response) -> None:
+    payload = response.json()
+    assert payload["cancelled"] is True
+    assert fetcher.cancelled_orders[-1] == ("Demo Account", "42", "BTCUSDT")
+
+
+def _assert_close_success(fetcher: StubFetcher, response: httpx.Response) -> None:
+    payload = response.json()
+    assert payload["closed_positions"][0]["symbol"] == "BTCUSDT"
+    assert fetcher.closed_positions[-1] == ("Demo Account", "BTCUSDT")
+
+
+ASYNC_FLOW_SCENARIOS: Sequence[AsyncFlowScenario] = (
+    AsyncFlowScenario(
+        identifier="place-order-success",
+        method="POST",
+        path="/api/trading/accounts/Demo%20Account/orders",
+        payload={
+            "symbol": "BTCUSDT",
+            "order_type": "limit",
+            "side": "buy",
+            "amount": 1.25,
+            "price": 42_000,
+        },
+        error_sequences=None,
+        expected_status=200,
+        assertion=_assert_place_order_success,
+    ),
+    AsyncFlowScenario(
+        identifier="place-order-missing-account",
+        method="POST",
+        path="/api/trading/accounts/Unknown/orders",
+        payload={
+            "symbol": "BTCUSDT",
+            "order_type": "limit",
+            "side": "buy",
+            "amount": 1.25,
+            "price": 42_000,
+        },
+        error_sequences={"place_order": [ValueError("Account 'Unknown' not found")]},
+        expected_status=404,
+        assertion=_assert_error_detail("Account 'Unknown' not found"),
+    ),
+    AsyncFlowScenario(
+        identifier="place-order-invalid",
+        method="POST",
+        path="/api/trading/accounts/Demo%20Account/orders",
+        payload={
+            "symbol": "BTCUSDT",
+            "order_type": "limit",
+            "side": "buy",
+            "amount": 1.25,
+            "price": 42_000,
+        },
+        error_sequences={"place_order": [RuntimeError("order rejected")]},
+        expected_status=400,
+        assertion=_assert_error_detail("order rejected"),
+    ),
+    AsyncFlowScenario(
+        identifier="cancel-order-success",
+        method="DELETE",
+        path="/api/trading/accounts/Demo%20Account/orders/42",
+        payload={"symbol": "BTCUSDT"},
+        error_sequences=None,
+        expected_status=200,
+        assertion=_assert_cancel_success,
+    ),
+    AsyncFlowScenario(
+        identifier="cancel-order-not-found",
+        method="DELETE",
+        path="/api/trading/accounts/Demo%20Account/orders/42",
+        payload={"symbol": "BTCUSDT"},
+        error_sequences={"cancel_order": [ValueError("Unknown order")]},
+        expected_status=404,
+        assertion=_assert_error_detail("Unknown order"),
+    ),
+    AsyncFlowScenario(
+        identifier="cancel-order-rejected",
+        method="DELETE",
+        path="/api/trading/accounts/Demo%20Account/orders/42",
+        payload={"symbol": "BTCUSDT"},
+        error_sequences={"cancel_order": [RuntimeError("cannot cancel")]},
+        expected_status=400,
+        assertion=_assert_error_detail("cannot cancel"),
+    ),
+    AsyncFlowScenario(
+        identifier="close-position-success",
+        method="POST",
+        path="/api/trading/accounts/Demo%20Account/positions/BTCUSDT/close",
+        payload=None,
+        error_sequences=None,
+        expected_status=200,
+        assertion=_assert_close_success,
+    ),
+    AsyncFlowScenario(
+        identifier="close-position-not-found",
+        method="POST",
+        path="/api/trading/accounts/Demo%20Account/positions/BTCUSDT/close",
+        payload=None,
+        error_sequences={"close_position": [ValueError("no position")]},
+        expected_status=404,
+        assertion=_assert_error_detail("no position"),
+    ),
+    AsyncFlowScenario(
+        identifier="close-position-failed",
+        method="POST",
+        path="/api/trading/accounts/Demo%20Account/positions/BTCUSDT/close",
+        payload=None,
+        error_sequences={"close_position": [RuntimeError("close failed")]},
+        expected_status=400,
+        assertion=_assert_error_detail("close failed"),
+    ),
+)
+
+
+async def _async_login(client: httpx.AsyncClient) -> None:
+    response = await client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=False,
+    )
+    assert response.status_code in {302, 303, 307}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("scenario", ASYNC_FLOW_SCENARIOS, ids=lambda sc: sc.identifier)
+async def test_async_trading_flows(
+    sample_snapshot: dict, auth_manager: AuthManager, scenario: AsyncFlowScenario
+) -> None:
+    client, fetcher = create_async_test_app(
+        sample_snapshot,
+        auth_manager,
+        error_sequences=scenario.error_sequences,
+    )
+    try:
+        await _async_login(client)
+        request_kwargs: Dict[str, Any] = {}
+        if scenario.payload is not None:
+            request_kwargs["json"] = scenario.payload
+        response = await client.request(scenario.method, scenario.path, **request_kwargs)
+        assert response.status_code == scenario.expected_status
+        scenario.assertion(fetcher, response)
+    finally:
+        await client.aclose()
 
 
 def _build_accounts_snapshot() -> dict:
@@ -689,7 +907,7 @@ def test_close_all_positions_endpoint(sample_snapshot: dict, auth_manager: AuthM
 
 
 def test_letsencrypt_challenge_mount(tmp_path: Path, auth_manager: AuthManager) -> None:
-    fetcher = StubFetcher({"generated_at": "", "accounts": [], "alert_thresholds": {}, "notification_channels": []})
+    fetcher = StubRiskService({"generated_at": "", "accounts": [], "alert_thresholds": {}, "notification_channels": []})
     service = RiskDashboardService(fetcher)  # type: ignore[arg-type]
     config = RealtimeConfig(accounts=[AccountConfig(name="Demo", exchange="binance", credentials={})])
     challenge_dir = tmp_path / "acme"
