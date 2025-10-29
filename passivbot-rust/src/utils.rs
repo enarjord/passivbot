@@ -33,8 +33,9 @@ pub fn round_dn(n: f64, step: f64) -> f64 {
 #[derive(Clone, Copy, Debug)]
 pub enum RoundingMode {
     Nearest,
-    Floor,
-    Ceil,
+    //Floor,
+    //Ceil,
+    // uncomment the above to add Floor,Ceil rounding modes
 }
 
 fn quantize_value(value: f64, step: f64, mode: RoundingMode, context: &str) -> f64 {
@@ -43,8 +44,9 @@ fn quantize_value(value: f64, step: f64, mode: RoundingMode, context: &str) -> f
     }
     let rounded = match mode {
         RoundingMode::Nearest => round_(value, step),
-        RoundingMode::Floor => round_dn(value, step),
-        RoundingMode::Ceil => round_up(value, step),
+        //RoundingMode::Floor => round_dn(value, step),
+        //RoundingMode::Ceil => round_up(value, step),
+        // uncomment the above to add Floor,Ceil rounding modes
     };
     let diff = (value - rounded).abs();
     // Allow for typical floating noise (up to 1e-8 of the step).
