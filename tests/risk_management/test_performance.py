@@ -36,10 +36,19 @@ def test_performance_tracker_records_daily_snapshots(tmp_path: Path) -> None:
         portfolio_balance=11_200.0,
         account_balances={"Demo": 11_200.0},
     )
+    portfolio_daily = summary_second["portfolio"]["daily"]
+    assert portfolio_daily is not None
+    assert pytest.approx(portfolio_daily["pnl"]) == 1_200.0
+    assert pytest.approx(portfolio_daily["pct_change"]) == 12.0
+    assert portfolio_daily["since"] == "2024-03-01"
+    assert pytest.approx(portfolio_daily["reference_balance"]) == 10_000.0
+
     daily_change = summary_second["accounts"]["Demo"]["daily"]
     assert daily_change is not None
     assert pytest.approx(daily_change["pnl"]) == 1_200.0
+    assert pytest.approx(daily_change["pct_change"]) == 12.0
     assert daily_change["since"] == "2024-03-01"
+    assert pytest.approx(daily_change["reference_balance"]) == 10_000.0
 
 
 def test_performance_tracker_handles_missing_history(tmp_path: Path) -> None:
@@ -51,3 +60,31 @@ def test_performance_tracker_handles_missing_history(tmp_path: Path) -> None:
     )
     assert summary["portfolio"]["daily"] is None
     assert summary["accounts"]["Demo"]["weekly"] is None
+
+
+def test_performance_tracker_handles_zero_reference_balance(tmp_path: Path) -> None:
+    tracker = PerformanceTracker(tmp_path)
+
+    first_day = datetime(2024, 4, 1, 21, 0, tzinfo=timezone.utc)
+    tracker.record(
+        generated_at=first_day,
+        portfolio_balance=0.0,
+        account_balances={"Demo": 0.0},
+    )
+
+    second_day = datetime(2024, 4, 2, 21, 0, tzinfo=timezone.utc)
+    summary = tracker.record(
+        generated_at=second_day,
+        portfolio_balance=500.0,
+        account_balances={"Demo": 500.0},
+    )
+
+    portfolio_daily = summary["portfolio"]["daily"]
+    assert portfolio_daily is not None
+    assert pytest.approx(portfolio_daily["pnl"]) == 500.0
+    assert portfolio_daily["pct_change"] is None
+
+    account_daily = summary["accounts"]["Demo"]["daily"]
+    assert account_daily is not None
+    assert pytest.approx(account_daily["pnl"]) == 500.0
+    assert account_daily["pct_change"] is None

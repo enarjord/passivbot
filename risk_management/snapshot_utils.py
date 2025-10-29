@@ -439,6 +439,9 @@ def _normalise_performance(data: Any) -> Dict[str, Any]:
         "daily": None,
         "weekly": None,
         "monthly": None,
+        "daily_pct": None,
+        "weekly_pct": None,
+        "monthly_pct": None,
     }
     latest = data.get("latest_snapshot")
     if isinstance(latest, Mapping):
@@ -453,18 +456,19 @@ def _normalise_performance(data: Any) -> Dict[str, Any]:
         change = data.get(key)
         if isinstance(change, Mapping):
             pnl = change.get("pnl")
-            if pnl is not None:
-                summary[key] = float(pnl)
-                if change.get("since") is not None:
-                    since_map[key] = change.get("since")
-                if change.get("reference_balance") is not None:
-                    reference_balances[key] = float(change.get("reference_balance"))
-            else:
-                summary[key] = None
+            pct = change.get("pct_change")
+            summary[key] = float(pnl) if pnl is not None else None
+            summary[f"{key}_pct"] = float(pct) if pct is not None else None
+            if change.get("since") is not None:
+                since_map[key] = change.get("since")
+            if change.get("reference_balance") is not None:
+                reference_balances[key] = float(change.get("reference_balance"))
         elif isinstance(change, (int, float)):
             summary[key] = float(change)
+            summary[f"{key}_pct"] = None
         else:
             summary[key] = None
+            summary[f"{key}_pct"] = None
     if since_map:
         summary["since"] = since_map
     if reference_balances:
