@@ -20,6 +20,7 @@ from urllib.parse import quote, urljoin
 from .configuration import RealtimeConfig
 from .realtime import RealtimeDataFetcher
 from .reporting import ReportManager
+from .services import PerformanceRepository
 from .snapshot_utils import (
     ACCOUNT_SORT_FIELDS,
     DEFAULT_ACCOUNT_SORT_KEY,
@@ -267,6 +268,7 @@ def create_app(
     auth_manager: Optional[AuthManager] = None,
     templates_dir: Optional[Path] = None,
     letsencrypt_challenge_dir: Optional[Path] = None,
+    performance_repository: Optional[PerformanceRepository] = None,
 ) -> FastAPI:
     if service is None:
         service = RiskDashboardService(RealtimeDataFetcher(config))
@@ -289,6 +291,9 @@ def create_app(
         base_root = config.config_root or Path.cwd()
         reports_dir = base_root / "reports"
     app.state.report_manager = ReportManager(reports_dir)
+    if performance_repository is None:
+        performance_repository = PerformanceRepository(Path(reports_dir))
+    app.state.performance_repository = performance_repository
 
     def resolve_grafana_context() -> dict[str, Any]:
         grafana_cfg = config.grafana
@@ -368,6 +373,9 @@ def create_app(
 
     def get_report_manager(request: Request) -> ReportManager:
         return request.app.state.report_manager
+
+    def get_performance_repository(request: Request) -> PerformanceRepository:
+        return request.app.state.performance_repository
 
     @app.get("/login", response_class=HTMLResponse)
     async def login_form(request: Request) -> HTMLResponse:
@@ -474,6 +482,38 @@ def create_app(
             sort_order=sort_order_param,
         )
         return JSONResponse(view_model)
+
+    @app.get("/api/performance/portfolio", response_class=JSONResponse)
+    async def api_portfolio_performance(
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        repository: PerformanceRepository = Depends(get_performance_repository),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        try:
+            series = repository.get_portfolio_series(start=start, end=end)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return JSONResponse({"series": series})
+
+    @app.get("/api/performance/accounts/{account_name}", response_class=JSONResponse)
+    async def api_account_performance(
+        account_name: str,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        repository: PerformanceRepository = Depends(get_performance_repository),
+        _: str = Depends(require_user),
+    ) -> JSONResponse:
+        try:
+            series = repository.get_account_series(account_name, start=start, end=end)
+        except KeyError:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Account '{account_name}' not found",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return JSONResponse({"account": account_name, "series": series})
 
     @app.get(
         "/api/trading/accounts/{account_name}/order-types",

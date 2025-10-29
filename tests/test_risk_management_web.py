@@ -178,6 +178,54 @@ class StubFetcher:
         return {"closed_positions": [], "failed_position_closures": []}
 
 
+class StubPerformanceRepository:
+    def __init__(
+        self,
+        *,
+        portfolio_series: Sequence[Mapping[str, Any]],
+        account_series: Mapping[str, Sequence[Mapping[str, Any]]],
+    ) -> None:
+        self.portfolio_series = [dict(item) for item in portfolio_series]
+        self.account_series = {name: [dict(entry) for entry in history] for name, history in account_series.items()}
+
+    def get_portfolio_series(
+        self, *, start: Optional[str] = None, end: Optional[str] = None
+    ) -> List[dict[str, Any]]:
+        return self._filter(self.portfolio_series, start=start, end=end)
+
+    def get_account_series(
+        self, account_name: str, *, start: Optional[str] = None, end: Optional[str] = None
+    ) -> List[dict[str, Any]]:
+        if account_name not in self.account_series:
+            raise KeyError(account_name)
+        return self._filter(self.account_series[account_name], start=start, end=end)
+
+    def _filter(
+        self,
+        series: Sequence[Mapping[str, Any]],
+        *,
+        start: Optional[str],
+        end: Optional[str],
+    ) -> List[dict[str, Any]]:
+        if start == "invalid" or end == "invalid":
+            raise ValueError("invalid date value")
+        if start and end and start > end:
+            raise ValueError("start date cannot be after end date")
+        filtered: List[dict[str, Any]] = []
+        for entry in series:
+            date_str = str(entry.get("date"))
+            if start and date_str < start:
+                continue
+            if end and date_str > end:
+                continue
+            filtered.append({
+                "date": date_str,
+                "balance": float(entry.get("balance", 0.0)),
+                "timestamp": entry.get("timestamp"),
+            })
+        return filtered
+
+
 @pytest.fixture
 def sample_snapshot() -> dict:
     now = datetime.now(timezone.utc).isoformat()
@@ -241,11 +289,17 @@ def create_test_app(
     auth_manager: AuthManager,
     *,
     kill_switch_responses: Optional[List[dict]] = None,
+    performance_repository: Optional[Any] = None,
 ) -> tuple[TestClient, StubFetcher]:
     fetcher = StubFetcher(snapshot, kill_switch_responses=kill_switch_responses)
     service = RiskDashboardService(fetcher)  # type: ignore[arg-type]
     config = RealtimeConfig(accounts=[AccountConfig(name="Demo", exchange="binance", credentials={})])
-    app = create_app(config, service=service, auth_manager=auth_manager)
+    app = create_app(
+        config,
+        service=service,
+        auth_manager=auth_manager,
+        performance_repository=performance_repository,
+    )
     return TestClient(app), fetcher
 
 
@@ -690,3 +744,102 @@ def test_portfolio_history_and_cashflows(
         report_response = client.get("/api/reports/portfolio")
         assert report_response.status_code == 200
         assert report_response.headers["content-type"].startswith("text/csv")
+
+
+def _build_performance_series() -> tuple[List[dict[str, Any]], Dict[str, List[dict[str, Any]]]]:
+    portfolio = [
+        {"date": "2024-01-01", "balance": 1000.0, "timestamp": "2024-01-01T16:00:00+00:00"},
+        {"date": "2024-01-02", "balance": 1100.0, "timestamp": "2024-01-02T16:00:00+00:00"},
+        {"date": "2024-01-03", "balance": 1080.0, "timestamp": "2024-01-03T16:00:00+00:00"},
+    ]
+    accounts = {
+        "Demo": [
+            {"date": "2024-01-01", "balance": 500.0, "timestamp": "2024-01-01T16:00:00+00:00"},
+            {"date": "2024-01-02", "balance": 520.0, "timestamp": "2024-01-02T16:00:00+00:00"},
+            {"date": "2024-01-03", "balance": 515.0, "timestamp": "2024-01-03T16:00:00+00:00"},
+        ]
+    }
+    return portfolio, accounts
+
+
+def test_portfolio_performance_endpoint_returns_series(
+    auth_manager: AuthManager,
+) -> None:
+    snapshot = _build_accounts_snapshot()
+    portfolio, accounts = _build_performance_series()
+    repository = StubPerformanceRepository(portfolio_series=portfolio, account_series=accounts)
+    client, _ = create_test_app(
+        snapshot,
+        auth_manager,
+        performance_repository=repository,
+    )
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        response = client.get("/api/performance/portfolio")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload == {"series": portfolio}
+
+
+def test_account_performance_endpoint_filters_by_range(
+    auth_manager: AuthManager,
+) -> None:
+    snapshot = _build_accounts_snapshot()
+    portfolio, accounts = _build_performance_series()
+    repository = StubPerformanceRepository(portfolio_series=portfolio, account_series=accounts)
+    client, _ = create_test_app(
+        snapshot,
+        auth_manager,
+        performance_repository=repository,
+    )
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        response = client.get(
+            "/api/performance/accounts/Demo",
+            params={"start": "2024-01-02", "end": "2024-01-03"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["account"] == "Demo"
+        assert payload["series"] == accounts["Demo"][1:]
+
+
+def test_account_performance_endpoint_handles_errors(
+    auth_manager: AuthManager,
+) -> None:
+    snapshot = _build_accounts_snapshot()
+    portfolio, accounts = _build_performance_series()
+    repository = StubPerformanceRepository(portfolio_series=portfolio, account_series=accounts)
+    client, _ = create_test_app(
+        snapshot,
+        auth_manager,
+        performance_repository=repository,
+    )
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        missing = client.get("/api/performance/accounts/Unknown")
+        assert missing.status_code == 404
+
+        invalid = client.get(
+            "/api/performance/portfolio",
+            params={"start": "invalid"},
+        )
+        assert invalid.status_code == 400
