@@ -1,0 +1,211 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://passivbot/risk_management/realtime_snapshot.schema.json",
+  "title": "Risk management realtime snapshot",
+  "type": "object",
+  "required": ["generated_at", "accounts", "alert_thresholds", "notification_channels"],
+  "properties": {
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "accounts": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/account"}
+    },
+    "alert_thresholds": {
+      "type": "object",
+      "required": [
+        "wallet_exposure_pct",
+        "position_wallet_exposure_pct",
+        "max_drawdown_pct",
+        "loss_threshold_pct"
+      ],
+      "properties": {
+        "wallet_exposure_pct": {"type": "number"},
+        "position_wallet_exposure_pct": {"type": "number"},
+        "max_drawdown_pct": {"type": "number"},
+        "loss_threshold_pct": {"type": "number"}
+      },
+      "additionalProperties": true
+    },
+    "notification_channels": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "account_messages": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "portfolio_stop_loss": {
+      "$ref": "#/definitions/stopLossState"
+    },
+    "account_stop_losses": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/definitions/stopLossState"}
+    },
+    "performance": {
+      "type": "object",
+      "properties": {
+        "portfolio": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/definitions/performanceSummary"}
+          ]
+        },
+        "accounts": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {"type": "null"},
+              {"$ref": "#/definitions/performanceSummary"}
+            ]
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true,
+  "definitions": {
+    "account": {
+      "type": "object",
+      "required": ["name", "balance", "positions"],
+      "properties": {
+        "name": {"type": "string"},
+        "balance": {"type": "number"},
+        "daily_realized_pnl": {"type": ["number", "null"]},
+        "positions": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/position"}
+        },
+        "orders": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/order"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "position": {
+      "type": "object",
+      "required": [
+        "symbol",
+        "side",
+        "notional",
+        "entry_price",
+        "mark_price",
+        "unrealized_pnl"
+      ],
+      "properties": {
+        "symbol": {"type": "string"},
+        "side": {"type": "string"},
+        "notional": {"type": "number"},
+        "entry_price": {"type": "number"},
+        "mark_price": {"type": "number"},
+        "liquidation_price": {"type": ["number", "null"]},
+        "wallet_exposure_pct": {"type": ["number", "null"]},
+        "unrealized_pnl": {"type": "number"},
+        "max_drawdown_pct": {"type": ["number", "null"]},
+        "take_profit_price": {"type": ["number", "null"]},
+        "stop_loss_price": {"type": ["number", "null"]},
+        "size": {"type": ["number", "null"]},
+        "signed_notional": {"type": ["number", "null"]},
+        "volatility": {
+          "type": ["object", "null"],
+          "additionalProperties": {"type": "number"}
+        },
+        "funding_rates": {
+          "type": ["object", "null"],
+          "additionalProperties": {"type": "number"}
+        },
+        "daily_realized_pnl": {"type": ["number", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "order": {
+      "type": "object",
+      "required": ["symbol", "side", "order_type", "status", "reduce_only"],
+      "properties": {
+        "symbol": {"type": "string"},
+        "side": {"type": "string"},
+        "order_type": {"type": "string"},
+        "price": {"type": ["number", "null"]},
+        "amount": {"type": ["number", "null"]},
+        "remaining": {"type": ["number", "null"]},
+        "status": {"type": "string"},
+        "reduce_only": {"type": "boolean"},
+        "stop_price": {"type": ["number", "null"]},
+        "notional": {"type": ["number", "null"]},
+        "order_id": {"type": ["string", "null"]},
+        "created_at": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "stopLossState": {
+      "type": "object",
+      "required": ["threshold_pct", "triggered", "active"],
+      "properties": {
+        "threshold_pct": {"type": "number"},
+        "baseline_balance": {"type": ["number", "null"]},
+        "current_balance": {"type": ["number", "null"]},
+        "current_drawdown_pct": {"type": ["number", "null"]},
+        "triggered": {"type": "boolean"},
+        "triggered_at": {"type": ["string", "null"], "format": "date-time"},
+        "active": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    },
+    "performanceSnapshot": {
+      "type": "object",
+      "required": ["date", "balance"],
+      "properties": {
+        "date": {"type": "string"},
+        "balance": {"type": "number"},
+        "timestamp": {"type": ["string", "null"], "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "performanceChange": {
+      "type": "object",
+      "required": ["pnl", "since", "reference_balance"],
+      "properties": {
+        "pnl": {"type": "number"},
+        "since": {"type": "string"},
+        "reference_balance": {"type": "number"}
+      },
+      "additionalProperties": false
+    },
+    "performanceSummary": {
+      "type": "object",
+      "required": ["current_balance", "latest_snapshot", "daily", "weekly", "monthly"],
+      "properties": {
+        "current_balance": {"type": "number"},
+        "latest_snapshot": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/definitions/performanceSnapshot"}
+          ]
+        },
+        "daily": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/definitions/performanceChange"}
+          ]
+        },
+        "weekly": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/definitions/performanceChange"}
+          ]
+        },
+        "monthly": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/definitions/performanceChange"}
+          ]
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}
