@@ -4,7 +4,7 @@ use crate::types::{ExchangeParams, Order, OrderType};
 use crate::utils::{
     calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, calc_pprice_diff_int,
     calc_pside_price_diff_int, calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty,
-    round_dn, round_up,
+    round_dn, round_up, RoundingMode,
 };
 use std::collections::HashMap;
 
@@ -868,12 +868,19 @@ pub fn calc_twel_enforcer_actions(
             price,
             order_type,
         };
-        order.price = quantize_price(order.price, candidate.price_step);
-        order.qty = quantize_qty(order.qty, candidate.qty_step);
-        actions.push((
-            candidate.idx,
-            order,
-        ));
+        order.price = quantize_price(
+            order.price,
+            candidate.price_step,
+            RoundingMode::Nearest,
+            "calc_twel_enforcer_actions::price",
+        );
+        order.qty = quantize_qty(
+            order.qty,
+            candidate.qty_step,
+            RoundingMode::Nearest,
+            "calc_twel_enforcer_actions::qty",
+        );
+        actions.push((candidate.idx, order));
     }
     actions
 }

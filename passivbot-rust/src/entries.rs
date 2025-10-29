@@ -3,8 +3,8 @@ use crate::types::{
 };
 use crate::utils::{
     calc_ema_price_ask, calc_ema_price_bid, calc_new_psize_pprice, calc_wallet_exposure,
-    calc_wallet_exposure_if_filled, cost_to_qty, interpolate, quantize_price, quantize_qty,
-    round_, round_dn, round_up,
+    calc_wallet_exposure_if_filled, cost_to_qty, interpolate, quantize_price, quantize_qty, round_,
+    round_dn, round_up, RoundingMode,
 };
 
 pub fn wallet_exposure_limit_with_allowance(bot_params: &BotParams) -> f64 {
@@ -1098,8 +1098,18 @@ pub fn calc_entries_long(
             &position_mod,
             &trailing_price_bundle,
         );
-        entry.price = quantize_price(entry.price, exchange_params.price_step);
-        entry.qty = quantize_qty(entry.qty, exchange_params.qty_step);
+        entry.price = quantize_price(
+            entry.price,
+            exchange_params.price_step,
+            RoundingMode::Nearest,
+            "calc_entries_long::price",
+        );
+        entry.qty = quantize_qty(
+            entry.qty,
+            exchange_params.qty_step,
+            RoundingMode::Nearest,
+            "calc_entries_long::qty",
+        );
         if entry.qty == 0.0 {
             break;
         }
@@ -1151,8 +1161,18 @@ pub fn calc_entries_short(
             &position_mod,
             &trailing_price_bundle,
         );
-        entry.price = quantize_price(entry.price, exchange_params.price_step);
-        entry.qty = quantize_qty(entry.qty, exchange_params.qty_step);
+        entry.price = quantize_price(
+            entry.price,
+            exchange_params.price_step,
+            RoundingMode::Nearest,
+            "calc_entries_short::price",
+        );
+        entry.qty = quantize_qty(
+            entry.qty,
+            exchange_params.qty_step,
+            RoundingMode::Nearest,
+            "calc_entries_short::qty",
+        );
         if entry.qty == 0.0 {
             break;
         }

@@ -4,6 +4,7 @@ use crate::types::{
 };
 use crate::utils::{
     calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty, round_, round_dn, round_up,
+    RoundingMode,
 };
 
 pub fn calc_close_qty(
@@ -904,8 +905,18 @@ pub fn calc_closes_long(
             &position_mod,
             &trailing_price_bundle,
         );
-        close.price = quantize_price(close.price, exchange_params.price_step);
-        close.qty = quantize_qty(close.qty, exchange_params.qty_step);
+        close.price = quantize_price(
+            close.price,
+            exchange_params.price_step,
+            RoundingMode::Nearest,
+            "calc_closes_long::price",
+        );
+        close.qty = quantize_qty(
+            close.qty,
+            exchange_params.qty_step,
+            RoundingMode::Nearest,
+            "calc_closes_long::qty",
+        );
         if close.qty == 0.0 {
             break;
         }
@@ -925,8 +936,18 @@ pub fn calc_closes_long(
                     order_type: close.order_type,
                 };
                 let mut merged_close = merged_close;
-                merged_close.price = quantize_price(merged_close.price, exchange_params.price_step);
-                merged_close.qty = quantize_qty(merged_close.qty, exchange_params.qty_step);
+                merged_close.price = quantize_price(
+                    merged_close.price,
+                    exchange_params.price_step,
+                    RoundingMode::Nearest,
+                    "calc_closes_long::merged_price",
+                );
+                merged_close.qty = quantize_qty(
+                    merged_close.qty,
+                    exchange_params.qty_step,
+                    RoundingMode::Nearest,
+                    "calc_closes_long::merged_qty",
+                );
                 closes.push(merged_close);
                 continue;
             }
@@ -958,8 +979,18 @@ pub fn calc_closes_short(
             &position_mod,
             &trailing_price_bundle,
         );
-        close.price = quantize_price(close.price, exchange_params.price_step);
-        close.qty = quantize_qty(close.qty, exchange_params.qty_step);
+        close.price = quantize_price(
+            close.price,
+            exchange_params.price_step,
+            RoundingMode::Nearest,
+            "calc_closes_short::price",
+        );
+        close.qty = quantize_qty(
+            close.qty,
+            exchange_params.qty_step,
+            RoundingMode::Nearest,
+            "calc_closes_short::qty",
+        );
         if close.qty == 0.0 {
             break;
         }
@@ -979,8 +1010,18 @@ pub fn calc_closes_short(
                     order_type: close.order_type,
                 };
                 let mut merged_close = merged_close;
-                merged_close.price = quantize_price(merged_close.price, exchange_params.price_step);
-                merged_close.qty = quantize_qty(merged_close.qty, exchange_params.qty_step);
+                merged_close.price = quantize_price(
+                    merged_close.price,
+                    exchange_params.price_step,
+                    RoundingMode::Nearest,
+                    "calc_closes_short::merged_price",
+                );
+                merged_close.qty = quantize_qty(
+                    merged_close.qty,
+                    exchange_params.qty_step,
+                    RoundingMode::Nearest,
+                    "calc_closes_short::merged_qty",
+                );
                 closes.push(merged_close);
                 continue;
             }

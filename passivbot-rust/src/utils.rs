@@ -30,20 +30,44 @@ pub fn round_dn(n: f64, step: f64) -> f64 {
     round_to_decimal_places(result, 10)
 }
 
-pub fn quantize_price(price: f64, price_step: f64) -> f64 {
-    if price_step > 0.0 && price.is_finite() {
-        round_(price, price_step)
-    } else {
-        price
-    }
+#[derive(Clone, Copy, Debug)]
+pub enum RoundingMode {
+    Nearest,
+    Floor,
+    Ceil,
 }
 
-pub fn quantize_qty(qty: f64, qty_step: f64) -> f64 {
-    if qty_step > 0.0 && qty.is_finite() {
-        round_(qty, qty_step)
-    } else {
-        qty
+fn quantize_value(value: f64, step: f64, mode: RoundingMode, context: &str) -> f64 {
+    if step <= 0.0 || !value.is_finite() {
+        return value;
     }
+    let rounded = match mode {
+        RoundingMode::Nearest => round_(value, step),
+        RoundingMode::Floor => round_dn(value, step),
+        RoundingMode::Ceil => round_up(value, step),
+    };
+    let diff = (value - rounded).abs();
+    // Allow for typical floating noise (up to 1e-8 of the step).
+    let tolerance = step * 1e-8;
+    if diff > tolerance {
+        log::warn!(
+            "quantize_value: large adjustment in {} (step {}): {} -> {} (Δ={})",
+            context,
+            step,
+            value,
+            rounded,
+            diff
+        );
+    }
+    rounded
+}
+
+pub fn quantize_price(price: f64, price_step: f64, mode: RoundingMode, context: &str) -> f64 {
+    quantize_value(price, price_step, mode, context)
+}
+
+pub fn quantize_qty(qty: f64, qty_step: f64, mode: RoundingMode, context: &str) -> f64 {
+    quantize_value(qty, qty_step, mode, context)
 }
 
 #[pyfunction]
