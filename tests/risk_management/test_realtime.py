@@ -2,7 +2,9 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Mapping
+
+import pytest
 
 from custom_endpoint_overrides import (
     configure_custom_endpoint_loader,
@@ -33,6 +35,18 @@ class StubAccountClient:
 
     async def close(self) -> None:  # pragma: no cover - included for interface completeness
         return None
+
+
+class RecordingNotifications:
+    def __init__(self) -> None:
+        self.daily: List[tuple[Mapping[str, object], float]] = []
+        self.alerts: List[Mapping[str, object]] = []
+
+    def send_daily_snapshot(self, snapshot: Mapping[str, object], portfolio_balance: float) -> None:
+        self.daily.append((snapshot, portfolio_balance))
+
+    def dispatch_alerts(self, snapshot: Mapping[str, object]) -> None:
+        self.alerts.append(snapshot)
 
 
 def _make_config() -> RealtimeConfig:
@@ -146,3 +160,56 @@ def test_configure_custom_endpoints_prefers_config_directory(tmp_path: Path) -> 
         )
     finally:
         configure_custom_endpoint_loader(None, autodiscover=True)
+
+
+def test_portfolio_stop_loss_triggers_notifications() -> None:
+    config = RealtimeConfig(
+        accounts=[
+            AccountConfig(name="Alpha", exchange="test"),
+            AccountConfig(name="Beta", exchange="test"),
+        ],
+        notification_channels=["email:risk@example.com"],
+    )
+    client_alpha = StubAccountClient(
+        [
+            {"name": "Alpha", "balance": 1_000.0, "positions": []},
+            {"name": "Alpha", "balance": 950.0, "positions": []},
+            {"name": "Alpha", "balance": 800.0, "positions": []},
+        ]
+    )
+    client_beta = StubAccountClient(
+        [
+            {"name": "Beta", "balance": 1_000.0, "positions": []},
+            {"name": "Beta", "balance": 980.0, "positions": []},
+            {"name": "Beta", "balance": 900.0, "positions": []},
+        ]
+    )
+    fetcher = RealtimeDataFetcher(config, account_clients=[client_alpha, client_beta])
+    recorder = RecordingNotifications()
+    fetcher._notifications = recorder  # type: ignore[attr-defined]
+
+    initial_snapshot = asyncio.run(fetcher.fetch_snapshot())
+    assert "portfolio_stop_loss" not in initial_snapshot
+
+    asyncio.run(fetcher.set_portfolio_stop_loss(10.0))
+    pre_trigger_snapshot = asyncio.run(fetcher.fetch_snapshot())
+    state = pre_trigger_snapshot["portfolio_stop_loss"]
+    assert state["threshold_pct"] == 10.0
+    assert state["triggered"] is False
+    assert state["baseline_balance"] == pytest.approx(2_000.0, rel=1e-6)
+    assert state["current_balance"] == pytest.approx(1_930.0, rel=1e-6)
+    assert state["current_drawdown_pct"] == pytest.approx((2_000.0 - 1_930.0) / 2_000.0, rel=1e-6)
+
+    triggered_snapshot = asyncio.run(fetcher.fetch_snapshot())
+    triggered_state = triggered_snapshot["portfolio_stop_loss"]
+    assert triggered_state["triggered"] is True
+    assert triggered_state["triggered_at"] is not None
+    assert triggered_state["current_balance"] == pytest.approx(1_700.0, rel=1e-6)
+    assert triggered_state["current_drawdown_pct"] == pytest.approx((2_000.0 - 1_700.0) / 2_000.0, rel=1e-6)
+
+    assert recorder.daily, "daily snapshot notifications should be recorded"
+    assert recorder.daily[-1][0]["portfolio_stop_loss"]["triggered"] is True
+    assert recorder.alerts, "alert dispatches should be recorded"
+    assert recorder.alerts[-1]["portfolio_stop_loss"]["triggered"] is True
+
+    asyncio.run(fetcher.close())
