@@ -320,6 +320,10 @@ def create_app(
     templates_path = templates_dir or Path(__file__).with_name("templates")
     templates = Jinja2Templates(directory=str(templates_path))
 
+    static_path = Path(__file__).with_name("static")
+    if static_path.exists():
+        app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
+
     def currency_filter(value: Any) -> str:
         try:
             number = float(value)
@@ -407,34 +411,7 @@ def create_app(
         )
         grafana_context: dict[str, Any] = request.app.state.grafana_context
         return templates.TemplateResponse(
-            "dashboard.html",
-            {
-                "request": request,
-                "user": user,
-                "snapshot": view_model,
-                "grafana_dashboards": grafana_context.get("dashboards", []),
-                "grafana_theme": grafana_context.get("theme"),
-            },
-        )
-
-    @app.get("/trading-panel", response_class=HTMLResponse)
-    async def trading_panel(
-        request: Request, service: RiskDashboardService = Depends(get_service)
-    ) -> HTMLResponse:
-        user = request.session.get("user")
-        if not user:
-            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-        snapshot = await service.fetch_snapshot()
-        view_model = build_presentable_snapshot(
-            snapshot,
-            page=1,
-            page_size=DEFAULT_ACCOUNTS_PAGE_SIZE,
-            sort_key=DEFAULT_ACCOUNT_SORT_KEY,
-            sort_order=DEFAULT_ACCOUNT_SORT_ORDER,
-        )
-        grafana_context: dict[str, Any] = request.app.state.grafana_context
-        return templates.TemplateResponse(
-            "trading_panel.html",
+            "dashboard/index.html",
             {
                 "request": request,
                 "user": user,
