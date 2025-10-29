@@ -742,7 +742,7 @@ async def main():
     else:
         logging.info(f"loading config {args.config_path}")
         config = load_config(args.config_path)
-    update_config_with_args(config, args)
+    update_config_with_args(config, args, verbose=True)
     config = format_config(config, verbose=False)
     config_logging_level = get_optional_config_value(config, "logging.level", 1)
     try:
