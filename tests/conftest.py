@@ -43,6 +43,11 @@ def _install_passivbot_rust_stub():
         return math.floor(value / step) * step
 
     stub.calc_diff = lambda price, reference: price - reference
+    stub.calc_order_price_diff = (
+        lambda side, price, market: (0.0 if not market else (1 - price / market))
+        if str(side).lower() in ("buy", "long")
+        else (0.0 if not market else (price / market - 1))
+    )
     stub.calc_min_entry_qty = lambda *args, **kwargs: 0.0
     stub.calc_min_entry_qty_py = stub.calc_min_entry_qty
     stub.round_ = _round

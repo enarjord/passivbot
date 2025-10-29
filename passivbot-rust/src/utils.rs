@@ -1,5 +1,6 @@
 use crate::constants::{LONG, SHORT};
 use crate::types::ExchangeParams;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 /// Rounds a number to the specified number of decimal places.
@@ -228,6 +229,25 @@ pub fn calc_pside_price_diff_int(pside: usize, pprice: f64, price: f64) -> f64 {
 #[pyfunction]
 pub fn calc_price_diff_pside_int(pside: usize, pprice: f64, price: f64) -> f64 {
     calc_pside_price_diff_int(pside, pprice, price)
+}
+
+#[pyfunction]
+pub fn calc_order_price_diff(side: &str, order_price: f64, market_price: f64) -> PyResult<f64> {
+    if !order_price.is_finite() || !market_price.is_finite() || market_price <= 0.0 {
+        return Ok(0.0);
+    }
+    let norm_side = side.trim().to_ascii_lowercase();
+    let diff = match norm_side.as_str() {
+        "buy" | "long" => 1.0 - order_price / market_price,
+        "sell" | "short" => order_price / market_price - 1.0,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "invalid order side '{}'; expected 'buy' or 'sell'",
+                other
+            )))
+        }
+    };
+    Ok(diff)
 }
 
 #[pyfunction]

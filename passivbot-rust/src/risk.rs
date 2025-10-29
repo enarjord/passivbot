@@ -106,7 +106,7 @@ pub fn gate_entries_by_twel(
         } else {
             continue;
         };
-        let distance = calc_pside_price_diff_int(pside, entry.market_price, entry.price).abs();
+        let distance = calc_pside_price_diff_int(pside, entry.market_price, entry.price);
         candidates.push(CandidateInternal {
             data: GateEntriesCandidate {
                 qty: entry.qty.abs(),

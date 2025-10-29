@@ -84,12 +84,12 @@ from custom_endpoint_overrides import (
 )
 
 
-calc_diff = pbr.calc_diff
 calc_min_entry_qty = pbr.calc_min_entry_qty_py
 round_ = pbr.round_
 round_up = pbr.round_up
 round_dn = pbr.round_dn
 round_dynamic = pbr.round_dynamic
+calc_order_price_diff = pbr.calc_order_price_diff
 
 DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL = 20_000
 
@@ -205,6 +205,14 @@ def calc_pnl(position_side, entry_price, close_price, qty, inverse, c_mult):
     except Exception:
         # rethrow to preserve behavior
         raise
+
+
+def order_market_diff(side: str, order_price: float, market_price: float) -> float:
+    """Return side-aware relative price diff between order and market."""
+    try:
+        return float(calc_order_price_diff(side, float(order_price), float(market_price)))
+    except Exception:
+        return 0.0
 
 
 from pure_funcs import (
@@ -2551,10 +2559,14 @@ class Passivbot:
         for symbol in ideal_orders:
             ideal_orders_f[symbol] = []
             last_mprice = last_prices[symbol]
-            with_mprice_diff = [(calc_diff(x[1], last_mprice), x) for x in ideal_orders[symbol]]
             seen = set()
-            any_partial = any(["partial" in order[2] for _, order in with_mprice_diff])
-            for mprice_diff, order in sorted(with_mprice_diff):
+            with_mprice_diff = []
+            for order in ideal_orders[symbol]:
+                side = determine_side_from_order_tuple(order)
+                diff = order_market_diff(side, order[1], last_mprice)
+                with_mprice_diff.append((diff, order, side))
+            any_partial = any("partial" in order[2] for _, order, _ in with_mprice_diff)
+            for mprice_diff, order, order_side in sorted(with_mprice_diff, key=lambda item: item[0]):
                 position_side = "long" if "long" in order[2] else "short"
                 if order[0] == 0.0:
                     continue
@@ -2569,7 +2581,6 @@ class Passivbot:
                 if seen_key in seen:
                     logging.info(f"debug duplicate ideal order {symbol} {order}")
                     continue
-                order_side = determine_side_from_order_tuple(order)
                 order_type = "limit"
                 if self.live_value("market_orders_allowed") and (
                     ("grid" in order[2] and mprice_diff < 0.0001)
@@ -2957,12 +2968,10 @@ class Passivbot:
         to_create_with_mprice_diff = []
         for x in to_create:
             try:
+                market_price = await self.cm.get_current_close(x["symbol"], max_age_ms=10_000)
                 to_create_with_mprice_diff.append(
                     (
-                        calc_diff(
-                            x["price"],
-                            (await self.cm.get_current_close(x["symbol"], max_age_ms=10_000)),
-                        ),
+                        order_market_diff(x["side"], x["price"], market_price),
                         x,
                     )
                 )
@@ -2973,12 +2982,10 @@ class Passivbot:
         to_cancel_with_mprice_diff = []
         for x in to_cancel:
             try:
+                market_price = await self.cm.get_current_close(x["symbol"], max_age_ms=10_000)
                 to_cancel_with_mprice_diff.append(
                     (
-                        calc_diff(
-                            x["price"],
-                            (await self.cm.get_current_close(x["symbol"], max_age_ms=10_000)),
-                        ),
+                        order_market_diff(x["side"], x["price"], market_price),
                         x,
                     )
                 )

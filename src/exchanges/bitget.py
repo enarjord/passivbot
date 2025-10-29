@@ -16,7 +16,7 @@ from pure_funcs import (
 )
 import passivbot_rust as pbr
 
-calc_diff = pbr.calc_diff
+calc_order_price_diff = pbr.calc_order_price_diff
 from procedures import print_async_exception, assert_correct_ccxt_version
 import passivbot_rust as pbr
 
@@ -419,8 +419,10 @@ class BitgetBot(Passivbot):
             for x in ideal_orders[s]:
                 ideal_orders_tmp.append(
                     (
-                        calc_diff(
-                            x["price"], (await self.cm.get_current_close(s, max_age_ms=10_000))
+                        calc_order_price_diff(
+                            x["side"],
+                            x["price"],
+                            await self.cm.get_current_close(s, max_age_ms=10_000),
                         ),
                         {**x, **{"symbol": s}},
                     )
