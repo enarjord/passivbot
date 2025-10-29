@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <rect width="1280" height="720" fill="#101820"/>
+  <rect x="60" y="120" width="1160" height="500" fill="none" stroke="#00ffc6" stroke-width="6" rx="16"/>
+  <text x="640" y="190" fill="#00ffc6" font-family="Inter,Helvetica,Arial,sans-serif" font-size="48" text-anchor="middle">
+    Risk Management Dashboard
+  </text>
+  <text x="640" y="240" fill="#ffffff" font-family="Inter,Helvetica,Arial,sans-serif" font-size="28" text-anchor="middle">
+    Positions • Exposure • Alerts • Overrides
+  </text>
+  <text x="640" y="280" fill="#c3f5ff" font-family="Inter,Helvetica,Arial,sans-serif" font-size="22" text-anchor="middle">
+    Consolidated overview of risk metrics across venues
+  </text>
+  <g transform="translate(120 330)">
+    <rect width="480" height="120" fill="#142634" stroke="#00ffc6" stroke-width="4" rx="12"/>
+    <text x="240" y="55" fill="#ffffff" font-family="Inter,Helvetica,Arial,sans-serif" font-size="26" text-anchor="middle">
+      Venue Balances
+    </text>
+    <text x="240" y="90" fill="#7fffd4" font-family="Inter,Helvetica,Arial,sans-serif" font-size="20" text-anchor="middle">
+      Spot, Perp, Options coverage
+    </text>
+  </g>
+  <g transform="translate(640 330)">
+    <rect width="480" height="120" fill="#142634" stroke="#00ffc6" stroke-width="4" rx="12"/>
+    <text x="240" y="55" fill="#ffffff" font-family="Inter,Helvetica,Arial,sans-serif" font-size="26" text-anchor="middle">
+      Open Positions
+    </text>
+    <text x="240" y="90" fill="#7fffd4" font-family="Inter,Helvetica,Arial,sans-serif" font-size="20" text-anchor="middle">
+      Net + gross exposure by venue
+    </text>
+  </g>
+  <g transform="translate(120 480)">
+    <rect width="480" height="120" fill="#142634" stroke="#00ffc6" stroke-width="4" rx="12"/>
+    <text x="240" y="55" fill="#ffffff" font-family="Inter,Helvetica,Arial,sans-serif" font-size="26" text-anchor="middle">
+      P&amp;L Timeline
+    </text>
+    <text x="240" y="90" fill="#7fffd4" font-family="Inter,Helvetica,Arial,sans-serif" font-size="20" text-anchor="middle">
+      Rolling 24h delta + drawdown
+    </text>
+  </g>
+  <g transform="translate(640 480)">
+    <rect width="480" height="120" fill="#142634" stroke="#00ffc6" stroke-width="4" rx="12"/>
+    <text x="240" y="55" fill="#ffffff" font-family="Inter,Helvetica,Arial,sans-serif" font-size="26" text-anchor="middle">
+      Risk Alerts
+    </text>
+    <text x="240" y="90" fill="#ff9f1c" font-family="Inter,Helvetica,Arial,sans-serif" font-size="20" text-anchor="middle">
+      Auto-hedge triggers + overrides
+    </text>
+  </g>
+</svg>

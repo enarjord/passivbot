@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+- Consolidated risk dashboard delivers a single-page view of exposure, alerts, and overrides with faster navigation for portfolio managers.
+- Kill-switch banner and inline threshold editor highlight live governance state with contextual guidance to coordinate CLI + UI actions.
+- Analytics tray now streams rolling P&L and alert cadence metrics so portfolio managers can monitor drawdowns without leaving the dashboard.
+- Portfolio managers should review the updated onboarding tips in the dashboard header and the risk refactor guide (`docs/risk-management-refactor.md`) before live trading.
+
+
 ## [v3.5.2] - 2021-05-10
 - walk forward optimization
 - more advanced backtest analysis tools
