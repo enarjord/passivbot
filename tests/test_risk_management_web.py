@@ -661,7 +661,9 @@ def test_kill_switch_endpoint(sample_snapshot: dict, auth_manager: AuthManager) 
         assert fetcher.kill_requests[-1] == ("Demo Account", None)
 
 
-def test_trading_panel_page(sample_snapshot: dict, auth_manager: AuthManager) -> None:
+def test_trading_controls_embedded_and_route_removed(
+    sample_snapshot: dict, auth_manager: AuthManager
+) -> None:
     client, _ = create_test_app(sample_snapshot, auth_manager)
     with client:
         login_response = client.post(
@@ -671,9 +673,36 @@ def test_trading_panel_page(sample_snapshot: dict, auth_manager: AuthManager) ->
         )
         assert login_response.status_code in {302, 303, 307}
 
-        response = client.get("/trading-panel")
+        dashboard = client.get("/")
+        assert dashboard.status_code == 200
+        body = dashboard.text
+        assert "data-page-target=\"trading\"" in body
+        assert "id=\"order-form\"" in body
+        assert "data-open-trading" in body
+
+        orphaned = client.get("/trading-panel", allow_redirects=False)
+        assert orphaned.status_code == 404
+
+
+def test_dashboard_theme_toggle_and_persistence_script(
+    sample_snapshot: dict, auth_manager: AuthManager
+) -> None:
+    client, _ = create_test_app(sample_snapshot, auth_manager)
+    with client:
+        login_response = client.post(
+            "/login",
+            data={"username": "admin", "password": "admin123"},
+            allow_redirects=False,
+        )
+        assert login_response.status_code in {302, 303, 307}
+
+        response = client.get("/")
         assert response.status_code == 200
-        assert "Trading panel" in response.text
+        body = response.text
+        assert "data-theme-toggle" in body
+        assert "risk-dashboard.theme" in body
+        assert "document.documentElement.dataset.theme" in body
+        assert "localStorage.setItem" in body
 
 
 def test_snapshot_api_paginates_and_sorts(auth_manager: AuthManager) -> None:

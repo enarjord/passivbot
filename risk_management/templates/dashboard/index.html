@@ -1,236 +1,11 @@
 {% extends "base.html" %}
 
-{% block head %}
-  <style>
-    .view-nav {
-      display: flex;
-      gap: 0.75rem;
-      margin-bottom: 1.5rem;
-      flex-wrap: wrap;
-    }
-
-    .view-nav__button {
-      background: rgba(148, 163, 184, 0.15);
-      color: var(--text);
-      border-radius: 0.75rem;
-      padding: 0.6rem 1.25rem;
-      border: 1px solid transparent;
-      font-weight: 600;
-      letter-spacing: 0.02em;
-    }
-
-    .view-nav__button:hover {
-      background: rgba(148, 163, 184, 0.25);
-    }
-
-    .view-nav__button.active {
-      background: var(--accent);
-      color: #0f172a;
-      border-color: transparent;
-    }
-
-    .page-section[hidden] {
-      display: none;
-    }
-
-    .button.secondary {
-      background: rgba(148, 163, 184, 0.2);
-      color: var(--text);
-    }
-
-    .button.secondary:hover {
-      background: rgba(148, 163, 184, 0.3);
-      box-shadow: 0 8px 20px rgba(148, 163, 184, 0.2);
-    }
-
-    .status-message {
-      font-size: 0.85rem;
-      color: var(--muted);
-    }
-
-    .status-message.success {
-      color: var(--success);
-    }
-
-    .status-message.error {
-      color: var(--danger);
-    }
-
-    .grafana-grid {
-      display: grid;
-      gap: 1.5rem;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    }
-
-    .grafana-panel {
-      display: flex;
-      flex-direction: column;
-      gap: 0.75rem;
-    }
-
-    .grafana-panel iframe {
-      width: 100%;
-      border: none;
-      border-radius: 0.75rem;
-      background: rgba(15, 23, 42, 0.75);
-      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.35);
-    }
-
-    .grafana-panel__meta {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 0.75rem;
-      flex-wrap: wrap;
-    }
-
-    .accounts-controls {
-      display: flex;
-      flex-direction: column;
-      gap: 1rem;
-      margin-bottom: 1.5rem;
-    }
-
-    .accounts-controls__row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 1rem;
-    }
-
-    .accounts-controls .field {
-      display: flex;
-      flex-direction: column;
-      gap: 0.35rem;
-      min-width: 180px;
-    }
-
-    .accounts-controls .field > span {
-      font-size: 0.85rem;
-      color: var(--muted);
-    }
-
-    .accounts-controls input[type="search"],
-    .accounts-controls select {
-      background: rgba(148, 163, 184, 0.1);
-      border: 1px solid rgba(148, 163, 184, 0.25);
-      border-radius: 0.5rem;
-      padding: 0.6rem 0.75rem;
-      color: inherit;
-    }
-
-    .chip-group {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-    }
-
-    .chip {
-      border: 1px solid rgba(148, 163, 184, 0.25);
-      background: rgba(148, 163, 184, 0.12);
-      border-radius: 999px;
-      padding: 0.4rem 0.9rem;
-      font-size: 0.85rem;
-      cursor: pointer;
-      transition: background 0.2s ease;
-    }
-
-    .chip[aria-pressed="true"],
-    .chip.active {
-      background: var(--accent);
-      color: #0f172a;
-      border-color: transparent;
-    }
-
-    .accounts-sort {
-      display: grid;
-      gap: 0.35rem;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    }
-
-    .accounts-sort__button {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      background: rgba(148, 163, 184, 0.12);
-      border: 1px solid rgba(148, 163, 184, 0.2);
-      border-radius: 0.6rem;
-      padding: 0.55rem 0.75rem;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s ease;
-    }
-
-    .accounts-sort__button:hover {
-      background: rgba(148, 163, 184, 0.2);
-    }
-
-    .accounts-sort__button[data-active="true"] {
-      background: var(--accent);
-      color: #0f172a;
-      border-color: transparent;
-    }
-
-    .accounts-summary {
-      margin-bottom: 1rem;
-      color: var(--muted);
-      font-size: 0.9rem;
-      display: flex;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-    }
-
-    .pagination {
-      display: flex;
-      justify-content: flex-end;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-      margin-top: 1.5rem;
-    }
-
-    .pagination button {
-      border-radius: 0.5rem;
-      background: rgba(148, 163, 184, 0.12);
-      border: 1px solid rgba(148, 163, 184, 0.2);
-      padding: 0.45rem 0.9rem;
-      font-weight: 600;
-      cursor: pointer;
-    }
-
-    .pagination button[disabled] {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    .table-pagination {
-      display: flex;
-      justify-content: flex-end;
-      gap: 0.35rem;
-      margin-top: 0.5rem;
-      flex-wrap: wrap;
-    }
-
-    .table-pagination button {
-      border-radius: 0.5rem;
-      background: rgba(148, 163, 184, 0.12);
-      border: 1px solid rgba(148, 163, 184, 0.2);
-      padding: 0.3rem 0.6rem;
-      font-size: 0.8rem;
-      cursor: pointer;
-    }
-
-    .table-pagination button[disabled] {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-  </style>
-{% endblock %}
+{% block head %}{% endblock %}
 
 {% block header_controls %}
-  <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
+  <div class="header-toolbar">
     <span class="badge">Logged in as {{ user }}</span>
-    <a href="/trading-panel" class="button secondary">Trading panel</a>
+    <button type="button" class="button secondary" data-open-trading>Trading controls</button>
     <button type="button" class="button danger" data-kill-portfolio>Kill portfolio</button>
     <div class="status-message" data-kill-status="__portfolio__" hidden></div>
     <form method="post" action="/logout">
@@ -258,6 +33,15 @@
       data-page-target="accounts"
     >
       Accounts
+    </button>
+    <button
+      type="button"
+      class="view-nav__button"
+      role="tab"
+      aria-selected="false"
+      data-page-target="trading"
+    >
+      Trading
     </button>
     <button
       type="button"
@@ -829,6 +613,173 @@
       </div>
     </div>
 
+    <div class="page-section" data-page-section="trading" hidden>
+      <section class="card" style="margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;">
+          <div>
+            <h2 style="margin: 0 0 0.5rem;">Trading controls</h2>
+            <p style="margin: 0; color: var(--muted);">
+              Manage orders and risk stops for connected accounts in real time.
+            </p>
+          </div>
+          <button type="button" class="button secondary" id="refresh-button">Refresh</button>
+        </div>
+      </section>
+
+      <section class="panel-grid" aria-live="polite">
+        <section class="card" id="order-card">
+          <h3 style="margin-top: 0;">Create order</h3>
+          <form id="order-form" style="display: flex; flex-direction: column; gap: 1rem;">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="account-select">Account</label>
+                <select id="account-select" name="account" required></select>
+              </div>
+              <div class="form-group">
+                <label for="symbol-input">Symbol</label>
+                <input id="symbol-input" name="symbol" placeholder="e.g. BTC/USDT" required />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="side-select">Side</label>
+                <select id="side-select" name="side" required>
+                  <option value="buy">Buy</option>
+                  <option value="sell">Sell</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="type-select">Order type</label>
+                <select id="type-select" name="order_type" required></select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="amount-input">Amount</label>
+                <input id="amount-input" name="amount" type="number" step="any" min="0" required />
+              </div>
+              <div class="form-group">
+                <label for="price-input">Price (optional for market)</label>
+                <input id="price-input" name="price" type="number" step="any" min="0" />
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="params-input">Additional params (JSON)</label>
+              <textarea
+                id="params-input"
+                name="params"
+                rows="3"
+                placeholder="{\n  &quot;reduceOnly&quot;: true\n}"
+              ></textarea>
+            </div>
+            <div style="display: flex; gap: 1rem; align-items: center;">
+              <button type="submit" class="button">Submit order</button>
+              <div class="status-message" id="order-status" hidden></div>
+            </div>
+          </form>
+        </section>
+
+        <section class="card" id="stop-loss-card">
+          <h3 style="margin-top: 0;">Portfolio stop loss</h3>
+          <p style="color: var(--muted);" id="stop-loss-summary"></p>
+          <form id="stop-loss-form" style="display: flex; flex-direction: column; gap: 1rem;">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="stop-loss-threshold">Drawdown threshold (%)</label>
+                <input id="stop-loss-threshold" name="threshold" type="number" step="0.1" min="0" required />
+              </div>
+            </div>
+            <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+              <button type="submit" class="button">Set threshold</button>
+              <button type="button" class="button secondary" id="stop-loss-clear">Clear</button>
+              <div class="status-message" id="stop-loss-status" hidden></div>
+            </div>
+          </form>
+        </section>
+
+        <section class="card" id="account-stop-loss-card">
+          <h3 style="margin-top: 0;">Account stop loss</h3>
+          <p style="color: var(--muted);" id="account-stop-loss-summary"></p>
+          <form id="account-stop-loss-form" style="display: flex; flex-direction: column; gap: 1rem;">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="account-stop-loss-threshold">Drawdown threshold (%)</label>
+                <input
+                  id="account-stop-loss-threshold"
+                  name="threshold"
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  required
+                />
+              </div>
+            </div>
+            <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+              <button type="submit" class="button">Set threshold</button>
+              <button type="button" class="button secondary" id="account-stop-loss-clear">Clear</button>
+              <div class="status-message" id="account-stop-loss-status" hidden></div>
+            </div>
+          </form>
+        </section>
+      </section>
+
+      <section class="card" style="margin-top: 1.5rem;" id="positions-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;">
+          <h3 style="margin: 0;">Positions</h3>
+          <span id="positions-summary" style="color: var(--muted);"></span>
+          <button type="button" class="button secondary small" id="close-all-positions">Close all positions</button>
+        </div>
+        <div class="table-wrapper">
+          <table id="positions-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Notional</th>
+                <th>Exposure %</th>
+                <th>Unrealised PnL</th>
+                <th>Daily realised PnL</th>
+                <th>Entry</th>
+                <th>Mark</th>
+                <th>Liq.</th>
+                <th>Max DD</th>
+                <th>TP</th>
+                <th>SL</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card" style="margin-top: 1.5rem;" id="orders-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;">
+          <h3 style="margin: 0;">Open orders</h3>
+          <span id="orders-summary" style="color: var(--muted);"></span>
+          <button type="button" class="button secondary small" id="cancel-all-orders">Cancel all orders</button>
+        </div>
+        <div class="table-wrapper">
+          <table id="orders-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Type</th>
+                <th>Price</th>
+                <th>Amount</th>
+                <th>Remaining</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
     <div class="page-section" data-page-section="alerts" hidden>
       <section class="card alerts">
         <h2>Alerts</h2>
@@ -1034,6 +985,13 @@
       });
     });
 
+    const tradingShortcut = document.querySelector("[data-open-trading]");
+    if (tradingShortcut) {
+      tradingShortcut.addEventListener("click", () => {
+        setActivePage("trading");
+      });
+    }
+
     setActivePage(state.activePage || DEFAULT_PAGE);
 
     const updateSortButtons = () => {
@@ -1099,6 +1057,606 @@
       const number = Number(value || 0) * 100;
       return `${number.toFixed(2)}%`;
     };
+
+    const tradingModule = (() => {
+      const initialSnapshot = {{ snapshot | tojson | safe }};
+      const state = {
+        snapshot: initialSnapshot,
+        currentAccount:
+          (Array.isArray(initialSnapshot.accounts) && initialSnapshot.accounts[0]?.name) || "",
+        orderTypes: new Map(),
+      };
+
+      const elements = {
+        accountSelect: document.getElementById("account-select"),
+        typeSelect: document.getElementById("type-select"),
+        orderStatus: document.getElementById("order-status"),
+        positionsTableBody: document.querySelector("#positions-table tbody"),
+        ordersTableBody: document.querySelector("#orders-table tbody"),
+        positionsSummary: document.getElementById("positions-summary"),
+        ordersSummary: document.getElementById("orders-summary"),
+        stopLossSummary: document.getElementById("stop-loss-summary"),
+        stopLossStatus: document.getElementById("stop-loss-status"),
+        stopLossThreshold: document.getElementById("stop-loss-threshold"),
+        accountStopLossSummary: document.getElementById("account-stop-loss-summary"),
+        accountStopLossStatus: document.getElementById("account-stop-loss-status"),
+        accountStopLossThreshold: document.getElementById("account-stop-loss-threshold"),
+        accountStopLossClear: document.getElementById("account-stop-loss-clear"),
+        orderForm: document.getElementById("order-form"),
+        stopLossForm: document.getElementById("stop-loss-form"),
+        accountStopLossForm: document.getElementById("account-stop-loss-form"),
+        refreshButton: document.getElementById("refresh-button"),
+        cancelAllOrdersButton: document.getElementById("cancel-all-orders"),
+        closeAllPositionsButton: document.getElementById("close-all-positions"),
+        stopLossClearButton: document.getElementById("stop-loss-clear"),
+      };
+
+      const showStatus = (element, message, variant = "info") => {
+        if (!element) return;
+        element.hidden = !message;
+        element.textContent = message || "";
+        element.classList.remove("success", "error");
+        if (variant === "success") {
+          element.classList.add("success");
+        } else if (variant === "error") {
+          element.classList.add("error");
+        }
+      };
+
+      const parseParams = (raw) => {
+        if (!raw) {
+          return null;
+        }
+        try {
+          const parsed = JSON.parse(raw);
+          return typeof parsed === "object" && parsed !== null ? parsed : null;
+        } catch (error) {
+          return null;
+        }
+      };
+
+      const renderAccountOptions = () => {
+        const select = elements.accountSelect;
+        if (!select) {
+          return;
+        }
+        const accounts = Array.isArray(state.snapshot.accounts) ? state.snapshot.accounts : [];
+        if (!accounts.some((account) => account.name === state.currentAccount)) {
+          state.currentAccount = accounts.length > 0 ? accounts[0].name : "";
+        }
+        select.innerHTML = accounts
+          .map((account) => {
+            const selected = account.name === state.currentAccount ? "selected" : "";
+            return `<option value="${account.name}" ${selected}>${account.name}</option>`;
+          })
+          .join("");
+      };
+
+      const renderOrderTypes = () => {
+        const select = elements.typeSelect;
+        if (!select) {
+          return;
+        }
+        const types = state.orderTypes.get(state.currentAccount) || [];
+        const fallback = types.length === 0 ? ["limit", "market"] : types;
+        select.innerHTML = fallback.map((type) => `<option value="${type}">${type}</option>`).join("");
+      };
+
+      const renderPositions = () => {
+        const tbody = elements.positionsTableBody;
+        if (!tbody) {
+          return;
+        }
+        const accounts = Array.isArray(state.snapshot.accounts) ? state.snapshot.accounts : [];
+        const account = accounts.find((item) => item.name === state.currentAccount);
+        const positions = account && Array.isArray(account.positions) ? account.positions : [];
+        if (elements.positionsSummary) {
+          elements.positionsSummary.textContent = `${positions.length} position${positions.length === 1 ? "" : "s"}`;
+        }
+        tbody.innerHTML = positions
+          .map((position) => {
+            const pnlClass = Number(position.unrealized_pnl) >= 0 ? "gain" : "loss";
+            const realizedClass = Number(position.daily_realized_pnl) >= 0 ? "gain" : "loss";
+            const liquidation =
+              position.liquidation_price !== null && position.liquidation_price !== undefined
+                ? formatCurrency(position.liquidation_price)
+                : "-";
+            const maxDrawdown =
+              position.max_drawdown_pct !== null && position.max_drawdown_pct !== undefined
+                ? formatPct(position.max_drawdown_pct)
+                : "-";
+            const takeProfit =
+              position.take_profit_price !== null && position.take_profit_price !== undefined
+                ? formatCurrency(position.take_profit_price)
+                : "-";
+            const stopLossPrice =
+              position.stop_loss_price !== null && position.stop_loss_price !== undefined
+                ? formatCurrency(position.stop_loss_price)
+                : "-";
+            return `
+              <tr>
+                <td>${position.symbol}</td>
+                <td>${position.side}</td>
+                <td>${formatCurrency(position.notional)}</td>
+                <td>${formatPct(position.exposure)}</td>
+                <td class="${pnlClass}">${formatCurrency(position.unrealized_pnl)}</td>
+                <td class="${realizedClass}">${formatCurrency(position.daily_realized_pnl)}</td>
+                <td>${formatCurrency(position.entry_price)}</td>
+                <td>${formatCurrency(position.mark_price)}</td>
+                <td>${liquidation}</td>
+                <td>${maxDrawdown}</td>
+                <td>${takeProfit}</td>
+                <td>${stopLossPrice}</td>
+                <td>
+                  <div class="actions-column">
+                    <button type="button" class="button danger small" data-close-position data-symbol="${position.symbol}">Close</button>
+                  </div>
+                </td>
+              </tr>
+            `;
+          })
+          .join("");
+        if (positions.length === 0) {
+          tbody.innerHTML =
+            '<tr><td colspan="13" style="text-align: center; color: var(--muted);">No open positions.</td></tr>';
+        }
+      };
+
+      const renderOrders = () => {
+        const tbody = elements.ordersTableBody;
+        if (!tbody) {
+          return;
+        }
+        const accounts = Array.isArray(state.snapshot.accounts) ? state.snapshot.accounts : [];
+        const account = accounts.find((item) => item.name === state.currentAccount);
+        const orders = account && Array.isArray(account.orders) ? account.orders : [];
+        if (elements.ordersSummary) {
+          elements.ordersSummary.textContent = `${orders.length} order${orders.length === 1 ? "" : "s"}`;
+        }
+        tbody.innerHTML = orders
+          .map((order) => {
+            const orderId = order.order_id || "";
+            const cancelAction = orderId
+              ? `<button type="button" class="button danger small" data-cancel-order data-order-id="${orderId}" data-symbol="${order.symbol}">Cancel</button>`
+              : '<span style="color: var(--muted);">N/A</span>';
+            const price =
+              order.price !== null && order.price !== undefined ? formatCurrency(order.price) : "-";
+            const amount = order.amount ?? "-";
+            const remaining = order.remaining ?? "-";
+            const status = order.status || "-";
+            return `
+              <tr>
+                <td>${orderId || "-"}</td>
+                <td>${order.symbol}</td>
+                <td>${order.side}</td>
+                <td>${order.type}</td>
+                <td>${price}</td>
+                <td>${amount}</td>
+                <td>${remaining}</td>
+                <td>${status}</td>
+                <td>
+                  <div class="actions-column">
+                    ${cancelAction}
+                  </div>
+                </td>
+              </tr>
+            `;
+          })
+          .join("");
+        if (orders.length === 0) {
+          tbody.innerHTML =
+            '<tr><td colspan="9" style="text-align: center; color: var(--muted);">No open orders.</td></tr>';
+        }
+      };
+
+      const renderPortfolioStopLoss = () => {
+        if (!elements.stopLossSummary) {
+          return;
+        }
+        const stopLoss = state.snapshot.portfolio_stop_loss;
+        if (!stopLoss) {
+          elements.stopLossSummary.textContent = "No active stop loss.";
+          if (elements.stopLossThreshold) {
+            elements.stopLossThreshold.value = "";
+          }
+          return;
+        }
+        const threshold = Number(stopLoss.threshold_pct ?? 0);
+        const baseline =
+          stopLoss.baseline_balance !== undefined && stopLoss.baseline_balance !== null
+            ? formatCurrency(stopLoss.baseline_balance)
+            : "-";
+        const currentBalance =
+          stopLoss.current_balance !== undefined && stopLoss.current_balance !== null
+            ? formatCurrency(stopLoss.current_balance)
+            : "-";
+        const drawdown = Number(stopLoss.current_drawdown_pct);
+        const drawdownStr = Number.isFinite(drawdown) ? `${(drawdown * 100).toFixed(2)}%` : "-";
+        const triggered = stopLoss.triggered ? "Triggered" : "Active";
+        elements.stopLossSummary.textContent = `Status: ${triggered}. Threshold ${threshold.toFixed(
+          2,
+        )}%. Baseline ${baseline}, current ${currentBalance}, drawdown ${drawdownStr}.`;
+        if (!stopLoss.triggered && threshold > 0 && elements.stopLossThreshold) {
+          elements.stopLossThreshold.value = threshold;
+        }
+      };
+
+      const renderAccountStopLoss = () => {
+        if (!elements.accountStopLossSummary) {
+          return;
+        }
+        const accounts = Array.isArray(state.snapshot.accounts) ? state.snapshot.accounts : [];
+        const account = accounts.find((item) => item.name === state.currentAccount);
+        if (!account) {
+          elements.accountStopLossSummary.textContent = "No account selected.";
+          if (elements.accountStopLossThreshold) {
+            elements.accountStopLossThreshold.value = "";
+          }
+          return;
+        }
+        const stopLoss =
+          account.stop_loss || (state.snapshot.account_stop_losses && state.snapshot.account_stop_losses[account.name]);
+        if (!stopLoss) {
+          elements.accountStopLossSummary.textContent = `No active stop loss for ${account.name}.`;
+          if (elements.accountStopLossThreshold) {
+            elements.accountStopLossThreshold.value = "";
+          }
+          return;
+        }
+        const threshold = Number(stopLoss.threshold_pct ?? 0);
+        const baseline =
+          stopLoss.baseline_balance !== undefined && stopLoss.baseline_balance !== null
+            ? formatCurrency(stopLoss.baseline_balance)
+            : "-";
+        const currentBalance =
+          stopLoss.current_balance !== undefined && stopLoss.current_balance !== null
+            ? formatCurrency(stopLoss.current_balance)
+            : formatCurrency(account.balance);
+        const drawdown = Number(stopLoss.current_drawdown_pct ?? NaN);
+        const drawdownStr = Number.isFinite(drawdown) ? `${(drawdown * 100).toFixed(2)}%` : "-";
+        const status = stopLoss.triggered ? "Triggered" : "Active";
+        elements.accountStopLossSummary.textContent = `${account.name}: ${status}. Threshold ${threshold.toFixed(
+          2,
+        )}%. Baseline ${baseline}, current ${currentBalance}, drawdown ${drawdownStr}.`;
+        if (!stopLoss.triggered && threshold > 0 && elements.accountStopLossThreshold) {
+          elements.accountStopLossThreshold.value = threshold;
+        }
+      };
+
+      const renderAll = () => {
+        renderAccountOptions();
+        renderOrderTypes();
+        renderPositions();
+        renderOrders();
+        renderPortfolioStopLoss();
+        renderAccountStopLoss();
+      };
+
+      const fetchOrderTypes = async (accountName) => {
+        if (!accountName) {
+          return;
+        }
+        try {
+          const response = await fetch(`/api/trading/accounts/${encodeURIComponent(accountName)}/order-types`, {
+            credentials: "include",
+          });
+          if (!response.ok) {
+            throw new Error(`Unable to load order types (${response.status})`);
+          }
+          const payload = await response.json();
+          state.orderTypes.set(accountName, payload.order_types || []);
+          renderOrderTypes();
+        } catch (error) {
+          console.error(error);
+          showStatus(elements.orderStatus, error.message, "error");
+        }
+      };
+
+      const updateSnapshot = (snapshot) => {
+        state.snapshot = snapshot;
+        const accounts = Array.isArray(snapshot.accounts) ? snapshot.accounts : [];
+        if (!accounts.some((account) => account.name === state.currentAccount)) {
+          state.currentAccount = accounts.length > 0 ? accounts[0].name : "";
+        }
+        renderAll();
+      };
+
+      const handleAccountChange = async (event) => {
+        state.currentAccount = event.target.value;
+        renderPositions();
+        renderOrders();
+        await fetchOrderTypes(state.currentAccount);
+        renderAccountStopLoss();
+      };
+
+      if (elements.accountSelect) {
+        elements.accountSelect.addEventListener("change", handleAccountChange);
+      }
+
+      if (elements.orderForm) {
+        elements.orderForm.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const formData = new FormData(elements.orderForm);
+          const accountName = formData.get("account");
+          const payload = {
+            symbol: formData.get("symbol"),
+            side: formData.get("side"),
+            order_type: formData.get("order_type"),
+            amount: formData.get("amount"),
+            price: formData.get("price"),
+          };
+          const paramsRaw = formData.get("params");
+          const params = parseParams(paramsRaw);
+          if (params) {
+            payload.params = params;
+          }
+          showStatus(elements.orderStatus, "Submitting order...");
+          try {
+            const response = await fetch(`/api/trading/accounts/${encodeURIComponent(accountName)}/orders`, {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            if (!response.ok) {
+              const errorPayload = await response.json().catch(() => ({}));
+              throw new Error(errorPayload.detail || `Order failed (${response.status})`);
+            }
+            showStatus(elements.orderStatus, "Order submitted.", "success");
+            elements.orderForm.reset();
+            await requestSnapshot();
+          } catch (error) {
+            console.error(error);
+            showStatus(elements.orderStatus, error.message, "error");
+          }
+        });
+      }
+
+      if (elements.stopLossForm) {
+        elements.stopLossForm.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const threshold = Number(elements.stopLossThreshold?.value);
+          if (!Number.isFinite(threshold) || threshold <= 0) {
+            showStatus(elements.stopLossStatus, "Threshold must be greater than zero.", "error");
+            return;
+          }
+          showStatus(elements.stopLossStatus, "Updating stop loss...");
+          try {
+            const response = await fetch("/api/trading/portfolio/stop-loss", {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ threshold_pct: threshold }),
+            });
+            if (!response.ok) {
+              const errorPayload = await response.json().catch(() => ({}));
+              throw new Error(errorPayload.detail || `Update failed (${response.status})`);
+            }
+            showStatus(elements.stopLossStatus, "Stop loss updated.", "success");
+            await requestSnapshot();
+          } catch (error) {
+            console.error(error);
+            showStatus(elements.stopLossStatus, error.message, "error");
+          }
+        });
+      }
+
+      if (elements.stopLossClearButton) {
+        elements.stopLossClearButton.addEventListener("click", async () => {
+          showStatus(elements.stopLossStatus, "Clearing stop loss...");
+          try {
+            const response = await fetch("/api/trading/portfolio/stop-loss", {
+              method: "DELETE",
+              credentials: "include",
+            });
+            if (!response.ok) {
+              const errorPayload = await response.json().catch(() => ({}));
+              throw new Error(errorPayload.detail || `Unable to clear (${response.status})`);
+            }
+            showStatus(elements.stopLossStatus, "Stop loss cleared.", "success");
+            await requestSnapshot();
+          } catch (error) {
+            console.error(error);
+            showStatus(elements.stopLossStatus, error.message, "error");
+          }
+        });
+      }
+
+      if (elements.accountStopLossForm) {
+        elements.accountStopLossForm.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          if (!state.currentAccount) {
+            showStatus(elements.accountStopLossStatus, "Select an account first.", "error");
+            return;
+          }
+          const threshold = Number(elements.accountStopLossThreshold?.value);
+          if (!Number.isFinite(threshold) || threshold <= 0) {
+            showStatus(elements.accountStopLossStatus, "Threshold must be greater than zero.", "error");
+            return;
+          }
+          showStatus(elements.accountStopLossStatus, "Updating stop loss...");
+          try {
+            const response = await fetch(
+              `/api/trading/accounts/${encodeURIComponent(state.currentAccount)}/stop-loss`,
+              {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ threshold_pct: threshold }),
+              },
+            );
+            if (!response.ok) {
+              const errorPayload = await response.json().catch(() => ({}));
+              throw new Error(errorPayload.detail || `Update failed (${response.status})`);
+            }
+            showStatus(elements.accountStopLossStatus, "Stop loss updated.", "success");
+            await requestSnapshot();
+          } catch (error) {
+            console.error(error);
+            showStatus(elements.accountStopLossStatus, error.message, "error");
+          }
+        });
+      }
+
+      if (elements.accountStopLossClear) {
+        elements.accountStopLossClear.addEventListener("click", async () => {
+          if (!state.currentAccount) {
+            showStatus(elements.accountStopLossStatus, "Select an account first.", "error");
+            return;
+          }
+          showStatus(elements.accountStopLossStatus, "Clearing stop loss...");
+          try {
+            const response = await fetch(
+              `/api/trading/accounts/${encodeURIComponent(state.currentAccount)}/stop-loss`,
+              {
+                method: "DELETE",
+                credentials: "include",
+              },
+            );
+            if (!response.ok) {
+              const errorPayload = await response.json().catch(() => ({}));
+              throw new Error(errorPayload.detail || `Unable to clear (${response.status})`);
+            }
+            showStatus(elements.accountStopLossStatus, "Stop loss cleared.", "success");
+            await requestSnapshot();
+          } catch (error) {
+            console.error(error);
+            showStatus(elements.accountStopLossStatus, error.message, "error");
+          }
+        });
+      }
+
+      document.addEventListener("click", async (event) => {
+        const cancelButton = event.target.closest("[data-cancel-order]");
+        if (cancelButton) {
+          const orderId = cancelButton.getAttribute("data-order-id");
+          const symbol = cancelButton.getAttribute("data-symbol");
+          showStatus(elements.orderStatus, `Cancelling ${orderId || "order"}...`);
+          try {
+            const response = await fetch(
+              `/api/trading/accounts/${encodeURIComponent(state.currentAccount)}/orders/${encodeURIComponent(orderId || "")}`,
+              {
+                method: "DELETE",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ symbol }),
+              },
+            );
+            if (!response.ok) {
+              const errorPayload = await response.json().catch(() => ({}));
+              throw new Error(errorPayload.detail || `Cancel failed (${response.status})`);
+            }
+            showStatus(elements.orderStatus, "Order cancelled.", "success");
+            await requestSnapshot();
+          } catch (error) {
+            console.error(error);
+            showStatus(elements.orderStatus, error.message, "error");
+          }
+          return;
+        }
+        const closeButton = event.target.closest("[data-close-position]");
+        if (closeButton) {
+          const symbol = closeButton.getAttribute("data-symbol");
+          showStatus(elements.orderStatus, `Closing ${symbol}...`);
+          try {
+            const response = await fetch(
+              `/api/trading/accounts/${encodeURIComponent(state.currentAccount)}/positions/${encodeURIComponent(symbol)}/close`,
+              {
+                method: "POST",
+                credentials: "include",
+              },
+            );
+            if (!response.ok) {
+              const errorPayload = await response.json().catch(() => ({}));
+              throw new Error(errorPayload.detail || `Close failed (${response.status})`);
+            }
+            showStatus(elements.orderStatus, "Position close requested.", "success");
+            await requestSnapshot();
+          } catch (error) {
+            console.error(error);
+            showStatus(elements.orderStatus, error.message, "error");
+          }
+        }
+      });
+
+      if (elements.refreshButton) {
+        elements.refreshButton.addEventListener("click", async () => {
+          showStatus(elements.orderStatus, "Refreshing snapshot...");
+          try {
+            await requestSnapshot();
+            showStatus(elements.orderStatus, "Snapshot updated.", "success");
+          } catch (error) {
+            console.error(error);
+            showStatus(elements.orderStatus, error.message, "error");
+          }
+        });
+      }
+
+      if (elements.cancelAllOrdersButton) {
+        elements.cancelAllOrdersButton.addEventListener("click", async () => {
+          if (!state.currentAccount) {
+            showStatus(elements.orderStatus, "Select an account first.", "error");
+            return;
+          }
+          showStatus(elements.orderStatus, "Cancelling all orders...");
+          try {
+            const response = await fetch(
+              `/api/trading/accounts/${encodeURIComponent(state.currentAccount)}/orders/cancel-all`,
+              {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({}),
+              },
+            );
+            if (!response.ok) {
+              const errorPayload = await response.json().catch(() => ({}));
+              throw new Error(errorPayload.detail || `Cancel failed (${response.status})`);
+            }
+            showStatus(elements.orderStatus, "All orders cancelled.", "success");
+            await requestSnapshot();
+          } catch (error) {
+            console.error(error);
+            showStatus(elements.orderStatus, error.message, "error");
+          }
+        });
+      }
+
+      if (elements.closeAllPositionsButton) {
+        elements.closeAllPositionsButton.addEventListener("click", async () => {
+          if (!state.currentAccount) {
+            showStatus(elements.orderStatus, "Select an account first.", "error");
+            return;
+          }
+          showStatus(elements.orderStatus, "Closing all positions...");
+          try {
+            const response = await fetch(
+              `/api/trading/accounts/${encodeURIComponent(state.currentAccount)}/positions/close-all`,
+              {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({}),
+              },
+            );
+            if (!response.ok) {
+              const errorPayload = await response.json().catch(() => ({}));
+              throw new Error(errorPayload.detail || `Close failed (${response.status})`);
+            }
+            showStatus(elements.orderStatus, "Close requests submitted.", "success");
+            await requestSnapshot();
+          } catch (error) {
+            console.error(error);
+            showStatus(elements.orderStatus, error.message, "error");
+          }
+        });
+      }
+
+      renderAll();
+      fetchOrderTypes(state.currentAccount);
+
+      return { updateSnapshot };
+    })();
 
     const isFiniteNumber = (value) => typeof value === "number" && Number.isFinite(value);
 
@@ -1769,6 +2327,9 @@
       renderAccounts(snapshot);
       renderAlerts(snapshot);
       renderNotifications(snapshot);
+      if (tradingModule) {
+        tradingModule.updateSnapshot(snapshot);
+      }
     };
 
     const buildSnapshotParams = () => {
