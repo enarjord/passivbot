@@ -28,6 +28,18 @@ def plot_two_series_shared_x(df: pd.DataFrame, upper_column: str, lower_column: 
     return fig
 
 
+def plot_two_series(series1: pd.Series, series2: pd.Series, *, title: str = ""):
+    fig, axes = plt.subplots(2, 1, sharex=True, figsize=(12, 6))
+    series1.plot(ax=axes[0])
+    axes[0].set_ylabel(series1.name)
+    series2.plot(ax=axes[1])
+    axes[1].set_ylabel(series2.name)
+    if title:
+        fig.suptitle(title)
+    fig.tight_layout()
+    return fig
+
+
 def make_table(result_):
     result = result_.copy()
     if "result" not in result:
