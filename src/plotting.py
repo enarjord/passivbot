@@ -16,6 +16,18 @@ from pure_funcs import denumpyize, ts_to_date
 import passivbot_rust as pbr
 
 
+def plot_two_series_shared_x(df: pd.DataFrame, upper_column: str, lower_column: str, *, title: str = ""):
+    fig, axes = plt.subplots(2, 1, sharex=True, figsize=(12, 6))
+    df[upper_column].plot(ax=axes[0])
+    axes[0].set_ylabel(upper_column)
+    df[lower_column].plot(ax=axes[1])
+    axes[1].set_ylabel(lower_column)
+    if title:
+        fig.suptitle(title)
+    fig.tight_layout()
+    return fig
+
+
 def make_table(result_):
     result = result_.copy()
     if "result" not in result:
