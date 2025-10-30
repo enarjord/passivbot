@@ -6,14 +6,12 @@ mod entries;
 mod python;
 mod risk;
 mod trailing;
-mod trailing_flip;
 mod types;
 mod utils;
 
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use python::*;
-use trailing_flip::*;
 use utils::*;
 
 /// A Python module implemented in Rust.
@@ -49,7 +47,6 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calc_pside_price_diff_int, m)?)?;
     m.add_function(wrap_pyfunction!(calc_price_diff_pside_int, m)?)?;
     m.add_function(wrap_pyfunction!(calc_order_price_diff, m)?)?;
-    m.add_function(wrap_pyfunction!(backtest_trailing_flip, m)?)?;
     m.add_function(wrap_pyfunction!(order_type_id_to_snake, m)?)?;
     m.add_function(wrap_pyfunction!(all_order_types_ids, m)?)?;
     m.add_function(wrap_pyfunction!(order_type_snake_to_id, m)?)?;
