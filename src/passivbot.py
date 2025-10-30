@@ -38,6 +38,7 @@ from utils import (
 from prettytable import PrettyTable
 from uuid import uuid4
 from copy import deepcopy
+from dataclasses import dataclass
 from collections import defaultdict
 from sortedcontainers import SortedDict
 
@@ -160,6 +161,15 @@ def snake_of(type_id: int) -> str:
         return pbr.order_type_id_to_snake(type_id)
     except Exception:
         return "unknown"
+
+
+@dataclass
+class BaseOrderPlan:
+    """Intermediate data produced while building ideal orders."""
+
+    close_candidates: dict[str, list]
+    entry_candidates: dict[str, list[dict[str, float]]]
+    entry_index_map: dict[str, dict[int, str]]
 
 
 # Legacy EMA helper removed; CandlestickManager provides EMA utilities
@@ -2360,153 +2370,31 @@ class Passivbot:
         """Compute desired entry and exit orders for every active symbol."""
         last_prices, ema_anchor, entry_grid_log_ranges = await self._load_price_context()
 
-        ideal_orders, entries_acc, symbol_idx_map_entries = self._build_base_orders(
-            last_prices, ema_anchor, entry_grid_log_ranges
-        )
+        order_plan = self._build_base_orders(last_prices, ema_anchor, entry_grid_log_ranges)
+        close_candidates = order_plan.close_candidates
 
         unstucking_symbol, unstucking_close = await self.calc_unstucking_close(
             allow_new_unstuck=allow_unstuck
         )
         if unstucking_close[0] != 0.0:
-            ideal_orders[unstucking_symbol] = [
-                x for x in ideal_orders[unstucking_symbol] if not "close" in x[2]
+            close_candidates[unstucking_symbol] = [
+                x for x in close_candidates[unstucking_symbol] if not "close" in x[2]
             ]
-            ideal_orders[unstucking_symbol].append(unstucking_close)
+            close_candidates[unstucking_symbol].append(unstucking_close)
 
-        ideal_orders_f, wel_blocked_symbols = self._to_executable_orders(ideal_orders, last_prices)
-        # TWEL entry gating (Rust powered)
-        try:
-            for pside in ["long", "short"]:
-                total_wel = self.bot_value(pside, "total_wallet_exposure_limit")
-                if total_wel is None or total_wel <= 0.0:
-                    continue
-                # Build positions payload per side
-                positions_payload = []
-                inv_map = {v: k for k, v in symbol_idx_map_entries[pside].items()}
-                for symbol in self.positions:
-                    idx = inv_map.get(symbol)
-                    if idx is None:
-                        continue
-                    positions_payload.append(
-                        {
-                            "idx": idx,
-                            "position_size": float(self.positions[symbol][pside]["size"]),
-                            "position_price": float(self.positions[symbol][pside]["price"]),
-                            "c_mult": float(self.c_mults[symbol]),
-                        }
-                    )
-                if not entries_acc[pside]:
-                    continue
-                gated = pbr.gate_entries_by_twel_py(
-                    pside,
-                    float(self.balance),
-                    float(total_wel),
-                    positions_payload,
-                    entries_acc[pside],
-                )
-                # Map back by idx
-                for idx, qty, price, order_type_id in gated:
-                    symbol = symbol_idx_map_entries[pside].get(idx)
-                    if symbol is None:
-                        continue
-                    ideal_orders[symbol].append((qty, price, snake_of(order_type_id), order_type_id))
-        except Exception as exc:
-            logging.info(f"debug: failed to gate entries by TWEL: {exc}")
-        # TWEL enforcer orders
-        try:
-            unstuck_side = ""
-            if unstucking_symbol:
-                order_name = unstucking_close[2]
-                if isinstance(order_name, str):
-                    if "long" in order_name:
-                        unstuck_side = "long"
-                    elif "short" in order_name:
-                        unstuck_side = "short"
-            for pside in ["long", "short"]:
-                threshold = self.bot_value(pside, "risk_twel_enforcer_threshold")
-                if threshold is None or threshold < 0.0:
-                    continue
-                total_wel = self.bot_value(pside, "total_wallet_exposure_limit")
-                if total_wel is None or total_wel <= 0.0:
-                    continue
-                effective_n_positions = int(
-                    round(self.bot_value(pside, "n_positions") or 0.0)
-                )
-                if effective_n_positions <= 0:
-                    effective_n_positions = max(1, len(self.positions))
-                positions_payload = []
-                symbol_idx_map = {}
-                idx_counter = 0
-                for symbol in self.positions:
-                    if not self.has_position(pside, symbol):
-                        continue
-                    if symbol in wel_blocked_symbols:
-                        continue
-                    size = self.positions[symbol][pside]["size"]
-                    if size == 0.0:
-                        continue
-                    positions_payload.append(
-                        {
-                            "idx": idx_counter,
-                            "position_size": float(size),
-                            "position_price": float(self.positions[symbol][pside]["price"]),
-                            "market_price": float(
-                                last_prices.get(symbol, self.positions[symbol][pside]["price"])
-                            ),
-                            "base_wallet_exposure_limit": float(
-                                self.bp(pside, "wallet_exposure_limit", symbol)
-                            ),
-                            "c_mult": float(self.c_mults[symbol]),
-                            "qty_step": float(self.qty_steps[symbol]),
-                            "price_step": float(self.price_steps[symbol]),
-                            "min_qty": float(self.min_qtys[symbol]),
-                        }
-                    )
-                    symbol_idx_map[idx_counter] = symbol
-                    idx_counter += 1
-                if not positions_payload:
-                    continue
-                skip_idx = None
-                if unstucking_symbol and unstuck_side == pside:
-                    skip_idx = next(
-                        (idx for idx, sym in symbol_idx_map.items() if sym == unstucking_symbol),
-                        None,
-                    )
-                enforcer_actions = pbr.calc_twel_enforcer_orders_py(
-                    pside,
-                    float(threshold),
-                    float(total_wel),
-                    int(effective_n_positions),
-                    float(self.balance),
-                    positions_payload,
-                    skip_idx,
-                )
-                for idx, qty, price, order_type_id in enforcer_actions:
-                    symbol = symbol_idx_map.get(idx)
-                    if symbol is None or not self.has_position(pside, symbol):
-                        continue
-                    if abs(qty) <= 0.0:
-                        continue
-                    if symbol == unstucking_symbol and unstuck_side == pside:
-                        continue
-                    if symbol not in ideal_orders_f:
-                        ideal_orders_f[symbol] = []
-                    order_side = "sell" if pside == "long" else "buy"
-                    exec_type = "market" if self.live_value("market_orders_allowed") else "limit"
-                    ideal_orders_f[symbol].append(
-                        {
-                            "symbol": symbol,
-                            "side": order_side,
-                            "position_side": pside,
-                            "qty": abs(qty),
-                            "price": price,
-                            "reduce_only": True,
-                            "custom_id": self.format_custom_id_single(order_type_id),
-                            "type": exec_type,
-                        }
-                    )
-        except Exception as exc:
-            logging.info(f"debug: failed to compute TWEL enforcer orders: {exc}")
+        self._apply_twel_entry_gating(order_plan)
+
+        ideal_orders_f, wel_blocked_symbols = self._to_executable_orders(
+            close_candidates, last_prices
+        )
+
+        ideal_orders_f = self._inject_twel_enforcer_orders(
+            ideal_orders_f,
+            wel_blocked_symbols,
+            last_prices,
+            unstucking_symbol,
+            unstucking_close,
+        )
 
         # ensure close qtys don't exceed pos sizes
         for symbol in ideal_orders_f:
@@ -2602,11 +2490,11 @@ class Passivbot:
         last_prices: Dict[str, float],
         ema_anchor: Dict[str, Dict[str, float]],
         entry_grid_log_ranges: Dict[str, Dict[str, float]],
-    ) -> tuple[defaultdict, Dict[str, list], Dict[str, Dict[int, str]]]:
+    ) -> BaseOrderPlan:
         """Construct initial close/entry order tuples and gating payloads."""
-        ideal_orders: defaultdict = defaultdict(list)
-        entries_acc = {"long": [], "short": []}
-        symbol_idx_map_entries = {"long": {}, "short": {}}
+        close_candidates: defaultdict = defaultdict(list)
+        entry_candidates = {"long": [], "short": []}
+        entry_index_map = {"long": {}, "short": {}}
         idx_counters = {"long": 0, "short": 0}
 
         for pside in self.PB_modes:
@@ -2616,7 +2504,7 @@ class Passivbot:
                     if self.has_position(pside, symbol):
                         qmul = -1 if pside == "long" else 1
                         panic_order_type = f"close_panic_{pside}"
-                        ideal_orders[symbol].append(
+                        close_candidates[symbol].append(
                             (
                                 abs(self.positions[symbol][pside]["size"]) * qmul,
                                 last_prices[symbol],
@@ -2690,21 +2578,21 @@ class Passivbot:
                     self.trailing_prices[symbol][pside]["min_since_max"],
                     last_prices[symbol],
                 )
-                ideal_orders[symbol] += [(x[0], x[1], snake_of(x[2]), x[2]) for x in closes]
+                close_candidates[symbol] += [(x[0], x[1], snake_of(x[2]), x[2]) for x in closes]
 
-                if symbol not in symbol_idx_map_entries[pside]:
-                    symbol_idx_map_entries[pside][idx_counters[pside]] = symbol
+                if symbol not in entry_index_map[pside]:
+                    entry_index_map[pside][idx_counters[pside]] = symbol
                     idx_counters[pside] += 1
 
-                inv_map = {v: k for k, v in symbol_idx_map_entries[pside].items()}
+                inv_map = {v: k for k, v in entry_index_map[pside].items()}
                 idx = inv_map.get(symbol)
                 if idx is None:
                     idx = idx_counters[pside]
-                    symbol_idx_map_entries[pside][idx] = symbol
+                    entry_index_map[pside][idx] = symbol
                     idx_counters[pside] += 1
 
                 for qty, price, order_type_id in entries:
-                    entries_acc[pside].append(
+                    entry_candidates[pside].append(
                         {
                             "idx": idx,
                             "qty": float(abs(qty)),
@@ -2718,7 +2606,7 @@ class Passivbot:
                         }
                     )
 
-        return ideal_orders, entries_acc, symbol_idx_map_entries
+        return BaseOrderPlan(close_candidates, entry_candidates, entry_index_map)
 
     def _to_executable_orders(
         self, ideal_orders: dict, last_prices: Dict[str, float]
@@ -3083,6 +2971,182 @@ class Passivbot:
                 logging.info(f"debug: failed fetching mprice for {symbol}: {exc}")
                 results[symbol] = None
         return results
+
+    def _apply_twel_entry_gating(self, order_plan: BaseOrderPlan) -> None:
+        """Use the Rust TWEL gate to prune oversized entry lists per side."""
+        entry_candidates = order_plan.entry_candidates
+        close_candidates = order_plan.close_candidates
+        for pside in ("long", "short"):
+            if not entry_candidates.get(pside):
+                continue
+            total_wel = self.bot_value(pside, "total_wallet_exposure_limit")
+            if total_wel is None or total_wel <= 0.0:
+                continue
+            positions_payload = self._build_twel_gating_payload(order_plan, pside)
+            if not positions_payload:
+                continue
+            try:
+                gated_entries = pbr.gate_entries_by_twel_py(
+                    pside,
+                    float(self.balance),
+                    float(total_wel),
+                    positions_payload,
+                    entry_candidates[pside],
+                )
+            except Exception as exc:
+                logging.info(f"debug: failed to gate entries by TWEL ({pside}): {exc}")
+                continue
+            for idx, qty, price, order_type_id in gated_entries:
+                symbol = order_plan.entry_index_map[pside].get(idx)
+                if symbol is None:
+                    continue
+                close_candidates[symbol].append((qty, price, snake_of(order_type_id), order_type_id))
+
+    def _build_twel_gating_payload(
+        self, order_plan: BaseOrderPlan, pside: str
+    ) -> list[dict[str, float]]:
+        """Return position state payload for TWEL entry gating."""
+        inv_map = {symbol: idx for idx, symbol in order_plan.entry_index_map.get(pside, {}).items()}
+        payload: list[dict[str, float]] = []
+        for symbol, position_data in self.positions.items():
+            idx = inv_map.get(symbol)
+            if idx is None:
+                continue
+            payload.append(
+                {
+                    "idx": idx,
+                    "position_size": float(position_data[pside]["size"]),
+                    "position_price": float(position_data[pside]["price"]),
+                    "c_mult": float(self.c_mults.get(symbol, 1.0)),
+                }
+            )
+        return payload
+
+    def _inject_twel_enforcer_orders(
+        self,
+        ideal_orders_f: dict[str, list[dict]],
+        wel_blocked_symbols: set[str],
+        last_prices: dict[str, float],
+        unstucking_symbol: str | None,
+        unstucking_close: tuple,
+    ) -> dict[str, list[dict]]:
+        """Append TWEL enforcer reduce-only orders to the order map."""
+        try:
+            unstuck_side = self._resolve_unstuck_side(unstucking_symbol, unstucking_close)
+            for pside in ("long", "short"):
+                threshold = self.bot_value(pside, "risk_twel_enforcer_threshold")
+                if threshold is None or threshold < 0.0:
+                    continue
+                total_wel = self.bot_value(pside, "total_wallet_exposure_limit")
+                if total_wel is None or total_wel <= 0.0:
+                    continue
+                effective_n_positions = int(round(self.bot_value(pside, "n_positions") or 0.0))
+                if effective_n_positions <= 0:
+                    effective_n_positions = max(1, len(self.positions))
+                payload, symbol_idx_map = self._build_twel_enforcer_payload(
+                    pside, wel_blocked_symbols, last_prices
+                )
+                if not payload:
+                    continue
+                skip_idx = None
+                if unstucking_symbol and unstuck_side == pside:
+                    skip_idx = next(
+                        (idx for idx, symbol in symbol_idx_map.items() if symbol == unstucking_symbol),
+                        None,
+                    )
+                actions = pbr.calc_twel_enforcer_orders_py(
+                    pside,
+                    float(threshold),
+                    float(total_wel),
+                    int(effective_n_positions),
+                    float(self.balance),
+                    payload,
+                    skip_idx,
+                )
+                for idx, qty, price, order_type_id in actions:
+                    symbol = symbol_idx_map.get(idx)
+                    if (
+                        symbol is None
+                        or not self.has_position(pside, symbol)
+                        or abs(qty) <= 0.0
+                        or (symbol == unstucking_symbol and unstuck_side == pside)
+                    ):
+                        continue
+                    if symbol not in ideal_orders_f:
+                        ideal_orders_f[symbol] = []
+                    order_side = "sell" if pside == "long" else "buy"
+                    exec_type = (
+                        "market" if self.live_value("market_orders_allowed") else "limit"
+                    )
+                    ideal_orders_f[symbol].append(
+                        {
+                            "symbol": symbol,
+                            "side": order_side,
+                            "position_side": pside,
+                            "qty": abs(qty),
+                            "price": price,
+                            "reduce_only": True,
+                            "custom_id": self.format_custom_id_single(order_type_id),
+                            "type": exec_type,
+                        }
+                    )
+        except Exception as exc:
+            logging.info(f"debug: failed to compute TWEL enforcer orders: {exc}")
+        return ideal_orders_f
+
+    def _build_twel_enforcer_payload(
+        self,
+        pside: str,
+        wel_blocked_symbols: set[str],
+        last_prices: dict[str, float],
+    ) -> tuple[list[dict[str, float]], dict[int, str]]:
+        """Prepare position payload and index map for TWEL enforcer."""
+        payload: list[dict[str, float]] = []
+        symbol_idx_map: dict[int, str] = {}
+        idx_counter = 0
+        for symbol in self.positions:
+            if not self.has_position(pside, symbol):
+                continue
+            if symbol in wel_blocked_symbols:
+                continue
+            size = float(self.positions[symbol][pside]["size"])
+            if size == 0.0:
+                continue
+            payload.append(
+                {
+                    "idx": idx_counter,
+                    "position_size": size,
+                    "position_price": float(self.positions[symbol][pside]["price"]),
+                    "market_price": float(
+                        last_prices.get(symbol, self.positions[symbol][pside]["price"])
+                    ),
+                    "base_wallet_exposure_limit": float(
+                        self.bp(pside, "wallet_exposure_limit", symbol)
+                    ),
+                    "c_mult": float(self.c_mults[symbol]),
+                    "qty_step": float(self.qty_steps[symbol]),
+                    "price_step": float(self.price_steps[symbol]),
+                    "min_qty": float(self.min_qtys[symbol]),
+                }
+            )
+            symbol_idx_map[idx_counter] = symbol
+            idx_counter += 1
+        return payload, symbol_idx_map
+
+    def _resolve_unstuck_side(
+        self, unstucking_symbol: str | None, unstucking_close: tuple
+    ) -> str:
+        """Determine which side is currently being unstuck, if any."""
+        if not unstucking_symbol or len(unstucking_close) < 3:
+            return ""
+        order_name = unstucking_close[2]
+        if not isinstance(order_name, str):
+            return ""
+        if "long" in order_name:
+            return "long"
+        if "short" in order_name:
+            return "short"
+        return ""
 
     async def restart_bot_on_too_many_errors(self):
         """Restart the bot if the hourly execution error budget is exhausted."""
