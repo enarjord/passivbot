@@ -1482,6 +1482,9 @@ impl<'a> Backtest<'a> {
                         position_size: position.size,
                         position_price: position.price,
                         wallet_exposure_limit: self.bp(idx, LONG).wallet_exposure_limit,
+                        risk_we_excess_allowance_pct: self
+                            .bp(idx, LONG)
+                            .risk_we_excess_allowance_pct,
                         unstuck_threshold: self.bp(idx, LONG).unstuck_threshold,
                         unstuck_close_pct: self.bp(idx, LONG).unstuck_close_pct,
                         unstuck_ema_dist: self.bp(idx, LONG).unstuck_ema_dist,
@@ -1514,6 +1517,9 @@ impl<'a> Backtest<'a> {
                         position_size: position.size,
                         position_price: position.price,
                         wallet_exposure_limit: self.bp(idx, SHORT).wallet_exposure_limit,
+                        risk_we_excess_allowance_pct: self
+                            .bp(idx, SHORT)
+                            .risk_we_excess_allowance_pct,
                         unstuck_threshold: self.bp(idx, SHORT).unstuck_threshold,
                         unstuck_close_pct: self.bp(idx, SHORT).unstuck_close_pct,
                         unstuck_ema_dist: self.bp(idx, SHORT).unstuck_ema_dist,

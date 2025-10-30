@@ -2867,6 +2867,9 @@ class Passivbot:
                     "position_size": float(self.positions[symbol][pside]["size"]),
                     "position_price": float(self.positions[symbol][pside]["price"]),
                     "wallet_exposure_limit": float(self.bp(pside, "wallet_exposure_limit", symbol)),
+                    "risk_we_excess_allowance_pct": float(
+                        self.bp(pside, "risk_we_excess_allowance_pct", symbol)
+                    ),
                     "unstuck_threshold": float(self.bp(pside, "unstuck_threshold", symbol)),
                     "unstuck_close_pct": float(self.bp(pside, "unstuck_close_pct", symbol)),
                     "unstuck_ema_dist": float(self.bp(pside, "unstuck_ema_dist", symbol)),

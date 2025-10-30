@@ -280,6 +280,7 @@ pub struct UnstuckPositionInput {
     pub position_size: f64,
     pub position_price: f64,
     pub wallet_exposure_limit: f64,
+    pub risk_we_excess_allowance_pct: f64,
     pub unstuck_threshold: f64,
     pub unstuck_close_pct: f64,
     pub unstuck_ema_dist: f64,
@@ -331,14 +332,14 @@ pub fn calc_unstucking_action(
 
         let wallet_exposure =
             calc_wallet_exposure(input.c_mult, balance, size_abs, input.position_price);
+        let allowance_multiplier = 1.0 + input.risk_we_excess_allowance_pct.max(0.0);
+        let effective_wel = input.wallet_exposure_limit * allowance_multiplier;
 
         let unstuck_threshold = input.unstuck_threshold;
         if unstuck_threshold < 0.0 {
             continue;
         }
-        if input.wallet_exposure_limit > 0.0
-            && wallet_exposure / input.wallet_exposure_limit <= unstuck_threshold
-        {
+        if effective_wel > 0.0 && wallet_exposure / effective_wel <= unstuck_threshold {
             continue;
         }
 
@@ -438,6 +439,8 @@ pub fn calc_unstucking_action(
             c_mult: input.c_mult,
         };
         let min_entry_qty = calc_min_entry_qty(input.current_price, &exchange_params);
+        let allowance_multiplier = 1.0 + input.risk_we_excess_allowance_pct.max(0.0);
+        let effective_wel = input.wallet_exposure_limit * allowance_multiplier;
 
         match input.side {
             LONG => {
@@ -446,7 +449,7 @@ pub fn calc_unstucking_action(
                     continue;
                 }
                 let target_qty = cost_to_qty(
-                    balance * input.wallet_exposure_limit * input.unstuck_close_pct,
+                    balance * effective_wel * input.unstuck_close_pct,
                     input.current_price,
                     input.c_mult,
                 );
@@ -487,7 +490,7 @@ pub fn calc_unstucking_action(
                     continue;
                 }
                 let target_qty = cost_to_qty(
-                    balance * input.wallet_exposure_limit * input.unstuck_close_pct,
+                    balance * effective_wel * input.unstuck_close_pct,
                     input.current_price,
                     input.c_mult,
                 );
