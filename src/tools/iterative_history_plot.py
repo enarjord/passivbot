@@ -135,8 +135,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--x-metric",
-        default="equity_peak_recovery_hours_usd",
-        help="Metric to plot on X axis (default: equity_peak_recovery_hours_usd).",
+        default="peak_recovery_hours_equity_usd",
+        help="Metric to plot on X axis (default: peak_recovery_hours_equity_usd).",
     )
     parser.add_argument(
         "--y-metric",

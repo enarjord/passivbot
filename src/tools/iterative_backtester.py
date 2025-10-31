@@ -62,6 +62,11 @@ SHARED_METRIC_WEIGHTS = {
     "position_held_hours_max": 1.0,
     "position_held_hours_median": 1.0,
     "position_unchanged_hours_max": 1.0,
+    "loss_profit_ratio": 1.0,
+    "loss_profit_ratio_w": 1.0,
+    "volume_pct_per_day_avg": -1.0,
+    "volume_pct_per_day_avg_w": -1.0,
+    "peak_recovery_hours_pnl": 1.0,
 }
 
 CURRENCY_METRIC_WEIGHTS = {
@@ -83,15 +88,13 @@ CURRENCY_METRIC_WEIGHTS = {
     "equity_choppiness_w": 1.0,
     "equity_jerkiness": 1.0,
     "equity_jerkiness_w": 1.0,
-    "equity_peak_recovery_hours": 1.0,
+    "peak_recovery_hours_equity": 1.0,
     "expected_shortfall_1pct": 1.0,
     "exponential_fit_error": 1.0,
     "exponential_fit_error_w": 1.0,
     "gain": -1.0,
     "gain_per_exposure_long": -1.0,
     "gain_per_exposure_short": -1.0,
-    "loss_profit_ratio": 1.0,
-    "loss_profit_ratio_w": 1.0,
     "mdg": -1.0,
     "mdg_per_exposure_long": -1.0,
     "mdg_per_exposure_short": -1.0,
@@ -106,8 +109,6 @@ CURRENCY_METRIC_WEIGHTS = {
     "sortino_ratio_w": -1.0,
     "sterling_ratio": -1.0,
     "sterling_ratio_w": -1.0,
-    "volume_pct_per_day_avg": -1.0,
-    "volume_pct_per_day_avg_w": -1.0,
 }
 
 PENALTY_WEIGHT = 1e6
