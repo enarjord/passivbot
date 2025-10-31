@@ -30,6 +30,65 @@ For example, if wallet_exposure_limit=0.6, the bot will not make any more entrie
 
 User sets total_wallet_exposure_limit separately for long and short. A single position's wallet_exposure_limit is `total_wallet_exposure_limit / n_positions`.
 
+## Exposure Allowance and Enforcers
+
+Passivbot now exposes three related parameters that control how aggressively the bot will cap exposure, both per-position and portfolio-wide:
+
+- `risk_we_excess_allowance_pct`
+- `risk_wel_enforcer_threshold`
+- `risk_twel_enforcer_threshold`
+
+These parameters act on top of the base wallet exposure limits described above. `risk_we_excess_allowance_pct` and `risk_wel_enforcer_threshold` can be configured globally (under `bot.long` / `bot.short`) and overridden inside coin path overrides (`coin_overrides.<COIN>.bot.long/short`). `risk_twel_enforcer_threshold` applies to the whole side (all longs or all shorts) and therefore is **global-only**; coin overrides inherit the global value.
+
+### risk_we_excess_allowance_pct — “grace room” for exposure
+
+This value (expressed as a decimal, e.g. `0.05` = +5 %) multiplies the base wallet exposure limit before any gating or enforcer logic runs:
+
+```
+effective_limit = wallet_exposure_limit * (1 + max(0, risk_we_excess_allowance_pct))
+```
+
+The same multiplier is used for:
+
+- entry sizing and cropping
+- unstuck / partial fillers
+- the per-position WEL enforcer
+
+Example: with `wallet_exposure_limit = 0.20` and `risk_we_excess_allowance_pct = 0.10`, a position may temporarily grow to `0.22` wallet exposure before it is considered over the limit. Setting the allowance to `0.0` keeps the strict behaviour from earlier versions; increasing it lets the bot breathe a little above the nominal cap before the safety circuits engage.
+
+### risk_wel_enforcer_threshold — per-position trimming
+
+The WEL (Wallet Exposure Limit) enforcer monitors each open position. When a position’s actual exposure exceeds
+
+```
+effective_limit * risk_wel_enforcer_threshold
+```
+
+the bot emits a reduce-only order (tagged `close_auto_reduce_wel_*`) to bring the exposure back below the target. Values < 1.0 make the enforcer trim proactively, even before the allowance is fully consumed. A value of `1.0` enforces a hard cap precisely at the allowed limit, while `<= 0` disables WEL auto-reduction entirely.
+
+In practical terms:
+
+- `risk_wel_enforcer_threshold = 0.9` → keep each position around 90 % of the allowance, continuously shaving excess.
+- `risk_wel_enforcer_threshold = 1.0` → allow positions to climb to the allowance but never above.
+- `risk_wel_enforcer_threshold <= 0` → no automatic trimming; entries/unstuck logic alone must keep exposure in check.
+
+### risk_twel_enforcer_threshold — portfolio trimmer
+
+The TWEL (Total Wallet Exposure Limit) enforcer works across all positions of a side (long or short). When the **sum** of wallet exposures crosses
+
+```
+total_wallet_exposure_limit * risk_twel_enforcer_threshold
+```
+
+the bot queues reduction orders for the least underwater positions until the aggregate exposure falls back below the threshold. Much like the per-position enforcer:
+
+- `risk_twel_enforcer_threshold < 1.0` keeps the fleet of positions running under the configured total cap (e.g. `0.95` trims whenever the portfolio reaches 95 % of the total limit).
+- `risk_twel_enforcer_threshold = 1.0` enforces the limit strictly—equivalent to the old `enforce_exposure_limit=true`.
+- `risk_twel_enforcer_threshold > 1.0` grants a little overflow before the enforcer fires.
+- `risk_twel_enforcer_threshold <= 0` disables the TWEL enforcer entirely.
+
+Because the TWEL enforcer uses each position’s internal limit (which already includes `risk_we_excess_allowance_pct`), both knobs interact: increasing the allowance raises the breathing room for individual symbols as well as the total pool. Pairing a higher allowance with a lower `risk_wel_enforcer_threshold`/`risk_twel_enforcer_threshold` yields “soft edges” (continuous trimming), while keeping the thresholds at `1.0` produces “hard edges” (the bot only trims on overshoot).
+
 ## Bankruptcy and liquidation
 
 Bankruptcy is defined as when `equity == (balance + unrealized_pnl) == 0.0`, that is, when total debt is equal to total assets.
@@ -58,4 +117,3 @@ To achieve this, the position must be increased. However, the larger the positio
 While correlation is observed in most markets in general and in crypto markets in particular (e.g. if the price of bitcoin crashes, most other cryptos tend to follow closely), it is also observed that the "dead cat" often bounces at slightly different times and at different heights. Therefore, diversifying to multiple coins helps reduce the risk of a single bad coin destroying the whole account.
 
 A thousand coin flips will converge on 500 heads and 500 tails. One single coin flip will be either heads or tails. So it may be more desirable to end up with 3 out of 10 bots stuck, each with wallet_exposure==0.1, than with 1 single bot stuck with wallet_exposure==1.0.
-
