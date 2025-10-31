@@ -209,12 +209,12 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     // Calculate equity-balance differences
     let mut bal_eq = Vec::with_capacity(equities.len());
     let mut fill_iter = fills.iter().peekable();
-    let mut last_balance = fills[0].balance_usd_total;
+    let mut last_balance = fills[0].usd_total_balance;
 
     for (i, &equity) in equities.iter().enumerate() {
         while let Some(fill) = fill_iter.peek() {
             if fill.index <= i {
-                last_balance = fill.balance_usd_total;
+                last_balance = fill.usd_total_balance;
                 fill_iter.next();
             } else {
                 break;
@@ -350,7 +350,23 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     let exponential_fit_error = calc_exponential_fit_error(&daily_eqs);
 
     let volume_pct_per_day_avg = calc_avg_volume_pct_per_day(fills);
-    let equity_peak_recovery_hours = calc_equity_peak_recovery_hours(equities);
+    let peak_recovery_hours_equity = calc_peak_recovery_hours(equities);
+    let peak_recovery_hours_pnl = if equities.is_empty() {
+        0.0
+    } else {
+        let mut deltas = vec![0.0f64; equities.len()];
+        for fill in fills {
+            if fill.index < deltas.len() {
+                deltas[fill.index] += fill.pnl + fill.fee_paid;
+            }
+        }
+        let mut running = 0.0;
+        for value in deltas.iter_mut() {
+            running += *value;
+            *value = running;
+        }
+        calc_peak_recovery_hours(&deltas)
+    };
 
     let mut analysis = Analysis::default();
     analysis.adg = adg;
@@ -378,7 +394,8 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     analysis.equity_jerkiness = equity_jerkiness;
     analysis.exponential_fit_error = exponential_fit_error;
     analysis.volume_pct_per_day_avg = volume_pct_per_day_avg;
-    analysis.equity_peak_recovery_hours = equity_peak_recovery_hours;
+    analysis.peak_recovery_hours_equity = peak_recovery_hours_equity;
+    analysis.peak_recovery_hours_pnl = peak_recovery_hours_pnl;
 
     analysis
 }
@@ -468,7 +485,7 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
 /// Returns (Analysis in USD, Analysis in BTC).
 /// If `balance.use_btc_collateral == false`, both are identical.
 pub fn analyze_backtest_pair(fills: &[Fill], equities: &Equities) -> (Analysis, Analysis) {
-    let analysis_usd = analyze_backtest(fills, &equities.usd);
+    let analysis_usd = analyze_backtest(fills, &equities.usd_total_equity);
     let mut btc_fills = fills.to_vec();
     for fill in btc_fills.iter_mut() {
         let price = if fill.btc_price > 0.0 {
@@ -476,13 +493,13 @@ pub fn analyze_backtest_pair(fills: &[Fill], equities: &Equities) -> (Analysis, 
         } else {
             1.0
         };
-        fill.balance_usd_total /= price; // balance expressed in BTC
+        fill.usd_total_balance /= price; // balance expressed in BTC
         fill.pnl /= price;
         fill.fee_paid /= price;
         fill.fill_price /= price;
         fill.position_price /= price;
     }
-    let analysis_btc = analyze_backtest(&btc_fills, &equities.btc);
+    let analysis_btc = analyze_backtest(&btc_fills, &equities.btc_total_equity);
 
     (analysis_usd, analysis_btc)
 }
@@ -522,14 +539,14 @@ pub fn calc_equity_choppiness(equity: &[f64]) -> f64 {
     variation / net_gain.abs()
 }
 
-fn calc_equity_peak_recovery_hours(equity: &[f64]) -> f64 {
-    if equity.is_empty() {
+fn calc_peak_recovery_hours(series: &[f64]) -> f64 {
+    if series.is_empty() {
         return 0.0;
     }
     let mut peak = f64::NEG_INFINITY;
     let mut peak_index: isize = 0;
     let mut max_duration: isize = 0;
-    for (i, &value) in equity.iter().enumerate() {
+    for (i, &value) in series.iter().enumerate() {
         if value >= peak {
             let duration = i as isize - peak_index;
             if duration > max_duration {
@@ -639,7 +656,7 @@ pub fn calc_avg_volume_pct_per_day(fills: &[Fill]) -> f64 {
 
     for fill in fills {
         let day = fill.index / 1440;
-        let cost_pct = (fill.fill_qty.abs() * fill.fill_price) / fill.balance_usd_total;
+        let cost_pct = (fill.fill_qty.abs() * fill.fill_price) / fill.usd_total_balance;
         *daily_totals.entry(day).or_insert(0.0) += cost_pct;
     }
 
