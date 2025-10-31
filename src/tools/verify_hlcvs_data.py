@@ -22,10 +22,11 @@ import argparse
 import gzip
 import hashlib
 import json
+import io
+import textwrap
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
-import io
 
 import numpy as np
 from tqdm.auto import tqdm
@@ -259,10 +260,29 @@ def compare(path_a: Path, path_b: Path, fast: bool) -> None:
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Inspect and verify cached HLCVS datasets.")
-    subparsers = parser.add_subparsers(dest="command")
+    parser = argparse.ArgumentParser(
+        description="Inspect and verify cached HLCVS datasets.",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=textwrap.dedent(
+            """
+            Commonly used flags:
+              summarize                  --fast  --json
+              compare                    --fast
+              summarize-historical       --progress  --hash  --json
+              clean-historical           --progress  --apply
+              hash-historical            --progress  --output PATH
+              compare-historical-hashes  --apply  --local-root PATH
 
-    summary_parser = subparsers.add_parser("summarize", help="Summarise one or more datasets.")
+            Tip: every sub-command also supports -h/--help for full details.
+            """
+        ).strip(),
+    )
+    subparsers = parser.add_subparsers(dest="command", metavar="command")
+
+    summary_parser = subparsers.add_parser(
+        "summarize",
+        help="Summarise one or more datasets (--fast for hashes only, --json for machine output).",
+    )
     summary_parser.add_argument(
         "paths",
         nargs="*",
@@ -281,7 +301,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="Emit summary data as JSON.",
     )
 
-    compare_parser = subparsers.add_parser("compare", help="Compare two cached HLCVS datasets.")
+    compare_parser = subparsers.add_parser(
+        "compare",
+        help="Compare two cached HLCVS datasets (use --fast to skip full stats).",
+    )
     compare_parser.add_argument("path_a", type=Path)
     compare_parser.add_argument("path_b", type=Path)
     compare_parser.add_argument(
@@ -291,7 +314,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
 
     historical_parser = subparsers.add_parser(
-        "summarize-historical", help="Summarise raw historical OHLCV files."
+        "summarize-historical",
+        help="Summarise raw historical OHLCV files (--progress, --hash, --json).",
     )
     historical_parser.add_argument(
         "paths",
@@ -322,7 +346,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
 
     clean_parser = subparsers.add_parser(
-        "clean-historical", help="Scan and remove problematic historical OHLCV files."
+        "clean-historical",
+        help="Scan/remove problematic historical OHLCV files (--progress, --apply).",
     )
     clean_parser.add_argument(
         "paths",
@@ -343,7 +368,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
 
     hash_parser = subparsers.add_parser(
-        "hash-historical", help="Compute file hashes for historical OHLCV data."
+        "hash-historical",
+        help="Compute float32 hashes for historical files (--progress, --output).",
     )
     hash_parser.add_argument(
         "paths",
@@ -366,7 +392,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
     compare_hash_parser = subparsers.add_parser(
         "compare-historical-hashes",
-        help="Compare two historical hash manifests and optionally delete local files.",
+        help="Compare two hash manifests (--apply deletes mismatched local files).",
     )
     compare_hash_parser.add_argument("manifest_a", type=Path)
     compare_hash_parser.add_argument("manifest_b", type=Path)
