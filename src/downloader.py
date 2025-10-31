@@ -232,6 +232,7 @@ def canonicalize_daily_ohlcvs(data, start_ts: int, interval_ms: int = 60_000) ->
     else:
         raise TypeError("data must be a pandas DataFrame or numpy array")
 
+    df = df.reset_index(drop=True)
     df = ensure_millis(df)
     for col in columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
