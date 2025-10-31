@@ -475,9 +475,9 @@ pub fn run_backtest(
             py_fills[(i, 2)] = <String as Clone>::clone(&fill.coin).into_py(py);
             py_fills[(i, 3)] = fill.pnl.into_py(py);
             py_fills[(i, 4)] = fill.fee_paid.into_py(py);
-            py_fills[(i, 5)] = fill.balance_usd_total.into_py(py);
-            py_fills[(i, 6)] = fill.balance_btc.into_py(py);
-            py_fills[(i, 7)] = fill.balance_usd.into_py(py);
+            py_fills[(i, 5)] = fill.usd_total_balance.into_py(py);
+            py_fills[(i, 6)] = fill.btc_cash_wallet.into_py(py);
+            py_fills[(i, 7)] = fill.usd_cash_wallet.into_py(py);
             py_fills[(i, 8)] = fill.btc_price.into_py(py);
             py_fills[(i, 9)] = fill.fill_qty.into_py(py);
             py_fills[(i, 10)] = fill.fill_price.into_py(py);
@@ -489,8 +489,8 @@ pub fn run_backtest(
         let equities_array =
             Array2::from_shape_fn((equities.timestamps_ms.len(), 3), |(i, j)| match j {
                 0 => equities.timestamps_ms[i] as f64,
-                1 => equities.usd[i],
-                2 => equities.btc[i],
+                1 => equities.usd_total_equity[i],
+                2 => equities.btc_total_equity[i],
                 _ => 0.0,
             })
             .into_pyarray_bound(py)
