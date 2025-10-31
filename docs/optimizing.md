@@ -148,7 +148,8 @@ over all exchanges before scoring.
 | `position_held_hours_{mean,median,max}` | Holding-time statistics in hours |
 | `position_unchanged_hours_max` | Longest span without modifying an existing position |
 | `volume_pct_per_day_avg`, `volume_pct_per_day_avg_w` | Average traded volume as % of account per day, with recency bias |
-| `equity_peak_recovery_hours_usd`, `_btc` | Longest time (in hours) the equity curve stayed below its prior peak before recovering, per denomination. Available for scoring and limit checks (e.g. `penalize_if_greater_than_equity_peak_recovery_hours_usd`). |
+| `peak_recovery_hours_equity_usd`, `_btc` | Longest time (in hours) the equity curve stayed below its prior peak before recovering, per denomination. Available for scoring and limit checks (e.g. `penalize_if_greater_than_peak_recovery_hours_equity_usd`). |
+| `peak_recovery_hours_pnl` | Longest recovery time (hours) of cumulative realised PnL (USD). Useful for monitoring realised drawdown recovery latency. |
 
 ### Equity Curve Quality
 | Metric | Description |
