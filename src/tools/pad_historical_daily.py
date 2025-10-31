@@ -54,7 +54,10 @@ def _process_file(path: Path, dry_run: bool) -> str | None:
     if dry_run:
         return f"DRYRUN {path}: would pad from {rows} to 1440 rows"
 
-    dl.dump_daily_ohlcv_data(arr, str(path), start_ts)
+    try:
+        dl.dump_daily_ohlcv_data(arr, str(path), start_ts)
+    except ValueError as exc:
+        return f"SKIP {path}: {exc}"
     return f"FIXED {path}: padded from {rows} to 1440 rows"
 
 
