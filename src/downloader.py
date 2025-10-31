@@ -217,6 +217,67 @@ def dump_ohlcv_data(data, filepath):
     np.save(filepath, deduplicate_rows(data))
 
 
+def canonicalize_daily_ohlcvs(data, start_ts: int, interval_ms: int = 60_000) -> pd.DataFrame:
+    """
+    Return a 1-minute canonical OHLCV DataFrame for the given day.
+
+    Missing minutes are forward/back filled for price columns and zero-filled for volume.
+    Duplicate timestamps keep the last observation.
+    """
+    columns = ["timestamp", "open", "high", "low", "close", "volume"]
+    if isinstance(data, np.ndarray):
+        df = pd.DataFrame(data, columns=columns)
+    elif isinstance(data, pd.DataFrame):
+        df = data[columns].copy()
+    else:
+        raise TypeError("data must be a pandas DataFrame or numpy array")
+
+    df = ensure_millis(df)
+    for col in columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    end_ts = start_ts + 24 * 60 * 60 * 1000
+    df = df.dropna(subset=["timestamp"])
+    df = df[(df["timestamp"] >= start_ts) & (df["timestamp"] < end_ts)]
+    df = df.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
+
+    if df.empty:
+        raise ValueError("No data available for canonicalization")
+
+    expected_ts = np.arange(start_ts, end_ts, interval_ms)
+    reindexed = df.set_index("timestamp").reindex(expected_ts)
+    missing_mask = reindexed[["open", "high", "low", "close", "volume"]].isna().all(axis=1)
+
+    close = reindexed["close"].astype(float)
+    close = close.ffill().bfill()
+    if close.isna().any():
+        raise ValueError("Unable to fill close prices while canonicalizing daily OHLCV data")
+    reindexed["close"] = close
+
+    for col in ["open", "high", "low"]:
+        series = reindexed[col].astype(float)
+        series = series.ffill().bfill()
+        series = series.fillna(reindexed["close"])
+        series = pd.Series(
+            np.where(missing_mask, reindexed["close"], series),
+            index=reindexed.index,
+            dtype=float,
+        )
+        reindexed[col] = series
+
+    volume = reindexed["volume"].astype(float)
+    volume = volume.fillna(0.0)
+    reindexed["volume"] = volume
+
+    result = reindexed.reset_index().rename(columns={"index": "timestamp"})
+    return result[columns]
+
+
+def dump_daily_ohlcv_data(data, filepath, start_ts: int, interval_ms: int = 60_000):
+    canonical = canonicalize_daily_ohlcvs(data, start_ts, interval_ms=interval_ms)
+    dump_ohlcv_data(canonical, filepath)
+
+
 def deduplicate_rows(arr):
     """
     Remove duplicate rows from a 2D NumPy array while preserving order.
@@ -842,7 +903,11 @@ class OHLCVManager:
                         d_fpath = os.path.join(dirpath, fpath)
                         if not os.path.exists(d_fpath):
                             n_days_dumped += 1
-                            dump_ohlcv_data(daily_data, d_fpath)
+                            dump_daily_ohlcv_data(
+                                daily_data,
+                                d_fpath,
+                                date_to_ts(date.strftime("%Y-%m-%d")),
+                            )
                     else:
                         logging.info(
                             f"binanceusdm incomplete daily data for {coin} {date} {len(daily_data)}"
@@ -883,7 +948,12 @@ class OHLCVManager:
         try:
             csv = await get_zip_binance(url)
             if not csv.empty:
-                dump_ohlcv_data(ensure_millis(csv), fpath)
+                day = Path(fpath).stem
+                dump_daily_ohlcv_data(
+                    ensure_millis(csv),
+                    fpath,
+                    date_to_ts(day),
+                )
                 if self.verbose:
                     logging.info(f"binanceusdm Dumped data {fpath}")
                 return True
@@ -957,9 +1027,12 @@ class OHLCVManager:
             )
             ohlcvs["timestamp"] = ohlcvs.index
             fpath = os.path.join(dirpath, day + ".npy")
-            dump_ohlcv_data(
-                ensure_millis(ohlcvs[["timestamp", "open", "high", "low", "close", "volume"]]),
+            dump_daily_ohlcv_data(
+                ensure_millis(
+                    ohlcvs[["timestamp", "open", "high", "low", "close", "volume"]]
+                ),
                 fpath,
+                date_to_ts(day),
             )
             if self.verbose:
                 logging.info(f"bybit Dumped {fpath}")
@@ -1010,7 +1083,7 @@ class OHLCVManager:
     async def download_single_bitget(self, base_url, symbolf, day, fpath):
         url = self.get_url_bitget(base_url, symbolf, day)
         res = await get_zip_bitget(url)
-        dump_ohlcv_data(ensure_millis(res), fpath)
+        dump_daily_ohlcv_data(ensure_millis(res), fpath, date_to_ts(day))
         if self.verbose:
             logging.info(f"bitget Dumped daily data {fpath}")
 
@@ -1134,7 +1207,7 @@ class OHLCVManager:
             dfc["volume"] = dfc["volume"].fillna(0.0)
             dfc = dfc.reset_index().rename(columns={"index": "timestamp"})
             if len(dfc) == 1440:
-                dump_ohlcv_data(ensure_millis(dfc), fpath)
+                dump_daily_ohlcv_data(ensure_millis(dfc), fpath, start_ts_day)
                 if self.verbose:
                     logging.info(f"kucoin Dumped daily data {fpath}")
             else:
@@ -1254,7 +1327,7 @@ class OHLCVManager:
 
         # Dump final day data only if is a full day
         if len(df_day) == 1440:
-            dump_ohlcv_data(ensure_millis(df_day), fpath)
+            dump_daily_ohlcv_data(ensure_millis(df_day), fpath, start_ts_day)
             if self.verbose:
                 logging.info(f"gateio Dumped daily OHLCV data for {symbol} to {fpath}")
 
