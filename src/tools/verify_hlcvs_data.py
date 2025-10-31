@@ -541,12 +541,9 @@ def hash_historical(paths: List[Path], show_progress: bool) -> Dict[str, str]:
         for file in iterator:
             rel_path = file.relative_to(root)
             digest = hashlib.sha256()
-            with file.open("rb") as fh:
-                while True:
-                    chunk = fh.read(1 << 20)
-                    if not chunk:
-                        break
-                    digest.update(chunk)
+            arr = np.load(file, allow_pickle=False, mmap_mode="r")
+            data = arr.astype(np.float32, copy=False).tobytes()
+            digest.update(data)
             key = str(rel_path).replace("\\", "/")
             mapping[key] = digest.hexdigest()
     return mapping
