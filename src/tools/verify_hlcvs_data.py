@@ -30,7 +30,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import numpy as np
 from tqdm.auto import tqdm
-from datetime import datetime
+from datetime import datetime, UTC
 
 
 DEFAULT_ROOT = Path("caches/hlcvs_data")
@@ -577,7 +577,7 @@ def hash_historical(paths: List[Path], show_progress: bool) -> Dict[str, str]:
 
 def save_hash_manifest(output: Path, roots: List[Path], mapping: Dict[str, str]) -> None:
     data = {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(UTC).isoformat(),
         "roots": [str(p.resolve()) for p in roots],
         "files": mapping,
     }
