@@ -81,9 +81,9 @@ def process_forager_fills(
             "coin",
             "pnl",
             "fee_paid",
-            "balance",
-            "balance_btc",
-            "balance_usd",
+            "usd_total_balance",
+            "btc_cash_wallet",
+            "usd_cash_wallet",
             "btc_price",
             "qty",
             "price",
@@ -99,9 +99,9 @@ def process_forager_fills(
         numeric_cols = [
             "pnl",
             "fee_paid",
-            "balance",
-            "balance_btc",
-            "balance_usd",
+            "usd_total_balance",
+            "btc_cash_wallet",
+            "usd_cash_wallet",
             "btc_price",
             "qty",
             "price",
@@ -109,8 +109,14 @@ def process_forager_fills(
             "pprice",
         ]
         fdf[numeric_cols] = fdf[numeric_cols].apply(pd.to_numeric, errors="coerce")
+        fdf["btc_total_balance"] = np.where(
+            fdf["btc_price"] > 0.0,
+            fdf["usd_total_balance"] / fdf["btc_price"],
+            np.nan,
+        )
     else:
         fdf["minute"] = pd.Series(dtype=int)
+        fdf["btc_total_balance"] = pd.Series(dtype=float)
     analysis_appendix = {}
 
     pnls = {}
@@ -131,38 +137,61 @@ def process_forager_fills(
         bucket = (timestamps_ns // (sample_divider * 60_000 * 1_000_000)) * (
             sample_divider * 60_000 * 1_000_000
         )
-        bdf = fdf.groupby(bucket)["balance"].last().rename("balance_usd")
-        bbdf = fdf.groupby(bucket)["balance_btc"].last().rename("balance_btc")
+        usd_cash_series = (
+            fdf.groupby(bucket)["usd_cash_wallet"].last().rename("usd_cash_wallet")
+        )
+        usd_total_balance_series = (
+            fdf.groupby(bucket)["usd_total_balance"].last().rename("usd_total_balance")
+        )
+        btc_cash_series = (
+            fdf.groupby(bucket)["btc_cash_wallet"].last().rename("btc_cash_wallet")
+        )
+        btc_total_balance_series = (
+            fdf.groupby(bucket)["btc_total_balance"].last().rename("btc_total_balance")
+        )
         # convert to datetime index for easier alignment
-        bdf.index = pd.to_datetime(bdf.index, unit="ns")
-        bbdf.index = pd.to_datetime(bbdf.index, unit="ns")
+        usd_cash_series.index = pd.to_datetime(usd_cash_series.index, unit="ns")
+        usd_total_balance_series.index = pd.to_datetime(usd_total_balance_series.index, unit="ns")
+        btc_cash_series.index = pd.to_datetime(btc_cash_series.index, unit="ns")
+        btc_total_balance_series.index = pd.to_datetime(btc_total_balance_series.index, unit="ns")
     else:
-        bdf = pd.Series(dtype=float, name="balance_usd")
-        bbdf = pd.Series(dtype=float, name="balance_btc")
+        usd_cash_series = pd.Series(dtype=float, name="usd_cash_wallet")
+        usd_total_balance_series = pd.Series(dtype=float, name="usd_total_balance")
+        btc_cash_series = pd.Series(dtype=float, name="btc_cash_wallet")
+        btc_total_balance_series = pd.Series(dtype=float, name="btc_total_balance")
     equities_array = np.asarray(equities_array)
     equities_index = pd.to_datetime(equities_array[:, 0].astype(np.int64), unit="ms")
     edf = pd.Series(
         equities_array[:, 1],
         index=equities_index,
-        name="equity_usd",
+        name="usd_total_equity",
     )
     ebdf = pd.Series(
         equities_array[:, 2],
         index=equities_index,
-        name="equity_btc",
+        name="btc_total_equity",
     )
     bal_eq = pd.concat(
-        [bdf, edf, bbdf, ebdf],
+        [
+            usd_cash_series,
+            usd_total_balance_series,
+            edf,
+            btc_cash_series,
+            btc_total_balance_series,
+            ebdf,
+        ],
         axis=1,
         join="outer",
     )
     if bal_eq.empty:
         bal_eq = pd.DataFrame(
             columns=[
-                "balance_usd",
-                "equity_usd",
-                "balance_btc",
-                "equity_btc",
+                "usd_cash_wallet",
+                "usd_total_balance",
+                "usd_total_equity",
+                "btc_cash_wallet",
+                "btc_total_balance",
+                "btc_total_equity",
             ]
         )
     else:
@@ -171,10 +200,12 @@ def process_forager_fills(
         bal_eq = (
             bal_eq.reindex(
                 columns=[
-                    "balance_usd",
-                    "equity_usd",
-                    "balance_btc",
-                    "equity_btc",
+                    "usd_cash_wallet",
+                    "usd_total_balance",
+                    "usd_total_equity",
+                    "btc_cash_wallet",
+                    "btc_total_balance",
+                    "btc_total_equity",
                 ]
             )
             .ffill()
@@ -520,6 +551,11 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
         "position_held_hours_max",
         "position_held_hours_median",
         "position_unchanged_hours_max",
+        "loss_profit_ratio",
+        "loss_profit_ratio_w",
+        "volume_pct_per_day_avg",
+        "volume_pct_per_day_avg_w",
+        "peak_recovery_hours_pnl",
     }
 
     result = {}
@@ -529,6 +565,9 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
         btc_val = analysis_btc.pop(key, None)
         if usd_val is not None:
             result[key] = usd_val
+            if key not in {"peak_recovery_hours_pnl"}:
+                result.setdefault(f"{key}_usd", usd_val)
+                result.setdefault(f"usd_{key}", usd_val)
             if btc_val is not None and not np.isclose(usd_val, btc_val, equal_nan=True):
                 logging.debug(
                     "shared metric %s differs across denominations: usd=%s btc=%s",
@@ -565,6 +604,18 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
 
     _add_metrics(analysis_usd, "usd")
     _add_metrics(analysis_btc, "btc")
+
+    # Backwards compatibility aliases for renamed metrics
+    if "peak_recovery_hours_equity_usd" in result:
+        result.setdefault(
+            "equity_peak_recovery_hours_usd", result["peak_recovery_hours_equity_usd"]
+        )
+    if "peak_recovery_hours_equity_btc" in result:
+        result.setdefault(
+            "equity_peak_recovery_hours_btc", result["peak_recovery_hours_equity_btc"]
+        )
+    if "peak_recovery_hours_equity" in result:
+        result.setdefault("equity_peak_recovery_hours", result["peak_recovery_hours_equity"])
     return result
 
 
