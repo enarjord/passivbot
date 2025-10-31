@@ -241,11 +241,11 @@ impl OrderType {
 
 #[derive(Default)]
 pub struct Balance {
-    pub usd: f64,                            // usd balance
-    pub usd_total: f64,                      // total in usd
-    pub usd_total_rounded: f64,              // total in usd rounded for calculations
-    pub btc: f64,                            // btc balance
-    pub btc_total: f64,                      // total in btc
+    pub usd_cash_wallet: f64,                // raw usd wallet balance
+    pub usd_total_balance: f64,              // usd cash + btc converted to usd
+    pub usd_total_balance_rounded: f64,      // rounded usd total for hysteresis logic
+    pub btc_cash_wallet: f64,                // raw btc wallet balance
+    pub btc_total_balance: f64,              // btc cash + usd converted to btc
     pub use_btc_collateral: bool,            // whether to use btc as collateral
     pub btc_collateral_cap: f64,             // target/cap ratio of collateral held in btc
     pub btc_collateral_ltv_cap: Option<f64>, // optional LTV ceiling when topping up btc
@@ -254,8 +254,8 @@ pub struct Balance {
 #[derive(Default, Clone)]
 pub struct Equities {
     pub timestamps_ms: Vec<u64>,
-    pub usd: Vec<f64>,
-    pub btc: Vec<f64>,
+    pub usd_total_equity: Vec<f64>,
+    pub btc_total_equity: Vec<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -265,10 +265,10 @@ pub struct Fill {
     pub coin: String,
     pub pnl: f64,
     pub fee_paid: f64,
-    pub balance_usd_total: f64,
-    pub balance_btc: f64, // Added: BTC balance after fill
-    pub balance_usd: f64, // Added: USD balance after fill
-    pub btc_price: f64,   // Added: BTC/USD price at time of fill
+    pub usd_total_balance: f64,
+    pub btc_cash_wallet: f64,
+    pub usd_cash_wallet: f64,
+    pub btc_price: f64,
     pub fill_qty: f64,
     pub fill_price: f64,
     pub position_size: f64,
@@ -294,7 +294,8 @@ pub struct Analysis {
     pub equity_balance_diff_pos_max: f64,
     pub equity_balance_diff_pos_mean: f64,
     pub loss_profit_ratio: f64,
-    pub equity_peak_recovery_hours: f64,
+    pub peak_recovery_hours_equity: f64,
+    pub peak_recovery_hours_pnl: f64,
 
     pub equity_choppiness: f64,
     pub equity_jerkiness: f64,
@@ -340,7 +341,8 @@ impl Default for Analysis {
             equity_balance_diff_pos_max: 1.0,
             equity_balance_diff_pos_mean: 1.0,
             loss_profit_ratio: 1.0,
-            equity_peak_recovery_hours: 0.0,
+            peak_recovery_hours_equity: 0.0,
+            peak_recovery_hours_pnl: 0.0,
             equity_choppiness: 1.0,
             equity_jerkiness: 1.0,
             exponential_fit_error: 1.0,
