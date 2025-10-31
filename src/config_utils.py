@@ -36,15 +36,13 @@ CURRENCY_METRICS = {
     "equity_choppiness_w",
     "equity_jerkiness",
     "equity_jerkiness_w",
-    "equity_peak_recovery_hours",
+    "peak_recovery_hours_equity",
     "expected_shortfall_1pct",
     "exponential_fit_error",
     "exponential_fit_error_w",
     "gain",
     "gain_per_exposure_long",
     "gain_per_exposure_short",
-    "loss_profit_ratio",
-    "loss_profit_ratio_w",
     "mdg",
     "mdg_per_exposure_long",
     "mdg_per_exposure_short",
@@ -59,8 +57,6 @@ CURRENCY_METRICS = {
     "sortino_ratio_w",
     "sterling_ratio",
     "sterling_ratio_w",
-    "volume_pct_per_day_avg",
-    "volume_pct_per_day_avg_w",
 }
 
 SHARED_METRICS = {
@@ -71,6 +67,9 @@ SHARED_METRICS = {
     "position_unchanged_hours_max",
     "volume_pct_per_day_avg",
     "volume_pct_per_day_avg_w",
+    "loss_profit_ratio",
+    "loss_profit_ratio_w",
+    "peak_recovery_hours_pnl",
 }
 
 

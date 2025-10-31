@@ -528,24 +528,34 @@ def create_forager_balance_figures(
     autoplot: bool = False,
 ) -> dict:
     figures = {}
-    denom_configs = [
-        ("USD Balance & Equity", "balance_usd", "equity_usd"),
-        ("BTC Balance & Equity", "balance_btc", "equity_btc"),
+    panel_configs = [
+        (
+            "USD Cash / Balance / Equity",
+            [
+                ("USD Cash Wallet", "usd_cash_wallet"),
+                ("USD Total Balance", "usd_total_balance"),
+                ("USD Total Equity", "usd_total_equity"),
+            ],
+        ),
+        (
+            "BTC Cash / Balance / Equity",
+            [
+                ("BTC Cash Wallet", "btc_cash_wallet"),
+                ("BTC Total Balance", "btc_total_balance"),
+                ("BTC Total Equity", "btc_total_equity"),
+            ],
+        ),
     ]
     for logy in (False, True):
         fig, axes = plt.subplots(2, 1, sharex=True, figsize=figsize)
         x = bal_eq.index
-        for ax, (title, bal_key, eq_key) in zip(axes, denom_configs):
-            balance = bal_eq.get(bal_key, pd.Series(index=x, data=np.nan)).astype(float)
-            equity = bal_eq.get(eq_key, pd.Series(index=x, data=np.nan)).astype(float)
-            if logy:
-                balance = balance.mask(balance <= 0.0)
-                equity = equity.mask(equity <= 0.0)
-                ax.set_yscale("log")
-            else:
-                ax.set_yscale("linear")
-            ax.plot(x, balance, label=bal_key.replace("_", " ").title(), linewidth=1.0)
-            ax.plot(x, equity, label=eq_key.replace("_", " ").title(), linewidth=1.0)
+        for ax, (title, series_specs) in zip(axes, panel_configs):
+            ax.set_yscale("log" if logy else "linear")
+            for label, key in series_specs:
+                series = bal_eq.get(key, pd.Series(index=x, data=np.nan)).astype(float)
+                if logy:
+                    series = series.mask(series <= 0.0)
+                ax.plot(x, series, label=label, linewidth=1.0)
             ax.set_title(title)
             ax.grid(True, linestyle="--", alpha=0.3)
             ax.legend()

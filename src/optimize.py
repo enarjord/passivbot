@@ -578,7 +578,7 @@ class Evaluator:
             "equity_choppiness_w": 1.0,
             "equity_jerkiness": 1.0,
             "equity_jerkiness_w": 1.0,
-            "equity_peak_recovery_hours": 1.0,
+            "peak_recovery_hours_equity": 1.0,
             "expected_shortfall_1pct": 1.0,
             "exponential_fit_error": 1.0,
             "exponential_fit_error_w": 1.0,
