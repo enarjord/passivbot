@@ -15,8 +15,8 @@ use crate::types::{
     Order, OrderBook, OrderType, Position, Positions, StateParams, TrailingPriceBundle,
 };
 use crate::utils::{
-    calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
-    hysteresis_rounding, qty_to_cost, round_, round_dn,
+    calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, qty_to_cost,
+    round_, round_dn, round_hysteresis,
 };
 use ndarray::{ArrayView1, ArrayView3};
 use std::cmp::Ordering;
@@ -604,7 +604,7 @@ impl<'a> Backtest<'a> {
                 self.balance.usd_total_balance / self.btc_usd_prices[k];
 
             // 2. apply hysteresis rounding
-            self.balance.usd_total_balance_rounded = hysteresis_rounding(
+            self.balance.usd_total_balance_rounded = round_hysteresis(
                 self.balance.usd_total_balance,
                 self.balance.usd_total_balance_rounded,
                 0.02, // round size
@@ -811,7 +811,7 @@ impl<'a> Backtest<'a> {
         let new_btc_value = self.balance.btc_cash_wallet * btc_price;
         self.balance.usd_total_balance = new_btc_value + self.balance.usd_cash_wallet;
         self.balance.btc_total_balance = self.balance.usd_total_balance / btc_price;
-        self.balance.usd_total_balance_rounded = hysteresis_rounding(
+        self.balance.usd_total_balance_rounded = round_hysteresis(
             self.balance.usd_total_balance,
             self.balance.usd_total_balance_rounded,
             0.02,

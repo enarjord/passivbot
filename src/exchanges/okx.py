@@ -132,7 +132,7 @@ class OKXBot(Passivbot):
                             )
                 if not hasattr(self, "previous_rounded_balance"):
                     self.previous_rounded_balance = balance
-                self.previous_rounded_balance = pbr.hysteresis_rounding(
+                self.previous_rounded_balance = pbr.round_hysteresis(
                     balance,
                     self.previous_rounded_balance,
                     self.hyst_rounding_balance_pct,
