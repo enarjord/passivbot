@@ -1,4 +1,4 @@
-from passivbot import Passivbot, logging
+from passivbot import Passivbot, logging, custom_id_to_snake, clip_by_timestamp
 from uuid import uuid4
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
@@ -145,15 +145,14 @@ class BitgetBot(Passivbot):
                 balance = float(balance_info["unionTotalMargin"]) - float(
                     balance_info["unrealizedPL"]
                 )
-                if not hasattr(self, "previous_rounded_balance"):
-                    self.previous_rounded_balance = balance
-                self.previous_rounded_balance = pbr.round_hysteresis(
+                if not hasattr(self, "previous_hysteresis_balance"):
+                    self.previous_hysteresis_balance = balance
+                self.previous_hysteresis_balance = pbr.hysteresis(
                     balance,
-                    self.previous_rounded_balance,
-                    self.hyst_rounding_balance_pct,
-                    self.hyst_rounding_balance_h,
+                    self.previous_hysteresis_balance,
+                    self.hyst_pct,
                 )
-                balance = self.previous_rounded_balance
+                balance = self.previous_hysteresis_balance
             else:
                 balance = float(balance_info["available"])
             for i in range(len(fetched_positions)):
@@ -248,6 +247,60 @@ class BitgetBot(Passivbot):
             logging.info(f"fetched {len(data)} fills until {ts_to_date(last_ts)[:19]}")
             params["endTime"] = int(last_ts)
         return sorted(data_d.values(), key=lambda x: x["timestamp"])
+
+
+    async def fetch_closed_orders(self, start_time, end_time, limit=100):
+        def extract_fill_event_from_co(elm):
+            return {
+                "id": elm.get("id"),
+                "timestamp": elm['lastUpdateTimestamp'],
+                "datetime": ts_to_date(elm['lastUpdateTimestamp']),
+                "symbol": elm["symbol"],
+                "side": elm["side"],
+                "qty": elm["filled"],
+                "price": elm["price"],
+                "pnl": float(elm['info']['totalProfits']),
+                "fees": elm.get("fees"),
+                "pb_order_type": custom_id_to_snake(elm.get("clientOrderId")),
+                "position_side": elm['info']['posSide'],
+            }
+        # max limit is 100
+        limit = min(limit, 100)
+        max_n_fetches = 200
+        buffer_step_ms = int(1000 * 60 * 60 * 24 * 3)
+        end_time = int(utc_ms() + 3600000 if end_time is None else end_time)
+        params = {"until": end_time}
+        closed_orders_all = []
+        count = 0
+        while True:
+            count += 1
+            closed_orders = await self.cca.fetch_closed_orders(params=params)
+            if count > 0:
+                line = f"fetched {len(closed_orders)} fill{'' if len(closed_orders) == 1 else 's'}"
+                if len(closed_orders) > 2:
+                    line += f" from {closed_orders[0]['datetime'][:19]} to {closed_orders[-1]['datetime'][:19]}"
+                logging.info(line)
+            closed_orders_all.extend(closed_orders)
+            if len(closed_orders) < limit:
+                if start_time is None or params["until"] - start_time < buffer_step_ms:
+                    logging.debug(f"broke loop fetch_closed_orders on n closed_orders {len(closed_orders)}")
+                    print(f"broke loop fetch_closed_orders on n closed_orders {len(closed_orders)}")
+                    break
+                else:
+                    params["until"] = params["until"] = int(closed_orders[0]["timestamp"] + 1 if closed_orders else params["until"] - buffer_step_ms)
+                    continue
+            if start_time is None or closed_orders[0]["timestamp"] < start_time:
+                logging.debug(f"broke loop fetch_closed_orders on start time exceeded")
+                print(f"broke loop fetch_closed_orders on start time exceeded")
+                break
+            if params["until"] == closed_orders[0]["timestamp"]:
+                logging.debug(f"broke loop fetch_closed_orders on two successive identical endTimes")
+                print(f"broke loop fetch_closed_orders on two successive identical endTimes")
+                break
+            params["until"] = int(closed_orders[0]["timestamp"])
+        final_result = sorted([extract_fill_event_from_co(x) for x in closed_orders_all], key=lambda x: x["timestamp"])
+        return clip_by_timestamp(final_result, start_time, end_time)
+
 
     async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
         """Return canonical fill events for Bitget (draft placeholder)."""

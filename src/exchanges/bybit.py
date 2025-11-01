@@ -1,4 +1,4 @@
-from passivbot import Passivbot, logging
+from passivbot import Passivbot, logging, clip_by_timestamp
 from uuid import uuid4
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
@@ -7,7 +7,6 @@ import asyncio
 import traceback
 import numpy as np
 import passivbot_rust as pbr
-import bisect
 from collections import defaultdict
 from utils import ts_to_date, utc_ms
 from config_utils import require_live_value
@@ -21,13 +20,6 @@ from pure_funcs import (
 from procedures import print_async_exception, assert_correct_ccxt_version
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
-
-
-def clip_by_timestamp(xs, start_ts, end_ts):
-    timestamps = [x["timestamp"] for x in xs]
-    i0 = bisect.bisect_left(timestamps, start_ts)
-    i1 = bisect.bisect_right(timestamps, end_ts)
-    return xs[i0:i1]
 
 
 class BybitBot(Passivbot):
@@ -130,15 +122,14 @@ class BybitBot(Passivbot):
                 for elm in balinfo["coin"]:
                     if elm["marginCollateral"] and elm["collateralSwitch"]:
                         balance += float(elm["usdValue"]) + float(elm["unrealisedPnl"])
-                if not hasattr(self, "previous_rounded_balance"):
-                    self.previous_rounded_balance = balance
-                self.previous_rounded_balance = pbr.round_hysteresis(
+                if not hasattr(self, "previous_hysteresis_balance"):
+                    self.previous_hysteresis_balance = balance
+                self.previous_hysteresis_balance = pbr.hysteresis(
                     balance,
-                    self.previous_rounded_balance,
-                    self.hyst_rounding_balance_pct,
-                    self.hyst_rounding_balance_h,
+                    self.previous_hysteresis_balance,
+                    self.hyst_pct,
                 )
-                balance = self.previous_rounded_balance
+                balance = self.previous_hysteresis_balance
             else:
                 balance = fetched_balance[self.quote]["total"]
             while True:
@@ -481,7 +472,7 @@ class BybitBot(Passivbot):
                     logging.debug(f"broke loop fetch_my_trades on n my_trades {len(my_trades)}")
                     break
                 else:
-                    params["endTime"] = int(params["endTime"] - week_with_buffer_ms)
+                    params["endTime"] = int(my_trades[0]["timestamp"] + 1 if my_trades else params["endTime"] - week_with_buffer_ms)
                     continue
             if start_time is None or my_trades[0]["timestamp"] < start_time:
                 logging.debug(f"broke loop fetch_my_trades on start time exceeded")
@@ -489,7 +480,7 @@ class BybitBot(Passivbot):
             if params["endTime"] == my_trades[0]["timestamp"]:
                 logging.debug(f"broke loop fetch_my_trades on two successive identical endTimes")
                 break
-            params["endTime"] = int(my_trades[0]["timestamp"])
+            params["endTime"] = int(my_trades[0]["timestamp"] + 1)
             if count > 1:
                 logging.info(
                     f"fetched {len(my_trades)} fills from {my_trades[0]['datetime'][:19]} to {my_trades[-1]['datetime'][:19]}"

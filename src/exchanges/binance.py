@@ -182,15 +182,14 @@ class BinanceBot(Passivbot):
                         }
                     )
             balance = float(fetched_balance["info"]["totalCrossWalletBalance"])
-            if not hasattr(self, "previous_rounded_balance"):
-                self.previous_rounded_balance = balance
-            self.previous_rounded_balance = pbr.hysteresis_rounding(
+            if not hasattr(self, "previous_hysteresis_balance"):
+                self.previous_hysteresis_balance = balance
+            self.previous_hysteresis_balance = pbr.hysteresis(
                 balance,
-                self.previous_rounded_balance,
-                self.hyst_rounding_balance_pct,
-                self.hyst_rounding_balance_h,
+                self.previous_hysteresis_balance,
+                self.hyst_pct,
             )
-            return positions, self.previous_rounded_balance
+            return positions, self.previous_hysteresis_balance
         except Exception as e:
             logging.error(f"error fetching positions {e}")
             print_async_exception(fetched_positions)
