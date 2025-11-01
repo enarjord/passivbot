@@ -381,7 +381,7 @@ class Passivbot:
         self.debug_mode = False
         self.balance_threshold = 1.0  # don't create orders if balance is less than threshold
         self.hyst_rounding_balance_pct = 0.025
-        self.hyst_rounding_balance_h = 0.75
+        self.hyst_rounding_balance_h = 0.499
         self.state_change_detected_by_symbol = set()
         self.recent_order_executions = []
         self.recent_order_cancellations = []
