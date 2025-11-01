@@ -44,8 +44,8 @@ def _install_passivbot_rust_stub():
         return math.floor(value / step) * step
 
     stub.calc_diff = lambda price, reference: price - reference
-    stub.calc_order_price_diff = (
-        lambda side, price, market: (0.0 if not market else (1 - price / market))
+    stub.calc_order_price_diff = lambda side, price, market: (
+        (0.0 if not market else (1 - price / market))
         if str(side).lower() in ("buy", "long")
         else (0.0 if not market else (price / market - 1))
     )
@@ -97,9 +97,9 @@ def _install_passivbot_rust_stub():
         "close_panic_short": 0x3006,
     }
     stub.get_order_id_type_from_string = lambda name: _order_map.get(name, 0)
-    stub.order_type_id_to_snake = lambda type_id: {
-        v: k for k, v in _order_map.items()
-    }.get(type_id, "other")
+    stub.order_type_id_to_snake = lambda type_id: {v: k for k, v in _order_map.items()}.get(
+        type_id, "other"
+    )
     stub.order_type_snake_to_id = lambda name: _order_map.get(name, 0)
 
     stub.run_backtest = lambda *args, **kwargs: {}

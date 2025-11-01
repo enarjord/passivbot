@@ -128,9 +128,7 @@ class DummyBot(Passivbot):
         self.custom_id_max_length = 36
 
     def bp(self, pside, key, symbol=None):
-        return self._bp_overrides.get(
-            (pside, symbol, key), self._bp_defaults.get(key, 0.0)
-        )
+        return self._bp_overrides.get((pside, symbol, key), self._bp_defaults.get(key, 0.0))
 
     def bot_value(self, pside, key):
         return self._bot_value_overrides.get((pside, key), self._bot_value_defaults.get(key, 0.0))

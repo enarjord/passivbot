@@ -10,7 +10,11 @@ pbr_is_stub = bool(getattr(pbr, "__is_stub__", False)) if pbr is not None else F
 
 def _apply_twel_orders(balance, positions, actions):
     positions_map = {
-        pos["idx"]: {"size": pos["position_size"], "price": pos["position_price"], "c_mult": pos["c_mult"]}
+        pos["idx"]: {
+            "size": pos["position_size"],
+            "price": pos["position_price"],
+            "c_mult": pos["c_mult"],
+        }
         for pos in positions
     }
     for idx, qty, _price, _order_type in actions:
@@ -24,9 +28,7 @@ def _apply_twel_orders(balance, positions, actions):
     return total_we
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_twel_reduces_most_profitable_long_first():
     balance = 1000.0
     total_wel = 0.8
@@ -73,9 +75,7 @@ def test_twel_reduces_most_profitable_long_first():
     assert final_we <= total_wel * threshold + 1e-9
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_twel_reduces_most_profitable_short_first():
     balance = 1000.0
     total_wel = 0.8

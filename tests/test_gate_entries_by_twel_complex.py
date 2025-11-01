@@ -10,6 +10,7 @@ except Exception:  # pragma: no cover - exercised when the extension is unavaila
 
 pbr_is_stub = bool(getattr(pbr, "__is_stub__", False)) if pbr is not None else False
 
+
 def _apply_entries_and_calc_twe(balance, positions, original_entries, gated_entries):
     """
     Helper that mirrors the Rust logic to evaluate the resulting total wallet exposure.

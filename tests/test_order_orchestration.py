@@ -310,9 +310,7 @@ async def test_only_one_unstuck_order_survives(monkeypatch):
     assert len(to_create) == 1
     remaining = to_create[0]
     assert remaining["symbol"] == symbols[0]
-    assert remaining["custom_id"].endswith(
-        f"0x{pbr.order_type_snake_to_id(unstuck_type):04x}"
-    )
+    assert remaining["custom_id"].endswith(f"0x{pbr.order_type_snake_to_id(unstuck_type):04x}")
 
 
 @pytest.mark.asyncio
@@ -345,17 +343,14 @@ async def test_calc_ideal_orders_includes_closes_and_entries(monkeypatch):
     monkeypatch.setattr(
         pbr,
         "gate_entries_by_twel_py",
-        lambda *args, **kwargs: [
-            (0, 1.0, 95.0, pbr.order_type_snake_to_id(entry_type))
-        ],
+        lambda *args, **kwargs: [(0, 1.0, 95.0, pbr.order_type_snake_to_id(entry_type))],
     )
     monkeypatch.setattr(pbr, "calc_twel_enforcer_orders_py", lambda *args, **kwargs: [])
 
     orders = await bot.calc_ideal_orders()
     assert symbol in orders
     snake_types = {
-        snake_of(try_decode_type_id_from_custom_id(order["custom_id"]))
-        for order in orders[symbol]
+        snake_of(try_decode_type_id_from_custom_id(order["custom_id"])) for order in orders[symbol]
     }
     assert close_type in snake_types
     assert entry_type in snake_types
@@ -373,6 +368,7 @@ async def test_twel_entry_gating_appends_gated_entries(monkeypatch):
     bot = IdealOrdersBot(symbol, market_price=100.0)
     bot.set_bot_value_override("long", "total_wallet_exposure_limit", 1.0)
     bot.set_bot_value_override("long", "n_positions", 1.0)
+
     def fake_build_base_orders(self, *_args, **_kwargs):
         return BaseOrderPlan(
             close_candidates=defaultdict(list, {symbol: []}),
@@ -406,9 +402,7 @@ async def test_twel_entry_gating_appends_gated_entries(monkeypatch):
     monkeypatch.setattr(
         pbr,
         "gate_entries_by_twel_py",
-        lambda *args, **kwargs: [
-            (0, 0.5, 99.0, pbr.order_type_snake_to_id(gated_entry_type))
-        ],
+        lambda *args, **kwargs: [(0, 0.5, 99.0, pbr.order_type_snake_to_id(gated_entry_type))],
     )
     monkeypatch.setattr(pbr, "calc_twel_enforcer_orders_py", lambda *args, **kwargs: [])
 
@@ -417,8 +411,7 @@ async def test_twel_entry_gating_appends_gated_entries(monkeypatch):
     entry_orders = [
         order
         for order in orders[symbol]
-        if snake_of(try_decode_type_id_from_custom_id(order["custom_id"]))
-        == gated_entry_type
+        if snake_of(try_decode_type_id_from_custom_id(order["custom_id"])) == gated_entry_type
     ]
     assert entry_orders
     assert entry_orders[0]["price"] == pytest.approx(99.0)
@@ -448,9 +441,7 @@ async def test_twel_enforcer_injects_reduce_only(monkeypatch):
 
     reduce_type = "close_auto_reduce_twel_long"
 
-    def fake_enforcer(
-        side, threshold, total_wel, n_positions, balance, payload, skip_idx
-    ):
+    def fake_enforcer(side, threshold, total_wel, n_positions, balance, payload, skip_idx):
         return [
             (0, -3.0, 99.0, pbr.order_type_snake_to_id(reduce_type)),
         ]
@@ -463,8 +454,7 @@ async def test_twel_enforcer_injects_reduce_only(monkeypatch):
     reduce_orders = [
         order
         for order in orders[symbol]
-        if snake_of(try_decode_type_id_from_custom_id(order["custom_id"]))
-        == reduce_type
+        if snake_of(try_decode_type_id_from_custom_id(order["custom_id"])) == reduce_type
     ]
     assert reduce_orders
     reduce_order = reduce_orders[0]

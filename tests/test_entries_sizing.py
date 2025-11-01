@@ -18,9 +18,7 @@ def _calc_next_entry_short(**kwargs):
     return qty, price, order_type
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_initial_entry_qty_long_respects_min_qty_and_allowance():
     params = dict(
         qty_step=0.01,
@@ -61,14 +59,14 @@ def test_initial_entry_qty_long_respects_min_qty_and_allowance():
 
     allowed = params["wallet_exposure_limit"] * (1.0 + params["risk_we_excess_allowance_pct"])
     target_cost = params["balance"] * allowed * params["entry_initial_qty_pct"]
-    expected_qty = pbr.round_(pbr.cost_to_qty(target_cost, price, params["c_mult"]), params["qty_step"])
+    expected_qty = pbr.round_(
+        pbr.cost_to_qty(target_cost, price, params["c_mult"]), params["qty_step"]
+    )
 
     assert qty == pytest.approx(expected_qty)
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_initial_entry_qty_short_respects_allowance():
     params = dict(
         qty_step=0.01,
@@ -109,14 +107,14 @@ def test_initial_entry_qty_short_respects_allowance():
 
     allowed = params["wallet_exposure_limit"] * (1.0 + params["risk_we_excess_allowance_pct"])
     target_cost = params["balance"] * allowed * params["entry_initial_qty_pct"]
-    expected_qty = pbr.round_(pbr.cost_to_qty(target_cost, price, params["c_mult"]), params["qty_step"])
+    expected_qty = pbr.round_(
+        pbr.cost_to_qty(target_cost, price, params["c_mult"]), params["qty_step"]
+    )
 
     assert abs(qty) == pytest.approx(expected_qty)
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_reentry_blocked_when_cap_reached():
     params = dict(
         qty_step=0.1,
@@ -158,9 +156,7 @@ def test_reentry_blocked_when_cap_reached():
     assert order_type == "empty"
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_reentry_long_is_cropped_to_cap():
     params = dict(
         qty_step=0.1,
@@ -203,16 +199,12 @@ def test_reentry_long_is_cropped_to_cap():
     new_size, new_price = pbr.calc_new_psize_pprice(
         params["position_size"], params["position_price"], qty, price, params["qty_step"]
     )
-    new_exposure = pbr.calc_wallet_exposure(
-        params["c_mult"], params["balance"], new_size, new_price
-    )
+    new_exposure = pbr.calc_wallet_exposure(params["c_mult"], params["balance"], new_size, new_price)
     allowed = params["wallet_exposure_limit"] * (1.0 + params["risk_we_excess_allowance_pct"])
     assert new_exposure <= allowed * 1.02 + 1e-9
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_reentry_short_is_cropped_to_cap():
     params = dict(
         qty_step=0.1,

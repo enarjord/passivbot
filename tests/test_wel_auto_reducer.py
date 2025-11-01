@@ -16,9 +16,7 @@ def _find_order(orders, order_type_name):
     return None
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_wel_enforcer_reduces_long_exposure_below_threshold():
     params = dict(
         qty_step=0.1,
@@ -63,9 +61,7 @@ def test_wel_enforcer_reduces_long_exposure_below_threshold():
     assert new_exposure < target
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_wel_enforcer_reduces_short_exposure_below_threshold():
     params = dict(
         qty_step=0.1,

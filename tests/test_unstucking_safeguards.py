@@ -26,8 +26,8 @@ def _make_mock_pbr():
     )
     module.calc_pprice_diff_int = lambda *args, **kwargs: 0.0
     module.calc_diff = lambda price, reference: price - reference
-    module.calc_order_price_diff = (
-        lambda side, price, market: (0.0 if not market else (1 - price / market))
+    module.calc_order_price_diff = lambda side, price, market: (
+        (0.0 if not market else (1 - price / market))
         if str(side).lower() in ("buy", "long")
         else (0.0 if not market else (price / market - 1))
     )

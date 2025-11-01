@@ -28,11 +28,9 @@ def test_calc_pprice_diff_int_returns_zero_for_non_positive_pprice(pside):
 
 
 def test_pside_aliases_match_core_function():
-    assert (
-        pbr.calc_pside_price_diff_int(LONG, 100.0, 95.0)
-        == pbr.calc_pprice_diff_int(LONG, 100.0, 95.0)
+    assert pbr.calc_pside_price_diff_int(LONG, 100.0, 95.0) == pbr.calc_pprice_diff_int(
+        LONG, 100.0, 95.0
     )
-    assert (
-        pbr.calc_price_diff_pside_int(SHORT, 100.0, 105.0)
-        == pbr.calc_pprice_diff_int(SHORT, 100.0, 105.0)
+    assert pbr.calc_price_diff_pside_int(SHORT, 100.0, 105.0) == pbr.calc_pprice_diff_int(
+        SHORT, 100.0, 105.0
     )

@@ -59,18 +59,14 @@ def _build_position(
     }
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_unstucking_returns_none_when_allowance_zero():
     positions = [_build_position()]
     result = pbr.calc_unstucking_close_py(1000.0, 0.0, 0.0, positions)
     assert result is None
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_unstucking_emits_long_order_when_triggered():
     positions = [
         _build_position(
@@ -92,9 +88,7 @@ def test_unstucking_emits_long_order_when_triggered():
     assert math.isclose(qty, expected_qty, rel_tol=1e-9)
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_unstucking_emits_short_order_when_triggered():
     positions = [
         _build_position(
@@ -130,9 +124,7 @@ def test_unstucking_skips_when_price_not_beyond_ema():
     assert result is None
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_unstucking_respects_effective_wel_threshold():
     balance = 1000.0
     wel = 0.2
@@ -174,9 +166,7 @@ def test_unstucking_respects_effective_wel_threshold():
     assert order_type_id == expected_order_type
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_unstucking_respects_effective_wel_threshold_short():
     balance = 1000.0
     wel = 0.2
@@ -217,9 +207,7 @@ def test_unstucking_respects_effective_wel_threshold_short():
     assert order_type_id == expected_order_type
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_unstucking_triggers_with_fractional_allowance():
     balance = 2000.0
     wel = 0.25
@@ -260,9 +248,7 @@ def test_unstucking_triggers_with_fractional_allowance():
     assert order_type_id == expected_order_type
 
 
-@pytest.mark.skipif(
-    pbr is None or pbr_is_stub, reason="passivbot_rust extension not available"
-)
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_unstucking_requires_exposure_when_threshold_above_one():
     balance = 1000.0
     wel = 0.2
