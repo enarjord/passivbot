@@ -137,7 +137,6 @@ class BitgetBot(Passivbot):
                 self.cca.fetch_balance(),
             )
             balance_info = [x for x in fetched_balance["info"] if x["marginCoin"] == self.quote][0]
-            print(balance_info)
             if (
                 "assetMode" in balance_info
                 and "unionTotalMargin" in balance_info
@@ -146,7 +145,6 @@ class BitgetBot(Passivbot):
                 balance = float(balance_info["unionTotalMargin"]) - float(
                     balance_info["unrealizedPL"]
                 )
-                print('kak', balance)
                 if not hasattr(self, "previous_rounded_balance"):
                     self.previous_rounded_balance = balance
                 self.previous_rounded_balance = pbr.round_hysteresis(
@@ -155,7 +153,6 @@ class BitgetBot(Passivbot):
                     self.hyst_rounding_balance_pct,
                     self.hyst_rounding_balance_h,
                 )
-                print('kek', self.previous_rounded_balance)
                 balance = self.previous_rounded_balance
             else:
                 balance = float(balance_info["available"])
