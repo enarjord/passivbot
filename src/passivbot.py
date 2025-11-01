@@ -2413,9 +2413,9 @@ class Passivbot:
 
     # Legacy calc_ema_bound removed; pricing uses CandlestickManager EMA bounds
 
-    async def _load_price_context(self) -> tuple[
-        Dict[str, float], Dict[str, Dict[str, float]], Dict[str, Dict[str, float]]
-    ]:
+    async def _load_price_context(
+        self,
+    ) -> tuple[Dict[str, float], Dict[str, Dict[str, float]], Dict[str, Dict[str, float]]]:
         """Fetch latest prices and EMA/log-range anchors required for order calculation."""
         to_update_last_prices: set[str] = set()
         to_update_emas: dict[str, set[str]] = {"long": set(), "short": set()}
@@ -2670,18 +2670,13 @@ class Passivbot:
                 seen.add(seen_key)
         return self._finalize_reduce_only_orders(ideal_orders_f), wel_blocked_symbols
 
-    def _finalize_reduce_only_orders(
-        self, orders_by_symbol: Dict[str, list]
-    ) -> Dict[str, list]:
+    def _finalize_reduce_only_orders(self, orders_by_symbol: Dict[str, list]) -> Dict[str, list]:
         """Bound reduce-only quantities so they never exceed the current position size."""
         for symbol, orders in orders_by_symbol.items():
             for order in orders:
                 if not order.get("reduce_only"):
                     continue
-                pos = (
-                    self.positions.get(order["symbol"], {})
-                    .get(order["position_side"], {})
-                )
+                pos = self.positions.get(order["symbol"], {}).get(order["position_side"], {})
                 pos_size_abs = abs(pos.get("size", 0.0))
                 if abs(order["qty"]) > pos_size_abs:
                     logging.info(
@@ -2854,7 +2849,9 @@ class Passivbot:
                             "position_side": order["position_side"],
                             "qty": abs(order["qty"]),
                             "price": order["price"],
-                            "reduce_only": (order["position_side"] == "long" and order["side"] == "sell")
+                            "reduce_only": (
+                                order["position_side"] == "long" and order["side"] == "sell"
+                            )
                             or (order["position_side"] == "short" and order["side"] == "buy"),
                             "id": order.get("id"),
                             "custom_id": order.get("custom_id"),
@@ -2881,9 +2878,7 @@ class Passivbot:
         to_cancel, to_create = self._apply_mode_filters(symbol, to_cancel, to_create)
         return to_cancel, to_create
 
-    def _dedupe_unstuck_orders(
-        self, orders: list[dict], unstuck_names: set[str]
-    ) -> list[dict]:
+    def _dedupe_unstuck_orders(self, orders: list[dict], unstuck_names: set[str]) -> list[dict]:
         """Keep at most one unstuck order within a list of orders."""
         filtered: list[dict] = []
         seen_unstuck = False
@@ -2929,9 +2924,7 @@ class Passivbot:
                 ]
         return to_cancel, to_create
 
-    async def _sort_orders_by_market_diff(
-        self, orders: list[dict], log_label: str
-    ) -> list[dict]:
+    async def _sort_orders_by_market_diff(self, orders: list[dict], log_label: str) -> list[dict]:
         """Return orders sorted by market diff, fetching prices concurrently."""
         if not orders:
             return []
@@ -2940,9 +2933,7 @@ class Passivbot:
         for order in orders:
             market_price = market_prices.get(order["symbol"])
             if market_price is None:
-                logging.info(
-                    f"debug: price missing sort {log_label} by mprice_diff {order}"
-                )
+                logging.info(f"debug: price missing sort {log_label} by mprice_diff {order}")
                 diff = 0.0
             else:
                 diff = order_market_diff(order["side"], order["price"], market_price)
@@ -3051,7 +3042,11 @@ class Passivbot:
                 skip_idx = None
                 if unstucking_symbol and unstuck_side == pside:
                     skip_idx = next(
-                        (idx for idx, symbol in symbol_idx_map.items() if symbol == unstucking_symbol),
+                        (
+                            idx
+                            for idx, symbol in symbol_idx_map.items()
+                            if symbol == unstucking_symbol
+                        ),
                         None,
                     )
                 actions = pbr.calc_twel_enforcer_orders_py(
@@ -3075,9 +3070,7 @@ class Passivbot:
                     if symbol not in ideal_orders_f:
                         ideal_orders_f[symbol] = []
                     order_side = "sell" if pside == "long" else "buy"
-                    exec_type = (
-                        "market" if self.live_value("market_orders_allowed") else "limit"
-                    )
+                    exec_type = "market" if self.live_value("market_orders_allowed") else "limit"
                     ideal_orders_f[symbol].append(
                         {
                             "symbol": symbol,
@@ -3133,9 +3126,7 @@ class Passivbot:
             idx_counter += 1
         return payload, symbol_idx_map
 
-    def _resolve_unstuck_side(
-        self, unstucking_symbol: str | None, unstucking_close: tuple
-    ) -> str:
+    def _resolve_unstuck_side(self, unstucking_symbol: str | None, unstucking_close: tuple) -> str:
         """Determine which side is currently being unstuck, if any."""
         if not unstucking_symbol or len(unstucking_close) < 3:
             return ""

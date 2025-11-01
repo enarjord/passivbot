@@ -1029,9 +1029,7 @@ class OHLCVManager:
             ohlcvs["timestamp"] = ohlcvs.index
             fpath = os.path.join(dirpath, day + ".npy")
             dump_daily_ohlcv_data(
-                ensure_millis(
-                    ohlcvs[["timestamp", "open", "high", "low", "close", "volume"]]
-                ),
+                ensure_millis(ohlcvs[["timestamp", "open", "high", "low", "close", "volume"]]),
                 fpath,
                 date_to_ts(day),
             )

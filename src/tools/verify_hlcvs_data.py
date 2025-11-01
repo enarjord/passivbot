@@ -543,7 +543,9 @@ def clean_historical(
             problems = _scan_problem_files(exchange, coin_dir, show_progress=False)
             for problem in problems:
                 action = "REMOVED" if apply_changes else "FOUND"
-                print(f"[{action}] {problem.exchange}/{problem.coin}/{problem.file.name} -> {problem.reason}")
+                print(
+                    f"[{action}] {problem.exchange}/{problem.coin}/{problem.file.name} -> {problem.reason}"
+                )
                 if apply_changes:
                     try:
                         problem.file.unlink(missing_ok=True)
@@ -642,9 +644,7 @@ def compare_historical_hashes(
     print("Comparison complete. Remove the same files on the other host to keep datasets aligned.")
 
 
-def print_historical_summaries(
-    summaries: List[HistoricalCoinSummary], json_output: bool
-) -> None:
+def print_historical_summaries(summaries: List[HistoricalCoinSummary], json_output: bool) -> None:
     if json_output:
         payload = [summary.to_display_dict() for summary in summaries]
         print(json.dumps(payload, indent=2, sort_keys=True))

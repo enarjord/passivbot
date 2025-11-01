@@ -137,15 +137,11 @@ def process_forager_fills(
         bucket = (timestamps_ns // (sample_divider * 60_000 * 1_000_000)) * (
             sample_divider * 60_000 * 1_000_000
         )
-        usd_cash_series = (
-            fdf.groupby(bucket)["usd_cash_wallet"].last().rename("usd_cash_wallet")
-        )
+        usd_cash_series = fdf.groupby(bucket)["usd_cash_wallet"].last().rename("usd_cash_wallet")
         usd_total_balance_series = (
             fdf.groupby(bucket)["usd_total_balance"].last().rename("usd_total_balance")
         )
-        btc_cash_series = (
-            fdf.groupby(bucket)["btc_cash_wallet"].last().rename("btc_cash_wallet")
-        )
+        btc_cash_series = fdf.groupby(bucket)["btc_cash_wallet"].last().rename("btc_cash_wallet")
         btc_total_balance_series = (
             fdf.groupby(bucket)["btc_total_balance"].last().rename("btc_total_balance")
         )
@@ -607,13 +603,9 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
 
     # Backwards compatibility aliases for renamed metrics
     if "peak_recovery_hours_equity_usd" in result:
-        result.setdefault(
-            "equity_peak_recovery_hours_usd", result["peak_recovery_hours_equity_usd"]
-        )
+        result.setdefault("equity_peak_recovery_hours_usd", result["peak_recovery_hours_equity_usd"])
     if "peak_recovery_hours_equity_btc" in result:
-        result.setdefault(
-            "equity_peak_recovery_hours_btc", result["peak_recovery_hours_equity_btc"]
-        )
+        result.setdefault("equity_peak_recovery_hours_btc", result["peak_recovery_hours_equity_btc"])
     if "peak_recovery_hours_equity" in result:
         result.setdefault("equity_peak_recovery_hours", result["peak_recovery_hours_equity"])
     return result

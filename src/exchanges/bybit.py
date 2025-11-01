@@ -23,13 +23,11 @@ from procedures import print_async_exception, assert_correct_ccxt_version
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
-
 def clip_by_timestamp(xs, start_ts, end_ts):
-    timestamps = [x['timestamp'] for x in xs]
+    timestamps = [x["timestamp"] for x in xs]
     i0 = bisect.bisect_left(timestamps, start_ts)
     i1 = bisect.bisect_right(timestamps, end_ts)
     return xs[i0:i1]
-
 
 
 class BybitBot(Passivbot):
@@ -438,22 +436,26 @@ class BybitBot(Passivbot):
             my_trades, positions_history = [], []
 
         # extract events
-        mt_events = sorted([extract_fill_event_from_mt(x) for x in my_trades], key=lambda x: x['timestamp'])
-        ph_events = sorted([extract_fill_event_from_ph(x) for x in positions_history], key=lambda x: x['timestamp'])
+        mt_events = sorted(
+            [extract_fill_event_from_mt(x) for x in my_trades], key=lambda x: x["timestamp"]
+        )
+        ph_events = sorted(
+            [extract_fill_event_from_ph(x) for x in positions_history], key=lambda x: x["timestamp"]
+        )
         mt_events = clip_by_timestamp(mt_events, start_time, end_time)
         ph_events = clip_by_timestamp(ph_events, start_time, end_time)
 
         pnls = defaultdict(float)
         for event in ph_events:
-            pnls[event['id']] += event['pnl']
+            pnls[event["id"]] += event["pnl"]
         unified = []
         for event in mt_events[::-1]:
-            if event['id'] in pnls:
-                event['pnl'] = pnls.pop(event['id'])
+            if event["id"] in pnls:
+                event["pnl"] = pnls.pop(event["id"])
             unified.append(event)
         if len(pnls) > 0:
-            print('debug positions_history events without corresponding my_trades')
-        unified.sort(key=lambda x: x['timestamp'])
+            print("debug positions_history events without corresponding my_trades")
+        unified.sort(key=lambda x: x["timestamp"])
         return unified
 
     async def fetch_my_trades(self, start_time, end_time, limit=100):
