@@ -75,7 +75,7 @@ def _install_passivbot_rust_stub():
     )
     stub.qty_to_cost = lambda qty, price, c_mult=1.0: qty * price * (c_mult if c_mult else 1.0)
 
-    stub.round_hysteresis = _identity
+    stub.hysteresis = _identity
     stub.calc_entries_long_py = lambda *args, **kwargs: []
     stub.calc_entries_short_py = lambda *args, **kwargs: []
     stub.calc_closes_long_py = lambda *args, **kwargs: []
