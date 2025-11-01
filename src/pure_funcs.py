@@ -2020,18 +2020,6 @@ def extract_and_sort_by_keys_recursive(nested_dict):
     return sorted_values
 
 
-def hysteresis_rounding(balance, last_rounded_balance, percentage=0.02, h=0.5):
-    step = last_rounded_balance * percentage
-    threshold = step * h
-    if balance > last_rounded_balance + threshold:
-        rounded_balance = last_rounded_balance + step
-    elif balance < last_rounded_balance - threshold:
-        rounded_balance = last_rounded_balance - step
-    else:
-        rounded_balance = last_rounded_balance
-    return pbr.round_dynamic(rounded_balance, 6)
-
-
 def log_dict_changes(d1, d2, parent_key=""):
     """
     Compare two nested dictionaries and log the changes between them.
