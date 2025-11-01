@@ -388,7 +388,7 @@ class Passivbot:
         self.create_ccxt_sessions()
         self.debug_mode = False
         self.balance_threshold = 1.0  # don't create orders if balance is less than threshold
-        self.hyst_rounding_balance_pct = 0.02
+        self.hyst_pct = 0.02
         self.state_change_detected_by_symbol = set()
         self.recent_order_executions = []
         self.recent_order_cancellations = []
