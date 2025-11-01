@@ -105,53 +105,30 @@ pub fn round_dynamic_dn(n: f64, d: i32) -> f64 {
     round_to_decimal_places(result, 10)
 }
 
-/// Hysteresis rounding (stateless, PyO3-compatible).
+/// Multiplicative (relative) hysteresis.
+/// Triggers a change only if the relative difference exceeds `pct`.
+/// Example: pct = 0.01 → require >1% change to update.
 ///
-/// Rounds `value` to the nearest multiple of `percentage`, but only changes
-/// once the input leaves a hysteresis band around the previous output.
-///
-/// Parameters
-/// ----------
-/// value : float
-///     Current input value.
-/// prev : float
-///     Previously rounded output.
-/// percentage : float
-///     Absolute grid spacing (> 0). Example: 0.1 means steps of 0.1.
-/// h : float
-///     Hysteresis half-band as fraction of step (0 <= h < 0.5).
-///
-/// Returns
-/// -------
-/// float
-///     New rounded output (or same as prev if within hysteresis band).
+/// Semantics match the Python reference:
+/// - If any input is non-finite ⇒ hold `prev_val`.
+/// - If `prev_val == 0.0` ⇒ pass through `val`.
+/// - Else update iff |val - prev_val| / |prev_val| > max(0, pct).
 #[pyfunction]
-pub fn round_hysteresis(value: f64, prev: f64, percentage: f64, h: f64) -> f64 {
-    // Validate
-    if !(percentage.is_finite() && percentage > 0.0) {
-        return prev;
+pub fn hysteresis(val: f64, prev_val: f64, pct: f64) -> f64 {
+    if !(val.is_finite() && prev_val.is_finite() && pct.is_finite()) {
+        return prev_val;
     }
-    if !(h.is_finite() && h >= 0.0 && h < 0.5) {
-        return prev;
-    }
-    if !value.is_finite() || !prev.is_finite() {
-        return prev;
+    let pct = if pct.is_sign_negative() { 0.0 } else { pct };
+
+    if prev_val == 0.0 {
+        return val;
     }
 
-    let step = percentage;
-    let margin = (0.5 + h) * step;
-    let upper = prev + margin;
-    let lower = prev - margin;
-
-    let result = if value >= upper || value <= lower {
-        // Snap to nearest multiple of step
-        (value / step).round() * step
+    if ((val - prev_val).abs() / prev_val.abs()) > pct {
+        val
     } else {
-        prev
-    };
-
-    // Optionally round to clean significant digits
-    round_dynamic(result, 10)
+        prev_val
+    }
 }
 
 #[pyfunction]
