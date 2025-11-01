@@ -105,23 +105,53 @@ pub fn round_dynamic_dn(n: f64, d: i32) -> f64 {
     round_to_decimal_places(result, 10)
 }
 
+/// Hysteresis rounding (stateless, PyO3-compatible).
+///
+/// Rounds `value` to the nearest multiple of `percentage`, but only changes
+/// once the input leaves a hysteresis band around the previous output.
+///
+/// Parameters
+/// ----------
+/// value : float
+///     Current input value.
+/// prev : float
+///     Previously rounded output.
+/// percentage : float
+///     Absolute grid spacing (> 0). Example: 0.1 means steps of 0.1.
+/// h : float
+///     Hysteresis half-band as fraction of step (0 <= h < 0.5).
+///
+/// Returns
+/// -------
+/// float
+///     New rounded output (or same as prev if within hysteresis band).
 #[pyfunction]
-pub fn hysteresis_rounding(
-    balance: f64,
-    last_rounded_balance: f64,
-    percentage: f64,
-    h: f64,
-) -> f64 {
-    let step = last_rounded_balance * percentage;
-    let threshold = step * h;
-    let rounded_balance = if balance > last_rounded_balance + threshold {
-        last_rounded_balance + step
-    } else if balance < last_rounded_balance - threshold {
-        last_rounded_balance - step
+pub fn round_hysteresis(value: f64, prev: f64, percentage: f64, h: f64) -> f64 {
+    // Validate
+    if !(percentage.is_finite() && percentage > 0.0) {
+        return prev;
+    }
+    if !(h.is_finite() && h >= 0.0 && h < 0.5) {
+        return prev;
+    }
+    if !value.is_finite() || !prev.is_finite() {
+        return prev;
+    }
+
+    let step = percentage;
+    let margin = (0.5 + h) * step;
+    let upper = prev + margin;
+    let lower = prev - margin;
+
+    let result = if value >= upper || value <= lower {
+        // Snap to nearest multiple of step
+        (value / step).round() * step
     } else {
-        last_rounded_balance
+        prev
     };
-    round_dynamic(rounded_balance, 6)
+
+    // Optionally round to clean significant digits
+    round_dynamic(result, 10)
 }
 
 #[pyfunction]
