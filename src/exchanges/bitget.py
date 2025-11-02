@@ -263,17 +263,22 @@ class BitgetBot(Passivbot):
             price = float(elm["price"])
             qty = float(elm["filled"])
             pb_order_type = custom_id_to_snake(elm.get("clientOrderId"))
-            if not pb_order_type:
-                logging.info(
-                    "bitget fill without pb_order_type id=%s symbol=%s clientOrderId=%s %s %s %s @ %s",
-                    elm.get("id"),
-                    elm.get("symbol"),
-                    elm.get("clientOrderId"),
-                    elm.get("side"),
-                    elm.get("info", {}).get("posSide"),
-                    qty,
-                    price,
-                )
+            if not pb_order_type or pb_order_type == "unknown":
+                if not hasattr(self, "pb_order_type_missing_logged"):
+                    self.pb_order_type_missing_logged = set()
+                key = json.dumps(elm)
+                if key not in self.pb_order_type_missing_logged:
+                    logging.info(
+                        "bitget fill without pb_order_type id=%s symbol=%s clientOrderId=%s %s %s %s @ %s",
+                        elm.get("id"),
+                        elm.get("symbol"),
+                        elm.get("clientOrderId"),
+                        elm.get("side"),
+                        elm.get("info", {}).get("posSide"),
+                        qty,
+                        price,
+                    )
+                self.pb_order_type_missing_logged.add(key)
             return {
                 "id": elm.get("id"),
                 "timestamp": timestamp,
