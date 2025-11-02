@@ -378,7 +378,7 @@ class IterativeBacktestSession:
     async def _load_config(self) -> Dict[str, Any]:
         if not self.config_path.exists():
             raise FileNotFoundError(f"Config file not found: {self.config_path}")
-        config = load_config(str(self.config_path))
+        config = load_config(str(self.config_path), verbose=False)
         config = format_config(config, verbose=False)
         config = parse_overrides(config, verbose=False)
         # Configure logging lazily based on CLI/debug preference
@@ -394,7 +394,7 @@ class IterativeBacktestSession:
         for ex in require_config_value(config, "backtest.exchanges"):
             await load_markets(ex, verbose=False)
         await format_approved_ignored_coins(
-            config, require_config_value(config, "backtest.exchanges")
+            config, require_config_value(config, "backtest.exchanges"), verbose=False
         )
         config.setdefault("backtest", {})
         config["backtest"].setdefault("cache_dir", {})
