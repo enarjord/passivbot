@@ -472,7 +472,11 @@ class BybitBot(Passivbot):
                     logging.debug(f"broke loop fetch_my_trades on n my_trades {len(my_trades)}")
                     break
                 else:
-                    params["endTime"] = int(my_trades[0]["timestamp"] + 1 if my_trades else params["endTime"] - week_with_buffer_ms)
+                    params["endTime"] = int(
+                        my_trades[0]["timestamp"] + 1
+                        if my_trades
+                        else params["endTime"] - week_with_buffer_ms
+                    )
                     continue
             if start_time is None or my_trades[0]["timestamp"] < start_time:
                 logging.debug(f"broke loop fetch_my_trades on start time exceeded")
