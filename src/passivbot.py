@@ -95,6 +95,9 @@ calc_order_price_diff = pbr.calc_order_price_diff
 
 DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL = 20_000
 PARTIAL_FILL_MERGE_MAX_DELAY_MS = 60_000
+FILL_EVENT_FETCH_OVERLAP_COUNT = 20
+FILL_EVENT_FETCH_OVERLAP_MAX_MS = 86_400_000  # 24 hours
+FILL_EVENT_FETCH_LIMIT_DEFAULT = 20
 
 # Match "...0xABCD..." anywhere (case-insensitive)
 _TYPE_MARKER_RE = re.compile(r"0x([0-9a-fA-F]{4})", re.IGNORECASE)
@@ -121,12 +124,14 @@ def _get_process_rss_bytes() -> Optional[int]:
             pass
     return None
 
+
 def clip_by_timestamp(xs, start_ts, end_ts):
     # assumes xs is already sorted by timestamp
     timestamps = [x["timestamp"] for x in xs]
     i0 = bisect.bisect_left(timestamps, start_ts) if start_ts else 0
     i1 = bisect.bisect_right(timestamps, end_ts) if end_ts else len(xs)
     return xs[i0:i1]
+
 
 def custom_id_to_snake(custom_id) -> str:
     """Translate a broker custom id into the snake_case order type name."""
@@ -1859,10 +1864,7 @@ class Passivbot:
             gap_fills: List[dict] = []
             if newest is not None:
                 try:
-                    gap_fills.extend(
-                        await self.fetch_fill_events(start_time=newest - 1000)
-                        or []
-                    )
+                    gap_fills.extend(await self.fetch_fill_events(start_time=newest - 1000) or [])
                 except Exception as exc:
                     logging.error(f"failed to fetch recent fill events: {exc}")
             if oldest is not None and oldest > age_limit + 1000 * 60 * 60 * 4:
@@ -1872,8 +1874,7 @@ class Passivbot:
                 )
                 try:
                     gap_fills.extend(
-                        await self.fetch_fill_events(start_time=age_limit, end_time=oldest)
-                        or []
+                        await self.fetch_fill_events(start_time=age_limit, end_time=oldest) or []
                     )
                 except Exception as exc:
                     logging.error(f"failed to fetch historical fill events: {exc}")
@@ -1906,6 +1907,11 @@ class Passivbot:
                     merged[evt["id"]] = evt
 
         self.fill_events = sorted(merged.values(), key=lambda x: x["timestamp"])
+        if not hasattr(self, "_fill_event_fingerprints"):
+            self._fill_event_fingerprints = {}
+        for evt in self.fill_events:
+            fp = self._fingerprint_event(evt)
+            self._fill_event_fingerprints.setdefault(evt["id"], set()).add(fp)
         self.fill_events_loaded = True
 
     async def fetch_fill_events(self, start_time=None, end_time=None, limit=None):
@@ -1980,13 +1986,24 @@ class Passivbot:
 
         if "fees" in raw and raw["fees"] is not None:
             try:
-                result["fees"] = float(raw["fees"])
+                if "fees" in result:
+                    result["fees"] = eval(raw["fees"])
             except Exception:
-                logging.warning(f"failed to parse fees for fill {event_id}; dropping field")
+                logging.warning(f"failed to parse fees for fill {event_id}; dropping field. {result}")
         if "pb_order_type" in raw and raw["pb_order_type"] is not None:
             result["pb_order_type"] = str(raw["pb_order_type"])
 
         return result
+
+    def _fingerprint_event(self, event: dict) -> tuple:
+        return (
+            event.get("id"),
+            int(event.get("timestamp", 0)),
+            round(float(event.get("qty", 0.0)), 12),
+            round(float(event.get("price", 0.0)), 12),
+            round(float(event.get("pnl", 0.0)), 12),
+            str(event.get("pb_order_type")),
+        )
 
     def _merge_fill_event_group(self, event_id: str, events: List[dict]) -> List[dict]:
         events = [dict(evt) for evt in sorted(events, key=lambda x: x["timestamp"])]
@@ -2043,9 +2060,7 @@ class Passivbot:
         merged["pnl"] = sum(evt["pnl"] for evt in events)
         if total_qty != 0:
             merged["price"] = weighted_price / total_qty
-        merged_fees = [
-            evt.get("fees") for evt in events if evt.get("fees") is not None
-        ]
+        merged_fees = [evt.get("fees") for evt in events if evt.get("fees") is not None]
         if merged_fees:
             merged["fees"] = sum(merged_fees)
         pb_types = {evt.get("pb_order_type") for evt in events if evt.get("pb_order_type")}
@@ -2057,9 +2072,7 @@ class Passivbot:
             )
         return [merged]
 
-    def _merge_fill_events_collection(
-        self, events: Iterable[dict], age_limit: int
-    ) -> List[dict]:
+    def _merge_fill_events_collection(self, events: Iterable[dict], age_limit: int) -> List[dict]:
         grouped: Dict[str, List[dict]] = defaultdict(list)
         for evt in events:
             if evt["timestamp"] >= age_limit:
@@ -2085,7 +2098,41 @@ class Passivbot:
         merged.sort(key=lambda x: x["timestamp"])
         return merged
 
-    async def update_fill_events(self, start_time: Optional[int] = None, end_time: Optional[int] = None):
+    def _events_close(
+        self,
+        a: dict,
+        b: dict,
+        *,
+        qty_tol: float = 1e-9,
+        price_tol: float = 1e-8,
+        pnl_tol: float = 1e-9,
+    ) -> bool:
+        if a is None or b is None:
+            return False
+        if a.get("symbol") != b.get("symbol"):
+            return False
+        if a.get("side") != b.get("side"):
+            return False
+        if a.get("position_side") != b.get("position_side"):
+            return False
+        if abs(a.get("qty", 0.0) - b.get("qty", 0.0)) > qty_tol:
+            return False
+        price_ref = max(1.0, abs(a.get("price", 0.0)), abs(b.get("price", 0.0)))
+        if abs(a.get("price", 0.0) - b.get("price", 0.0)) > price_tol * price_ref:
+            return False
+        if abs(a.get("pnl", 0.0) - b.get("pnl", 0.0)) > pnl_tol:
+            return False
+        fees_a = a.get("fees")
+        fees_b = b.get("fees")
+        if fees_a is None and fees_b is None:
+            return True
+        if fees_a is None or fees_b is None:
+            return False
+        return abs(fees_a - fees_b) <= pnl_tol
+
+    async def update_fill_events(
+        self, start_time: Optional[int] = None, end_time: Optional[int] = None
+    ):
         """
         Fetch canonical fill events and maintain an up-to-date, deduplicated cache.
 
@@ -2103,18 +2150,31 @@ class Passivbot:
         )
 
         previous_map = {evt["id"]: evt for evt in self.fill_events}
+        known_event_ids: set[str] = set(previous_map.keys())
+        for key in list(previous_map.keys()):
+            if "#" in key:
+                known_event_ids.add(key.split("#", 1)[0])
         latest_ts = self.fill_events[-1]["timestamp"] if self.fill_events else None
 
         effective_start = start_time
+        fetch_limit = None if start_time is not None else FILL_EVENT_FETCH_LIMIT_DEFAULT
         if effective_start is None:
             effective_start = age_limit
-            if latest_ts is not None:
+            if self.fill_events:
+                overlap_count = min(len(self.fill_events), FILL_EVENT_FETCH_OVERLAP_COUNT)
+                overlap_idx = max(0, len(self.fill_events) - overlap_count)
+                overlap_ts = self.fill_events[overlap_idx]["timestamp"]
+                now_ts = self.get_exchange_time()
+                min_start = max(age_limit, now_ts - FILL_EVENT_FETCH_OVERLAP_MAX_MS)
+                effective_start = max(age_limit, min_start, overlap_ts)
+            elif latest_ts is not None:
                 effective_start = max(age_limit, latest_ts - 1000)
 
         try:
             fetched = await self.fetch_fill_events(
                 start_time=effective_start,
                 end_time=end_time,
+                limit=fetch_limit,
             )
         except RateLimitExceeded:
             logging.warning("rate limit while fetching fill events; retrying next cycle")
@@ -2127,32 +2187,77 @@ class Passivbot:
             traceback.print_exc()
             return False
 
-        normalised: List[dict] = []
+        grouped_updates: Dict[str, List[dict]] = defaultdict(list)
         for raw in fetched or []:
             try:
                 event = self._canonicalize_fill_event(raw)
             except Exception as exc:
                 logging.error(f"discarding malformed fill event: {exc}")
                 continue
-            if event["timestamp"] < age_limit:
+            if event["timestamp"] < age_limit and event["id"] not in known_event_ids:
                 continue
-            normalised.append(event)
-        candidates = [evt for evt in self.fill_events if evt["timestamp"] >= age_limit]
-        candidates.extend(normalised)
-        updated_events = self._merge_fill_events_collection(candidates, age_limit)
+            fp = self._fingerprint_event(event)
+            fp_set = self._fill_event_fingerprints.setdefault(event["id"], set())
+            if fp in fp_set:
+                continue
+            fp_set.add(fp)
+            grouped_updates[event["id"]].append(event)
+
+        if not grouped_updates:
+            return True
+
+        result_map: Dict[str, dict] = {
+            evt["id"]: evt for evt in self.fill_events if evt["timestamp"] >= age_limit
+        }
 
         delta_count = 0
         delta_pnl = 0.0
-        for evt in updated_events:
-            prev = previous_map.get(evt["id"])
-            if prev is None:
-                delta_count += 1
-                delta_pnl += evt.get("pnl", 0.0)
-            elif evt != prev:
-                delta_count += 1
-                delta_pnl += evt.get("pnl", 0.0) - prev.get("pnl", 0.0)
 
-        self.fill_events = updated_events
+        def _lists_close(new_events: List[dict], old_events: List[dict]) -> bool:
+            if len(new_events) != len(old_events):
+                return False
+            for a, b in zip(new_events, old_events):
+                if not self._events_close(a, b):
+                    return False
+            return True
+
+        for event_id, updates in grouped_updates.items():
+            if not updates:
+                continue
+
+            related_keys = [
+                key for key in result_map.keys() if key == event_id or key.startswith(f"{event_id}#")
+            ]
+            prev_entries = [
+                previous_map[key]
+                for key in previous_map
+                if key == event_id or key.startswith(f"{event_id}#")
+            ]
+            prev_pnl = sum(evt.get("pnl", 0.0) for evt in prev_entries)
+
+            for key in related_keys:
+                result_map.pop(key, None)
+            for key in list(self._fill_event_fingerprints.keys()):
+                if key == event_id or key.startswith(f"{event_id}#"):
+                    del self._fill_event_fingerprints[key]
+
+            merged_group = self._merge_fill_event_group(event_id, updates)
+            if not merged_group:
+                continue
+
+            changed = not _lists_close(merged_group, prev_entries)
+            if changed:
+                delta_count += len(merged_group)
+                new_pnl = sum(evt.get("pnl", 0.0) for evt in merged_group)
+                delta_pnl += new_pnl - prev_pnl
+
+            for evt in merged_group:
+                result_map[evt["id"]] = evt
+                self._fill_event_fingerprints.setdefault(evt["id"], set()).add(
+                    self._fingerprint_event(evt)
+                )
+
+        self.fill_events = sorted(result_map.values(), key=lambda x: x["timestamp"])
 
         if delta_count > 0:
             logging.info(
@@ -2162,15 +2267,11 @@ class Passivbot:
             )
 
         if delta_count > 0 or not os.path.exists(self.fill_events_cache_path):
-            cache_payload = [
-                evt for evt in self.fill_events if evt["timestamp"] >= age_limit
-            ]
+            cache_payload = [evt for evt in self.fill_events if evt["timestamp"] >= age_limit]
             try:
                 json.dump(cache_payload, open(self.fill_events_cache_path, "w"))
             except Exception as exc:
-                logging.error(
-                    f"error dumping fill events to {self.fill_events_cache_path}: {exc}"
-                )
+                logging.error(f"error dumping fill events to {self.fill_events_cache_path}: {exc}")
         return True
 
     def log_pnls_change(self, old_pnls, new_pnls):
