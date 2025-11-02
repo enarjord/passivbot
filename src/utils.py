@@ -557,7 +557,7 @@ def get_caller_name():
     return inspect.currentframe().f_back.f_back.f_code.co_name
 
 
-def symbol_to_coin(symbol):
+def symbol_to_coin(symbol, verbose=True):
     # caches symbol_to_coin_map in memory and reloads if file changes
     try:
         loaded = _load_symbol_to_coin_map()
@@ -590,11 +590,12 @@ def symbol_to_coin(symbol):
         coin = coin[1:]
     if coin:
         msg += f". Using heuristics to guess coin: {coin}"
-    logging.warning(msg)
+    if verbose:
+        logging.warning(msg)
     return coin
 
 
-async def format_approved_ignored_coins(config, exchanges: [str]):
+async def format_approved_ignored_coins(config, exchanges: [str], verbose=True):
     if isinstance(exchanges, str):
         exchanges = [exchanges]
     path = _require_live_value(config, "approved_coins")
@@ -615,7 +616,7 @@ async def format_approved_ignored_coins(config, exchanges: [str]):
             approved_coins = set()
             for markets in marketss:
                 for symbol in markets:
-                    approved_coins.add(symbol_to_coin(symbol))
+                    approved_coins.add(symbol_to_coin(symbol, verbose=verbose))
             approved_coins_sorted = sorted([x for x in approved_coins if x])
             config["live"]["approved_coins"] = {
                 "long": approved_coins_sorted,
