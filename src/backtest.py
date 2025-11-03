@@ -50,16 +50,12 @@ from plotting import (
     save_figures,
 )
 from collections import defaultdict
-import matplotlib.pyplot as plt
 import logging
 from main import manage_rust_compilation
 import gzip
 import traceback
 
 from logging_setup import configure_logging
-
-
-plt.rcParams["figure.figsize"] = [21, 13]
 
 
 def oj(*x):
@@ -601,13 +597,6 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
     _add_metrics(analysis_usd, "usd")
     _add_metrics(analysis_btc, "btc")
 
-    # Backwards compatibility aliases for renamed metrics
-    if "peak_recovery_hours_equity_usd" in result:
-        result.setdefault("equity_peak_recovery_hours_usd", result["peak_recovery_hours_equity_usd"])
-    if "peak_recovery_hours_equity_btc" in result:
-        result.setdefault("equity_peak_recovery_hours_btc", result["peak_recovery_hours_equity_btc"])
-    if "peak_recovery_hours_equity" in result:
-        result.setdefault("equity_peak_recovery_hours", result["peak_recovery_hours_equity"])
     return result
 
 
@@ -721,7 +710,12 @@ def post_process(
     dump_config(format_config(config), f"{results_path}config.json")
     fdf.to_csv(f"{results_path}fills.csv")
     bal_eq.to_csv(oj(results_path, "balance_and_equity.csv.gz"), compression="gzip")
-    balance_figs = create_forager_balance_figures(bal_eq)
+    balance_figs = create_forager_balance_figures(
+        bal_eq,
+        include_logy=True,
+        autoplot=False,
+        return_figures=True,
+    )
     save_figures(balance_figs, results_path)
 
     if not config["disable_plotting"]:
