@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -154,6 +155,11 @@ class RunSummary:
     scoring_metrics: Dict[str, MetricInfo]
     limit_metrics: Dict[str, LimitInfo]
     results_path: Path
+    bot_hash: str
+    bot_flat: Dict[str, Any] = field(default_factory=dict)
+    param_deltas: Dict[str, Tuple[Any, Any]] = field(default_factory=dict)
+    duration_s: float = 0.0
+    objective_vector: Tuple[float, ...] = field(default_factory=tuple)
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +203,34 @@ def format_diff(current: Optional[float], reference: Optional[float]) -> str:
         return ""
     sign = "+" if diff >= 0 else ""
     return f"{sign}{format_number(diff)}"
+
+
+def flatten_bot_config(data: Any, prefix: Tuple[str, ...] = ()) -> Dict[str, Any]:
+    flat: Dict[str, Any] = {}
+    if isinstance(data, dict):
+        for key in sorted(data.keys()):
+            flat.update(flatten_bot_config(data[key], prefix + (str(key),)))
+    elif isinstance(data, list):
+        for idx, value in enumerate(data):
+            flat.update(flatten_bot_config(value, prefix + (str(idx),)))
+    else:
+        flat[".".join(prefix)] = data
+    return flat
+
+
+def format_param_value(value: Any) -> str:
+    if value is None:
+        return "None"
+    if isinstance(value, float):
+        return format_number(value)
+    if isinstance(value, (int, np.integer)):
+        return str(int(value))
+    if isinstance(value, (list, dict)):
+        try:
+            return json.dumps(value, sort_keys=True)
+        except TypeError:
+            return str(value)
+    return str(value)
 
 
 def combine_analyses(analyses: Dict[str, Dict[str, Any]]) -> Dict[str, float]:
@@ -358,6 +392,11 @@ class IterativeBacktestSession:
         self.session_dir: Optional[Path] = None
         self.history: List[RunSummary] = []
         self.best_run_index: Optional[int] = None
+        self.config_cache: Dict[str, RunSummary] = {}
+        self.last_bot_flat: Optional[Dict[str, Any]] = None
+        self.scoring_keys: List[str] = []
+        self.backtest_durations: List[float] = []
+        self.pareto_front_indices: List[int] = []
         self.scoring_weights = build_scoring_weights()
 
     # ------------------------------------------------------------------
@@ -457,16 +496,32 @@ class IterativeBacktestSession:
         logging.info("Backtest configuration changed; reloading datasets...")
         self.history.clear()
         self.best_run_index = None
+        self.config_cache.clear()
+        self.last_bot_flat = None
+        self.pareto_front_indices = []
+        self.backtest_durations.clear()
+        self.scoring_keys = []
         self.datasets = await self._prepare_datasets(config)
         self.backtest_signature = make_backtest_signature(config)
         logging.info("Datasets reloaded.")
 
     # ------------------------------------------------------------------
-    async def run_once(self) -> RunSummary:
+    async def run_once(self) -> Tuple[RunSummary, bool]:
         config = await self._load_config()
         current_signature = make_backtest_signature(config)
         if current_signature != self.backtest_signature:
             await self.reload_datasets(config)
+
+        bot_section = denumpyize(deepcopy(config.get("bot", {})))
+        bot_hash = calc_hash(json.dumps(bot_section, sort_keys=True))
+        if bot_hash in self.config_cache:
+            cached = self.config_cache[bot_hash]
+            self.last_bot_flat = cached.bot_flat
+            logging.info(
+                "Configuration unchanged; reusing cached results from run #%d.", cached.index
+            )
+            return cached, True
+
         # Inject cached metadata
         config.setdefault("backtest", {})
         config["backtest"].setdefault("coins", {})
@@ -475,23 +530,38 @@ class IterativeBacktestSession:
             config["backtest"]["coins"][exchange] = dataset.coins
             config["backtest"]["cache_dir"][exchange] = dataset.cache_dir
 
+        estimate = self._estimate_duration()
+        progress_task: Optional[asyncio.Task] = None
+        if estimate is not None or self.history:
+            progress_task = asyncio.create_task(self._show_progress(estimate))
+
+        start_time = time.perf_counter()
         analyses: Dict[str, Dict[str, Any]] = {}
-        for exchange, dataset in self.datasets.items():
-            fills, equities_array, analysis = run_backtest(
-                dataset.hlcvs,
-                dataset.mss,
-                config,
-                exchange,
-                dataset.btc_usd_prices,
-                dataset.timestamps,
-            )
-            analyses[exchange] = analysis
-            # Explicitly discard large outputs we don't use
-            del fills
-            del equities_array
+        try:
+            for exchange, dataset in self.datasets.items():
+                fills, equities_array, analysis = await asyncio.to_thread(
+                    run_backtest,
+                    dataset.hlcvs,
+                    dataset.mss,
+                    config,
+                    exchange,
+                    dataset.btc_usd_prices,
+                    dataset.timestamps,
+                )
+                analyses[exchange] = analysis
+                del fills
+                del equities_array
+        finally:
+            duration = time.perf_counter() - start_time
+            if progress_task is not None:
+                progress_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await progress_task
+                self._clear_progress_line()
 
         combined = combine_analyses(analyses)
         scoring_keys = list(config.get("optimize", {}).get("scoring", []))
+        self.scoring_keys = scoring_keys
         limits_cfg = dict(config.get("optimize", {}).get("limits", {}))
         limit_checks = build_limit_checks(limits_cfg, self.scoring_weights)
         score_vector, modifier = calc_score_vector(
@@ -518,6 +588,33 @@ class IterativeBacktestSession:
                 metric_key=check["metric_key"],
             )
 
+        current_bot_flat = flatten_bot_config(bot_section)
+        param_deltas: Dict[str, Tuple[Any, Any]] = {}
+        if self.last_bot_flat is not None:
+            prev_keys = set(self.last_bot_flat.keys())
+            new_keys = set(current_bot_flat.keys())
+            for key in sorted(prev_keys | new_keys):
+                prev_val = self.last_bot_flat.get(key)
+                new_val = current_bot_flat.get(key)
+                if prev_val != new_val:
+                    param_deltas[key] = (prev_val, new_val)
+
+        objectives: List[float] = []
+        for key in scoring_keys:
+            info = scoring_metrics.get(key)
+            if info is None or info.value is None:
+                objectives.append(float("inf"))
+                continue
+            weight = info.weight
+            if weight is None:
+                weight = self.scoring_weights.get(info.resolved_key or key)
+            if weight is None:
+                objectives.append(info.value)
+            elif weight < 0:
+                objectives.append(-info.value)
+            else:
+                objectives.append(info.value)
+
         run_index = len(self.history) + 1
         run_ts = utc_ms()
         run_dir = self._write_results(
@@ -540,11 +637,54 @@ class IterativeBacktestSession:
             scoring_metrics=scoring_metrics,
             limit_metrics=limit_metrics,
             results_path=run_dir,
+            bot_hash=bot_hash,
+            bot_flat=current_bot_flat,
+            param_deltas=param_deltas,
+            duration_s=duration,
+            objective_vector=tuple(objectives),
         )
         self.history.append(summary)
         self._update_best_run(summary)
+        self.config_cache[bot_hash] = summary
+        self.last_bot_flat = current_bot_flat
+        self.backtest_durations.append(duration)
+        if len(self.backtest_durations) > 100:
+            self.backtest_durations.pop(0)
+        self._update_pareto_front()
         self._append_history_log(summary)
-        return summary
+        return summary, False
+
+    # ------------------------------------------------------------------
+    def _estimate_duration(self) -> Optional[float]:
+        if not self.backtest_durations:
+            return None
+        return sum(self.backtest_durations) / len(self.backtest_durations)
+
+    # ------------------------------------------------------------------
+    async def _show_progress(self, estimate: Optional[float]) -> None:
+        estimate = estimate or (self.backtest_durations[-1] if self.backtest_durations else 1.0)
+        estimate = max(estimate, 1e-6)
+        bar_width = 24
+        start = time.perf_counter()
+        try:
+            while True:
+                elapsed = time.perf_counter() - start
+                fraction = min(0.999, elapsed / estimate)
+                filled = int(fraction * bar_width)
+                bar = "#" * filled + "-" * (bar_width - filled)
+                eta = max(0.0, estimate - elapsed)
+                sys.stdout.write(
+                    f"\rRunning backtest: [{bar}] {elapsed:5.1f}s elapsed, ETA {eta:5.1f}s"
+                )
+                sys.stdout.flush()
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            raise
+
+    # ------------------------------------------------------------------
+    def _clear_progress_line(self) -> None:
+        sys.stdout.write("\r" + " " * 80 + "\r")
+        sys.stdout.flush()
 
     # ------------------------------------------------------------------
     def _update_best_run(self, run: RunSummary) -> None:
@@ -554,6 +694,59 @@ class IterativeBacktestSession:
         current_best = self.history[self.best_run_index]
         if run.score_vector < current_best.score_vector:
             self.best_run_index = run.index - 1
+
+    # ------------------------------------------------------------------
+    def _update_pareto_front(self) -> None:
+        if not self.history or not self.scoring_keys:
+            self.pareto_front_indices = [run.index for run in self.history]
+            return
+
+        front: List[int] = []
+        objective_map = {run.index: run.objective_vector for run in self.history}
+        for candidate in self.history:
+            vec_candidate = objective_map.get(candidate.index)
+            if vec_candidate is None or len(vec_candidate) == 0:
+                front.append(candidate.index)
+                continue
+            dominated = False
+            for other in self.history:
+                if other.index == candidate.index:
+                    continue
+                vec_other = objective_map.get(other.index)
+                if vec_other is None or len(vec_other) == 0:
+                    continue
+                if self._dominates(vec_other, vec_candidate):
+                    dominated = True
+                    break
+            if not dominated:
+                front.append(candidate.index)
+        self.pareto_front_indices = sorted(front)
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _dominates(vector_a: Tuple[float, ...], vector_b: Tuple[float, ...]) -> bool:
+        if not vector_a or not vector_b:
+            return False
+        if len(vector_a) != len(vector_b):
+            return False
+        better_or_equal = True
+        strictly_better = False
+        for a, b in zip(vector_a, vector_b):
+            if a > b:
+                better_or_equal = False
+                break
+            if a < b:
+                strictly_better = True
+        return better_or_equal and strictly_better
+
+    # ------------------------------------------------------------------
+    def _goal_symbol(self, metric: str, info: MetricInfo) -> str:
+        weight = info.weight
+        if weight is None:
+            weight = self.scoring_weights.get(info.resolved_key or metric)
+        if weight is None:
+            return "?"
+        return "↑" if weight < 0 else "↓"
 
     # ------------------------------------------------------------------
     def _append_history_log(self, run: RunSummary) -> None:
@@ -566,6 +759,9 @@ class IterativeBacktestSession:
             "modifier": run.modifier,
             "results_path": str(run.results_path),
             "backtest_signature": self.backtest_signature,
+            "bot_hash": run.bot_hash,
+            "duration_s": run.duration_s,
+            "objective_vector": run.objective_vector,
             "best_run_index": (
                 (self.best_run_index + 1) if self.best_run_index is not None else run.index
             ),
@@ -592,6 +788,11 @@ class IterativeBacktestSession:
             }
             for name, info in run.scoring_metrics.items()
         }
+        if run.param_deltas:
+            payload["param_deltas"] = {
+                key: {"previous": prev, "current": curr}
+                for key, (prev, curr) in run.param_deltas.items()
+            }
         log_path = self.session_dir / "history.jsonl"
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(payload, sort_keys=True))
@@ -633,52 +834,125 @@ class IterativeBacktestSession:
         return run_dir
 
     # ------------------------------------------------------------------
-    def print_summary(self, run: RunSummary) -> None:
-        prev = self.history[-2] if len(self.history) > 1 else None
+    def print_summary(self, run: RunSummary, reused: bool = False) -> None:
+        if not self.history:
+            print("No runs executed yet.")
+            return
+        try:
+            run_pos = next(i for i, item in enumerate(self.history) if item.index == run.index)
+        except StopIteration:
+            run_pos = len(self.history) - 1
+        prev = self.history[run_pos - 1] if run_pos > 0 else None
         best = self.history[self.best_run_index] if self.best_run_index is not None else None
 
         print()
         print("=" * 80)
-        print(
-            f"Run #{run.index}  @ {format_timestamp(run.timestamp)}  "
-            f"score={tuple(f'{x:.6g}' for x in run.score_vector)}"
-        )
+        print(f"Run #{run.index}  @ {format_timestamp(run.timestamp)}")
+        print(f"  Score vector: {tuple(f'{x:.6g}' for x in run.score_vector)}")
         if run.modifier:
             print(f"  Limit penalty applied: {run.modifier:.6g}")
         if best is not None:
-            best_note = "current run" if best.index == run.index else f"run #{best.index}"
-            print(f"Best so far: {best_note} score={tuple(f'{x:.6g}' for x in best.score_vector)}")
-        print(f"Results saved to: {run.results_path}")
+            best_note = "this run" if best.index == run.index else f"run #{best.index}"
+            print(f"  Best (score) so far: {best_note}")
+        print(f"  Results saved to: {run.results_path}")
+        if self.backtest_durations:
+            avg = sum(self.backtest_durations) / len(self.backtest_durations)
+            print(
+                f"  Backtest duration: {run.duration_s:.3f}s "
+                f"(avg {avg:.3f}s over {len(self.backtest_durations)} runs)"
+            )
+        else:
+            print(f"  Backtest duration: {run.duration_s:.3f}s")
+        if reused:
+            print("  Configuration unchanged (reused cached results).")
 
+        # Configuration delta block
+        if reused:
+            print("\nConfig changes vs previous run: none (reused)")
+        elif prev is None:
+            print("\nConfig changes vs previous run: (initial run)")
+        elif not run.param_deltas:
+            print("\nConfig changes vs previous run: none")
+        else:
+            print("\nConfig changes vs previous run:")
+            changed_keys = sorted(run.param_deltas.keys())
+            max_rows = 12
+            for key in changed_keys[:max_rows]:
+                prev_val, new_val = run.param_deltas[key]
+                print(f"  {key}: {format_param_value(prev_val)} -> {format_param_value(new_val)}")
+            if len(changed_keys) > max_rows:
+                print(f"  … and {len(changed_keys) - max_rows} more changes")
+
+        # Pareto front status
+        if self.pareto_front_indices:
+            is_pareto = run.index in self.pareto_front_indices
+            status = "ON PARETO FRONT" if is_pareto else "DOMINATED"
+            print(f"\nPareto status: {status}")
+            pareto_runs = [r for r in self.history if r.index in self.pareto_front_indices]
+            pareto_line = ", ".join(
+                f"#{r.index}{'*' if r.index == run.index else ''}" for r in pareto_runs
+            )
+            print(f"Pareto runs: {pareto_line}")
+            if not is_pareto:
+                dominators = [
+                    r.index
+                    for r in pareto_runs
+                    if r.index != run.index
+                    and self._dominates(r.objective_vector, run.objective_vector)
+                ]
+                if dominators:
+                    print(f"Dominated by: {', '.join('#' + str(idx) for idx in dominators)}")
+            snapshot_table = PrettyTable()
+            order = self.scoring_keys or list(run.scoring_metrics.keys())
+            snapshot_table.field_names = ["Run"] + order
+            max_rows = min(len(pareto_runs), 6)
+            for pareto_run in pareto_runs[:max_rows]:
+                row = [f"#{pareto_run.index}{'*' if pareto_run.index == run.index else ''}"]
+                for metric in order:
+                    info = pareto_run.scoring_metrics.get(metric)
+                    row.append(format_number(info.value if info else None))
+                snapshot_table.add_row(row)
+            print("\nPareto front snapshot:")
+            print(snapshot_table)
+
+        # Scoring metrics table
         if run.scoring_metrics:
 
-            def _get_metric_value(source: Optional[RunSummary], metric_key: str) -> Optional[float]:
+            def _metric_value(source: Optional[RunSummary], metric_key: str) -> Optional[float]:
                 if source is None:
                     return None
                 info = source.scoring_metrics.get(metric_key)
                 return info.value if info else None
 
+            order = self.scoring_keys or list(run.scoring_metrics.keys())
             table = PrettyTable()
             table.field_names = ["Metric", "Value", "ΔPrev", "ΔBest", "Goal"]
-            for metric, info in run.scoring_metrics.items():
-                prev_val = _get_metric_value(prev, metric)
-                best_val = _get_metric_value(best, metric)
-                goal = "↑" if (info.weight is not None and info.weight < 0) else "↓"
+            for metric in order:
+                info = run.scoring_metrics.get(metric)
+                if info is None:
+                    continue
+                prev_val = _metric_value(prev, metric)
+                best_val = _metric_value(best, metric)
+                delta_prev = format_diff(info.value, prev_val) or "-"
+                delta_best = format_diff(info.value, best_val) or "-"
+                goal = self._goal_symbol(metric, info)
                 table.add_row(
                     [
                         metric,
                         format_number(info.value),
-                        format_diff(info.value, prev_val),
-                        format_diff(info.value, best_val),
+                        delta_prev,
+                        delta_best,
                         goal,
                     ]
                 )
             print("\nScoring metrics:")
             print(table)
 
+        # Limit checks table
         if run.limit_metrics:
             table = PrettyTable()
-            table.field_names = ["Limit", "Value", "Bound", "ΔBound", "Status"]
+            table.field_names = ["Limit", "Value", "Bound", "Δ", "Status"]
+            rows: List[Tuple[int, List[str]]] = []
             for metric, info in run.limit_metrics.items():
                 delta = ""
                 status = "OK"
@@ -691,15 +965,16 @@ class IterativeBacktestSession:
                         diff = info.bound - info.value
                         delta = format_number(diff)
                         status = "VIOL" if diff > 0 else "OK"
-                table.add_row(
-                    [
-                        metric,
-                        format_number(info.value),
-                        format_number(info.bound),
-                        delta,
-                        status,
-                    ]
-                )
+                row = [
+                    metric,
+                    format_number(info.value),
+                    format_number(info.bound),
+                    delta or "-",
+                    status,
+                ]
+                rows.append((0 if status == "VIOL" else 1, row))
+            for _priority, row in sorted(rows, key=lambda item: (item[0], item[1][0])):
+                table.add_row(row)
             print("\nLimit checks:")
             print(table)
 
@@ -728,21 +1003,21 @@ class IterativeBacktestSession:
         print("Iterative backtester ready.")
         print("Commands: [Enter] run | best | history | reload | quit")
         if self.auto_run:
-            run = await self.run_once()
-            self.print_summary(run)
+            run, reused = await self.run_once()
+            self.print_summary(run, reused=reused)
         while True:
             cmd = (await asyncio.to_thread(input, "iterbt> ")).strip().lower()
             if cmd in ("", "run", "r"):
                 try:
-                    run = await self.run_once()
-                    self.print_summary(run)
+                    run, reused = await self.run_once()
+                    self.print_summary(run, reused=reused)
                 except Exception as exc:
                     logging.exception("Backtest failed: %s", exc)
             elif cmd in ("best", "b"):
                 if self.best_run_index is None:
                     print("No runs yet.")
                 else:
-                    self.print_summary(self.history[self.best_run_index])
+                    self.print_summary(self.history[self.best_run_index], reused=False)
             elif cmd in ("history", "h"):
                 self.print_history()
             elif cmd in ("reload",):
