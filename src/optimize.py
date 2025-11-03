@@ -826,7 +826,7 @@ class Evaluator:
             else:
                 if existing_score is not None:
                     self.duplicate_counter["reused"] += 1
-                    return existing_score
+                    return existing_score[0], existing_score[1] 
         else:
             self.seen_hashes[individual_hash] = None
         analyses = {}
@@ -867,7 +867,7 @@ class Evaluator:
         # attach metrics to individual so the parent process can persist lean results
         individual.evaluation_metrics = analyses_combined
         actual_hash = calc_hash(individual)
-        self.seen_hashes[actual_hash] = tuple(objectives)
+        self.seen_hashes[actual_hash] = [tuple(objectives), analyses_combined]
         return tuple(objectives), analyses_combined
 
     def combine_analyses(self, analyses):
