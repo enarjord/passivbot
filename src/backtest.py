@@ -579,20 +579,11 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
             else:
                 normalized_key = f"{key}_{suffix}"
             result[normalized_key] = value
-            result.setdefault(key, value)
-            if f"_{suffix_lower}" not in key_lower:
-                parts = key.split("_")
-                if len(parts) > 1:
-                    alias = "_".join(parts[:-1] + [suffix_lower, parts[-1]])
-                else:
-                    alias = f"{key}_{suffix_lower}"
-                result.setdefault(alias, value)
             if emit_legacy:
                 if suffix == "usd":
-                    result.setdefault(key, value)
-                    result.setdefault(f"usd_{key}", value)
+                    result[f"usd_{key}"] = value
                 elif suffix == "btc":
-                    result.setdefault(f"btc_{key}", value)
+                    result[f"btc_{key}"] = value
 
     _add_metrics(analysis_usd, "usd")
     _add_metrics(analysis_btc, "btc")
