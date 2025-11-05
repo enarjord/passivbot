@@ -1392,12 +1392,19 @@ class Passivbot:
             self.symbol_ids[symbol] = symbol
             return symbol
 
+    def get_symbol(self, exchange_symbol: str) -> str:
+        """Return the CCXT-standard symbol for an exchange-native identifier."""
+        return self.get_symbol_id_inv(exchange_symbol)
+
     def get_symbol_id_inv(self, symbol):
         """Return the human-friendly symbol for an exchange-native identifier."""
         try:
-            return self.symbol_ids_inv[symbol]
+            if symbol in self.symbol_ids_inv:
+                return self.symbol_ids_inv[symbol]
+            else:
+                return self.coin_to_symbol(symbol)
         except:
-            logging.info(f"debug: symbol {symbol} missing from self.symbol_ids_inv. Using {symbol}")
+            logging.info(f"failed to convert {symbol} to ccxt symbol. Using {symbol} as is.")
             self.symbol_ids_inv[symbol] = symbol
             return symbol
 
@@ -1840,6 +1847,7 @@ class Passivbot:
             self.live_value("pnls_max_lookback_days")
         )
         loaded_events: List[dict] = []
+        cache_needs_dump = False
         if os.path.exists(self.fill_events_cache_path):
             try:
                 loaded_events = json.load(open(self.fill_events_cache_path))
@@ -1848,7 +1856,7 @@ class Passivbot:
 
         merged: Dict[str, dict] = {}
         if loaded_events:
-            normalized = []
+            normalized: List[dict] = []
             for raw in loaded_events:
                 try:
                     evt = self._canonicalize_fill_event(raw)
@@ -1858,6 +1866,8 @@ class Passivbot:
                 if evt["timestamp"] >= age_limit:
                     normalized.append(evt)
             merged.update({evt["id"]: evt for evt in normalized})
+            if normalized != loaded_events:
+                cache_needs_dump = True
 
             oldest = min((evt["timestamp"] for evt in normalized), default=None)
             newest = max((evt["timestamp"] for evt in normalized), default=None)
@@ -1887,6 +1897,8 @@ class Passivbot:
                     continue
                 if evt["timestamp"] >= age_limit:
                     merged[evt["id"]] = evt
+            if gap_fills:
+                cache_needs_dump = True
         else:
             try:
                 fresh = await self.fetch_fill_events(start_time=age_limit)
@@ -1905,6 +1917,8 @@ class Passivbot:
                     continue
                 if evt["timestamp"] >= age_limit:
                     merged[evt["id"]] = evt
+            if fresh:
+                cache_needs_dump = True
 
         self.fill_events = sorted(merged.values(), key=lambda x: x["timestamp"])
         if not hasattr(self, "_fill_event_fingerprints"):
@@ -1913,6 +1927,12 @@ class Passivbot:
             fp = self._fingerprint_event(evt)
             self._fill_event_fingerprints.setdefault(evt["id"], set()).add(fp)
         self.fill_events_loaded = True
+        if cache_needs_dump and self.fill_events:
+            payload = [dict(evt) for evt in self.fill_events]
+            try:
+                json.dump(payload, open(self.fill_events_cache_path, "w"))
+            except Exception as exc:
+                logging.error(f"error dumping fill events to {self.fill_events_cache_path}: {exc}")
 
     async def fetch_fill_events(self, start_time=None, end_time=None, limit=None):
         """Exchange-specific fill event fetcher (to be implemented by subclasses)."""
@@ -2128,7 +2148,13 @@ class Passivbot:
             return True
         if fees_a is None or fees_b is None:
             return False
-        return abs(fees_a - fees_b) <= pnl_tol
+        if abs(fees_a - fees_b) > pnl_tol:
+            return False
+        if str(a.get("pb_order_type")) != str(b.get("pb_order_type")):
+            return False
+        if str(a.get("client_order_id")) != str(b.get("client_order_id")):
+            return False
+        return True
 
     async def update_fill_events(
         self, start_time: Optional[int] = None, end_time: Optional[int] = None
@@ -2142,7 +2168,6 @@ class Passivbot:
 
         if self.stop_signal_received:
             return False
-
         await self.init_fill_events()
 
         age_limit = self.get_exchange_time() - 1000 * 60 * 60 * 24 * float(
@@ -2202,7 +2227,6 @@ class Passivbot:
                 continue
             fp_set.add(fp)
             grouped_updates[event["id"]].append(event)
-
         if not grouped_updates:
             return True
 
