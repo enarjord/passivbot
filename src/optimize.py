@@ -826,7 +826,7 @@ class Evaluator:
             else:
                 if existing_score is not None:
                     self.duplicate_counter["reused"] += 1
-                    return existing_score[0], existing_score[1] 
+                    return existing_score[0], existing_score[1]
         else:
             self.seen_hashes[individual_hash] = None
         analyses = {}
