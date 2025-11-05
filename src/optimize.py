@@ -987,7 +987,7 @@ class Evaluator:
                         break
 
                 if val is None:
-                    return None
+                    val 0
                 if weight is None:
                     weight = 1.0
                 scores.append(val * weight)
