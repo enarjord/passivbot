@@ -7,6 +7,7 @@ APIs (PnL summaries, cumulative PnL, last fill timestamps, etc.).
 Currently implements a Bitget fetcher; the design is extensible to other
 exchanges.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -18,6 +19,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+
+from ccxt.base.errors import RateLimitExceeded
+
+from ccxt.base.errors import RateLimitExceeded
 
 try:
     from utils import ts_to_date  # type: ignore
@@ -35,6 +40,104 @@ def _format_ms(ts: Optional[int]) -> str:
 
 def _day_key(timestamp_ms: int) -> str:
     return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+def _merge_fee_lists(
+    fees_a: Optional[Sequence], fees_b: Optional[Sequence]
+) -> Optional[List[Dict[str, object]]]:
+    def to_list(fees):
+        if not fees:
+            return []
+        if isinstance(fees, dict):
+            return [fees]
+        return list(fees)
+
+    merged: Dict[str, Dict[str, object]] = {}
+    for entry in to_list(fees_a) + to_list(fees_b):
+        if not isinstance(entry, dict):
+            continue
+        currency = str(entry.get("currency") or entry.get("code") or "")
+        if currency not in merged:
+            merged[currency] = dict(entry)
+            try:
+                merged[currency]["cost"] = float(entry.get("cost", 0.0))
+            except Exception:
+                merged[currency]["cost"] = 0.0
+        else:
+            try:
+                merged[currency]["cost"] += float(entry.get("cost", 0.0))
+            except Exception:
+                pass
+    if not merged:
+        return None
+    return [dict(value) for value in merged.values()]
+
+
+def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    """Group events sharing timestamp/symbol/pb_type/side/position."""
+    aggregated: Dict[Tuple, Dict[str, object]] = {}
+    order: List[Tuple] = []
+    for ev in events:
+        key = (
+            ev.get("timestamp"),
+            ev.get("symbol"),
+            ev.get("pb_order_type"),
+            ev.get("side"),
+            ev.get("position_side"),
+        )
+        if key not in aggregated:
+            aggregated[key] = dict(ev)
+            aggregated[key]["id"] = str(ev.get("id", ""))
+            aggregated[key]["qty"] = float(ev.get("qty", 0.0))
+            aggregated[key]["pnl"] = float(ev.get("pnl", 0.0))
+            aggregated[key]["fees"] = _merge_fee_lists(ev.get("fees"), None)
+            aggregated[key]["_price_numerator"] = float(ev.get("price", 0.0)) * float(
+                ev.get("qty", 0.0)
+            )
+            order.append(key)
+        else:
+            agg = aggregated[key]
+            agg["id"] = f"{agg['id']}+{ev.get('id', '')}".strip("+")
+            agg["qty"] = float(agg.get("qty", 0.0)) + float(ev.get("qty", 0.0))
+            agg["pnl"] = float(agg.get("pnl", 0.0)) + float(ev.get("pnl", 0.0))
+            agg["fees"] = _merge_fee_lists(agg.get("fees"), ev.get("fees"))
+            agg["_price_numerator"] = float(agg.get("_price_numerator", 0.0)) + float(
+                ev.get("price", 0.0)
+            ) * float(ev.get("qty", 0.0))
+            if not agg.get("client_order_id") and ev.get("client_order_id"):
+                agg["client_order_id"] = ev.get("client_order_id")
+            if not agg.get("pb_order_type"):
+                agg["pb_order_type"] = ev.get("pb_order_type")
+    coalesced: List[Dict[str, object]] = []
+    for key in order:
+        agg = aggregated[key]
+        qty = float(agg.get("qty", 0.0))
+        price_numerator = float(agg.get("_price_numerator", 0.0))
+        if qty > 0:
+            agg["price"] = price_numerator / qty
+        agg.pop("_price_numerator", None)
+        fees = agg.get("fees")
+        if isinstance(fees, list) and len(fees) == 1:
+            agg["fees"] = fees[0]
+        coalesced.append(agg)
+    return coalesced
+
+
+def _check_pagination_progress(
+    previous: Optional[Tuple[Tuple[str, object], ...]],
+    params: Dict[str, object],
+    context: str,
+) -> Optional[Tuple[Tuple[str, object], ...]]:
+    params_key = tuple(sorted(params.items()))
+    if previous == params_key:
+        logger.warning(
+            "%s: repeated params detected; aborting pagination (%s)",
+            context,
+            dict(params),
+        )
+        return None
+    logger.debug("%s: fetching with params %s", context, dict(params))
+    return params_key
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +184,18 @@ class FillEvent:
 
     @classmethod
     def from_dict(cls, data: Dict[str, object]) -> "FillEvent":
-        required = ["id", "timestamp", "symbol", "side", "qty", "price", "pnl", "pb_order_type", "position_side", "client_order_id"]
+        required = [
+            "id",
+            "timestamp",
+            "symbol",
+            "side",
+            "qty",
+            "price",
+            "pnl",
+            "pb_order_type",
+            "position_side",
+            "client_order_id",
+        ]
         missing = [key for key in required if key not in data]
         if missing:
             raise ValueError(f"Fill event missing required keys: {missing}")
@@ -220,16 +334,19 @@ class BitgetFetcher(BaseFetcher):
         detail_cache: Dict[str, Tuple[str, str]],
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
     ) -> List[Dict[str, object]]:
+        buffer_step_ms = 24 * 60 * 60 * 1000
+        end_time = int(until_ms) if until_ms is not None else self._now_func() + buffer_step_ms
         params: Dict[str, object] = {
             "productType": self.product_type,
             "limit": self.history_limit,
+            "endTime": end_time,
         }
-        if until_ms is not None:
-            params["endTime"] = int(until_ms)
         events: Dict[str, Dict[str, object]] = {}
 
         detail_hits = 0
         detail_fetches = 0
+        max_fetches = 400
+        fetch_count = 0
 
         logger.info(
             "BitgetFetcher.fetch: start (since=%s, until=%s, limit=%d)",
@@ -239,10 +356,34 @@ class BitgetFetcher(BaseFetcher):
         )
 
         while True:
+            if fetch_count >= max_fetches:
+                logger.warning(
+                    "BitgetFetcher.fetch: reached maximum pagination depth (%d)",
+                    max_fetches,
+                )
+                break
+            fetch_count += 1
             payload = await self.api.private_mix_get_v2_mix_order_fill_history(dict(params))
             fill_list = payload.get("data", {}).get("fillList") or []
             if not fill_list:
-                break
+                if since_ms is None:
+                    logger.debug("BitgetFetcher.fetch: empty batch without start bound; stopping")
+                    break
+                end_param = int(params.get("endTime", self._now_func()))
+                if end_param <= since_ms:
+                    logger.debug(
+                        "BitgetFetcher.fetch: empty batch and cursor reached start; stopping"
+                    )
+                    break
+                new_end_time = max(since_ms, end_param - buffer_step_ms)
+                if new_end_time == end_param:
+                    new_end_time = max(since_ms, end_param - 1)
+                params["endTime"] = new_end_time
+                logger.debug(
+                    "BitgetFetcher.fetch: empty batch, continuing with endTime=%s",
+                    _format_ms(params["endTime"]),
+                )
+                continue
             logger.debug(
                 "BitgetFetcher.fetch: received batch size=%d endTime=%s",
                 len(fill_list),
@@ -277,12 +418,37 @@ class BitgetFetcher(BaseFetcher):
                 ]
                 if batch_events:
                     on_batch(batch_events)
+            oldest = min(int(raw["cTime"]) for raw in fill_list)
+            if len(fill_list) < self.history_limit:
+                if since_ms is None:
+                    logger.debug(
+                        "BitgetFetcher.fetch: short batch size=%d without start bound; stopping",
+                        len(fill_list),
+                    )
+                    break
+                end_param = int(params.get("endTime", oldest))
+                if end_param - since_ms < buffer_step_ms:
+                    logger.debug(
+                        "BitgetFetcher.fetch: short batch size=%d close to requested start; stopping",
+                        len(fill_list),
+                    )
+                    break
+                new_end_time = max(since_ms, min(end_param, oldest) - 1)
+                if new_end_time <= since_ms:
+                    logger.debug(
+                        "BitgetFetcher.fetch: rewound endTime to start boundary; stopping",
+                    )
+                    break
+                params["endTime"] = new_end_time
+                logger.debug(
+                    "BitgetFetcher.fetch: short batch size=%d, continuing with endTime=%s",
+                    len(fill_list),
+                    _format_ms(params["endTime"]),
+                )
+                continue
             first_ts = min(ev["timestamp"] for ev in events.values()) if events else None
             if since_ms is not None and first_ts is not None and first_ts <= since_ms:
                 break
-            if len(fill_list) < self.history_limit:
-                break
-            oldest = min(int(raw["cTime"]) for raw in fill_list)
             params["endTime"] = max(since_ms or oldest, oldest - 1)
 
         ordered = sorted(events.values(), key=lambda ev: ev["timestamp"])
@@ -306,8 +472,9 @@ class BitgetFetcher(BaseFetcher):
         if not event.get("order_id"):
             return 0
         logger.debug(
-            "BitgetFetcher._enrich_with_details: fetching detail for order %s",
+            "BitgetFetcher._enrich_with_details: fetching detail for order %s %s",
             event["order_id"],
+            event.get("datetime"),
         )
         await self._respect_rate_limit()
         order_details = await self.api.private_mix_get_v2_mix_order_detail(
@@ -328,9 +495,10 @@ class BitgetFetcher(BaseFetcher):
             event["pb_order_type"] = pb_type
             cache[event["id"]] = (client_oid, pb_type)
             logger.debug(
-                "BitgetFetcher._enrich_with_details: cached clientOid=%s for trade %s",
+                "BitgetFetcher._enrich_with_details: cached clientOid=%s for trade %s, pb_order_type %s",
                 client_oid,
                 event["id"],
+                pb_type,
             )
             return 1
         else:
@@ -436,13 +604,11 @@ class FillEventsManager:
         user: str,
         fetcher: BaseFetcher,
         cache_path: Path,
-        max_age_days: float = 30.0,
     ) -> None:
         self.exchange = exchange
         self.user = user
         self.fetcher = fetcher
         self.cache = FillEventCache(cache_path)
-        self.max_age_ms = int(max_age_days * 24 * 60 * 60 * 1000)
         self._events: List[FillEvent] = []
         self._loaded = False
         self._lock = asyncio.Lock()
@@ -454,12 +620,10 @@ class FillEventsManager:
             if self._loaded:
                 return
             cached = self.cache.load()
-            cutoff = self._cutoff_timestamp()
-            self._events = [ev for ev in cached if ev.timestamp >= cutoff]
+            self._events = list(cached)
             logger.info(
-                "FillEventsManager.ensure_loaded: loaded %d cached events (cutoff=%s)",
+                "FillEventsManager.ensure_loaded: loaded %d cached events",
                 len(self._events),
-                _format_ms(cutoff),
             )
             self._loaded = True
 
@@ -470,9 +634,7 @@ class FillEventsManager:
         end_ms: Optional[int] = None,
     ) -> None:
         await self.ensure_loaded()
-        cutoff = self._cutoff_timestamp()
         requested_start = start_ms
-        start_ms = max(start_ms or cutoff, cutoff)
         logger.info(
             "FillEventsManager.refresh: start=%s end=%s current_cache=%d (requested_start=%s)",
             _format_ms(start_ms),
@@ -481,7 +643,7 @@ class FillEventsManager:
             _format_ms(requested_start),
         )
         detail_cache = {ev.id: (ev.client_order_id, ev.pb_order_type) for ev in self._events}
-        updated_map: Dict[str, FillEvent] = {ev.id: ev for ev in self._events if ev.timestamp >= cutoff}
+        updated_map: Dict[str, FillEvent] = {ev.id: ev for ev in self._events}
         added_ids: set[str] = set()
 
         def handle_batch(batch: List[Dict[str, object]]) -> None:
@@ -531,9 +693,7 @@ class FillEventsManager:
         """Fetch only the most recent fills, overlapping by `overlap` events."""
         await self.ensure_loaded()
         if not self._events:
-            logger.info(
-                "FillEventsManager.refresh_latest: cache empty, falling back to full refresh"
-            )
+            logger.info("FillEventsManager.refresh_latest: cache empty, falling back to full refresh")
         start_ms = None
         if self._events:
             idx = max(0, len(self._events) - overlap)
@@ -554,9 +714,7 @@ class FillEventsManager:
         intervals: List[Tuple[int, int]] = []
 
         if not self._events:
-            logger.info(
-                "FillEventsManager.refresh_range: cache empty, refreshing entire interval"
-            )
+            logger.info("FillEventsManager.refresh_range: cache empty, refreshing entire interval")
             await self.refresh(start_ms=start_ms, end_ms=end_ms)
             await self.refresh_latest(overlap=overlap)
             return
@@ -593,14 +751,10 @@ class FillEventsManager:
             logger.info(
                 "FillEventsManager.refresh_range: refreshing %d intervals: %s",
                 len(merged),
-                ", ".join(
-                    f"{_format_ms(start)} → {_format_ms(end)}" for start, end in merged
-                ),
+                ", ".join(f"{_format_ms(start)} → {_format_ms(end)}" for start, end in merged),
             )
         else:
-            logger.info(
-                "FillEventsManager.refresh_range: no gaps detected in requested interval"
-            )
+            logger.info("FillEventsManager.refresh_range: no gaps detected in requested interval")
 
         for start, end in merged:
             await self.refresh(start_ms=start, end_ms=end)
@@ -653,7 +807,9 @@ class FillEventsManager:
             return None
         return max(ev.timestamp for ev in events)
 
-    def reconstruct_positions(self, current_positions: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+    def reconstruct_positions(
+        self, current_positions: Optional[Dict[str, float]] = None
+    ) -> Dict[str, float]:
         positions: Dict[str, float] = dict(current_positions or {})
         for ev in self._events:
             sign = 1 if ev.side == "buy" else -1
@@ -668,10 +824,6 @@ class FillEventsManager:
             total += ev.pnl
             points.append((ev.timestamp, total))
         return points
-
-    def _cutoff_timestamp(self) -> int:
-        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-        return now_ms - self.max_age_ms
 
     @staticmethod
     def _events_for_days(
@@ -688,11 +840,7 @@ class FillEventsManager:
 
     @staticmethod
     def _merge_intervals(intervals: Sequence[Tuple[int, int]]) -> List[Tuple[int, int]]:
-        cleaned = [
-            (int(start), int(end))
-            for start, end in intervals
-            if end > start
-        ]
+        cleaned = [(int(start), int(end)) for start, end in intervals if end > start]
         if not cleaned:
             return []
         cleaned.sort(key=lambda x: x[0])
@@ -749,6 +897,7 @@ class BybitFetcher(BaseFetcher):
             and (until_ms is None or ev["timestamp"] <= until_ms)
         ]
         events.sort(key=lambda ev: ev["timestamp"])
+        events = _coalesce_events(events)
 
         if on_batch and events:
             day_map = defaultdict(list)
@@ -775,7 +924,16 @@ class BybitFetcher(BaseFetcher):
         results: List[Dict[str, object]] = []
         max_fetches = 200
         fetch_count = 0
+        prev_params = None
         while True:
+            new_key = _check_pagination_progress(
+                prev_params,
+                params,
+                "BybitFetcher._fetch_my_trades",
+            )
+            if new_key is None:
+                break
+            prev_params = new_key
             fetch_count += 1
             batch = await self.api.fetch_my_trades(params=params)
             if not batch:
@@ -802,9 +960,7 @@ class BybitFetcher(BaseFetcher):
         )
         return ordered
 
-    async def _fetch_positions_history(
-        self, start_ms: int, end_ms: int
-    ) -> List[Dict[str, object]]:
+    async def _fetch_positions_history(self, start_ms: int, end_ms: int) -> List[Dict[str, object]]:
         params = {
             "limit": self.position_limit,
             "endTime": int(end_ms),
@@ -812,7 +968,16 @@ class BybitFetcher(BaseFetcher):
         results: List[Dict[str, object]] = []
         max_fetches = 200
         fetch_count = 0
+        prev_params = None
         while True:
+            new_key = _check_pagination_progress(
+                prev_params,
+                params,
+                "BybitFetcher._fetch_positions_history",
+            )
+            if new_key is None:
+                break
+            prev_params = new_key
             fetch_count += 1
             batch = await self.api.fetch_positions_history(params=params)
             if not batch:
@@ -853,7 +1018,9 @@ class BybitFetcher(BaseFetcher):
             symbol = entry.get("symbol")
             if symbol:
                 symbol_realized[symbol] += pnl
-                closed = float(entry.get("info", {}).get("closedSize") or entry.get("contracts") or 0.0)
+                closed = float(
+                    entry.get("info", {}).get("closedSize") or entry.get("contracts") or 0.0
+                )
                 symbol_closed_qty[symbol] += closed
 
         order_total_qty: Dict[str, float] = defaultdict(float)
@@ -896,7 +1063,9 @@ class BybitFetcher(BaseFetcher):
                     event["pnl"] = remaining_pnl * (qty / remaining_qty)
                 order_remaining_qty[order_id] = max(0.0, remaining_qty - qty)
                 order_remaining_pnl[order_id] = remaining_pnl - event["pnl"]
-                symbol_remaining_pnl[event["symbol"]] = symbol_remaining_pnl.get(event["symbol"], 0.0) - event["pnl"]
+                symbol_remaining_pnl[event["symbol"]] = (
+                    symbol_remaining_pnl.get(event["symbol"], 0.0) - event["pnl"]
+                )
                 symbol_remaining_qty[event["symbol"]] = max(
                     0.0, symbol_remaining_qty.get(event["symbol"], 0.0) - qty
                 )
@@ -988,6 +1157,167 @@ class BybitFetcher(BaseFetcher):
     @staticmethod
     def _now_ms() -> int:
         return int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+
+
+class HyperliquidFetcher(BaseFetcher):
+    """Fetches fill events via ccxt.fetch_my_trades for Hyperliquid."""
+
+    def __init__(
+        self,
+        api,
+        *,
+        trade_limit: int = 500,
+        symbol_resolver: Optional[Callable[[Optional[str]], str]] = None,
+    ) -> None:
+        self.api = api
+        self.trade_limit = max(1, trade_limit)
+        self._symbol_resolver = symbol_resolver
+
+    async def fetch(
+        self,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        params: Dict[str, object] = {"limit": self.trade_limit}
+        if since_ms is not None:
+            params["since"] = int(since_ms)
+
+        collected: Dict[str, Dict[str, object]] = {}
+        max_fetches = 200
+        fetch_count = 0
+
+        prev_params = None
+        while True:
+            check_params = dict(params)
+            check_params["_page"] = fetch_count
+            new_key = _check_pagination_progress(
+                prev_params,
+                check_params,
+                "HyperliquidFetcher.fetch",
+            )
+            if new_key is None:
+                break
+            prev_params = new_key
+            try:
+                trades = await self.api.fetch_my_trades(params=params)
+            except RateLimitExceeded as exc:
+                logger.debug(
+                    "HyperliquidFetcher.fetch: rate limit exceeded, sleeping briefly (%s)",
+                    exc,
+                )
+                await asyncio.sleep(1.0)
+                continue
+            fetch_count += 1
+            if not trades:
+                break
+            before_count = len(collected)
+            for trade in trades:
+                event = self._normalize_trade(trade)
+                ts = event["timestamp"]
+                if since_ms is not None and ts < since_ms:
+                    continue
+                if until_ms is not None and ts > until_ms:
+                    continue
+                collected[event["id"]] = event
+            added = len(collected) - before_count
+            if len(trades) < self.trade_limit:
+                break
+            last_ts = int(
+                trades[-1].get("timestamp")
+                or trades[-1].get("info", {}).get("time")
+                or trades[-1].get("info", {}).get("updatedTime")
+                or 0
+            )
+            if last_ts <= 0:
+                break
+            if until_ms is not None and last_ts >= until_ms:
+                break
+            if added <= 0:
+                logger.debug(
+                    "HyperliquidFetcher.fetch: no new trades added on page (last_ts=%s), stopping",
+                    last_ts,
+                )
+                break
+            params["since"] = last_ts
+            if fetch_count >= max_fetches:
+                logger.warning(
+                    "HyperliquidFetcher.fetch: reached maximum pagination depth (%d)",
+                    max_fetches,
+                )
+                break
+
+        events = sorted(collected.values(), key=lambda ev: ev["timestamp"])
+        events = _coalesce_events(events)
+
+        for event in events:
+            cache_entry = detail_cache.get(event["id"])
+            if cache_entry:
+                event["client_order_id"], event["pb_order_type"] = cache_entry
+            elif event["client_order_id"]:
+                event["pb_order_type"] = custom_id_to_snake(event["client_order_id"])
+            else:
+                event["pb_order_type"] = "unknown"
+            if not event["pb_order_type"]:
+                event["pb_order_type"] = "unknown"
+
+        if on_batch and events:
+            on_batch(events)
+
+        return events
+
+    def _normalize_trade(self, trade: Dict[str, object]) -> Dict[str, object]:
+        info = trade.get("info", {}) or {}
+        trade_id = str(trade.get("id") or info.get("tid") or info.get("hash") or info.get("oid"))
+        order_id = str(trade.get("order") or info.get("oid") or "")
+        timestamp = int(
+            trade.get("timestamp")
+            or info.get("time")
+            or info.get("updatedTime")
+            or info.get("tradeTime")
+            or 0
+        )
+        symbol_raw = trade.get("symbol") or info.get("symbol") or info.get("coin")
+        if self._symbol_resolver:
+            try:
+                symbol = self._symbol_resolver(symbol_raw)
+            except Exception:
+                symbol = str(symbol_raw) if symbol_raw is not None else ""
+        else:
+            symbol = str(symbol_raw) if symbol_raw is not None else ""
+        side = str(trade.get("side") or info.get("side", "")).lower()
+        qty = abs(float(trade.get("amount") or info.get("sz") or 0.0))
+        price = float(trade.get("price") or info.get("px") or 0.0)
+        pnl = float(trade.get("pnl") or info.get("closedPnl") or 0.0)
+        fee = trade.get("fee") or {
+            "currency": info.get("feeToken"),
+            "cost": info.get("fee"),
+        }
+        client_order_id = trade.get("clientOrderId") or info.get("cloid") or info.get("clOrdId") or ""
+        direction = str(info.get("dir", "")).lower()
+        if "short" in direction:
+            position_side = "short"
+        elif "long" in direction:
+            position_side = "long"
+        else:
+            position_side = "long" if side == "buy" else "short"
+
+        return {
+            "id": trade_id,
+            "order_id": order_id,
+            "timestamp": timestamp,
+            "datetime": ts_to_date(timestamp) if timestamp else "",
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "pnl": pnl,
+            "fees": fee,
+            "pb_order_type": "",
+            "position_side": position_side,
+            "client_order_id": str(client_order_id or ""),
+        }
 
 
 # ---------------------------------------------------------------------------

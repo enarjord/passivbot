@@ -355,7 +355,7 @@ class BitgetBot(Passivbot):
                 self._detail_fetch_timestamps.append(now)
                 break
             await asyncio.sleep(0.1)
-        print('fetching order detail for', symbol, order_id)
+        print("fetching order detail for", symbol, order_id)
         return await self.cca.private_mix_get_v2_mix_order_detail(
             params={
                 "productType": "USDT-FUTURES",
@@ -385,7 +385,9 @@ class BitgetBot(Passivbot):
                 self._client_oid_cache[event["id"]] = (client_oid, pb_type)
             else:
                 logging.debug(
-                    "bitget order detail missing clientOid for id=%s symbol=%s", event["id"], event["symbol"]
+                    "bitget order detail missing clientOid for id=%s symbol=%s",
+                    event["id"],
+                    event["symbol"],
                 )
         except Exception as exc:
             logging.warning(
@@ -463,8 +465,7 @@ class BitgetBot(Passivbot):
                 return []
             fetched = await self.cca.private_mix_get_v2_mix_order_fill_history(params)
             fill_events = [
-                _extract_fill(x)
-                for x in (fetched.get("data", {}).get("fillList", []) or [])
+                _extract_fill(x) for x in (fetched.get("data", {}).get("fillList", []) or [])
             ]
             fill_events.sort(key=lambda x: x["timestamp"])
             if count > 1:

@@ -1392,9 +1392,21 @@ class Passivbot:
             self.symbol_ids[symbol] = symbol
             return symbol
 
-    def get_symbol(self, exchange_symbol: str) -> str:
-        """Return the CCXT-standard symbol for an exchange-native identifier."""
-        return self.get_symbol_id_inv(exchange_symbol)
+    def to_ccxt_symbol(self, symbol: str) -> str:
+        """Convert to ccxt standardized symbol"""
+        candidates = []
+        try:
+            candidates.append(self.get_symbol_id_inv(symbol))
+        except:
+            pass
+        try:
+            candidates.append(self.coin_to_symbol(symbol))
+        except:
+            pass
+        if candidates:
+            return candidates[0]
+        else:
+            logging.info(f"failed to convert {symbol} to ccxt symbol. Using {symbol} as is.")
 
     def get_symbol_id_inv(self, symbol):
         """Return the human-friendly symbol for an exchange-native identifier."""

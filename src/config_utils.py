@@ -1314,6 +1314,13 @@ def get_template_config(passivbot_mode="v7"):
             "btc_collateral_ltv_cap": None,
             "emit_legacy_metrics": False,
             "max_warmup_minutes": 0.0,
+            "suite": {
+                "enabled": False,
+                "include_base_scenario": False,
+                "base_label": "base",
+                "aggregate": {"default": "mean"},
+                "scenarios": [],
+            },
         },
         "bot": {
             "long": {
@@ -1509,5 +1516,13 @@ def get_template_config(passivbot_mode="v7"):
             "round_to_n_significant_digits": 5,
             "scoring": ["adg", "sharpe_ratio"],
             "write_all_results": True,
+            "pareto_max_size": 300,
+            "suite": {
+                "enabled": False,
+                "include_base_scenario": False,
+                "base_label": "base",
+                "aggregate": {"default": "mean"},
+                "scenarios": [],
+            },
         },
     }

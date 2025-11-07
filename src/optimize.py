@@ -65,9 +65,15 @@ from optimizer_overrides import optimizer_overrides
 from opt_utils import make_json_serializable, generate_incremental_diff, round_floats
 from pareto_store import ParetoStore
 import msgpack
-from typing import Sequence, Tuple, List
+from typing import Sequence, Tuple, List, Dict, Any
 from itertools import permutations
 from shared_arrays import SharedArrayManager, attach_shared_array
+from optimize_suite import (
+    ScenarioEvalContext,
+    prepare_suite_contexts,
+    extract_optimize_suite_config,
+)
+from suite_runner import SuiteScenario, ScenarioResult, aggregate_metrics
 
 
 class ResultRecorder:
@@ -80,12 +86,14 @@ class ResultRecorder:
         scoring_keys: Sequence[str],
         compress: bool,
         write_all_results: bool,
+        pareto_max_size: int = 300,
     ):
         self.store = ParetoStore(
             directory=results_dir,
             sig_digits=sig_digits,
             flush_interval=flush_interval,
             log_name="optimizer.pareto",
+            max_size=pareto_max_size,
         )
         self.write_all = write_all_results
         self.compress = compress
@@ -366,8 +374,11 @@ def ea_mu_plus_lambda_stream(
                     fit_values, metrics = res.get()
                     ind = individuals[idx]
                     ind.fitness.values = fit_values
-                    ind.evaluation_metrics = metrics
-                    _record_individual_result(ind, evaluator_config, overrides_list, recorder)
+                    if metrics is not None:
+                        ind.evaluation_metrics = metrics
+                        _record_individual_result(ind, evaluator_config, overrides_list, recorder)
+                    elif hasattr(ind, "evaluation_metrics"):
+                        delattr(ind, "evaluation_metrics")
                     completed += 1
         except KeyboardInterrupt:
             logging.info("Evaluation interrupted; terminating pending tasks...")
@@ -826,7 +837,7 @@ class Evaluator:
             else:
                 if existing_score is not None:
                     self.duplicate_counter["reused"] += 1
-                    return existing_score[0], existing_score[1]
+                    return tuple(existing_score), None
         else:
             self.seen_hashes[individual_hash] = None
         analyses = {}
@@ -867,7 +878,7 @@ class Evaluator:
         # attach metrics to individual so the parent process can persist lean results
         individual.evaluation_metrics = analyses_combined
         actual_hash = calc_hash(individual)
-        self.seen_hashes[actual_hash] = [tuple(objectives), analyses_combined]
+        self.seen_hashes[actual_hash] = tuple(objectives)
         return tuple(objectives), analyses_combined
 
     def combine_analyses(self, analyses):
@@ -1016,6 +1027,165 @@ class Evaluator:
             self._ensure_attached(exchange)
 
 
+class SuiteEvaluator:
+    def __init__(
+        self,
+        base_evaluator: Evaluator,
+        scenario_contexts: List[ScenarioEvalContext],
+        aggregate_cfg: Dict[str, Any],
+    ) -> None:
+        self.base = base_evaluator
+        self.contexts = scenario_contexts
+        self.aggregate_cfg = aggregate_cfg
+
+    def _ensure_context_attachment(self, ctx: ScenarioEvalContext, exchange: str) -> None:
+        if exchange not in ctx.shared_hlcvs_np:
+            attachment = attach_shared_array(ctx.hlcvs_specs[exchange])
+            ctx.attachments["hlcvs"][exchange] = attachment
+            ctx.shared_hlcvs_np[exchange] = attachment.array
+        if exchange not in ctx.shared_btc_np and exchange in ctx.btc_usd_specs:
+            attachment = attach_shared_array(ctx.btc_usd_specs[exchange])
+            ctx.attachments["btc"][exchange] = attachment
+            ctx.shared_btc_np[exchange] = attachment.array
+
+    def evaluate(self, individual, overrides_list):
+        individual[:] = enforce_bounds(individual, self.base.bounds, self.base.sig_digits)
+        config = individual_to_config(
+            individual, optimizer_overrides, overrides_list, self.base.config
+        )
+        individual_hash = calc_hash(individual)
+        seen_hashes = self.base.seen_hashes
+        duplicate_counter = self.base.duplicate_counter
+
+        if individual_hash in seen_hashes:
+            existing_score = seen_hashes[individual_hash]
+            duplicate_counter["total"] += 1
+            perturbation_funcs = [
+                self.base.perturb_x_pct,
+                self.base.perturb_step_digits,
+                self.base.perturb_gaussian,
+                self.base.perturb_random_subset,
+                self.base.perturb_sample_some,
+                self.base.perturb_large_uniform,
+            ]
+            for perturb_fn in perturbation_funcs:
+                perturbed = perturb_fn(individual)
+                perturbed = enforce_bounds(perturbed, self.base.bounds, self.base.sig_digits)
+                new_hash = calc_hash(perturbed)
+                if new_hash not in seen_hashes:
+                    individual[:] = perturbed
+                    seen_hashes[new_hash] = None
+                    config = individual_to_config(
+                        perturbed, optimizer_overrides, overrides_list, self.base.config
+                    )
+                    duplicate_counter["resolved"] += 1
+                    break
+            else:
+                if existing_score is not None:
+                    duplicate_counter["reused"] += 1
+                    return tuple(existing_score), None
+        else:
+            seen_hashes[individual_hash] = None
+
+        per_scenario_metrics: Dict[str, Dict[str, float]] = {}
+        scenario_results: List[ScenarioResult] = []
+
+        from backtest import prep_backtest_args
+        from tools.iterative_backtester import combine_analyses as combine
+
+        for ctx in self.contexts:
+            scenario_config = deepcopy(config)
+            scenario_config["backtest"]["start_date"] = ctx.config["backtest"]["start_date"]
+            scenario_config["backtest"]["end_date"] = ctx.config["backtest"]["end_date"]
+            scenario_config["backtest"]["coins"] = deepcopy(ctx.config["backtest"]["coins"])
+            scenario_config["backtest"]["cache_dir"] = deepcopy(
+                ctx.config["backtest"].get("cache_dir", {})
+            )
+            scenario_config.setdefault("live", {})
+            scenario_config["live"]["approved_coins"] = deepcopy(
+                ctx.config["live"].get("approved_coins", {})
+            )
+            scenario_config["live"]["ignored_coins"] = deepcopy(
+                ctx.config["live"].get("ignored_coins", {})
+            )
+            scenario_config["disable_plotting"] = True
+
+            analyses = {}
+            for exchange in ctx.exchanges:
+                self._ensure_context_attachment(ctx, exchange)
+                bot_params_list, _, _ = prep_backtest_args(
+                    scenario_config,
+                    [],
+                    exchange,
+                    exchange_params=ctx.exchange_params[exchange],
+                    backtest_params=ctx.backtest_params[exchange],
+                )
+                run_result = pbr.run_backtest(
+                    ctx.shared_hlcvs_np[exchange],
+                    ctx.shared_btc_np.get(exchange),
+                    bot_params_list,
+                    ctx.exchange_params[exchange],
+                    ctx.backtest_params[exchange],
+                )
+                if len(run_result) == 5:
+                    fills, equities_array, _, analysis_usd, analysis_btc = run_result
+                else:
+                    fills, equities_array, analysis_usd, analysis_btc = run_result
+                analyses[exchange] = expand_analysis(
+                    analysis_usd, analysis_btc, fills, equities_array, scenario_config
+                )
+                del fills
+                del equities_array
+                del analysis_usd
+                del analysis_btc
+
+            combined_metrics = combine(analyses)
+            per_scenario_metrics[ctx.label] = combined_metrics
+            scenario_results.append(
+                ScenarioResult(
+                    scenario=SuiteScenario(
+                        label=ctx.label,
+                        start_date=None,
+                        end_date=None,
+                        coins=None,
+                        ignored_coins=None,
+                    ),
+                    per_exchange={},
+                    combined_metrics=combined_metrics,
+                    elapsed_seconds=0.0,
+                    output_path=None,
+                )
+            )
+
+        aggregate_summary = aggregate_metrics(scenario_results, self.aggregate_cfg)
+        analyses_combined = dict(aggregate_summary.get("aggregated", {}))
+        for label, metrics in per_scenario_metrics.items():
+            for key, value in metrics.items():
+                analyses_combined[f"{label}__{key}"] = value
+
+        objectives = self.base.calc_fitness(analyses_combined)
+        for i, val in enumerate(objectives):
+            analyses_combined[f"w_{i}"] = val
+
+        individual.evaluation_metrics = analyses_combined
+        actual_hash = calc_hash(individual)
+        self.base.seen_hashes[actual_hash] = tuple(objectives)
+        return tuple(objectives), analyses_combined
+
+    def __del__(self):
+        for ctx in self.contexts:
+            for attachment in ctx.attachments.get("hlcvs", {}).values():
+                try:
+                    attachment.close()
+                except Exception:
+                    pass
+            for attachment in ctx.attachments.get("btc", {}).values():
+                try:
+                    attachment.close()
+                except Exception:
+                    pass
+
+
 def add_extra_options(parser):
     parser.add_argument(
         "-t",
@@ -1153,6 +1323,17 @@ async def main():
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )
+    parser.add_argument(
+        "--suite",
+        action="store_true",
+        help="Evaluate candidates across the scenarios defined in optimize.suite.",
+    )
+    parser.add_argument(
+        "--suite-config",
+        type=str,
+        default=None,
+        help="Optional config file providing optimize.suite overrides.",
+    )
     template_config = get_template_config(TEMPLATE_CONFIG_MODE)
     del template_config["bot"]
     keep_live_keys = {
@@ -1190,50 +1371,59 @@ async def main():
             "Fine-tuning mode active for %s",
             ", ".join(sorted(fine_tune_params)),
         )
+    suite_override = None
+    if args.suite_config:
+        logging.info("loading suite config %s", args.suite_config)
+        suite_override = (
+            load_config(args.suite_config, verbose=False).get("optimize", {}).get("suite")
+        )
+        if suite_override is None:
+            raise ValueError(f"Suite config {args.suite_config} must define optimize.suite.")
+    suite_cfg = extract_optimize_suite_config(config, suite_override)
+    if args.suite:
+        suite_cfg["enabled"] = True
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     await format_approved_ignored_coins(config, backtest_exchanges)
     interrupted = False
     try:
-        # Prepare data for each exchange
         array_manager = SharedArrayManager()
         hlcvs_specs = {}
         btc_usd_specs = {}
         msss = {}
         timestamps_dict = {}
         config["backtest"]["coins"] = {}
+        aggregate_cfg: Dict[str, Any] = {"default": "mean"}
+        scenario_contexts: List[ScenarioEvalContext] = []
+        suite_enabled = bool(suite_cfg.get("enabled"))
 
-        if bool(require_config_value(config, "backtest.combine_ohlcvs")):
-            exchange = "combined"
-            coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = (
-                await prepare_hlcvs_mss(config, exchange)
+        if suite_enabled:
+            scenario_contexts, aggregate_cfg = await prepare_suite_contexts(
+                config,
+                suite_cfg,
+                shared_array_manager=array_manager,
             )
-            timestamps_dict[exchange] = _timestamps
-            exchange_preference = defaultdict(list)
-            for coin in coins:
-                exchange_preference[mss[coin]["exchange"]].append(coin)
-            for ex in exchange_preference:
-                logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
-            config["backtest"]["coins"][exchange] = coins
-            msss[exchange] = mss
-            validate_array(hlcvs, "hlcvs")
-            hlcvs_array = np.ascontiguousarray(hlcvs, dtype=np.float64)
-            hlcvs_spec, _ = array_manager.create_from(hlcvs_array)
-            hlcvs_specs[exchange] = hlcvs_spec
-
-            btc_usd_array = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
-            validate_array(btc_usd_array, f"btc_usd_data for {exchange}", allow_nan=False)
-            btc_usd_spec, _ = array_manager.create_from(btc_usd_array)
-            btc_usd_specs[exchange] = btc_usd_spec
-            del hlcvs, hlcvs_array, btc_usd_prices, btc_usd_array
+            if not scenario_contexts:
+                raise ValueError("Suite configuration produced no scenarios.")
+            logging.info("Optimizer suite enabled with %d scenario(s)", len(scenario_contexts))
+            first_ctx = scenario_contexts[0]
+            hlcvs_specs = first_ctx.hlcvs_specs
+            btc_usd_specs = first_ctx.btc_usd_specs
+            msss = first_ctx.msss
+            timestamps_dict = first_ctx.timestamps
+            config["backtest"]["coins"] = deepcopy(first_ctx.config["backtest"]["coins"])
+            backtest_exchanges = sorted({ex for ctx in scenario_contexts for ex in ctx.exchanges})
         else:
-            tasks = {}
-            for exchange in backtest_exchanges:
-                tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
-            for exchange in backtest_exchanges:
-                coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = await tasks[
-                    exchange
-                ]
+            if bool(require_config_value(config, "backtest.combine_ohlcvs")):
+                exchange = "combined"
+                coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = (
+                    await prepare_hlcvs_mss(config, exchange)
+                )
                 timestamps_dict[exchange] = _timestamps
+                exchange_preference = defaultdict(list)
+                for coin in coins:
+                    exchange_preference[mss[coin]["exchange"]].append(coin)
+                for ex in exchange_preference:
+                    logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
                 config["backtest"]["coins"][exchange] = coins
                 msss[exchange] = mss
                 validate_array(hlcvs, "hlcvs")
@@ -1246,6 +1436,27 @@ async def main():
                 btc_usd_spec, _ = array_manager.create_from(btc_usd_array)
                 btc_usd_specs[exchange] = btc_usd_spec
                 del hlcvs, hlcvs_array, btc_usd_prices, btc_usd_array
+            else:
+                tasks = {}
+                for exchange in backtest_exchanges:
+                    tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(config, exchange))
+                for exchange in backtest_exchanges:
+                    coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, _timestamps = (
+                        await tasks[exchange]
+                    )
+                    timestamps_dict[exchange] = _timestamps
+                    config["backtest"]["coins"][exchange] = coins
+                    msss[exchange] = mss
+                    validate_array(hlcvs, "hlcvs")
+                    hlcvs_array = np.ascontiguousarray(hlcvs, dtype=np.float64)
+                    hlcvs_spec, _ = array_manager.create_from(hlcvs_array)
+                    hlcvs_specs[exchange] = hlcvs_spec
+
+                    btc_usd_array = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
+                    validate_array(btc_usd_array, f"btc_usd_data for {exchange}", allow_nan=False)
+                    btc_usd_spec, _ = array_manager.create_from(btc_usd_array)
+                    btc_usd_specs[exchange] = btc_usd_spec
+                    del hlcvs, hlcvs_array, btc_usd_prices, btc_usd_array
         exchanges = backtest_exchanges
         exchanges_fname = (
             "combined"
@@ -1254,7 +1465,13 @@ async def main():
         )
         date_fname = ts_to_date(utc_ms())[:19].replace(":", "_")
         coins = sorted(set([x for y in config["backtest"]["coins"].values() for x in y]))
-        coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
+        suite_flag = bool(config.get("optimize", {}).get("suite", {}).get("enabled"))
+        if args.suite:
+            suite_flag = True
+        if suite_flag:
+            coins_fname = f"suite_{len(coins)}_coins"
+        else:
+            coins_fname = "_".join(coins) if len(coins) <= 6 else f"{len(coins)}_coins"
         hash_snippet = uuid4().hex[:8]
         n_days = int(
             round(
@@ -1294,9 +1511,15 @@ async def main():
             shared_array_manager=array_manager,
         )
 
+        if suite_enabled:
+            evaluator_for_pool = SuiteEvaluator(evaluator, scenario_contexts, aggregate_cfg)
+        else:
+            evaluator_for_pool = evaluator
+
         logging.info(f"Finished initializing evaluator...")
         flush_interval = 60  # or read from your config
         sig_digits = config["optimize"]["round_to_n_significant_digits"]
+        pareto_max = config["optimize"].get("pareto_max_size", 300)
         recorder = ResultRecorder(
             results_dir=results_dir,
             sig_digits=sig_digits,
@@ -1304,6 +1527,7 @@ async def main():
             scoring_keys=config["optimize"]["scoring"],
             compress=config["optimize"]["compress_results_file"],
             write_all_results=config["optimize"].get("write_all_results", True),
+            pareto_max_size=pareto_max,
         )
 
         n_objectives = len(config["optimize"]["scoring"])
@@ -1347,7 +1571,7 @@ async def main():
             indpb=mutation_indpb,
         )
         toolbox.register("select", tools.selNSGA2)
-        toolbox.register("evaluate", evaluator.evaluate, overrides_list=overrides_list)
+        toolbox.register("evaluate", evaluator_for_pool.evaluate, overrides_list=overrides_list)
 
         # Parallelization setup
         logging.info(f"Initializing multiprocessing pool. N cpus: {config['optimize']['n_cpus']}")
@@ -1358,32 +1582,48 @@ async def main():
         # Create initial population
         logging.info(f"Creating initial population...")
 
+        def _evaluate_initial(individuals):
+            for ind in individuals:
+                fit_values, metrics = toolbox.evaluate(ind)
+                ind.fitness.values = fit_values
+                if metrics is not None:
+                    ind.evaluation_metrics = metrics
+                    _record_individual_result(
+                        ind,
+                        evaluator.config,
+                        overrides_list,
+                        recorder,
+                    )
+
         starting_individuals = configs_to_individuals(
             get_starting_configs(args.starting_configs),
             bounds,
             sig_digits,
         )
         population_size = config["optimize"]["population_size"]
-        if (nstart := len(starting_individuals)) > population_size:
-            logging.info(f"Number of starting configs greater than population size.")
-            logging.info(f"Increasing population size: {population_size} -> {nstart}")
-            config["optimize"]["population_size"] = nstart
-            population_size = nstart
 
         def _make_random_individual():
             return creator.Individual([np.random.uniform(low, high) for low, high in bounds])
 
         population = [_make_random_individual() for _ in range(population_size)]
         if starting_individuals:
-            for i in range(len(starting_individuals)):
-                population[i] = creator.Individual(starting_individuals[i])
-
-            # populate up to half of the population with duplicates of random choices within starting configs
-            # duplicates will be perturbed during runtime
-            for i in range(len(starting_individuals), len(population) // 2):
-                population[i] = deepcopy(
-                    population[np.random.choice(range(len(starting_individuals)))]
+            evaluated_seeds = [creator.Individual(ind) for ind in starting_individuals]
+            _evaluate_initial(evaluated_seeds)
+            logging.info("Evaluated %d starting configs", len(evaluated_seeds))
+            if len(evaluated_seeds) > population_size:
+                evaluated_seeds = tools.selNSGA2(evaluated_seeds, population_size)
+                logging.info(
+                    "Trimmed starting configs to population size via NSGA-II crowding (kept %d)",
+                    len(evaluated_seeds),
                 )
+            for i, ind in enumerate(evaluated_seeds):
+                population[i] = creator.Individual(ind)
+
+            remaining = population_size - len(evaluated_seeds)
+            seed_pool = evaluated_seeds if evaluated_seeds else []
+            if seed_pool and remaining > 0:
+                for i in range(len(evaluated_seeds), len(evaluated_seeds) + remaining // 2):
+                    population[i] = deepcopy(seed_pool[np.random.choice(range(len(seed_pool)))])
         for i in range(len(population)):
             population[i][:] = enforce_bounds(population[i], bounds, sig_digits)
 

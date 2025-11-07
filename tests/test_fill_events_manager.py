@@ -14,6 +14,7 @@ from src.fill_events_manager import (
     BaseFetcher,
     BitgetFetcher,
     BybitFetcher,
+    HyperliquidFetcher,
     FillEvent,
     FillEventCache,
     FillEventsManager,
@@ -109,6 +110,18 @@ class _ManualFetcher(BaseFetcher):
         return list(self.events)
 
 
+class _FakeHyperliquidAPI:
+    def __init__(self, batches: List[List[Dict[str, Any]]]) -> None:
+        self._batches = list(batches)
+        self.calls: List[Dict[str, Any]] = []
+
+    async def fetch_my_trades(self, params: Dict[str, Any]):
+        self.calls.append(dict(params))
+        if not self._batches:
+            return []
+        return self._batches.pop(0)
+
+
 # ---------------------------------------------------------------------------
 # FillEvent tests
 # ---------------------------------------------------------------------------
@@ -133,9 +146,9 @@ def test_fill_event_from_dict_normalises_datetime():
         "client_order_id": "cid",
     }
     event = FillEvent.from_dict(data)
-    expected = datetime.fromtimestamp(
-        data["timestamp"], tz=timezone.utc
-    ).isoformat().replace("+00:00", "")
+    expected = (
+        datetime.fromtimestamp(data["timestamp"], tz=timezone.utc).isoformat().replace("+00:00", "")
+    )
     assert event.datetime == expected
     assert event.side == "buy"
     assert event.position_side == "long"
@@ -258,6 +271,133 @@ async def test_bitget_fetcher_enriches_and_deduplicates(monkeypatch):
     assert api.detail_calls, "Expected detail endpoint to be called"
     assert len(batches) == 1
     assert [ev["id"] for ev in batches[0]] == ["tid-1", "tid-2"]
+
+
+@pytest.mark.asyncio
+async def test_bitget_fetcher_paginates_across_sparse_history(monkeypatch):
+    day = 24 * 60 * 60 * 1000
+    recent = [
+        {
+            "tradeId": "tid-new-1",
+            "orderId": "oid-new-1",
+            "cTime": str(210 * day),
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "baseVolume": "0.1",
+            "price": "10",
+            "profit": "0",
+        },
+        {
+            "tradeId": "tid-new-2",
+            "orderId": "oid-new-2",
+            "cTime": str(209 * day),
+            "symbol": "BTCUSDT",
+            "side": "sell",
+            "baseVolume": "0.1",
+            "price": "11",
+            "profit": "0",
+        },
+    ]
+    sparse = [
+        {
+            "tradeId": "tid-gap",
+            "orderId": "oid-gap",
+            "cTime": str(150 * day),
+            "symbol": "BTCUSDT",
+            "side": "buy",
+            "baseVolume": "0.05",
+            "price": "9",
+            "profit": "0",
+        }
+    ]
+    older = [
+        {
+            "tradeId": "tid-old",
+            "orderId": "oid-old",
+            "cTime": str(20 * day),
+            "symbol": "BTCUSDT",
+            "side": "sell",
+            "baseVolume": "0.2",
+            "price": "8",
+            "profit": "-1",
+        }
+    ]
+    raw_batches = [recent, sparse, older, []]
+    api = _FakeBitgetAPI([list(batch) for batch in raw_batches])
+
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda value: value)
+
+    resolver = lambda s: f"{s[:-4]}/USDT:USDT" if s and s.endswith("USDT") else s
+
+    detail_cache = {
+        entry["tradeId"]: (f"client-{entry['tradeId']}", f"type-{entry['tradeId']}")
+        for bucket in raw_batches
+        for entry in bucket
+        if entry
+    }
+
+    start = 10 * day
+    end = 220 * day
+
+    fetcher = BitgetFetcher(
+        api,
+        history_limit=2,
+        detail_calls_per_minute=5,
+        now_func=lambda: end,
+        symbol_resolver=resolver,
+    )
+
+    events = await fetcher.fetch(
+        since_ms=start,
+        until_ms=end,
+        detail_cache=detail_cache,
+        on_batch=None,
+    )
+    ids = [ev["id"] for ev in events]
+    assert "tid-old" in ids
+    assert len(api.history_calls) >= 3
+
+
+@pytest.mark.asyncio
+async def test_bitget_fetcher_handles_empty_batches(monkeypatch):
+    day = 24 * 60 * 60 * 1000
+    gap_batches = [
+        [],
+        [
+            {
+                "tradeId": "tid-gap-old",
+                "orderId": "oid-gap-old",
+                "cTime": str(15 * day),
+                "symbol": "BTCUSDT",
+                "side": "buy",
+                "baseVolume": "0.1",
+                "price": "10",
+                "profit": "0",
+            }
+        ],
+        [],
+    ]
+    api = _FakeBitgetAPI([list(batch) for batch in gap_batches])
+    resolver = lambda s: f"{s[:-4]}/USDT:USDT" if s and s.endswith("USDT") else s
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda value: value)
+
+    fetcher = BitgetFetcher(
+        api,
+        history_limit=2,
+        detail_calls_per_minute=5,
+        now_func=lambda: 20 * day,
+        symbol_resolver=resolver,
+    )
+
+    events = await fetcher.fetch(
+        since_ms=10 * day,
+        until_ms=20 * day,
+        detail_cache={},
+        on_batch=None,
+    )
+
+    assert any(ev["id"] == "tid-gap-old" for ev in events)
+    assert len(api.history_calls) >= 2
 
 
 @pytest.mark.asyncio
@@ -502,6 +642,94 @@ async def test_bybit_fetcher_marks_unknown_for_manual():
     event = events[0]
     assert event["client_order_id"] == ""
     assert event["pb_order_type"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_fetcher_basic(monkeypatch):
+    base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
+    trades_batches = [
+        [
+            {
+                "id": "tid-hl-1",
+                "timestamp": base_ts,
+                "symbol": "BTC/USDC:USDC",
+                "side": "buy",
+                "amount": 0.1,
+                "price": 30000.0,
+                "info": {
+                    "closedPnl": "1.5",
+                    "dir": "Close Long",
+                    "cloid": "0xabc",
+                    "feeToken": "USDC",
+                    "fee": "0.5",
+                },
+            },
+            {
+                "id": "tid-hl-1b",
+                "timestamp": base_ts,
+                "symbol": "BTC/USDC:USDC",
+                "side": "buy",
+                "amount": 0.2,
+                "price": 30000.0,
+                "info": {
+                    "closedPnl": "0.5",
+                    "dir": "Close Long",
+                    "cloid": "0xabc",
+                    "feeToken": "USDC",
+                    "fee": "0.2",
+                },
+            },
+        ]
+    ]
+
+    api = _FakeHyperliquidAPI(trades_batches)
+    fetcher = HyperliquidFetcher(api, symbol_resolver=lambda s: s)
+    events = await fetcher.fetch(
+        since_ms=base_ts - 1,
+        until_ms=base_ts + 10,
+        detail_cache={},
+    )
+    assert len(events) == 1
+    event = events[0]
+    assert event["id"] == "tid-hl-1+tid-hl-1b"
+    assert event["pb_order_type"] == "unknown"
+    assert event["pnl"] == pytest.approx(2.0)
+    assert event["qty"] == pytest.approx(0.30000000000000004)
+    assert event["client_order_id"] == "0xabc"
+    assert isinstance(event["fees"], dict)
+    assert event["fees"]["cost"] == pytest.approx(0.7)
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_fetcher_uses_cache():
+    base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
+    trades_batches = [
+        [
+            {
+                "id": "tid-hl-2",
+                "timestamp": base_ts,
+                "symbol": "ETH/USDC:USDC",
+                "side": "sell",
+                "amount": 0.5,
+                "price": 2000.0,
+                "info": {"closedPnl": "-2.0", "dir": "Close Short"},
+            }
+        ]
+    ]
+    api = _FakeHyperliquidAPI(trades_batches)
+    cache = {"tid-hl-2": ("cached-id", "entry_initial_normal_long")}
+    fetcher = HyperliquidFetcher(api, symbol_resolver=lambda s: s)
+    events = await fetcher.fetch(
+        since_ms=None,
+        until_ms=None,
+        detail_cache=cache,
+    )
+    assert len(events) == 1
+    event = events[0]
+    assert event["client_order_id"] == "cached-id"
+    assert event["pb_order_type"] == "entry_initial_normal_long"
+
+
 # ---------------------------------------------------------------------------
 # FillEventsManager tests
 # ---------------------------------------------------------------------------
@@ -549,7 +777,6 @@ async def test_manager_refresh_persists_and_queries(tmp_path: Path, sample_event
         user="default",
         fetcher=fetcher,
         cache_path=cache_dir,
-        max_age_days=365,
     )
 
     await manager.refresh()
@@ -576,7 +803,6 @@ async def test_manager_refresh_persists_and_queries(tmp_path: Path, sample_event
         user="default",
         fetcher=fetcher2,
         cache_path=cache_dir,
-        max_age_days=365,
     )
     await manager2.ensure_loaded()
     assert manager2.get_last_timestamp() == last_ts
@@ -627,7 +853,6 @@ async def test_manager_refresh_latest_uses_overlap(tmp_path: Path, sample_events
         user="default",
         fetcher=fetcher,
         cache_path=cache_dir,
-        max_age_days=365,
     )
 
     await manager.refresh()
@@ -712,7 +937,6 @@ async def test_manager_refresh_range_detects_gaps(tmp_path: Path):
         user="default",
         fetcher=fetcher,
         cache_path=cache_dir,
-        max_age_days=365,
     )
 
     start_ms = base - int(6 * 60 * 60 * 1000)
@@ -749,7 +973,6 @@ async def test_manager_persists_manual_fill(tmp_path: Path):
         user="default",
         fetcher=fetcher,
         cache_path=cache_dir,
-        max_age_days=365,
     )
 
     await manager.refresh()

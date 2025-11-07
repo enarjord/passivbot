@@ -56,6 +56,7 @@ import gzip
 import traceback
 
 from logging_setup import configure_logging
+from suite_runner import extract_suite_config, run_backtest_suite_async
 
 
 def oj(*x):
@@ -750,6 +751,17 @@ async def main():
         default=None,
         help="Logging verbosity: 0=warnings, 1=info, 2=debug, 3=trace.",
     )
+    parser.add_argument(
+        "--suite",
+        action="store_true",
+        help="Run all scenarios defined in backtest.suite.",
+    )
+    parser.add_argument(
+        "--suite-config",
+        type=str,
+        default=None,
+        help="Optional config file providing backtest.suite overrides.",
+    )
     template_config = get_template_config("v7")
     del template_config["optimize"]
     keep_live_keys = {
@@ -788,9 +800,37 @@ async def main():
     config["logging"] = logging_section
     logging_section["level"] = effective_debug
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
+    config = parse_overrides(config, verbose=True)
+
+    suite_override = None
+    if args.suite_config:
+        logging.info("loading suite config %s", args.suite_config)
+        override_cfg = load_config(args.suite_config, verbose=False)
+        suite_override = override_cfg.get("backtest", {}).get("suite")
+        if suite_override is None:
+            raise ValueError(f"Suite config {args.suite_config} does not define backtest.suite.")
+
+    suite_cfg = extract_suite_config(config, suite_override)
+    if args.suite:
+        suite_cfg["enabled"] = True
+
+    if suite_cfg.get("enabled"):
+        logging.info("Running backtest suite (%d scenarios)...", len(suite_cfg.get("scenarios", [])))
+        summary = await run_backtest_suite_async(
+            config,
+            suite_cfg,
+            disable_plotting=args.disable_plotting,
+        )
+        logging.info(
+            "Suite %s completed | scenarios=%d | output=%s",
+            summary.suite_id,
+            len(summary.scenarios),
+            summary.output_dir,
+        )
+        return
+
     for ex in backtest_exchanges:
         await load_markets(ex)
-    config = parse_overrides(config, verbose=True)
     await format_approved_ignored_coins(config, backtest_exchanges)
     config["disable_plotting"] = args.disable_plotting
     config["backtest"]["cache_dir"] = {}

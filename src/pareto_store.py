@@ -10,7 +10,7 @@ import numpy as np
 import threading
 import logging
 import passivbot_rust as pbr
-from opt_utils import calc_normalized_dist, round_floats, dominates
+from opt_utils import round_floats, dominates
 from pure_funcs import calc_hash
 
 
@@ -21,15 +21,17 @@ class ParetoStore:
         sig_digits: int = 6,
         flush_interval: int = 60,
         log_name: str | None = None,
+        max_size: int = 300,
     ):
         self._log = logging.getLogger(log_name or __name__)
         self.directory = directory
         self.pareto_dir = os.path.join(self.directory, "pareto")
         self.sig_digits = sig_digits
         self.flush_interval = flush_interval  # seconds
+        self.max_size = max(1, int(max_size))
         os.makedirs(os.path.join(self.directory, "pareto"), exist_ok=True)
-        # --- in‑memory structures -----------------------------------------
-        self._entries: dict[str, dict] = {}  # hash -> full entry
+        # --- in-memory structures -----------------------------------------
+        self._entries: dict[str, str] = {}  # hash -> file path
         self._objectives: dict[str, tuple] = {}  # hash -> objective vector
         self._front: list[str] = []  # list of hashes (Pareto set)
         self._objective_lookup: dict[tuple, str] = {}  # objective vector ➜ hash
@@ -43,7 +45,7 @@ class ParetoStore:
         # bootstrap from disk if any
         self._bootstrap_from_disk()
 
-    def add_entry(self, entry: dict) -> bool:
+    def add_entry(self, entry: dict, *, source_path: str | None = None) -> bool:
         """
         Add a new entry, update Pareto front in‑memory.
         Return True if the store actually changed.
@@ -77,12 +79,16 @@ class ParetoStore:
             for idx in dominated:
                 del self._objective_lookup[self._objectives[idx]]
                 self._front.remove(idx)
+                self._delete_entry_file(idx)
 
             # add new member
-            self._entries[h] = rounded
+            self._persist_entry(h, rounded, source_path=source_path)
             self._objectives[h] = obj
             self._front.append(h)
             self._objective_lookup[obj] = h
+
+            if len(self._front) > self.max_size:
+                self._prune_front(len(self._front) - self.max_size)
 
             self._log_front_state(
                 added=1,
@@ -96,7 +102,17 @@ class ParetoStore:
 
     def get_front(self) -> list[dict]:
         with self._lock:
-            return [self._entries[h] for h in self._front]
+            results = []
+            for h in self._front:
+                path = self._entries.get(h)
+                if not path:
+                    continue
+                try:
+                    with open(path) as f:
+                        results.append(json.load(f))
+                except FileNotFoundError:
+                    continue
+            return results
 
     def flush_now(self) -> None:
         """Force a write of the current in‑memory set to disk."""
@@ -110,39 +126,15 @@ class ParetoStore:
             self._last_flush_ts = time.time()
 
     def _write_all_to_disk(self) -> None:
-        """
-        Flush the current Pareto front to disk.
-
-        * For every hash in ``self._front`` an up‑to‑date
-          ``"<dist>_<hash>.json"`` file is created if it does not already exist.
-        * After writing, every ``*.json`` file whose hash is **not** in
-          the front is removed.  The directory therefore mirrors the
-          in‑memory set 1‑to‑1.
-        """
         if not self._front:
+            for fp in glob.glob(os.path.join(self.pareto_dir, "*.json")):
+                try:
+                    os.remove(fp)
+                except OSError:
+                    pass
             return
 
-        # ── distance normalisation ------------------------------------------------
-        obj_matrix = [self._objectives[h] for h in self._front]
-        mins = [min(col) for col in zip(*obj_matrix)]
-        maxs = [max(col) for col in zip(*obj_matrix)]
-
-        live_files: set[str] = set()
-
-        for h in self._front:
-            obj = self._objectives[h]
-            norm = [(v - mi) / (ma - mi) if ma > mi else 0.0 for v, mi, ma in zip(obj, mins, maxs)]
-            dist = math.sqrt(sum(v * v for v in norm))
-            path = os.path.join(self.pareto_dir, f"{dist:08.4f}_{h}.json")
-            live_files.add(path)
-
-            if not os.path.exists(path):
-                tmp = path + ".tmp"
-                with open(tmp, "w") as f:
-                    json.dump(self._entries[h], f, separators=(",", ":"), indent=4)
-                os.replace(tmp, path)
-
-        # ── one‑pass purge of everything that is *not* in the front --------------
+        live_files = set(self._entries.values())
         for fp in glob.glob(os.path.join(self.pareto_dir, "*.json")):
             if fp not in live_files:
                 try:
@@ -159,7 +151,7 @@ class ParetoStore:
             try:
                 with open(fp) as f:
                     entry = json.load(f)
-                self.add_entry(entry)  # uses the normal path
+                self.add_entry(entry, source_path=fp)
             except Exception as e:
                 print(f"bootstrap skip {fp}: {e}")
 
@@ -180,6 +172,72 @@ class ParetoStore:
         self._log.info(
             f"Iter: {self.n_iters} | Pareto ↑ | +{added}/-{removed} | size:{len(self._front)} | {line}"
         )
+
+    def _prune_front(self, n_prune: int) -> None:
+        """Trim the Pareto front down by removing the most crowded entries."""
+        if n_prune <= 0 or len(self._front) <= n_prune:
+            return
+        objs = [self._objectives[idx] for idx in self._front]
+        crowding = self._crowding_distances(np.array(objs, dtype=float))
+        scored = list(zip(self._front, crowding))
+        scored.sort(key=lambda item: item[1])  # lowest crowding removed first
+        to_remove = [hash_id for hash_id, _ in scored[:n_prune]]
+        for hash_id in to_remove:
+            obj = self._objectives.pop(hash_id, None)
+            self._delete_entry_file(hash_id)
+            if obj is not None:
+                self._objective_lookup.pop(obj, None)
+            try:
+                self._front.remove(hash_id)
+            except ValueError:
+                pass
+
+    def _persist_entry(self, hash_id: str, entry: dict, *, source_path: str | None = None) -> None:
+        if source_path is None:
+            path = os.path.join(self.pareto_dir, f"{hash_id}.json")
+            tmp = path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(entry, f, separators=(",", ":"), indent=4)
+            os.replace(tmp, path)
+        else:
+            path = source_path
+            if not os.path.exists(path):
+                tmp = path + ".tmp"
+                with open(tmp, "w") as f:
+                    json.dump(entry, f, separators=(",", ":"), indent=4)
+                os.replace(tmp, path)
+        self._entries[hash_id] = path
+
+    def _delete_entry_file(self, hash_id: str) -> None:
+        path = self._entries.pop(hash_id, None)
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _crowding_distances(values: np.ndarray) -> np.ndarray:
+        if values.ndim != 2:
+            return np.zeros(len(values))
+        n, m = values.shape
+        if n == 0:
+            return np.array([])
+        if n <= 2:
+            return np.full(n, np.inf)
+        distances = np.zeros(n)
+        for col in range(m):
+            order = np.argsort(values[:, col])
+            distances[order[0]] = distances[order[-1]] = np.inf
+            column = values[order, col]
+            min_v = column[0]
+            max_v = column[-1]
+            denom = max_v - min_v
+            if denom == 0:
+                continue
+            normalized = (column[2:] - column[:-2]) / denom
+            distances[order[1:-1]] += normalized
+        return distances
 
 
 def compute_ideal(values_matrix, mode="min", weights=None, eps=1e-3, pct=10):
