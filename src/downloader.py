@@ -1590,9 +1590,15 @@ async def prepare_hlcvs_internal(
     return mss, timestamps, unified_array
 
 
-async def prepare_hlcvs_combined(config):
+async def prepare_hlcvs_combined(config, forced_sources=None):
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     exchanges_to_consider = [normalize_exchange_name(e) for e in backtest_exchanges]
+    forced_sources = forced_sources or {}
+    normalized_forced_sources = {
+        str(coin): normalize_exchange_name(exchange)
+        for coin, exchange in forced_sources.items()
+        if exchange
+    }
 
     requested_start_date = require_config_value(config, "backtest.start_date")
     requested_start_ts = int(date_to_ts(requested_start_date))
@@ -1622,6 +1628,16 @@ async def prepare_hlcvs_combined(config):
                 config, "backtest.gap_tolerance_ohlcvs_minutes"
             ),
         )
+    extra_forced = set(normalized_forced_sources.values()) - set(exchanges_to_consider)
+    for ex in extra_forced:
+        om_dict[ex] = OHLCVManager(
+            ex,
+            effective_start_date,
+            end_date,
+            gap_tolerance_ohlcvs_minutes=require_config_value(
+                config, "backtest.gap_tolerance_ohlcvs_minutes"
+            ),
+        )
     btc_om = None
 
     try:
@@ -1631,6 +1647,7 @@ async def prepare_hlcvs_combined(config):
             effective_start_ts,
             requested_start_ts,
             end_ts,
+            normalized_forced_sources,
         )
 
         # Always fetch BTC/USD prices
@@ -1676,6 +1693,7 @@ async def _prepare_hlcvs_combined_impl(
     base_start_ts,
     _requested_start_ts,
     end_ts,
+    forced_sources,
 ):
     """
     Amalgamates data from different exchanges for each coin in config, then unifies them into a single
@@ -1747,9 +1765,16 @@ async def _prepare_hlcvs_combined_impl(
             # No coverage needed or possible
             continue
 
-        # >>> Instead of a normal for-loop over exchanges, do concurrent tasks:
+        forced_exchange = forced_sources.get(coin)
+        candidate_exchanges = (
+            [forced_exchange] if forced_exchange else exchanges_to_consider
+        )
+        for ex in candidate_exchanges:
+            if ex not in om_dict:
+                raise ValueError(f"Unknown exchange '{ex}' requested for coin {coin}")
+
         tasks = []
-        for ex in exchanges_to_consider:
+        for ex in candidate_exchanges:
             tasks.append(
                 asyncio.create_task(
                     fetch_data_for_coin_and_exchange(
@@ -1769,14 +1794,23 @@ async def _prepare_hlcvs_combined_impl(
             exchange_candidates.append((ex, df, coverage_count, gap_count, total_volume))
 
         if not exchange_candidates:
+            if forced_exchange:
+                raise ValueError(
+                    f"No exchange data found for coin {coin} on forced exchange {forced_exchange}."
+                )
             logging.info(f"No exchange data found at all for coin {coin}. Skipping.")
             continue
 
-        # Now pick the "best" exchange (per your partial-coverage logic):
-        if len(exchange_candidates) == 1:
+        if forced_exchange:
+            chosen = [c for c in exchange_candidates if c[0] == forced_exchange]
+            if not chosen:
+                raise ValueError(
+                    f"Forced exchange {forced_exchange} returned no usable data for coin {coin}."
+                )
+            best_exchange, best_df, best_cov, best_gaps, best_vol = chosen[0]
+        elif len(exchange_candidates) == 1:
             best_exchange, best_df, best_cov, best_gaps, best_vol = exchange_candidates[0]
         else:
-            # Sort by coverage desc, gap_count asc, volume desc
             exchange_candidates.sort(key=lambda x: (x[2], -x[3], x[4]), reverse=True)
             best_exchange, best_df, best_cov, best_gaps, best_vol = exchange_candidates[0]
         logging.info(f"{coin} exchange preference: {[x[0] for x in exchange_candidates]}")

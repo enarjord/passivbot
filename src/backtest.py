@@ -256,6 +256,8 @@ def get_cache_hash(config, exchange):
     exchanges_cfg = require_config_value(config, "backtest.exchanges")
     approved_coins = require_live_value(config, "approved_coins")
     minimum_coin_age = require_live_value(config, "minimum_coin_age_days")
+    coin_sources = config.get("backtest", {}).get("coin_sources") or {}
+    coin_sources_sorted = sorted((str(k), str(v)) for k, v in coin_sources.items())
     to_hash = {
         "coins": approved_coins,
         "end_date": format_end_date(require_config_value(config, "backtest.end_date")),
@@ -266,6 +268,7 @@ def get_cache_hash(config, exchange):
             config, "backtest.gap_tolerance_ohlcvs_minutes"
         ),
         "warmup_minutes": compute_backtest_warmup_minutes(config),
+        "coin_sources": coin_sources_sorted,
     }
     return calc_hash(to_hash)
 
@@ -447,7 +450,10 @@ async def prepare_hlcvs_mss(config, exchange):
     except Exception as e:
         logging.info(f"Unable to load hlcvs data from cache: {e}. Fetching...")
     if exchange == "combined":
-        mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs_combined(config)
+        forced_sources = config.get("backtest", {}).get("coin_sources")
+        mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs_combined(
+            config, forced_sources=forced_sources
+        )
     else:
         mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(config, exchange)
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
