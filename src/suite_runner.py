@@ -107,7 +107,7 @@ def _coerce_coin_source_dict(value: Any) -> Optional[Dict[str, str]]:
 
 
 def resolve_coin_sources(
-    base_sources: Dict[str, str],
+    base_sources: Optional[Dict[str, str]],
     overrides: Optional[Dict[str, str]],
 ) -> Dict[str, str]:
     resolved = dict(base_sources or {})
@@ -261,6 +261,7 @@ def apply_scenario(
     master_ignored: List[str],
     available_exchanges: Iterable[str],
     available_coins: set[str],
+    base_coin_sources: Optional[Dict[str, str]] = None,
 ) -> Tuple[Dict[str, Any], List[str]]:
     cfg = deepcopy(base_config)
     cfg["backtest"]["start_date"] = scenario.start_date or cfg["backtest"]["start_date"]
@@ -287,12 +288,18 @@ def apply_scenario(
     filtered_ignored = [coin for coin in scenario_ignored if coin in available_coins]
     filtered_ignored = sorted(dict.fromkeys(filtered_ignored))
 
+    scenario_exchanges = (
+        list(scenario.exchanges)
+        if scenario.exchanges
+        else list(available_exchanges)
+    )
+    cfg["backtest"]["exchanges"] = scenario_exchanges
     cfg.setdefault("backtest", {}).setdefault("coins", {})
     cfg.setdefault("backtest", {}).setdefault("cache_dir", {})
     cfg.setdefault("live", {}).setdefault("approved_coins", {})
     cfg.setdefault("live", {}).setdefault("ignored_coins", {})
 
-    for exchange in available_exchanges:
+    for exchange in scenario_exchanges:
         cfg["backtest"]["coins"][exchange] = filtered_coins
 
     if isinstance(cfg["live"]["approved_coins"], dict):
@@ -306,6 +313,12 @@ def apply_scenario(
         cfg["live"]["ignored_coins"]["short"] = list(filtered_ignored)
     else:
         cfg["live"]["ignored_coins"] = list(filtered_ignored)
+
+    resolved_sources = resolve_coin_sources(
+        base_coin_sources or {},
+        scenario.coin_sources,
+    )
+    cfg["backtest"]["coin_sources"] = resolved_sources
 
     return cfg, filtered_coins
 

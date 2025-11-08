@@ -78,9 +78,11 @@ def test_apply_scenario_filters_unavailable_coins():
         master_ignored=["ETH"],
         available_exchanges=["binance"],
         available_coins={"BTC"},
+        base_coin_sources={"BTC": "binance"},
     )
     assert coins == ["BTC"]
     assert cfg["live"]["approved_coins"]["long"] == ["BTC"]
+    assert cfg["backtest"]["coin_sources"] == {"BTC": "binance"}
 
 
 def test_resolve_coin_sources_merges_overrides():

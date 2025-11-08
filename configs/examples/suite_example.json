@@ -1,0 +1,49 @@
+{
+  "backtest": {
+    "base_dir": "backtests",
+    "compress_cache": true,
+    "emit_legacy_metrics": false,
+    "start_date": "2024-01-01",
+    "end_date": "2024-06-01",
+    "exchanges": ["binance", "bybit"],
+    "gap_tolerance_ohlcvs_minutes": 120,
+    "max_warmup_minutes": 0,
+    "coin_sources": {"BTC": "binance"},
+    "suite": {
+      "enabled": true,
+      "include_base_scenario": false,
+      "scenarios": [
+        {
+          "label": "binance_only",
+          "coins": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+          "exchanges": ["binance"],
+          "coin_sources": {"ETH": "binance"}
+        },
+        {
+          "label": "bybit_mix",
+          "coins": ["BTC/USDT:USDT", "SOL/USDT:USDT"],
+          "exchanges": ["binance", "bybit"],
+          "coin_sources": {"SOL": "bybit"},
+          "start_date": "2024-02-01",
+          "end_date": "2024-05-01"
+        }
+      ]
+    }
+  },
+  "bot": {
+    "long": {"n_positions": 4},
+    "short": {"n_positions": 4}
+  },
+  "live": {
+    "approved_coins": {
+      "long": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+      "short": []
+    },
+    "ignored_coins": {"long": [], "short": []}
+  },
+  "optimize": {
+    "bounds": {},
+    "scoring": [],
+    "suite": {"enabled": false, "scenarios": []}
+  }
+}
