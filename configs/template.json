@@ -13,6 +13,7 @@
     ],
     "gap_tolerance_ohlcvs_minutes": 120,
     "max_warmup_minutes": 0,
+    "coin_sources": {},
     "suite": {
       "enabled": false,
       "include_base_scenario": false,

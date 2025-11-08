@@ -42,6 +42,8 @@ class SuiteScenario:
     end_date: Optional[str]
     coins: Optional[List[str]]
     ignored_coins: Optional[List[str]]
+    exchanges: Optional[List[str]] = None
+    coin_sources: Optional[Dict[str, str]] = None
 
 
 @dataclass
@@ -86,6 +88,34 @@ def _flatten_coin_list(value: Any) -> List[str]:
     return []
 
 
+def _coerce_exchange_list(value: Any) -> Optional[List[str]]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value]
+    raise ValueError("scenario exchanges must be a string or list of strings")
+
+
+def _coerce_coin_source_dict(value: Any) -> Optional[Dict[str, str]]:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("scenario coin_sources must be a mapping of coin -> exchange")
+    return {str(coin): str(exchange) for coin, exchange in value.items() if exchange is not None}
+
+
+def resolve_coin_sources(
+    base_sources: Dict[str, str],
+    overrides: Optional[Dict[str, str]],
+) -> Dict[str, str]:
+    resolved = dict(base_sources or {})
+    if overrides:
+        resolved.update(overrides)
+    return resolved
+
+
 def _collect_union(values: Iterable[Optional[List[str]]], fallback: List[str]) -> List[str]:
     union: set[str] = set()
     for val in values:
@@ -121,6 +151,12 @@ def build_scenarios(
 
     scenarios: List[SuiteScenario] = []
     for idx, raw in enumerate(scenarios_cfg, 1):
+        exchanges_value = raw.get("exchanges")
+        coin_sources_value = raw.get("coin_sources")
+        exchanges_list = _coerce_exchange_list(exchanges_value) if exchanges_value else None
+        coin_source_map = (
+            _coerce_coin_source_dict(coin_sources_value) if coin_sources_value else None
+        )
         scenarios.append(
             SuiteScenario(
                 label=str(raw.get("label") or f"scenario_{idx:02d}"),
@@ -132,6 +168,8 @@ def build_scenarios(
                     if raw.get("ignored_coins") is not None
                     else None
                 ),
+                exchanges=exchanges_list,
+                coin_sources=coin_source_map,
             )
         )
 

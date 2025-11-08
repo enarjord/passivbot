@@ -10,6 +10,7 @@ from suite_runner import (
     apply_scenario,
     build_scenarios,
     extract_suite_config,
+    resolve_coin_sources,
 )
 
 
@@ -32,6 +33,22 @@ def test_build_scenarios_include_base():
     assert scenarios[0].label == "A"
     assert include_base is True
     assert base_label == "base"
+
+
+def test_build_scenarios_handles_exchanges_and_coin_sources():
+    suite_cfg = {
+        "scenarios": [
+            {
+                "label": "X",
+                "exchanges": ["binance", "bybit"],
+                "coin_sources": {"BTC": "binance"},
+            }
+        ],
+    }
+    scenarios, *_ = build_scenarios(suite_cfg)
+    scenario = scenarios[0]
+    assert scenario.exchanges == ["binance", "bybit"]
+    assert scenario.coin_sources == {"BTC": "binance"}
 
 
 def test_apply_scenario_filters_unavailable_coins():
@@ -64,6 +81,13 @@ def test_apply_scenario_filters_unavailable_coins():
     )
     assert coins == ["BTC"]
     assert cfg["live"]["approved_coins"]["long"] == ["BTC"]
+
+
+def test_resolve_coin_sources_merges_overrides():
+    base = {"BTC": "binance"}
+    overrides = {"ETH": "bybit"}
+    resolved = resolve_coin_sources(base, overrides)
+    assert resolved == {"BTC": "binance", "ETH": "bybit"}
 
 
 def test_aggregate_metrics_computes_stats():

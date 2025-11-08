@@ -864,6 +864,19 @@ def _normalize_position_counts(result: dict) -> None:
         result["bot"][pside]["n_positions"] = int(round(result["bot"][pside]["n_positions"]))
 
 
+def _normalize_coin_sources(raw: Any) -> Dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("backtest.coin_sources must be a mapping of coin -> exchange")
+    normalized: Dict[str, str] = {}
+    for coin, exchange in raw.items():
+        if exchange is None:
+            continue
+        normalized[str(coin)] = str(exchange)
+    return normalized
+
+
 def _apply_non_live_adjustments(result: dict, verbose: bool = True) -> None:
     """Adjust live/backtest/optimize fields when not running in live-only mode."""
     for key in ("approved_coins", "ignored_coins"):
@@ -875,6 +888,9 @@ def _apply_non_live_adjustments(result: dict, verbose: bool = True) -> None:
             if coin not in result["live"]["ignored_coins"][pside]
         ]
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
+    result["backtest"]["coin_sources"] = _normalize_coin_sources(
+        result["backtest"].get("coin_sources", {})
+    )
 
     canonical_scoring = []
     seen = set()
@@ -900,6 +916,7 @@ def _apply_non_live_adjustments(result: dict, verbose: bool = True) -> None:
 
 def format_config(config: dict, verbose=True, live_only=False, base_config_path: str = "") -> dict:
     # attempts to format a config to v7 config
+    coin_sources_input = deepcopy(config.get("backtest", {}).get("coin_sources"))
     template = get_template_config("v7")
     flavor = detect_flavor(config, template)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
@@ -913,6 +930,8 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     _sync_with_template(template, result, base_config_path, verbose=verbose)
 
     _normalize_position_counts(result)
+    if coin_sources_input is not None:
+        result.setdefault("backtest", {})["coin_sources"] = coin_sources_input
 
     if not live_only:
         # unneeded adjustments if running live
