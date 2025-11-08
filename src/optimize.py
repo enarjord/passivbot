@@ -1209,8 +1209,12 @@ def add_extra_options(parser):
     )
 
 
-def apply_fine_tune_bounds(config: dict, fine_tune_params: list[str]) -> None:
-    if not fine_tune_params:
+def apply_fine_tune_bounds(
+    config: dict,
+    fine_tune_params: list[str],
+    cli_overridden_bounds: set[str],
+) -> None:
+    if not fine_tune_params and not cli_overridden_bounds:
         return
 
     bounds = config.get("optimize", {}).get("bounds", {})
@@ -1219,6 +1223,8 @@ def apply_fine_tune_bounds(config: dict, fine_tune_params: list[str]) -> None:
 
     for key in list(bounds.keys()):
         if key in fine_tune_set:
+            continue
+        if key in cli_overridden_bounds:
             continue
         try:
             pside, param = key.split("_", 1)
@@ -1230,23 +1236,6 @@ def apply_fine_tune_bounds(config: dict, fine_tune_params: list[str]) -> None:
             logging.warning(
                 f"fine-tune bounds: missing bot value for '{key}', leaving bounds unchanged"
             )
-            continue
-        current_bounds = bounds.get(key)
-        target_value = None
-        if isinstance(current_bounds, (list, tuple)):
-            if len(current_bounds) == 1:
-                target_value = current_bounds[0]
-            elif len(current_bounds) >= 2:
-                low, high = current_bounds[0], current_bounds[1]
-                if low != high:
-                    # Explicit range provided (e.g. via CLI); respect it.
-                    continue
-                target_value = low
-        if target_value is not None:
-            try:
-                side_cfg[param] = float(target_value)
-            except (TypeError, ValueError):
-                side_cfg[param] = target_value
             continue
         value = side_cfg[param]
         try:
@@ -1365,7 +1354,12 @@ async def main():
         if getattr(args, "fine_tune_params", "")
         else []
     )
-    apply_fine_tune_bounds(config, fine_tune_params)
+    cli_bounds_overrides = {
+        key.split("optimize.bounds.", 1)[1]
+        for key, value in vars(args).items()
+        if key.startswith("optimize.bounds.") and value is not None
+    }
+    apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
     if fine_tune_params:
         logging.info(
             "Fine-tuning mode active for %s",
