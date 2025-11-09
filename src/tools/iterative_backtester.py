@@ -52,6 +52,7 @@ from utils import (  # noqa: E402
     utc_ms,
 )
 from main import manage_rust_compilation  # noqa: E402
+from metrics_schema import build_scenario_metrics, flatten_metric_stats  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -233,31 +234,10 @@ def format_param_value(value: Any) -> str:
     return str(value)
 
 
-def combine_analyses(analyses: Dict[str, Dict[str, Any]]) -> Dict[str, float]:
-    combined: Dict[str, float] = {}
-    if not analyses:
-        return combined
-    all_keys = set()
-    for analysis in analyses.values():
-        all_keys.update(analysis.keys())
-    for key in sorted(all_keys):
-        values = [analysis.get(key) for analysis in analyses.values()]
-        if (
-            not values
-            or any(v is None for v in values)
-            or any(isinstance(v, float) and not np.isfinite(v) for v in values)  # type: ignore[arg-type]
-        ):
-            combined[f"{key}_mean"] = 0.0
-            combined[f"{key}_min"] = 0.0
-            combined[f"{key}_max"] = 0.0
-            combined[f"{key}_std"] = 0.0
-        else:
-            arr = np.array(values, dtype=float)
-            combined[f"{key}_mean"] = float(np.mean(arr))
-            combined[f"{key}_min"] = float(np.min(arr))
-            combined[f"{key}_max"] = float(np.max(arr))
-            combined[f"{key}_std"] = float(np.std(arr))
-    return combined
+def combine_analyses(analyses: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """Build structured stats for a scenario."""
+
+    return build_scenario_metrics(analyses)
 
 
 def build_limit_checks(
@@ -560,17 +540,18 @@ class IterativeBacktestSession:
                 self._clear_progress_line()
 
         combined = combine_analyses(analyses)
+        combined_flat = flatten_metric_stats(combined.get("stats", {}))
         scoring_keys = list(config.get("optimize", {}).get("scoring", []))
         self.scoring_keys = scoring_keys
         limits_cfg = dict(config.get("optimize", {}).get("limits", {}))
         limit_checks = build_limit_checks(limits_cfg, self.scoring_weights)
         score_vector, modifier = calc_score_vector(
-            scoring_keys, combined, self.scoring_weights, limit_checks
+            scoring_keys, combined_flat, self.scoring_weights, limit_checks
         )
 
         scoring_metrics: Dict[str, MetricInfo] = {}
         for key in scoring_keys:
-            value, resolved = resolve_metric_value(key, combined)
+            value, resolved = resolve_metric_value(key, combined_flat)
             weight = self.scoring_weights.get(resolved or key)
             scoring_metrics[key] = MetricInfo(
                 value=ensure_float(value),
@@ -580,7 +561,7 @@ class IterativeBacktestSession:
 
         limit_metrics: Dict[str, LimitInfo] = {}
         for check in limit_checks:
-            val = ensure_float(combined.get(check["metric_key"]))
+            val = ensure_float(combined_flat.get(check["metric_key"]))
             limit_metrics[check["metric"]] = LimitInfo(
                 value=val,
                 bound=check["bound"],
