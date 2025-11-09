@@ -74,6 +74,7 @@ from optimize_suite import (
     extract_optimize_suite_config,
 )
 from suite_runner import SuiteScenario, ScenarioResult, aggregate_metrics
+from metrics_schema import build_scenario_metrics, flatten_metric_stats, merge_suite_payload
 
 
 class ResultRecorder:
@@ -130,11 +131,11 @@ class ResultRecorder:
             logging.error(f"ParetoStore error: {exc}")
         else:
             if updated:
-                metrics = data.get("analyses_combined", {}) or {}
+                objectives_block = data.get("metrics", {}).get("objectives", {})
                 objective_values = [
-                    metrics[key]
-                    for key in sorted(metrics)
-                    if key.startswith("w_") and metrics.get(key) is not None
+                    objectives_block[key]
+                    for key in sorted(objectives_block)
+                    if objectives_block.get(key) is not None
                 ]
                 logging.info(
                     "Pareto update | eval=%d | front=%d | objectives=%s",
@@ -323,9 +324,17 @@ def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up):
 
 def _record_individual_result(individual, evaluator_config, overrides_list, recorder):
     metrics = getattr(individual, "evaluation_metrics", {}) or {}
+    suite_metrics = metrics.pop("suite_metrics", None)
     config = individual_to_config(individual, optimizer_overrides, overrides_list, evaluator_config)
-    data = {**config, "analyses_combined": metrics}
-    recorder.record(data)
+    entry = dict(config)
+    if suite_metrics is not None:
+        entry["suite_metrics"] = suite_metrics
+        bt = entry.get("backtest")
+        if isinstance(bt, dict):
+            bt.pop("coins", None)
+    if metrics:
+        entry["metrics"] = metrics
+    recorder.record(entry)
     if hasattr(individual, "evaluation_metrics"):
         del individual.evaluation_metrics
 
@@ -346,6 +355,7 @@ def ea_mu_plus_lambda_stream(
     overrides_list,
     pool,
     duplicate_counter,
+    pool_state,
 ):
     logbook = tools.Logbook()
     logbook.header = "gen", "evals", "min", "max"
@@ -387,6 +397,10 @@ def ea_mu_plus_lambda_stream(
                     res.cancel()
                 except Exception:
                     pass
+            if not pool_state["terminated"]:
+                logging.info("Terminating worker pool immediately due to interrupt...")
+                pool.terminate()
+                pool_state["terminated"] = True
             raise
 
         total_evals += completed
@@ -870,40 +884,19 @@ class Evaluator:
             del equities_array
             del analysis_usd
             del analysis_btc
-        analyses_combined = self.combine_analyses(analyses)
-        del analyses
-        objectives = self.calc_fitness(analyses_combined)
-        for i, val in enumerate(objectives):
-            analyses_combined[f"w_{i}"] = val
-        # attach metrics to individual so the parent process can persist lean results
-        individual.evaluation_metrics = analyses_combined
+        scenario_metrics = build_scenario_metrics(analyses)
+        aggregate_stats = scenario_metrics.get("stats", {})
+        flat_stats = flatten_metric_stats(aggregate_stats)
+        objectives = self.calc_fitness(flat_stats)
+        objectives_map = {f"w_{i}": val for i, val in enumerate(objectives)}
+        metrics_payload = {
+            "stats": aggregate_stats,
+            "objectives": objectives_map,
+        }
+        individual.evaluation_metrics = metrics_payload
         actual_hash = calc_hash(individual)
         self.seen_hashes[actual_hash] = tuple(objectives)
-        return tuple(objectives), analyses_combined
-
-    def combine_analyses(self, analyses):
-        analyses_combined = {}
-        keys = analyses[next(iter(analyses))].keys()
-        for key in keys:
-            values = [analysis[key] for analysis in analyses.values()]
-            if not values or any([x == np.inf for x in values]) or any([x is None for x in values]):
-                analyses_combined[f"{key}_mean"] = 0.0
-                analyses_combined[f"{key}_min"] = 0.0
-                analyses_combined[f"{key}_max"] = 0.0
-                analyses_combined[f"{key}_std"] = 0.0
-            else:
-                try:
-                    analyses_combined[f"{key}_mean"] = np.mean(values)
-                    analyses_combined[f"{key}_min"] = np.min(values)
-                    analyses_combined[f"{key}_max"] = np.max(values)
-                    analyses_combined[f"{key}_std"] = np.std(values)
-                except Exception as e:
-                    print("\n\n debug\n\n")
-                    print("key, values", key, values)
-                    print(e)
-                    traceback.print_exc()
-                    raise
-        return analyses_combined
+        return tuple(objectives), metrics_payload
 
     def build_limit_checks(self):
         self.limit_checks = []
@@ -1087,7 +1080,7 @@ class SuiteEvaluator:
         else:
             seen_hashes[individual_hash] = None
 
-        per_scenario_metrics: Dict[str, Dict[str, float]] = {}
+        per_scenario_metrics: Dict[str, Dict[str, Any]] = {}
         scenario_results: List[ScenarioResult] = []
 
         from backtest import prep_backtest_args
@@ -1151,26 +1144,33 @@ class SuiteEvaluator:
                         ignored_coins=None,
                     ),
                     per_exchange={},
-                    combined_metrics=combined_metrics,
+                    metrics={"stats": combined_metrics.get("stats", {})},
                     elapsed_seconds=0.0,
                     output_path=None,
                 )
             )
 
         aggregate_summary = aggregate_metrics(scenario_results, self.aggregate_cfg)
-        analyses_combined = dict(aggregate_summary.get("aggregated", {}))
-        for label, metrics in per_scenario_metrics.items():
-            for key, value in metrics.items():
-                analyses_combined[f"{label}__{key}"] = value
+        suite_payload = merge_suite_payload(
+            aggregate_summary.get("stats", {}),
+            aggregate_values=aggregate_summary.get("aggregated", {}),
+            scenario_labels=list(per_scenario_metrics.keys()),
+        )
+        aggregate_stats = aggregate_summary.get("stats", {})
 
-        objectives = self.base.calc_fitness(analyses_combined)
-        for i, val in enumerate(objectives):
-            analyses_combined[f"w_{i}"] = val
+        flat_stats = flatten_metric_stats(aggregate_stats)
+        objectives = self.base.calc_fitness(flat_stats)
+        objectives_map = {f"w_{i}": val for i, val in enumerate(objectives)}
 
-        individual.evaluation_metrics = analyses_combined
+        metrics_payload = {
+            "objectives": objectives_map,
+            "suite_metrics": suite_payload,
+        }
+
+        individual.evaluation_metrics = metrics_payload
         actual_hash = calc_hash(individual)
         self.base.seen_hashes[actual_hash] = tuple(objectives)
-        return tuple(objectives), analyses_combined
+        return tuple(objectives), metrics_payload
 
     def __del__(self):
         for ctx in self.contexts:
@@ -1379,6 +1379,8 @@ async def main():
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     await format_approved_ignored_coins(config, backtest_exchanges)
     interrupted = False
+    pool = None
+    pool_terminated = False
     try:
         array_manager = SharedArrayManager()
         hlcvs_specs = {}
@@ -1572,6 +1574,7 @@ async def main():
         pool = multiprocessing.Pool(processes=config["optimize"]["n_cpus"])
         toolbox.register("map", pool.map)
         logging.info(f"Finished initializing multiprocessing pool.")
+        pool_state = {"terminated": False}
 
         # Create initial population
         logging.info(f"Creating initial population...")
@@ -1655,13 +1658,24 @@ async def main():
             overrides_list=overrides_list,
             pool=pool,
             duplicate_counter=duplicate_counter,
+            pool_state=pool_state,
         )
 
         logging.info("Optimization complete.")
 
+        pool_terminated = pool_state["terminated"]
+
     except KeyboardInterrupt:
         interrupted = True
         logging.warning("Keyboard interrupt received; terminating optimization...")
+        if "pool" in locals():
+            already = pool_state["terminated"] if "pool_state" in locals() else pool_terminated
+            if not already:
+                logging.info("Terminating worker pool...")
+                pool.terminate()
+                pool_terminated = True
+                if "pool_state" in locals():
+                    pool_state["terminated"] = True
     except Exception as e:
         logging.error(f"An error occurred: {e}")
         traceback.print_exc()
@@ -1673,9 +1687,8 @@ async def main():
                 logging.exception("Failed to flush recorder")
             recorder.close()
         if "pool" in locals():
-            if interrupted:
-                logging.info("Terminating worker pool...")
-                pool.terminate()
+            if pool_terminated or interrupted:
+                logging.info("Joining terminated worker pool...")
             else:
                 logging.info("Closing worker pool...")
                 pool.close()
