@@ -125,7 +125,12 @@ pub fn run_backtest(
     Python::with_gil(|py| {
         let (fills, equities) = backtest.run();
         let (analysis_usd, analysis_btc) =
-            analyze_backtest_pair(&fills, &equities, backtest.balance.use_btc_collateral);
+            analyze_backtest_pair(
+                &fills, 
+                &equities, 
+                backtest.balance.use_btc_collateral, 
+                &backtest.total_wallet_exposures
+            );
 
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;

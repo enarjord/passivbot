@@ -302,6 +302,10 @@ pub struct Analysis {
     pub loss_profit_ratio_w: f64,
     pub volume_pct_per_day_avg: f64,
     pub volume_pct_per_day_avg_w: f64,
+
+    pub total_wallet_exposure_max: f64,
+    pub total_wallet_exposure_mean: f64,
+    pub total_wallet_exposure_median: f64,
 }
 
 impl Default for Analysis {
@@ -344,6 +348,9 @@ impl Default for Analysis {
             exponential_fit_error_w: 1.0,
             volume_pct_per_day_avg: 0.0,
             volume_pct_per_day_avg_w: 0.0,
+            total_wallet_exposure_max: 0.0,
+            total_wallet_exposure_mean: 0.0,
+            total_wallet_exposure_median: 0.0,
         }
     }
 }

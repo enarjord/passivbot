@@ -231,6 +231,7 @@ pub struct Backtest<'a> {
     did_fill_short: HashSet<usize>,
     n_eligible_long: usize,
     n_eligible_short: usize,
+    pub total_wallet_exposures: Vec<f64>,
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
 }
 
@@ -457,6 +458,7 @@ impl<'a> Backtest<'a> {
             did_fill_short: HashSet::new(),
             n_eligible_long,
             n_eligible_short,
+            total_wallet_exposures: Vec::with_capacity(n_timesteps),
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
     }
@@ -532,6 +534,7 @@ impl<'a> Backtest<'a> {
                 self.update_open_orders_all(k);
             }
             self.update_equities(k);
+            self.update_exposures(k);
         }
         (self.fills.clone(), self.equities.clone())
     }
@@ -804,6 +807,40 @@ impl<'a> Backtest<'a> {
         // Finally push the results into the Equities struct
         self.equities.usd.push(equity_usd);
         self.equities.btc.push(equity_btc);
+    }
+
+    fn update_exposures(&mut self, _k: usize) {
+        // Calculate total wallet exposure across all positions at this timestep
+        let mut total_we = 0.0;
+        
+        // Sum wallet exposure for all long positions
+        for (&idx, position) in &self.positions.long {
+            if position.size > 0.0 {
+                let we = calc_wallet_exposure(
+                    self.exchange_params_list[idx].c_mult,
+                    self.balance.usd_total_rounded,
+                    position.size,
+                    position.price,
+                );
+                total_we += we;
+            }
+        }
+        
+        // Sum wallet exposure for all short positions
+        for (&idx, position) in &self.positions.short {
+            if position.size < 0.0 {
+                let we = calc_wallet_exposure(
+                    self.exchange_params_list[idx].c_mult,
+                    self.balance.usd_total_rounded,
+                    position.size.abs(),
+                    position.price,
+                );
+                total_we += we;
+            }
+        }
+        
+        // Store the total wallet exposure for this timestep
+        self.total_wallet_exposures.push(total_we);
     }
 
     fn update_actives_long(&mut self) -> Vec<usize> {
