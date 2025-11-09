@@ -9,7 +9,9 @@ from suite_runner import (
     aggregate_metrics,
     apply_scenario,
     build_scenarios,
+    collect_suite_coin_sources,
     extract_suite_config,
+    filter_coins_by_exchange_assignment,
     resolve_coin_sources,
 )
 
@@ -92,19 +94,47 @@ def test_resolve_coin_sources_merges_overrides():
     assert resolved == {"BTC": "binance", "ETH": "bybit"}
 
 
+def test_collect_suite_coin_sources_detects_conflicts():
+    config = {"backtest": {"coin_sources": {"BTC": "binance"}}}
+    scenarios = [
+        SuiteScenario("one", None, None, None, None, coin_sources={"ETH": "bybit"}),
+        SuiteScenario("two", None, None, None, None, coin_sources={"ETH": "bybit"}),
+    ]
+    merged = collect_suite_coin_sources(config, scenarios)
+    assert merged == {"BTC": "binance", "ETH": "bybit"}
+
+    conflicting = [
+        SuiteScenario("one", None, None, None, None, coin_sources={"ADA": "binance"}),
+        SuiteScenario("two", None, None, None, None, coin_sources={"ADA": "bybit"}),
+    ]
+    with pytest.raises(ValueError):
+        collect_suite_coin_sources(config, conflicting)
+
+
+def test_filter_coins_by_exchange_assignment_filters_correctly():
+    coins = ["BTC", "ETH", "ADA"]
+    allowed = ["binanceusdm"]
+    coin_map = {"BTC": "binanceusdm", "ETH": "bybit", "ADA": "binanceusdm"}
+    selected, skipped = filter_coins_by_exchange_assignment(
+        coins, allowed, coin_map, default_exchange="combined"
+    )
+    assert selected == ["BTC", "ADA"]
+    assert skipped == ["ETH"]
+
+
 def test_aggregate_metrics_computes_stats():
     scenario_results = [
         ScenarioResult(
             scenario=SuiteScenario("a", None, None, None, None),
             per_exchange={},
-            combined_metrics={"metric": 1.0},
+            metrics={"stats": {"metric": {"mean": 1.0, "min": 1.0, "max": 1.0, "std": 0.0}}},
             elapsed_seconds=0.0,
             output_path=None,
         ),
         ScenarioResult(
             scenario=SuiteScenario("b", None, None, None, None),
             per_exchange={},
-            combined_metrics={"metric": 3.0},
+            metrics={"stats": {"metric": {"mean": 3.0, "min": 3.0, "max": 3.0, "std": 0.0}}},
             elapsed_seconds=0.0,
             output_path=None,
         ),
