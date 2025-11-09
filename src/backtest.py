@@ -564,9 +564,6 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
         btc_val = analysis_btc.pop(key, None)
         if usd_val is not None:
             result[key] = usd_val
-            if key not in {"peak_recovery_hours_pnl"}:
-                result.setdefault(f"{key}_usd", usd_val)
-                result.setdefault(f"usd_{key}", usd_val)
             if btc_val is not None and not np.isclose(usd_val, btc_val, equal_nan=True):
                 logging.debug(
                     "shared metric %s differs across denominations: usd=%s btc=%s",
