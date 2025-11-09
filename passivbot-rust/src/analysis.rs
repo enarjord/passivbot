@@ -354,7 +354,7 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     analysis
 }
 
-pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>, total_wallet_exposures: &[f64],) -> Analysis {
+pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     let mut analysis = analyze_backtest_basic(fills, equities);
 
     if fills.len() <= 1 {
@@ -434,18 +434,23 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>, total_wallet_exposu
         .sum::<f64>()
         / 10.0;
 
-    if total_wallet_exposures.len() > 0 {
-        analysis.total_wallet_exposure_max = total_wallet_exposures
+    let exposures: Vec<f64> = fills
+        .iter()
+        .map(|fill| fill.total_wallet_exposure)
+        .filter(|value| value.is_finite())
+        .collect();
+    if !exposures.is_empty() {
+        if let Some(max_val) = exposures
             .iter()
             .copied()
             .max_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap_or(0.0);
-        
-        analysis.total_wallet_exposure_mean = 
-            total_wallet_exposures.iter().sum::<f64>() / total_wallet_exposures.len() as f64;
-        
-        let mut sorted = total_wallet_exposures.to_vec();
-        sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        {
+            analysis.total_wallet_exposure_max = max_val;
+        }
+        analysis.total_wallet_exposure_mean =
+            exposures.iter().sum::<f64>() / exposures.len() as f64;
+        let mut sorted = exposures.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mid = sorted.len() / 2;
         analysis.total_wallet_exposure_median = if sorted.len() % 2 == 0 {
             (sorted[mid - 1] + sorted[mid]) / 2.0
@@ -462,9 +467,8 @@ pub fn analyze_backtest_pair(
     fills: &[Fill],
     equities: &Equities,
     use_btc_collateral: bool,
-    total_wallet_exposures: &[f64],
 ) -> (Analysis, Analysis) {
-    let analysis_usd = analyze_backtest(fills, &equities.usd, total_wallet_exposures);
+    let analysis_usd = analyze_backtest(fills, &equities.usd);
     if !use_btc_collateral {
         return (analysis_usd.clone(), analysis_usd);
     }
@@ -473,7 +477,7 @@ pub fn analyze_backtest_pair(
         fill.balance_usd_total /= fill.btc_price; // Use actual BTC balance if available
         fill.pnl = fill.pnl / fill.btc_price; // Convert PNL to BTC
     }
-    let analysis_btc = analyze_backtest(&btc_fills, &equities.btc, total_wallet_exposures);
+    let analysis_btc = analyze_backtest(&btc_fills, &equities.btc);
     (analysis_usd, analysis_btc)
 }
 

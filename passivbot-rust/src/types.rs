@@ -258,6 +258,8 @@ pub struct Fill {
     pub position_size: f64,
     pub position_price: f64,
     pub order_type: OrderType,
+    pub wallet_exposure: f64,
+    pub total_wallet_exposure: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
