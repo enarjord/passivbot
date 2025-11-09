@@ -130,7 +130,7 @@ pub fn run_backtest(
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
         let py_analysis_btc = struct_to_py_dict(py, &analysis_btc)?;
-        let mut py_fills = Array2::from_elem((fills.len(), 13), py.None());
+        let mut py_fills = Array2::from_elem((fills.len(), 15), py.None());
         for (i, fill) in fills.iter().enumerate() {
             py_fills[(i, 0)] = fill.index.into_py(py);
             py_fills[(i, 1)] = <String as Clone>::clone(&fill.coin).into_py(py);
@@ -145,6 +145,8 @@ pub fn run_backtest(
             py_fills[(i, 10)] = fill.position_size.into_py(py);
             py_fills[(i, 11)] = fill.position_price.into_py(py);
             py_fills[(i, 12)] = fill.order_type.to_string().into_py(py);
+            py_fills[(i, 13)] = fill.wallet_exposure.into_py(py);
+            py_fills[(i, 14)] = fill.total_wallet_exposure.into_py(py);
         }
 
         let py_equities_usd = Array1::from_vec(equities.usd)

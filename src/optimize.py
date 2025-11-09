@@ -634,6 +634,9 @@ class Evaluator:
             "sortino_ratio_w": -1.0,
             "sterling_ratio": -1.0,
             "sterling_ratio_w": -1.0,
+            "total_wallet_exposure_max": 1.0,
+            "total_wallet_exposure_mean": 1.0,
+            "total_wallet_exposure_median": 1.0,
             "volume_pct_per_day_avg": -1.0,
             "volume_pct_per_day_avg_w": -1.0,
         }

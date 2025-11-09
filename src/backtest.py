@@ -128,6 +128,8 @@ def process_forager_fills(fills, coins, hlcvs, equities, equities_btc):
             "psize",
             "pprice",
             "type",
+            "wallet_exposure",
+            "total_wallet_exposure",
         ],
     )
     analysis_appendix = {}
