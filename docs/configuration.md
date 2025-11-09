@@ -8,11 +8,27 @@ This document provides an overview of the parameters found in `config/template.j
 - **compress_cache**: Set to `true` to save disk space. Set to `false` for faster loading.
 - **end_date**: End date of backtest, e.g., `2024-06-23`. Set to `'now'` to use today's date as the end date.
 - **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. Options: `[binance, bybit, gateio, bitget]`.
+- **combine_ohlcvs**: When `true`, build a single “combined” dataset by taking the best-quality feed for each coin across all configured exchanges. When `false`, the backtester/optimizer runs each exchange independently.
+- **coin_sources**: Optional mapping of `coin -> exchange` used to override the automatic selection performed when `combine_ohlcvs` is `true`. Scenarios may add more overrides; conflicting assignments raise an error.
 - **start_date**: Start date of backtest.
 - **starting_balance**: Starting balance in USD at the beginning of the backtest.
 - **btc_collateral_cap**: Target (and ceiling) share of account equity to hold in BTC collateral. `0` keeps the account fully in USD; `1.0` mirrors the legacy 100% BTC mode; values `>1` allow leveraged BTC collateral, accepting negative USD balances.
 - **btc_collateral_ltv_cap**: Optional loan-to-value ceiling (`USD debt ÷ equity`) enforced when topping up BTC. Leave `null` (default) to allow unlimited debt, or set to a float (e.g., `0.6`) to stop buying BTC once leverage exceeds that threshold.
 - **emit_legacy_metrics**: If `true`, analysis results continue to include the legacy USD metric names (`adg`, `sharpe_ratio`, …) in addition to the new `*_usd`/`*_btc` suffixed keys. Disable once downstream tooling consumes the suffixed metrics exclusively. Default: `false`.
+
+### Suite Scenarios
+
+- **backtest.suite.enabled**: Master switch for suite runs (`--suite` forces it on).
+- **backtest.suite.include_base_scenario** / **base_label**: Optionally prepend a scenario that mirrors the base config.
+- **backtest.suite.aggregate**: Dict of metric-specific aggregation modes (default `mean`). Keys fall back to the `default` entry if unspecified.
+- **backtest.suite.scenarios**: List of scenario dicts. Supported per-scenario keys:
+  - `label`: Directory name under `backtests/suite_runs/<timestamp>/`.
+  - `start_date`, `end_date`: Override the global date window.
+  - `coins`, `ignored_coins`: Restrict or skip symbols.
+  - `exchanges`: Limit which exchanges can contribute data to this scenario.
+  - `coin_sources`: Scenario-specific overrides for `coin_sources`.
+
+Refer to `configs/examples/suite_example.json` for a practical template.
 
 ## Logging
 
@@ -267,6 +283,15 @@ When optimizing, parameter values are within the lower and upper bounds.
   - Suffix `_w` indicates mean across 10 temporal subsets (whole, last_half, last_third, ..., last_tenth) to weigh recent data more heavily.
   - Examples: `["mdg", "sharpe_ratio", "loss_profit_ratio"]`, `["adg", "sortino_ratio", "drawdown_worst"]`, `["sortino_ratio", "omega_ratio", "adg_w", "position_unchanged_hours_max"]`
     - Note: metrics may be suffixed with `_usd` or `_btc` to select denomination. If `config.backtest.btc_collateral_cap` is `0`, BTC values still represent the USD equity translated into BTC terms.
+
+### Optimizer Suites
+
+- **optimize.suite.enabled**: Evaluate every candidate across the configured scenarios. Equivalent to the `--suite` CLI flag.
+- **optimize.suite.include_base_scenario** / **base_label**: Same semantics as the backtest suite.
+- **optimize.suite.aggregate**: Per-metric aggregation rules applied to the scenario results before scoring.
+- **optimize.suite.scenarios**: Scenario dictionaries (same keys as `backtest.suite.scenarios`). Each one may override `coins`, `ignored_coins`, `start_date`, `end_date`, `exchanges`, and `coin_sources`.
+
+The optimizer automatically uploads all scenario slices into shared memory so the extra evaluations add minimal overhead.
 
 ### Optimization Limits
 
