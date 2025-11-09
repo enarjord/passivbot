@@ -19,12 +19,15 @@ from config_utils import (
     require_live_value,
     format_config,
 )
+from backtest import prep_backtest_args
 from shared_arrays import attach_shared_array
 from suite_runner import (
     SuiteScenario,
     aggregate_metrics,
     apply_scenario,
     build_scenarios,
+    collect_suite_coin_sources,
+    filter_coins_by_exchange_assignment,
     prepare_master_datasets,
 )
 from utils import format_approved_ignored_coins, load_markets, ts_to_date, utc_ms
@@ -90,6 +93,8 @@ async def prepare_suite_contexts(
         )
         scenarios = [base_scenario] + list(scenarios)
 
+    suite_coin_sources = collect_suite_coin_sources(config, scenarios)
+
     master_coins = set(base_coins_list) if include_base else set()
     master_ignored = set(base_ignored_list) if include_base else set()
     for scenario in scenarios:
@@ -97,6 +102,7 @@ async def prepare_suite_contexts(
             master_coins.update(scenario.coins)
         if scenario.ignored_coins:
             master_ignored.update(scenario.ignored_coins)
+    master_coins.update(suite_coin_sources.keys())
 
     master_coins_list = sorted(master_coins)
     master_ignored_list = sorted(master_ignored)
@@ -113,11 +119,20 @@ async def prepare_suite_contexts(
     else:
         base_config["live"]["ignored_coins"] = master_ignored_list
     base_config["backtest"]["coins"] = {}
+    base_config["backtest"]["coin_sources"] = suite_coin_sources
 
     datasets = await prepare_master_datasets(base_config, base_exchanges)
     available_coins = set()
     for dataset in datasets.values():
         available_coins.update(dataset.coins)
+    if not available_coins:
+        raise ValueError("No coins available after preparing master datasets.")
+
+    has_master_dataset = len(datasets) == 1 and "combined" in datasets
+    if has_master_dataset:
+        dataset_available_exchanges = datasets["combined"].available_exchanges
+    else:
+        dataset_available_exchanges = [ds.exchange for ds in datasets.values()]
 
     contexts: List[ScenarioEvalContext] = []
 
@@ -128,8 +143,9 @@ async def prepare_suite_contexts(
                 scenario,
                 master_coins=master_coins_list,
                 master_ignored=master_ignored_list,
-                available_exchanges=[ds.exchange for ds in datasets.values()],
+                available_exchanges=dataset_available_exchanges,
                 available_coins=available_coins,
+                base_coin_sources=suite_coin_sources,
             )
         except ValueError as exc:
             logging.warning("Skipping scenario %s: %s", scenario.label, exc)
@@ -139,6 +155,69 @@ async def prepare_suite_contexts(
         scenario_config.setdefault("backtest", {})
         scenario_config["backtest"]["coins"] = {}
 
+        if has_master_dataset:
+            dataset = datasets["combined"]
+            allowed_exchanges = (
+                list(scenario.exchanges)
+                if scenario.exchanges
+                else list(dataset.available_exchanges)
+            )
+            selected_coins, skipped_coins = filter_coins_by_exchange_assignment(
+                scenario_coins,
+                allowed_exchanges,
+                dataset.coin_exchange,
+                default_exchange=dataset.exchange,
+            )
+            if skipped_coins:
+                logging.warning(
+                    "Scenario %s: skipping %d coin(s) outside allowed exchanges (%s): %s",
+                    scenario.label,
+                    len(skipped_coins),
+                    ",".join(allowed_exchanges),
+                    ",".join(skipped_coins[:10]),
+                )
+            if not selected_coins:
+                logging.warning(
+                    "Skipping scenario %s: no coins remain after exchange filtering.",
+                    scenario.label,
+                )
+                continue
+            scenario_config["backtest"]["coins"][dataset.exchange] = list(selected_coins)
+            indices = [dataset.coin_index[coin] for coin in selected_coins]
+            hlcvs_slice = np.ascontiguousarray(dataset.hlcvs[:, indices, :], dtype=np.float64)
+            hlcvs_spec, _ = shared_array_manager.create_from(hlcvs_slice)
+            btc_array = np.ascontiguousarray(dataset.btc_usd_prices, dtype=np.float64)
+            btc_spec, _ = shared_array_manager.create_from(btc_array)
+            mss_slice = {coin: dataset.mss.get(coin, {}) for coin in selected_coins}
+            if "__meta__" in dataset.mss:
+                mss_slice["__meta__"] = dataset.mss["__meta__"]
+
+            _bot_params, exch_params, bt_params = prep_backtest_args(
+                scenario_config,
+                mss_slice,
+                dataset.exchange,
+            )
+            bt_params = dict(bt_params)
+            bt_params["metrics_only"] = True
+
+            contexts.append(
+                ScenarioEvalContext(
+                    label=scenario.label,
+                    config=scenario_config,
+                    exchanges=[dataset.exchange],
+                    hlcvs_specs={dataset.exchange: hlcvs_spec},
+                    btc_usd_specs={dataset.exchange: btc_spec},
+                    msss={dataset.exchange: mss_slice},
+                    exchange_params={dataset.exchange: exch_params},
+                    backtest_params={dataset.exchange: bt_params},
+                    timestamps={dataset.exchange: dataset.timestamps},
+                    shared_hlcvs_np={},
+                    shared_btc_np={},
+                    attachments={"hlcvs": {}, "btc": {}},
+                )
+            )
+            continue
+
         hlcvs_specs: Dict[str, Any] = {}
         btc_specs: Dict[str, Any] = {}
         mss_slices: Dict[str, Any] = {}
@@ -147,9 +226,10 @@ async def prepare_suite_contexts(
         timestamps_map: Dict[str, Any] = {}
         exchanges_for_scenario: List[str] = []
 
-        from backtest import prep_backtest_args
-
+        allowed_exchange_names = set(scenario.exchanges or dataset_available_exchanges)
         for exchange_key, dataset in datasets.items():
+            if allowed_exchange_names and dataset.exchange not in allowed_exchange_names:
+                continue
             coins_for_exchange = [coin for coin in scenario_coins if coin in dataset.coin_index]
             if not coins_for_exchange:
                 continue
@@ -175,9 +255,14 @@ async def prepare_suite_contexts(
                 exchange_key,
             )
             exchange_params[exchange_key] = exch_params
+            bt_params = dict(bt_params)
+            bt_params["metrics_only"] = True
             backtest_params[exchange_key] = bt_params
-            backtest_params[exchange_key]["metrics_only"] = True
             timestamps_map[exchange_key] = dataset.timestamps
+
+        if not exchanges_for_scenario:
+            logging.warning("Skipping scenario %s: no exchanges after filtering.", scenario.label)
+            continue
 
         contexts.append(
             ScenarioEvalContext(
