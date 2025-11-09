@@ -2,16 +2,18 @@ from __future__ import annotations
 import os
 import json
 import hashlib
-from typing import Dict
+from typing import Dict, Optional
 import glob
 import math
 import time
 import numpy as np
 import threading
 import logging
+from pathlib import Path
 import passivbot_rust as pbr
 from opt_utils import round_floats, dominates
 from pure_funcs import calc_hash
+from metrics_schema import flatten_metric_stats
 
 
 class ParetoStore:
@@ -60,8 +62,10 @@ class ParetoStore:
                 return False
 
             # objective vector = sorted w_i keys
-            w_keys = sorted(k for k in rounded["analyses_combined"] if k.startswith("w_"))
-            obj = tuple(rounded["analyses_combined"][k] for k in w_keys)
+            metrics_block = rounded.get("metrics", {}) or {}
+            objectives = metrics_block.get("objectives", metrics_block)
+            w_keys = sorted(k for k in objectives if k.startswith("w_"))
+            obj = tuple(objectives[k] for k in w_keys)
 
             # ───────────── NEW: dedupe on the objective vector ──────────────
             # identical after rounding  → nothing new to store or write
@@ -282,6 +286,21 @@ def comma_separated_values_float(x):
     return [float(z) for z in x.split(",")]
 
 
+def detect_latest_pareto_dir(root: Path = Path("optimize_results")) -> Optional[str]:
+    if not root.exists():
+        return None
+    latest: Optional[tuple[float, Path]] = None
+    for child in sorted(root.iterdir()):
+        pareto_path = child / "pareto"
+        if pareto_path.is_dir():
+            mtime = pareto_path.stat().st_mtime
+            if latest is None or mtime > latest[0]:
+                latest = (mtime, pareto_path)
+    if latest is None:
+        return None
+    return str(latest[1])
+
+
 def main():
     import argparse
     import matplotlib.pyplot as plt
@@ -289,7 +308,13 @@ def main():
     import json
 
     parser = argparse.ArgumentParser(description="Analyze and plot Pareto front")
-    parser.add_argument("pareto_dir", type=str, help="Path to pareto/ directory")
+    parser.add_argument(
+        "pareto_dir",
+        type=str,
+        nargs="?",
+        default=None,
+        help="Path to pareto/ directory (defaults to latest under optimize_results/)",
+    )
     parser.add_argument("--json", action="store_true", help="Output summary as JSON")
     parser.add_argument(
         "-w",
@@ -325,7 +350,18 @@ def main():
     )
     args = parser.parse_args()
 
-    pareto_dir = args.pareto_dir.rstrip("/")
+    pareto_dir = args.pareto_dir
+    if not pareto_dir:
+        auto_dir = detect_latest_pareto_dir()
+        if auto_dir is None:
+            parser.error(
+                "No pareto directory specified and none found under optimize_results/. "
+                "Provide a path explicitly."
+            )
+        print(f"[info] Using latest pareto directory: {auto_dir}")
+        pareto_dir = auto_dir
+
+    pareto_dir = pareto_dir.rstrip("/")
     entries = sorted(glob.glob(os.path.join(pareto_dir, "*.json")))
     if not entries:
         if not pareto_dir.endswith("pareto"):
@@ -373,10 +409,20 @@ def main():
             if metric_names is None:
                 metric_names = entry.get("optimize", {}).get("scoring", [])
                 metric_name_map = {f"w_{i}": name for i, name in enumerate(metric_names)}
-            if not w_keys:
-                all_w_keys = sorted(
-                    k for k in entry.get("analyses_combined", {}) if k.startswith("w_")
+            metrics_block = entry.get("metrics", {}) or {}
+            objectives = metrics_block.get("objectives", metrics_block)
+            stats_flat = {}
+            if "stats" in metrics_block:
+                stats_flat = flatten_metric_stats(metrics_block["stats"])
+            elif "suite_metrics" in entry:
+                agg_stats = (
+                    entry["suite_metrics"]
+                    .get("aggregate", {})
+                    .get("stats", {})
                 )
+                stats_flat = flatten_metric_stats(agg_stats)
+            if not w_keys:
+                all_w_keys = sorted(k for k in objectives if k.startswith("w_"))
 
                 # Filter w_keys based on --objectives argument
                 if args.objectives:
@@ -410,12 +456,9 @@ def main():
                     w_keys = sorted(w_keys)
                 else:
                     w_keys = all_w_keys
-            if any(
-                not op(entry.get("analyses_combined", {}).get(key, float("inf")), val)
-                for key, op, val in limit_checks
-            ):
+            if any(not op(stats_flat.get(key, float("inf")), val) for key, op, val in limit_checks):
                 continue
-            values = [entry.get("analyses_combined", {}).get(k) for k in w_keys]
+            values = [objectives.get(k) for k in w_keys]
             if all(v is not None for v in values):
                 points.append((*values, h))
                 filenames[h] = os.path.split(entry_path)[-1]
