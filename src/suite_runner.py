@@ -27,7 +27,8 @@ from config_utils import (
 )
 from logging_setup import configure_logging
 from main import manage_rust_compilation
-from utils import format_approved_ignored_coins, load_markets, ts_to_date, utc_ms
+from utils import format_approved_ignored_coins, load_markets, ts_to_date, utc_ms, date_to_ts
+from metrics_schema import flatten_metric_stats
 
 
 # --------------------------------------------------------------------------- #
@@ -50,7 +51,7 @@ class SuiteScenario:
 class ScenarioResult:
     scenario: SuiteScenario
     per_exchange: Dict[str, Dict[str, Any]]
-    combined_metrics: Dict[str, float]
+    metrics: Dict[str, Any]
     elapsed_seconds: float
     output_path: Optional[Path]
 
@@ -179,6 +180,68 @@ def build_scenarios(
     return scenarios, aggregate_cfg, include_base, base_label
 
 
+def collect_suite_coin_sources(
+    config: Dict[str, Any],
+    scenarios: Sequence[SuiteScenario],
+) -> Dict[str, str]:
+    """
+    Merge baseline coin_sources with any scenario overrides.
+
+    The merged mapping is shared across the suite so all scenarios consume a
+    consistent view of the underlying exchange assignment.  Conflicting
+    requests raise immediately to avoid silently running scenarios with
+    mismatched data.
+    """
+
+    base_sources = deepcopy(config.get("backtest", {}).get("coin_sources") or {})
+    merged: Dict[str, str] = {
+        str(coin): str(exchange)
+        for coin, exchange in base_sources.items()
+        if exchange is not None
+    }
+    for scenario in scenarios:
+        if not scenario.coin_sources:
+            continue
+        for coin, exchange in scenario.coin_sources.items():
+            if exchange is None:
+                continue
+            coin_key = str(coin)
+            exchange_value = str(exchange)
+            existing = merged.get(coin_key)
+            if existing and existing != exchange_value:
+                raise ValueError(
+                    f"Scenario '{scenario.label}' forces {coin_key} to exchange "
+                    f"{exchange_value}, but another scenario already forces {coin_key} "
+                    f"to {existing}. Please align coin_sources across the suite."
+                )
+            merged[coin_key] = exchange_value
+    return merged
+
+
+def filter_coins_by_exchange_assignment(
+    coins: Sequence[str],
+    allowed_exchanges: Optional[Sequence[str]],
+    coin_exchange_map: Dict[str, str],
+    *,
+    default_exchange: str,
+) -> Tuple[List[str], List[str]]:
+    """
+    Split the provided coins into those whose assigned exchange is allowed and
+    those that should be skipped.
+    """
+
+    allowed_set = {str(ex) for ex in allowed_exchanges} if allowed_exchanges else None
+    selected: List[str] = []
+    skipped: List[str] = []
+    for coin in coins:
+        assigned_exchange = coin_exchange_map.get(coin, default_exchange)
+        if allowed_set and assigned_exchange not in allowed_set:
+            skipped.append(coin)
+            continue
+        selected.append(coin)
+    return selected, skipped
+
+
 # --------------------------------------------------------------------------- #
 # Dataset preparation
 # --------------------------------------------------------------------------- #
@@ -189,6 +252,8 @@ class ExchangeDataset:
     exchange: str
     coins: List[str]
     coin_index: Dict[str, int]
+    coin_exchange: Dict[str, str]
+    available_exchanges: List[str]
     hlcvs: np.ndarray
     mss: Dict[str, Any]
     btc_usd_prices: np.ndarray
@@ -203,6 +268,35 @@ async def prepare_master_datasets(
     from backtest import prepare_hlcvs_mss
 
     datasets: Dict[str, ExchangeDataset] = {}
+
+    def _build_dataset(
+        exchange_label: str,
+        exchange_name: str,
+        coins: List[str],
+        hlcvs: np.ndarray,
+        mss: Dict[str, Any],
+        cache_dir: str,
+        btc_usd_prices: np.ndarray,
+        timestamps: Optional[np.ndarray],
+    ) -> ExchangeDataset:
+        coin_index = {coin: idx for idx, coin in enumerate(coins)}
+        coin_exchange = {
+            coin: str(mss.get(coin, {}).get("exchange", exchange_name)) for coin in coins
+        }
+        available_exchanges = sorted(set(coin_exchange.values())) or [exchange_name]
+        return ExchangeDataset(
+            exchange=exchange_label,
+            coins=coins,
+            coin_index=coin_index,
+            coin_exchange=coin_exchange,
+            available_exchanges=available_exchanges,
+            hlcvs=hlcvs,
+            mss=mss,
+            btc_usd_prices=btc_usd_prices,
+            timestamps=timestamps,
+            cache_dir=str(cache_dir),
+        )
+
     if require_config_value(base_config, "backtest.combine_ohlcvs"):
         (
             coins,
@@ -213,16 +307,15 @@ async def prepare_master_datasets(
             btc_usd_prices,
             timestamps,
         ) = await prepare_hlcvs_mss(base_config, "combined")
-        coin_index = {coin: idx for idx, coin in enumerate(coins)}
-        datasets["combined"] = ExchangeDataset(
-            exchange="combined",
-            coins=coins,
-            coin_index=coin_index,
-            hlcvs=hlcvs,
-            mss=mss,
-            btc_usd_prices=btc_usd_prices,
-            timestamps=timestamps,
-            cache_dir=str(cache_dir),
+        datasets["combined"] = _build_dataset(
+            "combined",
+            "combined",
+            coins,
+            hlcvs,
+            mss,
+            cache_dir,
+            btc_usd_prices,
+            timestamps,
         )
     else:
         for exchange in exchanges:
@@ -235,16 +328,15 @@ async def prepare_master_datasets(
                 btc_usd_prices,
                 timestamps,
             ) = await prepare_hlcvs_mss(base_config, exchange)
-            coin_index = {coin: idx for idx, coin in enumerate(coins)}
-            datasets[exchange] = ExchangeDataset(
-                exchange=exchange,
-                coins=coins,
-                coin_index=coin_index,
-                hlcvs=hlcvs,
-                mss=mss,
-                btc_usd_prices=btc_usd_prices,
-                timestamps=timestamps,
-                cache_dir=str(cache_dir),
+            datasets[exchange] = _build_dataset(
+                exchange,
+                exchange,
+                coins,
+                hlcvs,
+                mss,
+                cache_dir,
+                btc_usd_prices,
+                timestamps,
             )
     return datasets
 
@@ -329,9 +421,11 @@ async def run_backtest_scenario(
     datasets: Dict[str, ExchangeDataset],
     master_coins: List[str],
     master_ignored: List[str],
+    available_exchanges: List[str],
     available_coins: set[str],
     results_root: Optional[Path],
     disable_plotting: bool,
+    base_coin_sources: Optional[Dict[str, str]] = None,
 ) -> ScenarioResult:
     from backtest import run_backtest, post_process
 
@@ -340,8 +434,9 @@ async def run_backtest_scenario(
         scenario,
         master_coins=master_coins,
         master_ignored=master_ignored,
-        available_exchanges=[ds.exchange for ds in datasets.values()],
+        available_exchanges=available_exchanges,
         available_coins=available_coins,
+        base_coin_sources=base_coin_sources,
     )
     scenario_config["disable_plotting"] = disable_plotting
 
@@ -352,7 +447,142 @@ async def run_backtest_scenario(
         scenario_dir = results_root / scenario.label
         scenario_dir.mkdir(parents=True, exist_ok=True)
 
+    has_master_dataset = len(datasets) == 1 and "combined" in datasets
+
+    if has_master_dataset:
+        dataset = datasets["combined"]
+        per_exchange = _run_combined_dataset(
+            dataset,
+            scenario,
+            scenario_config,
+            scenario_coins,
+            scenario_dir,
+            run_backtest,
+            post_process,
+        )
+    else:
+        per_exchange = _run_multi_dataset(
+            datasets,
+            scenario,
+            scenario_config,
+            scenario_coins,
+            scenario_dir,
+            run_backtest,
+            post_process,
+            available_exchanges,
+        )
+
+    if not per_exchange:
+        raise ValueError(f"Scenario {scenario.label} had no exchanges after filtering.")
+
+    from tools.iterative_backtester import combine_analyses
+
+    combined_metrics = combine_analyses(per_exchange)
+    combined_metrics = {
+        "stats": combined_metrics.get("stats", {}),
+    }
+    elapsed = (utc_ms() - start_ts) / 1000.0
+    return ScenarioResult(
+        scenario=scenario,
+        per_exchange=per_exchange,
+        metrics=combined_metrics,
+        elapsed_seconds=elapsed,
+        output_path=scenario_dir,
+    )
+
+
+def _run_combined_dataset(
+    dataset: ExchangeDataset,
+    scenario: SuiteScenario,
+    scenario_config: Dict[str, Any],
+    scenario_coins: List[str],
+    scenario_dir: Optional[Path],
+    run_backtest_fn,
+    post_process_fn,
+) -> Dict[str, Dict[str, Any]]:
+    per_exchange: Dict[str, Dict[str, Any]] = {}
+
+    allowed_exchanges = (
+        list(scenario.exchanges)
+        if scenario.exchanges
+        else list(dataset.available_exchanges)
+    )
+    selected_coins, skipped_coins = filter_coins_by_exchange_assignment(
+        scenario_coins,
+        allowed_exchanges,
+        dataset.coin_exchange,
+        default_exchange=dataset.exchange,
+    )
+    if skipped_coins:
+        logging.warning(
+            "Scenario %s: skipping %d coin(s) outside allowed exchanges (%s): %s",
+            scenario.label,
+            len(skipped_coins),
+            ",".join(allowed_exchanges),
+            ",".join(skipped_coins[:10]),
+        )
+    if not selected_coins:
+        raise ValueError(
+            f"Scenario {scenario.label} has no coins after applying exchange filters."
+        )
+    scenario_config["backtest"]["coins"][dataset.exchange] = list(selected_coins)
+    scenario_config["backtest"]["cache_dir"][dataset.exchange] = dataset.cache_dir
+    indices = [dataset.coin_index[coin] for coin in selected_coins]
+    hlcvs_slice = dataset.hlcvs[:, indices, :]
+    mss_slice = {coin: dataset.mss.get(coin, {}) for coin in selected_coins}
+    if "__meta__" in dataset.mss:
+        mss_slice["__meta__"] = dataset.mss["__meta__"]
+
+    fills, equities_array, analysis = run_backtest_fn(
+        hlcvs_slice,
+        mss_slice,
+        scenario_config,
+        dataset.exchange,
+        dataset.btc_usd_prices,
+        dataset.timestamps,
+    )
+    per_exchange[dataset.exchange] = analysis
+    if scenario_dir is not None:
+        output_dir = scenario_dir / dataset.exchange
+        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            post_process_fn(
+                scenario_config,
+                hlcvs_slice,
+                fills,
+                equities_array,
+                dataset.btc_usd_prices,
+                analysis,
+                str(output_dir),
+                dataset.exchange,
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logging.error(
+                "Scenario %s exchange %s: post-process failed (%s)",
+                scenario.label,
+                dataset.exchange,
+                exc,
+            )
+    del fills
+    del equities_array
+    return per_exchange
+
+
+def _run_multi_dataset(
+    datasets: Dict[str, ExchangeDataset],
+    scenario: SuiteScenario,
+    scenario_config: Dict[str, Any],
+    scenario_coins: List[str],
+    scenario_dir: Optional[Path],
+    run_backtest_fn,
+    post_process_fn,
+    available_exchanges: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    per_exchange: Dict[str, Dict[str, Any]] = {}
+    allowed_exchanges = set(scenario.exchanges or available_exchanges)
     for exchange_key, dataset in datasets.items():
+        if allowed_exchanges and dataset.exchange not in allowed_exchanges:
+            continue
         exchange_coins = [coin for coin in scenario_coins if coin in dataset.coin_index]
         if not exchange_coins:
             logging.warning(
@@ -370,7 +600,7 @@ async def run_backtest_scenario(
         if "__meta__" in dataset.mss:
             mss_slice["__meta__"] = dataset.mss["__meta__"]
 
-        fills, equities_array, analysis = run_backtest(
+        fills, equities_array, analysis = run_backtest_fn(
             hlcvs_slice,
             mss_slice,
             scenario_config,
@@ -382,14 +612,16 @@ async def run_backtest_scenario(
         per_exchange[exchange_key] = analysis
         if scenario_dir is not None:
             try:
-                post_process(
+                exchange_dir = scenario_dir / dataset.exchange
+                exchange_dir.mkdir(parents=True, exist_ok=True)
+                post_process_fn(
                     scenario_config,
                     hlcvs_slice,
                     fills,
                     equities_array,
                     dataset.btc_usd_prices,
                     analysis,
-                    str(scenario_dir / dataset.exchange),
+                    str(exchange_dir),
                     dataset.exchange,
                 )
             except Exception as exc:
@@ -402,20 +634,7 @@ async def run_backtest_scenario(
         del fills
         del equities_array
 
-    if not per_exchange:
-        raise ValueError(f"Scenario {scenario.label} had no exchanges after filtering.")
-
-    from tools.iterative_backtester import combine_analyses
-
-    combined_metrics = combine_analyses(per_exchange)
-    elapsed = (utc_ms() - start_ts) / 1000.0
-    return ScenarioResult(
-        scenario=scenario,
-        per_exchange=per_exchange,
-        combined_metrics=combined_metrics,
-        elapsed_seconds=elapsed,
-        output_path=scenario_dir,
-    )
+    return per_exchange
 
 
 # --------------------------------------------------------------------------- #
@@ -430,9 +649,12 @@ def aggregate_metrics(
         return {"aggregated": {}, "stats": {}}
     metrics_values: Dict[str, List[float]] = {}
     for result in results:
-        for key, value in result.combined_metrics.items():
-            if isinstance(value, (int, float)) and np.isfinite(value):
-                metrics_values.setdefault(key, []).append(float(value))
+        stats = result.metrics.get("stats", {})
+        for metric, metric_stats in stats.items():
+            value = metric_stats.get("mean")
+            if value is None or not np.isfinite(value):
+                continue
+            metrics_values.setdefault(metric, []).append(float(value))
 
     stats: Dict[str, Dict[str, float]] = {}
     aggregates: Dict[str, float] = {}
@@ -503,13 +725,19 @@ async def run_backtest_suite_async(
         )
         scenarios = [base_scenario] + list(scenarios)
 
+    suite_coin_sources = collect_suite_coin_sources(config, scenarios)
+
     master_coins = _collect_union((s.coins for s in scenarios), base_coins)
+    if suite_coin_sources:
+        master_coins = sorted(dict.fromkeys([*master_coins, *suite_coin_sources.keys()]))
     master_ignored = _collect_union((s.ignored_coins for s in scenarios), base_ignored)
     global_start, global_end = _collect_date_window(base_start, base_end, scenarios)
 
     base_config = deepcopy(config)
     base_config["backtest"]["start_date"] = global_start
     base_config["backtest"]["end_date"] = global_end
+    base_config.setdefault("backtest", {})
+    base_config["backtest"]["coin_sources"] = suite_coin_sources
     if isinstance(base_config["live"]["approved_coins"], dict):
         base_config["live"]["approved_coins"]["long"] = list(master_coins)
         base_config["live"]["approved_coins"]["short"] = list(master_coins)
@@ -525,6 +753,13 @@ async def run_backtest_suite_async(
     available_coins: set[str] = set()
     for dataset in datasets.values():
         available_coins.update(dataset.coins)
+    if not available_coins:
+        raise ValueError("No coins available after preparing master datasets.")
+
+    if len(datasets) == 1 and "combined" in datasets:
+        dataset_available_exchanges = datasets["combined"].available_exchanges
+    else:
+        dataset_available_exchanges = [ds.exchange for ds in datasets.values()]
 
     suite_timestamp = ts_to_date(utc_ms())[:19].replace(":", "_")
     suite_dir = (
@@ -544,16 +779,18 @@ async def run_backtest_suite_async(
             datasets,
             master_coins,
             master_ignored,
+            dataset_available_exchanges,
             available_coins,
             suite_dir,
             disable_plotting=disable_plotting,
+            base_coin_sources=suite_coin_sources,
         )
         results.append(result)
         logging.info(
             "Scenario %s finished in %.2fs with %d metrics.",
             scenario.label,
             result.elapsed_seconds,
-            len(result.combined_metrics),
+            len(result.metrics.get("stats", {})),
         )
 
     aggregate_summary = aggregate_metrics(results, aggregate_cfg)
@@ -566,7 +803,7 @@ async def run_backtest_suite_async(
         "aggregate": aggregate_summary,
         "per_scenario": {
             res.scenario.label: {
-                "metrics": res.combined_metrics,
+                "metrics": res.metrics,
                 "elapsed_seconds": res.elapsed_seconds,
             }
             for res in results
