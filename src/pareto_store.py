@@ -385,15 +385,38 @@ def main():
     import numpy as np
     import json
 
-    parser = argparse.ArgumentParser(description="Analyze and plot Pareto front")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Inspect optimizer Pareto sets: discover the latest run (or analyze a\n"
+            "specified pareto/ directory), compute the ideal point, rank the best\n"
+            "solutions, and visualize objective correlations. Supports filtering by\n"
+            "metric limits and restricting the objective vector."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python3 src/pareto_store.py\n"
+            "  python3 src/pareto_store.py optimize_results/<run>/pareto\n"
+            "  python3 src/pareto_store.py -l \"w_4<800\" \"peak_recovery_hours_pnl.max<600\"\n"
+            "  python3 src/pareto_store.py -o adg_btc,mdg_btc -w 1,1\n"
+        ),
+    )
     parser.add_argument(
         "pareto_dir",
         type=str,
         nargs="?",
         default=None,
-        help="Path to pareto/ directory (defaults to latest under optimize_results/)",
+        help=(
+            "Path to a pareto/ directory produced by the optimizer or suite. When\n"
+            "omitted the script auto-detects the most recent run under\n"
+            "optimize_results/."
+        ),
     )
-    parser.add_argument("--json", action="store_true", help="Output summary as JSON")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the textual summary as JSON for consumption by other tools.",
+    )
     parser.add_argument(
         "-w",
         "--weights",
@@ -401,7 +424,11 @@ def main():
         required=False,
         dest="weights",
         default=None,
-        help="Weight for ideal point offset. Default=(0.0) * n_objectives",
+        help=(
+            "Comma-separated weights for the ideal-point offset. Defaults to zeros\n"
+            "which corresponds to the pure component-wise minimum. Fewer weights than\n"
+            "objectives reuse the last provided value."
+        ),
     )
     parser.add_argument(
         "-m",
@@ -410,7 +437,12 @@ def main():
         required=False,
         dest="mode",
         default="weighted",
-        help="Mode for ideal point computation. Default=min. Options: [min (m), weighted (w), geomedian (g)]",
+        help=(
+            "Mode for ideal point computation:\n"
+            "  min       – component-wise minima (default)\n"
+            "  weighted  – honour the --weights offset\n"
+            "  geomedian – geometric median in objective space"
+        ),
     )
     parser.add_argument(
         "-l",
@@ -418,13 +450,24 @@ def main():
         "--limits",
         dest="limits",
         nargs="*",
-        help='Limit filters (needs quotes), e.g., "w_0<1.0", "w_1<-0.0006", "w_2<1.0"',
+        help=(
+            "One or more limit filters applied before ranking. Expressions accept\n"
+            "objective ids (e.g. w_4<800) or metric names. When the metric name does\n"
+            "not include a statistic (mean/min/max/std) the tool uses suite-level\n"
+            "aggregates where available, otherwise the mean. Add a suffix such as\n"
+            "'.max' or '.min' to target a specific statistic. Remember to quote\n"
+            "expressions that contain comparison operators."
+        ),
     )
     parser.add_argument(
         "-o",
         "--objectives",
         type=str,
-        help="Comma-separated list of objective names to use for Pareto front (e.g., 'adg_btc,mdg_btc')",
+        help=(
+            "Restrict the objective vector to the provided comma-separated list\n"
+            "(names or w_i identifiers). By default all objectives stored in the\n"
+            "Pareto entry are used."
+        ),
     )
     args = parser.parse_args()
 
