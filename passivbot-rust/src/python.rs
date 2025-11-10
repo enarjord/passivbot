@@ -455,7 +455,12 @@ pub fn run_backtest(
     // Run the backtest and process results
     Python::with_gil(|py| {
         let (fills, equities) = backtest.run();
-        let (analysis_usd, analysis_btc) = analyze_backtest_pair(&fills, &equities);
+        let (analysis_usd, analysis_btc) = analyze_backtest_pair(
+            &fills,
+            &equities,
+            backtest.balance.use_btc_collateral,
+            &backtest.total_wallet_exposures,
+        );
 
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
@@ -468,7 +473,7 @@ pub fn run_backtest(
                 py_analysis_btc,
             ));
         }
-        let mut py_fills = Array2::from_elem((fills.len(), 14), py.None());
+        let mut py_fills = Array2::from_elem((fills.len(), 16), py.None());
         for (i, fill) in fills.iter().enumerate() {
             py_fills[(i, 0)] = fill.index.into_py(py);
             py_fills[(i, 1)] = (fill.timestamp_ms as i64).into_py(py);
@@ -484,6 +489,8 @@ pub fn run_backtest(
             py_fills[(i, 11)] = fill.position_size.into_py(py);
             py_fills[(i, 12)] = fill.position_price.into_py(py);
             py_fills[(i, 13)] = fill.order_type.to_string().into_py(py);
+            py_fills[(i, 14)] = fill.wallet_exposure.into_py(py);
+            py_fills[(i, 15)] = fill.total_wallet_exposure.into_py(py);
         }
 
         let equities_array =

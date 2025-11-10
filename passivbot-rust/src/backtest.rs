@@ -15,8 +15,8 @@ use crate::types::{
     Order, OrderBook, OrderType, Position, Positions, StateParams, TrailingPriceBundle,
 };
 use crate::utils::{
-    calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, hysteresis,
-    qty_to_cost, round_, round_dn,
+    calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
+    calc_wallet_exposure, hysteresis, qty_to_cost, round_, round_dn,
 };
 use ndarray::{ArrayView1, ArrayView3};
 use std::cmp::Ordering;
@@ -235,6 +235,7 @@ pub struct Backtest<'a> {
     did_fill_short: HashSet<usize>,
     n_eligible_long: usize,
     n_eligible_short: usize,
+    pub total_wallet_exposures: Vec<f64>,
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
 }
 
@@ -484,6 +485,7 @@ impl<'a> Backtest<'a> {
             did_fill_short: HashSet::new(),
             n_eligible_long,
             n_eligible_short,
+            total_wallet_exposures: Vec::with_capacity(n_timesteps),
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
     }
@@ -538,8 +540,9 @@ impl<'a> Backtest<'a> {
             if k > warmup_bars && current_ts >= guard_timestamp_ms {
                 self.update_n_positions_and_wallet_exposure_limits(k);
                 self.update_open_orders_all(k);
-                self.update_equities(k);
             }
+            self.update_equities(k);
+            self.record_total_wallet_exposure();
         }
         let fills = std::mem::take(&mut self.fills);
         let equities = std::mem::take(&mut self.equities);
@@ -873,6 +876,36 @@ impl<'a> Backtest<'a> {
         self.equities.timestamps_ms.push(timestamp_ms);
     }
 
+    fn record_total_wallet_exposure(&mut self) {
+        let total_wallet_exposure = self.compute_total_wallet_exposure();
+        self.total_wallet_exposures.push(total_wallet_exposure);
+    }
+
+    fn compute_total_wallet_exposure(&self) -> f64 {
+        let mut total = 0.0;
+        for (&idx, position) in &self.positions.long {
+            if position.size != 0.0 {
+                total += calc_wallet_exposure(
+                    self.exchange_params_list[idx].c_mult,
+                    self.balance.usd_total_balance,
+                    position.size.abs(),
+                    position.price,
+                );
+            }
+        }
+        for (&idx, position) in &self.positions.short {
+            if position.size != 0.0 {
+                total += calc_wallet_exposure(
+                    self.exchange_params_list[idx].c_mult,
+                    self.balance.usd_total_balance,
+                    position.size.abs(),
+                    position.price,
+                );
+            }
+        }
+        total
+    }
+
     fn update_actives_long(&mut self) -> Vec<usize> {
         let n_positions = self.effective_n_positions.long;
 
@@ -1058,6 +1091,17 @@ impl<'a> Backtest<'a> {
             self.positions.long.get_mut(&idx).unwrap().size = new_psize;
         }
         let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
+        let wallet_exposure = if new_psize != 0.0 {
+            calc_wallet_exposure(
+                self.exchange_params_list[idx].c_mult,
+                self.balance.usd_total_balance,
+                new_psize.abs(),
+                current_pprice,
+            )
+        } else {
+            0.0
+        };
+        let total_wallet_exposure = self.compute_total_wallet_exposure();
         self.fills.push(Fill {
             index: k, // index minute
             timestamp_ms,
@@ -1073,6 +1117,8 @@ impl<'a> Backtest<'a> {
             position_size: new_psize,                  // psize after fill
             position_price: current_pprice,            // pprice after fill
             order_type: close_fill.order_type.clone(), // fill type
+            wallet_exposure,
+            total_wallet_exposure,
         });
     }
 
@@ -1112,6 +1158,17 @@ impl<'a> Backtest<'a> {
             self.positions.short.get_mut(&idx).unwrap().size = new_psize;
         }
         let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
+        let wallet_exposure = if new_psize != 0.0 {
+            calc_wallet_exposure(
+                self.exchange_params_list[idx].c_mult,
+                self.balance.usd_total_balance,
+                new_psize.abs(),
+                current_pprice,
+            )
+        } else {
+            0.0
+        };
+        let total_wallet_exposure = self.compute_total_wallet_exposure();
         self.fills.push(Fill {
             index: k, // index minute
             timestamp_ms,
@@ -1127,6 +1184,8 @@ impl<'a> Backtest<'a> {
             position_size: new_psize,
             position_price: current_pprice,
             order_type: order.order_type.clone(),
+            wallet_exposure,
+            total_wallet_exposure,
         });
     }
 
@@ -1154,6 +1213,17 @@ impl<'a> Backtest<'a> {
         self.positions.long.get_mut(&idx).unwrap().size = new_psize;
         self.positions.long.get_mut(&idx).unwrap().price = new_pprice;
         let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
+        let wallet_exposure = if new_psize != 0.0 {
+            calc_wallet_exposure(
+                self.exchange_params_list[idx].c_mult,
+                self.balance.usd_total_balance,
+                new_psize.abs(),
+                new_pprice,
+            )
+        } else {
+            0.0
+        };
+        let total_wallet_exposure = self.compute_total_wallet_exposure();
         self.fills.push(Fill {
             index: k,
             timestamp_ms,
@@ -1169,6 +1239,8 @@ impl<'a> Backtest<'a> {
             position_size: self.positions.long[&idx].size,
             position_price: self.positions.long[&idx].price,
             order_type: order.order_type.clone(),
+            wallet_exposure,
+            total_wallet_exposure,
         });
     }
 
@@ -1194,10 +1266,20 @@ impl<'a> Backtest<'a> {
         );
         self.positions.short.get_mut(&idx).unwrap().size = new_psize;
         self.positions.short.get_mut(&idx).unwrap().price = new_pprice;
-        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
+        let wallet_exposure = if new_psize != 0.0 {
+            calc_wallet_exposure(
+                self.exchange_params_list[idx].c_mult,
+                self.balance.usd_total_balance,
+                new_psize.abs(),
+                new_pprice,
+            )
+        } else {
+            0.0
+        };
+        let total_wallet_exposure = self.compute_total_wallet_exposure();
         self.fills.push(Fill {
             index: k,
-            timestamp_ms,
+            timestamp_ms: self.first_timestamp_ms + (k as u64) * 60_000,
             coin: self.backtest_params.coins[idx].clone(),
             pnl: 0.0,
             fee_paid,
@@ -1210,6 +1292,8 @@ impl<'a> Backtest<'a> {
             position_size: self.positions.short[&idx].size,
             position_price: self.positions.short[&idx].price,
             order_type: order.order_type.clone(),
+            wallet_exposure,
+            total_wallet_exposure,
         });
     }
 

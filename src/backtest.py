@@ -87,6 +87,8 @@ def process_forager_fills(
             "psize",
             "pprice",
             "type",
+            "wallet_exposure",
+            "total_wallet_exposure",
         ],
     )
     if not fdf.empty:
