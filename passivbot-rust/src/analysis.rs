@@ -523,8 +523,7 @@ pub fn analyze_backtest_pair(
     use_btc_collateral: bool,
     total_wallet_exposures: &[f64],
 ) -> (Analysis, Analysis) {
-    let analysis_usd =
-        analyze_backtest(fills, &equities.usd_total_equity, total_wallet_exposures);
+    let analysis_usd = analyze_backtest(fills, &equities.usd_total_equity, total_wallet_exposures);
     if !use_btc_collateral {
         return (analysis_usd.clone(), analysis_usd);
     }
@@ -541,8 +540,11 @@ pub fn analyze_backtest_pair(
         fill.fill_price /= price;
         fill.position_price /= price;
     }
-    let analysis_btc =
-        analyze_backtest(&btc_fills, &equities.btc_total_equity, total_wallet_exposures);
+    let analysis_btc = analyze_backtest(
+        &btc_fills,
+        &equities.btc_total_equity,
+        total_wallet_exposures,
+    );
     (analysis_usd, analysis_btc)
 }
 

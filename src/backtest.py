@@ -557,6 +557,9 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
         "volume_pct_per_day_avg",
         "volume_pct_per_day_avg_w",
         "peak_recovery_hours_pnl",
+        "total_wallet_exposure_max",
+        "total_wallet_exposure_mean",
+        "total_wallet_exposure_median",
     }
 
     result = {}
