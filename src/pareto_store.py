@@ -13,6 +13,7 @@ from pathlib import Path
 import passivbot_rust as pbr
 from opt_utils import round_floats, dominates
 from pure_funcs import calc_hash
+from utils import json_dumps_streamlined
 from metrics_schema import flatten_metric_stats
 
 
@@ -201,14 +202,28 @@ class ParetoStore:
             path = os.path.join(self.pareto_dir, f"{hash_id}.json")
             tmp = path + ".tmp"
             with open(tmp, "w") as f:
-                json.dump(entry, f, separators=(",", ":"), indent=4)
+                f.write(
+                    json_dumps_streamlined(
+                        entry,
+                        indent=4,
+                        max_inline=72,
+                        separators=(",", ":"),
+                    )
+                )
             os.replace(tmp, path)
         else:
             path = source_path
             if not os.path.exists(path):
                 tmp = path + ".tmp"
                 with open(tmp, "w") as f:
-                    json.dump(entry, f, separators=(",", ":"), indent=4)
+                    f.write(
+                        json_dumps_streamlined(
+                            entry,
+                            indent=4,
+                            max_inline=72,
+                            separators=(",", ":"),
+                        )
+                    )
                 os.replace(tmp, path)
         self._entries[hash_id] = path
 
@@ -415,11 +430,7 @@ def main():
             if "stats" in metrics_block:
                 stats_flat = flatten_metric_stats(metrics_block["stats"])
             elif "suite_metrics" in entry:
-                agg_stats = (
-                    entry["suite_metrics"]
-                    .get("aggregate", {})
-                    .get("stats", {})
-                )
+                agg_stats = entry["suite_metrics"].get("aggregate", {}).get("stats", {})
                 stats_flat = flatten_metric_stats(agg_stats)
             if not w_keys:
                 all_w_keys = sorted(k for k in objectives if k.startswith("w_"))
