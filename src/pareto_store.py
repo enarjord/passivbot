@@ -2,19 +2,82 @@ from __future__ import annotations
 import os
 import json
 import hashlib
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional, Sequence
 import glob
 import math
 import time
 import numpy as np
 import threading
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 import passivbot_rust as pbr
 from opt_utils import round_floats, dominates
 from pure_funcs import calc_hash
 from utils import json_dumps_streamlined
 from metrics_schema import flatten_metric_stats
+
+STAT_FIELDS = {"mean", "min", "max", "std"}
+
+
+@dataclass(frozen=True)
+class LimitSpec:
+    metric: str
+    field: str  # "mean", "min", "max", "std", or "auto"
+    op: Callable[[float, float], bool]
+    value: float
+
+
+def _split_metric_field(raw_key: str) -> tuple[str, str]:
+    key = raw_key.strip()
+    for sep in (".", "_"):
+        if sep in key:
+            metric, suffix = key.rsplit(sep, 1)
+            if suffix in STAT_FIELDS:
+                return metric, suffix
+    return key, "auto"
+
+
+def _resolve_metric_name(metric: str, metric_map: Dict[str, str]) -> str:
+    if metric.startswith("w_"):
+        return metric_map.get(metric, metric)
+    return metric
+
+
+def _resolve_limit_value(
+    spec: LimitSpec,
+    stats_flat: Dict[str, float],
+    aggregated_values: Dict[str, float],
+    objectives: Dict[str, float],
+    metric_map: Dict[str, str],
+) -> Optional[float]:
+    metric = spec.metric
+    if metric.startswith("w_"):
+        return objectives.get(metric)
+    resolved_metric = _resolve_metric_name(metric, metric_map)
+    field = spec.field
+    if field == "auto":
+        if aggregated_values and resolved_metric in aggregated_values:
+            return aggregated_values.get(resolved_metric)
+        field = "mean"
+    key = f"{resolved_metric.replace('.', '_')}_{field}"
+    return stats_flat.get(key)
+
+
+def _evaluate_limits(
+    specs: Sequence[LimitSpec],
+    stats_flat: Dict[str, float],
+    aggregated_values: Dict[str, float],
+    objectives: Dict[str, float],
+    metric_map: Dict[str, str],
+) -> bool:
+    for spec in specs:
+        value = _resolve_limit_value(spec, stats_flat, aggregated_values, objectives, metric_map)
+        if value is None:
+            value = float("inf")
+        if not spec.op(value, spec.value):
+            return False
+    return True
 
 
 class ParetoStore:
@@ -399,20 +462,19 @@ def main():
         "=": operator.eq,
     }
 
-    def parse_limit_expr(expr: str):
+    def parse_limit_expr(expr: str) -> LimitSpec:
         for op_str in ["<=", ">=", "<", ">", "==", "="]:
             if op_str in expr:
-                key, val = expr.split(op_str)
-                key, val = key.strip(), float(val.strip())
-                return key, OPERATORS[op_str], val
+                key, val = expr.split(op_str, 1)
+                metric, field = _split_metric_field(key.strip())
+                return LimitSpec(metric, field, OPERATORS[op_str], float(val.strip()))
         raise ValueError(f"Invalid limit expression: {expr}")
 
-    limit_checks = []
+    limit_specs: List[LimitSpec] = []
     if args.limits:
         for expr in args.limits:
             try:
-                key, op_fn, val = parse_limit_expr(expr)
-                limit_checks.append((key + "_mean", op_fn, val))
+                limit_specs.append(parse_limit_expr(expr))
             except Exception as e:
                 print(f"Skipping invalid limit expression '{expr}': {e}")
 
@@ -427,10 +489,13 @@ def main():
             metrics_block = entry.get("metrics", {}) or {}
             objectives = metrics_block.get("objectives", metrics_block)
             stats_flat = {}
+            aggregated_values = {}
             if "stats" in metrics_block:
                 stats_flat = flatten_metric_stats(metrics_block["stats"])
             elif "suite_metrics" in entry:
-                agg_stats = entry["suite_metrics"].get("aggregate", {}).get("stats", {})
+                suite_payload = entry["suite_metrics"].get("aggregate", {})
+                agg_stats = suite_payload.get("stats", {})
+                aggregated_values = suite_payload.get("aggregated", {}) or {}
                 stats_flat = flatten_metric_stats(agg_stats)
             if not w_keys:
                 all_w_keys = sorted(k for k in objectives if k.startswith("w_"))
@@ -467,7 +532,13 @@ def main():
                     w_keys = sorted(w_keys)
                 else:
                     w_keys = all_w_keys
-            if any(not op(stats_flat.get(key, float("inf")), val) for key, op, val in limit_checks):
+            if limit_specs and not _evaluate_limits(
+                limit_specs,
+                stats_flat,
+                aggregated_values,
+                objectives,
+                metric_name_map or {},
+            ):
                 continue
             values = [objectives.get(k) for k in w_keys]
             if all(v is not None for v in values):
