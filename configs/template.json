@@ -206,7 +206,7 @@
               "mutation_probability": 0.34,
               "n_cpus": 8,
               "offspring_multiplier": 1,
-              "pareto_max_size": 300,
+              "pareto_max_size": 250,
               "population_size": 250,
               "round_to_n_significant_digits": 5,
               "scoring": ["adg_btc",
