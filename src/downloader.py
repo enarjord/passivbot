@@ -1766,9 +1766,7 @@ async def _prepare_hlcvs_combined_impl(
             continue
 
         forced_exchange = forced_sources.get(coin)
-        candidate_exchanges = (
-            [forced_exchange] if forced_exchange else exchanges_to_consider
-        )
+        candidate_exchanges = [forced_exchange] if forced_exchange else exchanges_to_consider
         for ex in candidate_exchanges:
             if ex not in om_dict:
                 raise ValueError(f"Unknown exchange '{ex}' requested for coin {coin}")
