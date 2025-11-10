@@ -17,7 +17,12 @@ def _base_config():
             "emit_legacy_metrics": False,
             "gap_tolerance_ohlcvs_minutes": 120,
             "max_warmup_minutes": 0,
-            "suite": {"enabled": False, "include_base_scenario": False, "base_label": "base", "scenarios": []},
+            "suite": {
+                "enabled": False,
+                "include_base_scenario": False,
+                "base_label": "base",
+                "scenarios": [],
+            },
         },
         "bot": {
             "long": {"n_positions": 4},
