@@ -875,6 +875,8 @@ def _normalize_coin_sources(raw: Any) -> Dict[str, str]:
             continue
         normalized[str(coin)] = str(exchange)
     return normalized
+
+
 def _preserve_coin_sources(result: dict) -> None:
     """Keep track of original approved/ignored coin sources before normalization."""
     sources = result.setdefault("_coins_sources", {})
