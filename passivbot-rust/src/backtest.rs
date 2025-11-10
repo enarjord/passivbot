@@ -231,6 +231,7 @@ pub struct Backtest<'a> {
     did_fill_short: HashSet<usize>,
     n_eligible_long: usize,
     n_eligible_short: usize,
+    pub total_wallet_exposures: Vec<f64>,
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
 }
 
@@ -457,6 +458,7 @@ impl<'a> Backtest<'a> {
             did_fill_short: HashSet::new(),
             n_eligible_long,
             n_eligible_short,
+            total_wallet_exposures: Vec::with_capacity(n_timesteps),
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
     }
@@ -532,6 +534,7 @@ impl<'a> Backtest<'a> {
                 self.update_open_orders_all(k);
             }
             self.update_equities(k);
+            self.record_total_wallet_exposure();
         }
         (self.fills.clone(), self.equities.clone())
     }
@@ -804,10 +807,11 @@ impl<'a> Backtest<'a> {
         // Finally push the results into the Equities struct
         self.equities.usd.push(equity_usd);
         self.equities.btc.push(equity_btc);
+    }
+
+    fn record_total_wallet_exposure(&mut self) {
         let total_wallet_exposure = self.compute_total_wallet_exposure();
-        self.equities
-            .total_wallet_exposure
-            .push(total_wallet_exposure);
+        self.total_wallet_exposures.push(total_wallet_exposure);
     }
 
     fn compute_total_wallet_exposure(&self) -> f64 {
