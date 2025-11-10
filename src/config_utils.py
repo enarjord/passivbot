@@ -875,6 +875,13 @@ def _normalize_coin_sources(raw: Any) -> Dict[str, str]:
             continue
         normalized[str(coin)] = str(exchange)
     return normalized
+def _preserve_coin_sources(result: dict) -> None:
+    """Keep track of original approved/ignored coin sources before normalization."""
+    sources = result.setdefault("_coins_sources", {})
+    live = result.get("live", {})
+    for key in ("approved_coins", "ignored_coins"):
+        if key in live and key not in sources:
+            sources[key] = deepcopy(live[key])
 
 
 def _apply_non_live_adjustments(result: dict, verbose: bool = True) -> None:
@@ -932,6 +939,7 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     _normalize_position_counts(result)
     if coin_sources_input is not None:
         result.setdefault("backtest", {})["coin_sources"] = coin_sources_input
+    _preserve_coin_sources(result)
 
     if not live_only:
         # unneeded adjustments if running live
@@ -1034,6 +1042,8 @@ def remove_unused_keys_recursively(
     for k in sorted(list(dst.keys())):
         current_path = parent + [k]
         if _path_is_preserved(current_path):
+            continue
+        if k.startswith("_"):
             continue
         if k not in src:
             del dst[k]
