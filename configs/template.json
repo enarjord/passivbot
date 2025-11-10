@@ -6,7 +6,6 @@
         "coin_sources": {},
         "combine_ohlcvs": true,
         "compress_cache": true,
-        "emit_legacy_metrics": false,
         "end_date": "now",
         "exchanges": ["binance","bybit"],
         "gap_tolerance_ohlcvs_minutes": 120,
@@ -123,7 +122,7 @@
         "price_distance_threshold": 0.002,
         "time_in_force": "good_till_cancelled",
         "user": "bybit_01",
-        "warmup_ratio": 0.2
+        "warmup_ratio": 0.3
     },
     "logging": {
         "level": 1,

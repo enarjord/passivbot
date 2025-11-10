@@ -111,7 +111,7 @@ def extract_objective_map(entry: Mapping[str, Any]) -> Dict[str, float]:
 
 
 def build_objective_matrix(
-    entries: Sequence[Mapping[str, Any]]
+    entries: Sequence[Mapping[str, Any]],
 ) -> Tuple[np.ndarray, List[str], List[int], List[int]]:
     key_set: set[str] = set()
     objective_dicts: List[Dict[str, float]] = []
@@ -159,7 +159,11 @@ def farthest_point_sampling(points: np.ndarray, count: int, *, seed: int | None 
     norms = np.linalg.norm(points, axis=1)
     min_norm = norms.min()
     first_candidates = np.flatnonzero(np.isclose(norms, min_norm))
-    first = int(rng.choice(first_candidates.tolist())) if first_candidates.size > 1 else int(first_candidates[0])
+    first = (
+        int(rng.choice(first_candidates.tolist()))
+        if first_candidates.size > 1
+        else int(first_candidates[0])
+    )
 
     selected = [first]
     distances = np.linalg.norm(points - points[first], axis=1)
@@ -227,7 +231,9 @@ def _gather_targets(paths: Sequence[Path]) -> Dict[Path, List[Path]]:
     return directories
 
 
-def _write_json(path: Path, data: Dict[str, Any], *, indent: int, max_inline: int, sort_keys: bool) -> None:
+def _write_json(
+    path: Path, data: Dict[str, Any], *, indent: int, max_inline: int, sort_keys: bool
+) -> None:
     payload = json_dumps_streamlined(
         data,
         indent=indent,
@@ -261,7 +267,9 @@ def process_directory(
     rewritten = 0
 
     if prune_target is not None and entries:
-        keep_indices = set(select_prune_indices([entry.data for entry in entries], prune_target, seed=seed))
+        keep_indices = set(
+            select_prune_indices([entry.data for entry in entries], prune_target, seed=seed)
+        )
         for idx, entry in enumerate(entries):
             entry.remove = idx not in keep_indices
 
@@ -279,7 +287,9 @@ def process_directory(
             action = "Would rewrite" if dry_run else "Rewrote"
             print(f"{action} {entry.path}")
             if not dry_run:
-                _write_json(entry.path, entry.data, indent=indent, max_inline=max_inline, sort_keys=sort_keys)
+                _write_json(
+                    entry.path, entry.data, indent=indent, max_inline=max_inline, sort_keys=sort_keys
+                )
 
     return rewritten, removed
 

@@ -397,7 +397,7 @@ def main():
             "Examples:\n"
             "  python3 src/pareto_store.py\n"
             "  python3 src/pareto_store.py optimize_results/<run>/pareto\n"
-            "  python3 src/pareto_store.py -l \"w_4<800\" \"peak_recovery_hours_pnl.max<600\"\n"
+            '  python3 src/pareto_store.py -l "w_4<800" "peak_recovery_hours_pnl.max<600"\n'
             "  python3 src/pareto_store.py -o adg_btc,mdg_btc -w 1,1\n"
         ),
     )

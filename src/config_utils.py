@@ -681,9 +681,6 @@ def _migrate_btc_collateral_settings(result: dict, verbose: bool = True) -> None
     if "btc_collateral_ltv_cap" not in backtest:
         backtest["btc_collateral_ltv_cap"] = None
 
-    if "emit_legacy_metrics" not in backtest:
-        backtest["emit_legacy_metrics"] = False
-
 
 def detect_flavor(config: dict, template: dict) -> str:
     """Detect incoming config flavor to drive the builder.
@@ -1343,7 +1340,6 @@ def get_template_config(passivbot_mode="v7"):
             "starting_balance": 100000.0,
             "btc_collateral_cap": 1.0,
             "btc_collateral_ltv_cap": None,
-            "emit_legacy_metrics": False,
             "max_warmup_minutes": 0.0,
             "suite": {
                 "enabled": False,

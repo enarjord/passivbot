@@ -103,14 +103,12 @@ def test_migrate_btc_collateral_settings_converts_bool():
     _migrate_btc_collateral_settings(config, verbose=False)
     assert config["backtest"]["btc_collateral_cap"] == pytest.approx(1.0)
     assert config["backtest"]["btc_collateral_ltv_cap"] is None
-    assert config["backtest"]["emit_legacy_metrics"] is False
     assert "use_btc_collateral" not in config["backtest"]
 
     config = {"backtest": {"use_btc_collateral": False}}
     _migrate_btc_collateral_settings(config, verbose=False)
     assert config["backtest"]["btc_collateral_cap"] == pytest.approx(0.0)
     assert config["backtest"]["btc_collateral_ltv_cap"] is None
-    assert config["backtest"]["emit_legacy_metrics"] is False
 
 
 def test_apply_backward_compatibility_renames_moves_filter_keys():

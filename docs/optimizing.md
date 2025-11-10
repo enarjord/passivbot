@@ -153,7 +153,7 @@ over all exchanges before scoring.
   positive weight means “minimize.”
 - Penalties from `optimize.limits` are added to every objective when a bound is violated,
   turning constraint breaches into very poor scores.
-- Metrics are emitted with both USD and BTC suffixes (for example, `adg_usd` and `adg_btc`). When `backtest.emit_legacy_metrics` is `true`, the legacy USD names without suffixes are also included.
+- Metrics are emitted with both USD and BTC suffixes (for example, `adg_usd` and `adg_btc`).
 - The tables below reference the base metric names for brevity; append `_usd` or `_btc` to select the denomination you want to use.
 - Exposure-normalized variants (e.g., `adg_per_exposure_long`) divide the base metric by
   that side’s configured `total_wallet_exposure_limit`, letting you compare bots that use

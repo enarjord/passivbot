@@ -14,8 +14,6 @@ This document provides an overview of the parameters found in `config/template.j
 - **starting_balance**: Starting balance in USD at the beginning of the backtest.
 - **btc_collateral_cap**: Target (and ceiling) share of account equity to hold in BTC collateral. `0` keeps the account fully in USD; `1.0` mirrors the legacy 100% BTC mode; values `>1` allow leveraged BTC collateral, accepting negative USD balances.
 - **btc_collateral_ltv_cap**: Optional loan-to-value ceiling (`USD debt ÷ equity`) enforced when topping up BTC. Leave `null` (default) to allow unlimited debt, or set to a float (e.g., `0.6`) to stop buying BTC once leverage exceeds that threshold.
-- **emit_legacy_metrics**: If `true`, analysis results continue to include the legacy USD metric names (`adg`, `sharpe_ratio`, …) in addition to the new `*_usd`/`*_btc` suffixed keys. Disable once downstream tooling consumes the suffixed metrics exclusively. Default: `false`.
-
 ### Suite Scenarios
 
 - **backtest.suite.enabled**: Master switch for suite runs (`--suite` forces it on).

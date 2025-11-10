@@ -544,7 +544,6 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
                 if analysis_btc[key] is not None
                 else None
             )
-    emit_legacy = bool(require_config_value(config, "backtest.emit_legacy_metrics"))
 
     shared_keys = {
         "positions_held_per_day",
@@ -588,11 +587,6 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
             else:
                 normalized_key = f"{key}_{suffix}"
             result[normalized_key] = value
-            if emit_legacy:
-                if suffix == "usd":
-                    result[f"usd_{key}"] = value
-                elif suffix == "btc":
-                    result[f"btc_{key}"] = value
 
     _add_metrics(analysis_usd, "usd")
     _add_metrics(analysis_btc, "btc")

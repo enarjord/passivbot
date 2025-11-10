@@ -14,7 +14,6 @@ def _base_config():
             "exchanges": ["binance"],
             "btc_collateral_cap": 1.0,
             "btc_collateral_ltv_cap": None,
-            "emit_legacy_metrics": False,
             "gap_tolerance_ohlcvs_minutes": 120,
             "max_warmup_minutes": 0,
             "suite": {
