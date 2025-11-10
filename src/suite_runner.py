@@ -155,9 +155,7 @@ def build_scenarios(
         exchanges_value = raw.get("exchanges")
         coin_sources_value = raw.get("coin_sources")
         exchanges_list = _coerce_exchange_list(exchanges_value) if exchanges_value else None
-        coin_source_map = (
-            _coerce_coin_source_dict(coin_sources_value) if coin_sources_value else None
-        )
+        coin_source_map = _coerce_coin_source_dict(coin_sources_value) if coin_sources_value else None
         scenarios.append(
             SuiteScenario(
                 label=str(raw.get("label") or f"scenario_{idx:02d}"),
@@ -195,9 +193,7 @@ def collect_suite_coin_sources(
 
     base_sources = deepcopy(config.get("backtest", {}).get("coin_sources") or {})
     merged: Dict[str, str] = {
-        str(coin): str(exchange)
-        for coin, exchange in base_sources.items()
-        if exchange is not None
+        str(coin): str(exchange) for coin, exchange in base_sources.items() if exchange is not None
     }
     for scenario in scenarios:
         if not scenario.coin_sources:
@@ -380,11 +376,7 @@ def apply_scenario(
     filtered_ignored = [coin for coin in scenario_ignored if coin in available_coins]
     filtered_ignored = sorted(dict.fromkeys(filtered_ignored))
 
-    scenario_exchanges = (
-        list(scenario.exchanges)
-        if scenario.exchanges
-        else list(available_exchanges)
-    )
+    scenario_exchanges = list(scenario.exchanges) if scenario.exchanges else list(available_exchanges)
     cfg["backtest"]["exchanges"] = scenario_exchanges
     cfg.setdefault("backtest", {}).setdefault("coins", {})
     cfg.setdefault("backtest", {}).setdefault("cache_dir", {})
@@ -503,9 +495,7 @@ def _run_combined_dataset(
     per_exchange: Dict[str, Dict[str, Any]] = {}
 
     allowed_exchanges = (
-        list(scenario.exchanges)
-        if scenario.exchanges
-        else list(dataset.available_exchanges)
+        list(scenario.exchanges) if scenario.exchanges else list(dataset.available_exchanges)
     )
     selected_coins, skipped_coins = filter_coins_by_exchange_assignment(
         scenario_coins,
@@ -522,9 +512,7 @@ def _run_combined_dataset(
             ",".join(skipped_coins[:10]),
         )
     if not selected_coins:
-        raise ValueError(
-            f"Scenario {scenario.label} has no coins after applying exchange filters."
-        )
+        raise ValueError(f"Scenario {scenario.label} has no coins after applying exchange filters.")
     scenario_config["backtest"]["coins"][dataset.exchange] = list(selected_coins)
     scenario_config["backtest"]["cache_dir"][dataset.exchange] = dataset.cache_dir
     indices = [dataset.coin_index[coin] for coin in selected_coins]
