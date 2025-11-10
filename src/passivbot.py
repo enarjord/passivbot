@@ -2958,7 +2958,9 @@ class Passivbot:
             for k in ("approved_coins", "ignored_coins"):
                 if not hasattr(self, k):
                     setattr(self, k, {"long": set(), "short": set()})
-                parsed = normalize_coins_source(self.live_value(k))
+                config_sources = self.config.get("_coins_sources", {})
+                raw_source = config_sources.get(k, self.live_value(k))
+                parsed = normalize_coins_source(raw_source)
                 if k == "approved_coins":
                     log_psides = {ps for ps in parsed if self.is_pside_enabled(ps)}
                 else:

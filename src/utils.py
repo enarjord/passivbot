@@ -12,6 +12,7 @@ from collections import defaultdict
 from typing import Dict, Any, List, Union, Optional
 import re
 import logging
+from copy import deepcopy
 from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
     resolve_custom_endpoint_override,
@@ -543,8 +544,12 @@ def symbol_to_coin(symbol):
 async def format_approved_ignored_coins(config, exchanges: [str]):
     if isinstance(exchanges, str):
         exchanges = [exchanges]
-    path = _require_live_value(config, "approved_coins")
-    if path in [
+    coin_sources = config.setdefault("_coins_sources", {})
+    approved_source = coin_sources.get("approved_coins", config.get("live", {}).get("approved_coins"))
+    if approved_source is None:
+        approved_source = _require_live_value(config, "approved_coins")
+    coin_sources["approved_coins"] = deepcopy(approved_source)
+    if approved_source in [
         [""],
         [],
         None,
@@ -571,12 +576,16 @@ async def format_approved_ignored_coins(config, exchanges: [str]):
             # leave empty
             config["live"]["approved_coins"] = {"long": [], "short": []}
     else:
-        ac = normalize_coins_source(_require_live_value(config, "approved_coins"))
+        ac = normalize_coins_source(approved_source)
         config["live"]["approved_coins"] = {
             pside: [cf for x in ac[pside] if (cf := symbol_to_coin(x))] for pside in ac
         }
 
-    ic = normalize_coins_source(_require_live_value(config, "ignored_coins"))
+    ignored_source = coin_sources.get("ignored_coins", config.get("live", {}).get("ignored_coins"))
+    if ignored_source is None:
+        ignored_source = _require_live_value(config, "ignored_coins")
+    coin_sources["ignored_coins"] = deepcopy(ignored_source)
+    ic = normalize_coins_source(ignored_source)
     config["live"]["ignored_coins"] = {
         pside: [cf for x in ic[pside] if (cf := symbol_to_coin(x))] for pside in ic
     }
