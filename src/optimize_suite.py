@@ -158,9 +158,7 @@ async def prepare_suite_contexts(
         if has_master_dataset:
             dataset = datasets["combined"]
             allowed_exchanges = (
-                list(scenario.exchanges)
-                if scenario.exchanges
-                else list(dataset.available_exchanges)
+                list(scenario.exchanges) if scenario.exchanges else list(dataset.available_exchanges)
             )
             selected_coins, skipped_coins = filter_coins_by_exchange_assignment(
                 scenario_coins,
