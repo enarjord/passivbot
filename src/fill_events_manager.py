@@ -589,6 +589,220 @@ class BitgetFetcher(BaseFetcher):
         return str(market_symbol)
 
 
+class BinanceFetcher(BaseFetcher):
+    """Fetch realised PnL events for Binance by combining income and trade history."""
+
+    def __init__(
+        self,
+        api,
+        *,
+        symbol_resolver: Callable[[str], str],
+        positions_provider: Optional[Callable[[], Iterable[str]]] = None,
+        open_orders_provider: Optional[Callable[[], Iterable[str]]] = None,
+        income_limit: int = 1000,
+        trade_limit: int = 1000,
+    ) -> None:
+        self.api = api
+        if symbol_resolver is None:
+            raise ValueError("BinanceFetcher requires a symbol_resolver callable")
+        self._symbol_resolver = symbol_resolver
+        self._positions_provider = positions_provider or (lambda: ())
+        self._open_orders_provider = open_orders_provider or (lambda: ())
+        self.income_limit = max(1, income_limit)
+        self.trade_limit = max(1, trade_limit)
+
+    async def fetch(
+        self,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        logger.info(
+            "BinanceFetcher.fetch: start since=%s until=%s",
+            _format_ms(since_ms),
+            _format_ms(until_ms),
+        )
+        income_events = await self._fetch_income(since_ms, until_ms)
+        symbol_pool = set(self._collect_symbols(self._positions_provider))
+        symbol_pool.update(self._collect_symbols(self._open_orders_provider))
+        symbol_pool.update(ev["symbol"] for ev in income_events if ev.get("symbol"))
+
+        trade_events: Dict[str, Dict[str, object]] = {}
+        trade_tasks: Dict[str, asyncio.Task[List[Dict[str, object]]]] = {}
+        for symbol in sorted(symbol_pool):
+            if not symbol:
+                continue
+            trade_tasks[symbol] = asyncio.create_task(
+                self._fetch_symbol_trades(symbol, since_ms, until_ms)
+            )
+        for symbol, task in trade_tasks.items():
+            try:
+                trades = await task
+            except RateLimitExceeded as exc:  # pragma: no cover - depends on live API
+                logger.warning(
+                    "BinanceFetcher.fetch: rate-limited fetching trades for %s (%s)", symbol, exc
+                )
+                trades = []
+            except Exception as exc:
+                logger.error("BinanceFetcher.fetch: error fetching trades for %s (%s)", symbol, exc)
+                trades = []
+            for trade in trades:
+                event = self._normalize_trade(trade)
+                cached = detail_cache.get(event["id"])
+                if cached:
+                    event.setdefault("client_order_id", cached[0])
+                    if cached[1]:
+                        event.setdefault("pb_order_type", cached[1])
+                trade_events[event["id"]] = event
+
+        merged: Dict[str, Dict[str, object]] = {}
+        for ev in income_events:
+            merged[ev["id"]] = ev
+
+        for event_id, trade_ev in trade_events.items():
+            base = merged.get(event_id)
+            if base:
+                base.update({k: v for k, v in trade_ev.items() if v not in (None, "")})
+            else:
+                merged[event_id] = trade_ev
+
+        ordered = sorted(merged.values(), key=lambda ev: ev["timestamp"])
+        if since_ms is not None:
+            ordered = [ev for ev in ordered if ev["timestamp"] >= since_ms]
+        if until_ms is not None:
+            ordered = [ev for ev in ordered if ev["timestamp"] <= until_ms]
+
+        if on_batch and ordered:
+            on_batch(ordered)
+
+        logger.info(
+            "BinanceFetcher.fetch: done events=%d (symbols=%d)",
+            len(ordered),
+            len(symbol_pool),
+        )
+        return ordered
+
+    async def _fetch_income(
+        self,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+    ) -> List[Dict[str, object]]:
+        params: Dict[str, object] = {"incomeType": "REALIZED_PNL", "limit": self.income_limit}
+        if since_ms is not None:
+            params["startTime"] = int(since_ms)
+        if until_ms is not None:
+            params["endTime"] = int(until_ms)
+        try:
+            payload = await self.api.fapiprivate_get_income(params=params)
+        except Exception as exc:  # pragma: no cover - depends on live API
+            logger.error("BinanceFetcher._fetch_income: failed %s", exc)
+            return []
+        events: List[Dict[str, object]] = []
+        for entry in payload or []:
+            events.append(self._normalize_income(entry))
+        return events
+
+    async def _fetch_symbol_trades(
+        self,
+        ccxt_symbol: str,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+    ) -> List[Dict[str, object]]:
+        params: Dict[str, object] = {}
+        if since_ms is not None:
+            params["startTime"] = int(since_ms)
+        if until_ms is not None:
+            params["endTime"] = int(until_ms)
+        try:
+            return await self.api.fetch_my_trades(
+                ccxt_symbol,
+                limit=self.trade_limit,
+                params=params or None,
+            )
+        except Exception as exc:  # pragma: no cover - depends on live API
+            logger.error("BinanceFetcher._fetch_symbol_trades: error %s (%s)", ccxt_symbol, exc)
+            return []
+
+    def _normalize_income(self, entry: Dict[str, object]) -> Dict[str, object]:
+        trade_id = entry.get("tradeId") or entry.get("id") or f"income-{entry.get('time')}"
+        timestamp = int(entry.get("time") or entry.get("timestamp") or 0)
+        raw_symbol = entry.get("symbol")
+        ccxt_symbol = self._resolve_symbol(raw_symbol)
+        pnl = float(entry.get("income") or entry.get("pnl") or 0.0)
+        position_side = str(entry.get("positionSide") or entry.get("pside") or "unknown").lower()
+        return {
+            "id": str(trade_id),
+            "timestamp": timestamp,
+            "datetime": ts_to_date(timestamp),
+            "symbol": ccxt_symbol,
+            "side": entry.get("side") or "",
+            "qty": 0.0,
+            "price": 0.0,
+            "pnl": pnl,
+            "fees": None,
+            "pb_order_type": "",
+            "position_side": position_side or "unknown",
+            "client_order_id": entry.get("clientOrderId") or "",
+        }
+
+    def _normalize_trade(self, trade: Dict[str, object]) -> Dict[str, object]:
+        info = trade.get("info") or {}
+        trade_id = trade.get("id") or info.get("id")
+        timestamp = int(trade.get("timestamp") or info.get("time") or info.get("T") or 0)
+        pnl = float(info.get("realizedPnl") or trade.get("pnl") or 0.0)
+        position_side = str(
+            info.get("positionSide") or trade.get("position_side") or "unknown"
+        ).lower()
+        fees = trade.get("fees") or trade.get("fee")
+        client_order_id = (
+            trade.get("clientOrderId") or info.get("clientOrderId") or info.get("orderId") or ""
+        )
+        symbol = trade.get("symbol")
+        if symbol and "/" not in symbol:
+            symbol = self._resolve_symbol(symbol)
+        return {
+            "id": str(trade_id),
+            "timestamp": timestamp,
+            "datetime": ts_to_date(timestamp),
+            "symbol": symbol or "",
+            "side": trade.get("side") or "",
+            "qty": float(trade.get("amount") or trade.get("qty") or 0.0),
+            "price": float(trade.get("price") or 0.0),
+            "pnl": pnl,
+            "fees": fees,
+            "pb_order_type": "",
+            "position_side": position_side or "unknown",
+            "client_order_id": client_order_id,
+        }
+
+    def _collect_symbols(self, provider: Callable[[], Iterable[str]]) -> List[str]:
+        try:
+            items = provider() or []
+        except Exception as exc:
+            logger.warning("BinanceFetcher._collect_symbols: provider failed (%s)", exc)
+            return []
+        symbols: List[str] = []
+        for raw in items:
+            normalized = self._resolve_symbol(raw)
+            if normalized:
+                symbols.append(normalized)
+        return symbols
+
+    def _resolve_symbol(self, value: Optional[str]) -> str:
+        if not value:
+            return ""
+        if "/" in value:
+            return value
+        try:
+            resolved = self._symbol_resolver(value)
+            if resolved:
+                return resolved
+        except Exception as exc:
+            logger.warning("BinanceFetcher._resolve_symbol: resolver failed for %s (%s)", value, exc)
+        return str(value)
+
+
 # ---------------------------------------------------------------------------
 # Manager
 # ---------------------------------------------------------------------------
