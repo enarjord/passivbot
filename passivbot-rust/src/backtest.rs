@@ -804,6 +804,10 @@ impl<'a> Backtest<'a> {
         // Finally push the results into the Equities struct
         self.equities.usd.push(equity_usd);
         self.equities.btc.push(equity_btc);
+        let total_wallet_exposure = self.compute_total_wallet_exposure();
+        self.equities
+            .total_wallet_exposure
+            .push(total_wallet_exposure);
     }
 
     fn compute_total_wallet_exposure(&self) -> f64 {

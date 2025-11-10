@@ -241,6 +241,7 @@ pub struct Balance {
 pub struct Equities {
     pub usd: Vec<f64>,
     pub btc: Vec<f64>,
+    pub total_wallet_exposure: Vec<f64>,
 }
 
 #[derive(Debug, Clone)]
