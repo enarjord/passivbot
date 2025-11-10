@@ -1595,8 +1595,17 @@ async def main():
                         recorder,
                     )
 
+        starting_configs = get_starting_configs(args.starting_configs)
+        if starting_configs:
+            logging.info(
+                "Loaded %d starting configs before quantization (population size=%d)",
+                len(starting_configs),
+                population_size,
+            )
+        else:
+            logging.info("No starting configs provided; population will be random-initialized")
         starting_individuals = configs_to_individuals(
-            get_starting_configs(args.starting_configs),
+            starting_configs,
             bounds,
             sig_digits,
         )
