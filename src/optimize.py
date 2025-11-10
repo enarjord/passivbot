@@ -25,6 +25,7 @@ import passivbot_rust as pbr
 import asyncio
 import argparse
 import multiprocessing
+import signal
 import time
 from collections import defaultdict
 from backtest import (
@@ -75,6 +76,14 @@ from optimize_suite import (
 )
 from suite_runner import SuiteScenario, ScenarioResult, aggregate_metrics
 from metrics_schema import build_scenario_metrics, flatten_metric_stats, merge_suite_payload
+
+
+def _ignore_sigint_in_worker():
+    """Ensure worker processes don't receive SIGINT so the parent controls shutdown."""
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except (AttributeError, ValueError):
+        pass
 
 
 class ResultRecorder:
@@ -1574,7 +1583,10 @@ async def main():
 
         # Parallelization setup
         logging.info(f"Initializing multiprocessing pool. N cpus: {config['optimize']['n_cpus']}")
-        pool = multiprocessing.Pool(processes=config["optimize"]["n_cpus"])
+        pool = multiprocessing.Pool(
+            processes=config["optimize"]["n_cpus"],
+            initializer=_ignore_sigint_in_worker,
+        )
         toolbox.register("map", pool.map)
         logging.info(f"Finished initializing multiprocessing pool.")
         pool_state = {"terminated": False}
@@ -1583,18 +1595,48 @@ async def main():
         logging.info(f"Creating initial population...")
 
         def _evaluate_initial(individuals):
+            if not individuals:
+                return 0
+            pending = {}
             for ind in individuals:
-                fit_values, metrics = toolbox.evaluate(ind)
-                ind.fitness.values = fit_values
-                if metrics is not None:
-                    ind.evaluation_metrics = metrics
-                    _record_individual_result(
-                        ind,
-                        evaluator.config,
-                        overrides_list,
-                        recorder,
-                    )
+                pending[pool.apply_async(toolbox.evaluate, (ind,))] = ind
+            completed = 0
+            try:
+                while pending:
+                    ready = [res for res in pending if res.ready()]
+                    if not ready:
+                        time.sleep(0.05)
+                        continue
+                    for res in ready:
+                        ind = pending.pop(res)
+                        fit_values, metrics = res.get()
+                        ind.fitness.values = fit_values
+                        if metrics is not None:
+                            ind.evaluation_metrics = metrics
+                            _record_individual_result(
+                                ind,
+                                evaluator.config,
+                                overrides_list,
+                                recorder,
+                            )
+                        elif hasattr(ind, "evaluation_metrics"):
+                            delattr(ind, "evaluation_metrics")
+                        completed += 1
+            except KeyboardInterrupt:
+                logging.info("Evaluation interrupted; terminating pending starting configs...")
+                for res in pending:
+                    try:
+                        res.cancel()
+                    except Exception:
+                        pass
+                if not pool_state["terminated"]:
+                    logging.info("Terminating worker pool immediately due to interrupt...")
+                    pool.terminate()
+                    pool_state["terminated"] = True
+                raise
+            return completed
 
+        population_size = config["optimize"]["population_size"]
         starting_configs = get_starting_configs(args.starting_configs)
         if starting_configs:
             logging.info(
@@ -1609,7 +1651,6 @@ async def main():
             bounds,
             sig_digits,
         )
-        population_size = config["optimize"]["population_size"]
 
         def _make_random_individual():
             return creator.Individual([np.random.uniform(low, high) for low, high in bounds])
@@ -1617,8 +1658,8 @@ async def main():
         population = [_make_random_individual() for _ in range(population_size)]
         if starting_individuals:
             evaluated_seeds = [creator.Individual(ind) for ind in starting_individuals]
-            _evaluate_initial(evaluated_seeds)
-            logging.info("Evaluated %d starting configs", len(evaluated_seeds))
+            eval_count = _evaluate_initial(evaluated_seeds)
+            logging.info("Evaluated %d starting configs", eval_count)
             if len(evaluated_seeds) > population_size:
                 evaluated_seeds = tools.selNSGA2(evaluated_seeds, population_size)
                 logging.info(
