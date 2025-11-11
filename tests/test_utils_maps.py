@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 import time
 import pytest
 
@@ -122,6 +123,30 @@ def test_coin_to_symbol_in_memory_reload(tmp_path, monkeypatch):
 
     # Should reload and reflect new value
     assert utils.coin_to_symbol("BTC", ex) == "BTCX/USDT:USDT"
+
+
+def test_coin_to_symbol_fallback_and_logging(tmp_path, monkeypatch, caplog):
+    monkeypatch.chdir(tmp_path)
+    ex = "hyperliquid"
+    path = os.path.join("caches", ex, "coin_to_symbol_map.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    json.dump({}, open(path, "w"))
+    # sanitize a noisy input
+    caplog.set_level(logging.INFO)
+    sym = utils.coin_to_symbol("BTCUSDC", ex)
+    assert sym == "BTC/USDC:USDC"
+    assert any("BTCUSDC" in rec.message for rec in caplog.records)
+
+
+def test_coin_to_symbol_multiple_candidates(tmp_path, monkeypatch, caplog):
+    monkeypatch.chdir(tmp_path)
+    ex = "binanceusdm"
+    path = os.path.join("caches", ex, "coin_to_symbol_map.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    json.dump({"BTC": ["A", "B"]}, open(path, "w"))
+    caplog.set_level(logging.INFO)
+    assert utils.coin_to_symbol("BTC", ex) == "A"
+    assert any("Multiple candidates" in rec.message for rec in caplog.records)
 
 
 def test_symbol_to_coin_in_memory_reload_and_heuristics(tmp_path, monkeypatch):
