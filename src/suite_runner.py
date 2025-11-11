@@ -419,7 +419,11 @@ async def run_backtest_scenario(
     disable_plotting: bool,
     base_coin_sources: Optional[Dict[str, str]] = None,
 ) -> ScenarioResult:
-    from backtest import run_backtest, post_process
+    from backtest import (
+        build_backtest_payload,
+        execute_backtest,
+        post_process,
+    )
 
     scenario_config, scenario_coins = apply_scenario(
         base_config,
@@ -449,7 +453,8 @@ async def run_backtest_scenario(
             scenario_config,
             scenario_coins,
             scenario_dir,
-            run_backtest,
+            build_backtest_payload,
+            execute_backtest,
             post_process,
         )
     else:
@@ -459,7 +464,8 @@ async def run_backtest_scenario(
             scenario_config,
             scenario_coins,
             scenario_dir,
-            run_backtest,
+            build_backtest_payload,
+            execute_backtest,
             post_process,
             available_exchanges,
         )
@@ -489,7 +495,8 @@ def _run_combined_dataset(
     scenario_config: Dict[str, Any],
     scenario_coins: List[str],
     scenario_dir: Optional[Path],
-    run_backtest_fn,
+    build_payload_fn,
+    execute_backtest_fn,
     post_process_fn,
 ) -> Dict[str, Dict[str, Any]]:
     per_exchange: Dict[str, Dict[str, Any]] = {}
@@ -521,7 +528,7 @@ def _run_combined_dataset(
     if "__meta__" in dataset.mss:
         mss_slice["__meta__"] = dataset.mss["__meta__"]
 
-    fills, equities_array, analysis = run_backtest_fn(
+    payload = build_payload_fn(
         hlcvs_slice,
         mss_slice,
         scenario_config,
@@ -529,6 +536,7 @@ def _run_combined_dataset(
         dataset.btc_usd_prices,
         dataset.timestamps,
     )
+    fills, equities_array, analysis = execute_backtest_fn(payload, scenario_config)
     per_exchange[dataset.exchange] = analysis
     if scenario_dir is not None:
         output_dir = scenario_dir / dataset.exchange
@@ -562,7 +570,8 @@ def _run_multi_dataset(
     scenario_config: Dict[str, Any],
     scenario_coins: List[str],
     scenario_dir: Optional[Path],
-    run_backtest_fn,
+    build_payload_fn,
+    execute_backtest_fn,
     post_process_fn,
     available_exchanges: List[str],
 ) -> Dict[str, Dict[str, Any]]:
@@ -588,7 +597,7 @@ def _run_multi_dataset(
         if "__meta__" in dataset.mss:
             mss_slice["__meta__"] = dataset.mss["__meta__"]
 
-        fills, equities_array, analysis = run_backtest_fn(
+        payload = build_payload_fn(
             hlcvs_slice,
             mss_slice,
             scenario_config,
@@ -596,6 +605,7 @@ def _run_multi_dataset(
             dataset.btc_usd_prices,
             dataset.timestamps,
         )
+        fills, equities_array, analysis = execute_backtest_fn(payload, scenario_config)
 
         per_exchange[exchange_key] = analysis
         if scenario_dir is not None:

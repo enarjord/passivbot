@@ -16,17 +16,231 @@ use crate::trailing::{
 };
 use crate::types::OrderType;
 use crate::types::{
-    BacktestParams, BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, Position,
-    StateParams, TrailingPriceBundle,
+    BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, ExchangeParams, HlcvsBundle,
+    HlcvsMeta, OrderBook, Position, StateParams, TrailingPriceBundle,
 };
 use ndarray::Array2;
-use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray3};
+use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyAny, PyDict, PyList};
 use pyo3::PyObject;
 use serde::Serialize;
 use std::str::FromStr;
+
+type BacktestPyResult = (PyObject, PyObject, Py<PyDict>, Py<PyDict>);
+
+#[pyclass(name = "HlcvsBundle", module = "passivbot_rust", unsendable)]
+pub struct HlcvsBundlePy {
+    pub inner: HlcvsBundle,
+}
+
+#[pymethods]
+impl HlcvsBundlePy {
+    #[new]
+    #[pyo3(signature = (hlcvs, btc_usd, timestamps, meta))]
+    pub fn new(
+        hlcvs: Py<PyArray3<f64>>,
+        btc_usd: Py<PyArray1<f64>>,
+        timestamps: Py<PyArray1<i64>>,
+        meta: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let parsed_meta = hlcvs_meta_from_py(meta)?;
+        let bundle = HlcvsBundle {
+            hlcvs,
+            btc_usd,
+            timestamps,
+            meta: parsed_meta,
+        };
+        Python::with_gil(|py| bundle.validate_shapes(py))?;
+        Ok(Self { inner: bundle })
+    }
+
+    #[getter]
+    pub fn hlcvs<'py>(&self, py: Python<'py>) -> PyObject {
+        self.inner.hlcvs.clone_ref(py).into_py(py)
+    }
+
+    #[getter]
+    pub fn btc_usd<'py>(&self, py: Python<'py>) -> PyObject {
+        self.inner.btc_usd.clone_ref(py).into_py(py)
+    }
+
+    #[getter]
+    pub fn timestamps<'py>(&self, py: Python<'py>) -> PyObject {
+        self.inner.timestamps.clone_ref(py).into_py(py)
+    }
+
+    #[getter]
+    pub fn meta<'py>(&self, py: Python<'py>) -> PyResult<PyObject> {
+        Ok(hlcvs_meta_to_dict(py, &self.inner.meta)?.into_py(py))
+    }
+
+    pub fn coin_meta<'py>(&self, symbol: &str, py: Python<'py>) -> PyResult<Option<PyObject>> {
+        if let Some(meta) = self.inner.coin_meta_by_symbol(symbol) {
+            Ok(Some(coin_meta_to_dict(py, meta)?.into_py(py)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn coins_len(&self) -> usize {
+        self.inner.coins_len()
+    }
+}
+
+fn hlcvs_meta_from_py(any: &Bound<'_, PyAny>) -> PyResult<HlcvsMeta> {
+    let dict = any
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("hlcvs meta must be a dict"))?;
+
+    let requested = get_u64(dict, "requested_start_timestamp_ms")?;
+    let effective = get_u64(dict, "effective_start_timestamp_ms")?;
+    let warm_req = get_u64(dict, "warmup_minutes_requested")?;
+    let warm_prov = get_u64(dict, "warmup_minutes_provided")?;
+
+    let coins_obj = dict
+        .get_item("coins")?
+        .ok_or_else(|| PyValueError::new_err("hlcvs meta missing 'coins'"))?;
+    let coins_list = coins_obj
+        .downcast::<PyList>()
+        .map_err(|_| PyValueError::new_err("'coins' must be a list"))?;
+    let mut coins = Vec::with_capacity(coins_list.len());
+    for (idx, item) in coins_list.iter().enumerate() {
+        let coin_dict = item
+            .downcast::<PyDict>()
+            .map_err(|_| PyValueError::new_err("coin metadata entries must be dicts"))?;
+        coins.push(parse_coin_meta(coin_dict, idx)?);
+    }
+
+    Ok(HlcvsMeta {
+        requested_start_timestamp_ms: requested,
+        effective_start_timestamp_ms: effective,
+        warmup_minutes_requested: warm_req,
+        warmup_minutes_provided: warm_prov,
+        coins,
+    })
+}
+
+fn get_u64(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<u64> {
+    dict.get_item(key)?
+        .ok_or_else(|| PyValueError::new_err(format!("hlcvs meta missing '{key}'")))?
+        .extract::<u64>()
+        .map_err(|_| PyValueError::new_err(format!("hlcvs meta field '{key}' must be int")))
+}
+
+fn parse_coin_meta(dict: &Bound<'_, PyDict>, default_index: usize) -> PyResult<CoinMeta> {
+    let index = dict
+        .get_item("index")?
+        .map(|val| val.extract::<usize>())
+        .transpose()?
+        .unwrap_or(default_index);
+    let symbol = dict
+        .get_item("symbol")?
+        .ok_or_else(|| PyValueError::new_err("coin meta missing 'symbol'"))?
+        .extract::<String>()?;
+    let coin = dict
+        .get_item("coin")?
+        .map(|val| val.extract::<String>())
+        .transpose()?
+        .unwrap_or_else(|| symbol.clone());
+    let exchange = dict
+        .get_item("exchange")?
+        .ok_or_else(|| PyValueError::new_err("coin meta missing 'exchange'"))?
+        .extract::<String>()?;
+    let quote = dict
+        .get_item("quote")?
+        .ok_or_else(|| PyValueError::new_err("coin meta missing 'quote'"))?
+        .extract::<String>()?;
+    let base = dict
+        .get_item("base")?
+        .ok_or_else(|| PyValueError::new_err("coin meta missing 'base'"))?
+        .extract::<String>()?;
+
+    macro_rules! fval {
+        ($key:literal) => {
+            dict.get_item($key)?
+                .ok_or_else(|| PyValueError::new_err(format!("coin meta missing '{}'", $key)))?
+                .extract::<f64>()
+                .map_err(|_| {
+                    PyValueError::new_err(format!("coin meta field '{}' must be float", $key))
+                })?
+        };
+    }
+
+    macro_rules! usize_val {
+        ($key:literal) => {
+            dict.get_item($key)?
+                .ok_or_else(|| PyValueError::new_err(format!("coin meta missing '{}'", $key)))?
+                .extract::<usize>()
+                .map_err(|_| {
+                    PyValueError::new_err(format!("coin meta field '{}' must be int", $key))
+                })?
+        };
+    }
+
+    Ok(CoinMeta {
+        index,
+        symbol,
+        coin,
+        exchange,
+        quote,
+        base,
+        qty_step: fval!("qty_step"),
+        price_step: fval!("price_step"),
+        min_qty: fval!("min_qty"),
+        min_cost: fval!("min_cost"),
+        c_mult: fval!("c_mult"),
+        maker_fee: fval!("maker_fee"),
+        taker_fee: fval!("taker_fee"),
+        first_valid_index: usize_val!("first_valid_index"),
+        last_valid_index: usize_val!("last_valid_index"),
+        warmup_minutes: usize_val!("warmup_minutes"),
+        trade_start_index: usize_val!("trade_start_index"),
+    })
+}
+
+fn coin_meta_to_dict<'py>(py: Python<'py>, meta: &CoinMeta) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("index", meta.index)?;
+    dict.set_item("symbol", &meta.symbol)?;
+    dict.set_item("coin", &meta.coin)?;
+    dict.set_item("exchange", &meta.exchange)?;
+    dict.set_item("quote", &meta.quote)?;
+    dict.set_item("base", &meta.base)?;
+    dict.set_item("qty_step", meta.qty_step)?;
+    dict.set_item("price_step", meta.price_step)?;
+    dict.set_item("min_qty", meta.min_qty)?;
+    dict.set_item("min_cost", meta.min_cost)?;
+    dict.set_item("c_mult", meta.c_mult)?;
+    dict.set_item("maker_fee", meta.maker_fee)?;
+    dict.set_item("taker_fee", meta.taker_fee)?;
+    dict.set_item("first_valid_index", meta.first_valid_index)?;
+    dict.set_item("last_valid_index", meta.last_valid_index)?;
+    dict.set_item("warmup_minutes", meta.warmup_minutes)?;
+    dict.set_item("trade_start_index", meta.trade_start_index)?;
+    Ok(dict)
+}
+
+fn hlcvs_meta_to_dict<'py>(py: Python<'py>, meta: &HlcvsMeta) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item(
+        "requested_start_timestamp_ms",
+        meta.requested_start_timestamp_ms,
+    )?;
+    dict.set_item(
+        "effective_start_timestamp_ms",
+        meta.effective_start_timestamp_ms,
+    )?;
+    dict.set_item("warmup_minutes_requested", meta.warmup_minutes_requested)?;
+    dict.set_item("warmup_minutes_provided", meta.warmup_minutes_provided)?;
+    let coins = PyList::empty_bound(py);
+    for entry in &meta.coins {
+        coins.append(coin_meta_to_dict(py, entry)?)?;
+    }
+    dict.set_item("coins", coins)?;
+    Ok(dict)
+}
 
 #[pyfunction]
 pub fn trailing_bundle_default_py() -> (f64, f64, f64, f64) {
@@ -390,12 +604,47 @@ mod tests {
 
 #[pyfunction]
 pub fn run_backtest(
-    hlcvs: PyReadonlyArray3<f64>, // Shared HLCV data (timesteps x coins x features)
-    btc_usd: PyReadonlyArray1<f64>, // Shared BTC/USD collateral prices
-    bot_params: &Bound<'_, PyAny>, // Bot parameters per coin
-    exchange_params_list: &Bound<'_, PyAny>, // Exchange parameters
-    backtest_params_dict: &Bound<'_, PyDict>, // Backtest parameters
-) -> PyResult<(PyObject, PyObject, Py<PyDict>, Py<PyDict>)> {
+    hlcvs: PyReadonlyArray3<f64>,
+    btc_usd: PyReadonlyArray1<f64>,
+    bot_params: &Bound<'_, PyAny>,
+    exchange_params_list: &Bound<'_, PyAny>,
+    backtest_params_dict: &Bound<'_, PyDict>,
+) -> PyResult<BacktestPyResult> {
+    run_backtest_core(
+        hlcvs,
+        btc_usd,
+        bot_params,
+        exchange_params_list,
+        backtest_params_dict,
+    )
+}
+
+#[pyfunction]
+pub fn run_backtest_bundle(
+    bundle: &HlcvsBundlePy,
+    bot_params: &Bound<'_, PyAny>,
+    exchange_params_list: &Bound<'_, PyAny>,
+    backtest_params_dict: &Bound<'_, PyDict>,
+) -> PyResult<BacktestPyResult> {
+    let py = bot_params.py();
+    let hlcvs = bundle.inner.hlcvs.bind(py).readonly();
+    let btc = bundle.inner.btc_usd.bind(py).readonly();
+    run_backtest_core(
+        hlcvs,
+        btc,
+        bot_params,
+        exchange_params_list,
+        backtest_params_dict,
+    )
+}
+
+fn run_backtest_core<'py>(
+    hlcvs: PyReadonlyArray3<'py, f64>,
+    btc_usd: PyReadonlyArray1<'py, f64>,
+    bot_params: &Bound<'py, PyAny>,
+    exchange_params_list: &Bound<'py, PyAny>,
+    backtest_params_dict: &Bound<'py, PyDict>,
+) -> PyResult<BacktestPyResult> {
     let hlcvs_rust = hlcvs.as_array();
     let btc_usd_rust = btc_usd.as_array();
 

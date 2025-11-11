@@ -9,6 +9,8 @@ from tools.event_loop_policy import set_windows_event_loop_policy
 set_windows_event_loop_policy()
 import asyncio
 import argparse
+from dataclasses import dataclass
+from typing import Any, Iterable, Sequence
 from config_utils import (
     load_config,
     dump_config,
@@ -61,6 +63,339 @@ from suite_runner import extract_suite_config, run_backtest_suite_async
 
 def oj(*x):
     return os.path.join(*x)
+
+
+def _split_symbol_parts(symbol: str):
+    symbol = str(symbol or "")
+    if not symbol:
+        return "", "USD"
+    if "/" in symbol:
+        base, rest = symbol.split("/", 1)
+    else:
+        base, rest = symbol, ""
+    if ":" in rest:
+        quote = rest.split(":", 1)[0]
+    elif rest:
+        quote = rest
+    elif ":" in symbol:
+        base, quote = symbol.split(":", 1)
+    else:
+        quote = "USD"
+    return base or symbol, quote or "USD"
+
+
+def _float_or(value, default=0.0):
+    try:
+        if value is None:
+            raise TypeError
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _int_or(value, default=0):
+    try:
+        if value is None:
+            raise TypeError
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _build_coin_metadata_entries(
+    coins_order,
+    exchange,
+    mss,
+    first_valid_indices,
+    last_valid_indices,
+    warmup_minutes,
+    trade_start_indices,
+):
+    entries = []
+    for idx, coin in enumerate(coins_order):
+        entry = mss.get(coin, {}) if isinstance(mss, dict) else {}
+        symbol = str(entry.get("symbol", coin))
+        base_from_symbol, quote_from_symbol = _split_symbol_parts(symbol)
+        coin_shorthand = entry.get("coin") or entry.get("base") or base_from_symbol
+        entry_exchange = entry.get("exchange") or exchange
+        maker_fee = entry.get("maker_fee")
+        if maker_fee is None:
+            maker_fee = entry.get("maker")
+        taker_fee = entry.get("taker_fee")
+        if taker_fee is None:
+            taker_fee = entry.get("taker")
+        entries.append(
+            {
+                "index": idx,
+                "symbol": symbol,
+                "coin": coin_shorthand,
+                "exchange": entry_exchange,
+                "quote": entry.get("quote") or quote_from_symbol,
+                "base": entry.get("base") or base_from_symbol,
+                "qty_step": _float_or(entry.get("qty_step")),
+                "price_step": _float_or(entry.get("price_step")),
+                "min_qty": _float_or(entry.get("min_qty")),
+                "min_cost": _float_or(entry.get("min_cost")),
+                "c_mult": _float_or(entry.get("c_mult"), 1.0),
+                "maker_fee": _float_or(maker_fee),
+                "taker_fee": _float_or(taker_fee),
+                "first_valid_index": _int_or(first_valid_indices[idx]),
+                "last_valid_index": _int_or(last_valid_indices[idx]),
+                "warmup_minutes": _int_or(warmup_minutes[idx]),
+                "trade_start_index": _int_or(trade_start_indices[idx]),
+            }
+        )
+    return entries
+
+
+def _build_hlcvs_bundle(
+    hlcvs,
+    btc_usd_prices,
+    timestamps,
+    config,
+    exchange,
+    mss,
+    coins_order,
+    first_valid_indices,
+    last_valid_indices,
+    warmup_minutes,
+    trade_start_indices,
+    requested_start_ts,
+):
+    hlcvs_arr = np.ascontiguousarray(hlcvs, dtype=np.float64)
+    btc_arr = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
+    if timestamps is None:
+        timestamps_arr = np.arange(hlcvs_arr.shape[0], dtype=np.int64)
+    else:
+        timestamps_arr = np.ascontiguousarray(timestamps, dtype=np.int64)
+    meta_overrides = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
+    warmup_requested = int(
+        meta_overrides.get("warmup_minutes_requested", compute_backtest_warmup_minutes(config))
+    )
+    warmup_provided = int(meta_overrides.get("warmup_minutes_provided", warmup_requested))
+    requested_ts = int(meta_overrides.get("requested_start_ts", requested_start_ts))
+    effective_start_ts = int(
+        meta_overrides.get(
+            "effective_start_ts", int(timestamps_arr[0]) if len(timestamps_arr) else 0
+        )
+    )
+    coin_meta_entries = _build_coin_metadata_entries(
+        coins_order,
+        exchange,
+        mss,
+        first_valid_indices,
+        last_valid_indices,
+        warmup_minutes,
+        trade_start_indices,
+    )
+    bundle_meta = {
+        "requested_start_timestamp_ms": requested_ts,
+        "effective_start_timestamp_ms": effective_start_ts,
+        "warmup_minutes_requested": warmup_requested,
+        "warmup_minutes_provided": warmup_provided,
+        "coins": coin_meta_entries,
+    }
+    return pbr.HlcvsBundle(hlcvs_arr, btc_arr, timestamps_arr, bundle_meta)
+
+
+@dataclass
+class BacktestPayload:
+    """Container for everything needed to run a backtest via the Rust engine."""
+
+    bundle: Any
+    bot_params_list: list
+    exchange_params: list
+    backtest_params: dict
+
+
+def build_backtest_payload(
+    hlcvs,
+    mss,
+    config: dict,
+    exchange: str,
+    btc_usd_prices,
+    timestamps=None,
+) -> BacktestPayload:
+    """
+    Assemble the bundle, bot params, and metadata needed to execute a backtest.
+    """
+
+    bot_params_list, exchange_params, backtest_params = prep_backtest_args(
+        config, mss, exchange
+    )
+    backtest_params = dict(backtest_params)
+    coins_order = backtest_params.get("coins", [])
+
+    # Inject first timestamp (ms) into backtest params; default to 0 if unknown
+    try:
+        first_ts_ms = int(timestamps[0]) if (timestamps is not None and len(timestamps) > 0) else 0
+    except Exception:
+        first_ts_ms = 0
+    backtest_params["first_timestamp_ms"] = first_ts_ms
+
+    warmup_map = compute_per_coin_warmup_minutes(config)
+    default_warm = int(warmup_map.get("__default__", 0))
+    first_valid_indices = []
+    last_valid_indices = []
+    warmup_minutes = []
+    trade_start_indices = []
+    total_steps = hlcvs.shape[0]
+    for idx, coin in enumerate(coins_order):
+        meta = mss.get(coin, {}) if isinstance(mss, dict) else {}
+        first_idx = int(meta.get("first_valid_index", 0))
+        last_idx = int(meta.get("last_valid_index", total_steps - 1))
+        if first_idx >= total_steps:
+            first_idx = total_steps
+        if last_idx >= total_steps:
+            last_idx = total_steps - 1
+        first_valid_indices.append(first_idx)
+        last_valid_indices.append(last_idx)
+        warm = int(meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
+        warmup_minutes.append(warm)
+        if first_idx > last_idx:
+            trade_idx = first_idx
+        else:
+            trade_idx = min(last_idx, first_idx + warm)
+        trade_start_indices.append(trade_idx)
+    backtest_params["first_valid_indices"] = first_valid_indices
+    backtest_params["last_valid_indices"] = last_valid_indices
+    backtest_params["warmup_minutes"] = warmup_minutes
+    backtest_params["trade_start_indices"] = trade_start_indices
+    backtest_params["global_warmup_bars"] = compute_backtest_warmup_minutes(config)
+
+    meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
+    candidate_start = meta.get(
+        "requested_start_ts", require_config_value(config, "backtest.start_date")
+    )
+    try:
+        if isinstance(candidate_start, str):
+            requested_start_ts = int(date_to_ts(candidate_start))
+        else:
+            requested_start_ts = int(candidate_start)
+    except Exception:
+        requested_start_ts = int(date_to_ts(require_config_value(config, "backtest.start_date")))
+    backtest_params["requested_start_timestamp_ms"] = requested_start_ts
+
+    bundle = _build_hlcvs_bundle(
+        hlcvs,
+        btc_usd_prices,
+        timestamps,
+        config,
+        exchange,
+        mss,
+        coins_order,
+        first_valid_indices,
+        last_valid_indices,
+        warmup_minutes,
+        trade_start_indices,
+        requested_start_ts,
+    )
+
+    return BacktestPayload(
+        bundle=bundle,
+        bot_params_list=bot_params_list,
+        exchange_params=exchange_params,
+        backtest_params=backtest_params,
+    )
+
+
+def execute_backtest(payload: BacktestPayload, config: dict):
+    """
+    Execute a prepared backtest payload and expand the resulting analysis.
+    """
+
+    (
+        fills,
+        equities_array,
+        analysis_usd,
+        analysis_btc,
+    ) = pbr.run_backtest_bundle(
+        payload.bundle,
+        payload.bot_params_list,
+        payload.exchange_params,
+        payload.backtest_params,
+    )
+
+    equities_array = np.asarray(equities_array)
+    analysis = expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config)
+    return fills, equities_array, analysis
+
+
+def subset_backtest_payload(
+    payload: BacktestPayload,
+    *,
+    coin_indices: Sequence[int] | None = None,
+    coin_symbols: Iterable[str] | None = None,
+) -> BacktestPayload:
+    """
+    Return a new payload sliced down to a subset of coins.
+
+    Args:
+        payload: Source payload produced by build_backtest_payload.
+        coin_indices: Ordered iterable of integer positions to keep.
+        coin_symbols: Optional iterable of symbol strings (either full symbol or shorthand coin).
+    """
+
+    if coin_indices is None and coin_symbols is None:
+        raise ValueError("Provide either coin_indices or coin_symbols when subsetting.")
+
+    bundle_meta = payload.bundle.meta
+    coins_meta = bundle_meta["coins"]
+
+    if coin_symbols is not None:
+        requested = {str(sym) for sym in coin_symbols}
+        lookup = {}
+        for pos, coin in enumerate(coins_meta):
+            lookup.setdefault(coin["symbol"], pos)
+            lookup.setdefault(coin.get("coin"), pos)
+        selected_positions = []
+        for sym in requested:
+            if sym not in lookup:
+                raise ValueError(f"Coin symbol '{sym}' not present in payload.")
+            selected_positions.append(lookup[sym])
+        selected_positions.sort()
+    else:
+        selected_positions = [int(idx) for idx in coin_indices]
+        for idx in selected_positions:
+            if idx < 0 or idx >= len(coins_meta):
+                raise ValueError(f"Coin index {idx} outside valid range.")
+
+    hlcvs_np = np.asarray(payload.bundle.hlcvs)
+    subset_hlcvs = np.ascontiguousarray(hlcvs_np[:, selected_positions, :], dtype=np.float64)
+    btc_np = np.ascontiguousarray(np.asarray(payload.bundle.btc_usd), dtype=np.float64)
+    ts_np = np.ascontiguousarray(np.asarray(payload.bundle.timestamps), dtype=np.int64)
+
+    new_meta = deepcopy(bundle_meta)
+    new_meta["coins"] = []
+    for new_idx, pos in enumerate(selected_positions):
+        coin_entry = deepcopy(coins_meta[pos])
+        coin_entry["index"] = new_idx
+        new_meta["coins"].append(coin_entry)
+
+    new_bundle = pbr.HlcvsBundle(subset_hlcvs, btc_np, ts_np, new_meta)
+
+    def _select(seq):
+        return [seq[pos] for pos in selected_positions]
+
+    new_bot = _select(payload.bot_params_list)
+    new_exchange_params = _select(payload.exchange_params)
+    new_backtest_params = deepcopy(payload.backtest_params)
+    for key in [
+        "coins",
+        "first_valid_indices",
+        "last_valid_indices",
+        "warmup_minutes",
+        "trade_start_indices",
+    ]:
+        if key in new_backtest_params and isinstance(new_backtest_params[key], list):
+            new_backtest_params[key] = _select(new_backtest_params[key])
+
+    return BacktestPayload(
+        bundle=new_bundle,
+        bot_params_list=new_bot,
+        exchange_params=new_exchange_params,
+        backtest_params=new_backtest_params,
+    )
 
 
 def process_forager_fills(
@@ -595,81 +930,16 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
 
 
 def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timestamps=None):
-    bot_params_list, exchange_params, backtest_params = prep_backtest_args(config, mss, exchange)
+    """
+    Backwards-compatible entry point that builds a payload and executes it immediately.
+    """
+
     logging.info(f"Backtesting {exchange}...")
     sts = utc_ms()
-
-    # Inject first timestamp (ms) into backtest params; default to 0 if unknown
-    try:
-        first_ts_ms = int(timestamps[0]) if (timestamps is not None and len(timestamps) > 0) else 0
-    except Exception:
-        first_ts_ms = 0
-    backtest_params = dict(backtest_params)
-    backtest_params["first_timestamp_ms"] = first_ts_ms
-    coins_order = backtest_params.get("coins", [])
-    warmup_map = compute_per_coin_warmup_minutes(config)
-    default_warm = int(warmup_map.get("__default__", 0))
-    first_valid_indices = []
-    last_valid_indices = []
-    warmup_minutes = []
-    trade_start_indices = []
-    total_steps = hlcvs.shape[0]
-    for idx, coin in enumerate(coins_order):
-        meta = mss.get(coin, {})
-        first_idx = int(meta.get("first_valid_index", 0))
-        last_idx = int(meta.get("last_valid_index", total_steps - 1))
-        if first_idx >= total_steps:
-            first_idx = total_steps
-        if last_idx >= total_steps:
-            last_idx = total_steps - 1
-        first_valid_indices.append(first_idx)
-        last_valid_indices.append(last_idx)
-        warm = int(meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
-        warmup_minutes.append(warm)
-        if first_idx > last_idx:
-            trade_idx = first_idx
-        else:
-            trade_idx = min(last_idx, first_idx + warm)
-        trade_start_indices.append(trade_idx)
-    backtest_params["first_valid_indices"] = first_valid_indices
-    backtest_params["last_valid_indices"] = last_valid_indices
-    backtest_params["warmup_minutes"] = warmup_minutes
-    backtest_params["trade_start_indices"] = trade_start_indices
-    backtest_params["global_warmup_bars"] = compute_backtest_warmup_minutes(config)
-    meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
-    candidate_start = meta.get(
-        "requested_start_ts", require_config_value(config, "backtest.start_date")
-    )
-    try:
-        if isinstance(candidate_start, str):
-            requested_start_ts = int(date_to_ts(candidate_start))
-        else:
-            requested_start_ts = int(candidate_start)
-    except Exception:
-        requested_start_ts = int(date_to_ts(require_config_value(config, "backtest.start_date")))
-    backtest_params["requested_start_timestamp_ms"] = requested_start_ts
-
-    (
-        fills,
-        equities_array,
-        analysis_usd,
-        analysis_btc,
-    ) = pbr.run_backtest(
-        np.ascontiguousarray(hlcvs, dtype=np.float64),
-        np.ascontiguousarray(btc_usd_prices, dtype=np.float64),
-        bot_params_list,
-        exchange_params,
-        backtest_params,
-    )
-
+    payload = build_backtest_payload(hlcvs, mss, config, exchange, btc_usd_prices, timestamps)
+    fills, equities_array, analysis = execute_backtest(payload, config)
     logging.info(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
-    equities_array = np.asarray(equities_array)
-
-    return (
-        fills,
-        equities_array,
-        expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config),
-    )
+    return fills, equities_array, analysis
 
 
 def post_process(

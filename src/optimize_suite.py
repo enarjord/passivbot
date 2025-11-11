@@ -19,7 +19,6 @@ from config_utils import (
     require_live_value,
     format_config,
 )
-from backtest import prep_backtest_args
 from shared_arrays import attach_shared_array
 from suite_runner import (
     SuiteScenario,
@@ -41,8 +40,6 @@ class ScenarioEvalContext:
     hlcvs_specs: Dict[str, Any]
     btc_usd_specs: Dict[str, Any]
     msss: Dict[str, Any]
-    exchange_params: Dict[str, Any]
-    backtest_params: Dict[str, Any]
     timestamps: Dict[str, Any]
     shared_hlcvs_np: Dict[str, np.ndarray]
     shared_btc_np: Dict[str, np.ndarray]
@@ -190,14 +187,6 @@ async def prepare_suite_contexts(
             if "__meta__" in dataset.mss:
                 mss_slice["__meta__"] = dataset.mss["__meta__"]
 
-            _bot_params, exch_params, bt_params = prep_backtest_args(
-                scenario_config,
-                mss_slice,
-                dataset.exchange,
-            )
-            bt_params = dict(bt_params)
-            bt_params["metrics_only"] = True
-
             contexts.append(
                 ScenarioEvalContext(
                     label=scenario.label,
@@ -206,8 +195,6 @@ async def prepare_suite_contexts(
                     hlcvs_specs={dataset.exchange: hlcvs_spec},
                     btc_usd_specs={dataset.exchange: btc_spec},
                     msss={dataset.exchange: mss_slice},
-                    exchange_params={dataset.exchange: exch_params},
-                    backtest_params={dataset.exchange: bt_params},
                     timestamps={dataset.exchange: dataset.timestamps},
                     shared_hlcvs_np={},
                     shared_btc_np={},
@@ -219,8 +206,6 @@ async def prepare_suite_contexts(
         hlcvs_specs: Dict[str, Any] = {}
         btc_specs: Dict[str, Any] = {}
         mss_slices: Dict[str, Any] = {}
-        exchange_params: Dict[str, Any] = {}
-        backtest_params: Dict[str, Any] = {}
         timestamps_map: Dict[str, Any] = {}
         exchanges_for_scenario: List[str] = []
 
@@ -247,15 +232,6 @@ async def prepare_suite_contexts(
                 mss_slice["__meta__"] = dataset.mss["__meta__"]
             mss_slices[exchange_key] = mss_slice
 
-            _bot_params, exch_params, bt_params = prep_backtest_args(
-                scenario_config,
-                mss_slice,
-                exchange_key,
-            )
-            exchange_params[exchange_key] = exch_params
-            bt_params = dict(bt_params)
-            bt_params["metrics_only"] = True
-            backtest_params[exchange_key] = bt_params
             timestamps_map[exchange_key] = dataset.timestamps
 
         if not exchanges_for_scenario:
@@ -270,8 +246,6 @@ async def prepare_suite_contexts(
                 hlcvs_specs=hlcvs_specs,
                 btc_usd_specs=btc_specs,
                 msss=mss_slices,
-                exchange_params=exchange_params,
-                backtest_params=backtest_params,
                 timestamps=timestamps_map,
                 shared_hlcvs_np={},
                 shared_btc_np={},

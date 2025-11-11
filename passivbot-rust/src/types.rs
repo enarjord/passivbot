@@ -1,8 +1,135 @@
 use core::str::FromStr;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use numpy::{PyArray1, PyArray3, PyUntypedArrayMethods};
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::{Py, PyResult, Python};
 use serde::Serialize;
 use std::collections::HashMap;
 use strum_macros::{Display, EnumIter, EnumString};
+
+/// Canonical metadata describing one coin/contract entry inside a unified HLCV tensor.
+///
+/// The numeric fields mirror the values currently distributed through `mss` dictionaries in
+/// Python.  Keeping them here ensures every column in the `(T, N, 4)` cube has an aligned
+/// metadata record with deterministic indexing.
+#[derive(Clone, Debug, Serialize)]
+pub struct CoinMeta {
+    /// Zero-based index that lines up with the second dimension of the HLCV tensor.
+    pub index: usize,
+    /// Full CCXT-style symbol (e.g. "BTC/USDT:USDT").
+    pub symbol: String,
+    /// Shorthand coin ticker (e.g. "BTC") assuming an implied USD quote.
+    pub coin: String,
+    /// Normalized exchange identifier (e.g. "binanceusdm").
+    pub exchange: String,
+    /// Quote asset, extracted from the symbol for readability.
+    pub quote: String,
+    /// Base asset, extracted from the symbol for readability.
+    pub base: String,
+    /// Smallest allowed quantity increment.
+    pub qty_step: f64,
+    /// Smallest allowed price increment.
+    pub price_step: f64,
+    /// Minimal order quantity enforced by the venue.
+    pub min_qty: f64,
+    /// Minimal notional/trade value enforced by the venue.
+    pub min_cost: f64,
+    /// Contract multiplier (lot size) used for sized calculations.
+    pub c_mult: f64,
+    /// Maker fee rate associated with this market (fractional, not percentage).
+    pub maker_fee: f64,
+    /// Taker fee rate associated with this market (fractional, not percentage).
+    pub taker_fee: f64,
+    /// First index (inclusive) in the HLCV tensor that contains valid data for this coin.
+    pub first_valid_index: usize,
+    /// Last index (inclusive) in the HLCV tensor that contains valid data for this coin.
+    pub last_valid_index: usize,
+    /// Warmup bars (expressed in minutes) required before this coin may trade.
+    pub warmup_minutes: usize,
+    /// Index in the HLCV tensor where trading is allowed to begin (>= `first_valid_index`).
+    pub trade_start_index: usize,
+}
+
+/// Metadata describing how an HLCV tensor was produced.  It travels alongside the raw
+/// `(time, coin, feature)` cube so both Python and Rust callers can reason about how to
+/// slice or merge the data without extra dictionaries.
+#[derive(Clone, Debug, Serialize)]
+pub struct HlcvsMeta {
+    pub requested_start_timestamp_ms: u64,
+    pub effective_start_timestamp_ms: u64,
+    pub warmup_minutes_requested: u64,
+    pub warmup_minutes_provided: u64,
+    pub coins: Vec<CoinMeta>,
+}
+
+/// Represents a fully-qualified HLCV tensor and its associated metadata.  The NumPy arrays are
+/// stored as owned Python references so Rust callers can obtain zero-copy views as needed while
+/// Python retains control over the underlying memory.
+#[derive(Clone)]
+pub struct HlcvsBundle {
+    pub hlcvs: Py<PyArray3<f64>>,
+    pub btc_usd: Py<PyArray1<f64>>,
+    pub timestamps: Py<PyArray1<i64>>,
+    pub meta: HlcvsMeta,
+}
+
+impl HlcvsBundle {
+    pub fn coin_meta_by_index(&self, idx: usize) -> Option<&CoinMeta> {
+        self.meta.coins.iter().find(|coin| coin.index == idx)
+    }
+
+    pub fn coin_meta_by_symbol(&self, symbol: &str) -> Option<&CoinMeta> {
+        self.meta
+            .coins
+            .iter()
+            .find(|coin| coin.symbol == symbol || coin.coin == symbol)
+    }
+
+    pub fn coins_len(&self) -> usize {
+        self.meta.coins.len()
+    }
+
+    pub fn validate_shapes(&self, py: Python<'_>) -> PyResult<()> {
+        let hlcvs_ref = self.hlcvs.bind(py);
+        let shape = hlcvs_ref.shape();
+        if shape.len() != 3 {
+            return Err(PyValueError::new_err(format!(
+                "hlcvs must be a 3D array, got ndim={}",
+                shape.len()
+            )));
+        }
+
+        let n_timesteps = shape[0];
+        let n_coins = shape[1];
+        if n_coins != self.meta.coins.len() {
+            return Err(PyValueError::new_err(format!(
+                "coin metadata length ({}) does not match hlcvs coin dimension ({})",
+                self.meta.coins.len(),
+                n_coins
+            )));
+        }
+
+        let timestamps_ref = self.timestamps.bind(py);
+        if timestamps_ref.len() != n_timesteps {
+            return Err(PyValueError::new_err(format!(
+                "timestamps length ({}) does not match hlcvs timesteps ({})",
+                timestamps_ref.len(),
+                n_timesteps
+            )));
+        }
+
+        let btc_ref = self.btc_usd.bind(py);
+        if btc_ref.len() != n_timesteps {
+            return Err(PyValueError::new_err(format!(
+                "btc_usd length ({}) does not match hlcvs timesteps ({})",
+                btc_ref.len(),
+                n_timesteps
+            )));
+        }
+
+        Ok(())
+    }
+}
 
 #[derive(Debug)]
 pub struct ExchangeParams {

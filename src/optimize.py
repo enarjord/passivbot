@@ -30,7 +30,8 @@ import time
 from collections import defaultdict
 from backtest import (
     prepare_hlcvs_mss,
-    prep_backtest_args,
+    build_backtest_payload,
+    execute_backtest,
     expand_analysis,
 )
 from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
@@ -557,8 +558,6 @@ class Evaluator:
         self.shared_hlcvs_np = {}
         self.shared_btc_np = {}
         self._attachments = {"hlcvs": {}, "btc": {}}
-        self.exchange_params = {}
-        self.backtest_params = {}
 
         for exchange in self.exchanges:
             logging.debug("Preparing cached parameters for %s...", exchange)
@@ -569,10 +568,6 @@ class Evaluator:
                 btc_spec = self.btc_usd_specs.get(exchange)
                 if btc_spec is not None:
                     self.shared_btc_np[exchange] = self.shared_array_manager.view(btc_spec)
-            _, self.exchange_params[exchange], self.backtest_params[exchange] = prep_backtest_args(
-                config, self.msss[exchange], exchange
-            )
-            self.backtest_params[exchange]["metrics_only"] = True
 
         self.config = config
         logging.debug("Evaluator initialization complete.")
@@ -581,9 +576,6 @@ class Evaluator:
         self.duplicate_counter = duplicate_counter if duplicate_counter is not None else {"count": 0}
         self.bounds = extract_bounds_tuple_list_from_config(self.config)
         self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
-
-        for exchange in self.exchanges:
-            self._populate_backtest_metadata(exchange)
 
         shared_metric_weights = {
             "positions_held_per_day": 1.0,
@@ -666,94 +658,6 @@ class Evaluator:
                 attachment = attach_shared_array(btc_spec)
                 self._attachments["btc"][exchange] = attachment
                 self.shared_btc_np[exchange] = attachment.array
-
-    def _populate_backtest_metadata(self, exchange: str) -> None:
-        self._ensure_attached(exchange)
-        hlcvs_arr = self.shared_hlcvs_np[exchange]
-        exchange_mss = self.msss.get(exchange, {}) if isinstance(self.msss, dict) else {}
-        meta = exchange_mss.get("__meta__", {}) if isinstance(exchange_mss, dict) else {}
-
-        first_ts_list = self.timestamps.get(exchange)
-        first_ts_ms = 0
-        if first_ts_list is not None and len(first_ts_list) > 0:
-            try:
-                first_ts_ms = int(first_ts_list[0])
-            except Exception:
-                logging.warning(
-                    "Evaluator: unable to parse first timestamp for %s from timestamps array",
-                    exchange,
-                )
-                first_ts_ms = 0
-        if first_ts_ms == 0:
-            candidate_ts = (
-                meta.get("requested_start_ts")
-                or meta.get("effective_start_ts")
-                or require_config_value(self.config, "backtest.start_date")
-            )
-            if isinstance(candidate_ts, (int, float)):
-                first_ts_ms = int(candidate_ts)
-            elif isinstance(candidate_ts, str):
-                try:
-                    first_ts_ms = int(date_to_ts(candidate_ts))
-                except Exception:
-                    first_ts_ms = 0
-            if first_ts_ms:
-                logging.info(
-                    "Evaluator: using fallback first timestamp %s for %s", first_ts_ms, exchange
-                )
-            else:
-                logging.warning(
-                    "Evaluator: falling back to 0 first_timestamp_ms for %s; timestamps unavailable",
-                    exchange,
-                )
-        self.backtest_params[exchange]["first_timestamp_ms"] = first_ts_ms
-
-        candidate_start = meta.get("requested_start_ts") or require_config_value(
-            self.config, "backtest.start_date"
-        )
-        try:
-            if isinstance(candidate_start, str):
-                requested_start_ts = int(date_to_ts(candidate_start))
-            else:
-                requested_start_ts = int(candidate_start or 0)
-        except Exception:
-            requested_start_ts = int(
-                date_to_ts(require_config_value(self.config, "backtest.start_date"))
-            )
-        self.backtest_params[exchange]["requested_start_timestamp_ms"] = requested_start_ts
-
-        coins_order = self.backtest_params[exchange].get("coins", [])
-        total_steps = hlcvs_arr.shape[0]
-        warmup_map = compute_per_coin_warmup_minutes(self.config)
-        default_warm = int(warmup_map.get("__default__", 0))
-        first_valid_indices = []
-        last_valid_indices = []
-        warmup_minutes = []
-        trade_start_indices = []
-        for idx, coin in enumerate(coins_order):
-            meta_coin = exchange_mss.get(coin, {}) if isinstance(exchange_mss, dict) else {}
-            first_idx = int(meta_coin.get("first_valid_index", 0))
-            last_idx = int(meta_coin.get("last_valid_index", total_steps - 1))
-            if first_idx >= total_steps:
-                first_idx = total_steps
-            if last_idx >= total_steps:
-                last_idx = total_steps - 1
-            first_valid_indices.append(first_idx)
-            last_valid_indices.append(last_idx)
-            warm = int(meta_coin.get("warmup_minutes", warmup_map.get(coin, default_warm)))
-            warmup_minutes.append(warm)
-            if first_idx > last_idx:
-                trade_idx = first_idx
-            else:
-                trade_idx = min(last_idx, first_idx + warm)
-            trade_start_indices.append(trade_idx)
-        self.backtest_params[exchange]["first_valid_indices"] = first_valid_indices
-        self.backtest_params[exchange]["last_valid_indices"] = last_valid_indices
-        self.backtest_params[exchange]["warmup_minutes"] = warmup_minutes
-        self.backtest_params[exchange]["trade_start_indices"] = trade_start_indices
-        self.backtest_params[exchange]["global_warmup_bars"] = compute_backtest_warmup_minutes(
-            self.config
-        )
 
     def perturb_step_digits(self, individual, change_chance=0.5):
         perturbed = []
@@ -869,33 +773,20 @@ class Evaluator:
         analyses = {}
         for exchange in self.exchanges:
             self._ensure_attached(exchange)
-            bot_params_list, _, _ = prep_backtest_args(
-                config,
-                [],
-                exchange,
-                exchange_params=self.exchange_params[exchange],
-                backtest_params=self.backtest_params[exchange],
-            )
-            run_result = pbr.run_backtest(
+            payload = build_backtest_payload(
                 self.shared_hlcvs_np[exchange],
+                self.msss[exchange],
+                config,
+                exchange,
                 self.shared_btc_np[exchange],
-                bot_params_list,
-                self.exchange_params[exchange],
-                self.backtest_params[exchange],
+                self.timestamps.get(exchange),
             )
-            if len(run_result) == 5:
-                fills, equities_array, _, analysis_usd, analysis_btc = run_result
-            else:
-                fills, equities_array, analysis_usd, analysis_btc = run_result
-            analyses[exchange] = expand_analysis(
-                analysis_usd, analysis_btc, fills, equities_array, config
-            )
+            fills, equities_array, analysis = execute_backtest(payload, config)
+            analyses[exchange] = analysis
 
             # Explicitly drop large intermediate arrays to keep worker RSS low.
             del fills
             del equities_array
-            del analysis_usd
-            del analysis_btc
         scenario_metrics = build_scenario_metrics(analyses)
         aggregate_stats = scenario_metrics.get("stats", {})
         flat_stats = flatten_metric_stats(aggregate_stats)
@@ -1095,7 +986,6 @@ class SuiteEvaluator:
         per_scenario_metrics: Dict[str, Dict[str, Any]] = {}
         scenario_results: List[ScenarioResult] = []
 
-        from backtest import prep_backtest_args
         from tools.iterative_backtester import combine_analyses as combine
 
         for ctx in self.contexts:
@@ -1118,31 +1008,18 @@ class SuiteEvaluator:
             analyses = {}
             for exchange in ctx.exchanges:
                 self._ensure_context_attachment(ctx, exchange)
-                bot_params_list, _, _ = prep_backtest_args(
-                    scenario_config,
-                    [],
-                    exchange,
-                    exchange_params=ctx.exchange_params[exchange],
-                    backtest_params=ctx.backtest_params[exchange],
-                )
-                run_result = pbr.run_backtest(
+                payload = build_backtest_payload(
                     ctx.shared_hlcvs_np[exchange],
+                    ctx.msss[exchange],
+                    scenario_config,
+                    exchange,
                     ctx.shared_btc_np.get(exchange),
-                    bot_params_list,
-                    ctx.exchange_params[exchange],
-                    ctx.backtest_params[exchange],
+                    ctx.timestamps.get(exchange),
                 )
-                if len(run_result) == 5:
-                    fills, equities_array, _, analysis_usd, analysis_btc = run_result
-                else:
-                    fills, equities_array, analysis_usd, analysis_btc = run_result
-                analyses[exchange] = expand_analysis(
-                    analysis_usd, analysis_btc, fills, equities_array, scenario_config
-                )
+                fills, equities_array, analysis = execute_backtest(payload, scenario_config)
+                analyses[exchange] = analysis
                 del fills
                 del equities_array
-                del analysis_usd
-                del analysis_btc
 
             combined_metrics = combine(analyses)
             per_scenario_metrics[ctx.label] = combined_metrics
