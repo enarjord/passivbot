@@ -480,24 +480,47 @@ def create_coin_symbol_map_cache(exchange: str, markets, verbose=True):
 
 def coin_to_symbol(coin, exchange):
     # caches coin_to_symbol_map in memory and reloads if file changes
+    if coin == "":
+        return ""
+    ex = normalize_exchange_name(exchange)
+    quote = get_quote(ex)
+    coin_sanitized = symbol_to_coin(coin)
+    fallback = f"{coin_sanitized}/{quote}:{quote}"
     try:
-        ex = normalize_exchange_name(exchange)
         loaded = _load_coin_to_symbol_map(ex)
-        if not loaded or coin not in loaded:
-            return ""
-        candidates = loaded.get(coin, [])
+        candidates = loaded.get(coin_sanitized, []) if loaded else []
         if len(candidates) == 1:
             return candidates[0]
-        elif len(candidates) == 0:
-            logging.info(f"No candidates for {coin}")
-            return ""
+        if len(candidates) > 1:
+            logging.info(
+                "Multiple candidates for %s (raw=%s): %s",
+                coin_sanitized,
+                coin,
+                candidates,
+            )
+            return candidates[0]
+        if loaded:
+            # map present but coin missing
+            logging.info(
+                "No mapping for %s (raw=%s) on %s; using fallback %s",
+                coin_sanitized,
+                coin,
+                ex,
+                fallback,
+            )
         else:
-            logging.info(f"Multiple candidates for {coin}: {candidates}")
-            return ""
+            logging.info(
+                "coin_to_symbol map for %s missing; using fallback for %s (raw=%s) -> %s",
+                ex,
+                coin_sanitized,
+                coin,
+                fallback,
+            )
     except Exception as e:
-        logging.error(f"error with coin_to_symbol {coin} {exchange} {e}")
-    quote = get_quote(normalize_exchange_name(exchange))
-    return f"{coin}/{quote}:{quote}"
+        logging.error(
+            "error with coin_to_symbol %s (raw=%s) %s: %s", coin_sanitized, coin, exchange, e
+        )
+    return fallback
 
 
 def get_caller_name():
