@@ -82,13 +82,13 @@ def parse_separators(raw: str) -> tuple[str, str]:
     if len(parts) == 2 and parts[0] and parts[1].strip():
         return parts[0], parts[1].strip()
 
-    raise argparse.ArgumentTypeError(
-        "Invalid separators format. Examples: ', :', ',:' or ' , : '"
-    )
+    raise argparse.ArgumentTypeError("Invalid separators format. Examples: ', :', ',:' or ' , : '")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawTextHelpFormatter
+    )
     parser.add_argument(
         "target",
         help="Path to a JSON file or directory containing JSON files.",
