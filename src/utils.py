@@ -17,6 +17,7 @@ from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
     resolve_custom_endpoint_override,
 )
+from config_transform import record_transform
 
 
 logging.basicConfig(
@@ -746,9 +747,22 @@ def symbol_to_coin(symbol, verbose=True):
     return coin
 
 
+def _snapshot(value):
+    return deepcopy(value) if isinstance(value, (dict, list)) else value
+
+
+def _diff_snapshot(before, after):
+    if before == after:
+        return None
+    return {"old": _snapshot(before), "new": _snapshot(after)}
+
+
 async def format_approved_ignored_coins(config, exchanges: [str], verbose=True):
     if isinstance(exchanges, str):
         exchanges = [exchanges]
+    before_approved = deepcopy(config.get("live", {}).get("approved_coins"))
+    before_ignored = deepcopy(config.get("live", {}).get("ignored_coins"))
+    before_sources = deepcopy(config.get("_coins_sources", {}))
     coin_sources = config.setdefault("_coins_sources", {})
     approved_source = coin_sources.get("approved_coins", config.get("live", {}).get("approved_coins"))
     if approved_source is None:
@@ -794,6 +808,19 @@ async def format_approved_ignored_coins(config, exchanges: [str], verbose=True):
     config["live"]["ignored_coins"] = {
         pside: [cf for x in ic[pside] if (cf := symbol_to_coin(x))] for pside in ic
     }
+
+    approved_diff = _diff_snapshot(before_approved, config["live"]["approved_coins"])
+    ignored_diff = _diff_snapshot(before_ignored, config["live"]["ignored_coins"])
+    sources_diff = _diff_snapshot(before_sources, config.get("_coins_sources", {}))
+    if approved_diff or ignored_diff or sources_diff:
+        details = {"exchanges": list(exchanges)}
+        if approved_diff:
+            details["approved_coins"] = approved_diff
+        if ignored_diff:
+            details["ignored_coins"] = ignored_diff
+        if sources_diff:
+            details["coin_sources"] = sources_diff
+        record_transform(config, "format_approved_ignored_coins", details)
 
 
 def normalize_coins_source(src):
