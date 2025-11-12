@@ -175,9 +175,7 @@ def _build_hlcvs_bundle(
     warmup_provided = int(meta_overrides.get("warmup_minutes_provided", warmup_requested))
     requested_ts = int(meta_overrides.get("requested_start_ts", requested_start_ts))
     effective_start_ts = int(
-        meta_overrides.get(
-            "effective_start_ts", int(timestamps_arr[0]) if len(timestamps_arr) else 0
-        )
+        meta_overrides.get("effective_start_ts", int(timestamps_arr[0]) if len(timestamps_arr) else 0)
     )
     coin_meta_entries = _build_coin_metadata_entries(
         coins_order,
@@ -220,9 +218,7 @@ def build_backtest_payload(
     Assemble the bundle, bot params, and metadata needed to execute a backtest.
     """
 
-    bot_params_list, exchange_params, backtest_params = prep_backtest_args(
-        config, mss, exchange
-    )
+    bot_params_list, exchange_params, backtest_params = prep_backtest_args(config, mss, exchange)
     backtest_params = dict(backtest_params)
     coins_order = backtest_params.get("coins", [])
 
