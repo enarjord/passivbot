@@ -1,13 +1,21 @@
+import argparse
+import json
+import logging
 import os
 import re
 from copy import deepcopy
 from typing import Any, Dict, Tuple, List, Union, Optional, Iterable
-import argparse
-import logging
+
 import hjson
+
 from pure_funcs import remove_OD, sort_dict_keys, str2bool
-from procedures import dump_pretty_json
-from utils import format_end_date, symbol_to_coin, normalize_coins_source
+from utils import (
+    format_end_date,
+    symbol_to_coin,
+    normalize_coins_source,
+    dump_json_streamlined,
+)
+from config_transform import ConfigTransformTracker, record_transform
 
 
 def _log_config(verbose: bool, level: int, message: str, *args) -> None:
@@ -93,6 +101,10 @@ def load_config(filepath: str, live_only=False, verbose=True) -> dict:
             config_raw, live_only=live_only, verbose=verbose, base_config_path=filepath
         )
         config["_raw"] = deepcopy(config_raw)
+        existing_log = config.get("_transform_log", [])
+        config["_transform_log"] = []
+        record_transform(config, "load_config", {"path": filepath})
+        config["_transform_log"].extend(existing_log)
         return config
     except Exception:
         logging.exception("failed to load config %s", filepath)
@@ -102,7 +114,10 @@ def load_config(filepath: str, live_only=False, verbose=True) -> dict:
 def dump_config(config: dict, filepath: str):
     config_ = deepcopy(config)
     try:
-        dump_pretty_json(config_, filepath)
+        sorted_config = sort_dict_keys(config_)
+        with open(filepath, "w", encoding="utf-8") as fp:
+            dump_json_streamlined(sorted_config, fp, sort_keys=False)
+            fp.write("\n")
     except Exception:
         logging.exception("failed to dump config to %s", filepath)
         raise
@@ -413,6 +428,11 @@ def parse_overrides(config, verbose=True):
             coin,
             sort_dict_keys(parsed_overrides),
         )
+    record_transform(
+        result,
+        "parse_overrides",
+        {"coins": sorted(result.get("coin_overrides", {}).keys())},
+    )
     return result
 
 
@@ -606,7 +626,9 @@ LEGACY_BOUNDS_KEYS = {
 }
 
 
-def _apply_backward_compatibility_renames(result: dict, verbose: bool = True) -> None:
+def _apply_backward_compatibility_renames(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
     """Translate legacy rolling_window keys to their EMA-span counterparts."""
 
     for pside, bot_cfg in result.get("bot", {}).items():
@@ -614,29 +636,50 @@ def _apply_backward_compatibility_renames(result: dict, verbose: bool = True) ->
             continue
         for old, new in LEGACY_FILTER_KEYS.items():
             if old in bot_cfg:
+                moved_value = bot_cfg[old]
                 if new not in bot_cfg:
-                    bot_cfg[new] = bot_cfg[old]
+                    bot_cfg[new] = moved_value
                     _log_config(
                         verbose, logging.INFO, "renaming parameter bot.%s.%s -> %s", pside, old, new
                     )
+                    if tracker is not None:
+                        tracker.rename(
+                            ["bot", pside, old],
+                            ["bot", pside, new],
+                            moved_value,
+                        )
                 del bot_cfg[old]
         for old, new in LEGACY_ENTRY_GRID_KEYS.items():
             if old in bot_cfg:
+                moved_value = bot_cfg[old]
                 if new not in bot_cfg:
-                    bot_cfg[new] = bot_cfg[old]
+                    bot_cfg[new] = moved_value
                     _log_config(
                         verbose, logging.INFO, "renaming parameter bot.%s.%s -> %s", pside, old, new
                     )
+                    if tracker is not None:
+                        tracker.rename(
+                            ["bot", pside, old],
+                            ["bot", pside, new],
+                            moved_value,
+                        )
                 del bot_cfg[old]
 
     bounds = result.get("optimize", {}).get("bounds", {})
     for old, new in LEGACY_BOUNDS_KEYS.items():
         if old in bounds:
+            moved_value = bounds[old]
             if new not in bounds:
-                bounds[new] = bounds[old]
+                bounds[new] = moved_value
                 _log_config(
                     verbose, logging.INFO, "renaming parameter optimize.bounds.%s -> %s", old, new
                 )
+                if tracker is not None:
+                    tracker.rename(
+                        ["optimize", "bounds", old],
+                        ["optimize", "bounds", new],
+                        moved_value,
+                    )
             del bounds[old]
 
     live_cfg = result.get("live")
@@ -650,9 +693,17 @@ def _apply_backward_compatibility_renames(result: dict, verbose: bool = True) ->
                 logging.INFO,
                 "moved live.memory_snapshot_interval_minutes -> logging.memory_snapshot_interval_minutes",
             )
+            if tracker is not None:
+                tracker.rename(
+                    ["live", "memory_snapshot_interval_minutes"],
+                    ["logging", "memory_snapshot_interval_minutes"],
+                    val,
+                )
 
 
-def _migrate_btc_collateral_settings(result: dict, verbose: bool = True) -> None:
+def _migrate_btc_collateral_settings(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
     """Convert legacy bool collateral flag to fractional settings and ensure defaults."""
     backtest = result.setdefault("backtest", {})
 
@@ -670,17 +721,34 @@ def _migrate_btc_collateral_settings(result: dict, verbose: bool = True) -> None
                 "changed backtest.use_btc_collateral -> backtest.btc_collateral_cap = %s",
                 backtest["btc_collateral_cap"],
             )
+            if tracker is not None:
+                tracker.rename(
+                    ["backtest", "use_btc_collateral"],
+                    ["backtest", "btc_collateral_cap"],
+                    backtest["btc_collateral_cap"],
+                )
+        elif tracker is not None:
+            tracker.remove(["backtest", "use_btc_collateral"], use_btc)
         if "btc_collateral_ltv_cap" not in backtest:
             backtest["btc_collateral_ltv_cap"] = None
+            if tracker is not None:
+                tracker.add(["backtest", "btc_collateral_ltv_cap"], None)
 
     cap = backtest.get("btc_collateral_cap")
     try:
-        backtest["btc_collateral_cap"] = float(cap)
+        cap_float = float(cap)
+        if tracker is not None and cap != cap_float:
+            tracker.update(["backtest", "btc_collateral_cap"], cap, cap_float)
+        backtest["btc_collateral_cap"] = cap_float
     except (TypeError, ValueError):
+        if tracker is not None:
+            tracker.update(["backtest", "btc_collateral_cap"], cap, 0.0)
         backtest["btc_collateral_cap"] = 0.0
 
     if "btc_collateral_ltv_cap" not in backtest:
         backtest["btc_collateral_ltv_cap"] = None
+        if tracker is not None:
+            tracker.add(["backtest", "btc_collateral_ltv_cap"], None)
 
 
 def detect_flavor(config: dict, template: dict) -> str:
@@ -737,7 +805,9 @@ def build_base_config_from_flavor(config: dict, template: dict, flavor: str, ver
     raise Exception("failed to format config: unknown flavor")
 
 
-def _ensure_bot_defaults_and_bounds(result: dict, verbose: bool = True) -> None:
+def _ensure_bot_defaults_and_bounds(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
     """Ensure required bot defaults and optimize bounds exist for each position side."""
     for pside in ("long", "short"):
         for k0, v_bt, v_opt in [
@@ -796,6 +866,8 @@ def _ensure_bot_defaults_and_bounds(result: dict, verbose: bool = True) -> None:
                     k0,
                     v_bt,
                 )
+                if tracker is not None:
+                    tracker.add(["bot", pside, k0], v_bt)
             opt_key = f"{pside}_{k0}"
             if opt_key not in result["optimize"]["bounds"]:
                 result["optimize"]["bounds"][opt_key] = v_opt
@@ -807,9 +879,13 @@ def _ensure_bot_defaults_and_bounds(result: dict, verbose: bool = True) -> None:
                     opt_key,
                     v_opt,
                 )
+                if tracker is not None:
+                    tracker.add(["optimize", "bounds", opt_key], v_opt)
 
 
-def _rename_config_keys(result: dict, verbose: bool = True) -> None:
+def _rename_config_keys(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
     """Rename legacy keys to their current names."""
     for section, src, dst in [
         ("live", "minimum_market_age_days", "minimum_coin_age_days"),
@@ -819,6 +895,8 @@ def _rename_config_keys(result: dict, verbose: bool = True) -> None:
         if src in result[section]:
             result[section][dst] = deepcopy(result[section][src])
             _log_config(verbose, logging.INFO, "renaming parameter %s %s -> %s", section, src, dst)
+            if tracker is not None:
+                tracker.rename([section, src], [section, dst], result[section][dst])
             del result[section][src]
     if "exchange" in result["backtest"] and isinstance(result["backtest"]["exchange"], str):
         exchange = result["backtest"]["exchange"]
@@ -830,36 +908,69 @@ def _rename_config_keys(result: dict, verbose: bool = True) -> None:
             exchange,
             exchange,
         )
+        if tracker is not None:
+            tracker.rename(
+                ["backtest", "exchange"],
+                ["backtest", "exchanges"],
+                [exchange],
+            )
         del result["backtest"]["exchange"]
 
 
 def _sync_with_template(
-    template: dict, result: dict, base_config_path: str, verbose: bool = True
+    template: dict,
+    result: dict,
+    base_config_path: str,
+    verbose: bool = True,
+    tracker: Optional[ConfigTransformTracker] = None,
 ) -> None:
     """Synchronize the config with the template structure and prune unused keys."""
-    add_missing_keys_recursively(template, result, verbose=verbose)
+    add_missing_keys_recursively(template, result, verbose=verbose, tracker=tracker)
+    existing_base = result["live"].get("base_config_path") if "live" in result else None
+    had_key = "live" in result and "base_config_path" in result["live"]
     if base_config_path or "base_config_path" not in result["live"]:
         result["live"]["base_config_path"] = base_config_path
+        if tracker is not None:
+            if not had_key:
+                tracker.add(["live", "base_config_path"], base_config_path)
+            elif existing_base != base_config_path:
+                tracker.update(["live", "base_config_path"], existing_base, base_config_path)
     template_with_extras = deepcopy(template)
     template_with_extras.setdefault("live", {})["base_config_path"] = ""
     remove_unused_keys_recursively(
-        template_with_extras, result, verbose=verbose, preserve=[("coin_overrides",)]
+        template_with_extras,
+        result,
+        verbose=verbose,
+        preserve=[("coin_overrides",)],
+        tracker=tracker,
     )
-    remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose)
     remove_unused_keys_recursively(
-        template["optimize"]["bounds"], result["optimize"]["bounds"], verbose=verbose
+        template["bot"], result["bot"], verbose=verbose, tracker=tracker
+    )
+    remove_unused_keys_recursively(
+        template["optimize"]["bounds"],
+        result["optimize"]["bounds"],
+        verbose=verbose,
+        tracker=tracker,
     )
     remove_unused_keys_recursively(
         template.get("optimize", {}).get("limits", {}),
         result["optimize"].setdefault("limits", {}),
         verbose=verbose,
+        tracker=tracker,
     )
 
 
-def _normalize_position_counts(result: dict) -> None:
+def _normalize_position_counts(
+    result: dict, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
     """Round position counts to integers for each side."""
     for pside in result["bot"]:
-        result["bot"][pside]["n_positions"] = int(round(result["bot"][pside]["n_positions"]))
+        current = result["bot"][pside].get("n_positions")
+        rounded = int(round(current))
+        if tracker is not None and current != rounded:
+            tracker.update(["bot", pside, "n_positions"], current, rounded)
+        result["bot"][pside]["n_positions"] = rounded
 
 
 def _normalize_coin_sources(raw: Any) -> Dict[str, str]:
@@ -884,7 +995,9 @@ def _preserve_coin_sources(result: dict) -> None:
             sources[key] = deepcopy(live[key])
 
 
-def _apply_non_live_adjustments(result: dict, verbose: bool = True) -> None:
+def _apply_non_live_adjustments(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
     """Adjust live/backtest/optimize fields when not running in live-only mode."""
     for key in ("approved_coins", "ignored_coins"):
         result["live"][key] = normalize_coins_source(result["live"].get(key, ""))
@@ -923,27 +1036,50 @@ def _apply_non_live_adjustments(result: dict, verbose: bool = True) -> None:
 
 def format_config(config: dict, verbose=True, live_only=False, base_config_path: str = "") -> dict:
     # attempts to format a config to v7 config
+    raw_snapshot = deepcopy(config["_raw"]) if "_raw" in config else None
+    existing_log = config.get("_transform_log")
+    if isinstance(existing_log, list):
+        existing_log = deepcopy(existing_log)
+    else:
+        existing_log = []
+    tracker = ConfigTransformTracker()
     coin_sources_input = deepcopy(config.get("backtest", {}).get("coin_sources"))
     template = get_template_config("v7")
     flavor = detect_flavor(config, template)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
-    _apply_backward_compatibility_renames(result, verbose=verbose)
-    _migrate_btc_collateral_settings(result, verbose=verbose)
-    _ensure_bot_defaults_and_bounds(result, verbose=verbose)
+    _apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
+    _migrate_btc_collateral_settings(result, verbose=verbose, tracker=tracker)
+    _ensure_bot_defaults_and_bounds(result, verbose=verbose, tracker=tracker)
     result["bot"] = sort_dict_keys(result["bot"])
 
-    _rename_config_keys(result, verbose=verbose)
+    _rename_config_keys(result, verbose=verbose, tracker=tracker)
 
-    _sync_with_template(template, result, base_config_path, verbose=verbose)
+    _sync_with_template(template, result, base_config_path, verbose=verbose, tracker=tracker)
 
-    _normalize_position_counts(result)
+    _normalize_position_counts(result, tracker=tracker)
     if coin_sources_input is not None:
         result.setdefault("backtest", {})["coin_sources"] = coin_sources_input
     _preserve_coin_sources(result)
 
     if not live_only:
         # unneeded adjustments if running live
-        _apply_non_live_adjustments(result, verbose=verbose)
+        _apply_non_live_adjustments(result, verbose=verbose, tracker=tracker)
+
+    result["_transform_log"] = existing_log
+    details = {
+        "live_only": live_only,
+        "base_config_path": base_config_path,
+        "flavor": flavor,
+    }
+    details = tracker.merge_details(details)
+    record_transform(
+        result,
+        "format_config",
+        details,
+    )
+
+    if raw_snapshot is not None and "_raw" not in result:
+        result["_raw"] = deepcopy(raw_snapshot)
 
     return result
 
@@ -975,16 +1111,18 @@ def parse_limits_string(limits_str: Union[str, dict]) -> dict:
     return result
 
 
-def add_missing_keys_recursively(src, dst, parent=None, verbose=True):
+def add_missing_keys_recursively(src, dst, parent=None, verbose=True, tracker=None):
     if parent is None:
         parent = []
     for k in src:
         if k not in dst:
             _log_config(verbose, logging.INFO, "Added missing %s to config.", ".".join(parent + [k]))
             dst[k] = src[k]
+            if tracker is not None:
+                tracker.add(parent + [k], src[k])
         # --- NEW: only walk down if both sides are dicts -------------
         elif isinstance(src[k], dict) and isinstance(dst.get(k), dict):
-            add_missing_keys_recursively(src[k], dst[k], parent + [k], verbose)
+            add_missing_keys_recursively(src[k], dst[k], parent + [k], verbose, tracker=tracker)
         # --------------------------------------------------------------
         elif isinstance(src[k], dict):
             # type clash: leave the user’s value untouched
@@ -1007,10 +1145,17 @@ def add_missing_keys_recursively(src, dst, parent=None, verbose=True):
                     src[k],
                 )
                 dst[k] = src[k]
+                if tracker is not None:
+                    tracker.add(parent + [k], src[k])
 
 
 def remove_unused_keys_recursively(
-    src, dst, parent=None, verbose=True, preserve: Optional[Iterable[Iterable[str]]] = None
+    src,
+    dst,
+    parent=None,
+    verbose=True,
+    preserve: Optional[Iterable[Iterable[str]]] = None,
+    tracker=None,
 ):
     if parent is None:
         parent = []
@@ -1046,15 +1191,19 @@ def remove_unused_keys_recursively(
         if k.startswith("_"):
             continue
         if k not in src:
-            del dst[k]
+            removed = dst.pop(k)
             _log_config(
                 verbose, logging.INFO, "Removed unused key from config: %s", ".".join(current_path)
             )
+            if tracker is not None:
+                tracker.remove(current_path, removed)
             continue
         src_val = src[k]
         dst_val = dst[k]
         if isinstance(dst_val, dict) and isinstance(src_val, dict):
-            remove_unused_keys_recursively(src_val, dst_val, current_path, verbose=verbose)
+            remove_unused_keys_recursively(
+                src_val, dst_val, current_path, verbose=verbose, tracker=tracker
+            )
 
     if parent == [] and hasattr(remove_unused_keys_recursively, "_preserve_set"):
         delattr(remove_unused_keys_recursively, "_preserve_set")
@@ -1258,11 +1407,13 @@ def recursive_config_update(config, key, value, path=None, verbose=False):
         coerced_value = _coerce_value(config[key], value)
         if coerced_value != config[key]:
             full_path = ".".join(path + [key])
+            old_value = deepcopy(config[key])
             _log_config(
                 verbose, logging.INFO, "changed %s %s -> %s", full_path, config[key], coerced_value
             )
             config[key] = coerced_value
-        return True
+            return {"path": full_path, "old": old_value, "new": deepcopy(coerced_value)}
+        return None
 
     key_split = key.split(".")
     if key_split[0] in config:
@@ -1271,20 +1422,33 @@ def recursive_config_update(config, key, value, path=None, verbose=False):
             config[key_split[0]], ".".join(key_split[1:]), value, new_path, verbose=verbose
         )
 
-    return False
+    return None
 
 
 def update_config_with_args(config, args, verbose=False):
+    changed_keys = []
+    diffs = []
     for key, value in vars(args).items():
         if value is None:
             continue
         if key in {"live.approved_coins", "live.ignored_coins"}:
             normalized = normalize_coins_source(value)
-            recursive_config_update(config, key, normalized, verbose=verbose)
+            change = recursive_config_update(config, key, normalized, verbose=verbose)
             source_key = key.split(".")[-1]
             config.setdefault("_coins_sources", {})[source_key] = deepcopy(normalized)
+            if change:
+                changed_keys.append(key)
+                diffs.append(change)
             continue
-        recursive_config_update(config, key, value, verbose=verbose)
+        change = recursive_config_update(config, key, value, verbose=verbose)
+        if change:
+            changed_keys.append(key)
+            diffs.append(change)
+    if changed_keys:
+        details = {"keys": changed_keys}
+        if diffs:
+            details["diffs"] = diffs
+        record_transform(config, "update_config_with_args", details)
 
 
 def require_config_value(config: dict, dotted_path: str):
@@ -1341,6 +1505,7 @@ def get_template_config(passivbot_mode="v7"):
             "gap_tolerance_ohlcvs_minutes": 120.0,
             "start_date": "2021-04-01",
             "starting_balance": 100000.0,
+            "balance_sample_divider": 1,
             "btc_collateral_cap": 1.0,
             "btc_collateral_ltv_cap": None,
             "max_warmup_minutes": 0.0,
