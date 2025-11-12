@@ -12,6 +12,9 @@ This document provides an overview of the parameters found in `config/template.j
 - **coin_sources**: Optional mapping of `coin -> exchange` used to override the automatic selection performed when `combine_ohlcvs` is `true`. Scenarios may add more overrides; conflicting assignments raise an error.
 - **start_date**: Start date of backtest.
 - **starting_balance**: Starting balance in USD at the beginning of the backtest.
+- **balance_sample_divider**: Minutes per bucket when sampling balances/equity for
+  `balance_and_equity.csv` and related plots. `1` keeps full per-minute resolution; higher values
+  thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes.
 - **btc_collateral_cap**: Target (and ceiling) share of account equity to hold in BTC collateral. `0` keeps the account fully in USD; `1.0` mirrors the legacy 100% BTC mode; values `>1` allow leveraged BTC collateral, accepting negative USD balances.
 - **btc_collateral_ltv_cap**: Optional loan-to-value ceiling (`USD debt ÷ equity`) enforced when topping up BTC. Leave `null` (default) to allow unlimited debt, or set to a float (e.g., `0.6`) to stop buying BTC once leverage exceeds that threshold.
 ### Suite Scenarios
@@ -326,6 +329,9 @@ Passivbot stores a few metadata keys alongside the normalized config:
 - `_coins_sources` records where approved/ignored coin lists originated (inline strings, external
   files, CLI overrides). Future overrides update both the normalized lists and their
   `_coins_sources` entries so live reloads honour the latest intent.
+- `_transform_log` captures a chronological record of high-level configuration mutations (load,
+  formatting, CLI overrides, etc.). Each entry stores a `step`, optional `details`, and a timestamp,
+  making it easier to audit how the runtime config diverged from `_raw`.
 
 Additional reserved keys may appear in future releases; all keys beginning with an underscore are
 ignored by persistence helpers to keep user configs tidy.
