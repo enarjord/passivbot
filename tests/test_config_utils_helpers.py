@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+
+import config_utils
 import pytest
 
 from config_utils import (
@@ -9,6 +12,7 @@ from config_utils import (
     _rename_config_keys,
     _sync_with_template,
     get_template_config,
+    update_config_with_args,
 )
 
 
@@ -140,3 +144,51 @@ def test_apply_backward_compatibility_renames_moves_filter_keys():
     assert bounds["long_filter_log_range_ema_span"] == [10, 20]
     assert "short_filter_volume_rolling_window" not in bounds
     assert bounds["short_filter_volume_ema_span"] == [30, 40]
+
+
+def test_update_config_with_args_updates_coin_sources():
+    config = get_template_config("v7")
+    config["_coins_sources"] = {
+        "approved_coins": {"long": ["ADA"], "short": []},
+        "ignored_coins": {"long": [], "short": []},
+    }
+    args = SimpleNamespace()
+    vars(args)["live.approved_coins"] = ["BTC", "ETH"]
+    update_config_with_args(config, args, verbose=False)
+    assert config["live"]["approved_coins"]["long"] == ["BTC", "ETH"]
+    assert config["_coins_sources"]["approved_coins"]["long"] == ["BTC", "ETH"]
+
+
+def test_update_config_with_args_replaces_path_coin_source():
+    config = get_template_config("v7")
+    config["_coins_sources"] = {"ignored_coins": "configs/ignored.json"}
+    args = SimpleNamespace()
+    vars(args)["live.ignored_coins"] = ["DOGE"]
+    update_config_with_args(config, args, verbose=False)
+    assert config["live"]["ignored_coins"]["long"] == ["DOGE"]
+    assert config["_coins_sources"]["ignored_coins"]["long"] == ["DOGE"]
+
+
+def test_load_config_stores_raw_snapshot(monkeypatch):
+    import copy
+
+    raw = {"live": {"approved_coins": ["BTC"]}}
+
+    monkeypatch.setattr(
+        config_utils,
+        "load_hjson_config",
+        lambda path: copy.deepcopy(raw),
+    )
+
+    def fake_format(cfg, **kwargs):
+        # return a new dict to simulate normalization
+        return {"live": {"approved_coins": cfg["live"]["approved_coins"][:]}}
+
+    monkeypatch.setattr(config_utils, "format_config", fake_format)
+
+    loaded = config_utils.load_config("dummy.json", verbose=False)
+    assert loaded["_raw"] == raw
+
+    # Mutating runtime view must not mutate the raw snapshot
+    loaded["live"]["approved_coins"].append("ETH")
+    assert loaded["_raw"]["live"]["approved_coins"] == ["BTC"]
