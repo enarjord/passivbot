@@ -240,6 +240,7 @@ Coins selected for trading are filtered by volume and log range. First, filter c
 - **max_n_creations_per_batch**: Creates `n` new orders per execution.
 - **max_n_restarts_per_day**: If the bot crashes, restart up to `n` times per day before stopping completely.
 - **minimum_coin_age_days**: Disallows coins younger than a given number of days.
+- **recv_window_ms**: Millisecond tolerance for authenticated REST calls (default `5000`). Increase if your exchange intermittently rejects requests with `invalid request ... recv_window` errors due to clock drift.
 - Candlestick management is handled by the CandlestickManager with on-disk caching and TTL-based refresh. Legacy settings `ohlcvs_1m_rolling_window_days` and `ohlcvs_1m_update_after_minutes` are no longer used. Use `inactive_coin_candle_ttl_minutes` to control how long 1m candles for inactive symbols are kept in RAM before being refreshed.
 - **pnls_max_lookback_days**: How far into the past to fetch PnL history.
 - **price_distance_threshold**: Minimum distance to current price action required for EMA-based limit orders.
@@ -315,3 +316,16 @@ Limits can be set in the config file under `optimize.limits` or passed via CLI u
 ```
 python3 src/optimize.py --limits "--penalize_if_lower_than_omega_ratio_btc 3.0 --penalize_if_greater_than_loss_profit_ratio_usd 0.5"
 ```
+
+## Configuration Internals
+
+Passivbot stores a few metadata keys alongside the normalized config:
+
+- `_raw` retains the exact user input as it appeared on disk before formatting/normalization. It is
+  meant for inspection and diffing—callers should treat it as read-only.
+- `_coins_sources` records where approved/ignored coin lists originated (inline strings, external
+  files, CLI overrides). Future overrides update both the normalized lists and their
+  `_coins_sources` entries so live reloads honour the latest intent.
+
+Additional reserved keys may appear in future releases; all keys beginning with an underscore are
+ignored by persistence helpers to keep user configs tidy.
