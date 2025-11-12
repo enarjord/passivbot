@@ -30,6 +30,7 @@ class DefxBot(Passivbot):
                 {
                     "apiKey": self.user_info["key"],
                     "secret": self.user_info["secret"],
+                    "enableRateLimit": True,
                 }
             )
         elif self.endpoint_override:
@@ -38,12 +39,15 @@ class DefxBot(Passivbot):
             {
                 "apiKey": self.user_info["key"],
                 "secret": self.user_info["secret"],
+                "enableRateLimit": True,
             }
         )
-        self.cca.options["defaultType"] = "swap"
         if self.ws_enabled and self.ccp is not None:
+            self.ccp.options.update(self._build_ccxt_options())
             self.ccp.options["defaultType"] = "swap"
             self._apply_endpoint_override(self.ccp)
+        self.cca.options["defaultType"] = "swap"
+        self.cca.options.update(self._build_ccxt_options())
         self._apply_endpoint_override(self.cca)
 
     async def fetch_wallet_collaterals(self):

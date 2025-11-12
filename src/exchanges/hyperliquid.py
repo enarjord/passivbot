@@ -51,11 +51,13 @@ class HyperliquidBot(Passivbot):
         }
         if self.ws_enabled:
             self.ccp = getattr(ccxt_pro, self.exchange)(creds)
+            self.ccp.options.update(self._build_ccxt_options())
             self.ccp.options["defaultType"] = "swap"
             self._apply_endpoint_override(self.ccp)
         elif self.endpoint_override:
             logging.info("Skipping Hyperliquid websocket session due to custom endpoint override.")
         self.cca = getattr(ccxt_async, self.exchange)(creds)
+        self.cca.options.update(self._build_ccxt_options())
         self.cca.options["defaultType"] = "swap"
         self._apply_endpoint_override(self.cca)
 

@@ -34,8 +34,10 @@ class BybitBot(Passivbot):
                     "secret": self.user_info["secret"],
                     "password": self.user_info["passphrase"],
                     "headers": {"referer": self.broker_code} if self.broker_code else {},
+                    "enableRateLimit": True,
                 }
             )
+            self.ccp.options.update(self._build_ccxt_options())
             self._apply_endpoint_override(self.ccp)
         elif self.endpoint_override:
             logging.info("Skipping Bybit websocket session due to custom endpoint override.")
@@ -45,8 +47,10 @@ class BybitBot(Passivbot):
                 "secret": self.user_info["secret"],
                 "password": self.user_info["passphrase"],
                 "headers": {"referer": self.broker_code} if self.broker_code else {},
+                "enableRateLimit": True,
             }
         )
+        self.cca.options.update(self._build_ccxt_options())
         self._apply_endpoint_override(self.cca)
 
     def set_market_specific_settings(self):

@@ -48,9 +48,11 @@ class BinanceBot(Passivbot):
                         "apiKey": self.user_info["key"],
                         "secret": self.user_info["secret"],
                         "password": self.user_info["passphrase"],
+                        "enableRateLimit": True,
                     }
                 ),
             )
+            getattr(self, ccx).options.update(self._build_ccxt_options())
             getattr(self, ccx).options["defaultType"] = "swap"
             if self.broker_code:
                 for key in ["future", "delivery", "swap", "option"]:

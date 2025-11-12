@@ -151,6 +151,7 @@ class KucoinBot(Passivbot):
         )
 
         self.cca = async_cls(dict(base_kwargs))
+        self.cca.options.update(self._build_ccxt_options())
         try:
             self.cca.options["defaultType"] = "swap"
         except Exception:
@@ -159,6 +160,7 @@ class KucoinBot(Passivbot):
 
         if self.ws_enabled:
             self.ccp = pro_cls(dict(base_kwargs))
+            self.ccp.options.update(self._build_ccxt_options())
             try:
                 self.ccp.options["defaultType"] = "swap"
             except Exception:

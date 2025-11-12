@@ -51,8 +51,10 @@ class GateIOBot(Passivbot):
                     "apiKey": self.user_info["key"],
                     "secret": self.user_info["secret"],
                     "headers": headers,
+                    "enableRateLimit": True,
                 }
             )
+            self.ccp.options.update(self._build_ccxt_options())
             self.ccp.options["defaultType"] = "swap"
             self._apply_endpoint_override(self.ccp)
         elif self.endpoint_override:
@@ -62,8 +64,10 @@ class GateIOBot(Passivbot):
                 "apiKey": self.user_info["key"],
                 "secret": self.user_info["secret"],
                 "headers": headers,
+                "enableRateLimit": True,
             }
         )
+        self.cca.options.update(self._build_ccxt_options())
         self.cca.options["defaultType"] = "swap"
         self._apply_endpoint_override(self.cca)
 

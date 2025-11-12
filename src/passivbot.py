@@ -475,6 +475,20 @@ class Passivbot:
     def bot_value(self, pside: str, key: str):
         return require_config_value(self.config, f"bot.{pside}.{key}")
 
+    def _build_ccxt_options(self, overrides: Optional[dict] = None) -> dict:
+        options = {"adjustForTimeDifference": True}
+        recv_window = get_optional_live_value(self.config, "recv_window_ms", None)
+        if recv_window not in (None, ""):
+            try:
+                recv_int = int(float(recv_window))
+                if recv_int > 0:
+                    options["recvWindow"] = recv_int
+            except (TypeError, ValueError):
+                logging.warning("Unable to parse live.recv_window_ms=%r; ignoring", recv_window)
+        if overrides:
+            options.update(overrides)
+        return options
+
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""
         logging.info(f"Starting bot {self.exchange}...")
