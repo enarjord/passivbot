@@ -25,6 +25,7 @@ from config_utils import (
     require_config_value,
     require_live_value,
 )
+from config_transform import ConfigTransformTracker, record_transform
 from logging_setup import configure_logging
 from main import manage_rust_compilation
 from utils import format_approved_ignored_coins, load_markets, ts_to_date, utc_ms, date_to_ts
@@ -352,8 +353,19 @@ def apply_scenario(
     base_coin_sources: Optional[Dict[str, str]] = None,
 ) -> Tuple[Dict[str, Any], List[str]]:
     cfg = deepcopy(base_config)
-    cfg["backtest"]["start_date"] = scenario.start_date or cfg["backtest"]["start_date"]
-    cfg["backtest"]["end_date"] = scenario.end_date or cfg["backtest"]["end_date"]
+    tracker = ConfigTransformTracker()
+    backtest_section = cfg.setdefault("backtest", {})
+    live_section = cfg.setdefault("live", {})
+
+    new_start = scenario.start_date or backtest_section.get("start_date")
+    if new_start != backtest_section.get("start_date"):
+        tracker.update(["backtest", "start_date"], backtest_section.get("start_date"), new_start)
+        backtest_section["start_date"] = new_start
+
+    new_end = scenario.end_date or backtest_section.get("end_date")
+    if new_end != backtest_section.get("end_date"):
+        tracker.update(["backtest", "end_date"], backtest_section.get("end_date"), new_end)
+        backtest_section["end_date"] = new_end
 
     scenario_coins = list(scenario.coins) if scenario.coins is not None else list(master_coins)
     scenario_ignored = (
@@ -377,32 +389,73 @@ def apply_scenario(
     filtered_ignored = sorted(dict.fromkeys(filtered_ignored))
 
     scenario_exchanges = list(scenario.exchanges) if scenario.exchanges else list(available_exchanges)
-    cfg["backtest"]["exchanges"] = scenario_exchanges
-    cfg.setdefault("backtest", {}).setdefault("coins", {})
-    cfg.setdefault("backtest", {}).setdefault("cache_dir", {})
-    cfg.setdefault("live", {}).setdefault("approved_coins", {})
-    cfg.setdefault("live", {}).setdefault("ignored_coins", {})
+    if scenario_exchanges != backtest_section.get("exchanges"):
+        tracker.update(
+            ["backtest", "exchanges"], backtest_section.get("exchanges"), scenario_exchanges
+        )
+        backtest_section["exchanges"] = scenario_exchanges
+    backtest_section.setdefault("coins", {})
+    backtest_section.setdefault("cache_dir", {})
+    live_section.setdefault("approved_coins", {})
+    live_section.setdefault("ignored_coins", {})
 
     for exchange in scenario_exchanges:
-        cfg["backtest"]["coins"][exchange] = filtered_coins
+        current = backtest_section["coins"].get(exchange)
+        if current != filtered_coins:
+            tracker.update(
+                ["backtest", "coins", exchange],
+                deepcopy(current),
+                list(filtered_coins),
+            )
+        backtest_section["coins"][exchange] = list(filtered_coins)
 
-    if isinstance(cfg["live"]["approved_coins"], dict):
-        cfg["live"]["approved_coins"]["long"] = list(filtered_coins)
-        cfg["live"]["approved_coins"]["short"] = list(filtered_coins)
+    if isinstance(live_section["approved_coins"], dict):
+        for side in ("long", "short"):
+            current = live_section["approved_coins"].get(side, [])
+            if current != filtered_coins:
+                tracker.update(
+                    ["live", "approved_coins", side],
+                    deepcopy(current),
+                    list(filtered_coins),
+                )
+            live_section["approved_coins"][side] = list(filtered_coins)
     else:
-        cfg["live"]["approved_coins"] = list(filtered_coins)
+        current = live_section.get("approved_coins")
+        if current != filtered_coins:
+            tracker.update(["live", "approved_coins"], deepcopy(current), list(filtered_coins))
+        live_section["approved_coins"] = list(filtered_coins)
 
-    if isinstance(cfg["live"]["ignored_coins"], dict):
-        cfg["live"]["ignored_coins"]["long"] = list(filtered_ignored)
-        cfg["live"]["ignored_coins"]["short"] = list(filtered_ignored)
+    if isinstance(live_section["ignored_coins"], dict):
+        for side in ("long", "short"):
+            current = live_section["ignored_coins"].get(side, [])
+            if current != filtered_ignored:
+                tracker.update(
+                    ["live", "ignored_coins", side],
+                    deepcopy(current),
+                    list(filtered_ignored),
+                )
+            live_section["ignored_coins"][side] = list(filtered_ignored)
     else:
-        cfg["live"]["ignored_coins"] = list(filtered_ignored)
+        current = live_section.get("ignored_coins")
+        if current != filtered_ignored:
+            tracker.update(["live", "ignored_coins"], deepcopy(current), list(filtered_ignored))
+        live_section["ignored_coins"] = list(filtered_ignored)
 
     resolved_sources = resolve_coin_sources(
         base_coin_sources or {},
         scenario.coin_sources,
     )
-    cfg["backtest"]["coin_sources"] = resolved_sources
+    if resolved_sources != backtest_section.get("coin_sources"):
+        tracker.update(
+            ["backtest", "coin_sources"],
+            deepcopy(backtest_section.get("coin_sources")),
+            deepcopy(resolved_sources),
+        )
+        backtest_section["coin_sources"] = resolved_sources
+
+    if tracker.summary():
+        details = tracker.merge_details({"scenario": scenario.label})
+        record_transform(cfg, "apply_scenario", details)
 
     return cfg, filtered_coins
 
