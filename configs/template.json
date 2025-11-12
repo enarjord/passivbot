@@ -12,6 +12,7 @@
         "max_warmup_minutes": 0,
         "start_date": "2021-03-01",
         "starting_balance": 100000,
+        "balance_sample_divider": 1,
         "suite": {
             "aggregate": {"default":"mean"},
             "base_label": "base",
