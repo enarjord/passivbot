@@ -88,10 +88,11 @@ def load_hjson_config(config_path: str) -> dict:
 def load_config(filepath: str, live_only=False, verbose=True) -> dict:
     # loads hjson or json v7 config
     try:
-        config = load_hjson_config(filepath)
+        config_raw = load_hjson_config(filepath)
         config = format_config(
-            config, live_only=live_only, verbose=verbose, base_config_path=filepath
+            config_raw, live_only=live_only, verbose=verbose, base_config_path=filepath
         )
+        config["_raw"] = deepcopy(config_raw)
         return config
     except Exception:
         logging.exception("failed to load config %s", filepath)
@@ -1280,6 +1281,8 @@ def update_config_with_args(config, args, verbose=False):
         if key in {"live.approved_coins", "live.ignored_coins"}:
             normalized = normalize_coins_source(value)
             recursive_config_update(config, key, normalized, verbose=verbose)
+            source_key = key.split(".")[-1]
+            config.setdefault("_coins_sources", {})[source_key] = deepcopy(normalized)
             continue
         recursive_config_update(config, key, value, verbose=verbose)
 
