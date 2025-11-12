@@ -1,8 +1,10 @@
+from copy import deepcopy
 from types import SimpleNamespace
 
 import config_utils
 import pytest
 
+from config_transform import ConfigTransformTracker, record_transform
 from config_utils import (
     _apply_backward_compatibility_renames,
     _apply_non_live_adjustments,
@@ -13,6 +15,8 @@ from config_utils import (
     _sync_with_template,
     get_template_config,
     update_config_with_args,
+    parse_overrides,
+    format_config,
 )
 
 
@@ -43,6 +47,30 @@ def test_rename_config_keys_moves_legacy_fields():
     assert config["live"]["ohlcv_rolling_window"] == 34
     assert config["backtest"]["exchanges"] == ["binance"]
     assert "exchange" not in config["backtest"]
+
+
+def test_rename_config_keys_records_tracker_events():
+    config = {
+        "live": {"minimum_market_age_days": 5},
+        "backtest": {"exchange": "binance"},
+    }
+    tracker = ConfigTransformTracker()
+
+    _rename_config_keys(config, verbose=False, tracker=tracker)
+
+    summary = tracker.summary()
+    assert any(
+        event["action"] == "rename"
+        and event["from"] == "live.minimum_market_age_days"
+        and event["to"] == "live.minimum_coin_age_days"
+        for event in summary
+    )
+    assert any(
+        event["action"] == "rename"
+        and event["from"] == "backtest.exchange"
+        and event["to"] == "backtest.exchanges"
+        for event in summary
+    )
 
 
 def test_sync_with_template_adds_missing_and_removes_extras():
@@ -157,6 +185,11 @@ def test_update_config_with_args_updates_coin_sources():
     update_config_with_args(config, args, verbose=False)
     assert config["live"]["approved_coins"]["long"] == ["BTC", "ETH"]
     assert config["_coins_sources"]["approved_coins"]["long"] == ["BTC", "ETH"]
+    log_entry = config["_transform_log"][-1]
+    assert log_entry["step"] == "update_config_with_args"
+    diff = log_entry["details"]["diffs"][0]
+    assert diff["path"] == "live.approved_coins"
+    assert diff["new"]["long"] == ["BTC", "ETH"]
 
 
 def test_update_config_with_args_replaces_path_coin_source():
@@ -167,6 +200,9 @@ def test_update_config_with_args_replaces_path_coin_source():
     update_config_with_args(config, args, verbose=False)
     assert config["live"]["ignored_coins"]["long"] == ["DOGE"]
     assert config["_coins_sources"]["ignored_coins"]["long"] == ["DOGE"]
+    entry = config["_transform_log"][-1]
+    assert entry["step"] == "update_config_with_args"
+    assert entry["details"]["diffs"][0]["path"] == "live.ignored_coins"
 
 
 def test_load_config_stores_raw_snapshot(monkeypatch):
@@ -182,7 +218,10 @@ def test_load_config_stores_raw_snapshot(monkeypatch):
 
     def fake_format(cfg, **kwargs):
         # return a new dict to simulate normalization
-        return {"live": {"approved_coins": cfg["live"]["approved_coins"][:]}}
+        result = {"live": {"approved_coins": cfg["live"]["approved_coins"][:]}}
+        result["_transform_log"] = []
+        record_transform(result, "format_config", {"mock": True})
+        return result
 
     monkeypatch.setattr(config_utils, "format_config", fake_format)
 
@@ -192,3 +231,47 @@ def test_load_config_stores_raw_snapshot(monkeypatch):
     # Mutating runtime view must not mutate the raw snapshot
     loaded["live"]["approved_coins"].append("ETH")
     assert loaded["_raw"]["live"]["approved_coins"] == ["BTC"]
+    log_steps = [entry["step"] for entry in loaded["_transform_log"]]
+    assert log_steps[0] == "load_config"
+    assert "format_config" in log_steps
+
+
+def test_parse_overrides_records_transform_log():
+    cfg = {
+        "live": {"approved_coins": []},
+        "coin_overrides": {"BTC": {"bot": {"long": {"wallet_exposure_limit": 0.5}}}},
+    }
+    out = parse_overrides(cfg, verbose=False)
+    assert out["_transform_log"][-1]["step"] == "parse_overrides"
+
+
+def test_format_config_preserves_raw_snapshot_and_log():
+    cfg = get_template_config("v7")
+    raw_snapshot = {"live": {"approved_coins": ["BTC"]}}
+    cfg["_raw"] = deepcopy(raw_snapshot)
+    cfg["_transform_log"] = [{"step": "preprocess", "ts_ms": 0}]
+
+    out = format_config(cfg, verbose=False)
+
+    assert out["_raw"] == raw_snapshot
+    log_steps = [entry["step"] for entry in out["_transform_log"]]
+    assert log_steps[:1] == ["preprocess"]
+    assert log_steps[-1] == "format_config"
+    details = out["_transform_log"][-1]["details"]
+    assert details["changes"], "format_config should record structural changes"
+    assert any(event["action"] == "add" for event in details["changes"])
+
+
+def test_update_config_with_args_records_old_new_values():
+    config = get_template_config("v7")
+    args = SimpleNamespace()
+    vars(args)["backtest.start_date"] = "2022-01-01"
+
+    update_config_with_args(config, args, verbose=False)
+
+    entry = config["_transform_log"][-1]
+    assert entry["step"] == "update_config_with_args"
+    diff = entry["details"]["diffs"][0]
+    assert diff["path"] == "backtest.start_date"
+    assert diff["old"] == "2021-04-01"
+    assert diff["new"] == "2022-01-01"

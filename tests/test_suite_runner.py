@@ -60,6 +60,7 @@ def test_apply_scenario_filters_unavailable_coins():
             "end_date": "2021-01-31",
             "coins": {},
             "cache_dir": {},
+            "exchanges": ["binance"],
         },
         "live": {
             "approved_coins": {"long": [], "short": []},
@@ -85,6 +86,42 @@ def test_apply_scenario_filters_unavailable_coins():
     assert coins == ["BTC"]
     assert cfg["live"]["approved_coins"]["long"] == ["BTC"]
     assert cfg["backtest"]["coin_sources"] == {"BTC": "binance"}
+
+
+def test_apply_scenario_records_transform_log():
+    base_config = {
+        "backtest": {
+            "start_date": "2021-01-01",
+            "end_date": "2021-01-31",
+            "coins": {},
+            "cache_dir": {},
+            "exchanges": ["binance"],
+        },
+        "live": {
+            "approved_coins": {"long": [], "short": []},
+            "ignored_coins": {"long": [], "short": []},
+        },
+    }
+    scenario = SuiteScenario(
+        label="scenario_a",
+        start_date="2021-02-01",
+        end_date=None,
+        coins=["BTC"],
+        ignored_coins=["ETH"],
+    )
+    cfg, _ = apply_scenario(
+        base_config,
+        scenario,
+        master_coins=["BTC"],
+        master_ignored=["ETH"],
+        available_exchanges=["binance"],
+        available_coins={"BTC", "ETH"},
+        base_coin_sources={"BTC": "binance"},
+    )
+    entry = cfg["_transform_log"][-1]
+    assert entry["step"] == "apply_scenario"
+    assert entry["details"]["scenario"] == "scenario_a"
+    assert any(change["path"] == "backtest.start_date" for change in entry["details"]["changes"])
 
 
 def test_resolve_coin_sources_merges_overrides():
