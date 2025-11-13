@@ -4055,13 +4055,20 @@ class Passivbot:
                     if skipped:
                         coin_list = ", ".join(sorted(symbol_to_coin(sym) or sym for sym in skipped))
                         symbol_list = ", ".join(sorted(skipped))
-                        logging.warning(
-                            "Skipping unsupported markets for %s: coins=%s symbols=%s exchange=%s",
-                            k_coins,
-                            coin_list,
-                            symbol_list,
-                            getattr(self, "exchange", "?"),
-                        )
+                        warned = getattr(self, "_unsupported_coin_warnings", None)
+                        if warned is None:
+                            warned = set()
+                            setattr(self, "_unsupported_coin_warnings", warned)
+                        warn_key = (self.exchange, coin_list, symbol_list, k_coins)
+                        if warn_key not in warned:
+                            logging.warning(
+                                "Skipping unsupported markets for %s: coins=%s symbols=%s exchange=%s",
+                                k_coins,
+                                coin_list,
+                                symbol_list,
+                                getattr(self, "exchange", "?"),
+                            )
+                            warned.add(warn_key)
                         symbols = symbols - set(skipped)
             symbols_already = getattr(self, k_coins)[pside]
             if symbols_already != symbols:
