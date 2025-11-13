@@ -102,11 +102,7 @@ def filter_orders(
     actual_cropped = [{k: o[k] for k in keys} for o in actual_orders]
 
     for cropped, original in zip(ideal_cropped, ideal_orders):
-        matches = [
-            (a_c, a_o)
-            for a_c, a_o in zip(actual_cropped, actual_orders)
-            if a_c == cropped
-        ]
+        matches = [(a_c, a_o) for a_c, a_o in zip(actual_cropped, actual_orders) if a_c == cropped]
         if matches:
             actual_orders.remove(matches[0][1])
             actual_cropped.remove(matches[0][0])
