@@ -360,6 +360,8 @@ class Passivbot:
                 "added order",
             ]
         )
+        self.order_details_str_len = 34
+        self.order_type_str_len = 32
         self.stop_websocket = False
         self.balance = 1e-12
         self.hedge_mode = True
@@ -1204,10 +1206,23 @@ class Passivbot:
     def log_order_action(self, order, action, source="passivbot"):
         """Log a structured message describing an order action."""
         pb_order_type = self._resolve_pb_order_type(order)
+
+        def _fmt(val):
+            try:
+                return f"{float(val):g}"
+            except (TypeError, ValueError):
+                return str(val)
+
+        side = order.get("side", "?")
+        qty = _fmt(order.get("qty", "?"))
+        position_side = order.get("position_side", "?")
+        price = _fmt(order.get("price", "?"))
+        details = f"{side} {qty} {position_side} @ {price}"
+        symbol = self.pad_sym(order.get("symbol", "?"))
         logging.info(
-            f"{action: >{self.action_str_max_len}} {self.pad_sym(order['symbol'])} {order['side']} "
-            f"{order['qty']} {order['position_side']} @ {order['price']} type={pb_order_type} "
-            f"source: {source}"
+            f"{action: >{self.action_str_max_len}} {symbol} | "
+            f"{details:<{self.order_details_str_len}} | "
+            f"type={pb_order_type:<{self.order_type_str_len}} | source: {source}"
         )
 
     def _resolve_pb_order_type(self, order) -> str:
