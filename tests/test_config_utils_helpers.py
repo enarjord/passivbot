@@ -21,7 +21,7 @@ from config_utils import (
 
 
 def test_ensure_bot_defaults_and_bounds_adds_missing_values():
-    config = get_template_config("v7")
+    config = get_template_config()
     config["bot"]["long"].pop("close_trailing_qty_pct", None)
     config["optimize"]["bounds"].pop("long_close_trailing_qty_pct", None)
 
@@ -74,7 +74,7 @@ def test_rename_config_keys_records_tracker_events():
 
 
 def test_sync_with_template_adds_missing_and_removes_extras():
-    template = get_template_config("v7")
+    template = get_template_config()
     result = {
         "live": {},
         "backtest": {},
@@ -106,7 +106,7 @@ def test_normalize_position_counts_rounds_values():
 
 
 def test_apply_non_live_adjustments_sorts_and_filters():
-    config = get_template_config("v7")
+    config = get_template_config()
     config["live"]["approved_coins"] = "btc,eth"
     config["live"]["ignored_coins"] = {"long": ["eth"], "short": []}
     config["backtest"]["end_date"] = "2023-01-01"
@@ -175,7 +175,7 @@ def test_apply_backward_compatibility_renames_moves_filter_keys():
 
 
 def test_update_config_with_args_updates_coin_sources():
-    config = get_template_config("v7")
+    config = get_template_config()
     config["_coins_sources"] = {
         "approved_coins": {"long": ["ADA"], "short": []},
         "ignored_coins": {"long": [], "short": []},
@@ -193,7 +193,7 @@ def test_update_config_with_args_updates_coin_sources():
 
 
 def test_update_config_with_args_replaces_path_coin_source():
-    config = get_template_config("v7")
+    config = get_template_config()
     config["_coins_sources"] = {"ignored_coins": "configs/ignored.json"}
     args = SimpleNamespace()
     vars(args)["live.ignored_coins"] = ["DOGE"]
@@ -246,7 +246,7 @@ def test_parse_overrides_records_transform_log():
 
 
 def test_format_config_preserves_raw_snapshot_and_log():
-    cfg = get_template_config("v7")
+    cfg = get_template_config()
     raw_snapshot = {"live": {"approved_coins": ["BTC"]}}
     cfg["_raw"] = deepcopy(raw_snapshot)
     cfg["_transform_log"] = [{"step": "preprocess", "ts_ms": 0}]
@@ -263,7 +263,7 @@ def test_format_config_preserves_raw_snapshot_and_log():
 
 
 def test_update_config_with_args_records_old_new_values():
-    config = get_template_config("v7")
+    config = get_template_config()
     args = SimpleNamespace()
     vars(args)["backtest.start_date"] = "2022-01-01"
 
@@ -278,7 +278,7 @@ def test_update_config_with_args_records_old_new_values():
 
 
 def test_backtest_filter_min_cost_inherits_from_live():
-    cfg = get_template_config("v7")
+    cfg = get_template_config()
     cfg["live"]["filter_by_min_effective_cost"] = True
     cfg["backtest"].pop("filter_by_min_effective_cost", None)
 

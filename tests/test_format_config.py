@@ -11,7 +11,7 @@ from config_utils import detect_flavor, build_base_config_from_flavor
 
 
 def _template():
-    return get_template_config("v7")
+    return get_template_config()
 
 
 def test_detect_flavor_variants():

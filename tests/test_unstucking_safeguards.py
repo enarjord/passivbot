@@ -99,7 +99,7 @@ def mock_pbr(monkeypatch):
 def _dummy_config():
     from config_utils import get_template_config, format_config
 
-    cfg = get_template_config("v7")
+    cfg = get_template_config()
     cfg["live"]["user"] = "test_user"
     cfg["live"]["minimum_coin_age_days"] = 0
     for side in ("long", "short"):
