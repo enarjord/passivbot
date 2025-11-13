@@ -1614,8 +1614,7 @@ class Passivbot:
                 volumes = await self.calc_volumes(pside, symbols=candidates)
             else:
                 volumes = {
-                    symbol: float(len(candidates) - idx)
-                    for idx, symbol in enumerate(candidates)
+                    symbol: float(len(candidates) - idx) for idx, symbol in enumerate(candidates)
                 }
             log_ranges = await self.calc_log_range(pside, eligible_symbols=candidates)
             features = [

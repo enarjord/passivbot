@@ -451,7 +451,7 @@ def main():
         action="append",
         help=(
             "Limit filters applied before ranking. Repeat for multiple expressions:\n"
-            "  -l \"w_4<800\" -l \"position_held_hours_max<400\"\n"
+            '  -l "w_4<800" -l "position_held_hours_max<400"\n'
             "Metrics accept optional suffixes (.min/.max/.mean/.std). Without a suffix\n"
             "suite-level aggregates (if available) are used; otherwise the mean."
         ),
