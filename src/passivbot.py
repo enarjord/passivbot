@@ -1203,10 +1203,37 @@ class Passivbot:
 
     def log_order_action(self, order, action, source="passivbot"):
         """Log a structured message describing an order action."""
+        pb_order_type = self._resolve_pb_order_type(order)
         logging.info(
             f"{action: >{self.action_str_max_len}} {self.pad_sym(order['symbol'])} {order['side']} "
-            f"{order['qty']} {order['position_side']} @ {order['price']} source: {source}"
+            f"{order['qty']} {order['position_side']} @ {order['price']} type={pb_order_type} "
+            f"source: {source}"
         )
+
+    def _resolve_pb_order_type(self, order) -> str:
+        """Best-effort decoding of Passivbot order type for logging."""
+        if not isinstance(order, dict):
+            return "unknown"
+        pb_type = order.get("pb_order_type")
+        if pb_type:
+            return str(pb_type)
+        candidate_ids = [
+            order.get("custom_id"),
+            order.get("customId"),
+            order.get("client_order_id"),
+            order.get("clientOrderId"),
+            order.get("client_oid"),
+            order.get("clientOid"),
+            order.get("order_link_id"),
+            order.get("orderLinkId"),
+        ]
+        for cid in candidate_ids:
+            if not cid:
+                continue
+            snake = custom_id_to_snake(str(cid))
+            if snake and snake != "unknown":
+                return snake
+        return "unknown"
 
     def did_create_order(self, executed) -> bool:
         """Return True if the exchange acknowledged order creation."""
