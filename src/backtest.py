@@ -399,7 +399,7 @@ def process_forager_fills(
     coins,
     hlcvs,
     equities_array,
-    balance_sample_divider: int = 1,
+    balance_sample_divider: int = 60,
 ):
     fdf = pd.DataFrame(
         fills,
@@ -953,13 +953,11 @@ def post_process(
 ):
     sts = utc_ms()
     equities_array = np.asarray(equities_array)
-    balance_sample_divider = get_optional_config_value(
-        config, "backtest.balance_sample_divider", 1
-    )
+    balance_sample_divider = get_optional_config_value(config, "backtest.balance_sample_divider", 60)
     try:
         balance_sample_divider = int(round(float(balance_sample_divider)))
     except (TypeError, ValueError):
-        balance_sample_divider = 1
+        balance_sample_divider = 60
     balance_sample_divider = max(1, balance_sample_divider)
     fdf, analysis_py, bal_eq = process_forager_fills(
         fills,
