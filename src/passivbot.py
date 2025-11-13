@@ -4256,7 +4256,7 @@ async def main():
     initial_debug = args.debug_level if args.debug_level is not None else 1
     configure_logging(debug=initial_debug)
     config = load_config(args.config_path, live_only=True)
-    update_config_with_args(config, args)
+    update_config_with_args(config, args, verbose=True)
     config = format_config(config, live_only=True)
     config_logging_level = get_optional_config_value(config, "logging.level", 1)
     try:
