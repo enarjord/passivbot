@@ -169,3 +169,13 @@ def test_symbol_to_coin_in_memory_reload_and_heuristics(tmp_path, monkeypatch):
     json.dump({"kSHIB/USDT:USDT": "SHIB"}, open(s2c_path, "w"))
     os.utime(s2c_path, None)
     assert utils.symbol_to_coin("kSHIB/USDT:USDT") == "SHIB"
+
+
+def test_symbol_to_coin_warns_only_once(tmp_path, monkeypatch, caplog):
+    monkeypatch.chdir(tmp_path)
+    utils._SYMBOL_TO_COIN_WARNINGS.clear()
+    caplog.set_level(logging.WARNING)
+    assert utils.symbol_to_coin("FOO/USDT:USDT") == "FOO"
+    assert utils.symbol_to_coin("FOO/USDT:USDT") == "FOO"
+    warnings = [rec for rec in caplog.records if "heuristics to guess coin" in rec.message]
+    assert len(warnings) == 1
