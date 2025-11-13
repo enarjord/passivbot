@@ -955,9 +955,7 @@ def _sync_with_template(
         preserve=[("coin_overrides",)],
         tracker=tracker,
     )
-    remove_unused_keys_recursively(
-        template["bot"], result["bot"], verbose=verbose, tracker=tracker
-    )
+    remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose, tracker=tracker)
     remove_unused_keys_recursively(
         template["optimize"]["bounds"],
         result["optimize"]["bounds"],
@@ -1520,7 +1518,7 @@ def get_template_config(passivbot_mode="v7"):
             "gap_tolerance_ohlcvs_minutes": 120.0,
             "start_date": "2021-04-01",
             "starting_balance": 100000.0,
-            "balance_sample_divider": 1,
+            "balance_sample_divider": 60,
             "btc_collateral_cap": 1.0,
             "btc_collateral_ltv_cap": None,
             "max_warmup_minutes": 0.0,
