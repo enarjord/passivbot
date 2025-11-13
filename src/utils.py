@@ -29,6 +29,7 @@ logging.basicConfig(
 # In-memory caches for symbol/coin maps with on-disk change detection
 _COIN_TO_SYMBOL_CACHE = {}  # {exchange: {"map": dict, "mtime_ns": int, "size": int}}
 _SYMBOL_TO_COIN_CACHE = {"map": None, "mtime_ns": None, "size": None}
+_SYMBOL_TO_COIN_WARNINGS: set[str] = set()
 
 
 def _require_live_value(config: Dict[str, Any], key: str):
@@ -743,7 +744,10 @@ def symbol_to_coin(symbol, verbose=True):
     if coin:
         msg += f". Using heuristics to guess coin: {coin}"
     if verbose:
-        logging.warning(msg)
+        warn_key = str(symbol)
+        if warn_key not in _SYMBOL_TO_COIN_WARNINGS:
+            logging.warning(msg)
+            _SYMBOL_TO_COIN_WARNINGS.add(warn_key)
     return coin
 
 
