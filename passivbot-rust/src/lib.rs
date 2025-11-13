@@ -1,6 +1,7 @@
 mod analysis;
 mod backtest;
 mod closes;
+mod coin_selection;
 mod constants;
 mod entries;
 mod python;
@@ -9,6 +10,7 @@ mod trailing;
 mod types;
 mod utils;
 
+use coin_selection::select_coin_indices_py;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use python::*;
@@ -57,6 +59,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calc_unstucking_close_py, m)?)?;
     m.add_function(wrap_pyfunction!(trailing_bundle_default_py, m)?)?;
     m.add_function(wrap_pyfunction!(update_trailing_bundle_py, m)?)?;
+    m.add_function(wrap_pyfunction!(select_coin_indices_py, m)?)?;
 
     Ok(())
 }

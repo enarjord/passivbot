@@ -1,0 +1,40 @@
+passivbot_agent_principles:
+  general_ethos:
+    - Strive for simplicity, elegance, and clarity over complexity or cleverness.
+    - Write code that is modular, testable, and reusable.
+    - Ask clarifying questions before acting when a task is ambiguous.
+
+  code_design:
+    - Prefer pure functions with no side effects.
+    - Favor statelessness; components must behave identically after restart or redeploy.
+    - Use small, composable modules instead of large procedural blocks.
+    - Avoid caching state locally unless it only optimizes performance and never changes behavior.
+
+  language_and_implementation:
+    - Rust is the source of truth.
+    - Fix or improve issues in Rust rather than patching in Python.
+    - Backtester and live bot should share the same Rust logic wherever possible.
+    - Use Python primarily for orchestration, bindings, and experimentation.
+
+  error_handling:
+    - Fail loudly. Prefer clear exceptions or panics over silent error handling.
+    - Assume upstream code is correct; don’t silently compensate for bad data.
+    - Include clear, actionable error messages for all expected failures.
+
+  testing:
+    - Write comprehensive tests covering both normal and edge cases.
+    - Include property-based or randomized tests where applicable to uncover edge behavior.
+
+  logging:
+    - Implement structured, leveled logging according to best practices (error, warn, info, debug, trace).
+    - Every remote API call must have a corresponding debug-level log entry, including endpoint, params, and timing.
+    - Logging must be non-intrusive but sufficiently detailed for full replay or audit of bot actions.
+
+  collaboration_behavior:
+    - If uncertain, ask before executing or committing major changes.
+    - When modifying shared logic, explain reasoning and ensure compatibility across backtester and live bot modes.
+
+  safety_and_commit_practices:
+    - Before committing or running code, simulate or dry-run first.
+    - When proposing refactors, include before/after diff and rationale.
+    - If adding dependencies, explain necessity and impact.

@@ -133,7 +133,7 @@ class IdealOrdersBot(Passivbot):
             "close_trailing_retracement_pct": 0.0,
             "close_trailing_threshold_pct": 0.0,
             "risk_wel_enforcer_threshold": 0.0,
-            "entry_log_range_ema_span_hours": 0.0,
+            "entry_volatility_ema_span_hours": 0.0,
         }
         self._bp_overrides: dict[tuple[str, str, str], float] = {}
         self._bot_value_overrides: dict[tuple[str, str], float] = {}

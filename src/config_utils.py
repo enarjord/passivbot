@@ -246,7 +246,7 @@ def get_allowed_modifications():
                 "ema_span_1": True,
                 "entry_grid_double_down_factor": True,
                 "entry_grid_spacing_pct": True,
-                "entry_log_range_ema_span_hours": True,
+                "entry_volatility_ema_span_hours": True,
                 "entry_grid_spacing_log_weight": True,
                 "entry_grid_spacing_we_weight": True,
                 "entry_initial_ema_dist": True,
@@ -279,7 +279,7 @@ def get_allowed_modifications():
                 "ema_span_1": True,
                 "entry_grid_double_down_factor": True,
                 "entry_grid_spacing_pct": True,
-                "entry_log_range_ema_span_hours": True,
+                "entry_volatility_ema_span_hours": True,
                 "entry_grid_spacing_log_weight": True,
                 "entry_grid_spacing_we_weight": True,
                 "entry_initial_ema_dist": True,
@@ -520,7 +520,7 @@ PB_MULTI_FIELD_MAP = {
     "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_we_weight",
     "ema_span_0": "ema_span_0",
     "ema_span_1": "ema_span_1",
-    "filter_noisiness_rolling_window": "filter_log_range_ema_span",
+    "filter_noisiness_rolling_window": "filter_volatility_ema_span",
     "filter_volume_rolling_window": "filter_volume_ema_span",
 }
 PB_MULTI_FIELD_MAP_INV = {v: k for k, v in PB_MULTI_FIELD_MAP.items()}
@@ -602,27 +602,33 @@ def _build_from_live_only(config: dict, template: dict) -> dict:
 
 
 LEGACY_FILTER_KEYS = {
-    "filter_noisiness_rolling_window": "filter_log_range_ema_span",
-    "filter_noisiness_ema_span": "filter_log_range_ema_span",
+    "filter_noisiness_rolling_window": "filter_volatility_ema_span",
+    "filter_noisiness_ema_span": "filter_volatility_ema_span",
+    "filter_log_range_ema_span": "filter_volatility_ema_span",
     "filter_volume_rolling_window": "filter_volume_ema_span",
 }
 
 LEGACY_ENTRY_GRID_KEYS = {
     "entry_grid_spacing_weight": "entry_grid_spacing_we_weight",
-    "entry_grid_spacing_log_span_hours": "entry_log_range_ema_span_hours",
+    "entry_grid_spacing_log_span_hours": "entry_volatility_ema_span_hours",
+    "entry_log_range_ema_span_hours": "entry_volatility_ema_span_hours",
 }
 
 LEGACY_BOUNDS_KEYS = {
-    "long_filter_noisiness_rolling_window": "long_filter_log_range_ema_span",
-    "long_filter_noisiness_ema_span": "long_filter_log_range_ema_span",
+    "long_filter_noisiness_rolling_window": "long_filter_volatility_ema_span",
+    "long_filter_noisiness_ema_span": "long_filter_volatility_ema_span",
     "long_filter_volume_rolling_window": "long_filter_volume_ema_span",
-    "short_filter_noisiness_rolling_window": "short_filter_log_range_ema_span",
-    "short_filter_noisiness_ema_span": "short_filter_log_range_ema_span",
+    "long_filter_log_range_ema_span": "long_filter_volatility_ema_span",
+    "short_filter_noisiness_rolling_window": "short_filter_volatility_ema_span",
+    "short_filter_noisiness_ema_span": "short_filter_volatility_ema_span",
     "short_filter_volume_rolling_window": "short_filter_volume_ema_span",
+    "short_filter_log_range_ema_span": "short_filter_volatility_ema_span",
     "long_entry_grid_spacing_weight": "long_entry_grid_spacing_we_weight",
     "short_entry_grid_spacing_weight": "short_entry_grid_spacing_we_weight",
-    "long_entry_grid_spacing_log_span_hours": "long_entry_log_range_ema_span_hours",
-    "short_entry_grid_spacing_log_span_hours": "short_entry_log_range_ema_span_hours",
+    "long_entry_grid_spacing_log_span_hours": "long_entry_volatility_ema_span_hours",
+    "short_entry_grid_spacing_log_span_hours": "short_entry_volatility_ema_span_hours",
+    "long_entry_log_range_ema_span_hours": "long_entry_volatility_ema_span_hours",
+    "short_entry_log_range_ema_span_hours": "short_entry_volatility_ema_span_hours",
 }
 
 
@@ -818,9 +824,9 @@ def _ensure_bot_defaults_and_bounds(
                 [0.01, 3.0],
             ),
             (
-                "filter_log_range_ema_span",
+                "filter_volatility_ema_span",
                 result["bot"][pside].get(
-                    "filter_log_range_ema_span",
+                    "filter_volatility_ema_span",
                     result["bot"][pside].get(
                         "filter_rolling_window",
                         result["live"].get("ohlcv_rolling_window", 60.0),
@@ -853,6 +859,11 @@ def _ensure_bot_defaults_and_bounds(
             (
                 "filter_volume_drop_pct",
                 result["live"].get("filter_relative_volume_clip_pct", 0.5),
+                [0.0, 1.0],
+            ),
+            (
+                "filter_volatility_drop_pct",
+                0.0,
                 [0.0, 1.0],
             ),
         ]:
@@ -1011,6 +1022,10 @@ def _apply_non_live_adjustments(
     result["backtest"]["coin_sources"] = _normalize_coin_sources(
         result["backtest"].get("coin_sources", {})
     )
+    if result["backtest"].get("filter_by_min_effective_cost") is None:
+        result["backtest"]["filter_by_min_effective_cost"] = bool(
+            result["live"].get("filter_by_min_effective_cost", False)
+        )
 
     canonical_scoring = []
     seen = set()
@@ -1509,6 +1524,7 @@ def get_template_config(passivbot_mode="v7"):
             "btc_collateral_cap": 1.0,
             "btc_collateral_ltv_cap": None,
             "max_warmup_minutes": 0.0,
+            "filter_by_min_effective_cost": None,
             "suite": {
                 "enabled": False,
                 "include_base_scenario": False,
@@ -1529,7 +1545,7 @@ def get_template_config(passivbot_mode="v7"):
                 "ema_span_0": 1318.0,
                 "ema_span_1": 1435.0,
                 "entry_grid_double_down_factor": 0.894,
-                "entry_log_range_ema_span_hours": 72,
+                "entry_volatility_ema_span_hours": 72,
                 "entry_grid_spacing_log_weight": 0.0,
                 "entry_grid_spacing_pct": 0.04,
                 "entry_grid_spacing_we_weight": 0.697,
@@ -1543,7 +1559,8 @@ def get_template_config(passivbot_mode="v7"):
                 "entry_trailing_threshold_pct": 0.05,
                 "entry_trailing_threshold_we_weight": 0.0,
                 "entry_trailing_threshold_log_weight": 0.0,
-                "filter_log_range_ema_span": 60.0,
+                "filter_volatility_ema_span": 60.0,
+                "filter_volatility_drop_pct": 0.0,
                 "filter_volume_drop_pct": 0.95,
                 "filter_volume_ema_span": 60.0,
                 "n_positions": 10.0,
@@ -1567,7 +1584,7 @@ def get_template_config(passivbot_mode="v7"):
                 "ema_span_0": 1318.0,
                 "ema_span_1": 1435.0,
                 "entry_grid_double_down_factor": 0.894,
-                "entry_log_range_ema_span_hours": 72,
+                "entry_volatility_ema_span_hours": 72,
                 "entry_grid_spacing_log_weight": 0.0,
                 "entry_grid_spacing_pct": 0.04,
                 "entry_grid_spacing_we_weight": 0.697,
@@ -1581,7 +1598,8 @@ def get_template_config(passivbot_mode="v7"):
                 "entry_trailing_threshold_pct": 0.05,
                 "entry_trailing_threshold_we_weight": 0.0,
                 "entry_trailing_threshold_log_weight": 0.0,
-                "filter_log_range_ema_span": 60.0,
+                "filter_volatility_ema_span": 60.0,
+                "filter_volatility_drop_pct": 0.0,
                 "filter_volume_drop_pct": 0.95,
                 "filter_volume_ema_span": 60.0,
                 "n_positions": 10.0,
@@ -1634,7 +1652,7 @@ def get_template_config(passivbot_mode="v7"):
                 "long_ema_span_1": [200.0, 1440.0],
                 "long_entry_grid_double_down_factor": [0.1, 3.0],
                 "long_entry_grid_spacing_pct": [0.005, 0.12],
-                "long_entry_log_range_ema_span_hours": [24.0, 336.0],
+                "long_entry_volatility_ema_span_hours": [24.0, 336.0],
                 "long_entry_grid_spacing_log_weight": [0.0, 400.0],
                 "long_entry_grid_spacing_we_weight": [0.0, 20.0],
                 "long_entry_initial_ema_dist": [-0.1, 0.002],
@@ -1650,7 +1668,8 @@ def get_template_config(passivbot_mode="v7"):
                 "long_risk_wel_enforcer_threshold": [0.8, 1.05],
                 "long_risk_we_excess_allowance_pct": [0.0, 0.5],
                 "long_risk_twel_enforcer_threshold": [0.9, 1.01],
-                "long_filter_log_range_ema_span": [10.0, 1440.0],
+                "long_filter_volatility_ema_span": [10.0, 1440.0],
+                "long_filter_volatility_drop_pct": [0.0, 1.0],
                 "long_filter_volume_drop_pct": [0.0, 1.0],
                 "long_filter_volume_ema_span": [10.0, 1440.0],
                 "long_n_positions": [1.0, 20.0],
@@ -1670,7 +1689,7 @@ def get_template_config(passivbot_mode="v7"):
                 "short_ema_span_1": [200.0, 1440.0],
                 "short_entry_grid_double_down_factor": [0.1, 3.0],
                 "short_entry_grid_spacing_pct": [0.005, 0.12],
-                "short_entry_log_range_ema_span_hours": [24.0, 336.0],
+                "short_entry_volatility_ema_span_hours": [24.0, 336.0],
                 "short_entry_grid_spacing_log_weight": [0.0, 400.0],
                 "short_entry_grid_spacing_we_weight": [0.0, 20.0],
                 "short_entry_initial_ema_dist": [-0.1, 0.002],
@@ -1686,7 +1705,8 @@ def get_template_config(passivbot_mode="v7"):
                 "short_risk_wel_enforcer_threshold": [0.8, 1.05],
                 "short_risk_we_excess_allowance_pct": [0.0, 0.5],
                 "short_risk_twel_enforcer_threshold": [0.9, 1.01],
-                "short_filter_log_range_ema_span": [10.0, 1440.0],
+                "short_filter_volatility_ema_span": [10.0, 1440.0],
+                "short_filter_volatility_drop_pct": [0.0, 1.0],
                 "short_filter_volume_drop_pct": [0.0, 1.0],
                 "short_filter_volume_ema_span": [10.0, 1440.0],
                 "short_n_positions": [1.0, 20.0],

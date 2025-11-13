@@ -797,7 +797,7 @@ class Passivbot:
                 except Exception:
                     lv = default_win
                 try:
-                    ln = int(round(self.bp("long", "filter_log_range_ema_span", sym)))
+                    ln = int(round(self.bp("long", "filter_volatility_ema_span", sym)))
                 except Exception:
                     ln = default_win
                 try:
@@ -805,7 +805,7 @@ class Passivbot:
                 except Exception:
                     sv = default_win
                 try:
-                    sn = int(round(self.bp("short", "filter_log_range_ema_span", sym)))
+                    sn = int(round(self.bp("short", "filter_volatility_ema_span", sym)))
                 except Exception:
                     sn = default_win
                 per_symbol_win[sym] = max(1, lv, ln, sv, sn, warm_minutes)
@@ -1600,28 +1600,52 @@ class Passivbot:
             return []
         candidates = self.approved_coins_minus_ignored_coins[pside]
         candidates = [s for s in candidates if self.is_old_enough(pside, s)]
-        candidates = [s for s in candidates if self.effective_min_cost_is_low_enough(pside, s)]
-        if candidates == []:
-            self.warn_on_high_effective_min_cost(pside)
+        min_cost_flags = {s: self.effective_min_cost_is_low_enough(pside, s) for s in candidates}
+        if not any(min_cost_flags.values()):
+            if self.live_value("filter_by_min_effective_cost"):
+                self.warn_on_high_effective_min_cost(pside)
+            return []
         if self.is_forager_mode(pside):
             # filter coins by relative volume and log range
             clip_pct = self.bot_value(pside, "filter_volume_drop_pct")
+            volatility_drop = self.bot_value(pside, "filter_volatility_drop_pct")
             max_n_positions = self.get_max_n_positions(pside)
             if clip_pct > 0.0:
                 volumes = await self.calc_volumes(pside, symbols=candidates)
-                # filter by relative volume
-                n_eligible = round(len(volumes) * (1 - clip_pct))
-                candidates = sorted(volumes, key=lambda x: volumes[x], reverse=True)
-                candidates = candidates[: int(max(n_eligible, max_n_positions))]
-            # ideal symbols are high log-range symbols
+            else:
+                volumes = {
+                    symbol: float(len(candidates) - idx)
+                    for idx, symbol in enumerate(candidates)
+                }
             log_ranges = await self.calc_log_range(pside, eligible_symbols=candidates)
-            log_ranges = {
-                k: v for k, v in sorted(log_ranges.items(), key=lambda x: x[1], reverse=True)
-            }
-            ideal_coins = [k for k in log_ranges.keys()][:max_n_positions]
+            features = [
+                {
+                    "index": idx,
+                    "enabled": min_cost_flags.get(symbol, True),
+                    "volume_score": volumes.get(symbol, 0.0),
+                    "volatility_score": log_ranges.get(symbol, 0.0),
+                }
+                for idx, symbol in enumerate(candidates)
+            ]
+            selected = pbr.select_coin_indices_py(
+                features,
+                max_n_positions,
+                clip_pct,
+                volatility_drop,
+                True,
+            )
+            ideal_coins = [candidates[i] for i in selected]
+            if not ideal_coins and self.live_value("filter_by_min_effective_cost"):
+                if any(not flag for flag in min_cost_flags.values()):
+                    self.warn_on_high_effective_min_cost(pside)
         else:
+            eligible = [s for s in candidates if min_cost_flags.get(s, True)]
+            if not eligible:
+                if self.live_value("filter_by_min_effective_cost"):
+                    self.warn_on_high_effective_min_cost(pside)
+                return []
             # all approved coins are selected, no filtering by volume and log range
-            ideal_coins = sorted(candidates)
+            ideal_coins = sorted(eligible)
         return ideal_coins
 
     def warn_on_high_effective_min_cost(self, pside):
@@ -2950,7 +2974,7 @@ class Passivbot:
                     to_update_last_prices.add(symbol)
                     if self.bp(pside, "entry_grid_spacing_log_weight", symbol) != 0.0:
                         grid_log_span_hours = float(
-                            self.bp(pside, "entry_log_range_ema_span_hours", symbol)
+                            self.bp(pside, "entry_volatility_ema_span_hours", symbol)
                         )
                         if grid_log_span_hours > 0.0:
                             to_update_grid_log_ranges[pside][symbol] = max(1e-6, grid_log_span_hours)
@@ -3806,7 +3830,7 @@ class Passivbot:
         """
         if eligible_symbols is None:
             eligible_symbols = self.eligible_symbols
-        span = int(round(self.bot_value(pside, "filter_log_range_ema_span")))
+        span = int(round(self.bot_value(pside, "filter_volatility_ema_span")))
 
         # Compute EMA of log range on 1m candles: ln(high/low)
         async def one(symbol: str):

@@ -148,7 +148,7 @@ def test_apply_backward_compatibility_renames_moves_filter_keys():
         "bot": {
             "long": {
                 "filter_noisiness_rolling_window": 42,
-                "filter_log_range_ema_span": 84,
+                "filter_volatility_ema_span": 84,
                 "filter_volume_rolling_window": 21,
             },
             "short": {"filter_volume_rolling_window": 11},
@@ -164,12 +164,12 @@ def test_apply_backward_compatibility_renames_moves_filter_keys():
     _apply_backward_compatibility_renames(config, verbose=False)
 
     assert "filter_noisiness_rolling_window" not in config["bot"]["long"]
-    assert config["bot"]["long"]["filter_log_range_ema_span"] == 84
+    assert config["bot"]["long"]["filter_volatility_ema_span"] == 84
     assert config["bot"]["long"]["filter_volume_ema_span"] == 21
     assert config["bot"]["short"]["filter_volume_ema_span"] == 11
     bounds = config["optimize"]["bounds"]
     assert "long_filter_noisiness_rolling_window" not in bounds
-    assert bounds["long_filter_log_range_ema_span"] == [10, 20]
+    assert bounds["long_filter_volatility_ema_span"] == [10, 20]
     assert "short_filter_volume_rolling_window" not in bounds
     assert bounds["short_filter_volume_ema_span"] == [30, 40]
 
@@ -275,3 +275,13 @@ def test_update_config_with_args_records_old_new_values():
     assert diff["path"] == "backtest.start_date"
     assert diff["old"] == "2021-04-01"
     assert diff["new"] == "2022-01-01"
+
+
+def test_backtest_filter_min_cost_inherits_from_live():
+    cfg = get_template_config("v7")
+    cfg["live"]["filter_by_min_effective_cost"] = True
+    cfg["backtest"].pop("filter_by_min_effective_cost", None)
+
+    formatted = format_config(cfg, verbose=False)
+
+    assert formatted["backtest"]["filter_by_min_effective_cost"] is True

@@ -41,3 +41,19 @@ def test_limit_w_metric():
     assert _evaluate_limits(specs, stats_flat, aggregated, objectives, metric_map)
     objectives["w_4"] = 900.0
     assert not _evaluate_limits(specs, stats_flat, aggregated, objectives, metric_map)
+
+
+def test_metric_name_ending_with_suffix_is_not_misparsed():
+    specs = [
+        LimitSpec(metric="position_held_hours_max", field="auto", op=operator.lt, value=800),
+        LimitSpec(metric="position_unchanged_hours_max", field="auto", op=operator.lt, value=600),
+    ]
+    aggregated = {
+        "position_held_hours_max": 710.0,
+        "position_unchanged_hours_max": 590.0,
+    }
+    stats_flat = {
+        "position_held_hours_max_mean": 900.0,
+        "position_unchanged_hours_max_mean": 650.0,
+    }
+    assert _evaluate_limits(specs, stats_flat, aggregated, {}, {})

@@ -69,7 +69,7 @@ class DummyBot(Passivbot):
         "ema_span_0": 1.0,
         "ema_span_1": 1.0,
         "risk_wel_enforcer_threshold": 0.0,
-        "entry_log_range_ema_span_hours": 0.0,
+        "entry_volatility_ema_span_hours": 0.0,
     }
 
     _bot_value_defaults = {

@@ -167,6 +167,7 @@ pub struct BacktestParams {
     pub btc_collateral_cap: f64,
     pub btc_collateral_ltv_cap: Option<f64>,
     pub metrics_only: bool,
+    pub filter_by_min_effective_cost: bool,
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -237,7 +238,7 @@ pub struct BotParams {
     pub entry_grid_spacing_log_weight: f64,
     pub entry_grid_spacing_we_weight: f64,
     pub entry_grid_spacing_pct: f64,
-    pub entry_log_range_ema_span_hours: f64,
+    pub entry_volatility_ema_span_hours: f64,
     pub entry_initial_ema_dist: f64,
     pub entry_initial_qty_pct: f64,
     pub entry_trailing_double_down_factor: f64,
@@ -248,7 +249,8 @@ pub struct BotParams {
     pub entry_trailing_threshold_pct: f64,
     pub entry_trailing_threshold_we_weight: f64,
     pub entry_trailing_threshold_log_weight: f64,
-    pub filter_log_range_ema_span: f64,
+    pub filter_volatility_ema_span: f64,
+    pub filter_volatility_drop_pct: f64,
     pub filter_volume_ema_span: f64,
     pub filter_volume_drop_pct: f64,
     pub ema_span_0: f64,

@@ -819,6 +819,11 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(false),
+        filter_by_min_effective_cost: dict
+            .get_item("filter_by_min_effective_cost")?
+            .map(|item| item.extract::<bool>())
+            .transpose()?
+            .unwrap_or(false),
     })
 }
 
@@ -883,7 +888,11 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         entry_grid_spacing_log_weight: extract_value(dict, "entry_grid_spacing_log_weight")?,
         entry_grid_spacing_we_weight: extract_grid_spacing_we_weight(dict)?,
         entry_grid_spacing_pct: extract_value(dict, "entry_grid_spacing_pct")?,
-        entry_log_range_ema_span_hours: extract_value(dict, "entry_log_range_ema_span_hours")?,
+        entry_volatility_ema_span_hours: extract_value_with_fallback(
+            dict,
+            "entry_volatility_ema_span_hours",
+            "entry_log_range_ema_span_hours",
+        )?,
         entry_initial_ema_dist: extract_value(dict, "entry_initial_ema_dist")?,
         entry_initial_qty_pct: extract_value(dict, "entry_initial_qty_pct")?,
         entry_trailing_double_down_factor: extract_value(
@@ -909,9 +918,14 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
             dict,
             "entry_trailing_threshold_log_weight",
         )?,
-        filter_log_range_ema_span: extract_value(dict, "filter_log_range_ema_span")?,
+        filter_volatility_ema_span: extract_value_with_fallback(
+            dict,
+            "filter_volatility_ema_span",
+            "filter_log_range_ema_span",
+        )?,
         filter_volume_ema_span: extract_value(dict, "filter_volume_ema_span")?,
         filter_volume_drop_pct: extract_value(dict, "filter_volume_drop_pct")?,
+        filter_volatility_drop_pct: extract_value(dict, "filter_volatility_drop_pct")?,
         ema_span_0: extract_value(dict, "ema_span_0")?,
         ema_span_1: extract_value(dict, "ema_span_1")?,
         n_positions,
@@ -939,6 +953,23 @@ fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a PyDict, key: &str) -> 
             ))
         })
         .and_then(pyo3::FromPyObject::extract)
+}
+
+fn extract_value_with_fallback<'a, T: pyo3::FromPyObject<'a>>(
+    dict: &'a PyDict,
+    primary: &str,
+    fallback: &str,
+) -> PyResult<T> {
+    if let Some(item) = dict.get_item(primary)? {
+        return item.extract::<T>();
+    }
+    if let Some(item) = dict.get_item(fallback)? {
+        return item.extract::<T>();
+    }
+    Err(PyErr::new::<pyo3::exceptions::PyKeyError, _>(format!(
+        "Keys '{}' or '{}' not found",
+        primary, fallback
+    )))
 }
 
 #[pyfunction]

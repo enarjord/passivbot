@@ -854,6 +854,9 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "trade_start_indices": [],
             "global_warmup_bars": 0,
             "metrics_only": False,
+            "filter_by_min_effective_cost": bool(
+                require_config_value(config, "backtest.filter_by_min_effective_cost")
+            ),
         }
     return bot_params_list, exchange_params, backtest_params
 

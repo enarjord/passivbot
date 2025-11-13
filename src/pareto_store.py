@@ -30,11 +30,10 @@ class LimitSpec:
 
 def _split_metric_field(raw_key: str) -> tuple[str, str]:
     key = raw_key.strip()
-    for sep in (".", "_"):
-        if sep in key:
-            metric, suffix = key.rsplit(sep, 1)
-            if suffix in STAT_FIELDS:
-                return metric, suffix
+    if "." in key:
+        metric, suffix = key.rsplit(".", 1)
+        if suffix in STAT_FIELDS:
+            return metric, suffix
     return key, "auto"
 
 
@@ -449,14 +448,12 @@ def main():
         "--limit",
         "--limits",
         dest="limits",
-        nargs="*",
+        action="append",
         help=(
-            "One or more limit filters applied before ranking. Expressions accept\n"
-            "objective ids (e.g. w_4<800) or metric names. When the metric name does\n"
-            "not include a statistic (mean/min/max/std) the tool uses suite-level\n"
-            "aggregates where available, otherwise the mean. Add a suffix such as\n"
-            "'.max' or '.min' to target a specific statistic. Remember to quote\n"
-            "expressions that contain comparison operators."
+            "Limit filters applied before ranking. Repeat for multiple expressions:\n"
+            "  -l \"w_4<800\" -l \"position_held_hours_max<400\"\n"
+            "Metrics accept optional suffixes (.min/.max/.mean/.std). Without a suffix\n"
+            "suite-level aggregates (if available) are used; otherwise the mean."
         ),
     )
     parser.add_argument(

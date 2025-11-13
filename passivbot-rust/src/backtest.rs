@@ -1,6 +1,7 @@
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
 };
+use crate::coin_selection::{select_coins, CoinFeature, SelectionConfig};
 use crate::constants::{CLOSE, HIGH, LONG, LOW, NO_POS, SHORT, VOLUME};
 use crate::entries::{
     calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
@@ -217,6 +218,7 @@ pub struct Backtest<'a> {
     // Latest 1h bucket per coin (overwritten each new hour)
     latest_hour: Vec<HourBucket>,
     warmup_bars: usize,
+    current_step: usize,
     positions: Positions,
     open_orders: OpenOrders,
     trailing_prices: TrailingPrices,
@@ -233,8 +235,6 @@ pub struct Backtest<'a> {
     first_valid_timestamps: HashMap<usize, usize>,
     did_fill_long: HashSet<usize>,
     did_fill_short: HashSet<usize>,
-    n_eligible_long: usize,
-    n_eligible_short: usize,
     pub total_wallet_exposures: Vec<f64>,
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
 }
@@ -381,17 +381,9 @@ impl<'a> Backtest<'a> {
         // Store original bot params to preserve dynamic WEL indicators
         let bot_params_original = bot_params.clone();
 
-        let n_eligible_long = bot_params_master.long.n_positions.max(
-            (n_coins as f64 * (1.0 - bot_params_master.long.filter_volume_drop_pct)).round()
-                as usize,
-        );
-        let n_eligible_short = bot_params_master.short.n_positions.max(
-            (n_coins as f64 * (1.0 - bot_params_master.short.filter_volume_drop_pct)).round()
-                as usize,
-        );
         let effective_n_positions = EffectiveNPositions {
-            long: n_eligible_long,
-            short: n_eligible_short,
+            long: bot_params_master.long.n_positions,
+            short: bot_params_master.short.n_positions,
         };
 
         // Calculate EMA alphas for each coin
@@ -446,10 +438,10 @@ impl<'a> Backtest<'a> {
             }),
             needs_grid_log_range_long: bot_params
                 .iter()
-                .any(|bp| bp.long.entry_log_range_ema_span_hours > 0.0),
+                .any(|bp| bp.long.entry_volatility_ema_span_hours > 0.0),
             needs_grid_log_range_short: bot_params
                 .iter()
-                .any(|bp| bp.short.entry_log_range_ema_span_hours > 0.0),
+                .any(|bp| bp.short.entry_volatility_ema_span_hours > 0.0),
             coin_first_valid_idx: first_valid_idx,
             coin_last_valid_idx: last_valid_idx,
             coin_trade_start_idx: trade_start_idx,
@@ -459,6 +451,7 @@ impl<'a> Backtest<'a> {
             last_hour_boundary_ms: (backtest_params.first_timestamp_ms / 3_600_000) * 3_600_000,
             latest_hour: vec![HourBucket::default(); n_coins],
             warmup_bars,
+            current_step: 0,
             open_orders: OpenOrders::default(),
             trailing_prices: TrailingPrices::default(),
             actives: Actives::default(),
@@ -483,8 +476,6 @@ impl<'a> Backtest<'a> {
             first_valid_timestamps: HashMap::new(),
             did_fill_long: HashSet::new(),
             did_fill_short: HashSet::new(),
-            n_eligible_long,
-            n_eligible_short,
             total_wallet_exposures: Vec::with_capacity(n_timesteps),
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
@@ -518,6 +509,7 @@ impl<'a> Backtest<'a> {
             .requested_start_timestamp_ms
             .max(self.first_timestamp_ms);
         for k in 1..(n_timesteps - 1) {
+            self.current_step = k;
             for idx in 0..self.n_coins {
                 if !self.trade_activation_logged[idx] && self.coin_is_tradeable_at(idx, k) {
                     self.trade_activation_logged[idx] = true;
@@ -655,78 +647,86 @@ impl<'a> Backtest<'a> {
     }
 
     pub fn calc_preferred_coins(&mut self, pside: usize) -> Vec<usize> {
-        let n_positions = match pside {
+        let max_positions = match pside {
             LONG => self.effective_n_positions.long,
             SHORT => self.effective_n_positions.short,
-            _ => panic!("Invalid pside"),
+            _ => 0,
         };
-
-        if self.n_coins <= n_positions {
-            return (0..self.n_coins).collect();
-        }
-        let volume_filtered = self.filter_by_relative_volume(pside);
-        self.rank_by_log_range(&volume_filtered, pside)
-    }
-
-    fn filter_by_relative_volume(&mut self, pside: usize) -> Vec<usize> {
-        // Use EMA volume (alpha precomputed in `calc_ema_alphas`) to rank coins by
-        // recent activity and return the top n eligible symbols.
-        let mut volume_indices: Vec<(f64, usize)> = (0..self.n_coins)
-            .map(|idx| {
-                let vol = match pside {
-                    LONG => self.emas[idx].vol_long,
-                    SHORT => self.emas[idx].vol_short,
-                    _ => panic!("Invalid pside"),
-                };
-                (vol, idx)
-            })
-            .collect();
-        let n_eligible = match pside {
-            LONG => self.n_eligible_long,
-            SHORT => self.n_eligible_short,
-            _ => panic!("Invalid pside"),
-        };
-        let take = n_eligible.min(self.n_coins);
-        if take == 0 {
+        if max_positions == 0 {
             return Vec::new();
         }
-        let cmp = |a: &(f64, usize), b: &(f64, usize)| -> Ordering {
-            match b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal) {
-                Ordering::Equal => a.1.cmp(&b.1),
-                ord => ord,
-            }
-        };
-        volume_indices.sort_unstable_by(|a, b| cmp(a, b));
-        let take = take.min(volume_indices.len());
-        volume_indices
-            .into_iter()
-            .take(take)
-            .map(|(_, idx)| idx)
-            .collect()
-    }
 
-    fn rank_by_log_range(&self, candidates: &[usize], pside: usize) -> Vec<usize> {
-        // Use the EMA log range values computed in `update_emas` to prioritise the
-        // most volatile coins among the remaining candidates.
-        let mut log_ranges: Vec<(f64, usize)> = candidates
-            .iter()
-            .map(|&idx| {
-                let lr = match pside {
+        if self.n_coins <= max_positions && !self.backtest_params.filter_by_min_effective_cost {
+            return (0..self.n_coins).collect();
+        }
+
+        let volume_drop_pct = match pside {
+            LONG => self.bot_params_master.long.filter_volume_drop_pct,
+            SHORT => self.bot_params_master.short.filter_volume_drop_pct,
+            _ => 0.0,
+        };
+        let volatility_drop_pct = match pside {
+            LONG => self.bot_params_master.long.filter_volatility_drop_pct,
+            SHORT => self.bot_params_master.short.filter_volatility_drop_pct,
+            _ => 0.0,
+        };
+
+        let features: Vec<CoinFeature> = (0..self.n_coins)
+            .map(|idx| CoinFeature {
+                index: idx,
+                enabled: self.coin_passes_min_effective_cost(idx, pside),
+                volume_score: match pside {
+                    LONG => self.emas[idx].vol_long,
+                    SHORT => self.emas[idx].vol_short,
+                    _ => 0.0,
+                },
+                volatility_score: match pside {
                     LONG => self.emas[idx].log_range_long,
                     SHORT => self.emas[idx].log_range_short,
                     _ => 0.0,
-                };
-                (lr, idx)
+                },
             })
             .collect();
 
-        log_ranges.sort_unstable_by(|a, b| {
-            match b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal) {
-                Ordering::Equal => a.1.cmp(&b.1),
-                ord => ord,
-            }
-        });
-        log_ranges.into_iter().map(|(_, idx)| idx).collect()
+        let config = SelectionConfig {
+            max_positions,
+            volume_drop_pct,
+            volatility_drop_pct,
+            require_forager: true,
+        };
+
+        select_coins(&features, &config)
+    }
+
+    fn coin_passes_min_effective_cost(&self, idx: usize, pside: usize) -> bool {
+        if !self.backtest_params.filter_by_min_effective_cost {
+            return true;
+        }
+        if idx >= self.exchange_params_list.len() {
+            return false;
+        }
+        let price_idx = self
+            .current_step
+            .min(self.hlcvs.shape()[0].saturating_sub(1));
+        let price = self.hlcvs[[price_idx, idx, CLOSE]];
+        if !price.is_finite() || price <= 0.0 {
+            return false;
+        }
+        let exchange = &self.exchange_params_list[idx];
+        let min_cost = qty_to_cost(exchange.min_qty, price, exchange.c_mult).max(exchange.min_cost);
+        let bot = self.bp(idx, pside);
+        if bot.entry_initial_qty_pct <= 0.0 {
+            return false;
+        }
+        let base_limit = bot.wallet_exposure_limit;
+        if base_limit <= 0.0 {
+            return false;
+        }
+        let allowance_multiplier = 1.0 + bot.risk_we_excess_allowance_pct.max(0.0);
+        let effective_limit = base_limit * allowance_multiplier;
+        let projected_cost =
+            self.balance.usd_total_balance * effective_limit * bot.entry_initial_qty_pct;
+        projected_cost >= min_cost
     }
 
     fn create_state_params(&self, k: usize, idx: usize, pside: usize) -> StateParams {
@@ -2335,10 +2335,11 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
         // EMA spans for the volume/log range filters (alphas precomputed from spans)
         vol_alpha_long: 2.0 / (bot_params_pair.long.filter_volume_ema_span as f64 + 1.0),
         vol_alpha_short: 2.0 / (bot_params_pair.short.filter_volume_ema_span as f64 + 1.0),
-        log_range_alpha_long: 2.0 / (bot_params_pair.long.filter_log_range_ema_span as f64 + 1.0),
-        log_range_alpha_short: 2.0 / (bot_params_pair.short.filter_log_range_ema_span as f64 + 1.0),
+        log_range_alpha_long: 2.0 / (bot_params_pair.long.filter_volatility_ema_span as f64 + 1.0),
+        log_range_alpha_short: 2.0
+            / (bot_params_pair.short.filter_volatility_ema_span as f64 + 1.0),
         grid_log_range_alpha_long: {
-            let span = bot_params_pair.long.entry_log_range_ema_span_hours;
+            let span = bot_params_pair.long.entry_volatility_ema_span_hours;
             if span > 0.0 {
                 2.0 / (span + 1.0)
             } else {
@@ -2346,7 +2347,7 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
             }
         },
         grid_log_range_alpha_short: {
-            let span = bot_params_pair.short.entry_log_range_ema_span_hours;
+            let span = bot_params_pair.short.entry_volatility_ema_span_hours;
             if span > 0.0 {
                 2.0 / (span + 1.0)
             } else {
@@ -2364,15 +2365,15 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair]) -> usize {
             pair.long.ema_span_0,
             pair.long.ema_span_1,
             pair.long.filter_volume_ema_span as f64,
-            pair.long.filter_log_range_ema_span as f64,
-            pair.long.entry_log_range_ema_span_hours * 60.0,
+            pair.long.filter_volatility_ema_span as f64,
+            pair.long.entry_volatility_ema_span_hours * 60.0,
         ];
         let spans_short = [
             pair.short.ema_span_0,
             pair.short.ema_span_1,
             pair.short.filter_volume_ema_span as f64,
-            pair.short.filter_log_range_ema_span as f64,
-            pair.short.entry_log_range_ema_span_hours * 60.0,
+            pair.short.filter_volatility_ema_span as f64,
+            pair.short.entry_volatility_ema_span_hours * 60.0,
         ];
         for span in spans_long.iter().chain(spans_short.iter()) {
             if span.is_finite() {
