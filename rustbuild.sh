@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+
+if [[ -z "${BASH_VERSION:-}" ]]; then
+    echo "This script must be run with bash (e.g. 'bash rustbuild.sh')." >&2
+    exit 1
+fi
+
 set -euo pipefail
 
 show_help() {
