@@ -425,15 +425,15 @@ impl<'a> Backtest<'a> {
                 .iter()
                 .any(|bp| bp.short.filter_volume_drop_pct != 0.0),
             needs_log_range_long: bot_params.iter().any(|bp| {
-                bp.long.entry_grid_spacing_log_weight != 0.0
-                    || bp.long.entry_trailing_threshold_log_weight != 0.0
-                    || bp.long.entry_trailing_retracement_log_weight != 0.0
+                bp.long.entry_grid_spacing_volatility_weight != 0.0
+                    || bp.long.entry_trailing_threshold_volatility_weight != 0.0
+                    || bp.long.entry_trailing_retracement_volatility_weight != 0.0
                     || bp.long.entry_trailing_grid_ratio != 0.0
             }),
             needs_log_range_short: bot_params.iter().any(|bp| {
-                bp.short.entry_grid_spacing_log_weight != 0.0
-                    || bp.short.entry_trailing_threshold_log_weight != 0.0
-                    || bp.short.entry_trailing_retracement_log_weight != 0.0
+                bp.short.entry_grid_spacing_volatility_weight != 0.0
+                    || bp.short.entry_trailing_threshold_volatility_weight != 0.0
+                    || bp.short.entry_trailing_retracement_volatility_weight != 0.0
                     || bp.short.entry_trailing_grid_ratio != 0.0
             }),
             needs_grid_log_range_long: bot_params

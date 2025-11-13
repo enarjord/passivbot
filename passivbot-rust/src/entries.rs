@@ -144,7 +144,7 @@ fn calc_reentry_price_bid(
     } else {
         0.0
     };
-    let log_multiplier = grid_log_range * bot_params.entry_grid_spacing_log_weight;
+    let log_multiplier = grid_log_range * bot_params.entry_grid_spacing_volatility_weight;
     let spacing_multiplier = 1.0 + we_multiplier + log_multiplier;
     let reentry_price = f64::min(
         round_dn(
@@ -180,7 +180,7 @@ fn calc_reentry_price_ask(
     } else {
         0.0
     };
-    let log_multiplier = grid_log_range * bot_params.entry_grid_spacing_log_weight;
+    let log_multiplier = grid_log_range * bot_params.entry_grid_spacing_volatility_weight;
     let spacing_multiplier = 1.0 + we_multiplier + log_multiplier;
     let reentry_price = f64::max(
         round_up(
@@ -525,7 +525,7 @@ pub fn calc_trailing_entry_long(
         0.0
     };
     let threshold_log_multiplier =
-        state_params.grid_log_range * bot_params.entry_trailing_threshold_log_weight;
+        state_params.grid_log_range * bot_params.entry_trailing_threshold_volatility_weight;
     let threshold_pct = bot_params.entry_trailing_threshold_pct
         * (1.0 + threshold_multiplier + threshold_log_multiplier).max(0.0);
 
@@ -536,7 +536,7 @@ pub fn calc_trailing_entry_long(
         0.0
     };
     let retracement_log_multiplier =
-        state_params.grid_log_range * bot_params.entry_trailing_retracement_log_weight;
+        state_params.grid_log_range * bot_params.entry_trailing_retracement_volatility_weight;
     let retracement_pct = bot_params.entry_trailing_retracement_pct
         * (1.0 + retracement_multiplier + retracement_log_multiplier).max(0.0);
     let mut entry_triggered = false;
@@ -858,7 +858,7 @@ pub fn calc_trailing_entry_short(
         0.0
     };
     let threshold_log_multiplier =
-        state_params.grid_log_range * bot_params.entry_trailing_threshold_log_weight;
+        state_params.grid_log_range * bot_params.entry_trailing_threshold_volatility_weight;
     let threshold_pct = bot_params.entry_trailing_threshold_pct
         * (1.0 + threshold_multiplier + threshold_log_multiplier).max(0.0);
 
@@ -869,7 +869,7 @@ pub fn calc_trailing_entry_short(
         0.0
     };
     let retracement_log_multiplier =
-        state_params.grid_log_range * bot_params.entry_trailing_retracement_log_weight;
+        state_params.grid_log_range * bot_params.entry_trailing_retracement_volatility_weight;
     let retracement_pct = bot_params.entry_trailing_retracement_pct
         * (1.0 + retracement_multiplier + retracement_log_multiplier).max(0.0);
     let mut entry_triggered = false;
