@@ -2099,7 +2099,7 @@ async def main():
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )
-    template_config = get_template_config("v7")
+    template_config = get_template_config()
     del template_config["optimize"]
     del template_config["bot"]
     template_config["live"] = {

@@ -20,7 +20,7 @@ Throughout:
 ```text
 alpha(span)         = 2 / (span + 1)
 ramp_spacing(wel)   = 1 + (wel / wel_base) * entry_grid_spacing_we_weight + vol_term
-vol_term            = log_range_ema * entry_grid_spacing_log_weight
+vol_term            = log_range_ema * entry_grid_spacing_volatility_weight
 
 initial_price(pside) =
     long  : min(best_bid, EMA_low * (1 - entry_initial_ema_dist))
@@ -52,11 +52,11 @@ a pullback.
 ```text
 threshold = entry_trailing_threshold_pct *
             (1 + entry_trailing_threshold_we_weight * wel_ratio
-               + entry_trailing_threshold_log_weight * log_range_ema)
+               + entry_trailing_threshold_volatility_weight * log_range_ema)
 
 retracement = entry_trailing_retracement_pct *
               (1 + entry_trailing_retracement_we_weight * wel_ratio
-                 + entry_trailing_retracement_log_weight * log_range_ema)
+                 + entry_trailing_retracement_volatility_weight * log_range_ema)
 
 wel_ratio = wallet_exposure(...) / wel_base
 

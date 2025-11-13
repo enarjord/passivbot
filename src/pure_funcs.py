@@ -143,49 +143,6 @@ def get_xk_keys(passivbot_mode="neat_grid"):
         raise Exception(f"unknown passivbot mode {passivbot_mode}")
 
 
-def determine_passivbot_mode(config: dict, skip=[]) -> str:
-    # print('dpm devbug',config)
-    if all(k in config["long"] for k in get_template_config("clock")["long"] if k not in skip):
-        return "clock"
-    elif all(
-        k in config["long"] for k in get_template_config("recursive_grid")["long"] if k not in skip
-    ):
-        return "recursive_grid"
-    elif all(k in config["long"] for k in get_template_config("neat_grid")["long"] if k not in skip):
-        return "neat_grid"
-    else:
-        raise Exception("unable to determine passivbot mode")
-
-
-def create_xk(config: dict) -> dict:
-    xk = {}
-    config_ = make_compatible(config.copy())
-    config_["passivbot_mode"] = determine_passivbot_mode(config_)
-    if "spot" in config_["market_type"]:
-        config_ = spotify_config(config_)
-    else:
-        config_["spot"] = False
-        config_["do_long"] = config_["long"]["enabled"]
-        config_["do_short"] = config_["short"]["enabled"]
-    keys = get_xk_keys(config_["passivbot_mode"])
-    config_["long"]["n_close_orders"] = int(round(config_["long"]["n_close_orders"]))
-    config_["short"]["n_close_orders"] = int(round(config_["short"]["n_close_orders"]))
-    if config_["passivbot_mode"] in ["neat_grid"]:
-        config_["long"]["max_n_entry_orders"] = int(round(config_["long"]["max_n_entry_orders"]))
-        config_["short"]["max_n_entry_orders"] = int(round(config_["short"]["max_n_entry_orders"]))
-    if config_["passivbot_mode"] in ["clock"]:
-        config_["long"]["auto_unstuck_delay_minutes"] = 0.0
-        config_["short"]["auto_unstuck_qty_pct"] = 0.0
-    for k in keys:
-        if "long" in config_ and k in config_["long"]:
-            xk[k] = (config_["long"][k], config_["short"][k])
-        elif k in config_:
-            xk[k] = config_[k]
-        else:
-            raise Exception("failed to create xk", k)
-    return xk
-
-
 def numpyize(x):
     if type(x) in [list, tuple]:
         return np.array([numpyize(e) for e in x])
@@ -273,57 +230,6 @@ def config_pretty_str(config: dict):
     for r in [("'", '"'), ("True", "true"), ("False", "false"), ("None", "null")]:
         pretty_str = pretty_str.replace(*r)
     return pretty_str
-
-
-def candidate_to_live_config(candidate_: dict) -> dict:
-    result_dict = candidate_["result"] if "result" in candidate_ else candidate_
-    candidate = make_compatible(candidate_)
-    passivbot_mode = name = determine_passivbot_mode(candidate)
-    live_config = get_template_config(passivbot_mode)
-    sides = ["long", "short"]
-    for side in sides:
-        live_config[side]["n_close_orders"] = int(round(live_config[side]["n_close_orders"]))
-        for k in live_config[side]:
-            if k in candidate[side]:
-                live_config[side][k] = candidate[side][k]
-            else:
-                print(
-                    f"warning: {side} {k} missing in config; using default value {live_config[side][k]}"
-                )
-        for k in live_config:
-            if k not in sides and k in candidate:
-                live_config[k] = candidate[k]
-    if "symbols" in result_dict:
-        if len(result_dict["symbols"]) > 1:
-            name += f"_{len(result_dict['symbols'])}_symbols"
-        else:
-            name += f"_{result_dict['symbols'][0]}"
-    elif "symbol" in result_dict:
-        name += f"_{result_dict['symbol']}"
-    if "n_days" in result_dict:
-        n_days = result_dict["n_days"]
-    elif "start_date" in result_dict:
-        n_days = (date_to_ts(result_dict["end_date"]) - date_to_ts(result_dict["start_date"])) / (
-            1000 * 60 * 60 * 24
-        )
-    elif "config_name" in candidate and "days" in candidate["config_name"]:
-        try:
-            cn = candidate["config_name"]
-            for i in range(len(cn) - 1, -1, -1):
-                if cn[i] == "_":
-                    break
-            n_days = int(cn[i + 1 : cn.find("days")])
-        except:
-            n_days = 0
-    else:
-        n_days = 0
-    name += f"_{n_days:.0f}days"
-    if "average_daily_gain" in result_dict:
-        name += f"_adg{(result_dict['average_daily_gain']) * 100:.3f}%"
-    elif "daily_gain" in result_dict:
-        name += f"_adg{(result_dict['daily_gain'] - 1) * 100:.3f}%"
-    live_config["config_name"] = name
-    return denumpyize(live_config)
 
 
 def unpack_config(d):
@@ -420,21 +326,6 @@ def filter_orders(
         else:
             orders_to_create.append(io)
     return actual_orders, orders_to_create
-
-
-def get_dummy_settings(config: dict):
-    dummy_settings = get_template_config()
-    dummy_settings.update({k: 1.0 for k in get_xk_keys()})
-    dummy_settings.update(
-        {
-            "user": config["user"],
-            "exchange": config["exchange"],
-            "symbol": config["symbol"],
-            "config_name": "",
-            "logging_level": 0,
-        }
-    )
-    return {**config, **dummy_settings}
 
 
 def flatten(lst: list) -> list:
@@ -1299,108 +1190,6 @@ def get_daily_from_income(
     return idf, bdf
 
 
-def make_compatible(live_config_: dict) -> dict:
-    live_config = live_config_.copy()
-    for src, dst in [
-        ("iprice_ema_dist", "initial_eprice_ema_dist"),
-        ("iqty_pct", "initial_qty_pct"),
-        ("secondary_grid_spacing", "secondary_pprice_diff"),
-        ("shrt", "short"),
-        ("secondary_pbr_allocation", "secondary_allocation"),
-        ("pbr_limit", "wallet_exposure_limit"),
-        ("ema_span_min", "ema_span_0"),
-        ("ema_span_max", "ema_span_1"),
-    ]:
-        live_config = json.loads(json.dumps(live_config).replace(src, dst))
-    for side, src, dst in [
-        ("long", "ema_dist_lower", "ema_dist_entry"),
-        ("long", "ema_dist_upper", "ema_dist_close"),
-        ("short", "ema_dist_upper", "ema_dist_entry"),
-        ("short", "ema_dist_lower", "ema_dist_close"),
-    ]:
-        if src in live_config[side]:
-            live_config[side][dst] = live_config[side].pop(src)
-    passivbot_mode = determine_passivbot_mode(
-        live_config, skip=["backwards_tp", "auto_unstuck_qty_pct", "auto_unstuck_delay_minutes"]
-    )
-    for side in ["long", "short"]:
-        for k0 in [
-            "delay_weight_close",
-            "delay_weight_entry",
-            "we_multiplier_close",
-            "we_multiplier_entry",
-        ]:
-            if k0 in live_config[side]:
-                # apply abs()
-                live_config[side][k0] = abs(live_config[side][k0])
-        for k0, lb, ub in [
-            ("auto_unstuck_wallet_exposure_threshold", 0.0, 1.0),
-            ("auto_unstuck_ema_dist", -10.0, 10.0),
-            ("ema_span_0", 1.0, 1000000.0),
-            ("ema_span_1", 1.0, 1000000.0),
-            ("max_n_entry_orders", 1.0, 100.0),  # don't let's spam the exchange
-            ("n_close_orders", 1.0, 100.0),
-            ("initial_eprice_ema_dist", -10.0, 10.0),
-            ("ema_dist_entry", -10.0, 10.0),
-            ("ema_dist_close", -10.0, 10.0),
-            ("grid_span", 0.0, 10.0),
-            ("delay_between_fills_minutes_entry", 1.0, 1000000.0),  # one million minutes...
-            ("delay_between_fills_minutes_close", 1.0, 1000000.0),  #  ...is almost two years
-            ("min_markup", 0.0, 10.0),
-            ("markup_range", 0.0, 10.0),
-            ("wallet_exposure_limit", 0.0, 10000.0),  # 10000x leverage
-            ("qty_pct_entry", 0.0, 1.0),  # cannot enter more than whole balance
-            ("qty_pct_close", 0.0, 1.0),
-            ("initial_qty_pct", 0.0, 1.0),
-            ("eqty_exp_base", 0.0, 100.0),
-            ("eprice_exp_base", 0.0, 100.0),
-            ("ddown_factor", 0.0, 1000.0),
-            ("rentry_pprice_dist", 0.0, 100.0),
-            ("rentry_pprice_dist_wallet_exposure_weighting", 0.0, 1000000.0),
-            ("eprice_pprice_diff", 0.0, 100.0),
-        ]:
-            # keep within bounds
-            if k0 in live_config[side]:
-                live_config[side][k0] = min(ub, max(lb, live_config[side][k0]))
-
-        if passivbot_mode in ["recursive_grid", "neat_grid"]:
-            if "initial_eprice_ema_dist" not in live_config[side]:
-                live_config[side]["initial_eprice_ema_dist"] = -10.0
-            if "auto_unstuck_wallet_exposure_threshold" not in live_config[side]:
-                live_config[side]["auto_unstuck_wallet_exposure_threshold"] = 0.0
-            if "auto_unstuck_ema_dist" not in live_config[side]:
-                live_config[side]["auto_unstuck_ema_dist"] = 0.0
-            if "backwards_tp" not in live_config[side]:
-                live_config[side]["backwards_tp"] = False
-            if "auto_unstuck_delay_minutes" not in live_config[side]:
-                live_config[side]["auto_unstuck_delay_minutes"] = 0.0
-            if "auto_unstuck_qty_pct" not in live_config[side]:
-                live_config[side]["auto_unstuck_qty_pct"] = 0.0
-        elif passivbot_mode == "clock":
-            if "backwards_tp" not in live_config[side]:
-                live_config[side]["backwards_tp"] = True
-
-        if "ema_span_0" not in live_config[side]:
-            live_config[side]["ema_span_0"] = 1.0
-        if "ema_span_1" not in live_config[side]:
-            live_config[side]["ema_span_1"] = 1.0
-        live_config[side]["n_close_orders"] = int(round(live_config[side]["n_close_orders"]))
-        if "max_n_entry_orders" in live_config[side]:
-            live_config[side]["max_n_entry_orders"] = int(
-                round(live_config[side]["max_n_entry_orders"])
-            )
-    return sort_dict_keys(live_config)
-
-
-def strip_config(cfg: dict) -> dict:
-    pm = determine_passivbot_mode(cfg)
-    template = get_template_config(pm)
-    for k in template["long"]:
-        template["long"][k] = cfg["long"][k]
-        template["short"][k] = cfg["short"][k]
-    return template
-
-
 def calc_scores(config: dict, results: dict):
     sides = ["long", "short"]
     # keys are sorted by reverse importance
@@ -1477,24 +1266,6 @@ def calc_scores(config: dict, results: dict):
         "keys": keys,
         "symbols_to_include": symbols_to_include,
     }
-
-
-def configs_are_equal(cfg0, cfg1) -> bool:
-    try:
-        cfg0 = candidate_to_live_config(cfg0)
-        cfg1 = candidate_to_live_config(cfg1)
-        pm0 = determine_passivbot_mode(cfg0)
-        pm1 = determine_passivbot_mode(cfg1)
-        if pm0 != pm1:
-            return False
-        for side in ["long", "short"]:
-            for key in cfg0[side]:
-                if cfg0[side][key] != cfg1[side][key]:
-                    return False
-        return True
-    except Exception as e:
-        print(f"error checking whether configs are equal {e}")
-        return False
 
 
 def shorten_custom_id(id_: str) -> str:
@@ -1927,64 +1698,6 @@ def determine_side_from_order_tuple(order_tuple):
             raise Exception(f"malformed order tuple {order_tuple}")
     else:
         raise Exception(f"malformed order tuple {order_tuple}")
-
-
-def backtested_multiconfig2singleconfig(backtested_config: dict) -> dict:
-    template = get_template_config("recursive_grid")
-    for pside in ["long", "short"]:
-        for key, val in [
-            ("auto_unstuck_delay_minutes", 0.0),
-            ("auto_unstuck_qty_pct", 0.0),
-            ("auto_unstuck_wallet_exposure_threshold", 0.0),
-            ("auto_unstuck_ema_dist", 0.0),
-            ("backwards_tp", True),
-        ]:
-            template[pside][key] = val
-        for key in backtested_config["live_config"][pside]:
-            template[pside][key] = backtested_config["live_config"][pside][key]
-    template["config_name"] = "_".join(
-        [symbol_to_coin(sym) for sym in backtested_config["args"]["symbols"]]
-    )
-    return template
-
-
-def backtested_multiconfig2live_multiconfig(backtested_config: dict) -> dict:
-    template = get_template_config("multi_hjson")
-    template["long_enabled"] = backtested_config["args"]["long_enabled"]
-    template["short_enabled"] = backtested_config["args"]["short_enabled"]
-    template["approved_symbols"] = backtested_config["args"]["symbols"]
-    for key in ["live_configs_dir", "default_config_path"]:
-        template[key] = ""
-    for key in backtested_config["live_config"]["global"]:
-        template[key] = backtested_config["live_config"]["global"][key]
-    for pside in ["long", "short"]:
-        for key in backtested_config["live_config"][pside]:
-            if key in template["universal_live_config"][pside]:
-                template["universal_live_config"][pside][key] = backtested_config["live_config"][
-                    pside
-                ][key]
-    return template
-
-
-def add_missing_params_to_hjson_live_multi_config(config: dict) -> (dict, [str]):
-    config_copy = deepcopy(config)
-    logging_lines = []
-    if "approved_symbols" not in config and "symbols" in config:
-        logging_lines.append(f"changed 'symbols' -> 'approved_symbols'")
-        config_copy["approved_symbols"] = config["symbols"]
-    if "universal_live_config" not in config:
-        logging_lines.append(f"adding missing config param: 'universal_live_config': {{}}")
-        config_copy["universal_live_config"] = {}
-    if "minimum_coin_age_days" not in config and "minimum_market_age_days" in config:
-        logging_lines.append(f"changed 'minimum_market_age_days' -> 'minimum_coin_age_days'")
-        config_copy["minimum_coin_age_days"] = config_copy["minimum_market_age_days"]
-
-    template = get_template_config("multi_hjson")
-    for key, val in template.items():
-        if key not in config_copy:
-            logging_lines.append(f"adding missing config param: {key}: {val}")
-            config_copy[key] = val
-    return config_copy, logging_lines
 
 
 def remove_OD(d: dict) -> dict:

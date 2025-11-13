@@ -2971,7 +2971,7 @@ class Passivbot:
                 else:
                     to_update_emas[pside].add(symbol)
                     to_update_last_prices.add(symbol)
-                    if self.bp(pside, "entry_grid_spacing_log_weight", symbol) != 0.0:
+                    if self.bp(pside, "entry_grid_spacing_volatility_weight", symbol) != 0.0:
                         grid_log_span_hours = float(
                             self.bp(pside, "entry_volatility_ema_span_hours", symbol)
                         )
@@ -3063,7 +3063,7 @@ class Passivbot:
                     self.min_costs[symbol],
                     self.c_mults[symbol],
                     self.bp(pside, "entry_grid_double_down_factor", symbol),
-                    self.bp(pside, "entry_grid_spacing_log_weight", symbol),
+                    self.bp(pside, "entry_grid_spacing_volatility_weight", symbol),
                     self.bp(pside, "entry_grid_spacing_we_weight", symbol),
                     self.bp(pside, "entry_grid_spacing_pct", symbol),
                     self.bp(pside, "entry_initial_ema_dist", symbol),
@@ -3072,10 +3072,10 @@ class Passivbot:
                     self.bp(pside, "entry_trailing_grid_ratio", symbol),
                     self.bp(pside, "entry_trailing_retracement_pct", symbol),
                     self.bp(pside, "entry_trailing_retracement_we_weight", symbol),
-                    self.bp(pside, "entry_trailing_retracement_log_weight", symbol),
+                    self.bp(pside, "entry_trailing_retracement_volatility_weight", symbol),
                     self.bp(pside, "entry_trailing_threshold_pct", symbol),
                     self.bp(pside, "entry_trailing_threshold_we_weight", symbol),
-                    self.bp(pside, "entry_trailing_threshold_log_weight", symbol),
+                    self.bp(pside, "entry_trailing_threshold_volatility_weight", symbol),
                     self.bp(pside, "wallet_exposure_limit", symbol),
                     self.bp(pside, "risk_we_excess_allowance_pct", symbol),
                     self.balance,
@@ -4248,7 +4248,7 @@ async def main():
         help="Logging verbosity: 0=warnings, 1=info, 2=debug, 3=trace.",
     )
 
-    template_config = get_template_config("v7")
+    template_config = get_template_config()
     del template_config["optimize"]
     del template_config["backtest"]
     add_arguments_recursively(parser, template_config)

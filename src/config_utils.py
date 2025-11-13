@@ -247,7 +247,7 @@ def get_allowed_modifications():
                 "entry_grid_double_down_factor": True,
                 "entry_grid_spacing_pct": True,
                 "entry_volatility_ema_span_hours": True,
-                "entry_grid_spacing_log_weight": True,
+                "entry_grid_spacing_volatility_weight": True,
                 "entry_grid_spacing_we_weight": True,
                 "entry_initial_ema_dist": True,
                 "entry_initial_qty_pct": True,
@@ -255,10 +255,10 @@ def get_allowed_modifications():
                 "entry_trailing_grid_ratio": True,
                 "entry_trailing_retracement_pct": True,
                 "entry_trailing_retracement_we_weight": True,
-                "entry_trailing_retracement_log_weight": True,
+                "entry_trailing_retracement_volatility_weight": True,
                 "entry_trailing_threshold_pct": True,
                 "entry_trailing_threshold_we_weight": True,
-                "entry_trailing_threshold_log_weight": True,
+                "entry_trailing_threshold_volatility_weight": True,
                 "unstuck_close_pct": True,
                 "unstuck_ema_dist": True,
                 "unstuck_threshold": True,
@@ -280,7 +280,7 @@ def get_allowed_modifications():
                 "entry_grid_double_down_factor": True,
                 "entry_grid_spacing_pct": True,
                 "entry_volatility_ema_span_hours": True,
-                "entry_grid_spacing_log_weight": True,
+                "entry_grid_spacing_volatility_weight": True,
                 "entry_grid_spacing_we_weight": True,
                 "entry_initial_ema_dist": True,
                 "entry_initial_qty_pct": True,
@@ -288,10 +288,10 @@ def get_allowed_modifications():
                 "entry_trailing_grid_ratio": True,
                 "entry_trailing_retracement_pct": True,
                 "entry_trailing_retracement_we_weight": True,
-                "entry_trailing_retracement_log_weight": True,
+                "entry_trailing_retracement_volatility_weight": True,
                 "entry_trailing_threshold_pct": True,
                 "entry_trailing_threshold_we_weight": True,
-                "entry_trailing_threshold_log_weight": True,
+                "entry_trailing_threshold_volatility_weight": True,
                 "unstuck_close_pct": True,
                 "unstuck_ema_dist": True,
                 "unstuck_threshold": True,
@@ -554,10 +554,10 @@ def _build_from_pb_multi(config: dict, template: dict) -> dict:
             "entry_trailing_grid_ratio",
             "entry_trailing_retracement_pct",
             "entry_trailing_retracement_we_weight",
-            "entry_trailing_retracement_log_weight",
+            "entry_trailing_retracement_volatility_weight",
             "entry_trailing_threshold_pct",
             "entry_trailing_threshold_we_weight",
-            "entry_trailing_threshold_log_weight",
+            "entry_trailing_threshold_volatility_weight",
             "unstuck_ema_dist",
         ):
             result["bot"][pside][key] = 0.0
@@ -612,6 +612,9 @@ LEGACY_ENTRY_GRID_KEYS = {
     "entry_grid_spacing_weight": "entry_grid_spacing_we_weight",
     "entry_grid_spacing_log_span_hours": "entry_volatility_ema_span_hours",
     "entry_log_range_ema_span_hours": "entry_volatility_ema_span_hours",
+    "entry_grid_spacing_log_weight": "entry_grid_spacing_volatility_weight",
+    "entry_trailing_retracement_log_weight": "entry_trailing_retracement_volatility_weight",
+    "entry_trailing_threshold_log_weight": "entry_trailing_threshold_volatility_weight",
 }
 
 LEGACY_BOUNDS_KEYS = {
@@ -629,6 +632,12 @@ LEGACY_BOUNDS_KEYS = {
     "short_entry_grid_spacing_log_span_hours": "short_entry_volatility_ema_span_hours",
     "long_entry_log_range_ema_span_hours": "long_entry_volatility_ema_span_hours",
     "short_entry_log_range_ema_span_hours": "short_entry_volatility_ema_span_hours",
+    "long_entry_grid_spacing_log_weight": "long_entry_grid_spacing_volatility_weight",
+    "short_entry_grid_spacing_log_weight": "short_entry_grid_spacing_volatility_weight",
+    "long_entry_trailing_retracement_log_weight": "long_entry_trailing_retracement_volatility_weight",
+    "short_entry_trailing_retracement_log_weight": "short_entry_trailing_retracement_volatility_weight",
+    "long_entry_trailing_threshold_log_weight": "long_entry_trailing_threshold_volatility_weight",
+    "short_entry_trailing_threshold_log_weight": "short_entry_trailing_threshold_volatility_weight",
 }
 
 
@@ -1056,9 +1065,11 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     else:
         existing_log = []
     tracker = ConfigTransformTracker()
-    optimize_suite_defined = isinstance(config.get("optimize"), dict) and "suite" in config["optimize"]
+    optimize_suite_defined = (
+        isinstance(config.get("optimize"), dict) and "suite" in config["optimize"]
+    )
     coin_sources_input = deepcopy(config.get("backtest", {}).get("coin_sources"))
-    template = get_template_config("v7")
+    template = get_template_config()
     flavor = detect_flavor(config, template)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
     _apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
@@ -1134,12 +1145,12 @@ def _clean_with_template(template_node, source_node):
     return deepcopy(source_node)
 
 
-def clean_config(config: dict, passivbot_mode: str = "v7") -> dict:
+def clean_config(config: dict) -> dict:
     """
     Return a sanitized config aligned with the template structure, stripped of helper keys,
     with dictionaries sorted recursively.
     """
-    template = get_template_config(passivbot_mode)
+    template = get_template_config()
     cleaned = _clean_with_template(template, config or {})
     return sort_dict_keys(cleaned)
 
@@ -1549,7 +1560,7 @@ def get_optional_live_value(config: dict, key: str, default=None):
     return get_optional_config_value(config, f"live.{key}", default)
 
 
-def get_template_config(passivbot_mode="v7"):
+def get_template_config():
     return {
         "logging": {
             "level": 1,
@@ -1591,7 +1602,7 @@ def get_template_config(passivbot_mode="v7"):
                 "ema_span_1": 1435.0,
                 "entry_grid_double_down_factor": 0.894,
                 "entry_volatility_ema_span_hours": 72,
-                "entry_grid_spacing_log_weight": 0.0,
+                "entry_grid_spacing_volatility_weight": 0.0,
                 "entry_grid_spacing_pct": 0.04,
                 "entry_grid_spacing_we_weight": 0.697,
                 "entry_initial_ema_dist": -0.00738,
@@ -1600,10 +1611,10 @@ def get_template_config(passivbot_mode="v7"):
                 "entry_trailing_grid_ratio": 0.5,
                 "entry_trailing_retracement_pct": 0.01,
                 "entry_trailing_retracement_we_weight": 0.0,
-                "entry_trailing_retracement_log_weight": 0.0,
+                "entry_trailing_retracement_volatility_weight": 0.0,
                 "entry_trailing_threshold_pct": 0.05,
                 "entry_trailing_threshold_we_weight": 0.0,
-                "entry_trailing_threshold_log_weight": 0.0,
+                "entry_trailing_threshold_volatility_weight": 0.0,
                 "filter_volatility_ema_span": 60.0,
                 "filter_volatility_drop_pct": 0.0,
                 "filter_volume_drop_pct": 0.95,
@@ -1630,7 +1641,7 @@ def get_template_config(passivbot_mode="v7"):
                 "ema_span_1": 1435.0,
                 "entry_grid_double_down_factor": 0.894,
                 "entry_volatility_ema_span_hours": 72,
-                "entry_grid_spacing_log_weight": 0.0,
+                "entry_grid_spacing_volatility_weight": 0.0,
                 "entry_grid_spacing_pct": 0.04,
                 "entry_grid_spacing_we_weight": 0.697,
                 "entry_initial_ema_dist": -0.00738,
@@ -1639,10 +1650,10 @@ def get_template_config(passivbot_mode="v7"):
                 "entry_trailing_grid_ratio": 0.5,
                 "entry_trailing_retracement_pct": 0.01,
                 "entry_trailing_retracement_we_weight": 0.0,
-                "entry_trailing_retracement_log_weight": 0.0,
+                "entry_trailing_retracement_volatility_weight": 0.0,
                 "entry_trailing_threshold_pct": 0.05,
                 "entry_trailing_threshold_we_weight": 0.0,
-                "entry_trailing_threshold_log_weight": 0.0,
+                "entry_trailing_threshold_volatility_weight": 0.0,
                 "filter_volatility_ema_span": 60.0,
                 "filter_volatility_drop_pct": 0.0,
                 "filter_volume_drop_pct": 0.95,
@@ -1699,7 +1710,7 @@ def get_template_config(passivbot_mode="v7"):
                 "long_entry_grid_double_down_factor": [0.1, 3.0],
                 "long_entry_grid_spacing_pct": [0.005, 0.12],
                 "long_entry_volatility_ema_span_hours": [24.0, 336.0],
-                "long_entry_grid_spacing_log_weight": [0.0, 400.0],
+                "long_entry_grid_spacing_volatility_weight": [0.0, 400.0],
                 "long_entry_grid_spacing_we_weight": [0.0, 20.0],
                 "long_entry_initial_ema_dist": [-0.1, 0.002],
                 "long_entry_initial_qty_pct": [0.005, 0.1],
@@ -1707,10 +1718,10 @@ def get_template_config(passivbot_mode="v7"):
                 "long_entry_trailing_grid_ratio": [-1.0, 1.0],
                 "long_entry_trailing_retracement_pct": [0.001, 0.1],
                 "long_entry_trailing_retracement_we_weight": [0.0, 20.0],
-                "long_entry_trailing_retracement_log_weight": [0.0, 400.0],
+                "long_entry_trailing_retracement_volatility_weight": [0.0, 400.0],
                 "long_entry_trailing_threshold_pct": [0.001, 0.1],
                 "long_entry_trailing_threshold_we_weight": [0.0, 20.0],
-                "long_entry_trailing_threshold_log_weight": [0.0, 400.0],
+                "long_entry_trailing_threshold_volatility_weight": [0.0, 400.0],
                 "long_risk_wel_enforcer_threshold": [0.8, 1.05],
                 "long_risk_we_excess_allowance_pct": [0.0, 0.5],
                 "long_risk_twel_enforcer_threshold": [0.9, 1.01],
@@ -1736,7 +1747,7 @@ def get_template_config(passivbot_mode="v7"):
                 "short_entry_grid_double_down_factor": [0.1, 3.0],
                 "short_entry_grid_spacing_pct": [0.005, 0.12],
                 "short_entry_volatility_ema_span_hours": [24.0, 336.0],
-                "short_entry_grid_spacing_log_weight": [0.0, 400.0],
+                "short_entry_grid_spacing_volatility_weight": [0.0, 400.0],
                 "short_entry_grid_spacing_we_weight": [0.0, 20.0],
                 "short_entry_initial_ema_dist": [-0.1, 0.002],
                 "short_entry_initial_qty_pct": [0.005, 0.1],
@@ -1744,10 +1755,10 @@ def get_template_config(passivbot_mode="v7"):
                 "short_entry_trailing_grid_ratio": [-1.0, 1.0],
                 "short_entry_trailing_retracement_pct": [0.001, 0.1],
                 "short_entry_trailing_retracement_we_weight": [0.0, 20.0],
-                "short_entry_trailing_retracement_log_weight": [0.0, 400.0],
+                "short_entry_trailing_retracement_volatility_weight": [0.0, 400.0],
                 "short_entry_trailing_threshold_pct": [0.001, 0.1],
                 "short_entry_trailing_threshold_we_weight": [0.0, 20.0],
-                "short_entry_trailing_threshold_log_weight": [0.0, 400.0],
+                "short_entry_trailing_threshold_volatility_weight": [0.0, 400.0],
                 "short_risk_wel_enforcer_threshold": [0.8, 1.05],
                 "short_risk_we_excess_allowance_pct": [0.0, 0.5],
                 "short_risk_twel_enforcer_threshold": [0.9, 1.01],

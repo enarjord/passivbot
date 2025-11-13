@@ -221,9 +221,7 @@ def extract_bounds_tuple_list_from_config(config) -> [Bound]:
                 return tuple(sorted([val[0], val[1]]))
         raise Exception(f"malformed bound {key}: {val}")
 
-    template_config = get_template_config(
-        TEMPLATE_CONFIG_MODE
-    )  # single source of truth for key names
+    template_config = get_template_config()
     keys_ignored = get_bound_keys_ignored()
     bounds = []
     for pside in sorted(template_config["bot"]):
@@ -1212,7 +1210,7 @@ async def main():
         default=None,
         help="Optional config file providing optimize.suite overrides.",
     )
-    template_config = get_template_config(TEMPLATE_CONFIG_MODE)
+    template_config = get_template_config()
     del template_config["bot"]
     keep_live_keys = {
         "approved_coins",

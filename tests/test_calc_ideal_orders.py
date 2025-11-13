@@ -44,7 +44,7 @@ class DummyCM:
 class DummyBot(Passivbot):
     _bp_defaults = {
         "entry_grid_double_down_factor": 1.0,
-        "entry_grid_spacing_log_weight": 0.0,
+        "entry_grid_spacing_volatility_weight": 0.0,
         "entry_grid_spacing_we_weight": 0.0,
         "entry_grid_spacing_pct": 0.0,
         "entry_initial_ema_dist": 0.0,
@@ -53,10 +53,10 @@ class DummyBot(Passivbot):
         "entry_trailing_grid_ratio": 0.0,
         "entry_trailing_retracement_pct": 0.0,
         "entry_trailing_retracement_we_weight": 0.0,
-        "entry_trailing_retracement_log_weight": 0.0,
+        "entry_trailing_retracement_volatility_weight": 0.0,
         "entry_trailing_threshold_pct": 0.0,
         "entry_trailing_threshold_we_weight": 0.0,
-        "entry_trailing_threshold_log_weight": 0.0,
+        "entry_trailing_threshold_volatility_weight": 0.0,
         "wallet_exposure_limit": 1.0,
         "risk_we_excess_allowance_pct": 0.0,
         "close_grid_markup_end": 0.0,

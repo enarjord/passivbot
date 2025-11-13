@@ -1039,7 +1039,7 @@ async def main():
         default=None,
         help="Optional config file providing backtest.suite overrides.",
     )
-    template_config = get_template_config("v7")
+    template_config = get_template_config()
     del template_config["optimize"]
     keep_live_keys = {
         "approved_coins",

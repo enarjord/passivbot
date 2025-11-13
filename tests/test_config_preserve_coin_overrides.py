@@ -20,7 +20,7 @@ from config_utils import format_config, get_template_config
     ],
 )
 def test_coin_overrides_not_pruned(overrides):
-    cfg = get_template_config("v7")
+    cfg = get_template_config()
     cfg["live"]["user"] = "tester"
     cfg["coin_overrides"] = overrides
 
