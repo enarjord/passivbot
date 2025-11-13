@@ -1056,6 +1056,7 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     else:
         existing_log = []
     tracker = ConfigTransformTracker()
+    optimize_suite_defined = isinstance(config.get("optimize"), dict) and "suite" in config["optimize"]
     coin_sources_input = deepcopy(config.get("backtest", {}).get("coin_sources"))
     template = get_template_config("v7")
     flavor = detect_flavor(config, template)
@@ -1073,6 +1074,11 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     if coin_sources_input is not None:
         result.setdefault("backtest", {})["coin_sources"] = coin_sources_input
     _preserve_coin_sources(result)
+
+    if not optimize_suite_defined:
+        backtest_suite = result.get("backtest", {}).get("suite")
+        if backtest_suite is not None:
+            result.setdefault("optimize", {})["suite"] = deepcopy(backtest_suite)
 
     if not live_only:
         # unneeded adjustments if running live
@@ -1095,6 +1101,47 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
         result["_raw"] = deepcopy(raw_snapshot)
 
     return result
+
+
+def _clean_dynamic_node(value):
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, sub_value in value.items():
+            if str(key).startswith("_"):
+                continue
+            cleaned[key] = _clean_dynamic_node(sub_value)
+        return cleaned
+    if isinstance(value, list):
+        return [_clean_dynamic_node(item) for item in value]
+    return deepcopy(value)
+
+
+def _clean_with_template(template_node, source_node):
+    if isinstance(template_node, dict):
+        if not template_node:
+            return _clean_dynamic_node(source_node if isinstance(source_node, dict) else {})
+        result = {}
+        source_dict = source_node if isinstance(source_node, dict) else {}
+        for key, tmpl_value in template_node.items():
+            result[key] = _clean_with_template(tmpl_value, source_dict.get(key))
+        return result
+    if isinstance(template_node, list):
+        if isinstance(source_node, list):
+            return [_clean_dynamic_node(item) for item in source_node]
+        return deepcopy(template_node)
+    if source_node is None:
+        return deepcopy(template_node)
+    return deepcopy(source_node)
+
+
+def clean_config(config: dict, passivbot_mode: str = "v7") -> dict:
+    """
+    Return a sanitized config aligned with the template structure, stripped of helper keys,
+    with dictionaries sorted recursively.
+    """
+    template = get_template_config(passivbot_mode)
+    cleaned = _clean_with_template(template, config or {})
+    return sort_dict_keys(cleaned)
 
 
 def parse_limits_string(limits_str: Union[str, dict]) -> dict:
@@ -1632,6 +1679,7 @@ def get_template_config(passivbot_mode="v7"):
             "minimum_coin_age_days": 7.0,
             "pnls_max_lookback_days": 30.0,
             "price_distance_threshold": 0.002,
+            "recv_window_ms": 5000,
             "max_warmup_minutes": 0.0,
             "time_in_force": "good_till_cancelled",
             "warmup_ratio": 0.2,
