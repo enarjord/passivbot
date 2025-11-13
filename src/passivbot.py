@@ -4048,9 +4048,23 @@ class Passivbot:
                     coins = expanded_coins
 
                 symbols = [self.coin_to_symbol(coin) for coin in coins if coin]
-                symbols = set([s for s in symbols if s])
+                symbols = {s for s in symbols if s}
+                eligible = getattr(self, "eligible_symbols", None)
+                if eligible:
+                    skipped = [sym for sym in symbols if sym not in eligible]
+                    if skipped:
+                        coin_list = ", ".join(sorted(symbol_to_coin(sym) or sym for sym in skipped))
+                        symbol_list = ", ".join(sorted(skipped))
+                        logging.warning(
+                            "Skipping unsupported markets for %s: coins=%s symbols=%s exchange=%s",
+                            k_coins,
+                            coin_list,
+                            symbol_list,
+                            getattr(self, "exchange", "?"),
+                        )
+                        symbols = symbols - set(skipped)
             symbols_already = getattr(self, k_coins)[pside]
-            if symbols and symbols_already != symbols:
+            if symbols_already != symbols:
                 added = symbols - symbols_already
                 if added:
                     if pside in log_psides:
