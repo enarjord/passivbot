@@ -1232,6 +1232,16 @@ class Passivbot:
         pb_type = order.get("pb_order_type")
         if pb_type:
             return str(pb_type)
+        symbol = order.get("symbol")
+        if symbol and symbol in self.open_orders:
+            for existing in self.open_orders[symbol]:
+                if order_has_match(order, [existing], tolerance_price=0.0, tolerance_qty=0.0):
+                    existing_type = existing.get("pb_order_type")
+                    if existing_type:
+                        return str(existing_type)
+                    candidate = self._decode_pb_type_from_ids(existing)
+                    if candidate:
+                        return candidate
         candidate_ids = [
             order.get("custom_id"),
             order.get("customId"),
@@ -1242,13 +1252,31 @@ class Passivbot:
             order.get("order_link_id"),
             order.get("orderLinkId"),
         ]
-        for cid in candidate_ids:
+        candidate = self._decode_pb_type_from_ids(order, candidate_ids)
+        if candidate:
+            return candidate
+        return "unknown"
+
+    def _decode_pb_type_from_ids(self, order: dict, candidate_ids: Optional[list] = None) -> Optional[str]:
+        ids = candidate_ids
+        if ids is None:
+            ids = [
+                order.get("custom_id"),
+                order.get("customId"),
+                order.get("client_order_id"),
+                order.get("clientOrderId"),
+                order.get("client_oid"),
+                order.get("clientOid"),
+                order.get("order_link_id"),
+                order.get("orderLinkId"),
+            ]
+        for cid in ids:
             if not cid:
                 continue
             snake = custom_id_to_snake(str(cid))
             if snake and snake != "unknown":
                 return snake
-        return "unknown"
+        return None
 
     def did_create_order(self, executed) -> bool:
         """Return True if the exchange acknowledged order creation."""
