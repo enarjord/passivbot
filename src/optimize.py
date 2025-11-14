@@ -628,6 +628,7 @@ class Evaluator:
             "position_held_hours_median": 1.0,
             "position_unchanged_hours_max": 1.0,
             "positions_held_per_day": 1.0,
+            "positions_held_per_day_w": 1.0,
             "sharpe_ratio": -1.0,
             "sharpe_ratio_w": -1.0,
             "sortino_ratio": -1.0,
