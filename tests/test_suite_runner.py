@@ -1,11 +1,13 @@
 import asyncio
 from copy import deepcopy
 
+import numpy as np
 import pytest
 
 from suite_runner import (
     SuiteScenario,
     ScenarioResult,
+    ExchangeDataset,
     aggregate_metrics,
     apply_scenario,
     build_scenarios,
@@ -13,6 +15,7 @@ from suite_runner import (
     extract_suite_config,
     filter_coins_by_exchange_assignment,
     resolve_coin_sources,
+    _prepare_dataset_subset,
 )
 
 
@@ -124,6 +127,44 @@ def test_apply_scenario_records_transform_log():
     assert any(change["path"] == "backtest.start_date" for change in entry["details"]["changes"])
 
 
+def test_apply_scenario_overrides_update_config():
+    base_config = {
+        "backtest": {
+            "start_date": "2021-01-01",
+            "end_date": "2021-01-31",
+            "coins": {},
+            "cache_dir": {},
+            "exchanges": ["binance"],
+        },
+        "live": {
+            "approved_coins": {"long": [], "short": []},
+            "ignored_coins": {"long": [], "short": []},
+        },
+        "bot": {"long": {"n_positions": 8}, "short": {"n_positions": 8}},
+    }
+    scenario = SuiteScenario(
+        label="override",
+        start_date=None,
+        end_date=None,
+        coins=["BTC"],
+        ignored_coins=[],
+        overrides={"bot.long.n_positions": 3},
+    )
+    cfg, _ = apply_scenario(
+        base_config,
+        scenario,
+        master_coins=["BTC"],
+        master_ignored=[],
+        available_exchanges=["binance"],
+        available_coins={"BTC"},
+        base_coin_sources={"BTC": "binance"},
+    )
+    assert cfg["bot"]["long"]["n_positions"] == 3
+    entry = cfg["_transform_log"][-1]
+    paths = [change["path"] for change in entry["details"]["changes"]]
+    assert "bot.long.n_positions" in paths
+
+
 def test_resolve_coin_sources_merges_overrides():
     base = {"BTC": "binance"}
     overrides = {"ETH": "bybit"}
@@ -179,3 +220,47 @@ def test_aggregate_metrics_computes_stats():
     summary = aggregate_metrics(scenario_results, {"default": "mean"})
     assert summary["aggregated"]["metric"] == pytest.approx(2.0)
     assert summary["stats"]["metric"]["max"] == pytest.approx(3.0)
+
+
+def test_prepare_dataset_subset_clips_dates(monkeypatch):
+    coins = ["BTC", "ETH"]
+    timestamps = np.array([0, 60_000, 120_000, 180_000], dtype=np.int64)
+    hlcvs = np.random.random((len(timestamps), len(coins), 4))
+    btc_prices = np.linspace(10000, 10030, len(timestamps))
+    dataset = ExchangeDataset(
+        exchange="combined",
+        coins=coins,
+        coin_index={coin: idx for idx, coin in enumerate(coins)},
+        coin_exchange={coin: "combined" for coin in coins},
+        available_exchanges=["combined"],
+        hlcvs=hlcvs,
+        mss={coin: {} for coin in coins},
+        btc_usd_prices=btc_prices,
+        timestamps=timestamps,
+        cache_dir="/tmp",
+    )
+    scenario_config = {
+        "backtest": {"start_date": "1970-01-01T00:01:00", "end_date": "1970-01-01T00:03:00"},
+        "live": {"warmup_ratio": 0.0},
+        "bot": {"long": {}, "short": {}},
+        "optimize": {"bounds": {}},
+    }
+    monkeypatch.setattr(
+        "suite_runner.compute_backtest_warmup_minutes",
+        lambda cfg: 1,  # minute
+    )
+    monkeypatch.setattr(
+        "suite_runner.compute_per_coin_warmup_minutes",
+        lambda cfg: {"__default__": 0},
+    )
+    subset_hlcvs, subset_btc, subset_ts, subset_mss = _prepare_dataset_subset(
+        dataset, scenario_config, ["BTC"], "scenario_clip"
+    )
+    # Expect 4 timesteps: warmup extends to t=0 and end is inclusive
+    assert subset_hlcvs.shape[0] == 4
+    assert subset_ts[0] == 0
+    assert subset_ts[-1] == 180_000
+    meta = subset_mss["__meta__"]
+    assert meta["requested_start_ts"] == 60_000
+    assert meta["requested_end_ts"] == 180_000
+    assert "warmup_minutes_requested" in meta
