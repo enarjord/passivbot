@@ -16,6 +16,7 @@ from suite_runner import (
     filter_coins_by_exchange_assignment,
     resolve_coin_sources,
     _prepare_dataset_subset,
+    summarize_scenario_metrics,
 )
 
 
@@ -89,6 +90,20 @@ def test_apply_scenario_filters_unavailable_coins():
     assert coins == ["BTC"]
     assert cfg["live"]["approved_coins"]["long"] == ["BTC"]
     assert cfg["backtest"]["coin_sources"] == {"BTC": "binance"}
+
+
+def test_summarize_scenario_metrics_prefers_mean():
+    metrics = {
+        "stats": {
+            "adg_btc": {"mean": 0.1, "min": 0.05, "max": 0.2, "std": 0.01},
+            "mdg_btc": 0.2,
+            "drawdown": {"max": -0.1},
+        }
+    }
+    simplified = summarize_scenario_metrics(metrics)
+    assert simplified["adg_btc"] == 0.1
+    assert simplified["mdg_btc"] == 0.2
+    assert simplified["drawdown"] == -0.1
 
 
 def test_apply_scenario_records_transform_log():

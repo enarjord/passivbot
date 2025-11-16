@@ -1,6 +1,6 @@
 from copy import deepcopy
 
-from config_utils import clean_config, get_template_config
+from config_utils import clean_config, get_template_config, strip_config_metadata
 
 
 def test_clean_config_removes_internal_sections_and_keeps_user_values():
@@ -40,3 +40,23 @@ def test_clean_config_fills_missing_values_from_template():
     cleaned = clean_config(config)
     template = get_template_config()
     assert cleaned == template
+
+
+def test_strip_config_metadata_removes_known_keys_recursively():
+    config = {
+        "bot": {
+            "long": {"n_positions": 3, "_raw": {"ignore": True}},
+            "_coins_sources": {"BTC": "binance"},
+        },
+        "_raw": {"bot": {}},
+        "_transform_log": ["load"],
+        "nested": {"_raw": 123, "value": 5},
+        "_coins_sources": {"ADA": "bybit"},
+    }
+    stripped = strip_config_metadata(config)
+    assert "_raw" not in stripped
+    assert "_transform_log" not in stripped
+    assert "_coins_sources" not in stripped
+    assert "_coins_sources" not in stripped["bot"]
+    assert "_raw" not in stripped["bot"]["long"]
+    assert stripped["nested"]["value"] == 5
