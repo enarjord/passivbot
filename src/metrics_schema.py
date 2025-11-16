@@ -70,14 +70,42 @@ def merge_suite_payload(
     aggregate_stats: Mapping[str, MetricStats],
     *,
     aggregate_values: Mapping[str, float] | None = None,
-    scenario_labels: Iterable[str] | None = None,
+    scenario_metrics: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> Dict[str, Any]:
-    payload = {
-        "aggregate": {
-            "aggregated": dict(aggregate_values or {}),
-            "stats": dict(aggregate_stats),
-        },
-    }
-    if scenario_labels:
-        payload["scenarios"] = list(scenario_labels)
+    """
+    Build the suite metrics payload embedded in Pareto members.
+
+    Returns a structure where each metric contains aggregate stats/value
+    plus per-scenario means when available.
+    """
+
+    scenario_metrics = scenario_metrics or {}
+    metric_names = set(aggregate_stats.keys())
+    for stats in scenario_metrics.values():
+        metric_names.update(stats.get("stats", {}).keys())
+
+    suite_metrics: Dict[str, Any] = {}
+    for metric in sorted(metric_names):
+        aggregate_stat = dict(aggregate_stats.get(metric, {}))
+        aggregated_value = None
+        if aggregate_values and metric in aggregate_values:
+            aggregated_value = aggregate_values[metric]
+        elif aggregate_stat:
+            aggregated_value = aggregate_stat.get("mean")
+        metric_entry = {
+            "stats": aggregate_stat,
+            "aggregated": aggregated_value,
+            "scenarios": {},
+        }
+        for label, stats in scenario_metrics.items():
+            scenario_stat = stats.get("stats", {}).get(metric)
+            if scenario_stat:
+                value = scenario_stat.get("mean")
+                if value is not None:
+                    metric_entry["scenarios"][label] = value
+        suite_metrics[metric] = metric_entry
+
+    payload: Dict[str, Any] = {"metrics": suite_metrics}
+    if scenario_metrics:
+        payload["scenario_labels"] = list(scenario_metrics.keys())
     return payload

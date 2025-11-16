@@ -905,6 +905,32 @@ def aggregate_metrics(
     return {"aggregated": aggregates, "stats": stats}
 
 
+def summarize_scenario_metrics(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convert a metrics dict containing only stats into a flat metric -> value map,
+    preferring the mean when available.
+    """
+
+    if not isinstance(metrics, dict):
+        return {}
+    stats = metrics.get("stats")
+    if not isinstance(stats, dict):
+        return deepcopy(metrics)
+    simplified: Dict[str, Any] = {}
+    for name, payload in stats.items():
+        if isinstance(payload, dict):
+            value = payload.get("mean")
+            if value is None:
+                for key in ("value", "max", "min"):
+                    if key in payload:
+                        value = payload[key]
+                        break
+            simplified[name] = value
+        else:
+            simplified[name] = payload
+    return simplified
+
+
 # --------------------------------------------------------------------------- #
 # Public API
 # --------------------------------------------------------------------------- #
@@ -1018,7 +1044,7 @@ async def run_backtest_suite_async(
         "aggregate": aggregate_summary,
         "per_scenario": {
             res.scenario.label: {
-                "metrics": res.metrics,
+                "metrics": summarize_scenario_metrics(res.metrics),
                 "elapsed_seconds": res.elapsed_seconds,
             }
             for res in results

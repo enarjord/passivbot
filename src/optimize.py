@@ -44,6 +44,7 @@ from config_utils import (
     update_config_with_args,
     require_config_value,
     merge_negative_cli_values,
+    strip_config_metadata,
 )
 from pure_funcs import (
     denumpyize,
@@ -342,6 +343,7 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
             bt.pop("coins", None)
     if metrics:
         entry["metrics"] = metrics
+    entry = strip_config_metadata(entry)
     recorder.record(entry)
     if hasattr(individual, "evaluation_metrics"):
         del individual.evaluation_metrics
@@ -1041,7 +1043,7 @@ class SuiteEvaluator:
         suite_payload = merge_suite_payload(
             aggregate_summary.get("stats", {}),
             aggregate_values=aggregate_summary.get("aggregated", {}),
-            scenario_labels=list(per_scenario_metrics.keys()),
+            scenario_metrics=per_scenario_metrics,
         )
         aggregate_stats = aggregate_summary.get("stats", {})
 

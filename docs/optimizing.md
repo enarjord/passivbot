@@ -103,11 +103,29 @@ Contents:
 
 ## Analyzing Results
 
-Full analysis is included in each member of the Pareto front. Use
+Full analysis is included in each member of the Pareto front. Two helper tools are available:
+
 ```bash
+# Interactive dashboard (recommended)
+python3 src/tools/pareto_dash.py --data-root optimize_results
+
+# Static matplotlib plotter
 python3 src/pareto_store.py optimize_results/.../pareto/
 ```
-to produce a visualization. Supports plotting for 2 or 3 metrics.
+
+`pareto_dash.py` scans one or more optimization runs and launches a Plotly Dash app with:
+
+- Scatter/histogram views for any metrics or objectives
+- Defaults to the metrics listed in `config.optimize.scoring`, so the scatter/histogram
+  immediately highlight your optimization objectives when the app loads
+- Scenario-aware box plots (per-metric distributions broken down by suite scenario)
+- Correlation heat maps and parameter-vs-metric scatter plots for quick diagnostics
+- Streaming history chart sourced from `all_results.bin`
+- CSV export of the current run's dataset for offline analysis
+
+Install the dependencies via `pip install dash plotly` if they are not already present.
+The legacy `pareto_store.py` script still supports quick 2D/3D matplotlib plots if a GUI
+isn't needed.
 
 ## Optimization Limits
 

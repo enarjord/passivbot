@@ -704,12 +704,17 @@ fn run_backtest_core<'py>(
     // Run the backtest and process results
     Python::with_gil(|py| {
         let (fills, equities) = backtest.run();
-        let (analysis_usd, analysis_btc) = analyze_backtest_pair(
+        let (entry_pct_long, entry_pct_short) = backtest.initial_entry_balance_pct();
+        let (mut analysis_usd, mut analysis_btc) = analyze_backtest_pair(
             &fills,
             &equities,
             backtest.balance.use_btc_collateral,
             &backtest.total_wallet_exposures,
         );
+        analysis_usd.entry_initial_balance_pct_long = entry_pct_long;
+        analysis_usd.entry_initial_balance_pct_short = entry_pct_short;
+        analysis_btc.entry_initial_balance_pct_long = entry_pct_long;
+        analysis_btc.entry_initial_balance_pct_short = entry_pct_short;
 
         // Create a dictionary to store analysis results using a more concise approach
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;

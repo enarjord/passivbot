@@ -455,6 +455,8 @@ pub struct Analysis {
     pub total_wallet_exposure_max: f64,
     pub total_wallet_exposure_mean: f64,
     pub total_wallet_exposure_median: f64,
+    pub entry_initial_balance_pct_long: f64,
+    pub entry_initial_balance_pct_short: f64,
 }
 
 impl Default for Analysis {
@@ -502,6 +504,8 @@ impl Default for Analysis {
             total_wallet_exposure_max: 0.0,
             total_wallet_exposure_mean: 0.0,
             total_wallet_exposure_median: 0.0,
+            entry_initial_balance_pct_long: 0.0,
+            entry_initial_balance_pct_short: 0.0,
         }
     }
 }

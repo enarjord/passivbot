@@ -111,10 +111,12 @@ def load_config(filepath: str, live_only=False, verbose=True) -> dict:
         raise
 
 
-def dump_config(config: dict, filepath: str):
-    config_ = deepcopy(config)
+def dump_config(config: dict, filepath: str, *, clean: bool = False):
+    config_copy = deepcopy(config)
+    if clean:
+        config_copy = clean_config(config_copy)
+    sorted_config = sort_dict_keys(config_copy)
     try:
-        sorted_config = sort_dict_keys(config_)
         with open(filepath, "w", encoding="utf-8") as fp:
             dump_json_streamlined(sorted_config, fp, sort_keys=False)
             fp.write("\n")
@@ -1153,6 +1155,24 @@ def clean_config(config: dict) -> dict:
     template = get_template_config()
     cleaned = _clean_with_template(template, config or {})
     return sort_dict_keys(cleaned)
+
+
+def strip_config_metadata(config: dict, *, keys: Iterable[str] | None = None) -> dict:
+    """
+    Return a deep-copied config with the provided metadata keys removed recursively.
+    Defaults to removing `_raw` and `_transform_log`.
+    """
+
+    removal = set(keys or ("_raw", "_transform_log", "_coins_sources"))
+
+    def _strip(node):
+        if isinstance(node, dict):
+            return {k: _strip(v) for k, v in node.items() if k not in removal}
+        if isinstance(node, list):
+            return [_strip(item) for item in node]
+        return deepcopy(node)
+
+    return _strip(config)
 
 
 def parse_limits_string(limits_str: Union[str, dict]) -> dict:

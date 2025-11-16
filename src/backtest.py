@@ -22,6 +22,7 @@ from config_utils import (
     require_config_value,
     require_live_value,
     get_optional_config_value,
+    strip_config_metadata,
 )
 from utils import (
     utc_ms,
@@ -893,6 +894,8 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
         "total_wallet_exposure_max",
         "total_wallet_exposure_mean",
         "total_wallet_exposure_median",
+        "entry_initial_balance_pct_long",
+        "entry_initial_balance_pct_short",
     }
 
     result = {}
@@ -976,7 +979,9 @@ def post_process(
     )
     json.dump(analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True)
     config["analysis"] = analysis
-    dump_config(format_config(config), f"{results_path}config.json")
+    formatted_config = format_config(config)
+    sanitized_config = strip_config_metadata(formatted_config)
+    dump_config(sanitized_config, f"{results_path}config.json")
     fdf.to_csv(f"{results_path}fills.csv")
     bal_eq.to_csv(oj(results_path, "balance_and_equity.csv.gz"), compression="gzip")
     balance_figs = create_forager_balance_figures(

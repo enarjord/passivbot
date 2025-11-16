@@ -239,6 +239,15 @@ pub struct Backtest<'a> {
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
 }
 
+fn calc_entry_balance_pct(params: &BotParams, effective_n_positions: usize) -> f64 {
+    if effective_n_positions == 0 {
+        return 0.0;
+    }
+    let allowance_multiplier = 1.0 + params.risk_we_excess_allowance_pct.max(0.0);
+    params.total_wallet_exposure_limit * params.entry_initial_qty_pct * allowance_multiplier
+        / effective_n_positions as f64
+}
+
 impl<'a> Backtest<'a> {
     pub fn new(
         hlcvs: &'a ArrayView3<'a, f64>,
@@ -2303,6 +2312,18 @@ impl<'a> Backtest<'a> {
                 }
             }
         }
+    }
+
+    pub fn initial_entry_balance_pct(&self) -> (f64, f64) {
+        let long = calc_entry_balance_pct(
+            &self.bot_params_master.long,
+            self.effective_n_positions.long,
+        );
+        let short = calc_entry_balance_pct(
+            &self.bot_params_master.short,
+            self.effective_n_positions.short,
+        );
+        (long, short)
     }
 }
 
