@@ -632,6 +632,8 @@ class Evaluator:
             "total_wallet_exposure_median": 1.0,
             "volume_pct_per_day_avg": -1.0,
             "volume_pct_per_day_avg_w": -1.0,
+            "entry_initial_balance_pct_long": -1.0,
+            "entry_initial_balance_pct_short": -1.0,
         }
 
         self.scoring_weights = {}
