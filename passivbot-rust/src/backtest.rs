@@ -237,6 +237,7 @@ pub struct Backtest<'a> {
     did_fill_short: HashSet<usize>,
     pub total_wallet_exposures: Vec<f64>,
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
+    equity_tracking_active: bool,
 }
 
 fn calc_entry_balance_pct(params: &BotParams, effective_n_positions: usize) -> f64 {
@@ -486,6 +487,7 @@ impl<'a> Backtest<'a> {
             did_fill_long: HashSet::new(),
             did_fill_short: HashSet::new(),
             total_wallet_exposures: Vec::with_capacity(n_timesteps),
+            equity_tracking_active: false,
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
     }
@@ -539,24 +541,28 @@ impl<'a> Backtest<'a> {
             self.update_trailing_prices(k);
             let current_ts = self.first_timestamp_ms + (k as u64) * 60_000u64;
             if k > warmup_bars && current_ts >= guard_timestamp_ms {
-                self.update_n_positions_and_wallet_exposure_limits(k);
+                if self.update_n_positions_and_wallet_exposure_limits(k) {
+                    self.equity_tracking_active = true;
+                }
                 self.update_open_orders_all(k);
             }
-            self.update_equities(k);
-            self.record_total_wallet_exposure();
+            if self.equity_tracking_active {
+                self.update_equities(k);
+                self.record_total_wallet_exposure();
+            }
         }
         let fills = std::mem::take(&mut self.fills);
         let equities = std::mem::take(&mut self.equities);
         (fills, equities)
     }
 
-    fn update_n_positions_and_wallet_exposure_limits(&mut self, k: usize) {
+    fn update_n_positions_and_wallet_exposure_limits(&mut self, k: usize) -> bool {
         let eligible: Vec<usize> = (0..self.n_coins)
             .filter(|&idx| self.coin_is_tradeable_at(idx, k))
             .collect();
 
         if eligible.is_empty() {
-            return; // nothing tradable right now
+            return false; // nothing tradable right now
         }
 
         // ---------- 2. effective position counts ----------
@@ -567,7 +573,7 @@ impl<'a> Backtest<'a> {
 
         // avoid division by zero (possible directly after a delisting)
         if self.effective_n_positions.long == 0 && self.effective_n_positions.short == 0 {
-            return;
+            return false;
         }
 
         // ---------- 3. dynamic WELs ----------
@@ -595,6 +601,7 @@ impl<'a> Backtest<'a> {
                 self.bot_params[idx].short.wallet_exposure_limit = dyn_wel_short_base;
             }
         }
+        true
     }
 
     #[inline(always)]
