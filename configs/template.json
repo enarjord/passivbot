@@ -137,7 +137,7 @@
             "filter_volatility_ema_span": 69.6,
             "filter_volume_drop_pct": 0.549,
             "filter_volume_ema_span": 2080.0,
-            "n_positions": 4,
+            "n_positions": 7,
             "risk_twel_enforcer_threshold": 0.974,
             "risk_we_excess_allowance_pct": 0.0381,
             "risk_wel_enforcer_threshold": 0.975,
