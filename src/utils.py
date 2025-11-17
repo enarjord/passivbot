@@ -13,6 +13,7 @@ from typing import Dict, Any, List, Union, Optional
 import re
 import logging
 from copy import deepcopy
+from pathlib import Path
 from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
     resolve_custom_endpoint_override,
@@ -30,6 +31,55 @@ logging.basicConfig(
 _COIN_TO_SYMBOL_CACHE = {}  # {exchange: {"map": dict, "mtime_ns": int, "size": int}}
 _SYMBOL_TO_COIN_CACHE = {"map": None, "mtime_ns": None, "size": None}
 _SYMBOL_TO_COIN_WARNINGS: set[str] = set()
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+LEGACY_COINS_FILE_ALIASES = {
+    "approved_coins_topmcap.json": Path("configs/approved_coins.json"),
+    "approved_coins_topmcap.txt": Path("configs/approved_coins.json"),
+}
+
+
+def _resolve_coins_file_path(value: str) -> Optional[Path]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw_path = Path(value.strip())
+    candidates: List[Path] = []
+
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+    else:
+        candidates.extend(
+            [
+                PROJECT_ROOT / raw_path,
+                Path.cwd() / raw_path,
+            ]
+        )
+
+    alias = LEGACY_COINS_FILE_ALIASES.get(raw_path.name)
+    if alias is not None:
+        if not alias.is_absolute():
+            candidates.append(PROJECT_ROOT / alias)
+        else:
+            candidates.append(alias)
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.exists():
+            if candidate.name != raw_path.name and raw_path.name in LEGACY_COINS_FILE_ALIASES:
+                try:
+                    rel = candidate.relative_to(PROJECT_ROOT)
+                except ValueError:
+                    rel = candidate
+                logging.warning(
+                    "Resolved legacy coins file '%s' to '%s'. Update your config to the new path.",
+                    raw_path,
+                    rel,
+                )
+            return candidate
+    return None
 
 
 def _require_live_value(config: Dict[str, Any], key: str):
@@ -858,17 +908,20 @@ def normalize_coins_source(src):
         readable file path, load it with `read_external_coins_lists`.
         Otherwise just return *x* unchanged.
         """
-        if isinstance(x, str) and os.path.exists(x):
-            return read_external_coins_lists(x)
+        def _maybe_read(path_candidate):
+            resolved = _resolve_coins_file_path(path_candidate)
+            if resolved is not None:
+                return read_external_coins_lists(str(resolved))
+            return None
 
-        if (
-            isinstance(x, (list, tuple))
-            and len(x) == 1
-            and isinstance(x[0], str)
-            and os.path.exists(x[0])
-        ):
-            return read_external_coins_lists(x[0])
-
+        if isinstance(x, str):
+            loaded = _maybe_read(x)
+            if loaded is not None:
+                return loaded
+        if isinstance(x, (list, tuple)) and len(x) == 1 and isinstance(x[0], str):
+            loaded = _maybe_read(x[0])
+            if loaded is not None:
+                return loaded
         return x
 
     def _normalize_side(value, side):

@@ -1,5 +1,6 @@
 from copy import deepcopy
 from types import SimpleNamespace
+import json
 
 import config_utils
 import pytest
@@ -128,6 +129,19 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     assert limits["penalize_if_lower_than_gain_btc"] == pytest.approx(0.1)
     assert config["optimize"]["bounds"]["long_entry_grid_spacing_pct"] == [0.05, 0.1]
     assert config["live"]["approved_coins"]["short"] == ["btc", "eth"]
+
+
+def test_apply_non_live_adjustments_supports_legacy_coins_file():
+    config = get_template_config()
+    config["live"]["approved_coins"] = "configs/approved_coins_topmcap.json"
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["live"]["empty_means_all_approved"] = False
+    config["optimize"]["bounds"]["long_entry_grid_spacing_pct"] = [0.1, 0.2]
+    config["backtest"]["end_date"] = "2023-01-01"
+    _apply_non_live_adjustments(config, verbose=False)
+    with open("configs/approved_coins.json") as fp:
+        expected = json.load(fp)
+    assert config["live"]["approved_coins"]["long"] == expected
 
 
 def test_migrate_btc_collateral_settings_converts_bool():
