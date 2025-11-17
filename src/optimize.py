@@ -1476,6 +1476,7 @@ async def main():
         def _evaluate_initial(individuals):
             if not individuals:
                 return 0
+            total = len(individuals)
             pending = {}
             for ind in individuals:
                 pending[pool.apply_async(toolbox.evaluate, (ind,))] = ind
@@ -1501,6 +1502,7 @@ async def main():
                         elif hasattr(ind, "evaluation_metrics"):
                             delattr(ind, "evaluation_metrics")
                         completed += 1
+                        logging.info("Evaluated %d/%d starting configs", completed, total)
             except KeyboardInterrupt:
                 logging.info("Evaluation interrupted; terminating pending starting configs...")
                 for res in pending:
