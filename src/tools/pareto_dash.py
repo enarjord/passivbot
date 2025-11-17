@@ -5,11 +5,12 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from glob import glob
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple, Any
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import re
 
 # Ensure we can import modules from src/
 SRC_ROOT = Path(__file__).resolve().parents[1]
@@ -147,6 +148,9 @@ class RunData:
     dataframe: pd.DataFrame
     scenario_metrics: Dict[str, List[str]]
     scoring_metrics: List[str]
+    default_limits: List[str]
+    aggregated_metrics: List[str]
+    param_metrics: List[str]
 
 
 def load_pareto_dataframe(run_dir: str) -> RunData:
@@ -154,6 +158,9 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
     rows: List[Dict[str, float]] = []
     scenario_metric_map: Dict[str, set] = defaultdict(set)
     scoring_metrics: List[str] = []
+    default_limits: List[str] = []
+    aggregated_cols: set[str] = set()
+    param_cols: set[str] = set()
     for path in sorted(glob(os.path.join(pareto_dir, "*.json"))):
         with open(path) as f:
             entry = json.load(f)
@@ -162,6 +169,11 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         params = _flatten_numeric(entry.get("bot", {}), prefix="bot")
         row = {**base, **suite_values, **params}
         row.update(_extract_objectives(entry))
+        for key in row:
+            if key.startswith("bot."):
+                param_cols.add(key)
+            elif key != "_id" and not _looks_like_stat_column(key):
+                aggregated_cols.add(key)
         for scenario, metric_values in scenario_values.items():
             for metric, value in metric_values.items():
                 row[f"{scenario}__{metric}"] = value
@@ -171,12 +183,21 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         rows.append(row)
         if not scoring_metrics:
             scoring_metrics = list(entry.get("optimize", {}).get("scoring", []) or [])
+            limits_cfg = entry.get("optimize", {}).get("limits", {})
+            default_limits = _limits_to_exprs(limits_cfg)
     if not rows:
-        return RunData(pd.DataFrame(), {}, scoring_metrics)
+        return RunData(pd.DataFrame(), {}, scoring_metrics, default_limits, [], [])
     df = pd.DataFrame(rows)
     df = df.dropna(axis=1, how="all")
     scenario_metrics = {name: sorted(metrics) for name, metrics in scenario_metric_map.items()}
-    return RunData(df, scenario_metrics, scoring_metrics)
+    return RunData(
+        df,
+        scenario_metrics,
+        scoring_metrics,
+        default_limits,
+        sorted(aggregated_cols),
+        sorted(param_cols),
+    )
 
 
 def load_history_dataframe(run_dir: str, max_points: int = 400) -> pd.DataFrame:
@@ -205,6 +226,98 @@ def load_history_dataframe(run_dir: str, max_points: int = 400) -> pd.DataFrame:
         step = max(len(df) // max_points, 1)
         df = df.iloc[::step]
     return df
+
+
+def _select_closest_to_ideal(df: pd.DataFrame, metrics: List[str]) -> Optional[pd.Series]:
+    if not metrics:
+        return None
+    subset = df[metrics].copy()
+    # Normalize columns to [0,1]; if constant, treat distance as 0 for that metric
+    normed = pd.DataFrame(index=subset.index)
+    for col in metrics:
+        col_min = subset[col].min()
+        col_max = subset[col].max()
+        if not np.isfinite(col_min) or not np.isfinite(col_max):
+            normed[col] = np.nan
+            continue
+        if col_max > col_min:
+            normed[col] = (subset[col] - col_min) / (col_max - col_min)
+        else:
+            normed[col] = 0.0
+    normed = normed.dropna()
+    if normed.empty:
+        return None
+    # Ideal is max (1.0) for each metric
+    distances = np.sqrt(((normed - 1.0) ** 2).sum(axis=1))
+    best_idx = distances.idxmin()
+    return df.loc[best_idx]
+
+
+LIMIT_PATTERNS = [
+    (re.compile(r"^\s*(?P<key>[A-Za-z0-9_.]+)\s*<=\s*(?P<val>[-+eE0-9.]+)\s*$"), np.less_equal),
+    (re.compile(r"^\s*(?P<key>[A-Za-z0-9_.]+)\s*>=\s*(?P<val>[-+eE0-9.]+)\s*$"), np.greater_equal),
+    (re.compile(r"^\s*(?P<key>[A-Za-z0-9_.]+)\s*<\s*(?P<val>[-+eE0-9.]+)\s*$"), np.less),
+    (re.compile(r"^\s*(?P<key>[A-Za-z0-9_.]+)\s*>\s*(?P<val>[-+eE0-9.]+)\s*$"), np.greater),
+    (re.compile(r"^\s*(?P<key>[A-Za-z0-9_.]+)\s*==?\s*(?P<val>[-+eE0-9.]+)\s*$"), np.equal),
+]
+
+
+def _apply_limits(df: pd.DataFrame, exprs: Optional[str]) -> pd.Series:
+    if not exprs:
+        return pd.Series(True, index=df.index)
+    mask = pd.Series(True, index=df.index)
+    for line in str(exprs).splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        matched = False
+        for pattern, op in LIMIT_PATTERNS:
+            m = pattern.match(line)
+            if not m:
+                continue
+            matched = True
+            key = m.group("key")
+            try:
+                val = float(m.group("val"))
+            except ValueError:
+                continue
+            if key not in df.columns:
+                continue
+            col = df[key]
+            mask &= op(col, val)
+            break
+        if not matched:
+            # unsupported expression; ignore
+            continue
+    return mask
+
+
+def _looks_like_stat_column(name: str) -> bool:
+    lowered = name.lower()
+    return lowered.endswith(("_mean", "_min", "_max", "_std"))
+
+
+def _limits_to_exprs(limits_cfg: Any) -> List[str]:
+    exprs: List[str] = []
+    if isinstance(limits_cfg, str):
+        exprs.append(limits_cfg)
+        return exprs
+    if not isinstance(limits_cfg, dict):
+        return exprs
+    for key, val in limits_cfg.items():
+        try:
+            num = float(val)
+        except (TypeError, ValueError):
+            continue
+        if key.startswith("penalize_if_greater_than_"):
+            metric = key[len("penalize_if_greater_than_") :]
+            exprs.append(f"{metric}<={num}")
+        elif key.startswith("penalize_if_lower_than_"):
+            metric = key[len("penalize_if_lower_than_") :]
+            exprs.append(f"{metric}>={num}")
+        else:
+            exprs.append(f"{key}>={num}")
+    return exprs
 
 
 RUN_CACHE: Dict[str, RunData] = {}
@@ -243,39 +356,73 @@ def serve_dash(data_root: str, port: int = 8050):
             html.Div(
                 [
                     html.H2("Pareto Explorer"),
+                    html.Label("Run"),
                     dcc.Dropdown(
                         id="run-selection",
                         options=[{"label": os.path.basename(r), "value": r} for r in run_dirs],
                         value=run_dirs[-1],
                         clearable=False,
                     ),
+                    html.Label("X metric"),
                     dcc.Dropdown(id="x-metric", placeholder="Select X metric"),
+                    html.Label("Y metric"),
                     dcc.Dropdown(id="y-metric", placeholder="Select Y metric"),
+                    html.Label("Histogram metric"),
                     dcc.Dropdown(id="hist-metric", placeholder="Select histogram metric"),
+                    html.Label("Scenarios"),
                     dcc.Dropdown(
                         id="scenario-selection",
                         placeholder="Scenarios to include",
                         multi=True,
                     ),
+                    html.Label("Scenario metric"),
                     dcc.Dropdown(id="scenario-metric", placeholder="Scenario metric"),
+                    html.Label("Parameter (X axis for param scatter)"),
                     dcc.Dropdown(id="param-x", placeholder="Parameter (X axis)"),
+                    html.Label("Metric (Y axis for param scatter)"),
                     dcc.Dropdown(id="metric-y", placeholder="Metric (Y axis)"),
+                    html.Label("Correlation metrics"),
                     dcc.Dropdown(
                         id="correlation-metrics",
                         placeholder="Metrics for correlation heatmap",
                         multi=True,
+                    ),
+                    html.Label("Ideal metrics (closest config)"),
+                    dcc.Dropdown(
+                        id="ideal-metrics",
+                        placeholder="Metrics to optimize (closest to ideal)",
+                        multi=True,
+                    ),
+                    html.Label("Main plot metrics"),
+                    dcc.Dropdown(
+                        id="plot-metrics",
+                        placeholder="Metrics to visualize (2D/3D/parallel depending on count)",
+                        multi=True,
+                    ),
+                    html.Label("Limits (one per line, e.g. position_held_hours_max<800)"),
+                    dcc.Textarea(
+                        id="limit-expressions",
+                        placeholder="Limits",
+                        style={"width": "100%", "height": "80px"},
                     ),
                     html.Button("Download CSV", id="download-data"),
                     dcc.Download(id="download-dataset"),
                 ],
                 className="controls",
             ),
+            dcc.Graph(id="main-plot"),
             dcc.Graph(id="pareto-scatter"),
             dcc.Graph(id="metric-hist"),
             dcc.Graph(id="scenario-comparison"),
             dcc.Graph(id="correlation-heatmap"),
             dcc.Graph(id="param-scatter"),
             dcc.Graph(id="history-line"),
+            html.H4("Closest Config (filtered)"),
+            dash_table.DataTable(
+                id="best-config-table",
+                page_size=5,
+                style_table={"overflowX": "auto"},
+            ),
             dash_table.DataTable(
                 id="pareto-table",
                 page_size=15,
@@ -298,7 +445,14 @@ def serve_dash(data_root: str, port: int = 8050):
     def update_metric_choices(run_dir):
         run_data = get_run_data(run_dir)
         df = run_data.dataframe
-        numeric_cols = [c for c in df.columns if c != "_id" and pd.api.types.is_numeric_dtype(df[c])]
+        numeric_cols_full = [
+            c for c in df.columns if c != "_id" and pd.api.types.is_numeric_dtype(df[c])
+        ]
+        numeric_cols = [
+            c
+            for c in numeric_cols_full
+            if not _looks_like_stat_column(c) and not c.startswith("bot.")
+        ]
         options = [{"label": col, "value": col} for col in numeric_cols]
         preferred = [col for col in run_data.scoring_metrics if col in numeric_cols]
         default_x = preferred[0] if preferred else (numeric_cols[0] if numeric_cols else None)
@@ -322,6 +476,11 @@ def serve_dash(data_root: str, port: int = 8050):
         Output("metric-y", "value"),
         Output("correlation-metrics", "options"),
         Output("correlation-metrics", "value"),
+        Output("ideal-metrics", "options"),
+        Output("ideal-metrics", "value"),
+        Output("limit-expressions", "value"),
+        Output("plot-metrics", "options"),
+        Output("plot-metrics", "value"),
         Input("run-selection", "value"),
     )
     def update_metadata_controls(run_dir):
@@ -339,15 +498,25 @@ def serve_dash(data_root: str, port: int = 8050):
         ]
         scenario_metric_value = scenario_metric_options[0]["value"] if scenario_metric_options else None
 
-        numeric_cols = [c for c in df.columns if c != "_id" and pd.api.types.is_numeric_dtype(df[c])]
-        param_cols = [c for c in numeric_cols if c.startswith("bot.")]
-        metric_cols = [c for c in numeric_cols if c not in param_cols]
+        metric_cols = [
+            c
+            for c in run_data.aggregated_metrics
+            if c in df.columns and pd.api.types.is_numeric_dtype(df[c])
+        ]
+        param_cols = [
+            c for c in run_data.param_metrics if c in df.columns and pd.api.types.is_numeric_dtype(df[c])
+        ]
         param_options = [{"label": col, "value": col} for col in param_cols]
         metric_options = [{"label": col, "value": col} for col in metric_cols]
         param_value = param_cols[0] if param_cols else None
         metric_value = metric_cols[0] if metric_cols else None
 
         corr_default = [opt["value"] for opt in metric_options[:5]]
+        ideal_default = [
+            m for m in run_data.scoring_metrics if m in {opt["value"] for opt in metric_options}
+        ]
+        limits_default = "\n".join(run_data.default_limits)
+        plot_default = ideal_default if ideal_default else metric_cols[: min(3, len(metric_cols))]
         return (
             scenario_options,
             scenario_value,
@@ -359,25 +528,38 @@ def serve_dash(data_root: str, port: int = 8050):
             metric_value,
             metric_options,
             corr_default,
+            metric_options,
+            ideal_default,
+            limits_default,
+            metric_options,
+            plot_default,
         )
 
     @app.callback(
+        Output("main-plot", "figure"),
         Output("pareto-scatter", "figure"),
         Output("metric-hist", "figure"),
         Output("pareto-table", "data"),
         Output("pareto-table", "columns"),
         Output("history-line", "figure"),
+        Output("best-config-table", "data"),
+        Output("best-config-table", "columns"),
         Input("run-selection", "value"),
         Input("x-metric", "value"),
         Input("y-metric", "value"),
         Input("hist-metric", "value"),
+        Input("ideal-metrics", "value"),
+        Input("limit-expressions", "value"),
+        Input("plot-metrics", "value"),
     )
-    def update_figures(run_dir, x_metric, y_metric, hist_metric):
+    def update_figures(
+        run_dir, x_metric, y_metric, hist_metric, ideal_metrics, limit_exprs, plot_metrics
+    ):
         run_data = get_run_data(run_dir)
         df = run_data.dataframe
         if df.empty:
             empty_fig = px.scatter()
-            return empty_fig, empty_fig, [], [], empty_fig
+            return empty_fig, empty_fig, empty_fig, [], [], empty_fig, [], [], empty_fig
 
         scatter_df = df.dropna(subset=[x_metric, y_metric]) if x_metric and y_metric else df
         scatter_fig = px.scatter(
@@ -398,7 +580,65 @@ def serve_dash(data_root: str, port: int = 8050):
         else:
             history_fig = px.line()
 
-        return scatter_fig, hist_fig, table_data, table_columns, history_fig
+        main_fig = px.scatter()
+        plot_list = plot_metrics or []
+        plot_list = [m for m in plot_list if m in df.columns]
+        if plot_list:
+            filtered = df.dropna(subset=plot_list)
+            try:
+                mask = _apply_limits(filtered, limit_exprs)
+                filtered = filtered.loc[mask]
+            except Exception:
+                pass
+            if len(plot_list) >= 4:
+                main_fig = px.parallel_coordinates(filtered, dimensions=plot_list, color=plot_list[0])
+            elif len(plot_list) == 3:
+                main_fig = px.scatter_3d(
+                    filtered,
+                    x=plot_list[0],
+                    y=plot_list[1],
+                    z=plot_list[2],
+                    hover_data=["_id"],
+                )
+            elif len(plot_list) == 2:
+                main_fig = px.scatter(
+                    filtered, x=plot_list[0], y=plot_list[1], hover_data=["_id"]
+                )
+            elif len(plot_list) == 1:
+                main_fig = px.scatter(filtered, x=plot_list[0], y=plot_list[0], hover_data=["_id"])
+
+        # compute best config based on ideal metrics and limits
+        best_data: List[Dict[str, float]] = []
+        best_columns: List[Dict[str, str]] = []
+        if ideal_metrics:
+            filtered = df.dropna(subset=ideal_metrics)
+            if filtered.shape[0] > 0:
+                try:
+                    mask = _apply_limits(filtered, limit_exprs)
+                    filtered = filtered.loc[mask]
+                except Exception:
+                    pass
+            if filtered.shape[0] > 0:
+                best_row = _select_closest_to_ideal(filtered, ideal_metrics)
+                if best_row is not None:
+                    sanitized = {
+                        k: v
+                        for k, v in best_row.items()
+                        if not _looks_like_stat_column(k)
+                    }
+                    best_data = [sanitized]
+                    best_columns = [{"name": k, "id": k} for k in sanitized.keys()]
+
+        return (
+            main_fig,
+            scatter_fig,
+            hist_fig,
+            table_data,
+            table_columns,
+            history_fig,
+            best_data,
+            best_columns,
+        )
 
     @app.callback(
         Output("scenario-comparison", "figure"),
