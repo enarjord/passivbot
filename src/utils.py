@@ -908,6 +908,7 @@ def normalize_coins_source(src):
         readable file path, load it with `read_external_coins_lists`.
         Otherwise just return *x* unchanged.
         """
+
         def _maybe_read(path_candidate):
             resolved = _resolve_coins_file_path(path_candidate)
             if resolved is not None:

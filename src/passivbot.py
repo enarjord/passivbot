@@ -1257,7 +1257,9 @@ class Passivbot:
             return candidate
         return "unknown"
 
-    def _decode_pb_type_from_ids(self, order: dict, candidate_ids: Optional[list] = None) -> Optional[str]:
+    def _decode_pb_type_from_ids(
+        self, order: dict, candidate_ids: Optional[list] = None
+    ) -> Optional[str]:
         ids = candidate_ids
         if ids is None:
             ids = [
@@ -3414,6 +3416,7 @@ class Passivbot:
             to_cancel += cancel_
             to_create += create_
 
+        to_cancel, to_create = self._apply_order_match_tolerance(to_cancel, to_create)
         to_cancel = await self._sort_orders_by_market_diff(to_cancel, "to_cancel")
         to_create = await self._sort_orders_by_market_diff(to_create, "to_create")
         return to_cancel, to_create
@@ -3483,6 +3486,41 @@ class Passivbot:
         to_create = self._dedupe_unstuck_orders(to_create, unstuck_names)
         to_cancel, to_create = self._apply_mode_filters(symbol, to_cancel, to_create)
         return to_cancel, to_create
+
+    def _apply_order_match_tolerance(
+        self, to_cancel: list[dict], to_create: list[dict]
+    ) -> tuple[list[dict], list[dict]]:
+        """Drop cancel/create pairs that are within tolerance to avoid churn."""
+        tolerance = float(self.live_value("order_match_tolerance_pct"))
+        if tolerance <= 0.0:
+            return to_cancel, to_create
+
+        used_cancel: set[int] = set()
+        kept_create: list[dict] = []
+
+        for order in to_create:
+            match_idx = None
+            for idx, existing in enumerate(to_cancel):
+                if idx in used_cancel:
+                    continue
+                try:
+                    if orders_matching(
+                        order,
+                        existing,
+                        tolerance_qty=tolerance,
+                        tolerance_price=tolerance,
+                    ):
+                        match_idx = idx
+                        break
+                except Exception:
+                    continue
+            if match_idx is None:
+                kept_create.append(order)
+            else:
+                used_cancel.add(match_idx)
+
+        remaining_cancel = [o for i, o in enumerate(to_cancel) if i not in used_cancel]
+        return remaining_cancel, kept_create
 
     def _dedupe_unstuck_orders(self, orders: list[dict], unstuck_names: set[str]) -> list[dict]:
         """Keep at most one unstuck order within a list of orders."""

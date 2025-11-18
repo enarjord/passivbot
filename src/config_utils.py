@@ -1710,6 +1710,7 @@ def get_template_config():
             "minimum_coin_age_days": 7.0,
             "pnls_max_lookback_days": 30.0,
             "price_distance_threshold": 0.002,
+            "order_match_tolerance_pct": 0.0002,
             "recv_window_ms": 5000,
             "max_warmup_minutes": 0.0,
             "time_in_force": "good_till_cancelled",

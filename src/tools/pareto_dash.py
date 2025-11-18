@@ -496,7 +496,9 @@ def serve_dash(data_root: str, port: int = 8050):
         scenario_metric_options = [
             {"label": metric, "value": metric} for metric in sorted(scenario_metrics_set)
         ]
-        scenario_metric_value = scenario_metric_options[0]["value"] if scenario_metric_options else None
+        scenario_metric_value = (
+            scenario_metric_options[0]["value"] if scenario_metric_options else None
+        )
 
         metric_cols = [
             c
@@ -504,7 +506,9 @@ def serve_dash(data_root: str, port: int = 8050):
             if c in df.columns and pd.api.types.is_numeric_dtype(df[c])
         ]
         param_cols = [
-            c for c in run_data.param_metrics if c in df.columns and pd.api.types.is_numeric_dtype(df[c])
+            c
+            for c in run_data.param_metrics
+            if c in df.columns and pd.api.types.is_numeric_dtype(df[c])
         ]
         param_options = [{"label": col, "value": col} for col in param_cols]
         metric_options = [{"label": col, "value": col} for col in metric_cols]
@@ -561,6 +565,10 @@ def serve_dash(data_root: str, port: int = 8050):
             empty_fig = px.scatter()
             return empty_fig, empty_fig, empty_fig, [], [], empty_fig, [], [], empty_fig
 
+        # Apply limits once for downstream consumers (main plot + closest config)
+        limit_mask = _apply_limits(df, limit_exprs)
+        df_limited = df.loc[limit_mask]
+
         scatter_df = df.dropna(subset=[x_metric, y_metric]) if x_metric and y_metric else df
         scatter_fig = px.scatter(
             scatter_df,
@@ -584,12 +592,7 @@ def serve_dash(data_root: str, port: int = 8050):
         plot_list = plot_metrics or []
         plot_list = [m for m in plot_list if m in df.columns]
         if plot_list:
-            filtered = df.dropna(subset=plot_list)
-            try:
-                mask = _apply_limits(filtered, limit_exprs)
-                filtered = filtered.loc[mask]
-            except Exception:
-                pass
+            filtered = df_limited.dropna(subset=plot_list)
             if len(plot_list) >= 4:
                 main_fig = px.parallel_coordinates(filtered, dimensions=plot_list, color=plot_list[0])
             elif len(plot_list) == 3:
@@ -601,9 +604,7 @@ def serve_dash(data_root: str, port: int = 8050):
                     hover_data=["_id"],
                 )
             elif len(plot_list) == 2:
-                main_fig = px.scatter(
-                    filtered, x=plot_list[0], y=plot_list[1], hover_data=["_id"]
-                )
+                main_fig = px.scatter(filtered, x=plot_list[0], y=plot_list[1], hover_data=["_id"])
             elif len(plot_list) == 1:
                 main_fig = px.scatter(filtered, x=plot_list[0], y=plot_list[0], hover_data=["_id"])
 
@@ -611,21 +612,11 @@ def serve_dash(data_root: str, port: int = 8050):
         best_data: List[Dict[str, float]] = []
         best_columns: List[Dict[str, str]] = []
         if ideal_metrics:
-            filtered = df.dropna(subset=ideal_metrics)
-            if filtered.shape[0] > 0:
-                try:
-                    mask = _apply_limits(filtered, limit_exprs)
-                    filtered = filtered.loc[mask]
-                except Exception:
-                    pass
+            filtered = df_limited.dropna(subset=ideal_metrics)
             if filtered.shape[0] > 0:
                 best_row = _select_closest_to_ideal(filtered, ideal_metrics)
                 if best_row is not None:
-                    sanitized = {
-                        k: v
-                        for k, v in best_row.items()
-                        if not _looks_like_stat_column(k)
-                    }
+                    sanitized = {k: v for k, v in best_row.items() if not _looks_like_stat_column(k)}
                     best_data = [sanitized]
                     best_columns = [{"name": k, "id": k} for k in sanitized.keys()]
 

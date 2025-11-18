@@ -469,9 +469,7 @@ def apply_scenario(
     if scenario.overrides:
         for dotted_path, value in scenario.overrides.items():
             if not isinstance(dotted_path, str):
-                raise ValueError(
-                    f"Scenario '{scenario.label}' override keys must be dotted strings"
-                )
+                raise ValueError(f"Scenario '{scenario.label}' override keys must be dotted strings")
             _apply_override(cfg, dotted_path, value, tracker)
 
     if tracker.summary():
@@ -481,7 +479,9 @@ def apply_scenario(
     return cfg, filtered_coins
 
 
-def _apply_override(config: Dict[str, Any], dotted_path: str, value: Any, tracker: ConfigTransformTracker) -> None:
+def _apply_override(
+    config: Dict[str, Any], dotted_path: str, value: Any, tracker: ConfigTransformTracker
+) -> None:
     parts = dotted_path.split(".")
     if not parts:
         raise ValueError("Override paths must not be empty")
@@ -788,7 +788,9 @@ def _prepare_dataset_subset(
     hlcvs_window = dataset.hlcvs[start_idx:end_idx]
     btc_window = dataset.btc_usd_prices[start_idx:end_idx]
     ts_window = (
-        None if timestamps_arr is None else np.asarray(timestamps_arr[start_idx:end_idx], dtype=np.int64)
+        None
+        if timestamps_arr is None
+        else np.asarray(timestamps_arr[start_idx:end_idx], dtype=np.int64)
     )
 
     indices = [dataset.coin_index[coin] for coin in selected_coins]

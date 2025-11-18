@@ -258,6 +258,46 @@ async def test_calc_orders_to_cancel_and_create_reconciles_orders(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_order_hysteresis_skips_near_identical_cancel_create(monkeypatch):
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._live_values["order_match_tolerance_pct"] = 0.001  # 0.1%
+
+    bot.open_orders[symbol] = [
+        {
+            "symbol": symbol,
+            "side": "buy",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 100.0,
+            "custom_id": f"order-0x{pbr.order_type_snake_to_id('entry_grid_normal_long'):04x}",
+        }
+    ]
+
+    ideal = {
+        symbol: [
+            _make_order(
+                symbol,
+                "buy",
+                "long",
+                1.0,
+                100.05,  # within 0.1% tolerance, so should not churn
+                "entry_grid_normal_long",
+            )
+        ]
+    }
+
+    async def fake_calc_ideal_orders(self, allow_unstuck=True):
+        return ideal
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+    assert not to_cancel
+    assert not to_create
+
+
+@pytest.mark.asyncio
 async def test_to_create_orders_sorted_by_market_diff(monkeypatch):
     symbol = "BTC/USDT"
     bot = OrchestrationBot({symbol: 100.0})

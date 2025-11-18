@@ -63,6 +63,28 @@ def _resolve_limit_value(
     return stats_flat.get(key)
 
 
+def _suite_metrics_to_stats(entry: Dict[str, Any]) -> Tuple[Dict[str, float], Dict[str, float]]:
+    aggregated_values: Dict[str, float] = {}
+    stats_flat: Dict[str, float] = {}
+    suite_metrics = entry.get("suite_metrics") or {}
+    if "metrics" in suite_metrics:
+        for metric, payload in suite_metrics["metrics"].items():
+            stats = payload.get("stats") or {}
+            if stats:
+                stats_flat.update(flatten_metric_stats({metric: stats}))
+            agg = payload.get("aggregated")
+            if agg is None and stats:
+                agg = stats.get("mean")
+            if agg is not None:
+                aggregated_values[metric] = agg
+    elif "aggregate" in suite_metrics:
+        aggregate = suite_metrics.get("aggregate") or {}
+        agg_stats = aggregate.get("stats") or {}
+        aggregated_values = aggregate.get("aggregated") or {}
+        stats_flat = flatten_metric_stats(agg_stats)
+    return stats_flat, aggregated_values
+
+
 def _evaluate_limits(
     specs: Sequence[LimitSpec],
     stats_flat: Dict[str, float],
@@ -73,7 +95,7 @@ def _evaluate_limits(
     for spec in specs:
         value = _resolve_limit_value(spec, stats_flat, aggregated_values, objectives, metric_map)
         if value is None:
-            value = float("inf")
+            continue
         if not spec.op(value, spec.value):
             return False
     return True
@@ -528,15 +550,14 @@ def main():
                 metric_name_map = {f"w_{i}": name for i, name in enumerate(metric_names)}
             metrics_block = entry.get("metrics", {}) or {}
             objectives = metrics_block.get("objectives", metrics_block)
-            stats_flat = {}
-            aggregated_values = {}
+            stats_flat: Dict[str, float] = {}
+            aggregated_values: Dict[str, float] = {}
             if "stats" in metrics_block:
                 stats_flat = flatten_metric_stats(metrics_block["stats"])
-            elif "suite_metrics" in entry:
-                suite_payload = entry["suite_metrics"].get("aggregate", {})
-                agg_stats = suite_payload.get("stats", {})
-                aggregated_values = suite_payload.get("aggregated", {}) or {}
-                stats_flat = flatten_metric_stats(agg_stats)
+            if "suite_metrics" in entry:
+                stats_flat_suite, aggregated_values_suite = _suite_metrics_to_stats(entry)
+                stats_flat.update(stats_flat_suite)
+                aggregated_values.update(aggregated_values_suite)
             if not w_keys:
                 all_w_keys = sorted(k for k in objectives if k.startswith("w_"))
 
