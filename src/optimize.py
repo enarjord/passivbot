@@ -1187,9 +1187,19 @@ def configs_to_individuals(cfgs, bounds, sig_digits=0):
             individual = config_to_individual(fcfg, bounds, sig_digits)
             inds[calc_hash(individual)] = individual
             # add duplicate of config, but with lowered total wallet exposure limit
+            twel_index = None
+            for idx, name in enumerate(config_param_names(bounds)):
+                if name.endswith("total_wallet_exposure_limit"):
+                    twel_index = idx
+                    break
+            if twel_index is None:
+                logging.warning("Skipping WEL-reduced duplicates; parameter not in bounds.")
+                continue
+            low, high = bounds[twel_index]
             fcfg2 = deepcopy(fcfg)
             for pside in ["long", "short"]:
-                fcfg2["bot"][pside]["total_wallet_exposure_limit"] *= 0.75
+                value = fcfg2["bot"][pside]["total_wallet_exposure_limit"] * 0.75
+                fcfg2["bot"][pside]["total_wallet_exposure_limit"] = max(low, min(high, value))
             individual2 = config_to_individual(fcfg2, bounds, sig_digits)
             inds[calc_hash(individual2)] = individual2
         except Exception as e:
