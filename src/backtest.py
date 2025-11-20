@@ -58,7 +58,7 @@ from main import manage_rust_compilation
 import gzip
 import traceback
 
-from logging_setup import configure_logging
+from logging_setup import configure_logging, resolve_log_level
 from suite_runner import extract_suite_config, run_backtest_suite_async
 
 
@@ -1025,13 +1025,10 @@ async def main():
         help="disable plotting",
     )
     parser.add_argument(
-        "--debug-level",
         "--log-level",
-        dest="debug_level",
-        type=int,
-        choices=[0, 1, 2, 3],
+        dest="log_level",
         default=None,
-        help="Logging verbosity: 0=warnings, 1=info, 2=debug, 3=trace.",
+        help="Logging verbosity (warning, info, debug, trace or 0-3).",
     )
     parser.add_argument(
         "--suite",
@@ -1054,10 +1051,13 @@ async def main():
     for key in sorted(template_config["live"]):
         if key not in keep_live_keys:
             del template_config["live"][key]
+    if "logging" in template_config and isinstance(template_config["logging"], dict):
+        template_config["logging"].pop("level", None)
     add_arguments_recursively(parser, template_config)
     args = parser.parse_args()
-    initial_debug = args.debug_level if args.debug_level is not None else 1
-    configure_logging(debug=initial_debug)
+    cli_log_level = args.log_level
+    initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)
+    configure_logging(debug=initial_log_level)
     if args.config_path is None:
         logging.info(f"loading default template config configs/template.json")
         config = load_config("configs/template.json", verbose=False)
@@ -1066,21 +1066,15 @@ async def main():
         config = load_config(args.config_path)
     update_config_with_args(config, args, verbose=True)
     config = format_config(config, verbose=False)
-    config_logging_level = get_optional_config_value(config, "logging.level", 1)
-    try:
-        config_logging_level = int(float(config_logging_level))
-    except Exception:
-        config_logging_level = 1
-    if args.debug_level is None:
-        effective_debug = max(0, min(config_logging_level, 3))
-        configure_logging(debug=effective_debug)
-    else:
-        effective_debug = max(0, min(int(args.debug_level), 3))
+    config_logging_value = get_optional_config_value(config, "logging.level", None)
+    effective_log_level = resolve_log_level(cli_log_level, config_logging_value, fallback=1)
+    if effective_log_level != initial_log_level:
+        configure_logging(debug=effective_log_level)
     logging_section = config.get("logging")
     if not isinstance(logging_section, dict):
         logging_section = {}
     config["logging"] = logging_section
-    logging_section["level"] = effective_debug
+    logging_section["level"] = effective_log_level
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     config = parse_overrides(config, verbose=True)
 

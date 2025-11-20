@@ -2,6 +2,7 @@ from passivbot import Passivbot, logging, clip_by_timestamp
 from uuid import uuid4
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
+from ccxt.base.errors import InvalidNonce
 import pprint
 import asyncio
 import traceback
@@ -157,6 +158,9 @@ class BybitBot(Passivbot):
                     params={"cursor": next_page_cursor, "limit": limit}
                 )
             return sorted(positions.values(), key=lambda x: x["timestamp"]), balance
+        except InvalidNonce as e:
+            logging.warning("Invalid nonce while fetching positions/balance: %s", e)
+            return False
         except Exception as e:
             logging.error(f"error fetching positions and balance {e}")
             print_async_exception(fetched_positions)

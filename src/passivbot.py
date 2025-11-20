@@ -24,7 +24,7 @@ import logging
 import math
 from candlestick_manager import CandlestickManager, CANDLE_DTYPE
 from typing import Dict, Iterable, Tuple, List, Optional, Any
-from logging_setup import configure_logging
+from logging_setup import configure_logging, resolve_log_level
 from utils import (
     load_markets,
     coin_to_symbol,
@@ -35,12 +35,13 @@ from utils import (
     format_approved_ignored_coins,
     filter_markets,
     normalize_exchange_name,
+    coin_symbol_warning_counts,
 )
 from prettytable import PrettyTable
 from uuid import uuid4
 from copy import deepcopy
 from dataclasses import dataclass
-from collections import defaultdict
+from collections import defaultdict, Counter
 from sortedcontainers import SortedDict
 
 try:
@@ -399,6 +400,12 @@ class Passivbot:
         self.recent_order_executions = []
         self.recent_order_cancellations = []
         self._disabled_psides_logged = set()
+        self._last_coin_symbol_warning_counts = {
+            "symbol_to_coin_fallbacks": 0,
+            "coin_to_symbol_fallbacks": 0,
+        }
+        self._last_plan_detail: dict[str, tuple[int, int, int]] = {}
+        self._last_action_summary: dict[tuple[str, str], str] = {}
         # CandlestickManager settings from config.live
         cm_kwargs = {"exchange": self.cca, "debug": self.logging_level}
         mem_cap_raw = require_live_value(config, "max_memory_candles_per_symbol")
@@ -1058,14 +1065,14 @@ class Passivbot:
         for elm in to_cancel:
             key = str(elm["price"]) + str(elm["qty"])
             if key in seen:
-                logging.info(f"debug duplicate order cancel {elm}")
+                logging.debug("duplicate cancel candidate: %s", elm)
             seen.add(key)
 
         seen = set()
         for elm in to_create:
             key = str(elm["price"]) + str(elm["qty"])
             if key in seen:
-                logging.info(f"debug duplicate order create {elm}")
+                logging.debug("duplicate create candidate: %s", elm)
             seen.add(key)
         # format custom_id
         if self.debug_mode:
@@ -1084,8 +1091,9 @@ class Passivbot:
             for x in to_create:
                 xf = f"{x['symbol']} {x['side']} {x['position_side']} {x['qty']} @ {x['price']}"
                 if order_has_match(x, to_cancel):
-                    logging.info(
-                        f"matching order cancellation found; will be delayed until next cycle: {xf}"
+                    logging.debug(
+                        "matching order cancellation found; will be delayed until next cycle: %s",
+                        xf,
                     )
                 elif delay_time_ms := self.order_was_recently_updated(x):
                     logging.info(
@@ -1119,9 +1127,18 @@ class Passivbot:
     async def execute_orders_parent(self, orders: [dict]) -> [dict]:
         """Submit a batch of orders after throttling and bookkeeping."""
         orders = orders[: int(self.live_value("max_n_creations_per_batch"))]
+        grouped_orders: dict[str, list[dict]] = defaultdict(list)
         for order in orders:
             self.add_to_recent_order_executions(order)
-            self.log_order_action(order, "posting order")
+            self.log_order_action(
+                order,
+                "posting order",
+                context=order.get("_context", "plan_sync"),
+                level=logging.DEBUG,
+                delta=order.get("_delta"),
+            )
+            grouped_orders[order["symbol"]].append(order)
+        self._log_order_action_summary(grouped_orders, "post")
         res = await self.execute_orders(orders)
         if not res:
             return
@@ -1167,9 +1184,18 @@ class Passivbot:
             except Exception as e:
                 logging.error(f"debug filter cancellations {e}")
                 orders = orders[:max_cancellations]
+        grouped_orders: dict[str, list[dict]] = defaultdict(list)
         for order in orders:
             self.add_to_recent_order_cancellations(order)
-            self.log_order_action(order, "cancelling order")
+            self.log_order_action(
+                order,
+                "cancelling order",
+                context=order.get("_context", "plan_sync"),
+                level=logging.DEBUG,
+                delta=order.get("_delta"),
+            )
+            grouped_orders[order["symbol"]].append(order)
+        self._log_order_action_summary(grouped_orders, "cancel")
         res = await self.execute_cancellations(orders)
         to_return = []
         if len(orders) != len(res):
@@ -1203,7 +1229,16 @@ class Passivbot:
                 self.remove_order(elm, source="POST")
         return to_return
 
-    def log_order_action(self, order, action, source="passivbot"):
+    def log_order_action(
+        self,
+        order,
+        action,
+        source="passivbot",
+        *,
+        level=logging.DEBUG,
+        context: str | None = None,
+        delta: dict | None = None,
+    ):
         """Log a structured message describing an order action."""
         pb_order_type = self._resolve_pb_order_type(order)
 
@@ -1217,13 +1252,78 @@ class Passivbot:
         qty = _fmt(order.get("qty", "?"))
         position_side = order.get("position_side", "?")
         price = _fmt(order.get("price", "?"))
-        details = f"{side} {qty} {position_side} @ {price}"
-        symbol = self.pad_sym(order.get("symbol", "?"))
-        logging.info(
-            f"{action: >{self.action_str_max_len}} {symbol} | "
-            f"{details:<{self.order_details_str_len}} | "
-            f"type={pb_order_type:<{self.order_type_str_len}} | source: {source}"
-        )
+        symbol = order.get("symbol", "?")
+        details = f"{side} {qty} {position_side}@{price}"
+        extra_parts = []
+        if context:
+            extra_parts.append(f"context={context}")
+        elif order.get("_context"):
+            extra_parts.append(f"context={order.get('_context')}")
+        if delta:
+            parts = []
+            po, pn = delta.get("price_old"), delta.get("price_new")
+            qo, qn = delta.get("qty_old"), delta.get("qty_new")
+            if po is not None and pn is not None:
+                parts.append(f"price {po} -> {pn} ({delta.get('price_pct_diff','?')}%)")
+            if qo is not None and qn is not None:
+                parts.append(f"qty {qo} -> {qn} ({delta.get('qty_pct_diff','?')}%)")
+            if parts:
+                extra_parts.append("delta=" + "; ".join(parts))
+        msg = f"{action: >{self.action_str_max_len}} {symbol} | {details} | type={pb_order_type} | src={source}"
+        if extra_parts:
+            msg += " | " + " ".join(extra_parts)
+        logging.log(level, msg)
+
+    def _log_order_action_summary(self, grouped_orders: dict[str, list[dict]], action: str) -> None:
+        """Emit condensed INFO summaries for batched order actions, skipping repeats."""
+        max_entries = 4
+        for symbol, orders in grouped_orders.items():
+            if not orders:
+                continue
+            descriptors = []
+            for order in orders:
+                pb_order_type = self._resolve_pb_order_type(order)
+                qty = order.get("qty")
+                price = order.get("price")
+                qty_str = f"{float(qty):g}" if isinstance(qty, (int, float)) else str(qty)
+                price_str = f"{float(price):g}" if isinstance(price, (int, float)) else str(price)
+                desc = (
+                    f"{order.get('side','?')} {order.get('position_side','?')} "
+                    f"{qty_str}@{price_str} {pb_order_type}"
+                )
+                extras = []
+                context = order.get("_context")
+                reason = order.get("_reason")
+                if context:
+                    extras.append(context)
+                if reason and reason != context:
+                    extras.append(f"reason={reason}")
+                delta = order.get("_delta") or {}
+                price_diff = delta.get("price_pct_diff")
+                qty_diff = delta.get("qty_pct_diff")
+                delta_parts = []
+                if isinstance(price_diff, (int, float)) and price_diff:
+                    delta_parts.append(f"Δp={price_diff:.3g}%")
+                if isinstance(qty_diff, (int, float)) and qty_diff:
+                    delta_parts.append(f"Δq={qty_diff:.3g}%")
+                extras.extend(delta_parts)
+                if extras:
+                    desc += f" [{' '.join(extras)}]"
+                descriptors.append(desc)
+            if not descriptors:
+                continue
+            display = "; ".join(descriptors[:max_entries])
+            if len(descriptors) > max_entries:
+                display += f"; ... +{len(descriptors) - max_entries} more"
+            key = (symbol, action)
+            if self._last_action_summary.get(key) == display:
+                continue
+            self._last_action_summary[key] = display
+            reason_counts = Counter(order.get("_reason") for order in orders if order.get("_reason"))
+            reason_str = ""
+            if reason_counts:
+                reason_str = " | reasons=" + ", ".join(f"{reason}:{count}" for reason, count in sorted(reason_counts.items()))
+            logging.info("%s %s | %s%s", action, symbol, display, reason_str)
 
     def _resolve_pb_order_type(self, order) -> str:
         """Best-effort decoding of Passivbot order type for logging."""
@@ -1436,7 +1536,7 @@ class Passivbot:
             try:
                 results[sym] = await task
             except Exception as e:
-                logging.info(f"debug: failed to fetch candles for trailing {sym}: {e}")
+                logging.debug("failed to fetch candles for trailing %s: %s", sym, e)
                 results[sym] = None
 
         # Compute trailing metrics per symbol/side
@@ -1455,9 +1555,7 @@ class Passivbot:
                     bundle = _trailing_bundle_from_arrays(subset["h"], subset["l"], subset["c"])
                     self.trailing_prices[symbol][pside] = bundle
                 except Exception as e:
-                    logging.info(
-                        f"debug: failed to compute trailing bundle for {symbol} {pside}: {e}"
-                    )
+                    logging.debug("failed to compute trailing bundle for %s %s: %s", symbol, pside, e)
 
     def symbol_is_eligible(self, symbol):
         """Return True when the symbol passes exchange-specific eligibility rules."""
@@ -1473,7 +1571,7 @@ class Passivbot:
         try:
             return self.symbol_ids[symbol]
         except:
-            logging.info(f"debug: symbol {symbol} missing from self.symbol_ids. Using {symbol}")
+            logging.debug("symbol %s missing from self.symbol_ids. Using raw symbol.", symbol)
             self.symbol_ids[symbol] = symbol
             return symbol
 
@@ -2755,14 +2853,14 @@ class Passivbot:
                         # possible fill
                         # force another update_positions
                         schedule_update_positions = True
-                        self.log_order_action(order, "missing order", "fetch_open_orders")
+                        self.log_order_action(order, "missing order", "fetch_open_orders", level=logging.INFO)
                     else:
-                        self.log_order_action(order, "removed order", "fetch_open_orders")
+                        self.log_order_action(order, "removed order", "fetch_open_orders", level=logging.DEBUG)
             if len(added_orders) > 20:
                 logging.info(f"added {len(added_orders)} new orders")
             else:
                 for order in added_orders:
-                    self.log_order_action(order, "added order", "fetch_open_orders")
+                    self.log_order_action(order, "added order", "fetch_open_orders", level=logging.DEBUG)
             self.open_orders = {}
             for elm in open_orders:
                 if elm["symbol"] not in self.open_orders:
@@ -3013,8 +3111,10 @@ class Passivbot:
                         self.positions[order["symbol"]][order["position_side"]]["size"]
                     )
                     if abs(order["qty"]) > pos_size_abs:
-                        logging.info(
-                            f"debug: reduce only order size greater than pos size. Order: {order} Position: {self.positions[order['symbol']]}"
+                        logging.warning(
+                            "trimmed reduce-only qty to position size | order=%s | position=%s",
+                            order,
+                            self.positions[order["symbol"]],
                         )
                         order["qty"] = pos_size_abs
         return ideal_orders_f
@@ -3245,14 +3345,35 @@ class Passivbot:
                     continue
                 if mprice_diff > float(self.live_value("price_distance_threshold")):
                     if any_partial and "entry" in order[2]:
+                        logging.debug(
+                            "gated by price_distance_threshold (partial) | %s %s %s diff=%.5f",
+                            symbol,
+                            position_side,
+                            order[2],
+                            mprice_diff,
+                        )
                         continue
                     if any(token in order[2] for token in ("initial", "unstuck")):
+                        logging.debug(
+                            "gated by price_distance_threshold (initial/unstuck) | %s %s %s diff=%.5f",
+                            symbol,
+                            position_side,
+                            order[2],
+                            mprice_diff,
+                        )
                         continue
                     if not self.has_position(position_side, symbol):
+                        logging.debug(
+                            "gated by price_distance_threshold (no position) | %s %s %s diff=%.5f",
+                            symbol,
+                            position_side,
+                            order[2],
+                            mprice_diff,
+                        )
                         continue
                 seen_key = str(abs(order[0])) + str(order[1]) + order[2]
                 if seen_key in seen:
-                    logging.info(f"debug duplicate ideal order {symbol} {order}")
+                    logging.debug("duplicate ideal order for %s skipped: %s", symbol, order)
                     continue
                 order_type = "limit"
                 if self.live_value("market_orders_allowed") and (
@@ -3287,8 +3408,8 @@ class Passivbot:
                 pos = self.positions.get(order["symbol"], {}).get(order["position_side"], {})
                 pos_size_abs = abs(pos.get("size", 0.0))
                 if abs(order["qty"]) > pos_size_abs:
-                    logging.info(
-                        "debug: reduce only order size greater than pos size. Order: %s Position: %s",
+                    logging.warning(
+                        "trimmed reduce-only qty to position size | order=%s | position=%s",
                         order,
                         pos,
                     )
@@ -3347,8 +3468,8 @@ class Passivbot:
                         max_age_ms=30_000,
                     )
                 except Exception as e:
-                    logging.info(
-                        f"debug: failed ema bounds for unstucking {symbol} {pside}: {e}; skipping"
+                    logging.debug(
+                        "failed ema bounds for unstucking %s %s: %s; skipping", symbol, pside, e
                     )
                     continue
 
@@ -3399,6 +3520,8 @@ class Passivbot:
 
     async def calc_orders_to_cancel_and_create(self):
         """Determine which existing orders to cancel and which new ones to place."""
+        if not hasattr(self, "_last_plan_detail"):
+            self._last_plan_detail = {}
         allow_new_unstuck = not self.has_open_unstuck_order()
         ideal_orders = await self.calc_ideal_orders(allow_unstuck=allow_new_unstuck)
 
@@ -3408,17 +3531,59 @@ class Passivbot:
         actual_orders = self._snapshot_actual_orders()
         keys = ("symbol", "side", "position_side", "qty", "price")
         to_cancel, to_create = [], []
+        plan_summaries = []
         for symbol, symbol_orders in actual_orders.items():
             ideal_list = ideal_orders.get(symbol, []) if isinstance(ideal_orders, dict) else []
             cancel_, create_ = self._reconcile_symbol_orders(
                 symbol, symbol_orders, ideal_list, keys, unstuck_names
             )
+            cancel_, create_ = self._annotate_order_deltas(cancel_, create_)
+            pre_cancel = len(cancel_)
+            pre_create = len(create_)
+            cancel_, create_, skipped = self._apply_order_match_tolerance(cancel_, create_)
+            plan_summaries.append(
+                (symbol, pre_cancel, len(cancel_), pre_create, len(create_), skipped)
+            )
             to_cancel += cancel_
             to_create += create_
 
-        to_cancel, to_create = self._apply_order_match_tolerance(to_cancel, to_create)
         to_cancel = await self._sort_orders_by_market_diff(to_cancel, "to_cancel")
         to_create = await self._sort_orders_by_market_diff(to_create, "to_create")
+        if plan_summaries:
+            total_pre_cancel = sum(p[1] for p in plan_summaries)
+            total_cancel = sum(p[2] for p in plan_summaries)
+            total_pre_create = sum(p[3] for p in plan_summaries)
+            total_create = sum(p[4] for p in plan_summaries)
+            total_skipped = sum(p[5] for p in plan_summaries)
+            detail_parts = []
+            untouched_cancel = total_pre_cancel - total_cancel
+            untouched_create = total_pre_create - total_create
+            for symbol, pre_c, c, pre_cr, cr, skipped in plan_summaries:
+                prev = self._last_plan_detail.get(symbol)
+                current = (c, cr, skipped)
+                self._last_plan_detail[symbol] = current
+                if c or cr or skipped:
+                    if prev != current:
+                        detail_parts.append(
+                            f"{symbol}:c{pre_c}->{c} cr{pre_cr}->{cr} skip{skipped}"
+                        )
+            detail = " | ".join(detail_parts[:6])
+            if total_cancel or total_create or total_skipped:
+                extra = []
+                if untouched_cancel:
+                    extra.append(f"unchanged_cancel={untouched_cancel}")
+                if untouched_create:
+                    extra.append(f"unchanged_create={untouched_create}")
+                logging.info(
+                    "order plan summary | cancel %d->%d | create %d->%d | skipped=%d%s%s",
+                    total_pre_cancel,
+                    total_cancel,
+                    total_pre_create,
+                    total_create,
+                    total_skipped,
+                    f" | {' '.join(extra)}" if extra else "",
+                    f" | details: {detail}" if detail else "",
+                )
         return to_cancel, to_create
 
     def _trim_extra_unstuck_orders(
@@ -3487,16 +3652,100 @@ class Passivbot:
         to_cancel, to_create = self._apply_mode_filters(symbol, to_cancel, to_create)
         return to_cancel, to_create
 
-    def _apply_order_match_tolerance(
+    def _annotate_order_deltas(
         self, to_cancel: list[dict], to_create: list[dict]
     ) -> tuple[list[dict], list[dict]]:
-        """Drop cancel/create pairs that are within tolerance to avoid churn."""
+        """
+        Attach best-effort delta info between existing and desired orders to aid logging.
+
+        Matches orders by symbol/side/position_side and closest price distance.
+        """
+        remaining_create = list(to_create)
+        for order in to_create:
+            order.setdefault("_context", "new")
+            order.setdefault("_reason", "new")
+        for cancel_order in to_cancel:
+            cancel_order.setdefault("_context", "retire")
+            cancel_order.setdefault("_reason", "retire")
+
+        def pct(a: float, b: float) -> float:
+            if a == 0 and b == 0:
+                return 0.0
+            if a == 0:
+                return float("inf")
+            return abs(b - a) / abs(a) * 100.0
+
+        # annotate cancellations
+        for cancel_order in to_cancel:
+            candidates = [
+                (idx, co)
+                for idx, co in enumerate(remaining_create)
+                if co.get("symbol") == cancel_order.get("symbol")
+                and co.get("side") == cancel_order.get("side")
+                and co.get("position_side") == cancel_order.get("position_side")
+            ]
+            if not candidates:
+                continue
+            # choose closest by price difference
+            best_idx, best_order = min(
+                candidates, key=lambda c: abs(float(c[1].get("price", 0.0)) - float(cancel_order.get("price", 0.0))))
+            raw_price_diff = pct(float(cancel_order.get("price", 0.0)), float(best_order.get("price", 0.0)))
+            raw_qty_diff = pct(float(cancel_order.get("qty", 0.0)), float(best_order.get("qty", 0.0)))
+            price_diff = round(raw_price_diff, 4) if math.isfinite(raw_price_diff) else raw_price_diff
+            qty_diff = round(raw_qty_diff, 4) if math.isfinite(raw_qty_diff) else raw_qty_diff
+            reason_parts = []
+            if price_diff > 0:
+                reason_parts.append("price")
+            if qty_diff > 0:
+                reason_parts.append("qty")
+            reason = "+".join(reason_parts) if reason_parts else "adjustment"
+            cancel_order["_delta"] = {
+                "price_old": cancel_order.get("price"),
+                "price_new": best_order.get("price"),
+                "price_pct_diff": price_diff,
+                "qty_old": cancel_order.get("qty"),
+                "qty_new": best_order.get("qty"),
+                "qty_pct_diff": qty_diff,
+            }
+            cancel_order["_context"] = "replace"
+            cancel_order["_reason"] = reason
+            # also annotate the matched create order
+            best_order["_delta"] = {
+                "price_old": cancel_order.get("price"),
+                "price_new": best_order.get("price"),
+                "price_pct_diff": price_diff,
+                "qty_old": cancel_order.get("qty"),
+                "qty_new": best_order.get("qty"),
+                "qty_pct_diff": qty_diff,
+            }
+            best_order["_context"] = "replace"
+            best_order["_reason"] = reason
+            remaining_create.pop(best_idx)
+
+        for ord in remaining_create:
+            ord.setdefault("_context", "new")
+            ord.setdefault("_reason", "fresh")
+        return to_cancel, to_create
+
+    def _apply_order_match_tolerance(
+        self, to_cancel: list[dict], to_create: list[dict]
+    ) -> tuple[list[dict], list[dict], int]:
+        """Drop cancel/create pairs that are within tolerance to avoid churn.
+
+        Returns (remaining_cancel, remaining_create, skipped_pairs)
+        """
         tolerance = float(self.live_value("order_match_tolerance_pct"))
         if tolerance <= 0.0:
-            return to_cancel, to_create
+            return to_cancel, to_create, 0
 
         used_cancel: set[int] = set()
         kept_create: list[dict] = []
+        skipped = 0
+
+        def pct_diff(a: float, b: float) -> float:
+            if b == 0:
+                return 0.0 if a == 0 else float("inf")
+            return abs(a - b) / abs(b) * 100.0
 
         for order in to_create:
             match_idx = None
@@ -3518,9 +3767,26 @@ class Passivbot:
                 kept_create.append(order)
             else:
                 used_cancel.add(match_idx)
+                skipped += 1
+                try:
+                    price_diff = pct_diff(float(order["price"]), float(to_cancel[match_idx]["price"]))
+                    qty_diff = pct_diff(float(order["qty"]), float(to_cancel[match_idx]["qty"]))
+                    logging.debug(
+                        "skipped_recreate | %s | tolerance=%.4f%% price_diff=%.4f%% qty_diff=%.4f%%",
+                        order.get("symbol", "?"),
+                        tolerance * 100.0,
+                        price_diff,
+                        qty_diff,
+                    )
+                except Exception:
+                    logging.debug(
+                        "skipped_recreate | %s | tolerance=%.4f%%",
+                        order.get("symbol", "?"),
+                        tolerance * 100.0,
+                    )
 
         remaining_cancel = [o for i, o in enumerate(to_cancel) if i not in used_cancel]
-        return remaining_cancel, kept_create
+        return remaining_cancel, kept_create, skipped
 
     def _dedupe_unstuck_orders(self, orders: list[dict], unstuck_names: set[str]) -> list[dict]:
         """Keep at most one unstuck order within a list of orders."""
@@ -3577,7 +3843,7 @@ class Passivbot:
         for order in orders:
             market_price = market_prices.get(order["symbol"])
             if market_price is None:
-                logging.info(f"debug: price missing sort {log_label} by mprice_diff {order}")
+                logging.debug("price missing sort %s by mprice_diff %s", log_label, order)
                 diff = 0.0
             else:
                 diff = order_market_diff(order["side"], order["price"], market_price)
@@ -3597,13 +3863,13 @@ class Passivbot:
                 else:
                     results[symbol] = fetch_result
             except Exception as exc:
-                logging.info(f"debug: failed fetching mprice for {symbol}: {exc}")
+                logging.debug("failed fetching mprice for %s: %s", symbol, exc)
                 results[symbol] = None
         for symbol, task in tasks.items():
             try:
                 results[symbol] = await task
             except Exception as exc:
-                logging.info(f"debug: failed fetching mprice for {symbol}: {exc}")
+                logging.debug("failed fetching mprice for %s: %s", symbol, exc)
                 results[symbol] = None
         return results
 
@@ -3629,8 +3895,12 @@ class Passivbot:
                     entry_candidates[pside],
                 )
             except Exception as exc:
-                logging.info(f"debug: failed to gate entries by TWEL ({pside}): {exc}")
+                logging.debug("failed to gate entries by TWEL (%s): %s", pside, exc)
                 continue
+            if len(gated_entries) < len(entry_candidates[pside]):
+                logging.debug(
+                    "twel gating pruned %d/%d %s entries", len(entry_candidates[pside]) - len(gated_entries), len(entry_candidates[pside]), pside
+                )
             for idx, qty, price, order_type_id in gated_entries:
                 symbol = order_plan.entry_index_map[pside].get(idx)
                 if symbol is None:
@@ -3728,7 +3998,7 @@ class Passivbot:
                         }
                     )
         except Exception as exc:
-            logging.info(f"debug: failed to compute TWEL enforcer orders: {exc}")
+            logging.debug("failed to compute TWEL enforcer orders: %s", exc)
         return ideal_orders_f
 
     def _build_twel_enforcer_payload(
@@ -4137,6 +4407,7 @@ class Passivbot:
         if log_psides is None:
             log_psides = set(content.keys())
         symbols = None
+        result = {"added": {}, "removed": {}}
         psides_equal = content["long"] == content["short"]
         for pside in content:
             if not psides_equal or symbols is None:
@@ -4180,20 +4451,19 @@ class Passivbot:
             symbols_already = getattr(self, k_coins)[pside]
             if symbols_already != symbols:
                 added = symbols - symbols_already
-                if added:
-                    if pside in log_psides:
-                        cstr = ",".join([symbol_to_coin(x) for x in sorted(added)])
-                        logging.info(f"added {cstr} to {k_coins} {pside}")
                 removed = symbols_already - symbols
-                if removed:
-                    if pside in log_psides:
-                        cstr = ",".join([symbol_to_coin(x) for x in sorted(removed)])
-                        logging.info(f"removed {cstr} from {k_coins} {pside}")
+                if added and pside in log_psides:
+                    result["added"][pside] = added
+                if removed and pside in log_psides:
+                    result["removed"][pside] = removed
                 getattr(self, k_coins)[pside] = symbols
+        return result
 
     def refresh_approved_ignored_coins_lists(self):
         """Reload approved and ignored coin lists from config sources."""
         try:
+            added_summary = {}
+            removed_summary = {}
             for k in ("approved_coins", "ignored_coins"):
                 if not hasattr(self, k):
                     setattr(self, k, {"long": set(), "short": set()})
@@ -4204,7 +4474,10 @@ class Passivbot:
                     log_psides = {ps for ps in parsed if self.is_pside_enabled(ps)}
                 else:
                     log_psides = set(parsed.keys())
-                self.add_to_coins_lists(parsed, k, log_psides=log_psides)
+                add_res = self.add_to_coins_lists(parsed, k, log_psides=log_psides)
+                if add_res:
+                    added_summary.setdefault(k, {}).update(add_res.get("added", {}))
+                    removed_summary.setdefault(k, {}).update(add_res.get("removed", {}))
             self.approved_coins_minus_ignored_coins = {}
             for pside in self.approved_coins:
                 if not self.is_pside_enabled(pside):
@@ -4231,9 +4504,59 @@ class Passivbot:
                 self.approved_coins_minus_ignored_coins[pside] = (
                     self.approved_coins[pside] - self.ignored_coins[pside]
                 )
+            # aggregate add/remove logs for readability
+            for k, summary in (("added", added_summary.get("approved_coins", {})),):
+                if summary:
+                    parts = []
+                    for pside, coins in summary.items():
+                        if coins:
+                            parts.append(f"{pside}: {','.join(sorted(symbol_to_coin(x) for x in coins))}")
+                    if parts:
+                        logging.info("added to approved_coins | %s", " | ".join(parts))
+            for k, summary in (("removed", removed_summary.get("approved_coins", {})),):
+                if summary:
+                    parts = []
+                    for pside, coins in summary.items():
+                        if coins:
+                            parts.append(
+                                f"{pside}: {','.join(sorted(symbol_to_coin(x) for x in coins))}"
+                            )
+                    if parts:
+                        logging.info("removed from approved_coins | %s", " | ".join(parts))
+            for k, summary in (("added", added_summary.get("ignored_coins", {})),):
+                if summary:
+                    parts = []
+                    for pside, coins in summary.items():
+                        if coins:
+                            parts.append(f"{pside}: {','.join(sorted(symbol_to_coin(x) for x in coins))}")
+                    if parts:
+                        logging.info("added to ignored_coins | %s", " | ".join(parts))
+            for k, summary in (("removed", removed_summary.get("ignored_coins", {})),):
+                if summary:
+                    parts = []
+                    for pside, coins in summary.items():
+                        if coins:
+                            parts.append(
+                                f"{pside}: {','.join(sorted(symbol_to_coin(x) for x in coins))}"
+                            )
+                    if parts:
+                        logging.info("removed from ignored_coins | %s", " | ".join(parts))
+            self._log_coin_symbol_fallback_summary()
         except Exception as e:
             logging.error(f"error with refresh_approved_ignored_coins_lists {e}")
             traceback.print_exc()
+
+    def _log_coin_symbol_fallback_summary(self):
+        """Emit a brief summary of symbol/coin mapping fallbacks (once per change)."""
+        counts = coin_symbol_warning_counts()
+        if counts != self._last_coin_symbol_warning_counts:
+            if counts["symbol_to_coin_fallbacks"] or counts["coin_to_symbol_fallbacks"]:
+                logging.info(
+                    "Symbol/coin mapping fallbacks: symbol->coin=%d | coin->symbol=%d (unique)",
+                    counts["symbol_to_coin_fallbacks"],
+                    counts["coin_to_symbol_fallbacks"],
+                )
+            self._last_coin_symbol_warning_counts = dict(counts)
 
     def get_order_execution_params(self, order: dict) -> dict:
         """Return exchange-specific parameters for order placement."""
@@ -4346,41 +4669,35 @@ async def main():
         ),
     )
     parser.add_argument(
-        "--debug-level",
         "--log-level",
-        dest="debug_level",
-        type=int,
-        choices=[0, 1, 2, 3],
+        dest="log_level",
         default=None,
-        help="Logging verbosity: 0=warnings, 1=info, 2=debug, 3=trace.",
+        help="Logging verbosity (warning, info, debug, trace or 0-3).",
     )
 
     template_config = get_template_config()
     del template_config["optimize"]
     del template_config["backtest"]
+    if "logging" in template_config and isinstance(template_config["logging"], dict):
+        template_config["logging"].pop("level", None)
     add_arguments_recursively(parser, template_config)
     raw_args = merge_negative_cli_values(sys.argv[1:])
     args = parser.parse_args(raw_args)
-    initial_debug = args.debug_level if args.debug_level is not None else 1
-    configure_logging(debug=initial_debug)
+    cli_log_level = args.log_level
+    initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)
+    configure_logging(debug=initial_log_level)
     config = load_config(args.config_path, live_only=True)
     update_config_with_args(config, args, verbose=True)
     config = format_config(config, live_only=True)
-    config_logging_level = get_optional_config_value(config, "logging.level", 1)
-    try:
-        config_logging_level = int(float(config_logging_level))
-    except Exception:
-        config_logging_level = 1
-    if args.debug_level is None:
-        effective_debug = max(0, min(config_logging_level, 3))
-        configure_logging(debug=effective_debug)
-    else:
-        effective_debug = max(0, min(int(args.debug_level), 3))
+    config_logging_value = get_optional_config_value(config, "logging.level", None)
+    effective_log_level = resolve_log_level(cli_log_level, config_logging_value, fallback=1)
+    if effective_log_level != initial_log_level:
+        configure_logging(debug=effective_log_level)
     logging_section = config.get("logging")
     if not isinstance(logging_section, dict):
         logging_section = {}
     config["logging"] = logging_section
-    logging_section["level"] = effective_debug
+    logging_section["level"] = effective_log_level
 
     custom_endpoints_cli = args.custom_endpoints
     live_section = config.get("live") if isinstance(config.get("live"), dict) else {}

@@ -31,6 +31,7 @@ logging.basicConfig(
 _COIN_TO_SYMBOL_CACHE = {}  # {exchange: {"map": dict, "mtime_ns": int, "size": int}}
 _SYMBOL_TO_COIN_CACHE = {"map": None, "mtime_ns": None, "size": None}
 _SYMBOL_TO_COIN_WARNINGS: set[str] = set()
+_COIN_TO_SYMBOL_FALLBACKS: set[tuple[str, str]] = set()
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LEGACY_COINS_FILE_ALIASES = {
     "approved_coins_topmcap.json": Path("configs/approved_coins.json"),
@@ -734,21 +735,27 @@ def coin_to_symbol(coin, exchange):
             return candidates[0]
         if loaded:
             # map present but coin missing
-            logging.info(
-                "No mapping for %s (raw=%s) on %s; using fallback %s",
-                coin_sanitized,
-                coin,
-                ex,
-                fallback,
-            )
+            warn_key = (ex, coin_sanitized)
+            if warn_key not in _COIN_TO_SYMBOL_FALLBACKS:
+                logging.debug(
+                    "No mapping for %s (raw=%s) on %s; using fallback %s",
+                    coin_sanitized,
+                    coin,
+                    ex,
+                    fallback,
+                )
+                _COIN_TO_SYMBOL_FALLBACKS.add(warn_key)
         else:
-            logging.info(
-                "coin_to_symbol map for %s missing; using fallback for %s (raw=%s) -> %s",
-                ex,
-                coin_sanitized,
-                coin,
-                fallback,
-            )
+            warn_key = (ex, coin_sanitized)
+            if warn_key not in _COIN_TO_SYMBOL_FALLBACKS:
+                logging.debug(
+                    "coin_to_symbol map for %s missing; using fallback for %s (raw=%s) -> %s",
+                    ex,
+                    coin_sanitized,
+                    coin,
+                    fallback,
+                )
+                _COIN_TO_SYMBOL_FALLBACKS.add(warn_key)
     except Exception as e:
         logging.error(
             "error with coin_to_symbol %s (raw=%s) %s: %s", coin_sanitized, coin, exchange, e
@@ -796,9 +803,17 @@ def symbol_to_coin(symbol, verbose=True):
     if verbose:
         warn_key = str(symbol)
         if warn_key not in _SYMBOL_TO_COIN_WARNINGS:
-            logging.warning(msg)
+            logging.debug(msg)
             _SYMBOL_TO_COIN_WARNINGS.add(warn_key)
     return coin
+
+
+def coin_symbol_warning_counts() -> dict[str, int]:
+    """Return counts of fallback conversions for summary logging."""
+    return {
+        "coin_to_symbol_fallbacks": len(_COIN_TO_SYMBOL_FALLBACKS),
+        "symbol_to_coin_fallbacks": len(_SYMBOL_TO_COIN_WARNINGS),
+    }
 
 
 def _snapshot(value):

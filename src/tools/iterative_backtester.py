@@ -42,7 +42,7 @@ from config_utils import (  # noqa: E402
     require_config_value,
     get_optional_config_value,
 )
-from logging_setup import configure_logging  # noqa: E402
+from logging_setup import configure_logging, resolve_log_level  # noqa: E402
 from pure_funcs import calc_hash, denumpyize  # noqa: E402
 from utils import (  # noqa: E402
     format_approved_ignored_coins,
@@ -361,9 +361,9 @@ def format_timestamp(ms: float) -> str:
 # Core session class
 # ---------------------------------------------------------------------------
 class IterativeBacktestSession:
-    def __init__(self, config_path: Path, debug: Optional[int], auto_run: bool) -> None:
+    def __init__(self, config_path: Path, log_level: Optional[str], auto_run: bool) -> None:
         self.config_path = config_path
-        self.debug = debug
+        self.log_level = log_level
         self.auto_run = auto_run
         self.datasets: Dict[str, ExchangeDataset] = {}
         self.backtest_exchanges: List[str] = []
@@ -401,14 +401,10 @@ class IterativeBacktestSession:
         config = format_config(config, verbose=False)
         config = parse_overrides(config, verbose=False)
         # Configure logging lazily based on CLI/debug preference
-        level = self.debug
-        if level is None:
-            level = get_optional_config_value(config, "logging.level", 1)
-        try:
-            level = int(float(level))
-        except Exception:
-            level = 1
+        level = resolve_log_level(self.log_level, get_optional_config_value(config, "logging.level", None), fallback=1)
         configure_logging(debug=level)
+        config.setdefault("logging", {})
+        config["logging"]["level"] = level
         # Ensure exchanges have markets loaded and live coin lists expanded
         for ex in require_config_value(config, "backtest.exchanges"):
             await load_markets(ex, verbose=False)
@@ -1024,10 +1020,10 @@ async def async_main() -> None:
     parser = argparse.ArgumentParser(description="Interactive iterative backtester")
     parser.add_argument("config_path", type=Path, help="Path to bot config (json/hjson)")
     parser.add_argument(
-        "--debug-level",
-        type=int,
+        "--log-level",
+        dest="log_level",
         default=None,
-        help="Override logging verbosity (0=warn, 1=info, 2=debug, 3=trace)",
+        help="Override logging verbosity (warning, info, debug, trace or 0-3)",
     )
     parser.add_argument(
         "--auto-run",
@@ -1036,7 +1032,7 @@ async def async_main() -> None:
     )
     args = parser.parse_args()
 
-    session = IterativeBacktestSession(args.config_path, args.debug_level, args.auto_run)
+    session = IterativeBacktestSession(args.config_path, args.log_level, args.auto_run)
     await session.initialize()
     await session.interactive_loop()
 
