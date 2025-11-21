@@ -157,6 +157,7 @@ pub struct BacktestParams {
     pub starting_balance: f64,
     pub maker_fee: f64,
     pub coins: Vec<String>,
+    pub active_coin_indices: Option<Vec<usize>>,
     pub first_timestamp_ms: u64,
     pub requested_start_timestamp_ms: u64,
     pub first_valid_indices: Vec<usize>,

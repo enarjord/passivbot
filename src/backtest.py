@@ -162,7 +162,13 @@ def _build_hlcvs_bundle(
     warmup_minutes,
     trade_start_indices,
     requested_start_ts,
-):
+    *,
+    coin_indices: list[int] | None = None,
+) -> pbr.HlcvsBundle:
+    if coin_indices is not None and len(coin_indices) != len(coins_order):
+        raise ValueError(
+            f"coin_indices length ({len(coin_indices)}) does not match coins ({len(coins_order)})"
+        )
     hlcvs_arr = np.ascontiguousarray(hlcvs, dtype=np.float64)
     btc_arr = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
     if timestamps is None:
@@ -214,6 +220,8 @@ def build_backtest_payload(
     exchange: str,
     btc_usd_prices,
     timestamps=None,
+    *,
+    coin_indices: list[int] | None = None,
 ) -> BacktestPayload:
     """
     Assemble the bundle, bot params, and metadata needed to execute a backtest.
@@ -286,7 +294,11 @@ def build_backtest_payload(
         warmup_minutes,
         trade_start_indices,
         requested_start_ts,
+        coin_indices=coin_indices,
     )
+
+    if coin_indices is not None:
+        backtest_params["active_coin_indices"] = [int(idx) for idx in coin_indices]
 
     return BacktestPayload(
         bundle=bundle,

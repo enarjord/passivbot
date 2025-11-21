@@ -189,8 +189,9 @@ pub struct TradingEnabled {
 // RollingSum (SMA) removed — volume & log range are now tracked via EMAs in `EMAs`.
 
 pub struct Backtest<'a> {
-    hlcvs: &'a ArrayView3<'a, f64>,
-    btc_usd_prices: &'a ArrayView1<'a, f64>, // Change to ArrayView1 (1D view)
+    hlcvs: ArrayView3<'a, f64>,
+    btc_usd_prices: ArrayView1<'a, f64>, // Change to ArrayView1 (1D view)
+    active_coin_indices: Vec<usize>,
     bot_params_master: BotParamsPair,
     bot_params: Vec<BotParamsPair>,
     bot_params_original: Vec<BotParamsPair>,
@@ -250,9 +251,20 @@ fn calc_entry_balance_pct(params: &BotParams, effective_n_positions: usize) -> f
 }
 
 impl<'a> Backtest<'a> {
+    #[inline(always)]
+    fn col(&self, idx: usize) -> usize {
+        self.active_coin_indices[idx]
+    }
+
+    #[inline(always)]
+    fn hlcvs_value(&self, row: usize, coin_idx: usize, feature: usize) -> f64 {
+        let col = self.col(coin_idx);
+        self.hlcvs[[row, col, feature]]
+    }
+
     pub fn new(
-        hlcvs: &'a ArrayView3<'a, f64>,
-        btc_usd_prices: &'a ArrayView1<'a, f64>,
+        hlcvs: ArrayView3<'a, f64>,
+        btc_usd_prices: ArrayView1<'a, f64>,
         bot_params: Vec<BotParamsPair>,
         exchange_params_list: Vec<ExchangeParams>,
         backtest_params: &BacktestParams,
@@ -283,7 +295,30 @@ impl<'a> Backtest<'a> {
         balance.usd_total_balance_rounded = balance.usd_total_balance;
 
         let n_timesteps = hlcvs.shape()[0];
-        let n_coins = hlcvs.shape()[1];
+        let total_cols = hlcvs.shape()[1];
+        let mut active_coin_indices = backtest_params
+            .active_coin_indices
+            .clone()
+            .unwrap_or_else(|| (0..bot_params.len()).collect());
+        if active_coin_indices.len() != bot_params.len() {
+            active_coin_indices = (0..bot_params.len()).collect();
+        }
+        for &col in &active_coin_indices {
+            assert!(
+                col < total_cols,
+                "active coin index {} exceeds available columns {}",
+                col,
+                total_cols
+            );
+        }
+        let n_coins = active_coin_indices.len();
+        assert_eq!(
+            bot_params.len(),
+            n_coins,
+            "bot params length ({}) does not match active coin indices ({})",
+            bot_params.len(),
+            n_coins
+        );
         let mut first_valid_idx = backtest_params.first_valid_indices.clone();
         if first_valid_idx.len() != n_coins {
             first_valid_idx = vec![0usize; n_coins];
@@ -341,13 +376,14 @@ impl<'a> Backtest<'a> {
                     .copied()
                     .unwrap_or(0)
                     .min(n_timesteps.saturating_sub(1));
-                let close_price = hlcvs[[start_idx, i, CLOSE]];
+                let col = active_coin_indices[i];
+                let close_price = hlcvs[[start_idx, col, CLOSE]];
                 let base_close = if close_price.is_finite() {
                     close_price
                 } else {
                     0.0
                 };
-                let volume = hlcvs[[start_idx, i, VOLUME]];
+                let volume = hlcvs[[start_idx, col, VOLUME]];
                 let base_volume = if volume.is_finite() {
                     volume.max(0.0)
                 } else {
@@ -418,6 +454,7 @@ impl<'a> Backtest<'a> {
         Backtest {
             hlcvs,
             btc_usd_prices,
+            active_coin_indices,
             bot_params_master: bot_params_master.clone(),
             bot_params: bot_params.clone(),
             bot_params_original,
@@ -724,7 +761,7 @@ impl<'a> Backtest<'a> {
         let price_idx = self
             .current_step
             .min(self.hlcvs.shape()[0].saturating_sub(1));
-        let price = self.hlcvs[[price_idx, idx, CLOSE]];
+        let price = self.hlcvs_value(price_idx, idx, CLOSE);
         if !price.is_finite() || price <= 0.0 {
             return false;
         }
@@ -746,7 +783,7 @@ impl<'a> Backtest<'a> {
     }
 
     fn create_state_params(&self, k: usize, idx: usize, pside: usize) -> StateParams {
-        let mut close_price = self.hlcvs[[k, idx, CLOSE]];
+        let mut close_price = self.hlcvs_value(k, idx, CLOSE);
         if !close_price.is_finite() {
             close_price = 0.0;
         }
@@ -850,7 +887,7 @@ impl<'a> Backtest<'a> {
             if !self.coin_is_valid_at(idx, k) {
                 continue;
             }
-            let current_price = self.hlcvs[[k, idx, CLOSE]];
+            let current_price = self.hlcvs_value(k, idx, CLOSE);
             if !current_price.is_finite() {
                 continue;
             }
@@ -871,7 +908,7 @@ impl<'a> Backtest<'a> {
             if !self.coin_is_valid_at(idx, k) {
                 continue;
             }
-            let current_price = self.hlcvs[[k, idx, CLOSE]];
+            let current_price = self.hlcvs_value(k, idx, CLOSE);
             if !current_price.is_finite() {
                 continue;
             }
@@ -1323,14 +1360,15 @@ impl<'a> Backtest<'a> {
                 if !self.coin_is_valid_at(idx, k) {
                     continue;
                 }
+                let fill_long = self.did_fill_long.contains(&idx);
+                let col = self.active_coin_indices[idx];
+                let low = self.hlcvs[[k, col, LOW]];
+                let high = self.hlcvs[[k, col, HIGH]];
+                let close = self.hlcvs[[k, col, CLOSE]];
                 let bundle = self.trailing_prices.long.entry(idx).or_default();
-                if self.did_fill_long.contains(&idx) {
+                if fill_long {
                     reset_trailing_bundle(bundle);
                 } else {
-                    let low = self.hlcvs[[k, idx, LOW]];
-                    let high = self.hlcvs[[k, idx, HIGH]];
-                    let close = self.hlcvs[[k, idx, CLOSE]];
-
                     update_trailing_bundle_with_candle(bundle, high, low, close);
                 }
             }
@@ -1345,14 +1383,15 @@ impl<'a> Backtest<'a> {
                 if !self.coin_is_valid_at(idx, k) {
                     continue;
                 }
+                let fill_short = self.did_fill_short.contains(&idx);
+                let col = self.col(idx);
+                let low = self.hlcvs[[k, col, LOW]];
+                let high = self.hlcvs[[k, col, HIGH]];
+                let close = self.hlcvs[[k, col, CLOSE]];
                 let bundle = self.trailing_prices.short.entry(idx).or_default();
-                if self.did_fill_short.contains(&idx) {
+                if fill_short {
                     reset_trailing_bundle(bundle);
                 } else {
-                    let low = self.hlcvs[[k, idx, LOW]];
-                    let high = self.hlcvs[[k, idx, HIGH]];
-                    let close = self.hlcvs[[k, idx, CLOSE]];
-
                     update_trailing_bundle_with_candle(bundle, high, low, close);
                 }
             }
@@ -1379,7 +1418,7 @@ impl<'a> Backtest<'a> {
                         qty: -self.positions.long[&idx].size,
                         price: round_(
                             f64::min(
-                                self.hlcvs[[k, idx, HIGH]]
+                                self.hlcvs_value(k, idx, HIGH)
                                     - self.exchange_params_list[idx].price_step,
                                 self.positions.long[&idx].price,
                             ),
@@ -1459,7 +1498,7 @@ impl<'a> Backtest<'a> {
                         qty: self.positions.short[&idx].size.abs(),
                         price: round_(
                             f64::max(
-                                self.hlcvs[[k, idx, LOW]]
+                                self.hlcvs_value(k, idx, LOW)
                                     + self.exchange_params_list[idx].price_step,
                                 self.positions.short[&idx].price,
                             ),
@@ -1524,9 +1563,9 @@ impl<'a> Backtest<'a> {
         }
         // check if filled in current candle (pass k+1 to check if will fill in next candle)
         if order.qty > 0.0 {
-            self.hlcvs[[k, idx, LOW]] < order.price
+            self.hlcvs_value(k, idx, LOW) < order.price
         } else if order.qty < 0.0 {
-            self.hlcvs[[k, idx, HIGH]] > order.price
+            self.hlcvs_value(k, idx, HIGH) > order.price
         } else {
             false
         }
@@ -1577,7 +1616,7 @@ impl<'a> Backtest<'a> {
                 }
                 if let Some(position) = self.positions.long.get(&idx) {
                     let ema_bands = self.emas[idx].compute_bands(LONG);
-                    let current_price = self.hlcvs[[k, idx, CLOSE]];
+                    let current_price = self.hlcvs_value(k, idx, CLOSE);
                     inputs.push(UnstuckPositionInput {
                         idx,
                         side: LONG,
@@ -1612,7 +1651,7 @@ impl<'a> Backtest<'a> {
                 }
                 if let Some(position) = self.positions.short.get(&idx) {
                     let ema_bands = self.emas[idx].compute_bands(SHORT);
-                    let current_price = self.hlcvs[[k, idx, CLOSE]];
+                    let current_price = self.hlcvs_value(k, idx, CLOSE);
                     inputs.push(UnstuckPositionInput {
                         idx,
                         side: SHORT,
@@ -1710,7 +1749,7 @@ impl<'a> Backtest<'a> {
                         continue;
                     }
                     if let Some(position) = self.positions.long.get(&idx) {
-                        let market_price = self.hlcvs[[k, idx, CLOSE]];
+                        let market_price = self.hlcvs_value(k, idx, CLOSE);
                         inputs.push(TwelEnforcerInputPosition {
                             idx,
                             position_size: position.size,
@@ -1756,7 +1795,7 @@ impl<'a> Backtest<'a> {
                         continue;
                     }
                     if let Some(position) = self.positions.short.get(&idx) {
-                        let market_price = self.hlcvs[[k, idx, CLOSE]];
+                        let market_price = self.hlcvs_value(k, idx, CLOSE);
                         inputs.push(TwelEnforcerInputPosition {
                             idx,
                             position_size: position.size,
@@ -2022,6 +2061,8 @@ impl<'a> Backtest<'a> {
             let mut order_indices: Vec<usize> = open_orders_side.keys().cloned().collect();
             order_indices.sort_unstable();
             for idx in order_indices {
+                let col = self.active_coin_indices[idx];
+                let raw_market_price = self.hlcvs[[k, col, CLOSE]];
                 let bundle = match open_orders_side.get(&idx) {
                     Some(bundle) => bundle,
                     None => continue,
@@ -2030,7 +2071,6 @@ impl<'a> Backtest<'a> {
                     continue;
                 }
                 let params = &self.exchange_params_list[idx];
-                let raw_market_price = self.hlcvs[[k, idx, CLOSE]];
                 for order in &bundle.entries {
                     let qty = order.qty.abs();
                     if qty <= 0.0 || order.price <= 0.0 {
@@ -2171,8 +2211,8 @@ impl<'a> Backtest<'a> {
                             let mut l = f64::MAX;
                             let mut seen = false;
                             for j in start..=end {
-                                let high = self.hlcvs[[j, i, HIGH]];
-                                let low = self.hlcvs[[j, i, LOW]];
+                                let high = self.hlcvs_value(j, i, HIGH);
+                                let low = self.hlcvs_value(j, i, LOW);
                                 if !(high.is_finite() && low.is_finite()) {
                                     continue;
                                 }
@@ -2235,18 +2275,18 @@ impl<'a> Backtest<'a> {
             if !self.coin_is_valid_at(i, k) {
                 continue;
             }
-            let close_price = self.hlcvs[[k, i, CLOSE]];
+            let close_price = self.hlcvs_value(k, i, CLOSE);
             if !close_price.is_finite() {
                 continue;
             }
-            let vol_raw = self.hlcvs[[k, i, VOLUME]];
+            let vol_raw = self.hlcvs_value(k, i, VOLUME);
             let vol = if vol_raw.is_finite() {
                 f64::max(0.0, vol_raw)
             } else {
                 0.0
             };
-            let high = self.hlcvs[[k, i, HIGH]];
-            let low = self.hlcvs[[k, i, LOW]];
+            let high = self.hlcvs_value(k, i, HIGH);
+            let low = self.hlcvs_value(k, i, LOW);
             if !high.is_finite() || !low.is_finite() {
                 continue;
             }

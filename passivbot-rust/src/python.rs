@@ -694,8 +694,8 @@ fn run_backtest_core<'py>(
     let backtest_params = backtest_params_from_dict(backtest_params_dict.as_gil_ref())?;
     let metrics_only = backtest_params.metrics_only;
     let mut backtest = Backtest::new(
-        &hlcvs_rust,
-        &btc_usd_rust,
+        hlcvs_rust,
+        btc_usd_rust,
         bot_params_vec,
         exchange_params,
         &backtest_params,
@@ -789,6 +789,10 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         starting_balance: extract_value(dict, "starting_balance").unwrap_or_default(),
         maker_fee: extract_value(dict, "maker_fee").unwrap_or_default(),
         coins: extract_value(dict, "coins").unwrap_or_default(),
+        active_coin_indices: dict
+            .get_item("active_coin_indices")?
+            .map(|item| item.extract::<Vec<usize>>())
+            .transpose()?,
         // First timestamp (ms); default to 0 if not provided
         first_timestamp_ms: extract_value(dict, "first_timestamp_ms").unwrap_or(0u64),
         requested_start_timestamp_ms: extract_value(dict, "requested_start_timestamp_ms")

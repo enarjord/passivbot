@@ -37,6 +37,7 @@ from utils import (
     date_to_ts,
 )
 from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
+from shared_arrays import SharedArraySpec
 from metrics_schema import flatten_metric_stats
 
 
@@ -258,6 +259,7 @@ def filter_coins_by_exchange_assignment(
 
 
 @dataclass
+@dataclass
 class ExchangeDataset:
     exchange: str
     coins: List[str]
@@ -269,11 +271,16 @@ class ExchangeDataset:
     btc_usd_prices: np.ndarray
     timestamps: Optional[np.ndarray]
     cache_dir: str
+    hlcvs_spec: Optional[SharedArraySpec] = None
+    btc_spec: Optional[SharedArraySpec] = None
+    hlcvs_spec: Optional[SharedArraySpec] = None
+    btc_spec: Optional[SharedArraySpec] = None
 
 
 async def prepare_master_datasets(
     base_config: Dict[str, Any],
     exchanges: List[str],
+    shared_array_manager=None,
 ) -> Dict[str, ExchangeDataset]:
     from backtest import prepare_hlcvs_mss
 
@@ -294,17 +301,26 @@ async def prepare_master_datasets(
             coin: str(mss.get(coin, {}).get("exchange", exchange_name)) for coin in coins
         }
         available_exchanges = sorted(set(coin_exchange.values())) or [exchange_name]
+        hlcvs_array = np.ascontiguousarray(hlcvs, dtype=np.float64)
+        btc_array = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
+        hlcvs_spec = None
+        btc_spec = None
+        if shared_array_manager is not None:
+            hlcvs_spec, hlcvs_array = shared_array_manager.create_from(hlcvs_array)
+            btc_spec, btc_array = shared_array_manager.create_from(btc_array)
         return ExchangeDataset(
             exchange=exchange_label,
             coins=coins,
             coin_index=coin_index,
             coin_exchange=coin_exchange,
             available_exchanges=available_exchanges,
-            hlcvs=hlcvs,
+            hlcvs=hlcvs_array,
             mss=mss,
-            btc_usd_prices=btc_usd_prices,
+            btc_usd_prices=btc_array,
             timestamps=timestamps,
             cache_dir=str(cache_dir),
+            hlcvs_spec=hlcvs_spec,
+            btc_spec=btc_spec,
         )
 
     if require_config_value(base_config, "backtest.combine_ohlcvs"):

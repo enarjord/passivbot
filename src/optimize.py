@@ -1010,6 +1010,7 @@ class SuiteEvaluator:
             analyses = {}
             for exchange in ctx.exchanges:
                 self._ensure_context_attachment(ctx, exchange)
+                coin_indices = ctx.coin_indices.get(exchange)
                 payload = build_backtest_payload(
                     ctx.shared_hlcvs_np[exchange],
                     ctx.msss[exchange],
@@ -1017,6 +1018,7 @@ class SuiteEvaluator:
                     exchange,
                     ctx.shared_btc_np.get(exchange),
                     ctx.timestamps.get(exchange),
+                    coin_indices=coin_indices,
                 )
                 fills, equities_array, analysis = execute_backtest(payload, scenario_config)
                 analyses[exchange] = analysis

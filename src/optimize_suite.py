@@ -44,6 +44,7 @@ class ScenarioEvalContext:
     shared_hlcvs_np: Dict[str, np.ndarray]
     shared_btc_np: Dict[str, np.ndarray]
     attachments: Dict[str, Dict[str, Any]]
+    coin_indices: Dict[str, List[int]]
 
 
 async def prepare_suite_contexts(
@@ -118,7 +119,9 @@ async def prepare_suite_contexts(
     base_config["backtest"]["coins"] = {}
     base_config["backtest"]["coin_sources"] = suite_coin_sources
 
-    datasets = await prepare_master_datasets(base_config, base_exchanges)
+    datasets = await prepare_master_datasets(
+        base_config, base_exchanges, shared_array_manager=shared_array_manager
+    )
     available_coins = set()
     for dataset in datasets.values():
         available_coins.update(dataset.coins)
@@ -179,10 +182,14 @@ async def prepare_suite_contexts(
                 continue
             scenario_config["backtest"]["coins"][dataset.exchange] = list(selected_coins)
             indices = [dataset.coin_index[coin] for coin in selected_coins]
-            hlcvs_slice = np.ascontiguousarray(dataset.hlcvs[:, indices, :], dtype=np.float64)
-            hlcvs_spec, _ = shared_array_manager.create_from(hlcvs_slice)
-            btc_array = np.ascontiguousarray(dataset.btc_usd_prices, dtype=np.float64)
-            btc_spec, _ = shared_array_manager.create_from(btc_array)
+            if dataset.hlcvs_spec is not None and dataset.btc_spec is not None:
+                hlcvs_spec = dataset.hlcvs_spec
+                btc_spec = dataset.btc_spec
+            else:
+                hlcvs_slice = np.ascontiguousarray(dataset.hlcvs[:, indices, :], dtype=np.float64)
+                hlcvs_spec, _ = shared_array_manager.create_from(hlcvs_slice)
+                btc_array = np.ascontiguousarray(dataset.btc_usd_prices, dtype=np.float64)
+                btc_spec, _ = shared_array_manager.create_from(btc_array)
             mss_slice = {coin: dataset.mss.get(coin, {}) for coin in selected_coins}
             if "__meta__" in dataset.mss:
                 mss_slice["__meta__"] = dataset.mss["__meta__"]
@@ -199,6 +206,7 @@ async def prepare_suite_contexts(
                     shared_hlcvs_np={},
                     shared_btc_np={},
                     attachments={"hlcvs": {}, "btc": {}},
+                    coin_indices={dataset.exchange: indices},
                 )
             )
             continue
@@ -207,6 +215,7 @@ async def prepare_suite_contexts(
         btc_specs: Dict[str, Any] = {}
         mss_slices: Dict[str, Any] = {}
         timestamps_map: Dict[str, Any] = {}
+        coin_index_map: Dict[str, List[int]] = {}
         exchanges_for_scenario: List[str] = []
 
         allowed_exchange_names = set(scenario.exchanges or dataset_available_exchanges)
@@ -219,13 +228,18 @@ async def prepare_suite_contexts(
             exchanges_for_scenario.append(exchange_key)
             scenario_config["backtest"]["coins"][exchange_key] = list(coins_for_exchange)
             indices = [dataset.coin_index[coin] for coin in coins_for_exchange]
-            hlcvs_slice = np.ascontiguousarray(dataset.hlcvs[:, indices, :], dtype=np.float64)
-            hlcvs_spec, _ = shared_array_manager.create_from(hlcvs_slice)
-            hlcvs_specs[exchange_key] = hlcvs_spec
+            if dataset.hlcvs_spec is not None and dataset.btc_spec is not None:
+                hlcvs_specs[exchange_key] = dataset.hlcvs_spec
+                btc_specs[exchange_key] = dataset.btc_spec
+            else:
+                hlcvs_slice = np.ascontiguousarray(dataset.hlcvs[:, indices, :], dtype=np.float64)
+                hlcvs_spec, _ = shared_array_manager.create_from(hlcvs_slice)
+                hlcvs_specs[exchange_key] = hlcvs_spec
 
-            btc_array = np.ascontiguousarray(dataset.btc_usd_prices, dtype=np.float64)
-            btc_spec, _ = shared_array_manager.create_from(btc_array)
-            btc_specs[exchange_key] = btc_spec
+                btc_array = np.ascontiguousarray(dataset.btc_usd_prices, dtype=np.float64)
+                btc_spec, _ = shared_array_manager.create_from(btc_array)
+                btc_specs[exchange_key] = btc_spec
+            coin_index_map[exchange_key] = indices
 
             mss_slice = {coin: dataset.mss.get(coin, {}) for coin in coins_for_exchange}
             if "__meta__" in dataset.mss:
@@ -247,6 +261,7 @@ async def prepare_suite_contexts(
                 btc_usd_specs=btc_specs,
                 msss=mss_slices,
                 timestamps=timestamps_map,
+                coin_indices=coin_index_map,
                 shared_hlcvs_np={},
                 shared_btc_np={},
                 attachments={"hlcvs": {}, "btc": {}},
