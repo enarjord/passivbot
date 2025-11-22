@@ -401,7 +401,9 @@ class IterativeBacktestSession:
         config = format_config(config, verbose=False)
         config = parse_overrides(config, verbose=False)
         # Configure logging lazily based on CLI/debug preference
-        level = resolve_log_level(self.log_level, get_optional_config_value(config, "logging.level", None), fallback=1)
+        level = resolve_log_level(
+            self.log_level, get_optional_config_value(config, "logging.level", None), fallback=1
+        )
         configure_logging(debug=level)
         config.setdefault("logging", {})
         config["logging"]["level"] = level
