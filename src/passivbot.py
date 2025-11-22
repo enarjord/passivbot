@@ -1322,7 +1322,9 @@ class Passivbot:
             reason_counts = Counter(order.get("_reason") for order in orders if order.get("_reason"))
             reason_str = ""
             if reason_counts:
-                reason_str = " | reasons=" + ", ".join(f"{reason}:{count}" for reason, count in sorted(reason_counts.items()))
+                reason_str = " | reasons=" + ", ".join(
+                    f"{reason}:{count}" for reason, count in sorted(reason_counts.items())
+                )
             logging.info("%s %s | %s%s", action, symbol, display, reason_str)
 
     def _resolve_pb_order_type(self, order) -> str:
@@ -2853,14 +2855,20 @@ class Passivbot:
                         # possible fill
                         # force another update_positions
                         schedule_update_positions = True
-                        self.log_order_action(order, "missing order", "fetch_open_orders", level=logging.INFO)
+                        self.log_order_action(
+                            order, "missing order", "fetch_open_orders", level=logging.INFO
+                        )
                     else:
-                        self.log_order_action(order, "removed order", "fetch_open_orders", level=logging.DEBUG)
+                        self.log_order_action(
+                            order, "removed order", "fetch_open_orders", level=logging.DEBUG
+                        )
             if len(added_orders) > 20:
                 logging.info(f"added {len(added_orders)} new orders")
             else:
                 for order in added_orders:
-                    self.log_order_action(order, "added order", "fetch_open_orders", level=logging.DEBUG)
+                    self.log_order_action(
+                        order, "added order", "fetch_open_orders", level=logging.DEBUG
+                    )
             self.open_orders = {}
             for elm in open_orders:
                 if elm["symbol"] not in self.open_orders:
@@ -3564,9 +3572,7 @@ class Passivbot:
                 self._last_plan_detail[symbol] = current
                 if c or cr or skipped:
                     if prev != current:
-                        detail_parts.append(
-                            f"{symbol}:c{pre_c}->{c} cr{pre_cr}->{cr} skip{skipped}"
-                        )
+                        detail_parts.append(f"{symbol}:c{pre_c}->{c} cr{pre_cr}->{cr} skip{skipped}")
             detail = " | ".join(detail_parts[:6])
             if total_cancel or total_create or total_skipped:
                 extra = []
@@ -3688,8 +3694,14 @@ class Passivbot:
                 continue
             # choose closest by price difference
             best_idx, best_order = min(
-                candidates, key=lambda c: abs(float(c[1].get("price", 0.0)) - float(cancel_order.get("price", 0.0))))
-            raw_price_diff = pct(float(cancel_order.get("price", 0.0)), float(best_order.get("price", 0.0)))
+                candidates,
+                key=lambda c: abs(
+                    float(c[1].get("price", 0.0)) - float(cancel_order.get("price", 0.0))
+                ),
+            )
+            raw_price_diff = pct(
+                float(cancel_order.get("price", 0.0)), float(best_order.get("price", 0.0))
+            )
             raw_qty_diff = pct(float(cancel_order.get("qty", 0.0)), float(best_order.get("qty", 0.0)))
             price_diff = round(raw_price_diff, 4) if math.isfinite(raw_price_diff) else raw_price_diff
             qty_diff = round(raw_qty_diff, 4) if math.isfinite(raw_qty_diff) else raw_qty_diff
@@ -3899,7 +3911,10 @@ class Passivbot:
                 continue
             if len(gated_entries) < len(entry_candidates[pside]):
                 logging.debug(
-                    "twel gating pruned %d/%d %s entries", len(entry_candidates[pside]) - len(gated_entries), len(entry_candidates[pside]), pside
+                    "twel gating pruned %d/%d %s entries",
+                    len(entry_candidates[pside]) - len(gated_entries),
+                    len(entry_candidates[pside]),
+                    pside,
                 )
             for idx, qty, price, order_type_id in gated_entries:
                 symbol = order_plan.entry_index_map[pside].get(idx)
@@ -4510,7 +4525,9 @@ class Passivbot:
                     parts = []
                     for pside, coins in summary.items():
                         if coins:
-                            parts.append(f"{pside}: {','.join(sorted(symbol_to_coin(x) for x in coins))}")
+                            parts.append(
+                                f"{pside}: {','.join(sorted(symbol_to_coin(x) for x in coins))}"
+                            )
                     if parts:
                         logging.info("added to approved_coins | %s", " | ".join(parts))
             for k, summary in (("removed", removed_summary.get("approved_coins", {})),):
@@ -4528,7 +4545,9 @@ class Passivbot:
                     parts = []
                     for pside, coins in summary.items():
                         if coins:
-                            parts.append(f"{pside}: {','.join(sorted(symbol_to_coin(x) for x in coins))}")
+                            parts.append(
+                                f"{pside}: {','.join(sorted(symbol_to_coin(x) for x in coins))}"
+                            )
                     if parts:
                         logging.info("added to ignored_coins | %s", " | ".join(parts))
             for k, summary in (("removed", removed_summary.get("ignored_coins", {})),):
