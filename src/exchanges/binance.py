@@ -279,7 +279,6 @@ class BinanceBot(Passivbot):
         # but can fetch pnls for all symbols
         # fetch fills for all symbols with pos
         # fetch pnls for all symbols
-        # fills only needed for symbols with pos for trailing orders
         # binance returns at most 7 days worth of pnls per fetch unless both start_time and end_time are given
         if limit is None:
             limit = 1000
