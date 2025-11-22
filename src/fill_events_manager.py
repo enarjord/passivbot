@@ -10,17 +10,17 @@ exchanges.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import logging
 import os
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from importlib import import_module
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
-
-from ccxt.base.errors import RateLimitExceeded
 
 from ccxt.base.errors import RateLimitExceeded
 
@@ -28,6 +28,10 @@ try:
     from utils import ts_to_date  # type: ignore
 except ImportError:  # pragma: no cover - fallback for package-relative execution
     from .utils import ts_to_date
+
+from config_utils import format_config, load_config
+from logging_setup import configure_logging
+from procedures import load_user_info
 
 logger = logging.getLogger(__name__)
 
@@ -597,6 +601,7 @@ class BinanceFetcher(BaseFetcher):
         api,
         *,
         symbol_resolver: Callable[[str], str],
+        now_func: Optional[Callable[[], int]] = None,
         positions_provider: Optional[Callable[[], Iterable[str]]] = None,
         open_orders_provider: Optional[Callable[[], Iterable[str]]] = None,
         income_limit: int = 1000,
@@ -608,7 +613,8 @@ class BinanceFetcher(BaseFetcher):
         self._symbol_resolver = symbol_resolver
         self._positions_provider = positions_provider or (lambda: ())
         self._open_orders_provider = open_orders_provider or (lambda: ())
-        self.income_limit = max(1, income_limit)
+        self.income_limit = min(1000, max(1, income_limit))  # cap to max 1000
+        self._now_func = now_func or (lambda: int(datetime.now(tz=timezone.utc).timestamp() * 1000))
         self.trade_limit = max(1, trade_limit)
 
     async def fetch(
@@ -627,6 +633,8 @@ class BinanceFetcher(BaseFetcher):
         symbol_pool = set(self._collect_symbols(self._positions_provider))
         symbol_pool.update(self._collect_symbols(self._open_orders_provider))
         symbol_pool.update(ev["symbol"] for ev in income_events if ev.get("symbol"))
+        if detail_cache is None:
+            detail_cache = {}
 
         trade_events: Dict[str, Dict[str, object]] = {}
         trade_tasks: Dict[str, asyncio.Task[List[Dict[str, object]]]] = {}
@@ -660,12 +668,122 @@ class BinanceFetcher(BaseFetcher):
         for ev in income_events:
             merged[ev["id"]] = ev
 
-        for event_id, trade_ev in trade_events.items():
-            base = merged.get(event_id)
-            if base:
-                base.update({k: v for k, v in trade_ev.items() if v not in (None, "")})
-            else:
-                merged[event_id] = trade_ev
+        def _event_from_trade(trade: Dict[str, object]) -> Dict[str, object]:
+            symbol = trade.get("symbol") or self._resolve_symbol(trade.get("info", {}).get("symbol"))
+            timestamp = int(trade.get("timestamp") or 0)
+            client_oid = trade.get("client_order_id") or ""
+            event: Dict[str, object] = {
+                "id": str(trade.get("id")),
+                "timestamp": timestamp,
+                "datetime": ts_to_date(timestamp) if timestamp else "",
+                "symbol": symbol or "",
+                "side": trade.get("side") or "",
+                "qty": float(trade.get("qty") or 0.0),
+                "price": float(trade.get("price") or 0.0),
+                "pnl": float(trade.get("pnl") or 0.0),
+                "fees": trade.get("fees"),
+                "pb_order_type": trade.get("pb_order_type") or "",
+                "position_side": trade.get("position_side") or "unknown",
+                "client_order_id": client_oid,
+                "order_id": trade.get("order_id") or "",
+                "info": trade.get("info"),
+            }
+            return event
+
+        def _merge_trade_into_event(event: Dict[str, object], trade: Dict[str, object]) -> None:
+            if not event.get("symbol") and trade.get("symbol"):
+                event["symbol"] = trade["symbol"]
+            if not event.get("side") and trade.get("side"):
+                event["side"] = trade["side"]
+            if float(event.get("qty", 0.0)) == 0.0 and trade.get("qty") is not None:
+                event["qty"] = float(trade.get("qty", 0.0))
+            if float(event.get("price", 0.0)) == 0.0 and trade.get("price") is not None:
+                event["price"] = float(trade.get("price", 0.0))
+            if not event.get("fees") and trade.get("fees"):
+                event["fees"] = trade["fees"]
+            if (event.get("position_side") in (None, "", "unknown")) and trade.get("position_side"):
+                event["position_side"] = trade["position_side"]
+            if trade.get("client_order_id"):
+                event["client_order_id"] = trade["client_order_id"]
+            if trade.get("order_id"):
+                event["order_id"] = trade["order_id"]
+            if trade.get("info"):
+                event["info"] = trade["info"]
+            if trade.get("pb_order_type"):
+                event["pb_order_type"] = trade["pb_order_type"]
+
+        if trade_events:
+            for event_id, trade in trade_events.items():
+                if event_id not in merged:
+                    merged[event_id] = _event_from_trade(trade)
+                event = merged[event_id]
+                _merge_trade_into_event(event, trade)
+
+        for event_id, event in merged.items():
+            cached = detail_cache.get(event_id)
+            if cached:
+                client_oid, pb_type = cached
+                if client_oid:
+                    event["client_order_id"] = client_oid
+                if pb_type and pb_type != "unknown":
+                    event["pb_order_type"] = pb_type
+
+        enrichment_tasks: List[asyncio.Task[Optional[Tuple[str, str]]]] = []
+        enrichment_events: List[Tuple[Dict[str, object], str]] = []
+        if merged:
+            for event_id, event in merged.items():
+                has_client = bool(event.get("client_order_id"))
+                has_type = bool(event.get("pb_order_type")) and event["pb_order_type"] != "unknown"
+                if has_client and has_type:
+                    continue
+                trade = trade_events.get(event_id)
+                order_id = None
+                symbol = None
+                if trade:
+                    order_id = trade.get("order_id")
+                    symbol = trade.get("symbol") or event.get("symbol")
+                else:
+                    order_id = event.get("order_id")
+                    symbol = event.get("symbol")
+                if not order_id or not symbol:
+                    continue
+                enrichment_events.append((event, event_id))
+                enrichment_tasks.append(
+                    asyncio.create_task(
+                        self._enrich_with_order_details(
+                            str(order_id),
+                            str(symbol),
+                        )
+                    )
+                )
+        if enrichment_tasks:
+            detail_results = await asyncio.gather(*enrichment_tasks, return_exceptions=True)
+            for (event, event_id), res in zip(enrichment_events, detail_results):
+                if isinstance(res, Exception):
+                    logger.debug(
+                        "BinanceFetcher.fetch: fetch_order failed for %s (%s)",
+                        event.get("id"),
+                        res,
+                    )
+                    continue
+                if not res:
+                    continue
+                client_oid, pb_type = res
+                event["client_order_id"] = client_oid
+                if pb_type:
+                    event["pb_order_type"] = pb_type
+                if event_id:
+                    detail_cache[event_id] = (client_oid, pb_type or "")
+
+        for event_id, ev in merged.items():
+            client_oid = ev.get("client_order_id")
+            if client_oid and not ev.get("pb_order_type"):
+                ev["pb_order_type"] = custom_id_to_snake(str(client_oid))
+            if not ev.get("pb_order_type"):
+                ev["pb_order_type"] = ""
+            ev["client_order_id"] = str(client_oid) if client_oid is not None else ""
+            if event_id and ev.get("client_order_id"):
+                detail_cache[event_id] = (ev["client_order_id"], ev["pb_order_type"])
 
         ordered = sorted(merged.values(), key=lambda ev: ev["timestamp"])
         if since_ms is not None:
@@ -683,24 +801,73 @@ class BinanceFetcher(BaseFetcher):
         )
         return ordered
 
+    async def _enrich_with_order_details(
+        self,
+        order_id: Optional[str],
+        symbol: Optional[str],
+    ) -> Optional[Tuple[str, str]]:
+        if not order_id or not symbol:
+            return None
+        try:
+            detail = await self.api.fetch_order(order_id, symbol)
+        except Exception as exc:  # pragma: no cover - live API dependent
+            logger.debug(
+                "BinanceFetcher._enrich_with_order_details: fetch_order failed for %s (%s)",
+                order_id,
+                exc,
+            )
+            return None
+        info = detail.get("info") if isinstance(detail, dict) else detail
+        if not isinstance(info, dict):
+            return None
+        client_oid = info.get("clientOrderId") or info.get("clientOrderID")
+        if not client_oid:
+            return None
+        client_oid = str(client_oid)
+        return client_oid, custom_id_to_snake(client_oid)
+
     async def _fetch_income(
         self,
         since_ms: Optional[int],
         until_ms: Optional[int],
     ) -> List[Dict[str, object]]:
         params: Dict[str, object] = {"incomeType": "REALIZED_PNL", "limit": self.income_limit}
-        if since_ms is not None:
-            params["startTime"] = int(since_ms)
-        if until_ms is not None:
-            params["endTime"] = int(until_ms)
-        try:
+        if until_ms is None:
+            if since_ms is None:
+                logger.debug(f"BinanceFetcher._fetch_income.fapiprivate_get_income params={params}")
+                payload = await self.api.fapiprivate_get_income(params=params)
+                return sorted(
+                    [self._normalize_income(x) for x in payload], key=lambda x: x["timestamp"]
+                )
+            until_ms = self._now_func() + 1000 * 60 * 60
+        week_buffer_ms = 1000 * 60 * 60 * 24 * 6.95
+        params["startTime"] = int(since_ms)
+        params["endTime"] = int(min(until_ms, since_ms + week_buffer_ms))
+        events = []
+        previous_key: Optional[Tuple[Tuple[str, object], ...]] = None
+        while True:
+            key = _check_pagination_progress(
+                previous_key,
+                params,
+                "BinanceFetcher._fetch_income",
+            )
+            if key is None:
+                break
+            previous_key = key
             payload = await self.api.fapiprivate_get_income(params=params)
-        except Exception as exc:  # pragma: no cover - depends on live API
-            logger.error("BinanceFetcher._fetch_income: failed %s", exc)
-            return []
-        events: List[Dict[str, object]] = []
-        for entry in payload or []:
-            events.append(self._normalize_income(entry))
+            if payload == []:
+                if params["startTime"] + week_buffer_ms >= until_ms:
+                    break
+                params["startTime"] = int(params["startTime"] + week_buffer_ms)
+                params["endTime"] = int(min(until_ms, params["startTime"] + week_buffer_ms))
+                continue
+            events.extend(
+                sorted([self._normalize_income(x) for x in payload], key=lambda x: x["timestamp"])
+            )
+            params["startTime"] = int(events[-1]["timestamp"]) + 1
+            params["endTime"] = int(min(until_ms, params["startTime"] + week_buffer_ms))
+            if params["startTime"] > until_ms:
+                break
         return events
 
     async def _fetch_symbol_trades(
@@ -709,17 +876,63 @@ class BinanceFetcher(BaseFetcher):
         since_ms: Optional[int],
         until_ms: Optional[int],
     ) -> List[Dict[str, object]]:
-        params: Dict[str, object] = {}
-        if since_ms is not None:
-            params["startTime"] = int(since_ms)
-        if until_ms is not None:
-            params["endTime"] = int(until_ms)
+        limit = min(1000, max(1, self.trade_limit))
         try:
-            return await self.api.fetch_my_trades(
-                ccxt_symbol,
-                limit=self.trade_limit,
-                params=params or None,
+            if since_ms is None and until_ms is None:
+                return await self.api.fetch_my_trades(ccxt_symbol, limit=limit)
+
+            end_bound = until_ms or (self._now_func() + 60 * 60 * 1000)
+            start_bound = since_ms or max(0, end_bound - 7 * 24 * 60 * 60 * 1000)
+            week_span = int(7 * 24 * 60 * 60 * 1000 * 0.999)
+            params: Dict[str, object] = {}
+            fetched: Dict[str, Dict[str, object]] = {}
+            previous_key: Optional[Tuple[Tuple[str, object], ...]] = None
+
+            cursor = int(start_bound)
+            while cursor <= end_bound:
+                window_end = int(min(end_bound, cursor + week_span))
+                params["startTime"] = cursor
+                params["endTime"] = window_end
+                param_key = _check_pagination_progress(
+                    previous_key,
+                    params,
+                    f"BinanceFetcher._fetch_symbol_trades({ccxt_symbol})",
+                )
+                if param_key is None:
+                    break
+                previous_key = param_key
+                batch = await self.api.fetch_my_trades(
+                    ccxt_symbol,
+                    limit=limit,
+                    params=dict(params),
+                )
+                if not batch:
+                    cursor = window_end + 1
+                    continue
+                for trade in batch:
+                    trade_id = str(
+                        trade.get("id")
+                        or (trade.get("info") or {}).get("id")
+                        or f"{trade.get('order')}-{trade.get('timestamp')}"
+                    )
+                    fetched[trade_id] = trade
+                last_ts = int(
+                    batch[-1].get("timestamp")
+                    or (batch[-1].get("info") or {}).get("time")
+                    or params["endTime"]
+                )
+                if last_ts >= end_bound or len(batch) < limit:
+                    cursor = last_ts + 1
+                    if cursor > end_bound:
+                        break
+                else:
+                    cursor = last_ts + 1
+
+            ordered = sorted(
+                fetched.values(),
+                key=lambda tr: int(tr.get("timestamp") or (tr.get("info") or {}).get("time") or 0),
             )
+            return ordered
         except Exception as exc:  # pragma: no cover - depends on live API
             logger.error("BinanceFetcher._fetch_symbol_trades: error %s (%s)", ccxt_symbol, exc)
             return []
@@ -756,11 +969,21 @@ class BinanceFetcher(BaseFetcher):
         ).lower()
         fees = trade.get("fees") or trade.get("fee")
         client_order_id = (
-            trade.get("clientOrderId") or info.get("clientOrderId") or info.get("orderId") or ""
+            trade.get("clientOrderId")
+            or info.get("clientOrderId")
+            or info.get("origClientOrderId")
+            or info.get("clientOrderID")
+            or ""
         )
         symbol = trade.get("symbol")
         if symbol and "/" not in symbol:
             symbol = self._resolve_symbol(symbol)
+        order_id = (
+            trade.get("order")
+            or info.get("orderId")
+            or info.get("origClientOrderId")
+            or info.get("orderID")
+        )
         return {
             "id": str(trade_id),
             "timestamp": timestamp,
@@ -774,6 +997,8 @@ class BinanceFetcher(BaseFetcher):
             "pb_order_type": "",
             "position_side": position_side or "unknown",
             "client_order_id": client_order_id,
+            "order_id": str(order_id) if order_id else "",
+            "info": info,
         }
 
     def _collect_symbols(self, provider: Callable[[], Iterable[str]]) -> List[str]:
@@ -792,8 +1017,6 @@ class BinanceFetcher(BaseFetcher):
     def _resolve_symbol(self, value: Optional[str]) -> str:
         if not value:
             return ""
-        if "/" in value:
-            return value
         try:
             resolved = self._symbol_resolver(value)
             if resolved:
@@ -856,7 +1079,9 @@ class FillEventsManager:
             len(self._events),
             _format_ms(requested_start),
         )
-        detail_cache = {ev.id: (ev.client_order_id, ev.pb_order_type) for ev in self._events}
+        detail_cache = {
+            ev.id: (ev.client_order_id, ev.pb_order_type) for ev in self._events if ev.client_order_id
+        }
         updated_map: Dict[str, FillEvent] = {ev.id: ev for ev in self._events}
         added_ids: set[str] = set()
 
@@ -1558,3 +1783,225 @@ def deduce_side_pside(elm: dict) -> Tuple[str, str]:
     except Exception:
         side = str(elm.get("side", "buy")).lower()
         return side or "buy", "long"
+
+
+# ---------------------------------------------------------------------------
+# CLI helpers
+# ---------------------------------------------------------------------------
+
+
+EXCHANGE_BOT_CLASSES: Dict[str, Tuple[str, str]] = {
+    "binance": ("exchanges.binance", "BinanceBot"),
+    "bitget": ("exchanges.bitget", "BitgetBot"),
+    "bybit": ("exchanges.bybit", "BybitBot"),
+}
+
+
+def _parse_time_arg(value: Optional[str]) -> Optional[int]:
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        ts = int(value)
+        if ts < 10**11:
+            ts *= 1000
+        return ts
+    except ValueError:
+        pass
+    try:
+        if value.lower() == "now":
+            dt = datetime.now(tz=timezone.utc)
+        else:
+            if value.endswith("Z"):
+                value = value[:-1] + "+00:00"
+            dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    except Exception:
+        raise ValueError(f"Unable to parse datetime '{value}'")
+
+
+def _parse_log_level(value: str) -> int:
+    mapping = {"warning": 0, "warn": 0, "info": 1, "debug": 2, "trace": 3}
+    if value is None:
+        return 1
+    value = str(value).strip().lower()
+    if value in mapping:
+        return mapping[value]
+    try:
+        lvl = int(float(value))
+        return max(0, min(3, lvl))
+    except Exception:
+        return 1
+
+
+def _extract_symbol_pool(config: dict, override: Optional[List[str]]) -> List[str]:
+    if override:
+        return sorted({sym for sym in override if sym})
+    live = config.get("live", {})
+    approved = live.get("approved_coins")
+    symbols: List[str] = []
+    if isinstance(approved, dict):
+        for vals in approved.values():
+            if isinstance(vals, list):
+                symbols.extend(vals)
+    elif isinstance(approved, list):
+        symbols.extend(approved)
+    return sorted({sym for sym in symbols if sym})
+
+
+def _symbol_resolver(bot) -> Callable[[Optional[str]], str]:
+    def resolver(raw: Optional[str]) -> str:
+        if not raw:
+            return ""
+        if isinstance(raw, str) and "/" in raw:
+            return raw
+        value = "" if raw is None else str(raw)
+        if not value:
+            return ""
+        # Prefer the bot's coin_to_symbol mapping which handles exchange quirks
+        try:
+            mapped = bot.coin_to_symbol(value, verbose=False)
+            if mapped:
+                return mapped
+        except Exception:
+            pass
+        upper = value.upper()
+        for quote in ("USDT", "USDC", "USD"):
+            if upper.endswith(quote) and len(upper) > len(quote):
+                base = upper[: -len(quote)]
+                if base:
+                    return f"{base}/{quote}:{quote}"
+        if ":" in value and "/" not in value:
+            base, _, quote = value.partition(":")
+            if base and quote:
+                return f"{base}/{quote}:{quote}"
+        return value
+
+    return resolver
+
+
+def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
+    exchange = getattr(bot, "exchange", "").lower()
+    resolver = _symbol_resolver(bot)
+    static_provider = lambda: symbols  # noqa: E731
+    if exchange == "binance":
+        return BinanceFetcher(
+            api=bot.cca,
+            symbol_resolver=resolver,
+            positions_provider=static_provider,
+            open_orders_provider=static_provider,
+        )
+    if exchange == "bitget":
+        return BitgetFetcher(
+            api=bot.cca,
+            symbol_resolver=lambda value: resolver(value),
+        )
+    if exchange == "bybit":
+        return BybitFetcher(api=bot.cca)
+    raise ValueError(f"Unsupported exchange '{exchange}' for fill events CLI")
+
+
+def _instantiate_bot(config: dict):
+    live = config.get("live", {})
+    user = str(live.get("user") or "").strip()
+    if not user:
+        raise ValueError("Config missing live.user to determine bot exchange")
+    user_info = load_user_info(user)
+    exchange = str(user_info.get("exchange") or "").lower()
+    if not exchange:
+        raise ValueError(f"User '{user}' has no exchange configured in api-keys.json")
+    bot_cls_info = EXCHANGE_BOT_CLASSES.get(exchange)
+    if bot_cls_info is None:
+        raise ValueError(f"No bot class registered for exchange '{exchange}'")
+    module = import_module(bot_cls_info[0])
+    bot_cls = getattr(module, bot_cls_info[1])
+    return bot_cls(config)
+
+
+async def _run_cli(args: argparse.Namespace) -> None:
+    config = load_config(args.config, verbose=False)
+    config = format_config(config, verbose=False)
+    live = config.setdefault("live", {})
+    if args.user:
+        live["user"] = args.user
+    bot = _instantiate_bot(config)
+    try:
+        symbol_pool = _extract_symbol_pool(config, args.symbols)
+        fetcher = _build_fetcher_for_bot(bot, symbol_pool)
+        cache_root = Path(args.cache_root)
+        cache_path = cache_root / f"{bot.exchange}_{bot.user}"
+        manager = FillEventsManager(
+            exchange=bot.exchange,
+            user=bot.user,
+            fetcher=fetcher,
+            cache_path=cache_path,
+        )
+        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        start_ms = _parse_time_arg(args.start) or (
+            now_ms - int(args.lookback_days * 24 * 60 * 60 * 1000)
+        )
+        end_ms = _parse_time_arg(args.end) or now_ms
+        if start_ms >= end_ms:
+            raise ValueError("start time must be earlier than end time")
+        logger.info(
+            "fill_events_manager CLI | exchange=%s user=%s start=%s end=%s cache=%s",
+            bot.exchange,
+            bot.user,
+            _format_ms(start_ms),
+            _format_ms(end_ms),
+            cache_path,
+        )
+        await manager.refresh_range(start_ms, end_ms)
+        events = manager.get_events(start_ms, end_ms)
+        logger.info("fill_events_manager CLI: events=%d written to %s", len(events), cache_path)
+    finally:
+        try:
+            await bot.close()
+        except Exception:
+            pass
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Fill events cache refresher")
+    parser.add_argument("--config", type=str, default="configs/template.json", help="Config path")
+    parser.add_argument("--user", type=str, required=True, help="Live user identifier")
+    parser.add_argument("--start", type=str, help="Start datetime (ms or ISO)")
+    parser.add_argument("--end", type=str, help="End datetime (ms or ISO)")
+    parser.add_argument(
+        "--lookback-days",
+        type=float,
+        default=3.0,
+        help="Default lookback window in days when start is omitted",
+    )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        default="info",
+        help="Logging verbosity (warning/info/debug/trace or 0-3)",
+    )
+    parser.add_argument(
+        "--cache-root",
+        type=str,
+        default="caches/fill_events",
+        help="Root directory for fill events cache (default: caches/fill_events)",
+    )
+    parser.add_argument(
+        "--symbols",
+        nargs="*",
+        default=None,
+        help="Optional explicit symbol list to fetch",
+    )
+    args = parser.parse_args()
+    configure_logging(debug=_parse_log_level(args.log_level))
+    try:
+        asyncio.run(_run_cli(args))
+    except KeyboardInterrupt:
+        logger.info("fill_events_manager CLI interrupted by user")
+
+
+if __name__ == "__main__":
+    main()
