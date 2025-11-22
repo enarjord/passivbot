@@ -1,5 +1,6 @@
 import asyncio
 import sys
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -12,12 +13,14 @@ import pytest
 
 from src.fill_events_manager import (
     BaseFetcher,
+    BinanceFetcher,
     BitgetFetcher,
     BybitFetcher,
     HyperliquidFetcher,
     FillEvent,
     FillEventCache,
     FillEventsManager,
+    custom_id_to_snake,
 )
 
 
@@ -120,6 +123,221 @@ class _FakeHyperliquidAPI:
         if not self._batches:
             return []
         return self._batches.pop(0)
+
+
+# ---------------------------------------------------------------------------
+# Binance fetcher tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_binance_fetcher_merges_trade_details(monkeypatch):
+    client_id = "order-0x0005"
+    income_events = [
+        {
+            "id": "trade-1",
+            "timestamp": 1_700_000_000_000,
+            "datetime": "2023-11-01T00:00:00Z",
+            "symbol": "ADA/USDT:USDT",
+            "side": "buy",
+            "qty": 0.0,
+            "price": 0.0,
+            "pnl": 1.5,
+            "fees": None,
+            "pb_order_type": "",
+            "position_side": "long",
+            "client_order_id": "",
+        }
+    ]
+    trades = [
+        {
+            "id": "trade-1",
+            "timestamp": 1_700_000_000_000,
+            "symbol": "ADA/USDT:USDT",
+            "side": "buy",
+            "amount": 5.0,
+            "price": 0.65,
+            "fee": {"currency": "USDT", "cost": 0.001},
+            "clientOrderId": client_id,
+            "order": "123456",
+            "info": {"positionSide": "LONG"},
+        }
+    ]
+
+    fetcher = BinanceFetcher(
+        api=object(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: ["ADA/USDT:USDT"],
+        open_orders_provider=lambda: [],
+    )
+
+    async def fake_fetch_income(self, *_args, **_kwargs):
+        return [dict(ev) for ev in income_events]
+
+    async def fake_fetch_trades(self, symbol, *_args, **_kwargs):
+        return list(trades if symbol == "ADA/USDT:USDT" else [])
+
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_income",
+        types.MethodType(fake_fetch_income, fetcher),
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_symbol_trades",
+        types.MethodType(fake_fetch_trades, fetcher),
+    )
+
+    detail_cache: Dict[str, Tuple[str, str]] = {}
+    events = await fetcher.fetch(
+        since_ms=income_events[0]["timestamp"],
+        until_ms=income_events[0]["timestamp"] + 1,
+        detail_cache=detail_cache,
+    )
+    assert len(events) == 1
+    event = events[0]
+    assert event["qty"] == pytest.approx(5.0)
+    assert event["price"] == pytest.approx(0.65)
+    assert event["client_order_id"] == client_id
+    assert event["pb_order_type"] == custom_id_to_snake(client_id)
+    assert detail_cache["trade-1"][0] == client_id
+
+
+@pytest.mark.asyncio
+async def test_binance_fetcher_enriches_missing_client_ids(monkeypatch):
+    income_events = [
+        {
+            "id": "trade-2",
+            "timestamp": 1_700_000_100_000,
+            "datetime": "2023-11-02T00:00:00Z",
+            "symbol": "BTC/USDT:USDT",
+            "side": "sell",
+            "qty": 0.0,
+            "price": 0.0,
+            "pnl": -2.0,
+            "fees": None,
+            "pb_order_type": "",
+            "position_side": "short",
+            "client_order_id": "",
+        }
+    ]
+    trades = [
+        {
+            "id": "trade-2",
+            "timestamp": 1_700_000_100_000,
+            "symbol": "BTC/USDT:USDT",
+            "side": "sell",
+            "amount": 0.1,
+            "price": 35_000.0,
+            "fee": {"currency": "USDT", "cost": 0.003},
+            "order": "abc-789",
+            "info": {"positionSide": "SHORT"},
+        }
+    ]
+    enrich_calls: List[Tuple[str, str]] = []
+
+    fetcher = BinanceFetcher(
+        api=object(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: ["ADA/USDT:USDT"],
+        open_orders_provider=lambda: [],
+    )
+
+    async def fake_fetch_income(self, *_args, **_kwargs):
+        return [dict(ev) for ev in income_events]
+
+    async def fake_fetch_trades(self, symbol, *_args, **_kwargs):
+        return list(trades if symbol == "BTC/USDT:USDT" else [])
+
+    async def fake_enrich(self, order_id, symbol):
+        enrich_calls.append((order_id, symbol))
+        return ("clid-0x0010", "entry_initial_normal_long")
+
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_income",
+        types.MethodType(fake_fetch_income, fetcher),
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_symbol_trades",
+        types.MethodType(fake_fetch_trades, fetcher),
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "_enrich_with_order_details",
+        types.MethodType(fake_enrich, fetcher),
+    )
+
+    detail_cache: Dict[str, Tuple[str, str]] = {}
+    events = await fetcher.fetch(
+        since_ms=income_events[0]["timestamp"],
+        until_ms=income_events[0]["timestamp"] + 1,
+        detail_cache=detail_cache,
+    )
+    assert len(events) == 1
+    event = events[0]
+    assert enrich_calls == [("abc-789", "BTC/USDT:USDT")]
+    assert event["client_order_id"] == "clid-0x0010"
+    assert event["pb_order_type"] == "entry_initial_normal_long"
+    assert detail_cache["trade-2"] == ("clid-0x0010", "entry_initial_normal_long")
+
+
+@pytest.mark.asyncio
+async def test_binance_fetcher_includes_trade_entries(monkeypatch):
+    trades = [
+        {
+            "id": "entry-1",
+            "timestamp": 1_700_000_200_000,
+            "symbol": "ADA/USDT:USDT",
+            "side": "buy",
+            "amount": 5.0,
+            "price": 0.65,
+            "fee": {"currency": "USDT", "cost": 0.001},
+            "clientOrderId": "x-entry-test-0x0007",
+            "order": "order-123",
+            "info": {"positionSide": "LONG"},
+        }
+    ]
+
+    fetcher = BinanceFetcher(
+        api=object(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: ["ADA/USDT:USDT"],
+        open_orders_provider=lambda: [],
+    )
+
+    async def fake_fetch_income(self, *_args, **_kwargs):
+        return []
+
+    async def fake_fetch_trades(self, symbol, *_args, **_kwargs):
+        return list(trades if symbol == "ADA/USDT:USDT" else [])
+
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_income",
+        types.MethodType(fake_fetch_income, fetcher),
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_symbol_trades",
+        types.MethodType(fake_fetch_trades, fetcher),
+    )
+
+    detail_cache: Dict[str, Tuple[str, str]] = {}
+    events = await fetcher.fetch(
+        since_ms=trades[0]["timestamp"] - 1,
+        until_ms=trades[0]["timestamp"] + 1,
+        detail_cache=detail_cache,
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["symbol"] == "ADA/USDT:USDT"
+    assert event["qty"] == pytest.approx(5.0)
+    assert event["pnl"] == pytest.approx(0.0)
+    assert event["client_order_id"] == "x-entry-test-0x0007"
+    assert event["pb_order_type"] == custom_id_to_snake("x-entry-test-0x0007")
 
 
 # ---------------------------------------------------------------------------
