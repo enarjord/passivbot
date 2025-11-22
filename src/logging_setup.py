@@ -55,6 +55,7 @@ def resolve_log_level(cli_value, config_value, fallback=1):
         return cfg_level
     return fallback
 
+
 def _ensure_trace_level() -> None:
     """Register the TRACE log level on the logging module if missing."""
     if logging.getLevelName(TRACE_LEVEL) != TRACE_LEVEL_NAME:
