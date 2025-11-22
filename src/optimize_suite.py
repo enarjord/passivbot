@@ -44,7 +44,7 @@ class ScenarioEvalContext:
     shared_hlcvs_np: Dict[str, np.ndarray]
     shared_btc_np: Dict[str, np.ndarray]
     attachments: Dict[str, Dict[str, Any]]
-    coin_indices: Dict[str, List[int]]
+    coin_indices: Dict[str, Optional[List[int]]]
 
 
 async def prepare_suite_contexts(
@@ -182,40 +182,53 @@ async def prepare_suite_contexts(
                 continue
             scenario_config["backtest"]["coins"][dataset.exchange] = list(selected_coins)
             indices = [dataset.coin_index[coin] for coin in selected_coins]
-            if dataset.hlcvs_spec is not None and dataset.btc_spec is not None:
-                hlcvs_spec = dataset.hlcvs_spec
-                btc_spec = dataset.btc_spec
+            if dataset.hlcvs_spec is not None and shared_array_manager is not None:
+                master_view = shared_array_manager.view(dataset.hlcvs_spec)
             else:
-                hlcvs_slice = np.ascontiguousarray(dataset.hlcvs[:, indices, :], dtype=np.float64)
+                master_view = dataset.hlcvs
+            hlcvs_slice = np.ascontiguousarray(master_view[:, indices, :], dtype=np.float64)
+            if shared_array_manager is not None:
                 hlcvs_spec, _ = shared_array_manager.create_from(hlcvs_slice)
-                btc_array = np.ascontiguousarray(dataset.btc_usd_prices, dtype=np.float64)
-                btc_spec, _ = shared_array_manager.create_from(btc_array)
+                if dataset.btc_spec is not None:
+                    btc_spec = dataset.btc_spec
+                else:
+                    btc_array = np.ascontiguousarray(dataset.btc_usd_prices, dtype=np.float64)
+                    btc_spec, _ = shared_array_manager.create_from(btc_array)
+            else:
+                hlcvs_spec = None
+                btc_spec = None
             mss_slice = {coin: dataset.mss.get(coin, {}) for coin in selected_coins}
             if "__meta__" in dataset.mss:
                 mss_slice["__meta__"] = dataset.mss["__meta__"]
 
+            shared_hlcvs = {} if hlcvs_spec else {dataset.exchange: hlcvs_slice}
+            shared_btc = {} if (btc_spec or shared_array_manager is not None) else {
+                dataset.exchange: dataset.btc_usd_prices
+            }
             contexts.append(
                 ScenarioEvalContext(
                     label=scenario.label,
                     config=scenario_config,
                     exchanges=[dataset.exchange],
                     hlcvs_specs={dataset.exchange: hlcvs_spec},
-                    btc_usd_specs={dataset.exchange: btc_spec},
+                    btc_usd_specs={dataset.exchange: btc_spec} if btc_spec else {},
                     msss={dataset.exchange: mss_slice},
                     timestamps={dataset.exchange: dataset.timestamps},
-                    shared_hlcvs_np={},
-                    shared_btc_np={},
+                    shared_hlcvs_np=shared_hlcvs,
+                    shared_btc_np=shared_btc,
                     attachments={"hlcvs": {}, "btc": {}},
-                    coin_indices={dataset.exchange: indices},
+                    coin_indices={dataset.exchange: None},
                 )
             )
             continue
 
         hlcvs_specs: Dict[str, Any] = {}
         btc_specs: Dict[str, Any] = {}
+        preloaded_hlcvs: Dict[str, np.ndarray] = {}
+        preloaded_btc: Dict[str, np.ndarray] = {}
         mss_slices: Dict[str, Any] = {}
         timestamps_map: Dict[str, Any] = {}
-        coin_index_map: Dict[str, List[int]] = {}
+        coin_index_map: Dict[str, Optional[List[int]]] = {}
         exchanges_for_scenario: List[str] = []
 
         allowed_exchange_names = set(scenario.exchanges or dataset_available_exchanges)
@@ -228,18 +241,26 @@ async def prepare_suite_contexts(
             exchanges_for_scenario.append(exchange_key)
             scenario_config["backtest"]["coins"][exchange_key] = list(coins_for_exchange)
             indices = [dataset.coin_index[coin] for coin in coins_for_exchange]
-            if dataset.hlcvs_spec is not None and dataset.btc_spec is not None:
-                hlcvs_specs[exchange_key] = dataset.hlcvs_spec
-                btc_specs[exchange_key] = dataset.btc_spec
+            if dataset.hlcvs_spec is not None and shared_array_manager is not None:
+                master_view = shared_array_manager.view(dataset.hlcvs_spec)
             else:
-                hlcvs_slice = np.ascontiguousarray(dataset.hlcvs[:, indices, :], dtype=np.float64)
+                master_view = dataset.hlcvs
+            hlcvs_slice = np.ascontiguousarray(master_view[:, indices, :], dtype=np.float64)
+            if shared_array_manager is not None:
                 hlcvs_spec, _ = shared_array_manager.create_from(hlcvs_slice)
                 hlcvs_specs[exchange_key] = hlcvs_spec
-
-                btc_array = np.ascontiguousarray(dataset.btc_usd_prices, dtype=np.float64)
-                btc_spec, _ = shared_array_manager.create_from(btc_array)
-                btc_specs[exchange_key] = btc_spec
-            coin_index_map[exchange_key] = indices
+                if dataset.btc_spec is not None:
+                    btc_specs[exchange_key] = dataset.btc_spec
+                else:
+                    btc_array = np.ascontiguousarray(dataset.btc_usd_prices, dtype=np.float64)
+                    btc_spec, _ = shared_array_manager.create_from(btc_array)
+                    btc_specs[exchange_key] = btc_spec
+            else:
+                hlcvs_specs[exchange_key] = None
+                preloaded_hlcvs[exchange_key] = hlcvs_slice
+                btc_specs[exchange_key] = None
+                preloaded_btc[exchange_key] = dataset.btc_usd_prices
+            coin_index_map[exchange_key] = None
 
             mss_slice = {coin: dataset.mss.get(coin, {}) for coin in coins_for_exchange}
             if "__meta__" in dataset.mss:
@@ -262,8 +283,8 @@ async def prepare_suite_contexts(
                 msss=mss_slices,
                 timestamps=timestamps_map,
                 coin_indices=coin_index_map,
-                shared_hlcvs_np={},
-                shared_btc_np={},
+                shared_hlcvs_np=dict(preloaded_hlcvs),
+                shared_btc_np=dict(preloaded_btc),
                 attachments={"hlcvs": {}, "btc": {}},
             )
         )
