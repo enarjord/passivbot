@@ -303,7 +303,7 @@ def build_backtest_payload(
     )
 
     if coin_indices is not None:
-        backtest_params["active_coin_indices"] = [int(idx) for idx in coin_indices]
+        backtest_params["active_coin_indices"] = list(range(len(coins_order)))
 
     return BacktestPayload(
         bundle=bundle,
