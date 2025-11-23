@@ -89,6 +89,17 @@ def _ignore_sigint_in_worker():
         pass
 
 
+class ConstraintAwareFitness(base.Fitness):
+    constraint_violation: float = 0.0
+
+    def dominates(self, other, obj=slice(None)):
+        self_violation = getattr(self, "constraint_violation", 0.0)
+        other_violation = getattr(other, "constraint_violation", 0.0)
+        if math.isclose(self_violation, other_violation, rel_tol=0.0, abs_tol=1e-12):
+            return super().dominates(other, obj)
+        return self_violation < other_violation
+
+
 class ResultRecorder:
     def __init__(
         self,
@@ -137,23 +148,31 @@ class ResultRecorder:
                 self.results_file.flush()
             except Exception as exc:
                 logging.error(f"Error writing results: {exc}")
+        metrics_block = data.get("metrics", {}) or {}
+        violation = metrics_block.get("constraint_violation")
         try:
             updated = self.store.add_entry(data)
         except Exception as exc:
             logging.error(f"ParetoStore error: {exc}")
         else:
             if updated:
-                objectives_block = data.get("metrics", {}).get("objectives", {})
+                objectives_block = metrics_block.get("objectives", {})
                 objective_values = [
                     objectives_block[key]
                     for key in sorted(objectives_block)
                     if objectives_block.get(key) is not None
                 ]
+                violation_str = (
+                    f" | constraint={pbr.round_dynamic(violation, 3)}"
+                    if isinstance(violation, (int, float))
+                    else ""
+                )
                 logging.info(
-                    "Pareto update | eval=%d | front=%d | objectives=%s",
+                    "Pareto update | eval=%d | front=%d | objectives=%s%s",
                     self.store.n_iters,
                     len(self.store._front),
                     _format_objectives(objective_values),
+                    violation_str,
                 )
 
     def flush(self) -> None:
@@ -343,6 +362,10 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
         if isinstance(bt, dict):
             bt.pop("coins", None)
     if metrics:
+        if "constraint_violation" not in metrics:
+            violation = getattr(individual, "constraint_violation", None)
+            if violation is not None:
+                metrics["constraint_violation"] = violation
         entry["metrics"] = metrics
     entry = strip_config_metadata(entry)
     recorder.record(entry)
@@ -392,9 +415,11 @@ def ea_mu_plus_lambda_stream(
                     continue
                 for res in ready:
                     idx = pending.pop(res)
-                    fit_values, metrics = res.get()
+                    fit_values, penalty, metrics = res.get()
                     ind = individuals[idx]
                     ind.fitness.values = fit_values
+                    ind.fitness.constraint_violation = penalty
+                    ind.constraint_violation = penalty
                     if metrics is not None:
                         ind.evaluation_metrics = metrics
                         _record_individual_result(ind, evaluator_config, overrides_list, recorder)
@@ -745,7 +770,11 @@ class Evaluator:
         config = individual_to_config(individual, optimizer_overrides, overrides_list, self.config)
         individual_hash = calc_hash(individual)
         if individual_hash in self.seen_hashes:
-            existing_score = self.seen_hashes[individual_hash]
+            existing_entry = self.seen_hashes[individual_hash]
+            existing_score = None
+            existing_penalty = 0.0
+            if existing_entry is not None:
+                existing_score, existing_penalty = existing_entry
             self.duplicate_counter["total"] += 1
             perturbation_funcs = [
                 self.perturb_x_pct,
@@ -770,7 +799,7 @@ class Evaluator:
             else:
                 if existing_score is not None:
                     self.duplicate_counter["reused"] += 1
-                    return tuple(existing_score), None
+                    return tuple(existing_score), existing_penalty, None
         else:
             self.seen_hashes[individual_hash] = None
         analyses = {}
@@ -793,16 +822,17 @@ class Evaluator:
         scenario_metrics = build_scenario_metrics(analyses)
         aggregate_stats = scenario_metrics.get("stats", {})
         flat_stats = flatten_metric_stats(aggregate_stats)
-        objectives = self.calc_fitness(flat_stats)
+        objectives, total_penalty = self.calc_fitness(flat_stats)
         objectives_map = {f"w_{i}": val for i, val in enumerate(objectives)}
         metrics_payload = {
             "stats": aggregate_stats,
             "objectives": objectives_map,
+            "constraint_violation": total_penalty,
         }
         individual.evaluation_metrics = metrics_payload
         actual_hash = calc_hash(individual)
-        self.seen_hashes[actual_hash] = tuple(objectives)
-        return tuple(objectives), metrics_payload
+        self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
+        return tuple(objectives), total_penalty, metrics_payload
 
     def build_limit_checks(self):
         limits = self.config["optimize"].get("limits", [])
@@ -833,6 +863,7 @@ class Evaluator:
             else:
                 global_modifier += penalty
 
+        total_penalty = global_modifier + sum(per_objective_modifier)
         scores = []
         for idx, sk in enumerate(scoring_keys):
             penalty_total = global_modifier + per_objective_modifier[idx]
@@ -888,7 +919,7 @@ class Evaluator:
             if weight is None:
                 weight = 1.0
             scores.append(val * weight)
-        return tuple(scores)
+        return tuple(scores), total_penalty
 
     def __del__(self):
         for attachment_map in self._attachments.values():
@@ -944,7 +975,11 @@ class SuiteEvaluator:
         duplicate_counter = self.base.duplicate_counter
 
         if individual_hash in seen_hashes:
-            existing_score = seen_hashes[individual_hash]
+            existing_entry = seen_hashes[individual_hash]
+            existing_score = None
+            existing_penalty = 0.0
+            if existing_entry is not None:
+                existing_score, existing_penalty = existing_entry
             duplicate_counter["total"] += 1
             perturbation_funcs = [
                 self.base.perturb_x_pct,
@@ -969,7 +1004,7 @@ class SuiteEvaluator:
             else:
                 if existing_score is not None:
                     duplicate_counter["reused"] += 1
-                    return tuple(existing_score), None
+                    return tuple(existing_score), existing_penalty, None
         else:
             seen_hashes[individual_hash] = None
 
@@ -1040,18 +1075,19 @@ class SuiteEvaluator:
         aggregate_stats = aggregate_summary.get("stats", {})
 
         flat_stats = flatten_metric_stats(aggregate_stats)
-        objectives = self.base.calc_fitness(flat_stats)
+        objectives, total_penalty = self.base.calc_fitness(flat_stats)
         objectives_map = {f"w_{i}": val for i, val in enumerate(objectives)}
 
         metrics_payload = {
             "objectives": objectives_map,
             "suite_metrics": suite_payload,
+            "constraint_violation": total_penalty,
         }
 
         individual.evaluation_metrics = metrics_payload
         actual_hash = calc_hash(individual)
-        self.base.seen_hashes[actual_hash] = tuple(objectives)
-        return tuple(objectives), metrics_payload
+        self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
+        return tuple(objectives), total_penalty, metrics_payload
 
     def __del__(self):
         for ctx in self.contexts:
@@ -1422,8 +1458,12 @@ async def main():
         )
 
         n_objectives = len(config["optimize"]["scoring"])
-        creator.create("FitnessMulti", base.Fitness, weights=(-1.0,) * n_objectives)
-        creator.create("Individual", list, fitness=creator.FitnessMulti)
+        if not hasattr(creator, "FitnessMulti"):
+            creator.create("FitnessMulti", ConstraintAwareFitness, weights=(-1.0,) * n_objectives)
+        else:
+            creator.FitnessMulti.weights = (-1.0,) * n_objectives
+        if not hasattr(creator, "Individual"):
+            creator.create("Individual", list, fitness=creator.FitnessMulti)
 
         toolbox = base.Toolbox()
 
@@ -1493,8 +1533,10 @@ async def main():
                         continue
                     for res in ready:
                         ind = pending.pop(res)
-                        fit_values, metrics = res.get()
+                        fit_values, penalty, metrics = res.get()
                         ind.fitness.values = fit_values
+                        ind.fitness.constraint_violation = penalty
+                        ind.constraint_violation = penalty
                         if metrics is not None:
                             ind.evaluation_metrics = metrics
                             _record_individual_result(

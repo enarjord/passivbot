@@ -101,6 +101,18 @@ def _evaluate_limits(
     return True
 
 
+def _dominates_with_violation(
+    obj_a: tuple,
+    viol_a: float,
+    obj_b: tuple,
+    viol_b: float,
+    tol: float = 1e-12,
+) -> bool:
+    if math.isclose(viol_a, viol_b, rel_tol=0.0, abs_tol=tol):
+        return dominates(obj_a, obj_b)
+    return viol_a < viol_b
+
+
 class ParetoStore:
     def __init__(
         self,
@@ -120,6 +132,7 @@ class ParetoStore:
         # --- in-memory structures -----------------------------------------
         self._entries: dict[str, str] = {}  # hash -> file path
         self._objectives: dict[str, tuple] = {}  # hash -> objective vector
+        self._violations: dict[str, float] = {}  # hash -> constraint violation
         self._front: list[str] = []  # list of hashes (Pareto set)
         self._objective_lookup: dict[tuple, str] = {}  # objective vector ➜ hash
         # ------------------------------------------------------------------
@@ -151,28 +164,48 @@ class ParetoStore:
             objectives = metrics_block.get("objectives", metrics_block)
             w_keys = sorted(k for k in objectives if k.startswith("w_"))
             obj = tuple(objectives[k] for k in w_keys)
+            violation = float(metrics_block.get("constraint_violation") or 0.0)
 
             # ───────────── NEW: dedupe on the objective vector ──────────────
-            # identical after rounding  → nothing new to store or write
-            if obj in self._objective_lookup:
-                self._log.info(f"Dropping candidate whose obj score is already present: {obj}")
-                return False
+            existing_hash = self._objective_lookup.get(obj)
+            if existing_hash:
+                existing_violation = self._violations.get(existing_hash, 0.0)
+                if violation >= existing_violation - 1e-12:
+                    self._log.info(
+                        "Dropping candidate whose obj score is already present with <= violation: %s",
+                        obj,
+                    )
+                    return False
+                else:
+                    # replace existing entry with higher violation
+                    self._remove_from_front(existing_hash)
             # ────────────────────────────────────────────────────────────────
 
             # discard if dominated by current front
-            if any(dominates(self._objectives[idx], obj) for idx in self._front):
+            if any(
+                _dominates_with_violation(
+                    self._objectives[idx],
+                    self._violations.get(idx, 0.0),
+                    obj,
+                    violation,
+                )
+                for idx in self._front
+            ):
                 return False
 
             # remove dominated members
-            dominated = [idx for idx in self._front if dominates(obj, self._objectives[idx])]
+            dominated = [
+                idx
+                for idx in self._front
+                if _dominates_with_violation(obj, violation, self._objectives[idx], self._violations.get(idx, 0.0))
+            ]
             for idx in dominated:
-                del self._objective_lookup[self._objectives[idx]]
-                self._front.remove(idx)
-                self._delete_entry_file(idx)
+                self._remove_from_front(idx)
 
             # add new member
             self._persist_entry(h, rounded, source_path=source_path)
             self._objectives[h] = obj
+            self._violations[h] = violation
             self._front.append(h)
             self._objective_lookup[obj] = h
 
@@ -258,8 +291,18 @@ class ParetoStore:
             )
 
         line = " | ".join(metrics)
+        violation_summary = ""
+        if self._front:
+            viols = [self._violations.get(idx, 0.0) for idx in self._front]
+            if viols:
+                violation_summary = (
+                    f" | constraint:("
+                    f"{pbr.round_dynamic(min(viols), 3)},"
+                    f"{pbr.round_dynamic(max(viols), 3)})"
+                )
+
         self._log.info(
-            f"Iter: {self.n_iters} | Pareto ↑ | +{added}/-{removed} | size:{len(self._front)} | {line}"
+            f"Iter: {self.n_iters} | Pareto ↑ | +{added}/-{removed} | size:{len(self._front)} | {line}{violation_summary}"
         )
 
     def _prune_front(self, n_prune: int) -> None:
@@ -272,14 +315,18 @@ class ParetoStore:
         scored.sort(key=lambda item: item[1])  # lowest crowding removed first
         to_remove = [hash_id for hash_id, _ in scored[:n_prune]]
         for hash_id in to_remove:
-            obj = self._objectives.pop(hash_id, None)
-            self._delete_entry_file(hash_id)
-            if obj is not None:
-                self._objective_lookup.pop(obj, None)
-            try:
-                self._front.remove(hash_id)
-            except ValueError:
-                pass
+            self._remove_from_front(hash_id)
+
+    def _remove_from_front(self, hash_id: str) -> None:
+        obj = self._objectives.pop(hash_id, None)
+        if obj is not None:
+            self._objective_lookup.pop(obj, None)
+        self._violations.pop(hash_id, None)
+        self._delete_entry_file(hash_id)
+        try:
+            self._front.remove(hash_id)
+        except ValueError:
+            pass
 
     def _persist_entry(self, hash_id: str, entry: dict, *, source_path: str | None = None) -> None:
         if source_path is None:

@@ -36,8 +36,9 @@ def test_evaluator_applies_limit_penalties():
         + min(0.2, 0.3) * 1e6
     )
 
-    scores = evaluator.calc_fitness(stats)
+    scores, penalty = evaluator.calc_fitness(stats)
     assert pytest.approx(scores[0]) == expected_modifier
+    assert pytest.approx(penalty) == expected_modifier
 
 
 def test_evaluator_returns_weighted_metric_when_within_limits():
@@ -57,8 +58,9 @@ def test_evaluator_returns_weighted_metric_when_within_limits():
         "omega_ratio_mean": 1.8,
     }
 
-    scores = evaluator.calc_fitness(stats)
+    scores, penalty = evaluator.calc_fitness(stats)
     assert pytest.approx(scores[0]) == -0.002  # adg weight is -1, so maximize adg
+    assert pytest.approx(penalty) == 0.0
 
 
 def test_limit_penalty_applies_only_to_matching_objective():
@@ -77,9 +79,10 @@ def test_limit_penalty_applies_only_to_matching_objective():
         "adg_mean": 0.0015,
         "loss_profit_ratio_mean": 0.6,
     }
-    scores = evaluator.calc_fitness(stats)
+    scores, penalty = evaluator.calc_fitness(stats)
     assert pytest.approx(scores[0]) == -0.0015  # unaffected objective
     assert pytest.approx(scores[1]) == (0.6 - 0.5) * 1e6
+    assert pytest.approx(penalty) == (0.6 - 0.5) * 1e6
 
 
 def test_limit_penalty_remains_global_for_non_scoring_metric():
@@ -93,7 +96,8 @@ def test_limit_penalty_remains_global_for_non_scoring_metric():
         "loss_profit_ratio_mean": 0.3,
         "drawdown_worst_max": 0.6,
     }
-    penalty = (0.6 - 0.4) * 1e6
-    scores = evaluator.calc_fitness(stats)
-    assert pytest.approx(scores[0]) == penalty
-    assert pytest.approx(scores[1]) == penalty
+    expected_penalty = (0.6 - 0.4) * 1e6
+    scores, penalty = evaluator.calc_fitness(stats)
+    assert pytest.approx(scores[0]) == expected_penalty
+    assert pytest.approx(scores[1]) == expected_penalty
+    assert pytest.approx(penalty) == expected_penalty
