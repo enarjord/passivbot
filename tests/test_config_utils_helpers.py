@@ -191,6 +191,19 @@ def test_normalize_limit_entries_preserves_integers():
     assert normalized[0]["value"] == 2016
 
 
+def test_limits_structural_equal_detects_canonical_entries():
+    raw = [
+        {"metric": "drawdown_worst_btc", "penalize_if": "greater_than", "value": 0.3},
+        {
+            "metric": "loss_profit_ratio",
+            "penalize_if": "outside_range",
+            "range": (0.1, 0.7),
+        },
+    ]
+    normalized = config_utils.normalize_limit_entries(raw)
+    assert config_utils._limits_structurally_equal(raw, normalized)
+
+
 def test_apply_backward_compatibility_renames_moves_filter_keys():
     config = {
         "bot": {

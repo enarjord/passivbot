@@ -294,13 +294,16 @@ def combine_analyses(analyses: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def build_limit_checks(
-    limits: Any, scoring_weights: Dict[str, float]
+    limits: Any,
+    scoring_weights: Dict[str, float],
+    scoring_index_map: Optional[Dict[str, List[int]]] = None,
 ) -> List[Dict[str, Any]]:
     normalized_limits = normalize_limit_entries(limits)
     return expand_limit_checks(
         normalized_limits,
         scoring_weights,
         penalty_weight=PENALTY_WEIGHT,
+        objective_index_map=scoring_index_map,
     )
 
 
@@ -352,25 +355,39 @@ def calc_score_vector(
     scoring_weights: Dict[str, float],
     limit_checks: List[Dict[str, Any]],
 ) -> Tuple[Tuple[float, ...], float]:
+    scoring_keys = list(scoring_keys)
+    per_objective_modifier = [0.0] * len(scoring_keys)
     modifier = 0.0
     for check in limit_checks:
         val = ensure_float(combined.get(check["metric_key"]))
-        modifier += compute_limit_violation(check, val)
+        penalty = compute_limit_violation(check, val)
+        if not penalty:
+            continue
+        targets = check.get("objective_indexes") or []
+        if targets:
+            for idx in targets:
+                if 0 <= idx < len(per_objective_modifier):
+                    per_objective_modifier[idx] += penalty
+        else:
+            modifier += penalty
 
     scores: List[float] = []
-    for key in scoring_keys:
-        if modifier:
-            scores.append(modifier)
+    for idx, key in enumerate(scoring_keys):
+        penalty_total = modifier + per_objective_modifier[idx]
+        if penalty_total:
+            scores.append(penalty_total)
             continue
         value, resolved = resolve_metric_value(key, combined)
-        if resolved is not None and resolved in scoring_weights:
-            weight = scoring_weights[resolved]
+        if value is None:
+            scores.append(float("inf"))
+            continue
+        weight = scoring_weights.get(resolved or key)
+        if weight is None:
+            scores.append(value)
+        elif weight < 0:
+            scores.append(-value)
         else:
-            weight = scoring_weights.get(key)
-        if value is None or weight is None:
-            scores.append(0.0)
-        else:
-            scores.append(value * weight)
+            scores.append(value)
     return tuple(scores), modifier
 
 
@@ -568,9 +585,16 @@ class IterativeBacktestSession:
         combined = combine_analyses(analyses)
         combined_flat = flatten_metric_stats(combined.get("stats", {}))
         scoring_keys = list(config.get("optimize", {}).get("scoring", []))
+        scoring_index_map: Dict[str, List[int]] = {}
+        for idx, key in enumerate(scoring_keys):
+            scoring_index_map.setdefault(key, []).append(idx)
         self.scoring_keys = scoring_keys
         limits_cfg = config.get("optimize", {}).get("limits", [])
-        limit_checks = build_limit_checks(limits_cfg, self.scoring_weights)
+        limit_checks = build_limit_checks(
+            limits_cfg,
+            self.scoring_weights,
+            scoring_index_map,
+        )
         score_vector, modifier = calc_score_vector(
             scoring_keys, combined_flat, self.scoring_weights, limit_checks
         )

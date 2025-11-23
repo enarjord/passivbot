@@ -806,71 +806,88 @@ class Evaluator:
 
     def build_limit_checks(self):
         limits = self.config["optimize"].get("limits", [])
+        objective_index_map: Dict[str, List[int]] = {}
+        for idx, metric in enumerate(self.config["optimize"].get("scoring", [])):
+            objective_index_map.setdefault(metric, []).append(idx)
         self.limit_checks = expand_limit_checks(
             limits,
             self.scoring_weights,
             penalty_weight=1e6,
+            objective_index_map=objective_index_map,
         )
 
     def calc_fitness(self, analyses_combined):
-        modifier = 0.0
+        scoring_keys = self.config["optimize"]["scoring"]
+        per_objective_modifier = [0.0] * len(scoring_keys)
+        global_modifier = 0.0
         for check in self.limit_checks:
             val = analyses_combined.get(check["metric_key"])
-            modifier += compute_limit_violation(check, val)
+            penalty = compute_limit_violation(check, val)
+            if not penalty:
+                continue
+            targets = check.get("objective_indexes") or []
+            if targets:
+                for idx in targets:
+                    if 0 <= idx < len(per_objective_modifier):
+                        per_objective_modifier[idx] += penalty
+            else:
+                global_modifier += penalty
 
         scores = []
-        for sk in self.config["optimize"]["scoring"]:
-            if modifier:
-                scores.append(modifier)
+        for idx, sk in enumerate(scoring_keys):
+            penalty_total = global_modifier + per_objective_modifier[idx]
+            if penalty_total:
+                scores.append(penalty_total)
+                continue
+
+            parts = sk.split("_")
+            candidates = []
+            if len(parts) <= 1:
+                candidates = [sk]
             else:
-                parts = sk.split("_")
-                candidates = []
-                if len(parts) <= 1:
-                    candidates = [sk]
-                else:
-                    base, rest = parts[0], parts[1:]
-                    base_candidate = "_".join([base, *rest])
-                    candidates.append(base_candidate)
-                    for perm in permutations(rest):
-                        candidate = "_".join([base, *perm])
-                        candidates.append(candidate)
+                base, rest = parts[0], parts[1:]
+                base_candidate = "_".join([base, *rest])
+                candidates.append(base_candidate)
+                for perm in permutations(rest):
+                    candidate = "_".join([base, *perm])
+                    candidates.append(candidate)
 
-                extended_candidates = []
-                seen = set()
-                for candidate in candidates:
-                    if candidate not in seen:
-                        extended_candidates.append(candidate)
-                        seen.add(candidate)
-                    for suffix in ("usd", "btc"):
-                        with_suffix = f"{candidate}_{suffix}"
-                        if with_suffix not in seen:
-                            extended_candidates.append(with_suffix)
-                            seen.add(with_suffix)
-                        parts_candidate = candidate.split("_")
-                        if len(parts_candidate) >= 2:
-                            inserted = "_".join(parts_candidate[:-1] + [suffix, parts_candidate[-1]])
-                            if inserted not in seen:
-                                extended_candidates.append(inserted)
-                                seen.add(inserted)
+            extended_candidates = []
+            seen = set()
+            for candidate in candidates:
+                if candidate not in seen:
+                    extended_candidates.append(candidate)
+                    seen.add(candidate)
+                for suffix in ("usd", "btc"):
+                    with_suffix = f"{candidate}_{suffix}"
+                    if with_suffix not in seen:
+                        extended_candidates.append(with_suffix)
+                        seen.add(with_suffix)
+                    parts_candidate = candidate.split("_")
+                    if len(parts_candidate) >= 2:
+                        inserted = "_".join(parts_candidate[:-1] + [suffix, parts_candidate[-1]])
+                        if inserted not in seen:
+                            extended_candidates.append(inserted)
+                            seen.add(inserted)
 
-                val = None
-                weight = None
-                selected_metric = None
-                for candidate in extended_candidates:
-                    metric_key = f"{candidate}_mean"
-                    if val is None and metric_key in analyses_combined:
-                        val = analyses_combined[metric_key]
-                        selected_metric = candidate
-                    if weight is None and candidate in self.scoring_weights:
-                        weight = self.scoring_weights[candidate]
-                    if val is not None and weight is not None:
-                        break
+            val = None
+            weight = None
+            selected_metric = None
+            for candidate in extended_candidates:
+                metric_key = f"{candidate}_mean"
+                if val is None and metric_key in analyses_combined:
+                    val = analyses_combined[metric_key]
+                    selected_metric = candidate
+                if weight is None and candidate in self.scoring_weights:
+                    weight = self.scoring_weights[candidate]
+                if val is not None and weight is not None:
+                    break
 
-                if val is None:
-                    val = 0
-                if weight is None:
-                    weight = 1.0
-                scores.append(val * weight)
+            if val is None:
+                val = 0
+            if weight is None:
+                weight = 1.0
+            scores.append(val * weight)
         return tuple(scores)
 
     def __del__(self):

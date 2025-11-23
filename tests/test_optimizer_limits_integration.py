@@ -6,9 +6,9 @@ from config_utils import get_template_config
 from optimize import Evaluator
 
 
-def _make_config(limits):
+def _make_config(limits, scoring=None):
     cfg = deepcopy(get_template_config())
-    cfg["optimize"]["scoring"] = ["adg"]
+    cfg["optimize"]["scoring"] = scoring or ["adg"]
     cfg["optimize"]["limits"] = limits
     return cfg
 
@@ -59,3 +59,41 @@ def test_evaluator_returns_weighted_metric_when_within_limits():
 
     scores = evaluator.calc_fitness(stats)
     assert pytest.approx(scores[0]) == -0.002  # adg weight is -1, so maximize adg
+
+
+def test_limit_penalty_applies_only_to_matching_objective():
+    limits = [
+        {
+            "metric": "loss_profit_ratio",
+            "penalize_if": "greater_than",
+            "value": 0.5,
+            "stat": "mean",
+        },
+    ]
+    cfg = _make_config(limits, scoring=["adg", "loss_profit_ratio"])
+    evaluator = Evaluator({}, {}, {}, cfg)
+
+    stats = {
+        "adg_mean": 0.0015,
+        "loss_profit_ratio_mean": 0.6,
+    }
+    scores = evaluator.calc_fitness(stats)
+    assert pytest.approx(scores[0]) == -0.0015  # unaffected objective
+    assert pytest.approx(scores[1]) == (0.6 - 0.5) * 1e6
+
+
+def test_limit_penalty_remains_global_for_non_scoring_metric():
+    limits = [
+        {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.4},
+    ]
+    cfg = _make_config(limits, scoring=["adg", "loss_profit_ratio"])
+    evaluator = Evaluator({}, {}, {}, cfg)
+    stats = {
+        "adg_mean": 0.001,
+        "loss_profit_ratio_mean": 0.3,
+        "drawdown_worst_max": 0.6,
+    }
+    penalty = (0.6 - 0.4) * 1e6
+    scores = evaluator.calc_fitness(stats)
+    assert pytest.approx(scores[0]) == penalty
+    assert pytest.approx(scores[1]) == penalty

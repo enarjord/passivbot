@@ -12,6 +12,7 @@ def expand_limit_checks(
     scoring_weights: Dict[str, float],
     *,
     penalty_weight: float,
+    objective_index_map: Optional[Dict[str, List[int]]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Transform normalized limit entries into executable checks.
@@ -32,15 +33,33 @@ def expand_limit_checks(
                 continue
             mode = "less_than" if weight < 0 else "greater_than"
         if mode in {"greater_than", "less_than"}:
-            check = _build_single_bound_check(entry, metric, mode, penalty_weight)
+            check = _build_single_bound_check(
+                entry,
+                metric,
+                mode,
+                penalty_weight,
+                objective_index_map,
+            )
             if check:
                 checks.append(check)
         elif mode == "outside_range":
-            check = _build_range_check(entry, metric, penalty_weight, mode)
+            check = _build_range_check(
+                entry,
+                metric,
+                penalty_weight,
+                mode,
+                objective_index_map,
+            )
             if check:
                 checks.append(check)
         elif mode == "inside_range":
-            check = _build_range_check(entry, metric, penalty_weight, mode)
+            check = _build_range_check(
+                entry,
+                metric,
+                penalty_weight,
+                mode,
+                objective_index_map,
+            )
             if check:
                 checks.append(check)
         else:
@@ -100,6 +119,7 @@ def _build_single_bound_check(
     metric: str,
     mode: str,
     penalty_weight: float,
+    objective_index_map: Optional[Dict[str, List[int]]],
 ) -> Optional[Dict[str, Any]]:
     bound = entry.get("value")
     numeric_bound = _ensure_float(bound)
@@ -115,6 +135,9 @@ def _build_single_bound_check(
         "bound": numeric_bound,
         "penalty_weight": penalty_weight,
         "stat": stat,
+        "objective_indexes": list(objective_index_map.get(metric, []))
+        if objective_index_map
+        else [],
     }
 
 
@@ -123,6 +146,7 @@ def _build_range_check(
     metric: str,
     penalty_weight: float,
     mode: str,
+    objective_index_map: Optional[Dict[str, List[int]]],
 ) -> Optional[Dict[str, Any]]:
     rng = entry.get("range")
     if not isinstance(rng, (list, tuple)) or len(rng) != 2:
@@ -143,4 +167,7 @@ def _build_range_check(
         "range": (low, high),
         "penalty_weight": penalty_weight,
         "stat": stat,
+        "objective_indexes": list(objective_index_map.get(metric, []))
+        if objective_index_map
+        else [],
     }

@@ -1048,8 +1048,12 @@ def _apply_non_live_adjustments(
 
     original_limits = deepcopy(result["optimize"].get("limits", []))
     normalized_limits = normalize_limit_entries(original_limits)
+    existing_limits = result["optimize"].get("limits", [])
+    limits_snapshot = deepcopy(existing_limits)
+    normalized_limits = normalize_limit_entries(existing_limits)
+    changed_limits = not _limits_structurally_equal(existing_limits, normalized_limits)
     result["optimize"]["limits"] = normalized_limits
-    if normalized_limits != original_limits:
+    if changed_limits:
         _log_config(
             verbose,
             logging.INFO,
@@ -1057,7 +1061,7 @@ def _apply_non_live_adjustments(
             len(normalized_limits),
         )
         if tracker is not None:
-            tracker.update(["optimize", "limits"], original_limits, normalized_limits)
+            tracker.update(["optimize", "limits"], limits_snapshot, normalized_limits)
     for key, value in sorted(result["optimize"]["bounds"].items()):
         if isinstance(value, list):
             if len(value) == 1:
@@ -1400,6 +1404,46 @@ def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
     else:
         raise ValueError(f"Unsupported penalize_if '{penalize_if}' for {metric}.")
     return result
+
+
+def _numeric_equal(a: Any, b: Any, tol: float = 1e-12) -> bool:
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return math.isclose(float(a), float(b), rel_tol=0.0, abs_tol=tol)
+    return a == b
+
+
+def _range_equal(a: Any, b: Any, tol: float = 1e-12) -> bool:
+    if not isinstance(a, (list, tuple)) or not isinstance(b, (list, tuple)):
+        return False
+    if len(a) != len(b):
+        return False
+    return all(_numeric_equal(x, y, tol=tol) for x, y in zip(a, b))
+
+
+def _entries_equivalent(raw_entry: Any, normalized_entry: Dict[str, Any]) -> bool:
+    if not isinstance(raw_entry, dict):
+        return False
+    raw_keys = set(raw_entry.keys())
+    norm_keys = set(normalized_entry.keys())
+    if raw_keys != norm_keys:
+        return False
+    for key, norm_val in normalized_entry.items():
+        raw_val = raw_entry.get(key)
+        if key == "range":
+            if not _range_equal(raw_val, norm_val):
+                return False
+        else:
+            if not _numeric_equal(raw_val, norm_val):
+                return False
+    return True
+
+
+def _limits_structurally_equal(raw_limits: Any, normalized_limits: List[Dict[str, Any]]) -> bool:
+    if not isinstance(raw_limits, list):
+        return False
+    if len(raw_limits) != len(normalized_limits):
+        return False
+    return all(_entries_equivalent(raw, norm) for raw, norm in zip(raw_limits, normalized_limits))
 
 
 def add_missing_keys_recursively(src, dst, parent=None, verbose=True, tracker=None):
