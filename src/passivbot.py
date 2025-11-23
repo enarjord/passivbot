@@ -3592,22 +3592,34 @@ class Passivbot:
                     if prev != current:
                         detail_parts.append(f"{symbol}:c{pre_c}->{c} cr{pre_cr}->{cr} skip{skipped}")
             detail = " | ".join(detail_parts[:6])
-            if total_cancel or total_create or total_skipped:
-                extra = []
-                if untouched_cancel:
-                    extra.append(f"unchanged_cancel={untouched_cancel}")
-                if untouched_create:
-                    extra.append(f"unchanged_create={untouched_create}")
-                logging.info(
-                    "order plan summary | cancel %d->%d | create %d->%d | skipped=%d%s%s",
-                    total_pre_cancel,
-                    total_cancel,
-                    total_pre_create,
-                    total_create,
-                    total_skipped,
-                    f" | {' '.join(extra)}" if extra else "",
-                    f" | details: {detail}" if detail else "",
-                )
+            summary_key = (
+                total_pre_cancel,
+                total_cancel,
+                total_pre_create,
+                total_create,
+                total_skipped,
+                untouched_cancel,
+                untouched_create,
+                detail,
+            )
+            if summary_key != getattr(self, "_last_order_plan_summary", None):
+                self._last_order_plan_summary = summary_key
+                if total_cancel or total_create or total_skipped:
+                    extra = []
+                    if untouched_cancel:
+                        extra.append(f"unchanged_cancel={untouched_cancel}")
+                    if untouched_create:
+                        extra.append(f"unchanged_create={untouched_create}")
+                    logging.info(
+                        "order plan summary | cancel %d->%d | create %d->%d | skipped=%d%s%s",
+                        total_pre_cancel,
+                        total_cancel,
+                        total_pre_create,
+                        total_create,
+                        total_skipped,
+                        f" | {' '.join(extra)}" if extra else "",
+                        f" | details: {detail}" if detail else "",
+                    )
         return to_cancel, to_create
 
     def _trim_extra_unstuck_orders(
