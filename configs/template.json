@@ -291,7 +291,7 @@
             "short_risk_twel_enforcer_threshold": [0.95,0.99],
             "short_risk_we_excess_allowance_pct": [0,3],
             "short_risk_wel_enforcer_threshold": [0.95,0.99],
-            "short_total_wallet_exposure_limit": [1,1],
+            "short_total_wallet_exposure_limit": [0,0],
             "short_unstuck_close_pct": [0.001,0.05],
             "short_unstuck_ema_dist": [-0.1,0.01],
             "short_unstuck_loss_allowance_pct": [0.001,0.05],
