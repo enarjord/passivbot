@@ -1107,17 +1107,30 @@ def apply_fine_tune_bounds(
     fine_tune_params: list[str],
     cli_overridden_bounds: set[str],
 ) -> None:
-    if not fine_tune_params and not cli_overridden_bounds:
-        return
-
     bounds = config.get("optimize", {}).get("bounds", {})
     bot_cfg = config.get("bot", {})
+    # First, normalize any CLI overrides such that single values mean fixed bounds
+    for key in cli_overridden_bounds:
+        if key not in bounds:
+            continue
+        raw_val = bounds[key]
+        if isinstance(raw_val, (list, tuple)):
+            if len(raw_val) == 1:
+                bounds[key] = [float(raw_val[0]), float(raw_val[0])]
+        else:
+            try:
+                val = float(raw_val)
+            except (TypeError, ValueError):
+                continue
+            bounds[key] = [val, val]
+
+    if not fine_tune_params:
+        return
+
     fine_tune_set = set(fine_tune_params)
 
     for key in list(bounds.keys()):
         if key in fine_tune_set:
-            continue
-        if key in cli_overridden_bounds:
             continue
         try:
             pside, param = key.split("_", 1)
