@@ -202,9 +202,11 @@ async def prepare_suite_contexts(
                 mss_slice["__meta__"] = dataset.mss["__meta__"]
 
             shared_hlcvs = {} if hlcvs_spec else {dataset.exchange: hlcvs_slice}
-            shared_btc = {} if (btc_spec or shared_array_manager is not None) else {
-                dataset.exchange: dataset.btc_usd_prices
-            }
+            shared_btc = (
+                {}
+                if (btc_spec or shared_array_manager is not None)
+                else {dataset.exchange: dataset.btc_usd_prices}
+            )
             contexts.append(
                 ScenarioEvalContext(
                     label=scenario.label,
