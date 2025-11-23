@@ -737,7 +737,7 @@ def coin_to_symbol(coin, exchange):
             # map present but coin missing
             warn_key = (ex, coin_sanitized)
             if warn_key not in _COIN_TO_SYMBOL_FALLBACKS:
-                logging.debug(
+                logging.warning(
                     "No mapping for %s (raw=%s) on %s; using fallback %s",
                     coin_sanitized,
                     coin,
@@ -748,7 +748,7 @@ def coin_to_symbol(coin, exchange):
         else:
             warn_key = (ex, coin_sanitized)
             if warn_key not in _COIN_TO_SYMBOL_FALLBACKS:
-                logging.debug(
+                logging.warning(
                     "coin_to_symbol map for %s missing; using fallback for %s (raw=%s) -> %s",
                     ex,
                     coin_sanitized,
@@ -803,7 +803,7 @@ def symbol_to_coin(symbol, verbose=True):
     if verbose:
         warn_key = str(symbol)
         if warn_key not in _SYMBOL_TO_COIN_WARNINGS:
-            logging.debug(msg)
+            logging.warning(msg)
             _SYMBOL_TO_COIN_WARNINGS.add(warn_key)
     return coin
 
