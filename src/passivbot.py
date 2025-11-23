@@ -2022,7 +2022,12 @@ class Passivbot:
             return False
         await self.init_pnls()  # will do nothing if already initiated
         old_ids = {elm["id"] for elm in self.pnls}
-        start_time = self.pnls[-1]["timestamp"] - 1000 if self.pnls else age_limit
+        if not hasattr(self, "_pnls_cursor_ts"):
+            self._pnls_cursor_ts = age_limit
+        if self.pnls:
+            start_time = max(self.pnls[-1]["timestamp"] - 1000, age_limit)
+        else:
+            start_time = max(self._pnls_cursor_ts, age_limit)
         try:
             res = await self.fetch_pnls(start_time=start_time, limit=100)
         except RateLimitExceeded:
@@ -2037,6 +2042,8 @@ class Passivbot:
             }.values(),
             key=lambda x: x["timestamp"],
         )
+        if self.pnls:
+            self._pnls_cursor_ts = max(self.pnls[-1]["timestamp"] - 1000, age_limit)
         if new_pnls:
             new_income = sum([x["pnl"] for x in new_pnls])
             if new_income != 0.0:
@@ -2047,6 +2054,9 @@ class Passivbot:
                 json.dump(self.pnls, open(self.pnls_cache_filepath, "w"))
             except Exception as e:
                 logging.error(f"error dumping pnls to {self.pnls_cache_filepath} {e}")
+        elif not self.pnls:
+            # no fills yet; avoid re-scanning entire lookback on the next cycle
+            self._pnls_cursor_ts = max(self.get_exchange_time() - 1000, age_limit)
         return True
 
     async def init_fill_events(self):
