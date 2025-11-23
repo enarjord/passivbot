@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import math
 import os
 import re
 from copy import deepcopy
@@ -974,8 +975,8 @@ def _sync_with_template(
         tracker=tracker,
     )
     remove_unused_keys_recursively(
-        template.get("optimize", {}).get("limits", {}),
-        result["optimize"].setdefault("limits", {}),
+        template.get("optimize", {}).get("limits", []),
+        result["optimize"].setdefault("limits", []),
         verbose=verbose,
         tracker=tracker,
     )
@@ -1045,11 +1046,18 @@ def _apply_non_live_adjustments(
             seen.add(canon)
     result["optimize"]["scoring"] = canonical_scoring
 
-    limits_dict = parse_limits_string(result["optimize"].get("limits", {}))
-    canonical_limits = {}
-    for key, value in limits_dict.items():
-        canonical_limits[canonicalize_limit_name(key)] = value
-    result["optimize"]["limits"] = canonical_limits
+    original_limits = deepcopy(result["optimize"].get("limits", []))
+    normalized_limits = normalize_limit_entries(original_limits)
+    result["optimize"]["limits"] = normalized_limits
+    if normalized_limits != original_limits:
+        _log_config(
+            verbose,
+            logging.INFO,
+            "normalized optimize.limits to canonical schema (%d entries)",
+            len(normalized_limits),
+        )
+        if tracker is not None:
+            tracker.update(["optimize", "limits"], original_limits, normalized_limits)
     for key, value in sorted(result["optimize"]["bounds"].items()):
         if isinstance(value, list):
             if len(value) == 1:
@@ -1199,6 +1207,198 @@ def parse_limits_string(limits_str: Union[str, dict]) -> dict:
             result[k] = float(v)
         except ValueError:
             raise ValueError(f"Invalid limits format for token: {token}")
+    return result
+
+
+def normalize_limit_entries(raw_limits: Union[str, List[dict], Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Normalizes optimize.limits into a canonical list of limit clauses.
+    Accepts legacy dicts/CLI strings as well as the new list format.
+    """
+    if raw_limits is None:
+        return []
+    parsed = raw_limits
+    if isinstance(raw_limits, str):
+        stripped = raw_limits.strip()
+        if not stripped:
+            return []
+        if stripped[0] in "[{":
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = parse_limits_string(stripped)
+        else:
+            parsed = parse_limits_string(stripped)
+    elif isinstance(raw_limits, dict):
+        parsed = deepcopy(raw_limits)
+    elif isinstance(raw_limits, list):
+        parsed = deepcopy(raw_limits)
+    else:
+        raise ValueError(f"Unsupported limits format: {type(raw_limits).__name__}")
+
+    if isinstance(parsed, dict):
+        entries: List[Dict[str, Any]] = _legacy_limits_dict_to_entries(parsed)
+    elif isinstance(parsed, list):
+        entries = parsed
+    else:
+        raise ValueError(f"Unsupported parsed limits payload: {type(parsed).__name__}")
+
+    normalized: List[Dict[str, Any]] = []
+    for entry in entries:
+        normalized.append(_normalize_limit_entry(entry))
+    return normalized
+
+
+def _legacy_limits_dict_to_entries(limits_dict: Dict[str, Any]) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    for key in limits_dict:
+        value = limits_dict[key]
+        canonical_key = canonicalize_limit_name(key)
+        metric: str
+        penalty: str
+        if canonical_key.startswith("penalize_if_greater_than_"):
+            metric = canonical_key[len("penalize_if_greater_than_") :]
+            penalty = "greater_than"
+        elif canonical_key.startswith("penalize_if_lower_than_"):
+            metric = canonical_key[len("penalize_if_lower_than_") :]
+            penalty = "less_than"
+        else:
+            metric = canonical_key
+            penalty = "auto"
+        numeric_value = _ensure_float(value)
+        if numeric_value is None:
+            raise ValueError(f"Limit '{key}' must have a numeric value.")
+        entries.append({"metric": metric, "penalize_if": penalty, "value": numeric_value})
+    return entries
+
+
+def _normalize_penalize_if(value: Any) -> str:
+    if value is None:
+        raise ValueError("limits entries must include 'penalize_if'.")
+    token = str(value).strip().lower()
+    mapping = {
+        ">": "greater_than",
+        "gt": "greater_than",
+        "greater": "greater_than",
+        "greater_than": "greater_than",
+        "above": "greater_than",
+        "<": "less_than",
+        "lt": "less_than",
+        "lower": "less_than",
+        "less": "less_than",
+        "less_than": "less_than",
+        "below": "less_than",
+        "outside": "outside_range",
+        "outside_range": "outside_range",
+        "out_of_range": "outside_range",
+        "inside": "inside_range",
+        "inside_range": "inside_range",
+        "auto": "auto",
+    }
+    normalized = mapping.get(token)
+    if not normalized:
+        raise ValueError(f"Unsupported penalize_if value '{value}'.")
+    return normalized
+
+
+def _ensure_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _restore_numeric_precision(value: Optional[float]) -> Optional[Union[int, float]]:
+    if value is None:
+        return None
+    if isinstance(value, float):
+        if math.isfinite(value):
+            rounded = round(value)
+            if abs(value - rounded) < 1e-12:
+                return int(rounded)
+    return value
+
+
+def _extract_range(payload: Any) -> Optional[Tuple[float, float]]:
+    if payload is None:
+        return None
+    if isinstance(payload, dict):
+        low = payload.get("low")
+        high = payload.get("high")
+        if low is None:
+            low = payload.get("min")
+        if low is None:
+            low = payload.get("start")
+        if high is None:
+            high = payload.get("max")
+        if high is None:
+            high = payload.get("end")
+        if low is None or high is None:
+            return None
+        low_f = _ensure_float(low)
+        high_f = _ensure_float(high)
+        if low_f is None or high_f is None:
+            return None
+        return (min(low_f, high_f), max(low_f, high_f))
+    if isinstance(payload, (list, tuple)) and len(payload) == 2:
+        low_f = _ensure_float(payload[0])
+        high_f = _ensure_float(payload[1])
+        if low_f is None or high_f is None:
+            return None
+        return (min(low_f, high_f), max(low_f, high_f))
+    return None
+
+
+def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
+    if not isinstance(entry, dict):
+        raise ValueError(f"Each limit entry must be a dict, got {type(entry).__name__}.")
+    payload = deepcopy(entry)
+    metric = payload.get("metric") or payload.get("name")
+    if not metric:
+        raise ValueError("Limit entries must include a 'metric' field.")
+    metric = canonicalize_metric_name(str(metric))
+    penalize_if = _normalize_penalize_if(payload.get("penalize_if"))
+    stat = payload.get("stat") or payload.get("field")
+    normalized_stat: Optional[str] = None
+    if stat is not None:
+        stat = str(stat).lower()
+        if stat not in {"min", "max", "mean", "std"}:
+            raise ValueError(f"Unsupported stat '{stat}' for limit on {metric}.")
+        normalized_stat = stat
+    result: Dict[str, Any] = {"metric": metric, "penalize_if": penalize_if}
+    if normalized_stat:
+        result["stat"] = normalized_stat
+    if penalize_if in {"greater_than", "less_than", "auto"}:
+        bound = payload.get("value")
+        if bound is None:
+            bound = payload.get("threshold")
+        if bound is None:
+            bound = payload.get("bound")
+        numeric_bound = _ensure_float(bound)
+        if numeric_bound is None:
+            raise ValueError(f"Limit for {metric} requires a numeric 'value'.")
+        result["value"] = _restore_numeric_precision(numeric_bound)
+    elif penalize_if in {"outside_range", "inside_range"}:
+        range_payload = payload.get("range")
+        if range_payload is None:
+            range_payload = payload.get("values")
+        if range_payload is None:
+            range_payload = payload.get("bounds")
+        if range_payload is None and isinstance(payload.get("value"), (list, tuple)):
+            range_payload = payload.get("value")
+        bounds = _extract_range(range_payload)
+        if bounds is None:
+            raise ValueError(f"Limit for {metric} requires a two-value 'range'.")
+        result["range"] = [
+            _restore_numeric_precision(bounds[0]),
+            _restore_numeric_precision(bounds[1]),
+        ]
+    else:
+        raise ValueError(f"Unsupported penalize_if '{penalize_if}' for {metric}.")
     return result
 
 

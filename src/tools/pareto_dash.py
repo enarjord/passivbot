@@ -18,6 +18,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.append(str(SRC_ROOT))
 
 from opt_utils import load_results
+from config_utils import normalize_limit_entries
 
 
 def discover_runs(root: str) -> List[str]:
@@ -302,21 +303,32 @@ def _limits_to_exprs(limits_cfg: Any) -> List[str]:
     if isinstance(limits_cfg, str):
         exprs.append(limits_cfg)
         return exprs
-    if not isinstance(limits_cfg, dict):
+    try:
+        normalized = normalize_limit_entries(limits_cfg)
+    except Exception:
         return exprs
-    for key, val in limits_cfg.items():
-        try:
-            num = float(val)
-        except (TypeError, ValueError):
+    for entry in normalized:
+        metric = entry.get("metric")
+        mode = entry.get("penalize_if")
+        if not metric or not mode:
             continue
-        if key.startswith("penalize_if_greater_than_"):
-            metric = key[len("penalize_if_greater_than_") :]
-            exprs.append(f"{metric}<={num}")
-        elif key.startswith("penalize_if_lower_than_"):
-            metric = key[len("penalize_if_lower_than_") :]
-            exprs.append(f"{metric}>={num}")
-        else:
-            exprs.append(f"{key}>={num}")
+        if mode == "greater_than":
+            num = _ensure_float(entry.get("value"))
+            if num is not None:
+                exprs.append(f"{metric}<={num}")
+        elif mode == "less_than":
+            num = _ensure_float(entry.get("value"))
+            if num is not None:
+                exprs.append(f"{metric}>={num}")
+        elif mode == "outside_range":
+            rng = entry.get("range")
+            if isinstance(rng, (list, tuple)) and len(rng) == 2:
+                low = _ensure_float(rng[0])
+                high = _ensure_float(rng[1])
+                if low is not None and high is not None:
+                    exprs.append(f"{metric}>={low}")
+                    exprs.append(f"{metric}<={high}")
+        # inside_range cannot be represented as a simple AND expression; skip.
     return exprs
 
 

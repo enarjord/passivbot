@@ -7,7 +7,7 @@ This document provides an overview of the parameters found in `config/template.j
 - **base_dir**: Location to save backtest results.
 - **compress_cache**: Set to `true` to save disk space. Set to `false` for faster loading.
 - **end_date**: End date of backtest, e.g., `2024-06-23`. Set to `'now'` to use today's date as the end date.
-- **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. Options: `[binance, bybit, gateio, bitget]`.
+- **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. The template ships with `['binance', 'bybit']`; additional exchanges can be wired up manually if you maintain your own archives.
 - **combine_ohlcvs**: When `true`, build a single “combined” dataset by taking the best-quality feed for each coin across all configured exchanges. When `false`, the backtester/optimizer runs each exchange independently.
 - **coin_sources**: Optional mapping of `coin -> exchange` used to override the automatic selection performed when `combine_ohlcvs` is `true`. Scenarios may add more overrides; conflicting assignments raise an error.
 - **start_date**: Start date of backtest.
@@ -89,7 +89,7 @@ Passivbot can be configured to create a grid of entry orders, with prices and qu
   - Short initial entry/long unstuck close prices are upper EMA band plus offset.
   - See `ema_span_0`/`ema_span_1`.
 - **entry_initial_qty_pct**:
-  - `initial_entry_cost = balance * wallet_exposure_limit * initial_qty_pct`
+  - `initial_entry_cost = balance * wallet_exposure_limit * entry_initial_qty_pct`
 - **entry_trailing_double_down_factor**:
   - Multiplier controlling how aggressively trailing re-entries ramp up. As with the grid equivalent, any positive value increases the size of successive fills (higher values grow them faster).
 - **entry_trailing_threshold_pct**, **entry_trailing_retracement_pct**:
@@ -192,7 +192,7 @@ Coins selected for trading are filtered by volume and log range. First, filter c
       ```
       [
         close_grid_markup_end, close_grid_markup_start, close_grid_qty_pct, close_trailing_grid_ratio, close_trailing_qty_pct,
-        close_trailing_retracement_pct, close_trailing_threshold_pct, ema_span_0, ema_span_1, enforce_exposure_limit,
+    close_trailing_retracement_pct, close_trailing_threshold_pct, ema_span_0, ema_span_1,
         entry_grid_double_down_factor, entry_grid_spacing_pct, entry_grid_spacing_we_weight,
         entry_grid_spacing_volatility_weight, entry_volatility_ema_span_hours, entry_initial_ema_dist,
         entry_initial_qty_pct, entry_trailing_double_down_factor, entry_trailing_grid_ratio, entry_trailing_retracement_pct,
@@ -232,7 +232,7 @@ Coins selected for trading are filtered by volume and log range. First, filter c
 - **execution_delay_seconds**: Wait `x` seconds after executing to exchange.
 - **max_memory_candles_per_symbol**: Maximum number of 1m candles retained in RAM per symbol. Older entries are trimmed once this cap is exceeded. Default (`20_000`) balances memory footprint with trailing-history visibility.
 - **max_disk_candles_per_symbol_per_tf**: Maximum number of candles persisted on disk per symbol and timeframe. Oldest shards are pruned once the limit is hit (default `2_000_000`).
-- **filter_by_min_effective_cost**: If `true`, disallows coins where `balance * WE_limit * initial_qty_pct < min_effective_cost`.
+- **filter_by_min_effective_cost**: If `true`, disallows coins where `balance * WE_limit * entry_initial_qty_pct < min_effective_cost`.
   - Example: If the exchange's effective minimum cost for a coin is `$5`, but the bot wants to make an order of `$2`, disallow that coin.
 - **forced_mode_long**, **forced_mode_short**: Force all coins long/short to a given mode.
   - Choices: `[m (manual), gs (graceful_stop), p (panic), t (take_profit_only)]`.
@@ -303,26 +303,33 @@ The optimizer automatically uploads all scenario slices into shared memory so th
 
 The optimizer penalizes backtests whose metric values exceed or fall short of specified thresholds. Penalties are added to the fitness score to discourage undesirable configurations but do not disqualify the config.
 
-Any metric listed above (and its `btc_` prefixed counterpart when `backtest.use_btc_collateral=True`) can be used with `penalize_if_greater_than_*` / `penalize_if_lower_than_*`. Metrics present only in `analysis.json` but not in the scoring list are not currently available as limits.
+Any metric listed above (and its `btc_` prefixed counterpart when `backtest.use_btc_collateral=True`) can be used when defining limits. Each limit entry is a dictionary with:
+
+- `metric`: canonical metric name (`drawdown_worst_btc`, `loss_profit_ratio`, `peak_recovery_hours_pnl`, etc.).
+- `penalize_if`: one of `<`, `>`, `outside_range`, or `inside_range` (aliases like `less_than`, `greater_than`, `auto`, etc. are also accepted). Use `outside_range` to keep a metric within `[low, high]`, and `inside_range` to forbid a specific band.
+- `value`: numeric threshold for `<`/`>` modes.
+- `range`: two-value list `[low, high]` for the range modes.
+- Optional `stat`: when you want to compare against a specific statistic (`min`, `max`, `mean`, `std`). Defaults mirror the legacy behaviour (`>` checks use `_max`, `<` checks use `_min`, range checks use `_mean`).
 
 #### Format
 
-Limits can be set in the config file under `optimize.limits` or passed via CLI using `--limits`.
-
-##### Config Example
+Define limits in `optimize.limits` as a list:
 
 ```json
-"limits": {
-  "penalize_if_greater_than_drawdown_worst": 0.3,
-  "penalize_if_lower_than_adg": 0.001
-}
+"limits": [
+  {"metric": "drawdown_worst_btc", "penalize_if": ">", "value": 0.3},
+  {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.05, 0.7]},
+  {"metric": "adg_btc", "penalize_if": "<", "value": 0.0005, "stat": "mean"}
+]
 ```
 
-##### CLI arg Example:
+For quick CLI overrides you can pass the JSON/HJSON string directly:
 
 ```
-python3 src/optimize.py --limits "--penalize_if_lower_than_omega_ratio_btc 3.0 --penalize_if_greater_than_loss_profit_ratio_usd 0.5"
+python3 src/optimize.py --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
 ```
+
+The legacy syntax (`--penalize_if_greater_than_*`) is still accepted for backwards compatibility; it is normalized into the list form at runtime.
 
 ## Configuration Internals
 

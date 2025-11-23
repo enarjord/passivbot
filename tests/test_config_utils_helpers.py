@@ -123,10 +123,19 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     assert config["live"]["approved_coins"]["long"] == ["btc"]
     assert config["optimize"]["scoring"] == ["adg_btc", "adg_usd"]
     limits = config["optimize"]["limits"]
-    assert isinstance(limits, dict)
-    assert "lower_bound_drawdown_worst" not in limits
-    assert limits["penalize_if_greater_than_drawdown_worst_usd"] == pytest.approx(0.3)
-    assert limits["penalize_if_lower_than_gain_btc"] == pytest.approx(0.1)
+    assert isinstance(limits, list)
+    gain_limit = next(
+        (entry for entry in limits if entry["metric"] == "gain_btc"), None
+    )
+    drawdown_limit = next(
+        (entry for entry in limits if entry["metric"] == "drawdown_worst_usd"), None
+    )
+    assert drawdown_limit is not None
+    assert drawdown_limit["penalize_if"] == "greater_than"
+    assert drawdown_limit["value"] == pytest.approx(0.3)
+    assert gain_limit is not None
+    assert gain_limit["penalize_if"] == "less_than"
+    assert gain_limit["value"] == pytest.approx(0.1)
     assert config["optimize"]["bounds"]["long_entry_grid_spacing_pct"] == [0.05, 0.1]
     assert config["live"]["approved_coins"]["short"] == ["btc", "eth"]
 
@@ -155,6 +164,31 @@ def test_migrate_btc_collateral_settings_converts_bool():
     _migrate_btc_collateral_settings(config, verbose=False)
     assert config["backtest"]["btc_collateral_cap"] == pytest.approx(0.0)
     assert config["backtest"]["btc_collateral_ltv_cap"] is None
+
+
+def test_normalize_limit_entries_supports_new_schema():
+    raw = [
+        {"metric": "adg_btc", "penalize_if": "<", "value": 0.001, "stat": "mean"},
+        {"metric": "loss_profit_ratio", "penalize_if": ">", "value": 0.8},
+        {"metric": "omega_ratio", "penalize_if": "outside_range", "range": [1.5, 3.0]},
+        {"metric": "sharpe_ratio", "penalize_if": "inside_range", "range": [0.5, 1.0]},
+    ]
+    normalized = config_utils.normalize_limit_entries(raw)
+    assert len(normalized) == 4
+    assert normalized[0]["metric"] == "adg_btc"
+    assert normalized[0]["stat"] == "mean"
+    assert normalized[1]["metric"] == "loss_profit_ratio"
+    assert normalized[2]["range"] == [1.5, 3.0]
+    assert normalized[3]["penalize_if"] == "inside_range"
+
+
+def test_normalize_limit_entries_preserves_integers():
+    raw = {"penalize_if_greater_than_position_held_hours_max": 2016}
+    normalized = config_utils.normalize_limit_entries(raw)
+    assert len(normalized) == 1
+    assert normalized[0]["metric"] == "position_held_hours_max"
+    assert isinstance(normalized[0]["value"], int)
+    assert normalized[0]["value"] == 2016
 
 
 def test_apply_backward_compatibility_renames_moves_filter_keys():

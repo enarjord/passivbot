@@ -48,8 +48,15 @@ def _collect_metric(entry: Dict, metric: str) -> float | None:
     if metric in scoring:
         return scoring[metric].get("value")
     limits = entry.get("limits", {})
-    if metric in limits:
-        return limits[metric].get("value")
+    if isinstance(limits, dict):
+        if metric in limits:
+            return limits[metric].get("value")
+    elif isinstance(limits, list):
+        for item in limits:
+            if not isinstance(item, dict):
+                continue
+            if item.get("metric") == metric or item.get("metric_key") == metric:
+                return item.get("value")
     # support analysis_combined names, if stored
     combined = entry.get("analysis_combined", {})
     if combined:

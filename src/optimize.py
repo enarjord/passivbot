@@ -66,6 +66,7 @@ import math
 import fcntl
 from optimizer_overrides import optimizer_overrides
 from opt_utils import make_json_serializable, generate_incremental_diff, round_floats
+from limit_utils import expand_limit_checks, compute_limit_violation
 from pareto_store import ParetoStore
 import msgpack
 from typing import Sequence, Tuple, List, Dict, Any
@@ -804,48 +805,18 @@ class Evaluator:
         return tuple(objectives), metrics_payload
 
     def build_limit_checks(self):
-        self.limit_checks = []
-        limits = self.config["optimize"].get("limits", {})
-        scoring_weights = self.scoring_weights
-
-        for i, full_key in enumerate(sorted(limits)):
-            bound = limits[full_key]
-
-            if full_key.startswith("penalize_if_greater_than_"):
-                metric = full_key[len("penalize_if_greater_than_") :]
-                penalize_if = "greater"
-            elif full_key.startswith("penalize_if_lower_than_"):
-                metric = full_key[len("penalize_if_lower_than_") :]
-                penalize_if = "lower"
-            else:
-                # Fallback for scoring_weight-based logic
-                metric = full_key
-                weight = scoring_weights.get(metric)
-                if weight is None:
-                    continue
-                penalize_if = "lower" if weight < 0 else "greater"
-            suffix = "min" if penalize_if == "lower" else "max"
-
-            self.limit_checks.append(
-                {
-                    "metric_key": f"{metric}_{suffix}",
-                    "penalize_if": penalize_if,
-                    "bound": bound,
-                    "penalty_weight": 1e6,
-                }
-            )
+        limits = self.config["optimize"].get("limits", [])
+        self.limit_checks = expand_limit_checks(
+            limits,
+            self.scoring_weights,
+            penalty_weight=1e6,
+        )
 
     def calc_fitness(self, analyses_combined):
         modifier = 0.0
         for check in self.limit_checks:
             val = analyses_combined.get(check["metric_key"])
-            if val is None:
-                continue
-
-            if check["penalize_if"] == "greater" and val > check["bound"]:
-                modifier += (val - check["bound"]) * (check["penalty_weight"])
-            elif check["penalize_if"] == "lower" and val < check["bound"]:
-                modifier += (check["bound"] - val) * (check["penalty_weight"])
+            modifier += compute_limit_violation(check, val)
 
         scores = []
         for sk in self.config["optimize"]["scoring"]:

@@ -129,30 +129,36 @@ isn't needed.
 
 ## Optimization Limits
 
-To enforce constraints during optimization, use the `optimize.limits` key. Each limit defines a threshold beyond which the configuration will be penalized. Penalty grows with severity of violation. CLI and config file formats are supported.
+To enforce constraints during optimization, populate `optimize.limits` with a list of limit
+objects. Each object describes when to penalize a result:
 
-### CLI Format:
+- `metric`: canonical metric name (e.g. `drawdown_worst_btc`, `loss_profit_ratio`, `adg`).
+- `penalize_if`: comparison operator. Use `<` / `>` (or `less_than` / `greater_than`), `outside_range`
+  to keep a metric within `[low, high]`, or `inside_range` to forbid a band.
+- `value`: numeric threshold for `<`/`>` limits.
+- `range`: `[low, high]` for the range-based operators.
+- Optional `stat`: override the statistic to compare against (`min`, `max`, `mean`, `std`).
+  Defaults mirror the legacy behaviour (`>` checks use `_max`, `<` checks use `_min`, range checks use `_mean`).
+
 Example:
-```bash
---limits "--penalize_if_greater_than_drawdown_worst 0.3 --penalize_if_lower_than_adg 0.001"
-```
 
-This will:
-- Penalize any config where `drawdown_worst > 0.3`
-- Penalize any config where `adg < 0.001`
-
-### Config Format:
 ```json
-"limits": {
-  "penalize_if_greater_than_drawdown_worst": 0.3,
-  "penalize_if_lower_than_adg": 0.001
-}
+"limits": [
+  {"metric": "drawdown_worst_btc", "penalize_if": ">", "value": 0.3},
+  {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.05, 0.7]},
+  {"metric": "adg", "penalize_if": "<", "value": 0.0008, "stat": "mean"}
+]
 ```
 
-### Notes:
-- If the limit key is just `metric_name`, the direction will be inferred from its scoring weight.
-- Metric names may be given with explicit suffixes (e.g., `adg_usd` for USD collateralized backtests or `adg_btc` for BTC-denominated results). When no suffix is provided, the USD form is assumed.
-- Penalties are applied to the objective score; they do not disqualify a config.
+CLI overrides accept the same JSON/HJSON payload:
+
+```bash
+python3 src/optimize.py --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]'
+```
+
+For quick-and-dirty tweaks, the legacy format (`--penalize_if_greater_than_drawdown_worst 0.3`) is still recognized and converted to the new schema at runtime.
+
+Penalties are added to every objective as a positive modifier; they do not disqualify a config but will push it far from the Pareto front when violated. Metric names may include `_usd` / `_btc` suffixes to lock a denomination; when omitted, USD is assumed.
 
 ## Performance Metrics
 
@@ -210,7 +216,7 @@ over all exchanges before scoring.
 | `position_held_hours_{mean,median,max}` | Holding-time statistics in hours |
 | `position_unchanged_hours_max` | Longest span without modifying an existing position |
 | `volume_pct_per_day_avg`, `volume_pct_per_day_avg_w` | Average traded volume as % of account per day, with recency bias |
-| `peak_recovery_hours_equity_usd`, `_btc` | Longest time (in hours) the equity curve stayed below its prior peak before recovering, per denomination. Available for scoring and limit checks (e.g. `penalize_if_greater_than_peak_recovery_hours_equity_usd`). |
+| `peak_recovery_hours_equity_usd`, `_btc` | Longest time (in hours) the equity curve stayed below its prior peak before recovering, per denomination. Available for scoring and limit checks (e.g. `{"metric": "peak_recovery_hours_equity_usd", "penalize_if": ">", "value": 168}`). |
 | `peak_recovery_hours_pnl` | Longest recovery time (hours) of cumulative realised PnL (USD). Useful for monitoring realised drawdown recovery latency. |
 
 ### Equity Curve Quality

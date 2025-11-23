@@ -20,7 +20,6 @@ Standalone runs write metrics and plots to `backtests/{exchange}/timestamp/`. Su
 ## Backtest CLI args
 
 - `-dp` to disable individual coin plotting.
-- `-co` to combine the ohlcv data from multiple exchanges into a single array. Otherwise, backtest for each exchange individually. (The default is whatever is set in `backtest.combine_ohlcvs`.)
 - `--suite` to run every scenario defined under `backtest.suite`.
 - `--suite-config path/to/overrides.json` to merge an additional suite definition onto the base config. Useful when you want to keep suite definitions outside the main config file.
 
@@ -59,15 +58,15 @@ See `configs/examples/suite_example.json` for a minimal multi-scenario setup.
 
 ## Coin Sources
 
-When `backtest.combine_ohlcvs` is `true`, the downloader automatically selects the “best” exchange per coin (based on coverage, gaps, and relative volume). The optional `backtest.coin_sources` mapping lets you override those choices:
+When `backtest.combine_ohlcvs` is `true`, the downloader automatically selects the “best” exchange per coin (based on coverage, gaps, and relative volume). To override that choice, add a `coin_sources` map:
 
 ```json
 "backtest": {
   "coin_sources": {
-    "BTC/USDT:USDT": "binanceusdm",
+    "BTC/USDT:USDT": "binance",
     "SOL/USDT:USDT": "bybit"
   }
 }
 ```
 
-Suite scenarios can add more overrides under `coin_sources`; conflicts between scenarios are rejected so every run uses a single consistent exchange assignment.
+Suite scenarios can add more overrides under `coin_sources`; conflicts between scenarios are rejected so every run uses a single consistent exchange assignment. Passivbot currently ships Binance and Bybit archives out of the box. Support for other exchanges exists in the codebase but those feeds may be stale unless you fetch them yourself.
