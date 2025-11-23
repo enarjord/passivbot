@@ -1,8 +1,10 @@
 import json
 import re
 import os
+from typing import Callable, Optional, Dict
 
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 import pandas as pd
 import numpy as np
 import time
@@ -12,6 +14,40 @@ from config_utils import dump_config
 from utils import make_get_filepath
 from pure_funcs import denumpyize, ts_to_date
 import passivbot_rust as pbr
+
+
+plt.rcParams["figure.figsize"] = [21, 13]
+
+try:  # pragma: no cover
+    from IPython.display import display as _ipy_display
+except Exception:  # pragma: no cover
+    _ipy_display = None
+
+
+def plot_two_series_shared_x(
+    df: pd.DataFrame, upper_column: str, lower_column: str, *, title: str = ""
+):
+    fig, axes = plt.subplots(2, 1, sharex=True, figsize=(12, 6))
+    df[upper_column].plot(ax=axes[0])
+    axes[0].set_ylabel(upper_column)
+    df[lower_column].plot(ax=axes[1])
+    axes[1].set_ylabel(lower_column)
+    if title:
+        fig.suptitle(title)
+    fig.tight_layout()
+    return fig
+
+
+def plot_two_series(series1: pd.Series, series2: pd.Series, *, title: str = ""):
+    fig, axes = plt.subplots(2, 1, sharex=True, figsize=(12, 6))
+    series1.plot(ax=axes[0])
+    axes[0].set_ylabel(series1.name)
+    series2.plot(ax=axes[1])
+    axes[1].set_ylabel(series2.name)
+    if title:
+        fig.suptitle(title)
+    fig.tight_layout()
+    return fig
 
 
 def make_table(result_):
@@ -160,7 +196,7 @@ def dump_plots(
     disable_plotting: bool = False,
 ):
     init(autoreset=True)
-    plt.rcParams["figure.figsize"] = [29, 18]
+    plt.rcParams["figure.figsize"] = [21, 13]
     try:
         pd.set_option("display.precision", 10)
     except Exception as e:
@@ -272,61 +308,115 @@ def dump_plots(
 
 def plot_fills(df, fdf_, side: int = 0, plot_whole_df: bool = False, title=""):
     if fdf_.empty:
-        return
-    plt.clf()
-    fdf = fdf_.set_index("timestamp") if fdf_.index.name != "timestamp" else fdf_
-    dfc = df  # .iloc[::max(1, int(len(df) * 0.00001))]
-    if dfc.index.name != "timestamp":
-        dfc = dfc.set_index("timestamp")
-    if not plot_whole_df:
-        dfc = dfc[(dfc.index > fdf.index[0]) & (dfc.index < fdf.index[-1])]
-        dfc = dfc.loc[fdf.index[0] : fdf.index[-1]]
-    dfc.price.plot(style="y-", title=title, xlabel="Time", ylabel="Price + Fills")
-    if "ema_band_lower" in dfc.columns and "ema_band_upper" in dfc.columns:
-        dfc.ema_band_lower.plot(style="b--")
-        dfc.ema_band_upper.plot(style="r--")
-    if side >= 0:
-        longs = fdf[fdf.type.str.contains("long")]
+        return None
 
-        longs[longs.type.str.contains("rentry") | longs.type.str.contains("ientry")].price.plot(
-            style="bo"
+    if df.index.name != "timestamp":
+        dfc = df.set_index("timestamp")
+    else:
+        dfc = df
+
+    if fdf_.index.name != "timestamp":
+        fdf = fdf_.set_index("timestamp")
+    else:
+        fdf = fdf_
+
+    if not plot_whole_df:
+        start_ts = fdf.index[0]
+        end_ts = fdf.index[-1]
+        dfc = dfc.loc[start_ts:end_ts]
+
+    fig, ax = plt.subplots()
+    ax.plot(dfc.index, dfc["price"].values, "y-", label="price")
+    if "ema_band_lower" in dfc.columns and "ema_band_upper" in dfc.columns:
+        ax.plot(dfc.index, dfc["ema_band_lower"].values, "b--", label="ema_band_lower")
+        ax.plot(dfc.index, dfc["ema_band_upper"].values, "r--", label="ema_band_upper")
+
+    type_series = fdf["type"].astype(str)
+
+    def _mask(series, substring):
+        return series.str.contains(substring, regex=False)
+
+    if side >= 0:
+        longs = fdf[_mask(type_series, "long")]
+        long_types = longs["type"].astype(str)
+
+        mask_entry = _mask(long_types, "rentry") | _mask(long_types, "ientry")
+        ax.scatter(longs.index[mask_entry], longs.loc[mask_entry, "price"], c="b", marker="o")
+
+        mask_secondary = _mask(long_types, "secondary")
+        ax.scatter(longs.index[mask_secondary], longs.loc[mask_secondary, "price"], c="g", marker="o")
+
+        mask_nclose = long_types == "long_nclose"
+        ax.scatter(longs.index[mask_nclose], longs.loc[mask_nclose, "price"], c="r", marker="o")
+
+        mask_unstuck_entry = _mask(long_types, "unstuck_entry") | (long_types == "clock_entry_long")
+        ax.scatter(
+            longs.index[mask_unstuck_entry], longs.loc[mask_unstuck_entry, "price"], c="b", marker="x"
         )
-        longs[longs.type.str.contains("secondary")].price.plot(style="go")
-        longs[longs.type == "long_nclose"].price.plot(style="ro")
-        longs[
-            (longs.type.str.contains("unstuck_entry")) | (longs.type == "clock_entry_long")
-        ].price.plot(style="bx")
-        longs[
-            (longs.type.str.contains("unstuck_close")) | (longs.type == "clock_close_long")
-        ].price.plot(style="rx")
+
+        mask_unstuck_close = _mask(long_types, "unstuck_close") | (long_types == "clock_close_long")
+        ax.scatter(
+            longs.index[mask_unstuck_close], longs.loc[mask_unstuck_close, "price"], c="r", marker="x"
+        )
 
         lppu = longs[(longs.pprice != longs.pprice.shift(1)) & (longs.pprice != 0.0)]
-        for i in range(len(lppu) - 1):
-            plt.plot(
-                [lppu.index[i], lppu.index[i + 1]], [lppu.pprice.iloc[i], lppu.pprice.iloc[i]], "b--"
-            )
+        if len(lppu) > 1:
+            for idx_start, idx_end, price_val in zip(
+                lppu.index[:-1],
+                lppu.index[1:],
+                lppu.pprice.iloc[:-1],
+            ):
+                ax.plot([idx_start, idx_end], [price_val, price_val], "b--")
     if side <= 0:
-        shorts = fdf[fdf.type.str.contains("short")]
+        shorts = fdf[_mask(type_series, "short")]
+        short_types = shorts["type"].astype(str)
 
-        shorts[shorts.type.str.contains("rentry") | shorts.type.str.contains("ientry")].price.plot(
-            style="ro"
+        mask_entry = _mask(short_types, "rentry") | _mask(short_types, "ientry")
+        ax.scatter(shorts.index[mask_entry], shorts.loc[mask_entry, "price"], c="r", marker="o")
+
+        mask_secondary = _mask(short_types, "secondary")
+        ax.scatter(
+            shorts.index[mask_secondary], shorts.loc[mask_secondary, "price"], c="g", marker="o"
         )
-        shorts[shorts.type.str.contains("secondary")].price.plot(style="go")
-        shorts[shorts.type == "short_nclose"].price.plot(style="bo")
-        shorts[
-            (shorts.type.str.contains("unstuck_entry")) | (shorts.type == "clock_entry_short")
-        ].price.plot(style="rx")
-        shorts[
-            (shorts.type.str.contains("unstuck_close")) | (shorts.type == "clock_close_short")
-        ].price.plot(style="bx")
+
+        mask_nclose = short_types == "short_nclose"
+        ax.scatter(shorts.index[mask_nclose], shorts.loc[mask_nclose, "price"], c="b", marker="o")
+
+        mask_unstuck_entry = _mask(short_types, "unstuck_entry") | (
+            short_types == "clock_entry_short"
+        )
+        ax.scatter(
+            shorts.index[mask_unstuck_entry],
+            shorts.loc[mask_unstuck_entry, "price"],
+            c="r",
+            marker="x",
+        )
+
+        mask_unstuck_close = _mask(short_types, "unstuck_close") | (
+            short_types == "clock_close_short"
+        )
+        ax.scatter(
+            shorts.index[mask_unstuck_close],
+            shorts.loc[mask_unstuck_close, "price"],
+            c="b",
+            marker="x",
+        )
 
         sppu = shorts[(shorts.pprice != shorts.pprice.shift(1)) & (shorts.pprice != 0.0)]
-        for i in range(len(sppu) - 1):
-            plt.plot(
-                [sppu.index[i], sppu.index[i + 1]], [sppu.pprice.iloc[i], sppu.pprice.iloc[i]], "r--"
-            )
+        if len(sppu) > 1:
+            for idx_start, idx_end, price_val in zip(
+                sppu.index[:-1],
+                sppu.index[1:],
+                sppu.pprice.iloc[:-1],
+            ):
+                ax.plot([idx_start, idx_end], [price_val, price_val], "r--")
 
-    return plt
+    ax.set_title(title)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Price + Fills")
+    fig.tight_layout()
+
+    return fig
 
 
 def scale_array(xs, bottom, top):
@@ -340,6 +430,24 @@ def scale_array(xs, bottom, top):
     )  # Scale to the desired range and shift to the midpoint
 
     return scaled_xs
+
+
+def plot_fills_long(hlcvs, fdf, coins, coin, start_pct=0.0, end_pct=1.0):
+    start_idx = int(round(len(hlcvs) * start_pct))
+    end_idx = int(round(len(hlcvs) * end_pct))
+    coin_idx = coins.index(coin)
+    cdf = pd.DataFrame(hlcvs[:, coin_idx, 2]).loc[start_idx:end_idx]
+    fdfc = fdf[fdf.coin == coin].set_index("index").loc[start_idx:end_idx]
+    longs = fdfc[fdfc.type.str.contains("long")]
+    long_entries = longs[longs.qty > 0.0]
+    long_closes = longs[longs.qty < 0.0]
+    cdf.plot(style="y-")
+    long_entries.price.plot(style="b.")
+    long_closes.price.plot(style="r.")
+    long_positions = longs[["pprice", "psize"]].copy()
+    long_positions.loc[long_positions.psize == 0.0, "pprice"] = np.nan
+    long_positions.pprice.plot(style="b--")
+    return cdf, fdfc
 
 
 def plot_fills_multi(symbol, sdf, fdf, start_pct=0.0, end_pct=1.0):
@@ -435,9 +543,18 @@ def plot_pnls_stuck(sdf, fdf, symbol=None, start_pct=0.0, end_pct=1.0, unstuck_t
 
 
 def plot_fills_forager(
-    fdf: pd.DataFrame, hlcvs_df: pd.DataFrame, start_pct=0.0, end_pct=1.0, whole=False
+    fdf: pd.DataFrame,
+    hlcvs_df: pd.DataFrame,
+    start_pct=0.0,
+    end_pct=1.0,
+    whole=False,
+    clear: bool = True,
+    *,
+    stride: int = 1,
+    fast: bool = False,
 ):
-    plt.clf()
+    if clear:
+        plt.clf()
     if len(fdf) == 0:
         return
     if whole:
@@ -448,23 +565,71 @@ def plot_fills_forager(
 
     start_minute = int(hlcc.index[0] + hlcc.index[-1] * start_pct)
     end_minute = int(hlcc.index[0] + hlcc.index[-1] * end_pct)
-    hlcc = hlcc.loc[start_minute:end_minute]
-    fdfc = fdfc.loc[start_minute:end_minute]
-    ax = hlcc.close.plot(style="y--")
-    hlcc.low.plot(style="g--")
-    hlcc.high.plot(style="g--")
-    longs = fdfc[fdfc.type.str.contains("long")]
-    shorts = fdfc[fdfc.type.str.contains("short")]
+    hlcc = hlcc[(hlcc.index >= start_minute) & (hlcc.index <= end_minute)]
+    fdfc = fdfc[(fdfc.index >= start_minute) & (fdfc.index <= end_minute)]
+
+    stride = max(1, int(stride)) if stride else 1
+    if stride > 1:
+        hlcc = hlcc.iloc[::stride]
+
+    ax = plt.gca()
+    hlcc_close = hlcc["close"].to_numpy()
+    hlcc_low = hlcc["low"].to_numpy()
+    hlcc_high = hlcc["high"].to_numpy()
+
+    ax.plot(hlcc.index, hlcc_close, "y--", label="close", zorder=1.0)
+    ax.plot(hlcc.index, hlcc_low, "g--", label="low", zorder=0.9)
+    ax.plot(hlcc.index, hlcc_high, "g-.", alpha=0.6, label="high", zorder=0.8)
+
+    type_series = fdfc["type"].astype(str)
+    longs = fdfc[type_series.str.contains("long", regex=False)]
+    shorts = fdfc[type_series.str.contains("short", regex=False)]
     if len(longs) == 0 and len(shorts) == 0:
         return plt
-    legend = ["close", "high", "low"]
+    legend = ["close", "low", "high"]
     if len(longs) > 0:
-        pprices_long = hlcc.join(longs[["pprice", "psize"]]).astype(float).ffill()
-        pprices_long.loc[pprices_long.pprice.pct_change() != 0.0, "pprice"] = np.nan
-        pprices_long = pprices_long[pprices_long.psize != 0.0].pprice
-        longs[longs.type.str.contains("entry")].price.plot(style="b.")
-        longs[longs.type.str.contains("close")].price.plot(style="r.")
-        pprices_long.plot(style="b|")
+        longs_types = longs["type"].astype(str)
+        longs_price_series = longs["price"]
+        if fast and np.issubdtype(longs_price_series.dtype, np.number):
+            longs_price = longs_price_series.to_numpy(copy=False)
+        else:
+            longs_price = pd.to_numeric(longs_price_series, errors="coerce").to_numpy()
+        mask_entry = longs_types.str.contains("entry", regex=False).to_numpy()
+        mask_close = longs_types.str.contains("close", regex=False).to_numpy()
+        long_index_vals = longs.index.to_numpy()
+        ax.scatter(
+            long_index_vals[mask_entry],
+            longs_price[mask_entry],
+            c="b",
+            marker=".",
+            zorder=3.0,
+        )
+        ax.scatter(
+            long_index_vals[mask_close],
+            longs_price[mask_close],
+            c="r",
+            marker=".",
+            zorder=3.0,
+        )
+
+        lp = longs[["pprice", "psize"]]
+        if fast and all(np.issubdtype(lp[col].dtype, np.number) for col in lp.columns):
+            lp = lp.astype(float, copy=False)
+        else:
+            lp = lp.apply(pd.to_numeric, errors="coerce")
+        lp = lp.groupby(level=0).last()
+        pprices_long = lp.reindex(hlcc.index).ffill()
+        pct_change = pprices_long["pprice"].pct_change().fillna(0.0)
+        pprices_long.loc[pct_change != 0.0, "pprice"] = np.nan
+        pprices_filtered = pprices_long.loc[pprices_long["psize"] != 0.0, "pprice"]
+        if not pprices_filtered.empty:
+            ax.scatter(
+                pprices_filtered.index.to_numpy(),
+                pprices_filtered.to_numpy(),
+                c="b",
+                marker="|",
+                zorder=2.8,
+            )
         legend.extend(
             [
                 "entries_long",
@@ -473,12 +638,48 @@ def plot_fills_forager(
             ]
         )
     if len(shorts) > 0:
-        pprices_short = hlcc.join(shorts[["pprice", "psize"]]).astype(float).ffill()
-        pprices_short.loc[pprices_short.pprice.pct_change() != 0.0, "pprice"] = np.nan
-        pprices_short = pprices_short[pprices_short.psize != 0.0].pprice
-        shorts[shorts.type.str.contains("entry")].price.plot(style="mx")
-        shorts[shorts.type.str.contains("close")].price.plot(style="cx")
-        pprices_short.plot(style="r|")
+        shorts_types = shorts["type"].astype(str)
+        shorts_price_series = shorts["price"]
+        if fast and np.issubdtype(shorts_price_series.dtype, np.number):
+            shorts_price = shorts_price_series.to_numpy(copy=False)
+        else:
+            shorts_price = pd.to_numeric(shorts_price_series, errors="coerce").to_numpy()
+        mask_entry = shorts_types.str.contains("entry", regex=False).to_numpy()
+        mask_close = shorts_types.str.contains("close", regex=False).to_numpy()
+        short_index_vals = shorts.index.to_numpy()
+        ax.scatter(
+            short_index_vals[mask_entry],
+            shorts_price[mask_entry],
+            c="m",
+            marker="x",
+            zorder=3.0,
+        )
+        ax.scatter(
+            short_index_vals[mask_close],
+            shorts_price[mask_close],
+            c="c",
+            marker="x",
+            zorder=3.0,
+        )
+
+        sp = shorts[["pprice", "psize"]]
+        if fast and all(np.issubdtype(sp[col].dtype, np.number) for col in sp.columns):
+            sp = sp.astype(float, copy=False)
+        else:
+            sp = sp.apply(pd.to_numeric, errors="coerce")
+        sp = sp.groupby(level=0).last()
+        pprices_short = sp.reindex(hlcc.index).ffill()
+        pct_change = pprices_short["pprice"].pct_change().fillna(0.0)
+        pprices_short.loc[pct_change != 0.0, "pprice"] = np.nan
+        pprices_filtered = pprices_short.loc[pprices_short["psize"] != 0.0, "pprice"]
+        if not pprices_filtered.empty:
+            ax.scatter(
+                pprices_filtered.index.to_numpy(),
+                pprices_filtered.to_numpy(),
+                c="r",
+                marker="|",
+                zorder=2.8,
+            )
         legend.extend(
             [
                 "entries_short",
@@ -488,6 +689,157 @@ def plot_fills_forager(
         )
     ax.legend(legend)
     return plt
+
+
+def create_forager_balance_figures(
+    bal_eq: pd.DataFrame,
+    figsize=(21, 13),
+    *,
+    logy: bool = False,
+    include_logy: bool = False,
+    autoplot: bool | None = None,
+    return_figures: bool | None = None,
+    stride: int = 1,
+    fast: bool = False,
+) -> dict:
+    stride = max(1, int(stride)) if stride else 1
+    df = bal_eq.iloc[::stride]
+
+    def _extract_columns(df: pd.DataFrame, keys: list[str]) -> np.ndarray:
+        n_rows = len(df)
+        if n_rows == 0:
+            return np.empty((0, len(keys)))
+        columns: list[np.ndarray] = []
+        for key in keys:
+            if key in df.columns:
+                series = df[key]
+                if fast and np.issubdtype(series.dtype, np.number):
+                    values = series.to_numpy(copy=False)
+                else:
+                    values = pd.to_numeric(series, errors="coerce").to_numpy()
+            else:
+                values = np.full(n_rows, np.nan)
+            columns.append(np.asarray(values, dtype=float))
+        if not columns:
+            return np.empty((n_rows, 0))
+        return np.column_stack(columns)
+
+    figures = {}
+    panel_configs = [
+        (
+            "USD Cash / Balance / Equity",
+            [
+                ("USD Cash Wallet", "usd_cash_wallet"),
+                ("USD Total Balance", "usd_total_balance"),
+                ("USD Total Equity", "usd_total_equity"),
+            ],
+        ),
+        (
+            "BTC Cash / Balance / Equity",
+            [
+                ("BTC Cash Wallet", "btc_cash_wallet"),
+                ("BTC Total Balance", "btc_total_balance"),
+                ("BTC Total Equity", "btc_total_equity"),
+            ],
+        ),
+    ]
+    panel_data = [_extract_columns(df, [key for _, key in specs]) for _, specs in panel_configs]
+    x = df.index.to_numpy()
+
+    autoplot = (_ipy_display is not None) if autoplot is None else autoplot
+    if return_figures is None:
+        return_figures = not autoplot
+
+    modes = [logy]
+    if include_logy:
+        modes = [False, True]
+
+    for mode in modes:
+        fig, axes = plt.subplots(2, 1, sharex=True, figsize=figsize)
+        y_transform = (lambda arr: np.where(arr > 0.0, arr, np.nan)) if mode else (lambda arr: arr)
+
+        for ax, (title, series_specs), data in zip(axes, panel_configs, panel_data):
+            ax.set_yscale("log" if mode else "linear")
+            y_values = y_transform(data)
+            for col_idx, (label, _) in enumerate(series_specs):
+                ax.plot(
+                    x,
+                    y_values[:, col_idx],
+                    label=label,
+                    linewidth=1.0,
+                )
+            ax.set_title(title)
+            ax.grid(True, linestyle="--", alpha=0.3)
+            ax.legend()
+        axes[-1].set_xlabel("Time")
+        fig.tight_layout()
+
+        key = "balance_and_equity_logy" if mode else "balance_and_equity"
+        if return_figures:
+            figures[key] = fig
+        if autoplot:
+            if _ipy_display is not None:
+                _ipy_display(fig)
+            else:  # pragma: no cover
+                try:
+                    fig.show()
+                except Exception:
+                    pass
+        if not return_figures:
+            plt.close(fig)
+
+    return figures if return_figures else {}
+
+
+def create_forager_coin_figures(
+    coins: list,
+    fdf: pd.DataFrame,
+    hlcvs: np.ndarray,
+    figsize=(21, 13),
+    start_pct=0.0,
+    end_pct=1.0,
+    coin=None,
+    on_figure: Optional[Callable[[str, Figure], None]] = None,
+    close_after_callback: bool = True,
+) -> dict:
+    figures: Dict[str, Figure] = {}
+    if hlcvs is None:
+        return figures
+    for idx, coin_ in enumerate(coins):
+        if coin is not None and coin_ != coin:
+            continue
+        fdfc = fdf[fdf.coin == coin_]
+        if fdfc.empty:
+            continue
+        hlcvs_df = pd.DataFrame(hlcvs[:, idx, :3], columns=["high", "low", "close"])
+        plt.figure(figsize=figsize)
+        plot_fills_forager(fdfc, hlcvs_df, clear=False, start_pct=start_pct, end_pct=end_pct)
+        fig = plt.gcf()
+        ax = fig.axes[0] if fig.axes else fig.add_subplot(111)
+        ax.set_title(f"Fills {coin_}")
+        ax.set_xlabel("Minute")
+        ax.set_ylabel("Price")
+        if on_figure is not None:
+            on_figure(coin_, fig)
+            if close_after_callback:
+                plt.close(fig)
+        else:
+            figures[coin_] = fig
+    return figures
+
+
+def save_figures(figures: dict, output_dir: str, suffix: str = ".png", close: bool = True) -> dict:
+    if not figures:
+        return {}
+    output_dir = make_get_filepath(output_dir if output_dir.endswith("/") else f"{output_dir}/")
+    saved_paths = {}
+    for name, fig in figures.items():
+        filepath = os.path.join(output_dir, f"{name}{suffix}")
+        fig.savefig(filepath)
+        if close:
+            plt.close(fig)
+        saved_paths[name] = filepath
+    return saved_paths
 
 
 def plot_pareto_front(df, metrics, minimize=(True, True)):

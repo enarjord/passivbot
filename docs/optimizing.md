@@ -10,6 +10,8 @@ python3 src/optimize.py [path/to/config.json]
 
 - Defaults to `configs/template.json` if no config is specified
 - Use existing configs as starting points: `--start path/to/config(s)`
+- Enable suite scenarios defined in the config with `--suite`
+- Layer an external suite definition via `--suite-config path/to/file.json`
 
 Example:
 ```bash
@@ -33,6 +35,48 @@ python3 src/optimize.py configs/template.json \
 Behind the scenes the optimizer sets every unlisted bound to `[value, value]`, so the GA
 can mutate only the parameters you specified. Bounds for the listed parameters remain as
 configured.
+
+### Optimizer Suites
+
+`optimize.suite` mirrors the structure of `backtest.suite` and allows every candidate to
+be evaluated across multiple scenarios before scoring. Each scenario can override coins,
+date ranges, exchanges, and `coin_sources`. The optimizer prepares a single shared
+dataset that covers the union of the requested data so additional scenarios add minimal
+overhead.
+
+Key fields:
+
+- `optimize.suite.enabled`: can also be toggled with `--suite`
+- `optimize.suite.include_base_scenario` / `base_label`
+- `optimize.suite.scenarios`: same schema as backtest scenarios
+
+During evaluation the optimizer records:
+
+- Per-scenario combined metrics (the same mean/min/max/std set produced by standalone
+  backtests). These are exposed on each individual as `<label>__{metric}`.
+- Aggregated metrics computed with the `optimize.suite.aggregate` rules (default `mean`).
+  These aggregated values feed directly into `optimize.scoring` and `optimize.limits`.
+
+Result directories stay under `optimize_results/`, but the coin portion of the folder
+name switches to `suite_{n}_coins` to make suite runs easy to locate.
+
+Each evaluation written to disk now includes a compact `suite_metrics` payload:
+
+```json
+"suite_metrics": {
+  "aggregate": {
+    "aggregated": {"adg_btc_w": 0.0012, "...": "..."},
+    "stats": {"adg_btc_w": {"mean": 0.0011, "min": 0.0008, "max": 0.0014, "std": 1.5e-4}}
+  },
+  "scenarios": {
+    "scenario_a": {"stats": {"adg_btc_w": {"mean": 0.0012, "min": 0.0011, ...}}},
+    "scenario_b": {"stats": {"adg_btc_w": {"mean": 0.0009, ...}}}
+  }
+}
+```
+
+Only aggregated statistics remain in `analyses_combined`; the verbose per-scenario
+flattened keys have been removed to keep Pareto members and `all_results.bin` lean.
 
 ## Optimization Process
 
@@ -59,11 +103,29 @@ Contents:
 
 ## Analyzing Results
 
-Full analysis is included in each member of the Pareto front. Use
+Full analysis is included in each member of the Pareto front. Two helper tools are available:
+
 ```bash
+# Interactive dashboard (recommended)
+python3 src/tools/pareto_dash.py --data-root optimize_results
+
+# Static matplotlib plotter
 python3 src/pareto_store.py optimize_results/.../pareto/
 ```
-to produce a visualization. Supports plotting for 2 or 3 metrics.
+
+`pareto_dash.py` scans one or more optimization runs and launches a Plotly Dash app with:
+
+- Scatter/histogram views for any metrics or objectives
+- Defaults to the metrics listed in `config.optimize.scoring`, so the scatter/histogram
+  immediately highlight your optimization objectives when the app loads
+- Scenario-aware box plots (per-metric distributions broken down by suite scenario)
+- Correlation heat maps and parameter-vs-metric scatter plots for quick diagnostics
+- Streaming history chart sourced from `all_results.bin`
+- CSV export of the current run's dataset for offline analysis
+
+Install the dependencies via `pip install dash plotly` if they are not already present.
+The legacy `pareto_store.py` script still supports quick 2D/3D matplotlib plots if a GUI
+isn't needed.
 
 ## Optimization Limits
 
@@ -89,7 +151,7 @@ This will:
 
 ### Notes:
 - If the limit key is just `metric_name`, the direction will be inferred from its scoring weight.
-- Metric names may be either plain (e.g., `adg` for USD collateralized backtest) or prefixed with "btc\_" (e.g., `btc_adg` for BTC collateralized backtest).
+- Metric names may be given with explicit suffixes (e.g., `adg_usd` for USD collateralized backtests or `adg_btc` for BTC-denominated results). When no suffix is provided, the USD form is assumed.
 - Penalties are applied to the objective score; they do not disqualify a config.
 
 ## Performance Metrics
@@ -109,9 +171,8 @@ over all exchanges before scoring.
   positive weight means “minimize.”
 - Penalties from `optimize.limits` are added to every objective when a bound is violated,
   turning constraint breaches into very poor scores.
-- Metrics are available in USD collateral form by default. If
-  `backtest.use_btc_collateral` is true, BTC-denominated variants are exported with the
-  `btc_` prefix.
+- Metrics are emitted with both USD and BTC suffixes (for example, `adg_usd` and `adg_btc`).
+- The tables below reference the base metric names for brevity; append `_usd` or `_btc` to select the denomination you want to use.
 - Exposure-normalized variants (e.g., `adg_per_exposure_long`) divide the base metric by
   that side’s configured `total_wallet_exposure_limit`, letting you compare bots that use
   different leverage budgets.
@@ -149,7 +210,8 @@ over all exchanges before scoring.
 | `position_held_hours_{mean,median,max}` | Holding-time statistics in hours |
 | `position_unchanged_hours_max` | Longest span without modifying an existing position |
 | `volume_pct_per_day_avg`, `volume_pct_per_day_avg_w` | Average traded volume as % of account per day, with recency bias |
-| `flat_btc_balance_hours` | Hours spent with the BTC collateral balance flat while USD debt is being worked down (BTC collateral mode pays off USD borrow first, so long plateaus here highlight stretches where losses took time to recover before fresh BTC could be accumulated). Available for scoring and limit checks (use `penalize_if_greater_than_flat_btc_balance_hours`). |
+| `peak_recovery_hours_equity_usd`, `_btc` | Longest time (in hours) the equity curve stayed below its prior peak before recovering, per denomination. Available for scoring and limit checks (e.g. `penalize_if_greater_than_peak_recovery_hours_equity_usd`). |
+| `peak_recovery_hours_pnl` | Longest recovery time (hours) of cumulative realised PnL (USD). Useful for monitoring realised drawdown recovery latency. |
 
 ### Equity Curve Quality
 | Metric | Description |
@@ -178,3 +240,20 @@ from opt_utils import load_results
 for config in load_results("optimize_results/.../all_results.bin"):
     # Work with config
 ```
+
+### Monitoring Optimizer Memory Usage
+
+The script `tools/profile_optimizer_memory.py` (requires `psutil`) can be used to launch
+two optimizer runs with different CPU counts and record both process RSS and system-wide
+memory pressure. This is useful when validating that shared-memory datasets are behaving
+as expected on a given machine.
+
+```bash
+python tools/profile_optimizer_memory.py \
+  --coins BTC ETH XRP SOL \
+  --iters 20 \
+  --population-size 12 \
+  --cpus 2 6
+```
+
+The script writes raw samples and a summary to `tmp/optimizer_mem_profiles/`.

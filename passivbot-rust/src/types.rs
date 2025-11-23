@@ -1,8 +1,135 @@
 use core::str::FromStr;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use numpy::{PyArray1, PyArray3, PyUntypedArrayMethods};
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::{Py, PyResult, Python};
 use serde::Serialize;
 use std::collections::HashMap;
 use strum_macros::{Display, EnumIter, EnumString};
+
+/// Canonical metadata describing one coin/contract entry inside a unified HLCV tensor.
+///
+/// The numeric fields mirror the values currently distributed through `mss` dictionaries in
+/// Python.  Keeping them here ensures every column in the `(T, N, 4)` cube has an aligned
+/// metadata record with deterministic indexing.
+#[derive(Clone, Debug, Serialize)]
+pub struct CoinMeta {
+    /// Zero-based index that lines up with the second dimension of the HLCV tensor.
+    pub index: usize,
+    /// Full CCXT-style symbol (e.g. "BTC/USDT:USDT").
+    pub symbol: String,
+    /// Shorthand coin ticker (e.g. "BTC") assuming an implied USD quote.
+    pub coin: String,
+    /// Normalized exchange identifier (e.g. "binanceusdm").
+    pub exchange: String,
+    /// Quote asset, extracted from the symbol for readability.
+    pub quote: String,
+    /// Base asset, extracted from the symbol for readability.
+    pub base: String,
+    /// Smallest allowed quantity increment.
+    pub qty_step: f64,
+    /// Smallest allowed price increment.
+    pub price_step: f64,
+    /// Minimal order quantity enforced by the venue.
+    pub min_qty: f64,
+    /// Minimal notional/trade value enforced by the venue.
+    pub min_cost: f64,
+    /// Contract multiplier (lot size) used for sized calculations.
+    pub c_mult: f64,
+    /// Maker fee rate associated with this market (fractional, not percentage).
+    pub maker_fee: f64,
+    /// Taker fee rate associated with this market (fractional, not percentage).
+    pub taker_fee: f64,
+    /// First index (inclusive) in the HLCV tensor that contains valid data for this coin.
+    pub first_valid_index: usize,
+    /// Last index (inclusive) in the HLCV tensor that contains valid data for this coin.
+    pub last_valid_index: usize,
+    /// Warmup bars (expressed in minutes) required before this coin may trade.
+    pub warmup_minutes: usize,
+    /// Index in the HLCV tensor where trading is allowed to begin (>= `first_valid_index`).
+    pub trade_start_index: usize,
+}
+
+/// Metadata describing how an HLCV tensor was produced.  It travels alongside the raw
+/// `(time, coin, feature)` cube so both Python and Rust callers can reason about how to
+/// slice or merge the data without extra dictionaries.
+#[derive(Clone, Debug, Serialize)]
+pub struct HlcvsMeta {
+    pub requested_start_timestamp_ms: u64,
+    pub effective_start_timestamp_ms: u64,
+    pub warmup_minutes_requested: u64,
+    pub warmup_minutes_provided: u64,
+    pub coins: Vec<CoinMeta>,
+}
+
+/// Represents a fully-qualified HLCV tensor and its associated metadata.  The NumPy arrays are
+/// stored as owned Python references so Rust callers can obtain zero-copy views as needed while
+/// Python retains control over the underlying memory.
+#[derive(Clone)]
+pub struct HlcvsBundle {
+    pub hlcvs: Py<PyArray3<f64>>,
+    pub btc_usd: Py<PyArray1<f64>>,
+    pub timestamps: Py<PyArray1<i64>>,
+    pub meta: HlcvsMeta,
+}
+
+impl HlcvsBundle {
+    pub fn coin_meta_by_index(&self, idx: usize) -> Option<&CoinMeta> {
+        self.meta.coins.iter().find(|coin| coin.index == idx)
+    }
+
+    pub fn coin_meta_by_symbol(&self, symbol: &str) -> Option<&CoinMeta> {
+        self.meta
+            .coins
+            .iter()
+            .find(|coin| coin.symbol == symbol || coin.coin == symbol)
+    }
+
+    pub fn coins_len(&self) -> usize {
+        self.meta.coins.len()
+    }
+
+    pub fn validate_shapes(&self, py: Python<'_>) -> PyResult<()> {
+        let hlcvs_ref = self.hlcvs.bind(py);
+        let shape = hlcvs_ref.shape();
+        if shape.len() != 3 {
+            return Err(PyValueError::new_err(format!(
+                "hlcvs must be a 3D array, got ndim={}",
+                shape.len()
+            )));
+        }
+
+        let n_timesteps = shape[0];
+        let n_coins = shape[1];
+        if n_coins != self.meta.coins.len() {
+            return Err(PyValueError::new_err(format!(
+                "coin metadata length ({}) does not match hlcvs coin dimension ({})",
+                self.meta.coins.len(),
+                n_coins
+            )));
+        }
+
+        let timestamps_ref = self.timestamps.bind(py);
+        if timestamps_ref.len() != n_timesteps {
+            return Err(PyValueError::new_err(format!(
+                "timestamps length ({}) does not match hlcvs timesteps ({})",
+                timestamps_ref.len(),
+                n_timesteps
+            )));
+        }
+
+        let btc_ref = self.btc_usd.bind(py);
+        if btc_ref.len() != n_timesteps {
+            return Err(PyValueError::new_err(format!(
+                "btc_usd length ({}) does not match hlcvs timesteps ({})",
+                btc_ref.len(),
+                n_timesteps
+            )));
+        }
+
+        Ok(())
+    }
+}
 
 #[derive(Debug)]
 pub struct ExchangeParams {
@@ -30,6 +157,7 @@ pub struct BacktestParams {
     pub starting_balance: f64,
     pub maker_fee: f64,
     pub coins: Vec<String>,
+    pub active_coin_indices: Option<Vec<usize>>,
     pub first_timestamp_ms: u64,
     pub requested_start_timestamp_ms: u64,
     pub first_valid_indices: Vec<usize>,
@@ -37,6 +165,10 @@ pub struct BacktestParams {
     pub warmup_minutes: Vec<usize>,
     pub trade_start_indices: Vec<usize>,
     pub global_warmup_bars: usize,
+    pub btc_collateral_cap: f64,
+    pub btc_collateral_ltv_cap: Option<f64>,
+    pub metrics_only: bool,
+    pub filter_by_min_effective_cost: bool,
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -103,26 +235,33 @@ pub struct BotParams {
     pub close_trailing_grid_ratio: f64,
     pub close_trailing_qty_pct: f64,
     pub close_trailing_threshold_pct: f64,
-    pub enforce_exposure_limit: bool,
     pub entry_grid_double_down_factor: f64,
-    pub entry_grid_spacing_log_weight: f64,
+    pub entry_grid_spacing_volatility_weight: f64,
     pub entry_grid_spacing_we_weight: f64,
     pub entry_grid_spacing_pct: f64,
-    pub entry_grid_spacing_log_span_hours: f64,
+    pub entry_volatility_ema_span_hours: f64,
     pub entry_initial_ema_dist: f64,
     pub entry_initial_qty_pct: f64,
     pub entry_trailing_double_down_factor: f64,
     pub entry_trailing_retracement_pct: f64,
+    pub entry_trailing_retracement_we_weight: f64,
+    pub entry_trailing_retracement_volatility_weight: f64,
     pub entry_trailing_grid_ratio: f64,
     pub entry_trailing_threshold_pct: f64,
-    pub filter_log_range_ema_span: f64,
+    pub entry_trailing_threshold_we_weight: f64,
+    pub entry_trailing_threshold_volatility_weight: f64,
+    pub filter_volatility_ema_span: f64,
+    pub filter_volatility_drop_pct: f64,
     pub filter_volume_ema_span: f64,
     pub filter_volume_drop_pct: f64,
     pub ema_span_0: f64,
     pub ema_span_1: f64,
     pub n_positions: usize,
     pub total_wallet_exposure_limit: f64,
-    pub wallet_exposure_limit: f64, // is total_wallet_exposure_limit / n_positions
+    pub wallet_exposure_limit: f64, // per-position base limit (without excess allowance)
+    pub risk_wel_enforcer_threshold: f64,
+    pub risk_twel_enforcer_threshold: f64,
+    pub risk_we_excess_allowance_pct: f64,
     pub unstuck_close_pct: f64,
     pub unstuck_ema_dist: f64,
     pub unstuck_loss_allowance_pct: f64,
@@ -173,7 +312,7 @@ pub enum OrderType {
     CloseGridLong = 7,
     CloseTrailingLong = 8,
     CloseUnstuckLong = 9,
-    CloseAutoReduceLong = 10,
+    CloseAutoReduceTwelLong = 10,
 
     EntryInitialNormalShort = 11,
     EntryInitialPartialShort = 12,
@@ -186,10 +325,12 @@ pub enum OrderType {
     CloseGridShort = 18,
     CloseTrailingShort = 19,
     CloseUnstuckShort = 20,
-    CloseAutoReduceShort = 21,
+    CloseAutoReduceTwelShort = 21,
 
     ClosePanicLong = 22,
     ClosePanicShort = 23,
+    CloseAutoReduceWelLong = 24,
+    CloseAutoReduceWelShort = 25,
 
     Empty = 65535,
 }
@@ -221,7 +362,8 @@ impl OrderType {
                 | CloseGridLong
                 | CloseTrailingLong
                 | CloseUnstuckLong
-                | CloseAutoReduceLong
+                | CloseAutoReduceTwelLong
+                | CloseAutoReduceWelLong
                 | ClosePanicLong
         )
     }
@@ -229,30 +371,34 @@ impl OrderType {
 
 #[derive(Default)]
 pub struct Balance {
-    pub usd: f64,                 // usd balance
-    pub usd_total: f64,           // total in usd
-    pub usd_total_rounded: f64,   // total in usd rounded for calculations
-    pub btc: f64,                 // btc balance
-    pub btc_total: f64,           // total in btc
-    pub use_btc_collateral: bool, // whether to use btc as collateral
+    pub usd_cash_wallet: f64,                // raw usd wallet balance
+    pub usd_total_balance: f64,              // usd cash + btc converted to usd
+    pub usd_total_balance_rounded: f64,      // rounded usd total for hysteresis logic
+    pub btc_cash_wallet: f64,                // raw btc wallet balance
+    pub btc_total_balance: f64,              // btc cash + usd converted to btc
+    pub use_btc_collateral: bool,            // whether to use btc as collateral
+    pub btc_collateral_cap: f64,             // target/cap ratio of collateral held in btc
+    pub btc_collateral_ltv_cap: Option<f64>, // optional LTV ceiling when topping up btc
 }
 
 #[derive(Default, Clone)]
 pub struct Equities {
-    pub usd: Vec<f64>,
-    pub btc: Vec<f64>,
+    pub timestamps_ms: Vec<u64>,
+    pub usd_total_equity: Vec<f64>,
+    pub btc_total_equity: Vec<f64>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Fill {
     pub index: usize,
+    pub timestamp_ms: u64,
     pub coin: String,
     pub pnl: f64,
     pub fee_paid: f64,
-    pub balance_usd_total: f64,
-    pub balance_btc: f64, // Added: BTC balance after fill
-    pub balance_usd: f64, // Added: USD balance after fill
-    pub btc_price: f64,   // Added: BTC/USD price at time of fill
+    pub usd_total_balance: f64,
+    pub btc_cash_wallet: f64,
+    pub usd_cash_wallet: f64,
+    pub btc_price: f64,
     pub fill_qty: f64,
     pub fill_price: f64,
     pub position_size: f64,
@@ -280,6 +426,8 @@ pub struct Analysis {
     pub equity_balance_diff_pos_max: f64,
     pub equity_balance_diff_pos_mean: f64,
     pub loss_profit_ratio: f64,
+    pub peak_recovery_hours_equity: f64,
+    pub peak_recovery_hours_pnl: f64,
 
     pub equity_choppiness: f64,
     pub equity_jerkiness: f64,
@@ -308,6 +456,8 @@ pub struct Analysis {
     pub total_wallet_exposure_max: f64,
     pub total_wallet_exposure_mean: f64,
     pub total_wallet_exposure_median: f64,
+    pub entry_initial_balance_pct_long: f64,
+    pub entry_initial_balance_pct_short: f64,
 }
 
 impl Default for Analysis {
@@ -329,6 +479,8 @@ impl Default for Analysis {
             equity_balance_diff_pos_max: 1.0,
             equity_balance_diff_pos_mean: 1.0,
             loss_profit_ratio: 1.0,
+            peak_recovery_hours_equity: 0.0,
+            peak_recovery_hours_pnl: 0.0,
             equity_choppiness: 1.0,
             equity_jerkiness: 1.0,
             exponential_fit_error: 1.0,
@@ -353,6 +505,8 @@ impl Default for Analysis {
             total_wallet_exposure_max: 0.0,
             total_wallet_exposure_mean: 0.0,
             total_wallet_exposure_median: 0.0,
+            entry_initial_balance_pct_long: 0.0,
+            entry_initial_balance_pct_short: 0.0,
         }
     }
 }

@@ -17,7 +17,7 @@ from pure_funcs import (
     shorten_custom_id,
 )
 
-calc_diff = pbr.calc_diff
+calc_order_price_diff = pbr.calc_order_price_diff
 round_ = pbr.round_
 round_up = pbr.round_up
 round_dn = pbr.round_dn
@@ -51,11 +51,13 @@ class HyperliquidBot(Passivbot):
         }
         if self.ws_enabled:
             self.ccp = getattr(ccxt_pro, self.exchange)(creds)
+            self.ccp.options.update(self._build_ccxt_options())
             self.ccp.options["defaultType"] = "swap"
             self._apply_endpoint_override(self.ccp)
         elif self.endpoint_override:
             logging.info("Skipping Hyperliquid websocket session due to custom endpoint override.")
         self.cca = getattr(ccxt_async, self.exchange)(creds)
+        self.cca.options.update(self._build_ccxt_options())
         self.cca.options["defaultType"] = "swap"
         self._apply_endpoint_override(self.cca)
 
@@ -240,6 +242,31 @@ class HyperliquidBot(Passivbot):
             start_time = fetched[-1]["timestamp"] - 1000
             limit = 2000
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
+
+    async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
+        """Return canonical fill events for Hyperliquid (draft placeholder)."""
+        events = []
+        try:
+            fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
+        except Exception as exc:
+            logging.error(f"error gathering fill events (hyperliquid) {exc}")
+            return events
+        for fill in fills:
+            events.append(
+                {
+                    "id": fill.get("id"),
+                    "timestamp": fill.get("timestamp"),
+                    "symbol": fill.get("symbol"),
+                    "side": fill.get("side"),
+                    "position_side": fill.get("position_side"),
+                    "qty": fill.get("amount"),
+                    "price": fill.get("price"),
+                    "pnl": fill.get("pnl"),
+                    "fee": fill.get("fee"),
+                    "info": fill.get("info"),
+                }
+            )
+        return events
 
     async def fetch_pnl(
         self,

@@ -1,5 +1,6 @@
 use crate::constants::{LONG, SHORT};
 use crate::types::ExchangeParams;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 /// Rounds a number to the specified number of decimal places.
@@ -27,6 +28,48 @@ pub fn round_(n: f64, step: f64) -> f64 {
 pub fn round_dn(n: f64, step: f64) -> f64 {
     let result = (n / step).floor() * step;
     round_to_decimal_places(result, 10)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum RoundingMode {
+    Nearest,
+    //Floor,
+    //Ceil,
+    // uncomment the above to add Floor,Ceil rounding modes
+}
+
+fn quantize_value(value: f64, step: f64, mode: RoundingMode, context: &str) -> f64 {
+    if step <= 0.0 || !value.is_finite() {
+        return value;
+    }
+    let rounded = match mode {
+        RoundingMode::Nearest => round_(value, step),
+        //RoundingMode::Floor => round_dn(value, step),
+        //RoundingMode::Ceil => round_up(value, step),
+        // uncomment the above to add Floor,Ceil rounding modes
+    };
+    let diff = (value - rounded).abs();
+    // Allow for typical floating noise (up to 1e-8 of the step).
+    let tolerance = step * 1e-8;
+    if diff > tolerance {
+        log::warn!(
+            "quantize_value: large adjustment in {} (step {}): {} -> {} (Δ={})",
+            context,
+            step,
+            value,
+            rounded,
+            diff
+        );
+    }
+    rounded
+}
+
+pub fn quantize_price(price: f64, price_step: f64, mode: RoundingMode, context: &str) -> f64 {
+    quantize_value(price, price_step, mode, context)
+}
+
+pub fn quantize_qty(qty: f64, qty_step: f64, mode: RoundingMode, context: &str) -> f64 {
+    quantize_value(qty, qty_step, mode, context)
 }
 
 #[pyfunction]
@@ -62,23 +105,30 @@ pub fn round_dynamic_dn(n: f64, d: i32) -> f64 {
     round_to_decimal_places(result, 10)
 }
 
+/// Multiplicative (relative) hysteresis.
+/// Triggers a change only if the relative difference exceeds `pct`.
+/// Example: pct = 0.01 → require >1% change to update.
+///
+/// Semantics match the Python reference:
+/// - If any input is non-finite ⇒ hold `prev_val`.
+/// - If `prev_val == 0.0` ⇒ pass through `val`.
+/// - Else update iff |val - prev_val| / |prev_val| > max(0, pct).
 #[pyfunction]
-pub fn hysteresis_rounding(
-    balance: f64,
-    last_rounded_balance: f64,
-    percentage: f64,
-    h: f64,
-) -> f64 {
-    let step = last_rounded_balance * percentage;
-    let threshold = step * h;
-    let rounded_balance = if balance > last_rounded_balance + threshold {
-        last_rounded_balance + step
-    } else if balance < last_rounded_balance - threshold {
-        last_rounded_balance - step
+pub fn hysteresis(val: f64, prev_val: f64, pct: f64) -> f64 {
+    if !(val.is_finite() && prev_val.is_finite() && pct.is_finite()) {
+        return prev_val;
+    }
+    let pct = if pct.is_sign_negative() { 0.0 } else { pct };
+
+    if prev_val == 0.0 {
+        return val;
+    }
+
+    if ((val - prev_val).abs() / prev_val.abs()) > pct {
+        val
     } else {
-        last_rounded_balance
-    };
-    round_dynamic(rounded_balance, 6)
+        prev_val
+    }
 }
 
 #[pyfunction]
@@ -216,6 +266,37 @@ pub fn calc_pprice_diff_int(pside: usize, pprice: f64, price: f64) -> f64 {
         }
         _ => panic!("unknown pside {}", pside),
     }
+}
+
+/// Pside-aware signed price difference helper. Alias of calc_pprice_diff_int with clearer name.
+#[pyfunction]
+pub fn calc_pside_price_diff_int(pside: usize, pprice: f64, price: f64) -> f64 {
+    calc_pprice_diff_int(pside, pprice, price)
+}
+
+/// Backwards-compatible alias; prefer calc_pside_price_diff_int.
+#[pyfunction]
+pub fn calc_price_diff_pside_int(pside: usize, pprice: f64, price: f64) -> f64 {
+    calc_pside_price_diff_int(pside, pprice, price)
+}
+
+#[pyfunction]
+pub fn calc_order_price_diff(side: &str, order_price: f64, market_price: f64) -> PyResult<f64> {
+    if !order_price.is_finite() || !market_price.is_finite() || market_price <= 0.0 {
+        return Ok(0.0);
+    }
+    let norm_side = side.trim().to_ascii_lowercase();
+    let diff = match norm_side.as_str() {
+        "buy" | "long" => 1.0 - order_price / market_price,
+        "sell" | "short" => order_price / market_price - 1.0,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "invalid order side '{}'; expected 'buy' or 'sell'",
+                other
+            )))
+        }
+    };
+    Ok(diff)
 }
 
 #[pyfunction]

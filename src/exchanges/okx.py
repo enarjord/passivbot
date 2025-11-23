@@ -18,7 +18,7 @@ from pure_funcs import (
     shorten_custom_id,
 )
 
-calc_diff = pbr.calc_diff
+calc_order_price_diff = pbr.calc_order_price_diff
 from procedures import print_async_exception, assert_correct_ccxt_version
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
@@ -40,8 +40,10 @@ class OKXBot(Passivbot):
                     "apiKey": self.user_info["key"],
                     "secret": self.user_info["secret"],
                     "password": self.user_info["passphrase"],
+                    "enableRateLimit": True,
                 }
             )
+            self.ccp.options.update(self._build_ccxt_options())
             self.ccp.options["defaultType"] = "swap"
             self._apply_endpoint_override(self.ccp)
         elif self.endpoint_override:
@@ -51,8 +53,10 @@ class OKXBot(Passivbot):
                 "apiKey": self.user_info["key"],
                 "secret": self.user_info["secret"],
                 "password": self.user_info["passphrase"],
+                "enableRateLimit": True,
             }
         )
+        self.cca.options.update(self._build_ccxt_options())
         self.cca.options["defaultType"] = "swap"
         self._apply_endpoint_override(self.cca)
 
@@ -130,15 +134,14 @@ class OKXBot(Passivbot):
                                 if elm2["ccy"] != self.quote
                                 else 1.0
                             )
-                if not hasattr(self, "previous_rounded_balance"):
-                    self.previous_rounded_balance = balance
-                self.previous_rounded_balance = pbr.hysteresis_rounding(
+                if not hasattr(self, "previous_hysteresis_balance"):
+                    self.previous_hysteresis_balance = balance
+                self.previous_hysteresis_balance = pbr.hysteresis(
                     balance,
-                    self.previous_rounded_balance,
-                    self.hyst_rounding_balance_pct,
-                    self.hyst_rounding_balance_h,
+                    self.previous_hysteresis_balance,
+                    self.hyst_pct,
                 )
-                balance = self.previous_rounded_balance
+                balance = self.previous_hysteresis_balance
             else:
                 balance = float(fetched_balance["info"]["data"][0]["details"][0]["cashBal"])
 
@@ -217,6 +220,31 @@ class OKXBot(Passivbot):
         return sorted(
             [x for x in all_fetched.values() if x["pnl"] != 0.0], key=lambda x: x["timestamp"]
         )
+
+    async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
+        """Return canonical fill events for OKX (draft placeholder)."""
+        events = []
+        try:
+            fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
+        except Exception as exc:
+            logging.error(f"error gathering fill events (okx) {exc}")
+            return events
+        for fill in fills:
+            events.append(
+                {
+                    "id": fill.get("id"),
+                    "timestamp": fill.get("timestamp"),
+                    "symbol": fill.get("symbol"),
+                    "side": fill.get("side"),
+                    "position_side": fill.get("position_side"),
+                    "qty": fill.get("amount"),
+                    "price": fill.get("price"),
+                    "pnl": fill.get("pnl"),
+                    "fee": fill.get("fee"),
+                    "info": fill.get("info"),
+                }
+            )
+        return events
 
     async def fetch_pnl(
         self,
@@ -314,8 +342,10 @@ class OKXBot(Passivbot):
             for x in ideal_orders[s]:
                 ideal_orders_tmp.append(
                     (
-                        calc_diff(
-                            x["price"], (await self.cm.get_current_close(s, max_age_ms=10_000))
+                        calc_order_price_diff(
+                            x["side"],
+                            x["price"],
+                            await self.cm.get_current_close(s, max_age_ms=10_000),
                         ),
                         {**x, **{"symbol": s}},
                     )

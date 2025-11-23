@@ -2,16 +2,103 @@ from __future__ import annotations
 import os
 import json
 import hashlib
-from typing import Dict
+from typing import Callable, Dict, Optional, Sequence
 import glob
 import math
 import time
 import numpy as np
 import threading
 import logging
+from dataclasses import dataclass
+from pathlib import Path
 import passivbot_rust as pbr
-from opt_utils import calc_normalized_dist, round_floats, dominates
+from opt_utils import round_floats, dominates
 from pure_funcs import calc_hash
+from utils import json_dumps_streamlined
+from metrics_schema import flatten_metric_stats
+
+STAT_FIELDS = {"mean", "min", "max", "std"}
+
+
+@dataclass(frozen=True)
+class LimitSpec:
+    metric: str
+    field: str  # "mean", "min", "max", "std", or "auto"
+    op: Callable[[float, float], bool]
+    value: float
+
+
+def _split_metric_field(raw_key: str) -> tuple[str, str]:
+    key = raw_key.strip()
+    if "." in key:
+        metric, suffix = key.rsplit(".", 1)
+        if suffix in STAT_FIELDS:
+            return metric, suffix
+    return key, "auto"
+
+
+def _resolve_metric_name(metric: str, metric_map: Dict[str, str]) -> str:
+    if metric.startswith("w_"):
+        return metric_map.get(metric, metric)
+    return metric
+
+
+def _resolve_limit_value(
+    spec: LimitSpec,
+    stats_flat: Dict[str, float],
+    aggregated_values: Dict[str, float],
+    objectives: Dict[str, float],
+    metric_map: Dict[str, str],
+) -> Optional[float]:
+    metric = spec.metric
+    if metric.startswith("w_"):
+        return objectives.get(metric)
+    resolved_metric = _resolve_metric_name(metric, metric_map)
+    field = spec.field
+    if field == "auto":
+        if aggregated_values and resolved_metric in aggregated_values:
+            return aggregated_values.get(resolved_metric)
+        field = "mean"
+    key = f"{resolved_metric.replace('.', '_')}_{field}"
+    return stats_flat.get(key)
+
+
+def _suite_metrics_to_stats(entry: Dict[str, Any]) -> Tuple[Dict[str, float], Dict[str, float]]:
+    aggregated_values: Dict[str, float] = {}
+    stats_flat: Dict[str, float] = {}
+    suite_metrics = entry.get("suite_metrics") or {}
+    if "metrics" in suite_metrics:
+        for metric, payload in suite_metrics["metrics"].items():
+            stats = payload.get("stats") or {}
+            if stats:
+                stats_flat.update(flatten_metric_stats({metric: stats}))
+            agg = payload.get("aggregated")
+            if agg is None and stats:
+                agg = stats.get("mean")
+            if agg is not None:
+                aggregated_values[metric] = agg
+    elif "aggregate" in suite_metrics:
+        aggregate = suite_metrics.get("aggregate") or {}
+        agg_stats = aggregate.get("stats") or {}
+        aggregated_values = aggregate.get("aggregated") or {}
+        stats_flat = flatten_metric_stats(agg_stats)
+    return stats_flat, aggregated_values
+
+
+def _evaluate_limits(
+    specs: Sequence[LimitSpec],
+    stats_flat: Dict[str, float],
+    aggregated_values: Dict[str, float],
+    objectives: Dict[str, float],
+    metric_map: Dict[str, str],
+) -> bool:
+    for spec in specs:
+        value = _resolve_limit_value(spec, stats_flat, aggregated_values, objectives, metric_map)
+        if value is None:
+            continue
+        if not spec.op(value, spec.value):
+            return False
+    return True
 
 
 class ParetoStore:
@@ -21,15 +108,17 @@ class ParetoStore:
         sig_digits: int = 6,
         flush_interval: int = 60,
         log_name: str | None = None,
+        max_size: int = 300,
     ):
         self._log = logging.getLogger(log_name or __name__)
         self.directory = directory
         self.pareto_dir = os.path.join(self.directory, "pareto")
         self.sig_digits = sig_digits
         self.flush_interval = flush_interval  # seconds
+        self.max_size = max(1, int(max_size))
         os.makedirs(os.path.join(self.directory, "pareto"), exist_ok=True)
-        # --- in‑memory structures -----------------------------------------
-        self._entries: dict[str, dict] = {}  # hash -> full entry
+        # --- in-memory structures -----------------------------------------
+        self._entries: dict[str, str] = {}  # hash -> file path
         self._objectives: dict[str, tuple] = {}  # hash -> objective vector
         self._front: list[str] = []  # list of hashes (Pareto set)
         self._objective_lookup: dict[tuple, str] = {}  # objective vector ➜ hash
@@ -43,7 +132,7 @@ class ParetoStore:
         # bootstrap from disk if any
         self._bootstrap_from_disk()
 
-    def add_entry(self, entry: dict) -> bool:
+    def add_entry(self, entry: dict, *, source_path: str | None = None) -> bool:
         """
         Add a new entry, update Pareto front in‑memory.
         Return True if the store actually changed.
@@ -58,8 +147,10 @@ class ParetoStore:
                 return False
 
             # objective vector = sorted w_i keys
-            w_keys = sorted(k for k in rounded["analyses_combined"] if k.startswith("w_"))
-            obj = tuple(rounded["analyses_combined"][k] for k in w_keys)
+            metrics_block = rounded.get("metrics", {}) or {}
+            objectives = metrics_block.get("objectives", metrics_block)
+            w_keys = sorted(k for k in objectives if k.startswith("w_"))
+            obj = tuple(objectives[k] for k in w_keys)
 
             # ───────────── NEW: dedupe on the objective vector ──────────────
             # identical after rounding  → nothing new to store or write
@@ -77,12 +168,16 @@ class ParetoStore:
             for idx in dominated:
                 del self._objective_lookup[self._objectives[idx]]
                 self._front.remove(idx)
+                self._delete_entry_file(idx)
 
             # add new member
-            self._entries[h] = rounded
+            self._persist_entry(h, rounded, source_path=source_path)
             self._objectives[h] = obj
             self._front.append(h)
             self._objective_lookup[obj] = h
+
+            if len(self._front) > self.max_size:
+                self._prune_front(len(self._front) - self.max_size)
 
             self._log_front_state(
                 added=1,
@@ -96,7 +191,17 @@ class ParetoStore:
 
     def get_front(self) -> list[dict]:
         with self._lock:
-            return [self._entries[h] for h in self._front]
+            results = []
+            for h in self._front:
+                path = self._entries.get(h)
+                if not path:
+                    continue
+                try:
+                    with open(path) as f:
+                        results.append(json.load(f))
+                except FileNotFoundError:
+                    continue
+            return results
 
     def flush_now(self) -> None:
         """Force a write of the current in‑memory set to disk."""
@@ -110,39 +215,15 @@ class ParetoStore:
             self._last_flush_ts = time.time()
 
     def _write_all_to_disk(self) -> None:
-        """
-        Flush the current Pareto front to disk.
-
-        * For every hash in ``self._front`` an up‑to‑date
-          ``"<dist>_<hash>.json"`` file is created if it does not already exist.
-        * After writing, every ``*.json`` file whose hash is **not** in
-          the front is removed.  The directory therefore mirrors the
-          in‑memory set 1‑to‑1.
-        """
         if not self._front:
+            for fp in glob.glob(os.path.join(self.pareto_dir, "*.json")):
+                try:
+                    os.remove(fp)
+                except OSError:
+                    pass
             return
 
-        # ── distance normalisation ------------------------------------------------
-        obj_matrix = [self._objectives[h] for h in self._front]
-        mins = [min(col) for col in zip(*obj_matrix)]
-        maxs = [max(col) for col in zip(*obj_matrix)]
-
-        live_files: set[str] = set()
-
-        for h in self._front:
-            obj = self._objectives[h]
-            norm = [(v - mi) / (ma - mi) if ma > mi else 0.0 for v, mi, ma in zip(obj, mins, maxs)]
-            dist = math.sqrt(sum(v * v for v in norm))
-            path = os.path.join(self.pareto_dir, f"{dist:08.4f}_{h}.json")
-            live_files.add(path)
-
-            if not os.path.exists(path):
-                tmp = path + ".tmp"
-                with open(tmp, "w") as f:
-                    json.dump(self._entries[h], f, separators=(",", ":"), indent=4)
-                os.replace(tmp, path)
-
-        # ── one‑pass purge of everything that is *not* in the front --------------
+        live_files = set(self._entries.values())
         for fp in glob.glob(os.path.join(self.pareto_dir, "*.json")):
             if fp not in live_files:
                 try:
@@ -159,7 +240,7 @@ class ParetoStore:
             try:
                 with open(fp) as f:
                     entry = json.load(f)
-                self.add_entry(entry)  # uses the normal path
+                self.add_entry(entry, source_path=fp)
             except Exception as e:
                 print(f"bootstrap skip {fp}: {e}")
 
@@ -180,6 +261,86 @@ class ParetoStore:
         self._log.info(
             f"Iter: {self.n_iters} | Pareto ↑ | +{added}/-{removed} | size:{len(self._front)} | {line}"
         )
+
+    def _prune_front(self, n_prune: int) -> None:
+        """Trim the Pareto front down by removing the most crowded entries."""
+        if n_prune <= 0 or len(self._front) <= n_prune:
+            return
+        objs = [self._objectives[idx] for idx in self._front]
+        crowding = self._crowding_distances(np.array(objs, dtype=float))
+        scored = list(zip(self._front, crowding))
+        scored.sort(key=lambda item: item[1])  # lowest crowding removed first
+        to_remove = [hash_id for hash_id, _ in scored[:n_prune]]
+        for hash_id in to_remove:
+            obj = self._objectives.pop(hash_id, None)
+            self._delete_entry_file(hash_id)
+            if obj is not None:
+                self._objective_lookup.pop(obj, None)
+            try:
+                self._front.remove(hash_id)
+            except ValueError:
+                pass
+
+    def _persist_entry(self, hash_id: str, entry: dict, *, source_path: str | None = None) -> None:
+        if source_path is None:
+            path = os.path.join(self.pareto_dir, f"{hash_id}.json")
+            tmp = path + ".tmp"
+            with open(tmp, "w") as f:
+                f.write(
+                    json_dumps_streamlined(
+                        entry,
+                        indent=4,
+                        max_inline=72,
+                        separators=(",", ":"),
+                    )
+                )
+            os.replace(tmp, path)
+        else:
+            path = source_path
+            if not os.path.exists(path):
+                tmp = path + ".tmp"
+                with open(tmp, "w") as f:
+                    f.write(
+                        json_dumps_streamlined(
+                            entry,
+                            indent=4,
+                            max_inline=72,
+                            separators=(",", ":"),
+                        )
+                    )
+                os.replace(tmp, path)
+        self._entries[hash_id] = path
+
+    def _delete_entry_file(self, hash_id: str) -> None:
+        path = self._entries.pop(hash_id, None)
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _crowding_distances(values: np.ndarray) -> np.ndarray:
+        if values.ndim != 2:
+            return np.zeros(len(values))
+        n, m = values.shape
+        if n == 0:
+            return np.array([])
+        if n <= 2:
+            return np.full(n, np.inf)
+        distances = np.zeros(n)
+        for col in range(m):
+            order = np.argsort(values[:, col])
+            distances[order[0]] = distances[order[-1]] = np.inf
+            column = values[order, col]
+            min_v = column[0]
+            max_v = column[-1]
+            denom = max_v - min_v
+            if denom == 0:
+                continue
+            normalized = (column[2:] - column[:-2]) / denom
+            distances[order[1:-1]] += normalized
+        return distances
 
 
 def compute_ideal(values_matrix, mode="min", weights=None, eps=1e-3, pct=10):
@@ -224,15 +385,59 @@ def comma_separated_values_float(x):
     return [float(z) for z in x.split(",")]
 
 
+def detect_latest_pareto_dir(root: Path = Path("optimize_results")) -> Optional[str]:
+    if not root.exists():
+        return None
+    latest: Optional[tuple[float, Path]] = None
+    for child in sorted(root.iterdir()):
+        pareto_path = child / "pareto"
+        if pareto_path.is_dir():
+            mtime = pareto_path.stat().st_mtime
+            if latest is None or mtime > latest[0]:
+                latest = (mtime, pareto_path)
+    if latest is None:
+        return None
+    return str(latest[1])
+
+
 def main():
     import argparse
     import matplotlib.pyplot as plt
     import numpy as np
     import json
 
-    parser = argparse.ArgumentParser(description="Analyze and plot Pareto front")
-    parser.add_argument("pareto_dir", type=str, help="Path to pareto/ directory")
-    parser.add_argument("--json", action="store_true", help="Output summary as JSON")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Inspect optimizer Pareto sets: discover the latest run (or analyze a\n"
+            "specified pareto/ directory), compute the ideal point, rank the best\n"
+            "solutions, and visualize objective correlations. Supports filtering by\n"
+            "metric limits and restricting the objective vector."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python3 src/pareto_store.py\n"
+            "  python3 src/pareto_store.py optimize_results/<run>/pareto\n"
+            '  python3 src/pareto_store.py -l "w_4<800" "peak_recovery_hours_pnl.max<600"\n'
+            "  python3 src/pareto_store.py -o adg_btc,mdg_btc -w 1,1\n"
+        ),
+    )
+    parser.add_argument(
+        "pareto_dir",
+        type=str,
+        nargs="?",
+        default=None,
+        help=(
+            "Path to a pareto/ directory produced by the optimizer or suite. When\n"
+            "omitted the script auto-detects the most recent run under\n"
+            "optimize_results/."
+        ),
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the textual summary as JSON for consumption by other tools.",
+    )
     parser.add_argument(
         "-w",
         "--weights",
@@ -240,7 +445,11 @@ def main():
         required=False,
         dest="weights",
         default=None,
-        help="Weight for ideal point offset. Default=(0.0) * n_objectives",
+        help=(
+            "Comma-separated weights for the ideal-point offset. Defaults to zeros\n"
+            "which corresponds to the pure component-wise minimum. Fewer weights than\n"
+            "objectives reuse the last provided value."
+        ),
     )
     parser.add_argument(
         "-m",
@@ -249,25 +458,50 @@ def main():
         required=False,
         dest="mode",
         default="weighted",
-        help="Mode for ideal point computation. Default=min. Options: [min (m), weighted (w), geomedian (g)]",
+        help=(
+            "Mode for ideal point computation:\n"
+            "  min       – component-wise minima (default)\n"
+            "  weighted  – honour the --weights offset\n"
+            "  geomedian – geometric median in objective space"
+        ),
     )
     parser.add_argument(
         "-l",
         "--limit",
         "--limits",
         dest="limits",
-        nargs="*",
-        help='Limit filters (needs quotes), e.g., "w_0<1.0", "w_1<-0.0006", "w_2<1.0"',
+        action="append",
+        help=(
+            "Limit filters applied before ranking. Repeat for multiple expressions:\n"
+            '  -l "w_4<800" -l "position_held_hours_max<400"\n'
+            "Metrics accept optional suffixes (.min/.max/.mean/.std). Without a suffix\n"
+            "suite-level aggregates (if available) are used; otherwise the mean."
+        ),
     )
     parser.add_argument(
         "-o",
         "--objectives",
         type=str,
-        help="Comma-separated list of objective names to use for Pareto front (e.g., 'btc_adg_w,btc_mdg_w')",
+        help=(
+            "Restrict the objective vector to the provided comma-separated list\n"
+            "(names or w_i identifiers). By default all objectives stored in the\n"
+            "Pareto entry are used."
+        ),
     )
     args = parser.parse_args()
 
-    pareto_dir = args.pareto_dir.rstrip("/")
+    pareto_dir = args.pareto_dir
+    if not pareto_dir:
+        auto_dir = detect_latest_pareto_dir()
+        if auto_dir is None:
+            parser.error(
+                "No pareto directory specified and none found under optimize_results/. "
+                "Provide a path explicitly."
+            )
+        print(f"[info] Using latest pareto directory: {auto_dir}")
+        pareto_dir = auto_dir
+
+    pareto_dir = pareto_dir.rstrip("/")
     entries = sorted(glob.glob(os.path.join(pareto_dir, "*.json")))
     if not entries:
         if not pareto_dir.endswith("pareto"):
@@ -290,20 +524,19 @@ def main():
         "=": operator.eq,
     }
 
-    def parse_limit_expr(expr: str):
+    def parse_limit_expr(expr: str) -> LimitSpec:
         for op_str in ["<=", ">=", "<", ">", "==", "="]:
             if op_str in expr:
-                key, val = expr.split(op_str)
-                key, val = key.strip(), float(val.strip())
-                return key, OPERATORS[op_str], val
+                key, val = expr.split(op_str, 1)
+                metric, field = _split_metric_field(key.strip())
+                return LimitSpec(metric, field, OPERATORS[op_str], float(val.strip()))
         raise ValueError(f"Invalid limit expression: {expr}")
 
-    limit_checks = []
+    limit_specs: List[LimitSpec] = []
     if args.limits:
         for expr in args.limits:
             try:
-                key, op_fn, val = parse_limit_expr(expr)
-                limit_checks.append((key + "_mean", op_fn, val))
+                limit_specs.append(parse_limit_expr(expr))
             except Exception as e:
                 print(f"Skipping invalid limit expression '{expr}': {e}")
 
@@ -315,10 +548,18 @@ def main():
             if metric_names is None:
                 metric_names = entry.get("optimize", {}).get("scoring", [])
                 metric_name_map = {f"w_{i}": name for i, name in enumerate(metric_names)}
+            metrics_block = entry.get("metrics", {}) or {}
+            objectives = metrics_block.get("objectives", metrics_block)
+            stats_flat: Dict[str, float] = {}
+            aggregated_values: Dict[str, float] = {}
+            if "stats" in metrics_block:
+                stats_flat = flatten_metric_stats(metrics_block["stats"])
+            if "suite_metrics" in entry:
+                stats_flat_suite, aggregated_values_suite = _suite_metrics_to_stats(entry)
+                stats_flat.update(stats_flat_suite)
+                aggregated_values.update(aggregated_values_suite)
             if not w_keys:
-                all_w_keys = sorted(
-                    k for k in entry.get("analyses_combined", {}) if k.startswith("w_")
-                )
+                all_w_keys = sorted(k for k in objectives if k.startswith("w_"))
 
                 # Filter w_keys based on --objectives argument
                 if args.objectives:
@@ -352,12 +593,15 @@ def main():
                     w_keys = sorted(w_keys)
                 else:
                     w_keys = all_w_keys
-            if any(
-                not op(entry.get("analyses_combined", {}).get(key, float("inf")), val)
-                for key, op, val in limit_checks
+            if limit_specs and not _evaluate_limits(
+                limit_specs,
+                stats_flat,
+                aggregated_values,
+                objectives,
+                metric_name_map or {},
             ):
                 continue
-            values = [entry.get("analyses_combined", {}).get(k) for k in w_keys]
+            values = [objectives.get(k) for k in w_keys]
             if all(v is not None for v in values):
                 points.append((*values, h))
                 filenames[h] = os.path.split(entry_path)[-1]

@@ -26,6 +26,11 @@ def _make_mock_pbr():
     )
     module.calc_pprice_diff_int = lambda *args, **kwargs: 0.0
     module.calc_diff = lambda price, reference: price - reference
+    module.calc_order_price_diff = lambda side, price, market: (
+        (0.0 if not market else (1 - price / market))
+        if str(side).lower() in ("buy", "long")
+        else (0.0 if not market else (price / market - 1))
+    )
     module.round_ = lambda value, step: value
 
     def _get_order_id_type_from_string(name: str) -> int:
@@ -53,6 +58,39 @@ def _make_mock_pbr():
 def mock_pbr(monkeypatch):
     stub_module = _make_mock_pbr()
     monkeypatch.setitem(sys.modules, "passivbot_rust", stub_module)
+
+    class _DummyLockException(Exception):
+        pass
+
+    class _DummyLock:
+        def __init__(self, *args, **kwargs):
+            self._locked = False
+            self.fail_when_locked = kwargs.get("fail_when_locked", False)
+
+        def acquire(self, timeout=None, fail_when_locked=False):
+            if self._locked and (self.fail_when_locked or fail_when_locked):
+                raise _DummyLockException("lock already acquired")
+            self._locked = True
+            return True
+
+        def release(self):
+            self._locked = False
+
+        def __enter__(self):
+            if self._locked and self.fail_when_locked:
+                raise _DummyLockException("lock already acquired")
+            self._locked = True
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self._locked = False
+            return False
+
+    portalocker_stub = types.SimpleNamespace(
+        Lock=_DummyLock, exceptions=types.SimpleNamespace(LockException=_DummyLockException)
+    )
+    monkeypatch.setitem(sys.modules, "portalocker", portalocker_stub)
+
     import passivbot
 
     monkeypatch.setattr(passivbot, "pbr", stub_module, raising=False)
@@ -61,7 +99,7 @@ def mock_pbr(monkeypatch):
 def _dummy_config():
     from config_utils import get_template_config, format_config
 
-    cfg = get_template_config("v7")
+    cfg = get_template_config()
     cfg["live"]["user"] = "test_user"
     cfg["live"]["minimum_coin_age_days"] = 0
     for side in ("long", "short"):
@@ -160,6 +198,29 @@ def _make_unstuck_order(symbol="TEST/USDT", type_id=0x1234, price=100.0):
     }
 
 
+def _make_order(
+    symbol="TEST/USDT",
+    *,
+    side="buy",
+    position_side="long",
+    qty=0.1,
+    price=100.0,
+    reduce_only=False,
+    custom_hex=0x0001,
+):
+    suffix = "ro" if reduce_only else "entry"
+    return {
+        "symbol": symbol,
+        "side": side,
+        "position_side": position_side,
+        "qty": qty,
+        "price": price,
+        "reduce_only": reduce_only,
+        "id": f"{position_side}_{side}_{price}",
+        "custom_id": f"0x{custom_hex:04x}{suffix}",
+    }
+
+
 @pytest.mark.asyncio
 async def test_calc_orders_emits_single_unstuck(monkeypatch):
     cfg = _dummy_config()
@@ -226,3 +287,112 @@ async def test_existing_unstuck_blocks_new(monkeypatch):
     assert all(
         not order["custom_id"].startswith("0x1234") for order in to_create
     ), "No new unstuck orders should be created when one is live"
+
+
+@pytest.mark.asyncio
+async def test_manual_mode_skips_side_orders(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+
+    bot.PB_modes["long"][symbol] = "manual"
+    bot.open_orders[symbol] = [
+        _make_order(symbol, side="buy", position_side="long", price=101.0, custom_hex=0x0002)
+    ]
+    bot.active_symbols = [symbol]
+
+    async def fake_calc(self, allow_unstuck=True):
+        return {}
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc, bot)
+
+    async def fake_mprice(sym, **kwargs):
+        return 100.0
+
+    bot.cm.get_current_close = fake_mprice
+
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert to_cancel == []
+    assert to_create == []
+
+
+@pytest.mark.asyncio
+async def test_tp_only_filters_entry_orders(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+
+    bot.PB_modes["long"][symbol] = "tp_only"
+    bot.open_orders[symbol] = []
+    bot.active_symbols = [symbol]
+
+    async def fake_calc(self, allow_unstuck=True):
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    side="buy",
+                    position_side="long",
+                    price=101.0,
+                    reduce_only=False,
+                    custom_hex=0x0003,
+                ),
+                _make_order(
+                    symbol,
+                    side="sell",
+                    position_side="long",
+                    price=102.0,
+                    reduce_only=True,
+                    custom_hex=0x0004,
+                ),
+            ]
+        }
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc, bot)
+
+    async def fake_mprice(sym, **kwargs):
+        return 100.0
+
+    bot.cm.get_current_close = fake_mprice
+
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert to_cancel == []
+    assert len(to_create) == 1
+    assert to_create[0]["reduce_only"] is True
+    assert to_create[0]["price"] == 102.0
+
+
+@pytest.mark.asyncio
+async def test_orders_sorted_by_market_diff(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+
+    bot.PB_modes["long"][symbol] = "normal"
+    bot.open_orders[symbol] = [
+        _make_order(symbol, side="buy", position_side="long", price=102.0, custom_hex=0x0005),
+        _make_order(symbol, side="buy", position_side="long", price=97.0, custom_hex=0x0006),
+    ]
+    bot.active_symbols = [symbol]
+
+    async def fake_calc(self, allow_unstuck=True):
+        return {
+            symbol: [
+                _make_order(symbol, side="buy", position_side="long", price=101.0, custom_hex=0x0007),
+                _make_order(symbol, side="buy", position_side="long", price=95.0, custom_hex=0x0008),
+            ]
+        }
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc, bot)
+
+    async def fake_mprice(sym, **kwargs):
+        return 100.0
+
+    bot.cm.get_current_close = fake_mprice
+
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert [order["price"] for order in to_cancel] == [102.0, 97.0]
+    assert [order["price"] for order in to_create] == [101.0, 95.0]

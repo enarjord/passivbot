@@ -11,7 +11,7 @@ from config_utils import detect_flavor, build_base_config_from_flavor
 
 
 def _template():
-    return get_template_config("v7")
+    return get_template_config()
 
 
 def test_detect_flavor_variants():
@@ -108,17 +108,23 @@ def test_format_config_live_only_adds_sections():
 
 def test_format_config_current_roundtrip_basic():
     # Provide a minimally valid current config and ensure format_config returns a dict with
-    # expected top-level sections and enforces boolean casting for enforce_exposure_limit
+    # expected top-level sections while normalising new exposure controls
     tmpl = _template()
     current = copy.deepcopy(tmpl)
-    # set a non-bool value for enforce_exposure_limit to verify casting to bool
-    current["bot"]["long"]["enforce_exposure_limit"] = 1
-    current["bot"]["short"]["enforce_exposure_limit"] = 0
+    current["bot"]["long"]["risk_wel_enforcer_threshold"] = 0.99
+    current["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.25
+    current["bot"]["long"]["risk_twel_enforcer_threshold"] = 0.95
+    current["bot"]["short"]["risk_wel_enforcer_threshold"] = 1.02
+    current["bot"]["short"]["risk_twel_enforcer_threshold"] = 1.08
     out = format_config(current, verbose=False)
     for k in ["bot", "live", "optimize", "backtest"]:
         assert k in out
-    assert isinstance(out["bot"]["long"]["enforce_exposure_limit"], bool)
-    assert isinstance(out["bot"]["short"]["enforce_exposure_limit"], bool)
+    assert isinstance(out["bot"]["long"]["risk_wel_enforcer_threshold"], (int, float))
+    assert isinstance(out["bot"]["long"]["risk_we_excess_allowance_pct"], float)
+    assert isinstance(out["bot"]["long"]["risk_twel_enforcer_threshold"], (int, float))
+    assert isinstance(out["bot"]["short"]["risk_wel_enforcer_threshold"], (int, float))
+    assert isinstance(out["bot"]["short"]["risk_twel_enforcer_threshold"], (int, float))
+    assert "risk_twel_enforcer_threshold" not in out
 
 
 def test_format_config_preserves_approved_coins_dict():

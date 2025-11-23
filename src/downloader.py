@@ -135,14 +135,14 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         "ema_span_0",
         "ema_span_1",
         "filter_volume_ema_span",
-        "filter_log_range_ema_span",
+        "filter_volatility_ema_span",
     ]
 
     for _, long_params, short_params in _iter_param_sets(config):
         for params in (long_params, short_params):
             for field in minute_fields:
                 max_minutes = max(max_minutes, _to_float(params.get(field)))
-            log_span_minutes = _to_float(params.get("entry_grid_spacing_log_span_hours")) * 60.0
+            log_span_minutes = _to_float(params.get("entry_volatility_ema_span_hours")) * 60.0
             max_minutes = max(max_minutes, log_span_minutes)
 
     bounds = config.get("optimize", {}).get("bounds", {})
@@ -150,15 +150,15 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         "long_ema_span_0",
         "long_ema_span_1",
         "long_filter_volume_ema_span",
-        "long_filter_log_range_ema_span",
+        "long_filter_volatility_ema_span",
         "short_ema_span_0",
         "short_ema_span_1",
         "short_filter_volume_ema_span",
-        "short_filter_log_range_ema_span",
+        "short_filter_volatility_ema_span",
     ]
     bound_keys_hours = [
-        "long_entry_grid_spacing_log_span_hours",
-        "short_entry_grid_spacing_log_span_hours",
+        "long_entry_volatility_ema_span_hours",
+        "short_entry_volatility_ema_span_hours",
     ]
 
     for key in bound_keys_minutes:
@@ -185,7 +185,7 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
         "ema_span_0",
         "ema_span_1",
         "filter_volume_ema_span",
-        "filter_log_range_ema_span",
+        "filter_volatility_ema_span",
     ]
     for coin, long_params, short_params in _iter_param_sets(config):
         max_minutes = 0.0
@@ -194,7 +194,7 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
                 max_minutes = max(max_minutes, _to_float(params.get(field)))
             max_minutes = max(
                 max_minutes,
-                _to_float(params.get("entry_grid_spacing_log_span_hours")) * 60.0,
+                _to_float(params.get("entry_volatility_ema_span_hours")) * 60.0,
             )
         if not math.isfinite(max_minutes):
             per_coin[coin] = 0
@@ -215,6 +215,68 @@ def dump_ohlcv_data(data, filepath):
     else:
         raise Exception(f"Unknown data format for {filepath}")
     np.save(filepath, deduplicate_rows(data))
+
+
+def canonicalize_daily_ohlcvs(data, start_ts: int, interval_ms: int = 60_000) -> pd.DataFrame:
+    """
+    Return a 1-minute canonical OHLCV DataFrame for the given day.
+
+    Missing minutes are forward/back filled for price columns and zero-filled for volume.
+    Duplicate timestamps keep the last observation.
+    """
+    columns = ["timestamp", "open", "high", "low", "close", "volume"]
+    if isinstance(data, np.ndarray):
+        df = pd.DataFrame(data, columns=columns)
+    elif isinstance(data, pd.DataFrame):
+        df = data[columns].copy()
+    else:
+        raise TypeError("data must be a pandas DataFrame or numpy array")
+
+    df = df.reset_index(drop=True)
+    df = ensure_millis(df)
+    for col in columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    end_ts = start_ts + 24 * 60 * 60 * 1000
+    df = df.dropna(subset=["timestamp"])
+    df = df[(df["timestamp"] >= start_ts) & (df["timestamp"] < end_ts)]
+    df = df.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
+
+    if df.empty:
+        raise ValueError("No data available for canonicalization")
+
+    expected_ts = np.arange(start_ts, end_ts, interval_ms)
+    reindexed = df.set_index("timestamp").reindex(expected_ts)
+    missing_mask = reindexed[["open", "high", "low", "close", "volume"]].isna().all(axis=1)
+
+    close = reindexed["close"].astype(float)
+    close = close.ffill().bfill()
+    if close.isna().any():
+        raise ValueError("Unable to fill close prices while canonicalizing daily OHLCV data")
+    reindexed["close"] = close
+
+    for col in ["open", "high", "low"]:
+        series = reindexed[col].astype(float)
+        series = series.ffill().bfill()
+        series = series.fillna(reindexed["close"])
+        series = pd.Series(
+            np.where(missing_mask, reindexed["close"], series),
+            index=reindexed.index,
+            dtype=float,
+        )
+        reindexed[col] = series
+
+    volume = reindexed["volume"].astype(float)
+    volume = volume.fillna(0.0)
+    reindexed["volume"] = volume
+
+    result = reindexed.reset_index().rename(columns={"index": "timestamp"})
+    return result[columns]
+
+
+def dump_daily_ohlcv_data(data, filepath, start_ts: int, interval_ms: int = 60_000):
+    canonical = canonicalize_daily_ohlcvs(data, start_ts, interval_ms=interval_ms)
+    dump_ohlcv_data(canonical, filepath)
 
 
 def deduplicate_rows(arr):
@@ -842,7 +904,11 @@ class OHLCVManager:
                         d_fpath = os.path.join(dirpath, fpath)
                         if not os.path.exists(d_fpath):
                             n_days_dumped += 1
-                            dump_ohlcv_data(daily_data, d_fpath)
+                            dump_daily_ohlcv_data(
+                                daily_data,
+                                d_fpath,
+                                date_to_ts(date.strftime("%Y-%m-%d")),
+                            )
                     else:
                         logging.info(
                             f"binanceusdm incomplete daily data for {coin} {date} {len(daily_data)}"
@@ -883,7 +949,12 @@ class OHLCVManager:
         try:
             csv = await get_zip_binance(url)
             if not csv.empty:
-                dump_ohlcv_data(ensure_millis(csv), fpath)
+                day = Path(fpath).stem
+                dump_daily_ohlcv_data(
+                    ensure_millis(csv),
+                    fpath,
+                    date_to_ts(day),
+                )
                 if self.verbose:
                     logging.info(f"binanceusdm Dumped data {fpath}")
                 return True
@@ -957,9 +1028,10 @@ class OHLCVManager:
             )
             ohlcvs["timestamp"] = ohlcvs.index
             fpath = os.path.join(dirpath, day + ".npy")
-            dump_ohlcv_data(
+            dump_daily_ohlcv_data(
                 ensure_millis(ohlcvs[["timestamp", "open", "high", "low", "close", "volume"]]),
                 fpath,
+                date_to_ts(day),
             )
             if self.verbose:
                 logging.info(f"bybit Dumped {fpath}")
@@ -1010,7 +1082,7 @@ class OHLCVManager:
     async def download_single_bitget(self, base_url, symbolf, day, fpath):
         url = self.get_url_bitget(base_url, symbolf, day)
         res = await get_zip_bitget(url)
-        dump_ohlcv_data(ensure_millis(res), fpath)
+        dump_daily_ohlcv_data(ensure_millis(res), fpath, date_to_ts(day))
         if self.verbose:
             logging.info(f"bitget Dumped daily data {fpath}")
 
@@ -1134,7 +1206,7 @@ class OHLCVManager:
             dfc["volume"] = dfc["volume"].fillna(0.0)
             dfc = dfc.reset_index().rename(columns={"index": "timestamp"})
             if len(dfc) == 1440:
-                dump_ohlcv_data(ensure_millis(dfc), fpath)
+                dump_daily_ohlcv_data(ensure_millis(dfc), fpath, start_ts_day)
                 if self.verbose:
                     logging.info(f"kucoin Dumped daily data {fpath}")
             else:
@@ -1254,7 +1326,7 @@ class OHLCVManager:
 
         # Dump final day data only if is a full day
         if len(df_day) == 1440:
-            dump_ohlcv_data(ensure_millis(df_day), fpath)
+            dump_daily_ohlcv_data(ensure_millis(df_day), fpath, start_ts_day)
             if self.verbose:
                 logging.info(f"gateio Dumped daily OHLCV data for {symbol} to {fpath}")
 
@@ -1518,9 +1590,15 @@ async def prepare_hlcvs_internal(
     return mss, timestamps, unified_array
 
 
-async def prepare_hlcvs_combined(config):
+async def prepare_hlcvs_combined(config, forced_sources=None):
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     exchanges_to_consider = [normalize_exchange_name(e) for e in backtest_exchanges]
+    forced_sources = forced_sources or {}
+    normalized_forced_sources = {
+        str(coin): normalize_exchange_name(exchange)
+        for coin, exchange in forced_sources.items()
+        if exchange
+    }
 
     requested_start_date = require_config_value(config, "backtest.start_date")
     requested_start_ts = int(date_to_ts(requested_start_date))
@@ -1550,6 +1628,16 @@ async def prepare_hlcvs_combined(config):
                 config, "backtest.gap_tolerance_ohlcvs_minutes"
             ),
         )
+    extra_forced = set(normalized_forced_sources.values()) - set(exchanges_to_consider)
+    for ex in extra_forced:
+        om_dict[ex] = OHLCVManager(
+            ex,
+            effective_start_date,
+            end_date,
+            gap_tolerance_ohlcvs_minutes=require_config_value(
+                config, "backtest.gap_tolerance_ohlcvs_minutes"
+            ),
+        )
     btc_om = None
 
     try:
@@ -1559,6 +1647,7 @@ async def prepare_hlcvs_combined(config):
             effective_start_ts,
             requested_start_ts,
             end_ts,
+            normalized_forced_sources,
         )
 
         # Always fetch BTC/USD prices
@@ -1604,6 +1693,7 @@ async def _prepare_hlcvs_combined_impl(
     base_start_ts,
     _requested_start_ts,
     end_ts,
+    forced_sources,
 ):
     """
     Amalgamates data from different exchanges for each coin in config, then unifies them into a single
@@ -1675,9 +1765,14 @@ async def _prepare_hlcvs_combined_impl(
             # No coverage needed or possible
             continue
 
-        # >>> Instead of a normal for-loop over exchanges, do concurrent tasks:
+        forced_exchange = forced_sources.get(coin)
+        candidate_exchanges = [forced_exchange] if forced_exchange else exchanges_to_consider
+        for ex in candidate_exchanges:
+            if ex not in om_dict:
+                raise ValueError(f"Unknown exchange '{ex}' requested for coin {coin}")
+
         tasks = []
-        for ex in exchanges_to_consider:
+        for ex in candidate_exchanges:
             tasks.append(
                 asyncio.create_task(
                     fetch_data_for_coin_and_exchange(
@@ -1697,14 +1792,23 @@ async def _prepare_hlcvs_combined_impl(
             exchange_candidates.append((ex, df, coverage_count, gap_count, total_volume))
 
         if not exchange_candidates:
+            if forced_exchange:
+                raise ValueError(
+                    f"No exchange data found for coin {coin} on forced exchange {forced_exchange}."
+                )
             logging.info(f"No exchange data found at all for coin {coin}. Skipping.")
             continue
 
-        # Now pick the "best" exchange (per your partial-coverage logic):
-        if len(exchange_candidates) == 1:
+        if forced_exchange:
+            chosen = [c for c in exchange_candidates if c[0] == forced_exchange]
+            if not chosen:
+                raise ValueError(
+                    f"Forced exchange {forced_exchange} returned no usable data for coin {coin}."
+                )
+            best_exchange, best_df, best_cov, best_gaps, best_vol = chosen[0]
+        elif len(exchange_candidates) == 1:
             best_exchange, best_df, best_cov, best_gaps, best_vol = exchange_candidates[0]
         else:
-            # Sort by coverage desc, gap_count asc, volume desc
             exchange_candidates.sort(key=lambda x: (x[2], -x[3], x[4]), reverse=True)
             best_exchange, best_df, best_cov, best_gaps, best_vol = exchange_candidates[0]
         logging.info(f"{coin} exchange preference: {[x[0] for x in exchange_candidates]}")
@@ -1995,7 +2099,7 @@ async def main():
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
     )
-    template_config = get_template_config("v7")
+    template_config = get_template_config()
     del template_config["optimize"]
     del template_config["bot"]
     template_config["live"] = {

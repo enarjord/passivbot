@@ -9,6 +9,8 @@ from tools.event_loop_policy import set_windows_event_loop_policy
 set_windows_event_loop_policy()
 import asyncio
 import argparse
+from dataclasses import dataclass
+from typing import Any, Iterable, Sequence
 from config_utils import (
     load_config,
     dump_config,
@@ -20,6 +22,7 @@ from config_utils import (
     require_config_value,
     require_live_value,
     get_optional_config_value,
+    strip_config_metadata,
 )
 from utils import (
     utc_ms,
@@ -28,6 +31,7 @@ from utils import (
     format_end_date,
     format_approved_ignored_coins,
     date_to_ts,
+    trim_analysis_aliases,
 )
 from pure_funcs import (
     ts_to_date,
@@ -43,85 +47,389 @@ from downloader import (
     compute_per_coin_warmup_minutes,
 )
 from pathlib import Path
-from plotting import plot_fills_forager
+from plotting import (
+    create_forager_balance_figures,
+    create_forager_coin_figures,
+    save_figures,
+)
 from collections import defaultdict
-import matplotlib.pyplot as plt
 import logging
 from main import manage_rust_compilation
 import gzip
 import traceback
 
-import tempfile
-from contextlib import contextmanager
-from logging_setup import configure_logging
-
-
-@contextmanager
-def create_shared_memory_file(array: np.ndarray):
-    with tempfile.NamedTemporaryFile(delete=False) as f:
-        filepath = f.name
-        array.tofile(f)
-
-    try:
-        yield filepath
-    finally:
-        # Ensure file is closed before deleting
-        try:
-            os.unlink(filepath)
-        except PermissionError:
-            import time
-
-            time.sleep(0.1)  # Wait briefly and try again
-            try:
-                os.unlink(filepath)
-            except Exception as e:
-                print(f"Failed to delete temporary file {filepath}: {e}")
-
-
-plt.rcParams["figure.figsize"] = [29, 18]
+from logging_setup import configure_logging, resolve_log_level
+from suite_runner import extract_suite_config, run_backtest_suite_async
 
 
 def oj(*x):
     return os.path.join(*x)
 
 
-def calculate_flat_btc_balance_minutes(fills):
-    if fills is None or len(fills) == 0:
-        return 0.0
+def _split_symbol_parts(symbol: str):
+    symbol = str(symbol or "")
+    if not symbol:
+        return "", "USD"
+    if "/" in symbol:
+        base, rest = symbol.split("/", 1)
+    else:
+        base, rest = symbol, ""
+    if ":" in rest:
+        quote = rest.split(":", 1)[0]
+    elif rest:
+        quote = rest
+    elif ":" in symbol:
+        base, quote = symbol.split(":", 1)
+    else:
+        quote = "USD"
+    return base or symbol, quote or "USD"
 
-    change_minutes = []
-    last_balance_btc = None
-    for fill in fills:
-        try:
-            minute = float(fill[0])
-            balance_btc = float(fill[5])
-        except (IndexError, TypeError, ValueError):
-            return 0.0
 
-        if last_balance_btc is None or balance_btc != last_balance_btc:
-            change_minutes.append(minute)
-            last_balance_btc = balance_btc
+def _float_or(value, default=0.0):
+    try:
+        if value is None:
+            raise TypeError
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
 
-    if len(change_minutes) >= 2:
-        longest = max(
-            change_minutes[i] - change_minutes[i - 1] for i in range(1, len(change_minutes))
+
+def _int_or(value, default=0):
+    try:
+        if value is None:
+            raise TypeError
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _build_coin_metadata_entries(
+    coins_order,
+    exchange,
+    mss,
+    first_valid_indices,
+    last_valid_indices,
+    warmup_minutes,
+    trade_start_indices,
+):
+    entries = []
+    for idx, coin in enumerate(coins_order):
+        entry = mss.get(coin, {}) if isinstance(mss, dict) else {}
+        symbol = str(entry.get("symbol", coin))
+        base_from_symbol, quote_from_symbol = _split_symbol_parts(symbol)
+        coin_shorthand = entry.get("coin") or entry.get("base") or base_from_symbol
+        entry_exchange = entry.get("exchange") or exchange
+        maker_fee = entry.get("maker_fee")
+        if maker_fee is None:
+            maker_fee = entry.get("maker")
+        taker_fee = entry.get("taker_fee")
+        if taker_fee is None:
+            taker_fee = entry.get("taker")
+        entries.append(
+            {
+                "index": idx,
+                "symbol": symbol,
+                "coin": coin_shorthand,
+                "exchange": entry_exchange,
+                "quote": entry.get("quote") or quote_from_symbol,
+                "base": entry.get("base") or base_from_symbol,
+                "qty_step": _float_or(entry.get("qty_step")),
+                "price_step": _float_or(entry.get("price_step")),
+                "min_qty": _float_or(entry.get("min_qty")),
+                "min_cost": _float_or(entry.get("min_cost")),
+                "c_mult": _float_or(entry.get("c_mult"), 1.0),
+                "maker_fee": _float_or(maker_fee),
+                "taker_fee": _float_or(taker_fee),
+                "first_valid_index": _int_or(first_valid_indices[idx]),
+                "last_valid_index": _int_or(last_valid_indices[idx]),
+                "warmup_minutes": _int_or(warmup_minutes[idx]),
+                "trade_start_index": _int_or(trade_start_indices[idx]),
+            }
         )
-        return float(longest)
-
-    return 0.0
+    return entries
 
 
-def process_forager_fills(fills, coins, hlcvs, equities, equities_btc):
+def _build_hlcvs_bundle(
+    hlcvs,
+    btc_usd_prices,
+    timestamps,
+    config,
+    exchange,
+    mss,
+    coins_order,
+    first_valid_indices,
+    last_valid_indices,
+    warmup_minutes,
+    trade_start_indices,
+    requested_start_ts,
+    *,
+    coin_indices: list[int] | None = None,
+) -> pbr.HlcvsBundle:
+    subset_positions = None
+    if coin_indices is not None:
+        if len(coin_indices) != len(coins_order):
+            raise ValueError(
+                f"coin_indices length ({len(coin_indices)}) does not match coins ({len(coins_order)})"
+            )
+        subset_positions = [int(idx) for idx in coin_indices]
+    hlcvs_arr = np.ascontiguousarray(hlcvs, dtype=np.float64)
+    if subset_positions is not None:
+        hlcvs_arr = np.ascontiguousarray(hlcvs_arr[:, subset_positions, :], dtype=np.float64)
+    btc_arr = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
+    if timestamps is None:
+        timestamps_arr = np.arange(hlcvs_arr.shape[0], dtype=np.int64)
+    else:
+        timestamps_arr = np.ascontiguousarray(timestamps, dtype=np.int64)
+    meta_overrides = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
+    warmup_requested = int(
+        meta_overrides.get("warmup_minutes_requested", compute_backtest_warmup_minutes(config))
+    )
+    warmup_provided = int(meta_overrides.get("warmup_minutes_provided", warmup_requested))
+    requested_ts = int(meta_overrides.get("requested_start_ts", requested_start_ts))
+    effective_start_ts = int(
+        meta_overrides.get("effective_start_ts", int(timestamps_arr[0]) if len(timestamps_arr) else 0)
+    )
+    coin_meta_entries = _build_coin_metadata_entries(
+        coins_order,
+        exchange,
+        mss,
+        first_valid_indices,
+        last_valid_indices,
+        warmup_minutes,
+        trade_start_indices,
+    )
+    bundle_meta = {
+        "requested_start_timestamp_ms": requested_ts,
+        "effective_start_timestamp_ms": effective_start_ts,
+        "warmup_minutes_requested": warmup_requested,
+        "warmup_minutes_provided": warmup_provided,
+        "coins": coin_meta_entries,
+    }
+    return pbr.HlcvsBundle(hlcvs_arr, btc_arr, timestamps_arr, bundle_meta)
+
+
+@dataclass
+class BacktestPayload:
+    """Container for everything needed to run a backtest via the Rust engine."""
+
+    bundle: Any
+    bot_params_list: list
+    exchange_params: list
+    backtest_params: dict
+
+
+def build_backtest_payload(
+    hlcvs,
+    mss,
+    config: dict,
+    exchange: str,
+    btc_usd_prices,
+    timestamps=None,
+    *,
+    coin_indices: list[int] | None = None,
+) -> BacktestPayload:
+    """
+    Assemble the bundle, bot params, and metadata needed to execute a backtest.
+    """
+
+    bot_params_list, exchange_params, backtest_params = prep_backtest_args(config, mss, exchange)
+    backtest_params = dict(backtest_params)
+    coins_order = backtest_params.get("coins", [])
+
+    # Inject first timestamp (ms) into backtest params; default to 0 if unknown
+    try:
+        first_ts_ms = int(timestamps[0]) if (timestamps is not None and len(timestamps) > 0) else 0
+    except Exception:
+        first_ts_ms = 0
+    backtest_params["first_timestamp_ms"] = first_ts_ms
+
+    warmup_map = compute_per_coin_warmup_minutes(config)
+    default_warm = int(warmup_map.get("__default__", 0))
+    first_valid_indices = []
+    last_valid_indices = []
+    warmup_minutes = []
+    trade_start_indices = []
+    total_steps = hlcvs.shape[0]
+    for idx, coin in enumerate(coins_order):
+        meta = mss.get(coin, {}) if isinstance(mss, dict) else {}
+        first_idx = int(meta.get("first_valid_index", 0))
+        last_idx = int(meta.get("last_valid_index", total_steps - 1))
+        if first_idx >= total_steps:
+            first_idx = total_steps
+        if last_idx >= total_steps:
+            last_idx = total_steps - 1
+        first_valid_indices.append(first_idx)
+        last_valid_indices.append(last_idx)
+        warm = int(meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
+        warmup_minutes.append(warm)
+        if first_idx > last_idx:
+            trade_idx = first_idx
+        else:
+            trade_idx = min(last_idx, first_idx + warm)
+        trade_start_indices.append(trade_idx)
+    backtest_params["first_valid_indices"] = first_valid_indices
+    backtest_params["last_valid_indices"] = last_valid_indices
+    backtest_params["warmup_minutes"] = warmup_minutes
+    backtest_params["trade_start_indices"] = trade_start_indices
+    backtest_params["global_warmup_bars"] = compute_backtest_warmup_minutes(config)
+
+    meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
+    candidate_start = meta.get(
+        "requested_start_ts", require_config_value(config, "backtest.start_date")
+    )
+    try:
+        if isinstance(candidate_start, str):
+            requested_start_ts = int(date_to_ts(candidate_start))
+        else:
+            requested_start_ts = int(candidate_start)
+    except Exception:
+        requested_start_ts = int(date_to_ts(require_config_value(config, "backtest.start_date")))
+    backtest_params["requested_start_timestamp_ms"] = requested_start_ts
+
+    bundle = _build_hlcvs_bundle(
+        hlcvs,
+        btc_usd_prices,
+        timestamps,
+        config,
+        exchange,
+        mss,
+        coins_order,
+        first_valid_indices,
+        last_valid_indices,
+        warmup_minutes,
+        trade_start_indices,
+        requested_start_ts,
+        coin_indices=coin_indices,
+    )
+
+    if coin_indices is not None:
+        backtest_params["active_coin_indices"] = list(range(len(coins_order)))
+
+    return BacktestPayload(
+        bundle=bundle,
+        bot_params_list=bot_params_list,
+        exchange_params=exchange_params,
+        backtest_params=backtest_params,
+    )
+
+
+def execute_backtest(payload: BacktestPayload, config: dict):
+    """
+    Execute a prepared backtest payload and expand the resulting analysis.
+    """
+
+    (
+        fills,
+        equities_array,
+        analysis_usd,
+        analysis_btc,
+    ) = pbr.run_backtest_bundle(
+        payload.bundle,
+        payload.bot_params_list,
+        payload.exchange_params,
+        payload.backtest_params,
+    )
+
+    equities_array = np.asarray(equities_array)
+    analysis = expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config)
+    return fills, equities_array, analysis
+
+
+def subset_backtest_payload(
+    payload: BacktestPayload,
+    *,
+    coin_indices: Sequence[int] | None = None,
+    coin_symbols: Iterable[str] | None = None,
+) -> BacktestPayload:
+    """
+    Return a new payload sliced down to a subset of coins.
+
+    Args:
+        payload: Source payload produced by build_backtest_payload.
+        coin_indices: Ordered iterable of integer positions to keep.
+        coin_symbols: Optional iterable of symbol strings (either full symbol or shorthand coin).
+    """
+
+    if coin_indices is None and coin_symbols is None:
+        raise ValueError("Provide either coin_indices or coin_symbols when subsetting.")
+
+    bundle_meta = payload.bundle.meta
+    coins_meta = bundle_meta["coins"]
+
+    if coin_symbols is not None:
+        requested = {str(sym) for sym in coin_symbols}
+        lookup = {}
+        for pos, coin in enumerate(coins_meta):
+            lookup.setdefault(coin["symbol"], pos)
+            lookup.setdefault(coin.get("coin"), pos)
+        selected_positions = []
+        for sym in requested:
+            if sym not in lookup:
+                raise ValueError(f"Coin symbol '{sym}' not present in payload.")
+            selected_positions.append(lookup[sym])
+        selected_positions.sort()
+    else:
+        selected_positions = [int(idx) for idx in coin_indices]
+        for idx in selected_positions:
+            if idx < 0 or idx >= len(coins_meta):
+                raise ValueError(f"Coin index {idx} outside valid range.")
+
+    hlcvs_np = np.asarray(payload.bundle.hlcvs)
+    subset_hlcvs = np.ascontiguousarray(hlcvs_np[:, selected_positions, :], dtype=np.float64)
+    btc_np = np.ascontiguousarray(np.asarray(payload.bundle.btc_usd), dtype=np.float64)
+    ts_np = np.ascontiguousarray(np.asarray(payload.bundle.timestamps), dtype=np.int64)
+
+    new_meta = deepcopy(bundle_meta)
+    new_meta["coins"] = []
+    for new_idx, pos in enumerate(selected_positions):
+        coin_entry = deepcopy(coins_meta[pos])
+        coin_entry["index"] = new_idx
+        new_meta["coins"].append(coin_entry)
+
+    new_bundle = pbr.HlcvsBundle(subset_hlcvs, btc_np, ts_np, new_meta)
+
+    def _select(seq):
+        return [seq[pos] for pos in selected_positions]
+
+    new_bot = _select(payload.bot_params_list)
+    new_exchange_params = _select(payload.exchange_params)
+    new_backtest_params = deepcopy(payload.backtest_params)
+    for key in [
+        "coins",
+        "first_valid_indices",
+        "last_valid_indices",
+        "warmup_minutes",
+        "trade_start_indices",
+    ]:
+        if key in new_backtest_params and isinstance(new_backtest_params[key], list):
+            new_backtest_params[key] = _select(new_backtest_params[key])
+
+    return BacktestPayload(
+        bundle=new_bundle,
+        bot_params_list=new_bot,
+        exchange_params=new_exchange_params,
+        backtest_params=new_backtest_params,
+    )
+
+
+def process_forager_fills(
+    fills,
+    coins,
+    hlcvs,
+    equities_array,
+    balance_sample_divider: int = 60,
+):
     fdf = pd.DataFrame(
         fills,
         columns=[
-            "minute",
+            "index",
+            "timestamp",
             "coin",
             "pnl",
             "fee_paid",
-            "balance",
-            "balance_btc",
-            "balance_usd",
+            "usd_total_balance",
+            "btc_cash_wallet",
+            "usd_cash_wallet",
             "btc_price",
             "qty",
             "price",
@@ -132,6 +440,31 @@ def process_forager_fills(fills, coins, hlcvs, equities, equities_btc):
             "total_wallet_exposure",
         ],
     )
+    if not fdf.empty:
+        fdf["timestamp"] = pd.to_datetime(fdf["timestamp"].astype(np.int64), unit="ms")
+        fdf["index"] = fdf["index"].astype(int)
+        fdf["minute"] = fdf["index"].astype(int)
+        numeric_cols = [
+            "pnl",
+            "fee_paid",
+            "usd_total_balance",
+            "btc_cash_wallet",
+            "usd_cash_wallet",
+            "btc_price",
+            "qty",
+            "price",
+            "psize",
+            "pprice",
+        ]
+        fdf[numeric_cols] = fdf[numeric_cols].apply(pd.to_numeric, errors="coerce")
+        fdf["btc_total_balance"] = np.where(
+            fdf["btc_price"] > 0.0,
+            fdf["usd_total_balance"] / fdf["btc_price"],
+            np.nan,
+        )
+    else:
+        fdf["minute"] = pd.Series(dtype=int)
+        fdf["btc_total_balance"] = pd.Series(dtype=float)
     analysis_appendix = {}
 
     pnls = {}
@@ -145,21 +478,90 @@ def process_forager_fills(fills, coins, hlcvs, equities, equities_btc):
             continue
         pnls[pside] = profit + loss
         analysis_appendix[f"loss_profit_ratio_{pside}"] = abs(loss / profit)
-    div_by = 60  # save some disk space. Set to 1 to dump uncropped
     analysis_appendix["pnl_ratio_long_short"] = pnls["long"] / (pnls["long"] + pnls["short"])
-    bdf = fdf.groupby((fdf.minute // div_by) * div_by).balance.last()
-    bbdf = fdf.groupby((fdf.minute // div_by) * div_by).balance_btc.last()
-    edf = pd.Series(equities).iloc[::div_by]
-    ebdf = pd.Series(equities_btc).iloc[::div_by]
-    nidx = np.arange(min(bdf.index[0], edf.index[0]), max(bdf.index[-1], edf.index[-1]), div_by)
-    bal_eq = (
-        pd.DataFrame(
-            {"balance": bdf, "equity": edf, "balance_btc": bbdf, "equity_btc": ebdf}, index=nidx
+    sample_divider = max(1, int(balance_sample_divider))
+    if not fdf.empty:
+        timestamps_ns = fdf["timestamp"].astype("int64")
+        bucket = (timestamps_ns // (sample_divider * 60_000 * 1_000_000)) * (
+            sample_divider * 60_000 * 1_000_000
         )
-        .astype(float)
-        .ffill()
-        .bfill()
+        usd_cash_series = fdf.groupby(bucket)["usd_cash_wallet"].last().rename("usd_cash_wallet")
+        usd_total_balance_series = (
+            fdf.groupby(bucket)["usd_total_balance"].last().rename("usd_total_balance")
+        )
+        btc_cash_series = fdf.groupby(bucket)["btc_cash_wallet"].last().rename("btc_cash_wallet")
+        btc_total_balance_series = (
+            fdf.groupby(bucket)["btc_total_balance"].last().rename("btc_total_balance")
+        )
+        # convert to datetime index for easier alignment
+        usd_cash_series.index = pd.to_datetime(usd_cash_series.index, unit="ns")
+        usd_total_balance_series.index = pd.to_datetime(usd_total_balance_series.index, unit="ns")
+        btc_cash_series.index = pd.to_datetime(btc_cash_series.index, unit="ns")
+        btc_total_balance_series.index = pd.to_datetime(btc_total_balance_series.index, unit="ns")
+    else:
+        usd_cash_series = pd.Series(dtype=float, name="usd_cash_wallet")
+        usd_total_balance_series = pd.Series(dtype=float, name="usd_total_balance")
+        btc_cash_series = pd.Series(dtype=float, name="btc_cash_wallet")
+        btc_total_balance_series = pd.Series(dtype=float, name="btc_total_balance")
+    equities_array = np.asarray(equities_array)
+    equities_index = pd.to_datetime(equities_array[:, 0].astype(np.int64), unit="ms")
+    edf = pd.Series(
+        equities_array[:, 1],
+        index=equities_index,
+        name="usd_total_equity",
     )
+    ebdf = pd.Series(
+        equities_array[:, 2],
+        index=equities_index,
+        name="btc_total_equity",
+    )
+    bal_eq = pd.concat(
+        [
+            usd_cash_series,
+            usd_total_balance_series,
+            edf,
+            btc_cash_series,
+            btc_total_balance_series,
+            ebdf,
+        ],
+        axis=1,
+        join="outer",
+    )
+    if bal_eq.empty:
+        bal_eq = pd.DataFrame(
+            columns=[
+                "usd_cash_wallet",
+                "usd_total_balance",
+                "usd_total_equity",
+                "btc_cash_wallet",
+                "btc_total_balance",
+                "btc_total_equity",
+            ]
+        )
+    else:
+        bal_eq = bal_eq.sort_index()
+        bal_eq = bal_eq[~bal_eq.index.duplicated(keep="first")]
+        bal_eq = (
+            bal_eq.reindex(
+                columns=[
+                    "usd_cash_wallet",
+                    "usd_total_balance",
+                    "usd_total_equity",
+                    "btc_cash_wallet",
+                    "btc_total_balance",
+                    "btc_total_equity",
+                ]
+            )
+            .ffill()
+            .bfill()
+        )
+        if sample_divider > 1 and not bal_eq.empty:
+            try:
+                bal_eq = bal_eq.resample(f"{sample_divider}min").last()
+            except ValueError:
+                bal_eq = bal_eq.iloc[::sample_divider]
+            bal_eq = bal_eq.dropna(how="all").ffill().bfill()
+    bal_eq = bal_eq.round(4).astype(np.float32)
     return fdf, sort_dict_keys(analysis_appendix), bal_eq
 
 
@@ -205,6 +607,8 @@ def get_cache_hash(config, exchange):
     exchanges_cfg = require_config_value(config, "backtest.exchanges")
     approved_coins = require_live_value(config, "approved_coins")
     minimum_coin_age = require_live_value(config, "minimum_coin_age_days")
+    coin_sources = config.get("backtest", {}).get("coin_sources") or {}
+    coin_sources_sorted = sorted((str(k), str(v)) for k, v in coin_sources.items())
     to_hash = {
         "coins": approved_coins,
         "end_date": format_end_date(require_config_value(config, "backtest.end_date")),
@@ -215,6 +619,7 @@ def get_cache_hash(config, exchange):
             config, "backtest.gap_tolerance_ohlcvs_minutes"
         ),
         "warmup_minutes": compute_backtest_warmup_minutes(config),
+        "coin_sources": coin_sources_sorted,
     }
     return calc_hash(to_hash)
 
@@ -248,9 +653,10 @@ def load_coins_hlcvs_from_cache(config, exchange):
                 with gzip.open(btc_fname, "rb") as f:
                     btc_usd_prices = np.load(f)
             else:
-                # Backward compatibility: default to 1.0s if not cached
-                logging.info(f"{exchange} No BTC/USD prices in cache, using default array of 1.0s")
-                btc_usd_prices = np.ones(hlcvs.shape[0], dtype=np.float64)
+                logging.info(
+                    f"{exchange} No BTC/USD prices in cache; cache invalid for fractional collateral"
+                )
+                return None
         else:
             fname = cache_dir / "hlcvs.npy"
             logging.info(f"{exchange} Attempting to load hlcvs data from cache {fname}...")
@@ -269,9 +675,10 @@ def load_coins_hlcvs_from_cache(config, exchange):
                 )
                 btc_usd_prices = np.load(btc_fname)
             else:
-                # Backward compatibility: default to 1.0s if not cached
-                logging.info(f"{exchange} No BTC/USD prices in cache, using default array of 1.0s")
-                btc_usd_prices = np.ones(hlcvs.shape[0], dtype=np.float64)
+                logging.info(
+                    f"{exchange} No BTC/USD prices in cache; cache invalid for fractional collateral"
+                )
+                return None
         results_path = oj(require_config_value(config, "backtest.base_dir"), exchange, "")
         return cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps
     return None
@@ -394,7 +801,10 @@ async def prepare_hlcvs_mss(config, exchange):
     except Exception as e:
         logging.info(f"Unable to load hlcvs data from cache: {e}. Fetching...")
     if exchange == "combined":
-        mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs_combined(config)
+        forced_sources = config.get("backtest", {}).get("coin_sources")
+        mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs_combined(
+            config, forced_sources=forced_sources
+        )
     else:
         mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(config, exchange)
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
@@ -445,23 +855,33 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             for coin in coins
         ]
     if backtest_params is None:
+        btc_collateral_cap = float(require_config_value(config, "backtest.btc_collateral_cap"))
+        btc_collateral_ltv_cap = require_config_value(config, "backtest.btc_collateral_ltv_cap")
+        if btc_collateral_ltv_cap is not None:
+            btc_collateral_ltv_cap = float(btc_collateral_ltv_cap)
         backtest_params = {
             "starting_balance": require_config_value(config, "backtest.starting_balance"),
             "maker_fee": mss[coins[0]]["maker"],
             "coins": coins,
-            "use_btc_collateral": bool(require_config_value(config, "backtest.use_btc_collateral")),
+            "btc_collateral_cap": btc_collateral_cap,
+            "btc_collateral_ltv_cap": btc_collateral_ltv_cap,
             "requested_start_timestamp_ms": 0,
             "first_valid_indices": [],
             "last_valid_indices": [],
             "warmup_minutes": [],
             "trade_start_indices": [],
             "global_warmup_bars": 0,
+            "metrics_only": False,
+            "filter_by_min_effective_cost": bool(
+                require_config_value(config, "backtest.filter_by_min_effective_cost")
+            ),
         }
     return bot_params_list, exchange_params, backtest_params
 
 
-def expand_analysis(analysis_usd, analysis_btc, fills, config):
-    analysis_usd["flat_btc_balance_hours"] = calculate_flat_btc_balance_minutes(fills) / 60.0
+def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
+    analysis_usd = dict(analysis_usd)
+    analysis_btc = dict(analysis_btc)
     keys = ["adg", "adg_w", "mdg", "mdg_w", "gain"]
     for pside in ["long", "short"]:
         twel = float(require_config_value(config, f"bot.{pside}.total_wallet_exposure_limit"))
@@ -476,181 +896,136 @@ def expand_analysis(analysis_usd, analysis_btc, fills, config):
                 if analysis_btc[key] is not None
                 else None
             )
-    if not bool(require_config_value(config, "backtest.use_btc_collateral")):
-        return analysis_usd
-    return {
-        **{
-            f"btc_{k}": v
-            for k, v in analysis_btc.items()
-            if "position" not in k and "volume_pct_per_day" not in k
-        },
-        **analysis_usd,
+
+    shared_keys = {
+        "positions_held_per_day",
+        "position_held_hours_mean",
+        "position_held_hours_max",
+        "position_held_hours_median",
+        "position_unchanged_hours_max",
+        "loss_profit_ratio",
+        "loss_profit_ratio_w",
+        "volume_pct_per_day_avg",
+        "volume_pct_per_day_avg_w",
+        "peak_recovery_hours_pnl",
+        "total_wallet_exposure_max",
+        "total_wallet_exposure_mean",
+        "total_wallet_exposure_median",
+        "entry_initial_balance_pct_long",
+        "entry_initial_balance_pct_short",
     }
+
+    result = {}
+
+    for key in shared_keys:
+        usd_val = analysis_usd.pop(key, None)
+        btc_val = analysis_btc.pop(key, None)
+        if usd_val is not None:
+            result[key] = usd_val
+            if btc_val is not None and not np.isclose(usd_val, btc_val, equal_nan=True):
+                logging.debug(
+                    "shared metric %s differs across denominations: usd=%s btc=%s",
+                    key,
+                    usd_val,
+                    btc_val,
+                )
+        elif btc_val is not None:
+            result[key] = btc_val
+
+    def _add_metrics(metrics: dict, suffix: str):
+        for key, value in metrics.items():
+            suffix_lower = suffix.lower()
+            key_lower = key.lower()
+            if f"_{suffix_lower}" in key_lower:
+                normalized_key = key
+            else:
+                normalized_key = f"{key}_{suffix}"
+            result[normalized_key] = value
+
+    _add_metrics(analysis_usd, "usd")
+    _add_metrics(analysis_btc, "btc")
+
+    return result
 
 
 def run_backtest(hlcvs, mss, config: dict, exchange: str, btc_usd_prices, timestamps=None):
-    bot_params_list, exchange_params, backtest_params = prep_backtest_args(config, mss, exchange)
-    if not bool(require_config_value(config, "backtest.use_btc_collateral")):
-        btc_usd_prices = np.ones(len(btc_usd_prices))
+    """
+    Backwards-compatible entry point that builds a payload and executes it immediately.
+    """
+
     logging.info(f"Backtesting {exchange}...")
     sts = utc_ms()
-
-    # Inject first timestamp (ms) into backtest params; default to 0 if unknown
-    try:
-        first_ts_ms = int(timestamps[0]) if (timestamps is not None and len(timestamps) > 0) else 0
-    except Exception:
-        first_ts_ms = 0
-    backtest_params = dict(backtest_params)
-    backtest_params["first_timestamp_ms"] = first_ts_ms
-    coins_order = backtest_params.get("coins", [])
-    warmup_map = compute_per_coin_warmup_minutes(config)
-    default_warm = int(warmup_map.get("__default__", 0))
-    first_valid_indices = []
-    last_valid_indices = []
-    warmup_minutes = []
-    trade_start_indices = []
-    total_steps = hlcvs.shape[0]
-    for idx, coin in enumerate(coins_order):
-        meta = mss.get(coin, {})
-        first_idx = int(meta.get("first_valid_index", 0))
-        last_idx = int(meta.get("last_valid_index", total_steps - 1))
-        if first_idx >= total_steps:
-            first_idx = total_steps
-        if last_idx >= total_steps:
-            last_idx = total_steps - 1
-        first_valid_indices.append(first_idx)
-        last_valid_indices.append(last_idx)
-        warm = int(meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
-        warmup_minutes.append(warm)
-        if first_idx > last_idx:
-            trade_idx = first_idx
-        else:
-            trade_idx = min(last_idx, first_idx + warm)
-        trade_start_indices.append(trade_idx)
-    backtest_params["first_valid_indices"] = first_valid_indices
-    backtest_params["last_valid_indices"] = last_valid_indices
-    backtest_params["warmup_minutes"] = warmup_minutes
-    backtest_params["trade_start_indices"] = trade_start_indices
-    backtest_params["global_warmup_bars"] = compute_backtest_warmup_minutes(config)
-    meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
-    candidate_start = meta.get(
-        "requested_start_ts", require_config_value(config, "backtest.start_date")
-    )
-    try:
-        if isinstance(candidate_start, str):
-            requested_start_ts = int(date_to_ts(candidate_start))
-        else:
-            requested_start_ts = int(candidate_start)
-    except Exception:
-        requested_start_ts = int(date_to_ts(require_config_value(config, "backtest.start_date")))
-    backtest_params["requested_start_timestamp_ms"] = requested_start_ts
-
-    # Use context managers for both HLCV and BTC/USD shared memory files
-    with create_shared_memory_file(hlcvs) as shared_memory_file, create_shared_memory_file(
-        btc_usd_prices
-    ) as btc_usd_shared_memory_file:
-        fills, equities_usd, equities_btc, analysis_usd, analysis_btc = pbr.run_backtest(
-            shared_memory_file,
-            hlcvs.shape,
-            hlcvs.dtype.str,
-            btc_usd_shared_memory_file,
-            btc_usd_prices.dtype.str,
-            bot_params_list,
-            exchange_params,
-            backtest_params,
-        )
-
+    payload = build_backtest_payload(hlcvs, mss, config, exchange, btc_usd_prices, timestamps)
+    fills, equities_array, analysis = execute_backtest(payload, config)
     logging.info(f"seconds elapsed for backtest: {(utc_ms() - sts) / 1000:.4f}")
-    return (
-        fills,
-        equities_usd,
-        equities_btc,
-        expand_analysis(analysis_usd, analysis_btc, fills, config),
-    )
+    return fills, equities_array, analysis
 
 
 def post_process(
     config,
     hlcvs,
     fills,
-    equities,
-    equities_btc,
+    equities_array,
     btc_usd_prices,
     analysis,
     results_path,
     exchange,
 ):
     sts = utc_ms()
-    equities = pd.Series(equities)
-    equities_btc = pd.Series(equities_btc)
+    equities_array = np.asarray(equities_array)
+    balance_sample_divider = get_optional_config_value(config, "backtest.balance_sample_divider", 60)
+    try:
+        balance_sample_divider = int(round(float(balance_sample_divider)))
+    except (TypeError, ValueError):
+        balance_sample_divider = 60
+    balance_sample_divider = max(1, balance_sample_divider)
     fdf, analysis_py, bal_eq = process_forager_fills(
         fills,
         require_config_value(config, f"backtest.coins.{exchange}"),
         hlcvs,
-        equities,
-        equities_btc,
+        equities_array,
+        balance_sample_divider=balance_sample_divider,
     )
     for k in analysis_py:
         if k not in analysis:
             analysis[k] = analysis_py[k]
     logging.info(f"seconds elapsed for analysis: {(utc_ms() - sts) / 1000:.4f}")
-    pprint.pprint(analysis)
+    pprint.pprint(trim_analysis_aliases(analysis))
     results_path = make_get_filepath(
         oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
     )
     json.dump(analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True)
     config["analysis"] = analysis
-    dump_config(config, f"{results_path}config.json")
+    formatted_config = format_config(config)
+    sanitized_config = strip_config_metadata(formatted_config)
+    dump_config(sanitized_config, f"{results_path}config.json")
     fdf.to_csv(f"{results_path}fills.csv")
-    bal_eq.to_csv(oj(results_path, "balance_and_equity.csv"))
-    plot_forager(
-        results_path,
-        config,
-        exchange,
-        fdf,
+    bal_eq.to_csv(oj(results_path, "balance_and_equity.csv.gz"), compression="gzip")
+    balance_figs = create_forager_balance_figures(
         bal_eq,
-        hlcvs,
+        include_logy=True,
+        autoplot=False,
+        return_figures=True,
     )
-
-
-def plot_forager(
-    results_path,
-    config: dict,
-    exchange: str,
-    fdf: pd.DataFrame,
-    bal_eq,
-    hlcvs,
-):
-    plots_dir = make_get_filepath(oj(results_path, "fills_plots", ""))
-    plt.clf()
-    bal_eq[["balance", "equity"]].plot(logy=False)
-    plt.savefig(oj(results_path, "balance_and_equity.png"))
-    plt.clf()
-    bal_eq[["balance", "equity"]].plot(logy=True)
-    plt.savefig(oj(results_path, "balance_and_equity_logy.png"))
-    plt.clf()
-    if bool(require_config_value(config, "backtest.use_btc_collateral")):
-        plt.clf()
-        bal_eq[["balance_btc", "equity_btc"]].plot(logy=False)
-        plt.savefig(oj(results_path, "balance_and_equity_btc.png"))
-        plt.clf()
-        bal_eq[["balance_btc", "equity_btc"]].plot(logy=True)
-        plt.savefig(oj(results_path, "balance_and_equity_btc_logy.png"))
+    save_figures(balance_figs, results_path)
 
     if not config["disable_plotting"]:
-        for i, coin in enumerate(require_config_value(config, f"backtest.coins.{exchange}")):
-            try:
-                logging.info(f"Plotting fills for {coin}")
-                hlcvs_df = pd.DataFrame(hlcvs[:, i, :3], columns=["high", "low", "close"])
-                fdfc = fdf[fdf.coin == coin]
-                plt.clf()
-                plot_fills_forager(fdfc, hlcvs_df)
-                plt.title(f"Fills {coin}")
-                plt.xlabel = "time"
-                plt.ylabel = "price"
-                plt.savefig(oj(plots_dir, f"{coin}.png"))
-            except Exception as e:
-                logging.info(f"Error plotting {coin} {e}")
+        try:
+            coins = require_config_value(config, f"backtest.coins.{exchange}")
+            fills_plot_dir = oj(results_path, "fills_plots")
+
+            def _save_coin_figure(name, fig):
+                save_figures({name: fig}, fills_plot_dir, close=True)
+
+            create_forager_coin_figures(
+                coins,
+                fdf,
+                hlcvs,
+                on_figure=_save_coin_figure,
+                close_after_callback=False,
+            )
+        except Exception as e:
+            logging.info(f"Error creating fill plots: {e}")
 
 
 async def main():
@@ -667,15 +1042,23 @@ async def main():
         help="disable plotting",
     )
     parser.add_argument(
-        "--debug-level",
         "--log-level",
-        dest="debug_level",
-        type=int,
-        choices=[0, 1, 2, 3],
+        dest="log_level",
         default=None,
-        help="Logging verbosity: 0=warnings, 1=info, 2=debug, 3=trace.",
+        help="Logging verbosity (warning, info, debug, trace or 0-3).",
     )
-    template_config = get_template_config("v7")
+    parser.add_argument(
+        "--suite",
+        action="store_true",
+        help="Run all scenarios defined in backtest.suite.",
+    )
+    parser.add_argument(
+        "--suite-config",
+        type=str,
+        default=None,
+        help="Optional config file providing backtest.suite overrides.",
+    )
+    template_config = get_template_config()
     del template_config["optimize"]
     keep_live_keys = {
         "approved_coins",
@@ -685,37 +1068,62 @@ async def main():
     for key in sorted(template_config["live"]):
         if key not in keep_live_keys:
             del template_config["live"][key]
+    if "logging" in template_config and isinstance(template_config["logging"], dict):
+        template_config["logging"].pop("level", None)
     add_arguments_recursively(parser, template_config)
     args = parser.parse_args()
-    initial_debug = args.debug_level if args.debug_level is not None else 1
-    configure_logging(debug=initial_debug)
+    cli_log_level = args.log_level
+    initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)
+    configure_logging(debug=initial_log_level)
     if args.config_path is None:
         logging.info(f"loading default template config configs/template.json")
         config = load_config("configs/template.json", verbose=False)
     else:
         logging.info(f"loading config {args.config_path}")
         config = load_config(args.config_path)
-    update_config_with_args(config, args)
+    update_config_with_args(config, args, verbose=True)
     config = format_config(config, verbose=False)
-    config_logging_level = get_optional_config_value(config, "logging.level", 1)
-    try:
-        config_logging_level = int(float(config_logging_level))
-    except Exception:
-        config_logging_level = 1
-    if args.debug_level is None:
-        effective_debug = max(0, min(config_logging_level, 3))
-        configure_logging(debug=effective_debug)
-    else:
-        effective_debug = max(0, min(int(args.debug_level), 3))
+    config_logging_value = get_optional_config_value(config, "logging.level", None)
+    effective_log_level = resolve_log_level(cli_log_level, config_logging_value, fallback=1)
+    if effective_log_level != initial_log_level:
+        configure_logging(debug=effective_log_level)
     logging_section = config.get("logging")
     if not isinstance(logging_section, dict):
         logging_section = {}
     config["logging"] = logging_section
-    logging_section["level"] = effective_debug
+    logging_section["level"] = effective_log_level
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
+    config = parse_overrides(config, verbose=True)
+
+    suite_override = None
+    if args.suite_config:
+        logging.info("loading suite config %s", args.suite_config)
+        override_cfg = load_config(args.suite_config, verbose=False)
+        suite_override = override_cfg.get("backtest", {}).get("suite")
+        if suite_override is None:
+            raise ValueError(f"Suite config {args.suite_config} does not define backtest.suite.")
+
+    suite_cfg = extract_suite_config(config, suite_override)
+    if args.suite:
+        suite_cfg["enabled"] = True
+
+    if suite_cfg.get("enabled"):
+        logging.info("Running backtest suite (%d scenarios)...", len(suite_cfg.get("scenarios", [])))
+        summary = await run_backtest_suite_async(
+            config,
+            suite_cfg,
+            disable_plotting=args.disable_plotting,
+        )
+        logging.info(
+            "Suite %s completed | scenarios=%d | output=%s",
+            summary.suite_id,
+            len(summary.scenarios),
+            summary.output_dir,
+        )
+        return
+
     for ex in backtest_exchanges:
         await load_markets(ex)
-    config = parse_overrides(config, verbose=True)
     await format_approved_ignored_coins(config, backtest_exchanges)
     config["disable_plotting"] = args.disable_plotting
     config["backtest"]["cache_dir"] = {}
@@ -733,15 +1141,14 @@ async def main():
         config["backtest"]["coins"][exchange] = coins
         config["backtest"]["cache_dir"][exchange] = str(cache_dir)
 
-        fills, equities, equities_btc, analysis = run_backtest(
+        fills, equities_array, analysis = run_backtest(
             hlcvs, mss, config, exchange, btc_usd_prices, timestamps
         )
         post_process(
             config,
             hlcvs,
             fills,
-            equities,
-            equities_btc,
+            equities_array,
             btc_usd_prices,
             analysis,
             results_path,
@@ -759,15 +1166,14 @@ async def main():
             ]
             configs[exchange]["backtest"]["coins"][exchange] = coins
             configs[exchange]["backtest"]["cache_dir"][exchange] = str(cache_dir)
-            fills, equities, equities_btc, analysis = run_backtest(
+            fills, equities_array, analysis = run_backtest(
                 hlcvs, mss, configs[exchange], exchange, btc_usd_prices, timestamps
             )
             post_process(
                 configs[exchange],
                 hlcvs,
                 fills,
-                equities,
-                equities_btc,
+                equities_array,
                 btc_usd_prices,
                 analysis,
                 results_path,

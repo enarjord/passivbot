@@ -58,6 +58,25 @@ async def test_external_ignored_coins_reload(tmp_path: Path):
     assert set(refreshed["long"]) == {"DOGE", "SHIB"}, "ignored coins did not reload from file"
 
 
+@pytest.mark.asyncio
+async def test_format_approved_ignored_coins_records_transform():
+    config = {
+        "live": {
+            "approved_coins": "BTC,ETH",
+            "ignored_coins": {"long": [], "short": []},
+            "empty_means_all_approved": False,
+        }
+    }
+
+    await format_approved_ignored_coins(config, ["binanceusdm"])
+
+    entry = config["_transform_log"][-1]
+    assert entry["step"] == "format_approved_ignored_coins"
+    approved_diff = entry["details"]["approved_coins"]
+    assert sorted(approved_diff["new"]["long"]) == ["BTC", "ETH"]
+    assert sorted(approved_diff["new"]["short"]) == ["BTC", "ETH"]
+
+
 def test_load_config_preserves_external_coin_sources(tmp_path: Path):
     approved_file = tmp_path / "approved.hjson"
     approved_file.write_text('["BTC","ETH"]')

@@ -1,7 +1,8 @@
-from passivbot import Passivbot, logging
+from passivbot import Passivbot, logging, clip_by_timestamp
 from uuid import uuid4
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
+from ccxt.base.errors import InvalidNonce
 import pprint
 import asyncio
 import traceback
@@ -34,8 +35,10 @@ class BybitBot(Passivbot):
                     "secret": self.user_info["secret"],
                     "password": self.user_info["passphrase"],
                     "headers": {"referer": self.broker_code} if self.broker_code else {},
+                    "enableRateLimit": True,
                 }
             )
+            self.ccp.options.update(self._build_ccxt_options())
             self._apply_endpoint_override(self.ccp)
         elif self.endpoint_override:
             logging.info("Skipping Bybit websocket session due to custom endpoint override.")
@@ -45,8 +48,10 @@ class BybitBot(Passivbot):
                 "secret": self.user_info["secret"],
                 "password": self.user_info["passphrase"],
                 "headers": {"referer": self.broker_code} if self.broker_code else {},
+                "enableRateLimit": True,
             }
         )
+        self.cca.options.update(self._build_ccxt_options())
         self._apply_endpoint_override(self.cca)
 
     def set_market_specific_settings(self):
@@ -122,15 +127,14 @@ class BybitBot(Passivbot):
                 for elm in balinfo["coin"]:
                     if elm["marginCollateral"] and elm["collateralSwitch"]:
                         balance += float(elm["usdValue"]) + float(elm["unrealisedPnl"])
-                if not hasattr(self, "previous_rounded_balance"):
-                    self.previous_rounded_balance = balance
-                self.previous_rounded_balance = pbr.hysteresis_rounding(
+                if not hasattr(self, "previous_hysteresis_balance"):
+                    self.previous_hysteresis_balance = balance
+                self.previous_hysteresis_balance = pbr.hysteresis(
                     balance,
-                    self.previous_rounded_balance,
-                    self.hyst_rounding_balance_pct,
-                    self.hyst_rounding_balance_h,
+                    self.previous_hysteresis_balance,
+                    self.hyst_pct,
                 )
-                balance = self.previous_rounded_balance
+                balance = self.previous_hysteresis_balance
             else:
                 balance = fetched_balance[self.quote]["total"]
             while True:
@@ -154,6 +158,9 @@ class BybitBot(Passivbot):
                     params={"cursor": next_page_cursor, "limit": limit}
                 )
             return sorted(positions.values(), key=lambda x: x["timestamp"]), balance
+        except InvalidNonce as e:
+            logging.warning("Invalid nonce while fetching positions/balance: %s", e)
+            return False
         except Exception as e:
             logging.error(f"error fetching positions and balance {e}")
             print_async_exception(fetched_positions)
@@ -340,6 +347,204 @@ class BybitBot(Passivbot):
                 fillsd[x["orderId"]] = [x]
         joined = {x["info"]["execId"]: x for x in flatten(fillsd.values())}
         return sorted(joined.values(), key=lambda x: x["timestamp"])
+
+    async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
+        """Return canonical fill events for equity reconstruction (draft implementation)."""
+
+        def extract_fill_event_from_ph(elm):
+            event = {
+                "id": elm["info"]["orderId"],
+                "timestamp": int(float(elm.get("lastUpdateTimestamp", elm.get("timestamp", 0.0)))),
+                "symbol": elm["symbol"],
+                "side": str(elm["info"].get("side", "")).lower(),
+                "qty": float(elm.get("contracts", elm.get("qty", 0.0))),
+                "price": float(elm.get("lastPrice", elm.get("price", 0.0))),
+                "pnl": float(elm.get("realizedPnl", 0.0)),
+                "fee": None,
+                "custom_id": elm.get("info", {}).get("orderLinkId"),
+                "position_side": None,
+            }
+            if event["side"] == "buy":
+                event["position_side"] = "long" if event["pnl"] == 0.0 else "short"
+            elif event["side"] == "sell":
+                event["position_side"] = "short" if event["pnl"] == 0.0 else "long"
+            else:
+                raise Exception(f"malformed side {event['side']}")
+            return event
+
+        def extract_fill_event_from_mt(elm):
+            event = {
+                "id": elm["info"]["orderId"],
+                "timestamp": elm["timestamp"],
+                "symbol": elm["symbol"],
+                "side": elm["side"],
+                "qty": float(elm["amount"]),
+                "price": float(elm["price"]),
+                "pnl": None,
+                "fee": elm.get("fee"),
+                "custom_id": elm.get("info", {}).get("orderLinkId"),
+                "position_side": None,
+            }
+            closed_size = float(elm["info"].get("closedSize", 0.0))
+            if event["side"] == "buy":
+                event["position_side"] = "long" if closed_size == 0.0 else "short"
+                if closed_size == 0.0:
+                    event["pnl"] = 0.0
+            elif event["side"] == "sell":
+                event["position_side"] = "short" if closed_size == 0.0 else "long"
+                if closed_size == 0.0:
+                    event["pnl"] = 0.0
+            else:
+                raise Exception(f"malformed side {event['side']}")
+            return event
+
+        def is_equal(x0, x1):
+            for key in ["id", "symbol", "qty", "side", "position_side", "price"]:
+                if x0[key] != x1[key]:
+                    return False
+            return True
+
+        def merge_events(x0, x1):
+            merged_list = []
+            if is_equal(x0, x1):
+                event = {}
+                for key in x0:
+                    event[key] = x0.get(key, x1.get(key))
+                return [event]
+            else:
+                return [x0, x1]
+
+        def get_dedup_key(event):
+            return tuple(
+                [event[k] for k in ["id", "symbol", "qty", "side", "position_side", "price"]]
+            )
+
+        if end_time is None:
+            end_time = int(self.get_exchange_time() + 1000 * 60 * 60)
+        if start_time is None:
+            start_time = end_time - 1000 * 60 * 60 * 24 * 3
+
+        # fetch concurrently
+        try:
+            my_trades, positions_history = await asyncio.gather(
+                self.fetch_my_trades(start_time, end_time),
+                self.fetch_positions_history(start_time, end_time),
+            )
+        except Exception as exc:
+            logging.error(f"error fetching my_trades, positions_history {exc}")
+            my_trades, positions_history = [], []
+
+        # extract events
+        mt_events = sorted(
+            [extract_fill_event_from_mt(x) for x in my_trades], key=lambda x: x["timestamp"]
+        )
+        ph_events = sorted(
+            [extract_fill_event_from_ph(x) for x in positions_history], key=lambda x: x["timestamp"]
+        )
+        mt_events = clip_by_timestamp(mt_events, start_time, end_time)
+        ph_events = clip_by_timestamp(ph_events, start_time, end_time)
+
+        pnls = defaultdict(float)
+        for event in ph_events:
+            pnls[event["id"]] += event["pnl"]
+        unified = []
+        for event in mt_events[::-1]:
+            if event["id"] in pnls:
+                event["pnl"] = pnls.pop(event["id"])
+            unified.append(event)
+        if len(pnls) > 0:
+            print("debug positions_history events without corresponding my_trades")
+        unified.sort(key=lambda x: x["timestamp"])
+        return unified
+
+    async def fetch_my_trades(self, start_time, end_time, limit=100):
+        # wrapper for ccxt.fetch_my_trades
+        # multiple fetches to find all fills inside given date range
+        # limit is max 100
+        # The time range between startTime and endTime cannot exceed 7 days
+        # if start time is given without end time, will fetch fills closes to one week after start time
+        # strategy: fetch backwards from end time to start time
+        limit = min(limit, 100)
+        max_n_fetches = 200
+        week_with_buffer_ms = int(1000 * 60 * 60 * 24 * 6.5)
+        end_time = int(utc_ms() + 3600000 if end_time is None else end_time)
+        params = {"type": "swap", "subType": "linear", "limit": limit, "endTime": end_time}
+        my_trades_all = []
+        count = 0
+        while True:
+            count += 1
+            my_trades = await self.cca.fetch_my_trades(params=params)
+            my_trades_all.extend(my_trades)
+            if len(my_trades) < limit:
+                if start_time is None or params["endTime"] - start_time < week_with_buffer_ms:
+                    logging.debug(f"broke loop fetch_my_trades on n my_trades {len(my_trades)}")
+                    break
+                else:
+                    params["endTime"] = int(
+                        my_trades[0]["timestamp"] + 1
+                        if my_trades
+                        else params["endTime"] - week_with_buffer_ms
+                    )
+                    continue
+            if start_time is None or my_trades[0]["timestamp"] < start_time:
+                logging.debug(f"broke loop fetch_my_trades on start time exceeded")
+                break
+            if params["endTime"] == my_trades[0]["timestamp"]:
+                logging.debug(f"broke loop fetch_my_trades on two successive identical endTimes")
+                break
+            params["endTime"] = int(my_trades[0]["timestamp"] + 1)
+            if count > 1:
+                logging.info(
+                    f"fetched {len(my_trades)} fills from {my_trades[0]['datetime'][:19]} to {my_trades[-1]['datetime'][:19]}"
+                )
+        return sorted(my_trades_all, key=lambda x: x["timestamp"])
+
+    async def fetch_positions_history(self, start_time, end_time, limit=100):
+        # wrapper for ccxt.fetch_positions_history
+        # limit is max 100
+
+        # The start timestamp (ms)
+        # startTime and endTime are not passed, return 7 days by default
+        # Only startTime is passed, return range between startTime and startTime+7 days
+        # Only endTime is passed, return range between endTime-7 days and endTime
+        # If both are passed, the rule is endTime - startTime <= 7 days
+
+        # The time range between startTime and endTime cannot exceed 7 days
+        # if start time is given without end time, will fetch positions closes to one week after start time
+        # strategy: fetch backwards from end time to start time
+        limit = min(limit, 100)
+        max_n_fetches = 200
+        week_with_buffer_ms = int(1000 * 60 * 60 * 24 * 6.5)
+        end_time = int(utc_ms() + 3600000 if end_time is None else end_time)
+        params = {"limit": limit, "endTime": end_time}
+        positions_history_all = []
+        count = 0
+        while True:
+            count += 1
+            positions_history = await self.cca.fetch_positions_history(params=params)
+            positions_history.sort(key=lambda x: x["timestamp"])
+            positions_history_all.extend(positions_history)
+            if len(positions_history) < limit:
+                if start_time is None or params["endTime"] - start_time < week_with_buffer_ms:
+                    logging.debug(f"broke loop fetch_positions_history on n {len(positions_history)}")
+                    break
+                else:
+                    params["endTime"] = int(params["endTime"] - week_with_buffer_ms)
+                    continue
+            if start_time is None or positions_history[0]["timestamp"] < start_time:
+                logging.debug("broke loop fetch_positions_history on start time exceeded")
+                break
+            if params["endTime"] == positions_history[0]["timestamp"]:
+                logging.debug(
+                    "broke loop fetch_positions_history on two successive identical endTimes"
+                )
+                break
+            params["endTime"] = int(positions_history[0]["timestamp"])
+            if count > 1:
+                logging.info(
+                    f"fetched {len(positions_history)} positions_history from {positions_history[0]['datetime'][:19]} to {positions_history[-1]['datetime'][:19]}"
+                )
+        return sorted(positions_history_all, key=lambda x: x["timestamp"])
 
     def determine_pos_side(self, x):
         if x["side"] == "buy":

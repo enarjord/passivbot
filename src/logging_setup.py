@@ -13,6 +13,48 @@ TRACE_LEVEL_NAME = "TRACE"
 DEFAULT_FORMAT = "%(asctime)s %(levelname)-8s %(message)s"
 DEFAULT_DATEFMT = "%Y-%m-%dT%H:%M:%S"
 
+_LOG_LEVEL_ALIASES = {
+    "warning": 0,
+    "warn": 0,
+    "w": 0,
+    "info": 1,
+    "i": 1,
+    "debug": 2,
+    "d": 2,
+    "trace": 3,
+    "t": 3,
+}
+
+
+def normalize_log_level(value, default=None):
+    """Return normalized log level 0-3 or default when invalid/missing."""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned in _LOG_LEVEL_ALIASES:
+            return _LOG_LEVEL_ALIASES[cleaned]
+        try:
+            value = float(cleaned)
+        except ValueError:
+            return default
+    try:
+        level = int(float(value))
+    except (TypeError, ValueError):
+        return default
+    return max(0, min(level, 3))
+
+
+def resolve_log_level(cli_value, config_value, fallback=1):
+    """Resolve final log level from CLI override and config value."""
+    cli_level = normalize_log_level(cli_value, None)
+    if cli_level is not None:
+        return cli_level
+    cfg_level = normalize_log_level(config_value, None)
+    if cfg_level is not None:
+        return cfg_level
+    return fallback
+
 
 def _ensure_trace_level() -> None:
     """Register the TRACE log level on the logging module if missing."""
@@ -31,14 +73,10 @@ def _ensure_trace_level() -> None:
 
 
 def _normalize_debug(debug: Optional[int | str]) -> int:
-    if debug is None:
+    level = normalize_log_level(debug, None)
+    if level is None:
         return 1
-    if isinstance(debug, bool):
-        return 1 if debug else 0
-    try:
-        return int(debug)
-    except (TypeError, ValueError):
-        return 1
+    return level
 
 
 def _debug_to_level(debug: int) -> int:

@@ -1,13 +1,84 @@
+import argparse
+import json
+import logging
 import os
 import re
 from copy import deepcopy
 from typing import Any, Dict, Tuple, List, Union, Optional, Iterable
-import argparse
-import logging
+
 import hjson
+
 from pure_funcs import remove_OD, sort_dict_keys, str2bool
-from procedures import dump_pretty_json
-from utils import format_end_date, symbol_to_coin, normalize_coins_source
+from utils import (
+    format_end_date,
+    symbol_to_coin,
+    normalize_coins_source,
+    dump_json_streamlined,
+)
+from config_transform import ConfigTransformTracker, record_transform
+
+
+def _log_config(verbose: bool, level: int, message: str, *args) -> None:
+    if verbose or level >= logging.WARNING:
+        logging.log(level, message, *args)
+    else:
+        logging.debug(message, *args)
+
+
+CURRENCY_METRICS = {
+    "adg",
+    "adg_per_exposure_long",
+    "adg_per_exposure_short",
+    "adg_w",
+    "adg_w_per_exposure_long",
+    "adg_w_per_exposure_short",
+    "calmar_ratio",
+    "calmar_ratio_w",
+    "drawdown_worst",
+    "drawdown_worst_mean_1pct",
+    "equity_balance_diff_neg_max",
+    "equity_balance_diff_neg_mean",
+    "equity_balance_diff_pos_max",
+    "equity_balance_diff_pos_mean",
+    "equity_choppiness",
+    "equity_choppiness_w",
+    "equity_jerkiness",
+    "equity_jerkiness_w",
+    "peak_recovery_hours_equity",
+    "expected_shortfall_1pct",
+    "exponential_fit_error",
+    "exponential_fit_error_w",
+    "gain",
+    "gain_per_exposure_long",
+    "gain_per_exposure_short",
+    "mdg",
+    "mdg_per_exposure_long",
+    "mdg_per_exposure_short",
+    "mdg_w",
+    "mdg_w_per_exposure_long",
+    "mdg_w_per_exposure_short",
+    "omega_ratio",
+    "omega_ratio_w",
+    "sharpe_ratio",
+    "sharpe_ratio_w",
+    "sortino_ratio",
+    "sortino_ratio_w",
+    "sterling_ratio",
+    "sterling_ratio_w",
+}
+
+SHARED_METRICS = {
+    "positions_held_per_day",
+    "position_held_hours_mean",
+    "position_held_hours_max",
+    "position_held_hours_median",
+    "position_unchanged_hours_max",
+    "volume_pct_per_day_avg",
+    "volume_pct_per_day_avg_w",
+    "loss_profit_ratio",
+    "loss_profit_ratio_w",
+    "peak_recovery_hours_pnl",
+}
 
 
 Path = Tuple[str, ...]  # ("bot", "long", "entry_grid_spacing_pct")
@@ -25,20 +96,30 @@ def load_hjson_config(config_path: str) -> dict:
 def load_config(filepath: str, live_only=False, verbose=True) -> dict:
     # loads hjson or json v7 config
     try:
-        config = load_hjson_config(filepath)
+        config_raw = load_hjson_config(filepath)
         config = format_config(
-            config, live_only=live_only, verbose=verbose, base_config_path=filepath
+            config_raw, live_only=live_only, verbose=verbose, base_config_path=filepath
         )
+        config["_raw"] = deepcopy(config_raw)
+        existing_log = config.get("_transform_log", [])
+        config["_transform_log"] = []
+        record_transform(config, "load_config", {"path": filepath})
+        config["_transform_log"].extend(existing_log)
         return config
     except Exception:
         logging.exception("failed to load config %s", filepath)
         raise
 
 
-def dump_config(config: dict, filepath: str):
-    config_ = deepcopy(config)
+def dump_config(config: dict, filepath: str, *, clean: bool = False):
+    config_copy = deepcopy(config)
+    if clean:
+        config_copy = clean_config(config_copy)
+    sorted_config = sort_dict_keys(config_copy)
     try:
-        dump_pretty_json(config_, filepath)
+        with open(filepath, "w", encoding="utf-8") as fp:
+            dump_json_streamlined(sorted_config, fp, sort_keys=False)
+            fp.write("\n")
     except Exception:
         logging.exception("failed to dump config to %s", filepath)
         raise
@@ -165,22 +246,28 @@ def get_allowed_modifications():
                 "close_trailing_threshold_pct": True,
                 "ema_span_0": True,
                 "ema_span_1": True,
-                "enforce_exposure_limit": True,
                 "entry_grid_double_down_factor": True,
                 "entry_grid_spacing_pct": True,
-                "entry_grid_spacing_log_span_hours": True,
-                "entry_grid_spacing_log_weight": True,
+                "entry_volatility_ema_span_hours": True,
+                "entry_grid_spacing_volatility_weight": True,
                 "entry_grid_spacing_we_weight": True,
                 "entry_initial_ema_dist": True,
                 "entry_initial_qty_pct": True,
                 "entry_trailing_double_down_factor": True,
                 "entry_trailing_grid_ratio": True,
                 "entry_trailing_retracement_pct": True,
+                "entry_trailing_retracement_we_weight": True,
+                "entry_trailing_retracement_volatility_weight": True,
                 "entry_trailing_threshold_pct": True,
+                "entry_trailing_threshold_we_weight": True,
+                "entry_trailing_threshold_volatility_weight": True,
                 "unstuck_close_pct": True,
                 "unstuck_ema_dist": True,
                 "unstuck_threshold": True,
                 "wallet_exposure_limit": True,
+                "risk_wel_enforcer_threshold": True,
+                "risk_we_excess_allowance_pct": True,
+                "risk_twel_enforcer_threshold": False,
             },
             "short": {
                 "close_grid_markup_end": True,
@@ -192,22 +279,28 @@ def get_allowed_modifications():
                 "close_trailing_threshold_pct": True,
                 "ema_span_0": True,
                 "ema_span_1": True,
-                "enforce_exposure_limit": True,
                 "entry_grid_double_down_factor": True,
                 "entry_grid_spacing_pct": True,
-                "entry_grid_spacing_log_span_hours": True,
-                "entry_grid_spacing_log_weight": True,
+                "entry_volatility_ema_span_hours": True,
+                "entry_grid_spacing_volatility_weight": True,
                 "entry_grid_spacing_we_weight": True,
                 "entry_initial_ema_dist": True,
                 "entry_initial_qty_pct": True,
                 "entry_trailing_double_down_factor": True,
                 "entry_trailing_grid_ratio": True,
                 "entry_trailing_retracement_pct": True,
+                "entry_trailing_retracement_we_weight": True,
+                "entry_trailing_retracement_volatility_weight": True,
                 "entry_trailing_threshold_pct": True,
+                "entry_trailing_threshold_we_weight": True,
+                "entry_trailing_threshold_volatility_weight": True,
                 "unstuck_close_pct": True,
                 "unstuck_ema_dist": True,
                 "unstuck_threshold": True,
                 "wallet_exposure_limit": True,
+                "risk_wel_enforcer_threshold": True,
+                "risk_we_excess_allowance_pct": True,
+                "risk_twel_enforcer_threshold": False,
             },
         },
         "live": {
@@ -296,24 +389,25 @@ def parse_overrides(config, verbose=True):
     result = deepcopy(config)
     if not result.get("coin_overrides", {}):
         result["coin_overrides"] = parse_old_coin_flags(config)
-        if verbose:
-            if result["coin_overrides"]:
-                logging.info(
-                    "Converted old coin_flags to coin_overrides: %s -> %s",
-                    config.get("live", {}).get("coin_flags"),
-                    result["coin_overrides"],
-                )
+        if verbose and result["coin_overrides"]:
+            _log_config(
+                verbose,
+                logging.INFO,
+                "Converted old coin_flags to coin_overrides: %s -> %s",
+                config.get("live", {}).get("coin_flags"),
+                result["coin_overrides"],
+            )
     result["live"].pop("coin_flags", None) if "live" in result else None
     for coin in sorted(result["coin_overrides"]):
         coinf = symbol_to_coin(coin)
         if coinf != coin:
             if coinf:
                 result["coin_overrides"][coinf] = deepcopy(result["coin_overrides"][coin])
-                if verbose:
-                    logging.info("Renamed %s -> %s for coin_overrides", coin, coinf)
+                _log_config(verbose, logging.INFO, "Renamed %s -> %s for coin_overrides", coin, coinf)
             else:
-                if verbose:
-                    logging.info("Failed to format %s; removed from coin_overrides", coin)
+                _log_config(
+                    verbose, logging.INFO, "Failed to format %s; removed from coin_overrides", coin
+                )
             del result["coin_overrides"][coin]
     for coin, overrides in result["coin_overrides"].items():
         parsed_overrides = {}
@@ -329,8 +423,18 @@ def parse_overrides(config, verbose=True):
         )
 
         result.setdefault("coin_overrides", {})[coin] = parsed_overrides
-        if verbose:
-            logging.info("Added overrides for %s: %s", coin, sort_dict_keys(parsed_overrides))
+        _log_config(
+            verbose,
+            logging.INFO,
+            "Added overrides for %s: %s",
+            coin,
+            sort_dict_keys(parsed_overrides),
+        )
+    record_transform(
+        result,
+        "parse_overrides",
+        {"coins": sorted(result.get("coin_overrides", {}).keys())},
+    )
     return result
 
 
@@ -418,7 +522,7 @@ PB_MULTI_FIELD_MAP = {
     "rentry_pprice_dist_wallet_exposure_weighting": "entry_grid_spacing_we_weight",
     "ema_span_0": "ema_span_0",
     "ema_span_1": "ema_span_1",
-    "filter_noisiness_rolling_window": "filter_log_range_ema_span",
+    "filter_noisiness_rolling_window": "filter_volatility_ema_span",
     "filter_volume_rolling_window": "filter_volume_ema_span",
 }
 PB_MULTI_FIELD_MAP_INV = {v: k for k, v in PB_MULTI_FIELD_MAP.items()}
@@ -451,7 +555,11 @@ def _build_from_pb_multi(config: dict, template: dict) -> dict:
             "close_trailing_threshold_pct",
             "entry_trailing_grid_ratio",
             "entry_trailing_retracement_pct",
+            "entry_trailing_retracement_we_weight",
+            "entry_trailing_retracement_volatility_weight",
             "entry_trailing_threshold_pct",
+            "entry_trailing_threshold_we_weight",
+            "entry_trailing_threshold_volatility_weight",
             "unstuck_ema_dist",
         ):
             result["bot"][pside][key] = 0.0
@@ -496,28 +604,48 @@ def _build_from_live_only(config: dict, template: dict) -> dict:
 
 
 LEGACY_FILTER_KEYS = {
-    "filter_noisiness_rolling_window": "filter_log_range_ema_span",
-    "filter_noisiness_ema_span": "filter_log_range_ema_span",
+    "filter_noisiness_rolling_window": "filter_volatility_ema_span",
+    "filter_noisiness_ema_span": "filter_volatility_ema_span",
+    "filter_log_range_ema_span": "filter_volatility_ema_span",
     "filter_volume_rolling_window": "filter_volume_ema_span",
 }
 
 LEGACY_ENTRY_GRID_KEYS = {
     "entry_grid_spacing_weight": "entry_grid_spacing_we_weight",
+    "entry_grid_spacing_log_span_hours": "entry_volatility_ema_span_hours",
+    "entry_log_range_ema_span_hours": "entry_volatility_ema_span_hours",
+    "entry_grid_spacing_log_weight": "entry_grid_spacing_volatility_weight",
+    "entry_trailing_retracement_log_weight": "entry_trailing_retracement_volatility_weight",
+    "entry_trailing_threshold_log_weight": "entry_trailing_threshold_volatility_weight",
 }
 
 LEGACY_BOUNDS_KEYS = {
-    "long_filter_noisiness_rolling_window": "long_filter_log_range_ema_span",
-    "long_filter_noisiness_ema_span": "long_filter_log_range_ema_span",
+    "long_filter_noisiness_rolling_window": "long_filter_volatility_ema_span",
+    "long_filter_noisiness_ema_span": "long_filter_volatility_ema_span",
     "long_filter_volume_rolling_window": "long_filter_volume_ema_span",
-    "short_filter_noisiness_rolling_window": "short_filter_log_range_ema_span",
-    "short_filter_noisiness_ema_span": "short_filter_log_range_ema_span",
+    "long_filter_log_range_ema_span": "long_filter_volatility_ema_span",
+    "short_filter_noisiness_rolling_window": "short_filter_volatility_ema_span",
+    "short_filter_noisiness_ema_span": "short_filter_volatility_ema_span",
     "short_filter_volume_rolling_window": "short_filter_volume_ema_span",
+    "short_filter_log_range_ema_span": "short_filter_volatility_ema_span",
     "long_entry_grid_spacing_weight": "long_entry_grid_spacing_we_weight",
     "short_entry_grid_spacing_weight": "short_entry_grid_spacing_we_weight",
+    "long_entry_grid_spacing_log_span_hours": "long_entry_volatility_ema_span_hours",
+    "short_entry_grid_spacing_log_span_hours": "short_entry_volatility_ema_span_hours",
+    "long_entry_log_range_ema_span_hours": "long_entry_volatility_ema_span_hours",
+    "short_entry_log_range_ema_span_hours": "short_entry_volatility_ema_span_hours",
+    "long_entry_grid_spacing_log_weight": "long_entry_grid_spacing_volatility_weight",
+    "short_entry_grid_spacing_log_weight": "short_entry_grid_spacing_volatility_weight",
+    "long_entry_trailing_retracement_log_weight": "long_entry_trailing_retracement_volatility_weight",
+    "short_entry_trailing_retracement_log_weight": "short_entry_trailing_retracement_volatility_weight",
+    "long_entry_trailing_threshold_log_weight": "long_entry_trailing_threshold_volatility_weight",
+    "short_entry_trailing_threshold_log_weight": "short_entry_trailing_threshold_volatility_weight",
 }
 
 
-def _apply_backward_compatibility_renames(result: dict, verbose: bool = True) -> None:
+def _apply_backward_compatibility_renames(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
     """Translate legacy rolling_window keys to their EMA-span counterparts."""
 
     for pside, bot_cfg in result.get("bot", {}).items():
@@ -525,27 +653,119 @@ def _apply_backward_compatibility_renames(result: dict, verbose: bool = True) ->
             continue
         for old, new in LEGACY_FILTER_KEYS.items():
             if old in bot_cfg:
+                moved_value = bot_cfg[old]
                 if new not in bot_cfg:
-                    bot_cfg[new] = bot_cfg[old]
-                    if verbose:
-                        print(f"renaming parameter bot.{pside}.{old}: {new}")
+                    bot_cfg[new] = moved_value
+                    _log_config(
+                        verbose, logging.INFO, "renaming parameter bot.%s.%s -> %s", pside, old, new
+                    )
+                    if tracker is not None:
+                        tracker.rename(
+                            ["bot", pside, old],
+                            ["bot", pside, new],
+                            moved_value,
+                        )
                 del bot_cfg[old]
         for old, new in LEGACY_ENTRY_GRID_KEYS.items():
             if old in bot_cfg:
+                moved_value = bot_cfg[old]
                 if new not in bot_cfg:
-                    bot_cfg[new] = bot_cfg[old]
-                    if verbose:
-                        print(f"renaming parameter bot.{pside}.{old}: {new}")
+                    bot_cfg[new] = moved_value
+                    _log_config(
+                        verbose, logging.INFO, "renaming parameter bot.%s.%s -> %s", pside, old, new
+                    )
+                    if tracker is not None:
+                        tracker.rename(
+                            ["bot", pside, old],
+                            ["bot", pside, new],
+                            moved_value,
+                        )
                 del bot_cfg[old]
 
     bounds = result.get("optimize", {}).get("bounds", {})
     for old, new in LEGACY_BOUNDS_KEYS.items():
         if old in bounds:
+            moved_value = bounds[old]
             if new not in bounds:
-                bounds[new] = bounds[old]
-                if verbose:
-                    print(f"renaming parameter optimize.bounds.{old}: {new}")
+                bounds[new] = moved_value
+                _log_config(
+                    verbose, logging.INFO, "renaming parameter optimize.bounds.%s -> %s", old, new
+                )
+                if tracker is not None:
+                    tracker.rename(
+                        ["optimize", "bounds", old],
+                        ["optimize", "bounds", new],
+                        moved_value,
+                    )
             del bounds[old]
+
+    live_cfg = result.get("live")
+    logging_cfg = result.setdefault("logging", {})
+    if isinstance(live_cfg, dict) and "memory_snapshot_interval_minutes" in live_cfg:
+        val = live_cfg.pop("memory_snapshot_interval_minutes")
+        if "memory_snapshot_interval_minutes" not in logging_cfg:
+            logging_cfg["memory_snapshot_interval_minutes"] = val
+            _log_config(
+                verbose,
+                logging.INFO,
+                "moved live.memory_snapshot_interval_minutes -> logging.memory_snapshot_interval_minutes",
+            )
+            if tracker is not None:
+                tracker.rename(
+                    ["live", "memory_snapshot_interval_minutes"],
+                    ["logging", "memory_snapshot_interval_minutes"],
+                    val,
+                )
+
+
+def _migrate_btc_collateral_settings(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
+    """Convert legacy bool collateral flag to fractional settings and ensure defaults."""
+    backtest = result.setdefault("backtest", {})
+
+    if "use_btc_collateral" in backtest:
+        use_btc = backtest.pop("use_btc_collateral")
+        try:
+            use_btc_bool = bool(int(use_btc))
+        except (TypeError, ValueError):
+            use_btc_bool = bool(use_btc)
+        if "btc_collateral_cap" not in backtest:
+            backtest["btc_collateral_cap"] = 1.0 if use_btc_bool else 0.0
+            _log_config(
+                verbose,
+                logging.INFO,
+                "changed backtest.use_btc_collateral -> backtest.btc_collateral_cap = %s",
+                backtest["btc_collateral_cap"],
+            )
+            if tracker is not None:
+                tracker.rename(
+                    ["backtest", "use_btc_collateral"],
+                    ["backtest", "btc_collateral_cap"],
+                    backtest["btc_collateral_cap"],
+                )
+        elif tracker is not None:
+            tracker.remove(["backtest", "use_btc_collateral"], use_btc)
+        if "btc_collateral_ltv_cap" not in backtest:
+            backtest["btc_collateral_ltv_cap"] = None
+            if tracker is not None:
+                tracker.add(["backtest", "btc_collateral_ltv_cap"], None)
+
+    cap = backtest.get("btc_collateral_cap")
+    try:
+        cap_float = float(cap)
+        if tracker is not None and cap != cap_float:
+            tracker.update(["backtest", "btc_collateral_cap"], cap, cap_float)
+        backtest["btc_collateral_cap"] = cap_float
+    except (TypeError, ValueError):
+        if tracker is not None:
+            tracker.update(["backtest", "btc_collateral_cap"], cap, 0.0)
+        backtest["btc_collateral_cap"] = 0.0
+
+    if "btc_collateral_ltv_cap" not in backtest:
+        backtest["btc_collateral_ltv_cap"] = None
+        if tracker is not None:
+            tracker.add(["backtest", "btc_collateral_ltv_cap"], None)
 
 
 def detect_flavor(config: dict, template: dict) -> str:
@@ -602,7 +822,9 @@ def build_base_config_from_flavor(config: dict, template: dict, flavor: str, ver
     raise Exception("failed to format config: unknown flavor")
 
 
-def _ensure_bot_defaults_and_bounds(result: dict, verbose: bool = True) -> None:
+def _ensure_bot_defaults_and_bounds(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
     """Ensure required bot defaults and optimize bounds exist for each position side."""
     for pside in ("long", "short"):
         for k0, v_bt, v_opt in [
@@ -613,9 +835,9 @@ def _ensure_bot_defaults_and_bounds(result: dict, verbose: bool = True) -> None:
                 [0.01, 3.0],
             ),
             (
-                "filter_log_range_ema_span",
+                "filter_volatility_ema_span",
                 result["bot"][pside].get(
-                    "filter_log_range_ema_span",
+                    "filter_volatility_ema_span",
                     result["bot"][pside].get(
                         "filter_rolling_window",
                         result["live"].get("ohlcv_rolling_window", 60.0),
@@ -650,19 +872,42 @@ def _ensure_bot_defaults_and_bounds(result: dict, verbose: bool = True) -> None:
                 result["live"].get("filter_relative_volume_clip_pct", 0.5),
                 [0.0, 1.0],
             ),
+            (
+                "filter_volatility_drop_pct",
+                0.0,
+                [0.0, 1.0],
+            ),
         ]:
             if k0 not in result["bot"][pside]:
                 result["bot"][pside][k0] = v_bt
-                if verbose:
-                    print(f"adding missing backtest parameter {pside} {k0}: {v_bt}")
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "adding missing backtest parameter %s %s: %s",
+                    pside,
+                    k0,
+                    v_bt,
+                )
+                if tracker is not None:
+                    tracker.add(["bot", pside, k0], v_bt)
             opt_key = f"{pside}_{k0}"
             if opt_key not in result["optimize"]["bounds"]:
                 result["optimize"]["bounds"][opt_key] = v_opt
-                if verbose:
-                    print(f"adding missing optimize parameter {pside} {opt_key}: {v_opt}")
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "adding missing optimize parameter %s %s: %s",
+                    pside,
+                    opt_key,
+                    v_opt,
+                )
+                if tracker is not None:
+                    tracker.add(["optimize", "bounds", opt_key], v_opt)
 
 
-def _rename_config_keys(result: dict, verbose: bool = True) -> None:
+def _rename_config_keys(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
     """Rename legacy keys to their current names."""
     for section, src, dst in [
         ("live", "minimum_market_age_days", "minimum_coin_age_days"),
@@ -671,44 +916,94 @@ def _rename_config_keys(result: dict, verbose: bool = True) -> None:
     ]:
         if src in result[section]:
             result[section][dst] = deepcopy(result[section][src])
-            if verbose:
-                print(f"renaming parameter {section} {src}: {dst}")
+            _log_config(verbose, logging.INFO, "renaming parameter %s %s -> %s", section, src, dst)
+            if tracker is not None:
+                tracker.rename([section, src], [section, dst], result[section][dst])
             del result[section][src]
     if "exchange" in result["backtest"] and isinstance(result["backtest"]["exchange"], str):
         exchange = result["backtest"]["exchange"]
         result["backtest"]["exchanges"] = [exchange]
-        if verbose:
-            print(f"changed backtest.exchange: {exchange} -> backtest.exchanges: [{exchange}]")
+        _log_config(
+            verbose,
+            logging.INFO,
+            "changed backtest.exchange: %s -> backtest.exchanges: [%s]",
+            exchange,
+            exchange,
+        )
+        if tracker is not None:
+            tracker.rename(
+                ["backtest", "exchange"],
+                ["backtest", "exchanges"],
+                [exchange],
+            )
         del result["backtest"]["exchange"]
 
 
 def _sync_with_template(
-    template: dict, result: dict, base_config_path: str, verbose: bool = True
+    template: dict,
+    result: dict,
+    base_config_path: str,
+    verbose: bool = True,
+    tracker: Optional[ConfigTransformTracker] = None,
 ) -> None:
     """Synchronize the config with the template structure and prune unused keys."""
-    add_missing_keys_recursively(template, result, verbose=verbose)
+    add_missing_keys_recursively(template, result, verbose=verbose, tracker=tracker)
+    existing_base = result["live"].get("base_config_path") if "live" in result else None
+    had_key = "live" in result and "base_config_path" in result["live"]
     if base_config_path or "base_config_path" not in result["live"]:
         result["live"]["base_config_path"] = base_config_path
+        if tracker is not None:
+            if not had_key:
+                tracker.add(["live", "base_config_path"], base_config_path)
+            elif existing_base != base_config_path:
+                tracker.update(["live", "base_config_path"], existing_base, base_config_path)
     template_with_extras = deepcopy(template)
     template_with_extras.setdefault("live", {})["base_config_path"] = ""
     remove_unused_keys_recursively(
-        template_with_extras, result, verbose=verbose, preserve=[("coin_overrides",)]
+        template_with_extras,
+        result,
+        verbose=verbose,
+        preserve=[("coin_overrides",)],
+        tracker=tracker,
     )
-    remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose)
+    remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose, tracker=tracker)
     remove_unused_keys_recursively(
-        template["optimize"]["bounds"], result["optimize"]["bounds"], verbose=verbose
+        template["optimize"]["bounds"],
+        result["optimize"]["bounds"],
+        verbose=verbose,
+        tracker=tracker,
     )
     remove_unused_keys_recursively(
         template.get("optimize", {}).get("limits", {}),
         result["optimize"].setdefault("limits", {}),
         verbose=verbose,
+        tracker=tracker,
     )
 
 
-def _normalize_position_counts(result: dict) -> None:
+def _normalize_position_counts(
+    result: dict, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
     """Round position counts to integers for each side."""
     for pside in result["bot"]:
-        result["bot"][pside]["n_positions"] = int(round(result["bot"][pside]["n_positions"]))
+        current = result["bot"][pside].get("n_positions")
+        rounded = int(round(current))
+        if tracker is not None and current != rounded:
+            tracker.update(["bot", pside, "n_positions"], current, rounded)
+        result["bot"][pside]["n_positions"] = rounded
+
+
+def _normalize_coin_sources(raw: Any) -> Dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("backtest.coin_sources must be a mapping of coin -> exchange")
+    normalized: Dict[str, str] = {}
+    for coin, exchange in raw.items():
+        if exchange is None:
+            continue
+        normalized[str(coin)] = str(exchange)
+    return normalized
 
 
 def _preserve_coin_sources(result: dict) -> None:
@@ -720,7 +1015,9 @@ def _preserve_coin_sources(result: dict) -> None:
             sources[key] = deepcopy(live[key])
 
 
-def _apply_non_live_adjustments(result: dict, verbose: bool = True) -> None:
+def _apply_non_live_adjustments(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
     """Adjust live/backtest/optimize fields when not running in live-only mode."""
     for key in ("approved_coins", "ignored_coins"):
         result["live"][key] = normalize_coins_source(result["live"].get(key, ""))
@@ -731,30 +1028,28 @@ def _apply_non_live_adjustments(result: dict, verbose: bool = True) -> None:
             if coin not in result["live"]["ignored_coins"][pside]
         ]
     result["backtest"]["end_date"] = format_end_date(result["backtest"]["end_date"])
-    result["optimize"]["scoring"] = sorted(result["optimize"]["scoring"])
-    result["optimize"]["limits"] = parse_limits_string(result["optimize"]["limits"])
-    for key, value in sorted(result["optimize"]["limits"].items()):
-        if key.startswith("lower_bound_"):
-            new_key = key.replace("lower_bound_", "penalize_if_greater_than_")
-            result["optimize"]["limits"][new_key] = value
-            if verbose:
-                print(f"changed config.optimize.limits.{key} -> {new_key}")
-            del result["optimize"]["limits"][key]
-    if not result["backtest"]["use_btc_collateral"]:
-        for idx, value in enumerate(result["optimize"]["scoring"]):
-            if value.startswith("btc_"):
-                new_value = value[len("btc_") :]
-                if verbose:
-                    print(f"changed config.optimize.scoring.{value} -> {new_value}")
-                result["optimize"]["scoring"][idx] = new_value
-        for key in sorted(result["optimize"]["limits"]):
-            if key.startswith("btc_"):
-                new_key = key[len("btc_") :]
-                limit_value = result["optimize"]["limits"][key]
-                if verbose:
-                    print(f"changed config.optimize.limits.{key} -> {new_key}")
-                result["optimize"]["limits"][new_key] = limit_value
-                del result["optimize"]["limits"][key]
+    result["backtest"]["coin_sources"] = _normalize_coin_sources(
+        result["backtest"].get("coin_sources", {})
+    )
+    if result["backtest"].get("filter_by_min_effective_cost") is None:
+        result["backtest"]["filter_by_min_effective_cost"] = bool(
+            result["live"].get("filter_by_min_effective_cost", False)
+        )
+
+    canonical_scoring = []
+    seen = set()
+    for metric in result["optimize"].get("scoring", []):
+        canon = canonicalize_metric_name(metric)
+        if canon not in seen:
+            canonical_scoring.append(canon)
+            seen.add(canon)
+    result["optimize"]["scoring"] = canonical_scoring
+
+    limits_dict = parse_limits_string(result["optimize"].get("limits", {}))
+    canonical_limits = {}
+    for key, value in limits_dict.items():
+        canonical_limits[canonicalize_limit_name(key)] = value
+    result["optimize"]["limits"] = canonical_limits
     for key, value in sorted(result["optimize"]["bounds"].items()):
         if isinstance(value, list):
             if len(value) == 1:
@@ -763,36 +1058,121 @@ def _apply_non_live_adjustments(result: dict, verbose: bool = True) -> None:
                 result["optimize"]["bounds"][key] = sorted(value)
 
 
-def _ensure_enforce_exposure_limit_bool(result: dict) -> None:
-    """Ensure enforce_exposure_limit is a bool for each side."""
-    for pside in result["bot"]:
-        result["bot"][pside]["enforce_exposure_limit"] = bool(
-            result["bot"][pside]["enforce_exposure_limit"]
-        )
-
-
 def format_config(config: dict, verbose=True, live_only=False, base_config_path: str = "") -> dict:
     # attempts to format a config to v7 config
-    template = get_template_config("v7")
+    raw_snapshot = deepcopy(config["_raw"]) if "_raw" in config else None
+    existing_log = config.get("_transform_log")
+    if isinstance(existing_log, list):
+        existing_log = deepcopy(existing_log)
+    else:
+        existing_log = []
+    tracker = ConfigTransformTracker()
+    optimize_suite_defined = (
+        isinstance(config.get("optimize"), dict) and "suite" in config["optimize"]
+    )
+    coin_sources_input = deepcopy(config.get("backtest", {}).get("coin_sources"))
+    template = get_template_config()
     flavor = detect_flavor(config, template)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
-    _apply_backward_compatibility_renames(result, verbose=verbose)
-    _ensure_bot_defaults_and_bounds(result, verbose=verbose)
+    _apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
+    _migrate_btc_collateral_settings(result, verbose=verbose, tracker=tracker)
+    _ensure_bot_defaults_and_bounds(result, verbose=verbose, tracker=tracker)
     result["bot"] = sort_dict_keys(result["bot"])
 
-    _rename_config_keys(result, verbose=verbose)
+    _rename_config_keys(result, verbose=verbose, tracker=tracker)
 
-    _sync_with_template(template, result, base_config_path, verbose=verbose)
+    _sync_with_template(template, result, base_config_path, verbose=verbose, tracker=tracker)
 
-    _normalize_position_counts(result)
+    _normalize_position_counts(result, tracker=tracker)
+    if coin_sources_input is not None:
+        result.setdefault("backtest", {})["coin_sources"] = coin_sources_input
     _preserve_coin_sources(result)
+
+    if not optimize_suite_defined:
+        backtest_suite = result.get("backtest", {}).get("suite")
+        if backtest_suite is not None:
+            result.setdefault("optimize", {})["suite"] = deepcopy(backtest_suite)
 
     if not live_only:
         # unneeded adjustments if running live
-        _apply_non_live_adjustments(result, verbose=verbose)
+        _apply_non_live_adjustments(result, verbose=verbose, tracker=tracker)
 
-    _ensure_enforce_exposure_limit_bool(result)
+    result["_transform_log"] = existing_log
+    details = {
+        "live_only": live_only,
+        "base_config_path": base_config_path,
+        "flavor": flavor,
+    }
+    details = tracker.merge_details(details)
+    record_transform(
+        result,
+        "format_config",
+        details,
+    )
+
+    if raw_snapshot is not None and "_raw" not in result:
+        result["_raw"] = deepcopy(raw_snapshot)
+
     return result
+
+
+def _clean_dynamic_node(value):
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, sub_value in value.items():
+            if str(key).startswith("_"):
+                continue
+            cleaned[key] = _clean_dynamic_node(sub_value)
+        return cleaned
+    if isinstance(value, list):
+        return [_clean_dynamic_node(item) for item in value]
+    return deepcopy(value)
+
+
+def _clean_with_template(template_node, source_node):
+    if isinstance(template_node, dict):
+        if not template_node:
+            return _clean_dynamic_node(source_node if isinstance(source_node, dict) else {})
+        result = {}
+        source_dict = source_node if isinstance(source_node, dict) else {}
+        for key, tmpl_value in template_node.items():
+            result[key] = _clean_with_template(tmpl_value, source_dict.get(key))
+        return result
+    if isinstance(template_node, list):
+        if isinstance(source_node, list):
+            return [_clean_dynamic_node(item) for item in source_node]
+        return deepcopy(template_node)
+    if source_node is None:
+        return deepcopy(template_node)
+    return deepcopy(source_node)
+
+
+def clean_config(config: dict) -> dict:
+    """
+    Return a sanitized config aligned with the template structure, stripped of helper keys,
+    with dictionaries sorted recursively.
+    """
+    template = get_template_config()
+    cleaned = _clean_with_template(template, config or {})
+    return sort_dict_keys(cleaned)
+
+
+def strip_config_metadata(config: dict, *, keys: Iterable[str] | None = None) -> dict:
+    """
+    Return a deep-copied config with the provided metadata keys removed recursively.
+    Defaults to removing `_raw` and `_transform_log`.
+    """
+
+    removal = set(keys or ("_raw", "_transform_log", "_coins_sources"))
+
+    def _strip(node):
+        if isinstance(node, dict):
+            return {k: _strip(v) for k, v in node.items() if k not in removal}
+        if isinstance(node, list):
+            return [_strip(item) for item in node]
+        return deepcopy(node)
+
+    return _strip(config)
 
 
 def parse_limits_string(limits_str: Union[str, dict]) -> dict:
@@ -822,41 +1202,51 @@ def parse_limits_string(limits_str: Union[str, dict]) -> dict:
     return result
 
 
-def add_missing_keys_recursively(src, dst, parent=None, verbose=True):
+def add_missing_keys_recursively(src, dst, parent=None, verbose=True, tracker=None):
     if parent is None:
         parent = []
     for k in src:
         if k not in dst:
-            if verbose:
-                logging.info("Added missing %s to config.", ".".join(parent + [k]))
+            _log_config(verbose, logging.INFO, "Added missing %s to config.", ".".join(parent + [k]))
             dst[k] = src[k]
+            if tracker is not None:
+                tracker.add(parent + [k], src[k])
         # --- NEW: only walk down if both sides are dicts -------------
         elif isinstance(src[k], dict) and isinstance(dst.get(k), dict):
-            add_missing_keys_recursively(src[k], dst[k], parent + [k], verbose)
+            add_missing_keys_recursively(src[k], dst[k], parent + [k], verbose, tracker=tracker)
         # --------------------------------------------------------------
         elif isinstance(src[k], dict):
             # type clash: leave the user’s value untouched
-            if verbose:
-                logging.info(
-                    "Skipping template subtree %s (template is dict, config is %s)",
-                    ".".join(parent + [k]),
-                    type(dst.get(k)).__name__,
-                )
+            _log_config(
+                verbose,
+                logging.INFO,
+                "Skipping template subtree %s (template is dict, config is %s)",
+                ".".join(parent + [k]),
+                type(dst.get(k)).__name__,
+            )
             continue
         else:
             # previous branches already handle k not in dst; keep safe assignment
             if k not in dst:
-                if verbose:
-                    logging.info(
-                        "Adding missing key -> val %s -> %s to config",
-                        ".".join(parent + [k]),
-                        src[k],
-                    )
+                _log_config(
+                    verbose,
+                    logging.INFO,
+                    "Adding missing key -> val %s -> %s to config",
+                    ".".join(parent + [k]),
+                    src[k],
+                )
                 dst[k] = src[k]
+                if tracker is not None:
+                    tracker.add(parent + [k], src[k])
 
 
 def remove_unused_keys_recursively(
-    src, dst, parent=None, verbose=True, preserve: Optional[Iterable[Iterable[str]]] = None
+    src,
+    dst,
+    parent=None,
+    verbose=True,
+    preserve: Optional[Iterable[Iterable[str]]] = None,
+    tracker=None,
 ):
     if parent is None:
         parent = []
@@ -892,14 +1282,19 @@ def remove_unused_keys_recursively(
         if k.startswith("_"):
             continue
         if k not in src:
-            del dst[k]
-            if verbose:
-                logging.info("Removed unused key from config: %s", ".".join(current_path))
+            removed = dst.pop(k)
+            _log_config(
+                verbose, logging.INFO, "Removed unused key from config: %s", ".".join(current_path)
+            )
+            if tracker is not None:
+                tracker.remove(current_path, removed)
             continue
         src_val = src[k]
         dst_val = dst[k]
         if isinstance(dst_val, dict) and isinstance(src_val, dict):
-            remove_unused_keys_recursively(src_val, dst_val, current_path, verbose=verbose)
+            remove_unused_keys_recursively(
+                src_val, dst_val, current_path, verbose=verbose, tracker=tracker
+            )
 
     if parent == [] and hasattr(remove_unused_keys_recursively, "_preserve_set"):
         delattr(remove_unused_keys_recursively, "_preserve_set")
@@ -911,6 +1306,47 @@ def comma_separated_values_float(x):
 
 def comma_separated_values(x):
     return x.split(",")
+
+
+def optional_float(x):
+    if isinstance(x, str) and x.strip().lower() in {"none", "null", ""}:
+        return None
+    return float(x)
+
+
+def canonicalize_metric_name(metric: str) -> str:
+    if metric.endswith("_usd") or metric.endswith("_btc"):
+        return metric
+
+    for prefix, suffix in (("usd_", "usd"), ("btc_", "btc")):
+        if metric.startswith(prefix):
+            core = metric[len(prefix) :]
+            if core in SHARED_METRICS:
+                return core
+            return f"{core}_{suffix}"
+
+    if metric in SHARED_METRICS:
+        return metric
+
+    if metric in CURRENCY_METRICS:
+        return f"{metric}_usd"
+
+    return metric
+
+
+def canonicalize_limit_name(limit_key: str) -> str:
+    if limit_key.startswith("lower_bound_"):
+        metric = limit_key[len("lower_bound_") :]
+        return "penalize_if_greater_than_" + canonicalize_metric_name(metric)
+    if limit_key.startswith("upper_bound_"):
+        metric = limit_key[len("upper_bound_") :]
+        return "penalize_if_lower_than_" + canonicalize_metric_name(metric)
+    prefixes = ["penalize_if_greater_than_", "penalize_if_lower_than_"]
+    for prefix in prefixes:
+        if limit_key.startswith(prefix):
+            metric = limit_key[len(prefix) :]
+            return prefix + canonicalize_metric_name(metric)
+    return canonicalize_metric_name(limit_key)
 
 
 def merge_negative_cli_values(argv):
@@ -1012,6 +1448,11 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
                 acronym = "c"
             elif "iters" in full_name:
                 acronym = "i"
+            elif value is None:
+                if full_name == "backtest.btc_collateral_ltv_cap":
+                    type_ = optional_float
+                else:
+                    type_ = str
             elif type_ == bool:
                 type_ = str2bool
                 appendix = "[y/n]"
@@ -1036,7 +1477,7 @@ def add_arguments_recursively(parser, config, prefix="", acronyms=set()):
             acronyms.add(acronym)
 
 
-def recursive_config_update(config, key, value, path=None):
+def recursive_config_update(config, key, value, path=None, verbose=False):
     if path is None:
         path = []
 
@@ -1057,27 +1498,48 @@ def recursive_config_update(config, key, value, path=None):
         coerced_value = _coerce_value(config[key], value)
         if coerced_value != config[key]:
             full_path = ".".join(path + [key])
-            print(f"changed {full_path} {config[key]} -> {coerced_value}")
+            old_value = deepcopy(config[key])
+            _log_config(
+                verbose, logging.INFO, "changed %s %s -> %s", full_path, config[key], coerced_value
+            )
             config[key] = coerced_value
-        return True
+            return {"path": full_path, "old": old_value, "new": deepcopy(coerced_value)}
+        return None
 
     key_split = key.split(".")
     if key_split[0] in config:
         new_path = path + [key_split[0]]
-        return recursive_config_update(config[key_split[0]], ".".join(key_split[1:]), value, new_path)
+        return recursive_config_update(
+            config[key_split[0]], ".".join(key_split[1:]), value, new_path, verbose=verbose
+        )
 
-    return False
+    return None
 
 
-def update_config_with_args(config, args):
+def update_config_with_args(config, args, verbose=False):
+    changed_keys = []
+    diffs = []
     for key, value in vars(args).items():
         if value is None:
             continue
         if key in {"live.approved_coins", "live.ignored_coins"}:
             normalized = normalize_coins_source(value)
-            recursive_config_update(config, key, normalized)
+            change = recursive_config_update(config, key, normalized, verbose=verbose)
+            source_key = key.split(".")[-1]
+            config.setdefault("_coins_sources", {})[source_key] = deepcopy(normalized)
+            if change:
+                changed_keys.append(key)
+                diffs.append(change)
             continue
-        recursive_config_update(config, key, value)
+        change = recursive_config_update(config, key, value, verbose=verbose)
+        if change:
+            changed_keys.append(key)
+            diffs.append(change)
+    if changed_keys:
+        details = {"keys": changed_keys}
+        if diffs:
+            details["diffs"] = diffs
+        record_transform(config, "update_config_with_args", details)
 
 
 def require_config_value(config: dict, dotted_path: str):
@@ -1118,10 +1580,12 @@ def get_optional_live_value(config: dict, key: str, default=None):
     return get_optional_config_value(config, f"live.{key}", default)
 
 
-def get_template_config(passivbot_mode="v7"):
+def get_template_config():
     return {
         "logging": {
             "level": 1,
+            "memory_snapshot_interval_minutes": 30.0,
+            "volume_refresh_info_threshold_seconds": 30.0,
         },
         "backtest": {
             "base_dir": "backtests",
@@ -1132,7 +1596,18 @@ def get_template_config(passivbot_mode="v7"):
             "gap_tolerance_ohlcvs_minutes": 120.0,
             "start_date": "2021-04-01",
             "starting_balance": 100000.0,
-            "use_btc_collateral": False,
+            "balance_sample_divider": 60,
+            "btc_collateral_cap": 1.0,
+            "btc_collateral_ltv_cap": None,
+            "max_warmup_minutes": 0.0,
+            "filter_by_min_effective_cost": None,
+            "suite": {
+                "enabled": False,
+                "include_base_scenario": False,
+                "base_label": "base",
+                "aggregate": {"default": "mean"},
+                "scenarios": [],
+            },
         },
         "bot": {
             "long": {
@@ -1145,10 +1620,9 @@ def get_template_config(passivbot_mode="v7"):
                 "close_trailing_threshold_pct": 0.008,
                 "ema_span_0": 1318.0,
                 "ema_span_1": 1435.0,
-                "enforce_exposure_limit": True,
                 "entry_grid_double_down_factor": 0.894,
-                "entry_grid_spacing_log_span_hours": 72,
-                "entry_grid_spacing_log_weight": 0.0,
+                "entry_volatility_ema_span_hours": 72,
+                "entry_grid_spacing_volatility_weight": 0.0,
                 "entry_grid_spacing_pct": 0.04,
                 "entry_grid_spacing_we_weight": 0.697,
                 "entry_initial_ema_dist": -0.00738,
@@ -1156,8 +1630,13 @@ def get_template_config(passivbot_mode="v7"):
                 "entry_trailing_double_down_factor": 0.894,
                 "entry_trailing_grid_ratio": 0.5,
                 "entry_trailing_retracement_pct": 0.01,
+                "entry_trailing_retracement_we_weight": 0.0,
+                "entry_trailing_retracement_volatility_weight": 0.0,
                 "entry_trailing_threshold_pct": 0.05,
-                "filter_log_range_ema_span": 60.0,
+                "entry_trailing_threshold_we_weight": 0.0,
+                "entry_trailing_threshold_volatility_weight": 0.0,
+                "filter_volatility_ema_span": 60.0,
+                "filter_volatility_drop_pct": 0.0,
                 "filter_volume_drop_pct": 0.95,
                 "filter_volume_ema_span": 60.0,
                 "n_positions": 10.0,
@@ -1166,6 +1645,9 @@ def get_template_config(passivbot_mode="v7"):
                 "unstuck_ema_dist": 0.0,
                 "unstuck_loss_allowance_pct": 0.03,
                 "unstuck_threshold": 0.916,
+                "risk_wel_enforcer_threshold": 1.0,
+                "risk_we_excess_allowance_pct": 0.0,
+                "risk_twel_enforcer_threshold": 1.0,
             },
             "short": {
                 "close_grid_markup_end": 0.0089,
@@ -1177,10 +1659,9 @@ def get_template_config(passivbot_mode="v7"):
                 "close_trailing_threshold_pct": 0.008,
                 "ema_span_0": 1318.0,
                 "ema_span_1": 1435.0,
-                "enforce_exposure_limit": True,
                 "entry_grid_double_down_factor": 0.894,
-                "entry_grid_spacing_log_span_hours": 72,
-                "entry_grid_spacing_log_weight": 0.0,
+                "entry_volatility_ema_span_hours": 72,
+                "entry_grid_spacing_volatility_weight": 0.0,
                 "entry_grid_spacing_pct": 0.04,
                 "entry_grid_spacing_we_weight": 0.697,
                 "entry_initial_ema_dist": -0.00738,
@@ -1188,8 +1669,13 @@ def get_template_config(passivbot_mode="v7"):
                 "entry_trailing_double_down_factor": 0.894,
                 "entry_trailing_grid_ratio": 0.5,
                 "entry_trailing_retracement_pct": 0.01,
+                "entry_trailing_retracement_we_weight": 0.0,
+                "entry_trailing_retracement_volatility_weight": 0.0,
                 "entry_trailing_threshold_pct": 0.05,
-                "filter_log_range_ema_span": 60.0,
+                "entry_trailing_threshold_we_weight": 0.0,
+                "entry_trailing_threshold_volatility_weight": 0.0,
+                "filter_volatility_ema_span": 60.0,
+                "filter_volatility_drop_pct": 0.0,
                 "filter_volume_drop_pct": 0.95,
                 "filter_volume_ema_span": 60.0,
                 "n_positions": 10.0,
@@ -1198,6 +1684,9 @@ def get_template_config(passivbot_mode="v7"):
                 "unstuck_ema_dist": 0.0,
                 "unstuck_loss_allowance_pct": 0.03,
                 "unstuck_threshold": 0.916,
+                "risk_wel_enforcer_threshold": 1.0,
+                "risk_we_excess_allowance_pct": 0.0,
+                "risk_twel_enforcer_threshold": 1.0,
             },
         },
         "coin_overrides": {},
@@ -1221,7 +1710,8 @@ def get_template_config(passivbot_mode="v7"):
             "minimum_coin_age_days": 7.0,
             "pnls_max_lookback_days": 30.0,
             "price_distance_threshold": 0.002,
-            "memory_snapshot_interval_minutes": 30.0,
+            "order_match_tolerance_pct": 0.0002,
+            "recv_window_ms": 5000,
             "max_warmup_minutes": 0.0,
             "time_in_force": "good_till_cancelled",
             "warmup_ratio": 0.2,
@@ -1234,22 +1724,30 @@ def get_template_config(passivbot_mode="v7"):
                 "long_close_grid_qty_pct": [0.05, 1.0],
                 "long_close_trailing_grid_ratio": [-1.0, 1.0],
                 "long_close_trailing_qty_pct": [0.05, 1.0],
-                "long_close_trailing_retracement_pct": [0.0, 0.1],
-                "long_close_trailing_threshold_pct": [-0.1, 0.1],
+                "long_close_trailing_retracement_pct": [0.001, 0.1],
+                "long_close_trailing_threshold_pct": [0.001, 0.1],
                 "long_ema_span_0": [200.0, 1440.0],
                 "long_ema_span_1": [200.0, 1440.0],
                 "long_entry_grid_double_down_factor": [0.1, 3.0],
                 "long_entry_grid_spacing_pct": [0.005, 0.12],
-                "long_entry_grid_spacing_log_span_hours": [24.0, 336.0],
-                "long_entry_grid_spacing_log_weight": [0.0, 400.0],
-                "long_entry_grid_spacing_we_weight": [0.0, 2.0],
+                "long_entry_volatility_ema_span_hours": [24.0, 336.0],
+                "long_entry_grid_spacing_volatility_weight": [0.0, 400.0],
+                "long_entry_grid_spacing_we_weight": [0.0, 20.0],
                 "long_entry_initial_ema_dist": [-0.1, 0.002],
                 "long_entry_initial_qty_pct": [0.005, 0.1],
                 "long_entry_trailing_double_down_factor": [0.1, 3.0],
                 "long_entry_trailing_grid_ratio": [-1.0, 1.0],
-                "long_entry_trailing_retracement_pct": [0.0, 0.1],
-                "long_entry_trailing_threshold_pct": [-0.1, 0.1],
-                "long_filter_log_range_ema_span": [10.0, 1440.0],
+                "long_entry_trailing_retracement_pct": [0.001, 0.1],
+                "long_entry_trailing_retracement_we_weight": [0.0, 20.0],
+                "long_entry_trailing_retracement_volatility_weight": [0.0, 400.0],
+                "long_entry_trailing_threshold_pct": [0.001, 0.1],
+                "long_entry_trailing_threshold_we_weight": [0.0, 20.0],
+                "long_entry_trailing_threshold_volatility_weight": [0.0, 400.0],
+                "long_risk_wel_enforcer_threshold": [0.8, 1.05],
+                "long_risk_we_excess_allowance_pct": [0.0, 0.5],
+                "long_risk_twel_enforcer_threshold": [0.9, 1.01],
+                "long_filter_volatility_ema_span": [10.0, 1440.0],
+                "long_filter_volatility_drop_pct": [0.0, 1.0],
                 "long_filter_volume_drop_pct": [0.0, 1.0],
                 "long_filter_volume_ema_span": [10.0, 1440.0],
                 "long_n_positions": [1.0, 20.0],
@@ -1263,22 +1761,30 @@ def get_template_config(passivbot_mode="v7"):
                 "short_close_grid_qty_pct": [0.05, 1.0],
                 "short_close_trailing_grid_ratio": [-1.0, 1.0],
                 "short_close_trailing_qty_pct": [0.05, 1.0],
-                "short_close_trailing_retracement_pct": [0.0, 0.1],
-                "short_close_trailing_threshold_pct": [-0.1, 0.1],
+                "short_close_trailing_retracement_pct": [0.001, 0.1],
+                "short_close_trailing_threshold_pct": [0.001, 0.1],
                 "short_ema_span_0": [200.0, 1440.0],
                 "short_ema_span_1": [200.0, 1440.0],
                 "short_entry_grid_double_down_factor": [0.1, 3.0],
                 "short_entry_grid_spacing_pct": [0.005, 0.12],
-                "short_entry_grid_spacing_log_span_hours": [24.0, 336.0],
-                "short_entry_grid_spacing_log_weight": [0.0, 400.0],
-                "short_entry_grid_spacing_we_weight": [0.0, 2.0],
+                "short_entry_volatility_ema_span_hours": [24.0, 336.0],
+                "short_entry_grid_spacing_volatility_weight": [0.0, 400.0],
+                "short_entry_grid_spacing_we_weight": [0.0, 20.0],
                 "short_entry_initial_ema_dist": [-0.1, 0.002],
                 "short_entry_initial_qty_pct": [0.005, 0.1],
                 "short_entry_trailing_double_down_factor": [0.1, 3.0],
                 "short_entry_trailing_grid_ratio": [-1.0, 1.0],
-                "short_entry_trailing_retracement_pct": [0.0, 0.1],
-                "short_entry_trailing_threshold_pct": [-0.1, 0.1],
-                "short_filter_log_range_ema_span": [10.0, 1440.0],
+                "short_entry_trailing_retracement_pct": [0.001, 0.1],
+                "short_entry_trailing_retracement_we_weight": [0.0, 20.0],
+                "short_entry_trailing_retracement_volatility_weight": [0.0, 400.0],
+                "short_entry_trailing_threshold_pct": [0.001, 0.1],
+                "short_entry_trailing_threshold_we_weight": [0.0, 20.0],
+                "short_entry_trailing_threshold_volatility_weight": [0.0, 400.0],
+                "short_risk_wel_enforcer_threshold": [0.8, 1.05],
+                "short_risk_we_excess_allowance_pct": [0.0, 0.5],
+                "short_risk_twel_enforcer_threshold": [0.9, 1.01],
+                "short_filter_volatility_ema_span": [10.0, 1440.0],
+                "short_filter_volatility_drop_pct": [0.0, 1.0],
                 "short_filter_volume_drop_pct": [0.0, 1.0],
                 "short_filter_volume_ema_span": [10.0, 1440.0],
                 "short_n_positions": [1.0, 20.0],
@@ -1303,5 +1809,13 @@ def get_template_config(passivbot_mode="v7"):
             "round_to_n_significant_digits": 5,
             "scoring": ["adg", "sharpe_ratio"],
             "write_all_results": True,
+            "pareto_max_size": 300,
+            "suite": {
+                "enabled": False,
+                "include_base_scenario": False,
+                "base_label": "base",
+                "aggregate": {"default": "mean"},
+                "scenarios": [],
+            },
         },
     }

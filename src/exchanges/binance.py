@@ -48,9 +48,11 @@ class BinanceBot(Passivbot):
                         "apiKey": self.user_info["key"],
                         "secret": self.user_info["secret"],
                         "password": self.user_info["passphrase"],
+                        "enableRateLimit": True,
                     }
                 ),
             )
+            getattr(self, ccx).options.update(self._build_ccxt_options())
             getattr(self, ccx).options["defaultType"] = "swap"
             if self.broker_code:
                 for key in ["future", "delivery", "swap", "option"]:
@@ -182,15 +184,14 @@ class BinanceBot(Passivbot):
                         }
                     )
             balance = float(fetched_balance["info"]["totalCrossWalletBalance"])
-            if not hasattr(self, "previous_rounded_balance"):
-                self.previous_rounded_balance = balance
-            self.previous_rounded_balance = pbr.hysteresis_rounding(
+            if not hasattr(self, "previous_hysteresis_balance"):
+                self.previous_hysteresis_balance = balance
+            self.previous_hysteresis_balance = pbr.hysteresis(
                 balance,
-                self.previous_rounded_balance,
-                self.hyst_rounding_balance_pct,
-                self.hyst_rounding_balance_h,
+                self.previous_hysteresis_balance,
+                self.hyst_pct,
             )
-            return positions, self.previous_rounded_balance
+            return positions, self.previous_hysteresis_balance
         except Exception as e:
             logging.error(f"error fetching positions {e}")
             print_async_exception(fetched_positions)
@@ -278,7 +279,6 @@ class BinanceBot(Passivbot):
         # but can fetch pnls for all symbols
         # fetch fills for all symbols with pos
         # fetch pnls for all symbols
-        # fills only needed for symbols with pos for trailing orders
         # binance returns at most 7 days worth of pnls per fetch unless both start_time and end_time are given
         if limit is None:
             limit = 1000
@@ -311,6 +311,31 @@ class BinanceBot(Passivbot):
             )
             start_time = fetched[-1]["timestamp"]
         return sorted(all_fetched.values(), key=lambda x: x["timestamp"])
+
+    async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
+        """Return canonical fill events for Binance (draft placeholder)."""
+        events = []
+        try:
+            fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
+        except Exception as exc:
+            logging.error(f"error gathering fill events (binance) {exc}")
+            return events
+        for fill in fills:
+            events.append(
+                {
+                    "id": fill.get("id") or fill.get("tradeId"),
+                    "timestamp": fill.get("timestamp"),
+                    "symbol": fill.get("symbol"),
+                    "side": fill.get("side"),
+                    "position_side": fill.get("position_side", fill.get("pside")),
+                    "qty": fill.get("qty") or fill.get("amount"),
+                    "price": fill.get("price"),
+                    "pnl": fill.get("pnl"),
+                    "fee": fill.get("fee"),
+                    "info": fill.get("info"),
+                }
+            )
+        return events
 
     async def fetch_fills_sub(self, symbol, start_time=None, end_time=None, limit=None):
         try:

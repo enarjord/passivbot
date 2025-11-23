@@ -1,13 +1,14 @@
 -r requirements-rust.txt
-python-dateutil==2.8.2
+python-dateutil==2.9.0.post0
 numba==0.59.1; python_version>='3.9'
 numba==0.58.1; python_version<'3.9'
-pandas==1.5.3
-asyncio==3.4.3
-numpy==1.22.4
+pandas==2.2.2; python_version>='3.9'
+pandas==1.5.3; python_version<'3.9'
+numpy==1.26.4; python_version>='3.9'
+numpy==1.23.5; python_version<'3.9'
 ccxt==4.4.99
 hjson==3.0.2
-prettytable==3.0.0
+prettytable==3.11.0
 sortedcontainers==2.4.0
 portalocker==3.2.0
-tqdm==4.62.3
+tqdm==4.66.5

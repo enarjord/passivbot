@@ -13,10 +13,12 @@ from typing import Dict, Any, List, Union, Optional
 import re
 import logging
 from copy import deepcopy
+from pathlib import Path
 from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
     resolve_custom_endpoint_override,
 )
+from config_transform import record_transform
 
 
 logging.basicConfig(
@@ -28,6 +30,57 @@ logging.basicConfig(
 # In-memory caches for symbol/coin maps with on-disk change detection
 _COIN_TO_SYMBOL_CACHE = {}  # {exchange: {"map": dict, "mtime_ns": int, "size": int}}
 _SYMBOL_TO_COIN_CACHE = {"map": None, "mtime_ns": None, "size": None}
+_SYMBOL_TO_COIN_WARNINGS: set[str] = set()
+_COIN_TO_SYMBOL_FALLBACKS: set[tuple[str, str]] = set()
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+LEGACY_COINS_FILE_ALIASES = {
+    "approved_coins_topmcap.json": Path("configs/approved_coins.json"),
+    "approved_coins_topmcap.txt": Path("configs/approved_coins.json"),
+}
+
+
+def _resolve_coins_file_path(value: str) -> Optional[Path]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw_path = Path(value.strip())
+    candidates: List[Path] = []
+
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+    else:
+        candidates.extend(
+            [
+                PROJECT_ROOT / raw_path,
+                Path.cwd() / raw_path,
+            ]
+        )
+
+    alias = LEGACY_COINS_FILE_ALIASES.get(raw_path.name)
+    if alias is not None:
+        if not alias.is_absolute():
+            candidates.append(PROJECT_ROOT / alias)
+        else:
+            candidates.append(alias)
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.exists():
+            if candidate.name != raw_path.name and raw_path.name in LEGACY_COINS_FILE_ALIASES:
+                try:
+                    rel = candidate.relative_to(PROJECT_ROOT)
+                except ValueError:
+                    rel = candidate
+                logging.warning(
+                    "Resolved legacy coins file '%s' to '%s'. Update your config to the new path.",
+                    raw_path,
+                    rel,
+                )
+            return candidate
+    return None
 
 
 def _require_live_value(config: Dict[str, Any], key: str):
@@ -139,6 +192,187 @@ def make_get_filepath(filepath: str) -> str:
 
 def utc_ms() -> float:
     return time.time() * 1000
+
+
+def _inline_simple_containers(text: str, max_inline: int) -> str:
+    """Collapse flat list/dict blocks that fit within ``max_inline`` characters."""
+
+    result: list[str] = []
+    i = 0
+    length = len(text)
+
+    while i < length:
+        char = text[i]
+        if char in "[{":
+            closing = "]" if char == "[" else "}"
+            j = i + 1
+            depth = 1
+            nested = False
+            while j < length and depth > 0:
+                if text[j] == char:
+                    depth += 1
+                    nested = True
+                elif text[j] == closing:
+                    depth -= 1
+                j += 1
+            segment = text[i:j]
+            if (
+                depth == 0
+                and not nested
+                and "\n" in segment
+                and len("".join(segment.split())) <= max_inline
+            ):
+                inner = "".join(line.strip() for line in segment.splitlines()[1:-1])
+                result.append(f"{char}{inner}{closing}")
+            else:
+                result.append(segment)
+            i = j
+        else:
+            result.append(char)
+            i += 1
+    return "".join(result)
+
+
+def dump_json_streamlined(
+    data: Any,
+    fp,
+    *,
+    indent: int = 4,
+    max_inline: int = 60,
+    separators: tuple[str, str] = (",", ":"),
+    sort_keys: bool = False,
+) -> None:
+    """
+    Write JSON where short lists/dicts stay on one line while larger blocks keep
+    normal indentation.
+
+    Args:
+        data: Object to serialize.
+        fp: File-like object with ``write``.
+        indent: Base indentation level (like ``json.dump``).
+        max_inline: Maximum character count (including brackets/braces) allowed
+            for an inline container.
+        separators: Passed through to ``json.dumps`` for spacing control.
+        sort_keys: Whether to sort dictionary keys.
+    """
+
+    fp.write(
+        json_dumps_streamlined(
+            data,
+            indent=indent,
+            max_inline=max_inline,
+            separators=separators,
+            sort_keys=sort_keys,
+        )
+    )
+
+
+def json_dumps_streamlined(
+    data: Any,
+    *,
+    indent: int = 4,
+    max_inline: int = 60,
+    separators: tuple[str, str] = (",", ":"),
+    sort_keys: bool = False,
+) -> str:
+    """Return the streamlined JSON string (like ``dump_json_streamlined`` but in-memory)."""
+
+    compact_separators = separators
+
+    def _inline_repr(value: Any) -> Optional[str]:
+        try:
+            return json.dumps(value, separators=compact_separators, sort_keys=sort_keys)
+        except TypeError:
+            return None
+
+    def _render(value: Any, level: int) -> str:
+        inline = _inline_repr(value)
+        if inline is not None and len(inline) <= max_inline:
+            return inline
+
+        indent_str = " " * (indent * level)
+        child_indent = " " * (indent * (level + 1))
+
+        if isinstance(value, dict):
+            items = list(value.items())
+            if sort_keys:
+                items = sorted(items)
+            parts = ["{"]
+            total = len(items)
+            for idx, (key, val) in enumerate(items):
+                rendered = _render(val, level + 1)
+                comma = "," if idx < total - 1 else ""
+                parts.append(f"{child_indent}{json.dumps(key)}: {rendered}{comma}")
+            parts.append(f"{indent_str}}}")
+            return "\n".join(parts)
+
+        if isinstance(value, (list, tuple)):
+            total = len(value)
+            parts = ["["]
+            for idx, item in enumerate(value):
+                rendered = _render(item, level + 1)
+                comma = "," if idx < total - 1 else ""
+                parts.append(f"{child_indent}{rendered}{comma}")
+            parts.append(f"{indent_str}]")
+            return "\n".join(parts)
+
+        return json.dumps(value, separators=compact_separators)
+
+    return _render(data, 0)
+
+
+def trim_analysis_aliases(analysis: dict) -> dict:
+    """Return a copy of ``analysis`` with redundant alias metrics removed.
+
+    Two clean-up rules are applied:
+
+    1. If a key ends with ``"_usd"`` and its value matches the base metric
+       (the same key with the suffix removed), the base entry is dropped while
+       the explicit ``*_usd`` key is retained.
+    2. Within the remaining items, if multiple keys are permutations of the same
+       underscore-separated tokens and share the exact value (e.g.
+       ``"drawdown_btc_worst"`` vs ``"drawdown_worst_btc"``), only a single key
+       is kept. Preference is given to keys whose trailing token is a currency
+       tag (``usd``/``btc``); ties fall back to key length and lexical order.
+
+    The original ``analysis`` mapping is left untouched.
+    """
+
+    trimmed = dict(analysis)
+
+    # Step 1: remove base keys when *_usd carries the same value.
+    for key, value in list(trimmed.items()):
+        if key.endswith("_usd"):
+            base_key = key[:-4]
+            if base_key in trimmed and trimmed[base_key] == value:
+                trimmed.pop(base_key)
+
+    # Step 2: remove duplicate permutations sharing identical values.
+    groups = {}
+    for key in trimmed:
+        canon = tuple(sorted(key.split("_")))
+        groups.setdefault(canon, []).append(key)
+
+    def _score(alias: str) -> tuple:
+        tokens = alias.split("_")
+        tail_currency = 1 if tokens and tokens[-1] in {"usd", "btc"} else 0
+        return (tail_currency, -len(alias), alias)
+
+    for keys in groups.values():
+        if len(keys) < 2:
+            continue
+        values = {}
+        for key in keys:
+            values.setdefault(trimmed[key], []).append(key)
+        for aliases in values.values():
+            if len(aliases) < 2:
+                continue
+            keep = max(aliases, key=_score)
+            for alias in aliases:
+                if alias != keep:
+                    trimmed.pop(alias, None)
+
+    return trimmed
 
 
 def filter_markets(markets: dict, exchange: str, verbose=False) -> (dict, dict, dict):
@@ -501,21 +735,27 @@ def coin_to_symbol(coin, exchange):
             return candidates[0]
         if loaded:
             # map present but coin missing
-            logging.info(
-                "No mapping for %s (raw=%s) on %s; using fallback %s",
-                coin_sanitized,
-                coin,
-                ex,
-                fallback,
-            )
+            warn_key = (ex, coin_sanitized)
+            if warn_key not in _COIN_TO_SYMBOL_FALLBACKS:
+                logging.warning(
+                    "No mapping for %s (raw=%s) on %s; using fallback %s",
+                    coin_sanitized,
+                    coin,
+                    ex,
+                    fallback,
+                )
+                _COIN_TO_SYMBOL_FALLBACKS.add(warn_key)
         else:
-            logging.info(
-                "coin_to_symbol map for %s missing; using fallback for %s (raw=%s) -> %s",
-                ex,
-                coin_sanitized,
-                coin,
-                fallback,
-            )
+            warn_key = (ex, coin_sanitized)
+            if warn_key not in _COIN_TO_SYMBOL_FALLBACKS:
+                logging.warning(
+                    "coin_to_symbol map for %s missing; using fallback for %s (raw=%s) -> %s",
+                    ex,
+                    coin_sanitized,
+                    coin,
+                    fallback,
+                )
+                _COIN_TO_SYMBOL_FALLBACKS.add(warn_key)
     except Exception as e:
         logging.error(
             "error with coin_to_symbol %s (raw=%s) %s: %s", coin_sanitized, coin, exchange, e
@@ -527,7 +767,7 @@ def get_caller_name():
     return inspect.currentframe().f_back.f_back.f_code.co_name
 
 
-def symbol_to_coin(symbol):
+def symbol_to_coin(symbol, verbose=True):
     # caches symbol_to_coin_map in memory and reloads if file changes
     try:
         loaded = _load_symbol_to_coin_map()
@@ -560,13 +800,38 @@ def symbol_to_coin(symbol):
         coin = coin[1:]
     if coin:
         msg += f". Using heuristics to guess coin: {coin}"
-    logging.warning(msg)
+    if verbose:
+        warn_key = str(symbol)
+        if warn_key not in _SYMBOL_TO_COIN_WARNINGS:
+            logging.warning(msg)
+            _SYMBOL_TO_COIN_WARNINGS.add(warn_key)
     return coin
 
 
-async def format_approved_ignored_coins(config, exchanges: [str]):
+def coin_symbol_warning_counts() -> dict[str, int]:
+    """Return counts of fallback conversions for summary logging."""
+    return {
+        "coin_to_symbol_fallbacks": len(_COIN_TO_SYMBOL_FALLBACKS),
+        "symbol_to_coin_fallbacks": len(_SYMBOL_TO_COIN_WARNINGS),
+    }
+
+
+def _snapshot(value):
+    return deepcopy(value) if isinstance(value, (dict, list)) else value
+
+
+def _diff_snapshot(before, after):
+    if before == after:
+        return None
+    return {"old": _snapshot(before), "new": _snapshot(after)}
+
+
+async def format_approved_ignored_coins(config, exchanges: [str], verbose=True):
     if isinstance(exchanges, str):
         exchanges = [exchanges]
+    before_approved = deepcopy(config.get("live", {}).get("approved_coins"))
+    before_ignored = deepcopy(config.get("live", {}).get("ignored_coins"))
+    before_sources = deepcopy(config.get("_coins_sources", {}))
     coin_sources = config.setdefault("_coins_sources", {})
     approved_source = coin_sources.get("approved_coins", config.get("live", {}).get("approved_coins"))
     if approved_source is None:
@@ -589,7 +854,7 @@ async def format_approved_ignored_coins(config, exchanges: [str]):
             approved_coins = set()
             for markets in marketss:
                 for symbol in markets:
-                    approved_coins.add(symbol_to_coin(symbol))
+                    approved_coins.add(symbol_to_coin(symbol, verbose=verbose))
             approved_coins_sorted = sorted([x for x in approved_coins if x])
             config["live"]["approved_coins"] = {
                 "long": approved_coins_sorted,
@@ -612,6 +877,19 @@ async def format_approved_ignored_coins(config, exchanges: [str]):
     config["live"]["ignored_coins"] = {
         pside: [cf for x in ic[pside] if (cf := symbol_to_coin(x))] for pside in ic
     }
+
+    approved_diff = _diff_snapshot(before_approved, config["live"]["approved_coins"])
+    ignored_diff = _diff_snapshot(before_ignored, config["live"]["ignored_coins"])
+    sources_diff = _diff_snapshot(before_sources, config.get("_coins_sources", {}))
+    if approved_diff or ignored_diff or sources_diff:
+        details = {"exchanges": list(exchanges)}
+        if approved_diff:
+            details["approved_coins"] = approved_diff
+        if ignored_diff:
+            details["ignored_coins"] = ignored_diff
+        if sources_diff:
+            details["coin_sources"] = sources_diff
+        record_transform(config, "format_approved_ignored_coins", details)
 
 
 def normalize_coins_source(src):
@@ -645,17 +923,21 @@ def normalize_coins_source(src):
         readable file path, load it with `read_external_coins_lists`.
         Otherwise just return *x* unchanged.
         """
-        if isinstance(x, str) and os.path.exists(x):
-            return read_external_coins_lists(x)
 
-        if (
-            isinstance(x, (list, tuple))
-            and len(x) == 1
-            and isinstance(x[0], str)
-            and os.path.exists(x[0])
-        ):
-            return read_external_coins_lists(x[0])
+        def _maybe_read(path_candidate):
+            resolved = _resolve_coins_file_path(path_candidate)
+            if resolved is not None:
+                return read_external_coins_lists(str(resolved))
+            return None
 
+        if isinstance(x, str):
+            loaded = _maybe_read(x)
+            if loaded is not None:
+                return loaded
+        if isinstance(x, (list, tuple)) and len(x) == 1 and isinstance(x[0], str):
+            loaded = _maybe_read(x[0])
+            if loaded is not None:
+                return loaded
         return x
 
     def _normalize_side(value, side):

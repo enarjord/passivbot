@@ -39,10 +39,12 @@ import math
 import os
 import time
 import zlib
+import atexit
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncIterator, Callable, Dict, List, Optional, Tuple
+import threading
 from collections import OrderedDict
 
 import numpy as np
@@ -64,6 +66,7 @@ class _LockRecord:
     lock: portalocker.Lock
     count: int
     acquired_at: float
+    path: str
 
 
 CANDLE_DTYPE = np.dtype(
@@ -307,6 +310,7 @@ class CandlestickManager:
             {}
         )
         self._tf_range_cache_cap = 8
+        self._step_warning_keys: set[Tuple[str, str, str]] = set()
         # Timeout parameters for cross-process fetch locks
         self._lock_timeout_seconds = float(_LOCK_TIMEOUT_SECONDS)
         self._lock_stale_seconds = float(_LOCK_STALE_SECONDS)
@@ -314,6 +318,9 @@ class CandlestickManager:
         self._lock_backoff_max = float(_LOCK_BACKOFF_MAX)
         # Reentrant bookkeeping for portalocker fetch locks: key -> _LockRecord
         self._held_fetch_locks: Dict[Tuple[str, str], _LockRecord] = {}
+        self._shutdown_guard = threading.Lock()
+        self._closed = False
+        atexit.register(self._cleanup_on_exit)
 
         self._setup_logging()
         self._cleanup_stale_locks()
@@ -383,6 +390,31 @@ class CandlestickManager:
                 except Exception as exc:
                     self.log.error("failed to remove stale lock %s: %s", lock_path, exc)
 
+    def _cleanup_on_exit(self) -> None:
+        with self._shutdown_guard:
+            if self._closed:
+                return
+            self._closed = True
+        records = list(self._held_fetch_locks.values())
+        self._held_fetch_locks.clear()
+        for record in records:
+            self._release_lock_sync(record)
+
+    def _release_lock_sync(self, record: _LockRecord) -> None:
+        try:
+            record.lock.release()
+        except Exception:
+            pass
+        self._remove_lockfile(record.path)
+
+    def _remove_lockfile(self, path: str) -> None:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            return
+        except Exception:
+            return
+
     async def _release_lock(
         self, lock: portalocker.Lock, path: str, symbol: str, timeframe: str
     ) -> None:
@@ -406,7 +438,7 @@ class CandlestickManager:
                 error=str(exc),
             )
         finally:
-            self._touch_lockfile(path)
+            self._remove_lockfile(path)
 
     def _touch_lockfile(self, path: str) -> None:
         try:
@@ -671,7 +703,10 @@ class CandlestickManager:
         held = self._held_fetch_locks.get(key)
         if held is not None:
             self._held_fetch_locks[key] = _LockRecord(
-                lock=held.lock, count=held.count + 1, acquired_at=held.acquired_at
+                lock=held.lock,
+                path=held.path,
+                count=held.count + 1,
+                acquired_at=held.acquired_at,
             )
             self._log(
                 "debug",
@@ -688,10 +723,13 @@ class CandlestickManager:
                     return
                 if record.count <= 1:
                     self._held_fetch_locks.pop(key, None)
-                    await self._release_lock(record.lock, lock_path, symbol, tf_norm)
+                    await self._release_lock(record.lock, record.path, symbol, tf_norm)
                 else:
                     self._held_fetch_locks[key] = _LockRecord(
-                        lock=record.lock, count=record.count - 1, acquired_at=record.acquired_at
+                        lock=record.lock,
+                        path=record.path,
+                        count=record.count - 1,
+                        acquired_at=record.acquired_at,
                     )
             return
 
@@ -707,7 +745,10 @@ class CandlestickManager:
                 acquired_at = time.time()
                 self._touch_lockfile(lock_path)
                 self._held_fetch_locks[key] = _LockRecord(
-                    lock=lock_obj, count=1, acquired_at=acquired_at
+                    lock=lock_obj,
+                    path=lock_path,
+                    count=1,
+                    acquired_at=acquired_at,
                 )
                 self._log(
                     "debug",
@@ -721,7 +762,7 @@ class CandlestickManager:
                 finally:
                     record = self._held_fetch_locks.pop(key, None)
                     if record is not None:
-                        await self._release_lock(record.lock, lock_path, symbol, tf_norm)
+                        await self._release_lock(record.lock, record.path, symbol, tf_norm)
                 return
             except portalocker.exceptions.LockException as exc:
                 age = self._lockfile_age(lock_path)
@@ -1288,9 +1329,12 @@ class CandlestickManager:
                     min_step = int(diffs.min())
                     # Expect step to match the requested timeframe's period
                     if max_step != period_ms or min_step != period_ms:
-                        self.log.warning(
-                            f"unexpected step for tf exchange={self._ex_id} symbol={symbol} tf={tf_norm} expected={period_ms} min_step={min_step} max_step={max_step}"
-                        )
+                        warn_key = (self._ex_id, symbol, tf_norm)
+                        if warn_key not in self._step_warning_keys:
+                            self._step_warning_keys.add(warn_key)
+                            self.log.warning(
+                                f"unexpected step for tf exchange={self._ex_id} symbol={symbol} tf={tf_norm} expected={period_ms} min_step={min_step} max_step={max_step}"
+                            )
                 else:
                     max_step = ONE_MIN_MS
             except Exception:
