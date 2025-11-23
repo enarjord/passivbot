@@ -310,6 +310,7 @@ class CandlestickManager:
             {}
         )
         self._tf_range_cache_cap = 8
+        self._step_warning_keys: set[Tuple[str, str, str]] = set()
         # Timeout parameters for cross-process fetch locks
         self._lock_timeout_seconds = float(_LOCK_TIMEOUT_SECONDS)
         self._lock_stale_seconds = float(_LOCK_STALE_SECONDS)
@@ -1328,9 +1329,12 @@ class CandlestickManager:
                     min_step = int(diffs.min())
                     # Expect step to match the requested timeframe's period
                     if max_step != period_ms or min_step != period_ms:
-                        self.log.warning(
-                            f"unexpected step for tf exchange={self._ex_id} symbol={symbol} tf={tf_norm} expected={period_ms} min_step={min_step} max_step={max_step}"
-                        )
+                        warn_key = (self._ex_id, symbol, tf_norm)
+                        if warn_key not in self._step_warning_keys:
+                            self._step_warning_keys.add(warn_key)
+                            self.log.warning(
+                                f"unexpected step for tf exchange={self._ex_id} symbol={symbol} tf={tf_norm} expected={period_ms} min_step={min_step} max_step={max_step}"
+                            )
                 else:
                     max_step = ONE_MIN_MS
             except Exception:
