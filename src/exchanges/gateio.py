@@ -141,17 +141,24 @@ class GateIOBot(Passivbot):
             return False
 
     async def fetch_positions(self) -> ([dict], float):
-        positions, balance = None, None
+        positions, balance_fetched = None, None
         try:
-            positions_fetched, balance = await asyncio.gather(
+            positions_fetched, balance_fetched = await asyncio.gather(
                 self.cca.fetch_positions(), self.cca.fetch_balance()
             )
             if not hasattr(self, "uid") or not self.uid:
-                self.uid = balance["info"][0]["user"]
+                self.uid = balance_fetched["info"][0]["user"]
                 self.cca.uid = self.uid
                 if self.ccp is not None:
                     self.ccp.uid = self.uid
-            balance = balance[self.quote]["total"]
+            margin_mode_name = balance_fetched["info"][0]["margin_mode_name"]
+            self.log_once(f"account margin mode: {margin_mode_name}")
+            if margin_mode_name == "classic":
+                balance = float(balance_fetched[self.quote]["total"])
+            elif margin_mode_name == "multi_currency":
+                balance = float(balance_fetched["info"][0]["cross_available"])
+            else:
+                raise Exception(f"unknown margin_mode_name {balance_fetched}")
             positions = []
             for x in positions_fetched:
                 if x["contracts"] != 0.0:
@@ -159,7 +166,14 @@ class GateIOBot(Passivbot):
                     x["price"] = x["entryPrice"]
                     x["position_side"] = x["side"]
                     positions.append(x)
-            return positions, balance
+            if not hasattr(self, "previous_hysteresis_balance"):
+                self.previous_hysteresis_balance = balance
+            self.previous_hysteresis_balance = pbr.hysteresis(
+                balance,
+                self.previous_hysteresis_balance,
+                self.hyst_pct,
+            )
+            return positions, self.previous_hysteresis_balance
         except Exception as e:
             logging.error(f"error fetching positions and balance {e}")
             print_async_exception(positions)
@@ -327,8 +341,6 @@ class GateIOBot(Passivbot):
                         )
                     )
                 }
-                if self.user_info["is_vault"]:
-                    params["vaultAddress"] = self.user_info["wallet_address"]
                 coros_to_call_margin_mode[symbol] = asyncio.create_task(
                     self.cca.set_margin_mode("cross", symbol=symbol, params=params)
                 )
