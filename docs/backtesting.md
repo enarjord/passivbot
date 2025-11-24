@@ -20,7 +20,7 @@ Standalone runs write metrics and plots to `backtests/{exchange}/timestamp/`. Su
 ## Backtest CLI args
 
 - `-dp` to disable individual coin plotting.
-- `--suite` to run every scenario defined under `backtest.suite`.
+- `--suite [y/n]` to override `backtest.suite.enabled` (omit the value to enable, e.g. `--suite`).
 - `--suite-config path/to/overrides.json` to merge an additional suite definition onto the base config. Useful when you want to keep suite definitions outside the main config file.
 
 For a comprehensive list of CLI args:
@@ -40,7 +40,7 @@ python3 src/backtest.py -h
 
 Top-level suite keys:
 
-- `enabled`: toggles suite mode (or use `--suite`)
+- `enabled`: toggles suite mode (overridable via `--suite [y/n]`)
 - `include_base_scenario`: prepend an auto-generated scenario that mirrors the base config
 - `base_label`: name for the base scenario when included
 - `scenarios`: list of dictionaries as described above
