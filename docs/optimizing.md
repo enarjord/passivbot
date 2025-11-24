@@ -10,7 +10,7 @@ python3 src/optimize.py [path/to/config.json]
 
 - Defaults to `configs/template.json` if no config is specified
 - Use existing configs as starting points: `--start path/to/config(s)`
-- Enable suite scenarios defined in the config with `--suite`
+- Enable suite scenarios defined in the config with `--suite [y/n]` (omit value to enable)
 - Layer an external suite definition via `--suite-config path/to/file.json`
 
 Example:
@@ -46,7 +46,7 @@ overhead.
 
 Key fields:
 
-- `optimize.suite.enabled`: can also be toggled with `--suite`
+- `optimize.suite.enabled`: can also be toggled with `--suite [y/n]`
 - `optimize.suite.include_base_scenario` / `base_label`
 - `optimize.suite.scenarios`: same schema as backtest scenarios
 
