@@ -306,9 +306,9 @@
             {"metric": "drawdown_worst_btc", "penalize_if": ">", "value": 0.9},
             {"metric": "drawdown_worst_usd", "penalize_if": ">", "value": 0.9},
             {"metric": "loss_profit_ratio", "penalize_if": ">", "value": 0.4},
-            {"metric": "peak_recovery_hours_pnl", "penalize_if": ">", "value": 1008},
-            {"metric": "position_held_hours_max", "penalize_if": ">", "value": 1008},
-            {"metric": "position_unchanged_hours_max", "penalize_if": ">", "value": 1008}
+            {"metric": "peak_recovery_hours_pnl", "penalize_if": ">", "value": 1176},
+            {"metric": "position_held_hours_max", "penalize_if": ">", "value": 1176},
+            {"metric": "position_unchanged_hours_max", "penalize_if": ">", "value": 840}
         ],
         "mutation_eta": 20,
         "mutation_indpb": 0.05,
