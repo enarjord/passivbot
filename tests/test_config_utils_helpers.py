@@ -124,9 +124,7 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     assert config["optimize"]["scoring"] == ["adg_btc", "adg_usd"]
     limits = config["optimize"]["limits"]
     assert isinstance(limits, list)
-    gain_limit = next(
-        (entry for entry in limits if entry["metric"] == "gain_btc"), None
-    )
+    gain_limit = next((entry for entry in limits if entry["metric"] == "gain_btc"), None)
     drawdown_limit = next(
         (entry for entry in limits if entry["metric"] == "drawdown_worst_usd"), None
     )

@@ -135,9 +135,7 @@ def _build_single_bound_check(
         "bound": numeric_bound,
         "penalty_weight": penalty_weight,
         "stat": stat,
-        "objective_indexes": list(objective_index_map.get(metric, []))
-        if objective_index_map
-        else [],
+        "objective_indexes": list(objective_index_map.get(metric, [])) if objective_index_map else [],
     }
 
 
@@ -167,7 +165,5 @@ def _build_range_check(
         "range": (low, high),
         "penalty_weight": penalty_weight,
         "stat": stat,
-        "objective_indexes": list(objective_index_map.get(metric, []))
-        if objective_index_map
-        else [],
+        "objective_indexes": list(objective_index_map.get(metric, [])) if objective_index_map else [],
     }

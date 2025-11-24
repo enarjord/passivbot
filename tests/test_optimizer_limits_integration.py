@@ -30,10 +30,7 @@ def test_evaluator_applies_limit_penalties():
         "omega_ratio_mean": 1.2,
     }
     expected_modifier = (
-        (0.45 - 0.4) * 1e6
-        + (0.001 - 0.0008) * 1e6
-        + (0.55 - 0.5) * 1e6
-        + min(0.2, 0.3) * 1e6
+        (0.45 - 0.4) * 1e6 + (0.001 - 0.0008) * 1e6 + (0.55 - 0.5) * 1e6 + min(0.2, 0.3) * 1e6
     )
 
     scores, penalty = evaluator.calc_fitness(stats)

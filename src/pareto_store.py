@@ -197,7 +197,9 @@ class ParetoStore:
             dominated = [
                 idx
                 for idx in self._front
-                if _dominates_with_violation(obj, violation, self._objectives[idx], self._violations.get(idx, 0.0))
+                if _dominates_with_violation(
+                    obj, violation, self._objectives[idx], self._violations.get(idx, 0.0)
+                )
             ]
             for idx in dominated:
                 self._remove_from_front(idx)

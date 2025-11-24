@@ -1214,7 +1214,9 @@ def parse_limits_string(limits_str: Union[str, dict]) -> dict:
     return result
 
 
-def normalize_limit_entries(raw_limits: Union[str, List[dict], Dict[str, Any]]) -> List[Dict[str, Any]]:
+def normalize_limit_entries(
+    raw_limits: Union[str, List[dict], Dict[str, Any]],
+) -> List[Dict[str, Any]]:
     """
     Normalizes optimize.limits into a canonical list of limit clauses.
     Accepts legacy dicts/CLI strings as well as the new list format.
