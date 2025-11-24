@@ -100,6 +100,23 @@ class ConstraintAwareFitness(base.Fitness):
         return self_violation < other_violation
 
 
+def _apply_config_overrides(config: Dict[str, Any], overrides: Dict[str, Any]) -> None:
+    if not overrides:
+        return
+    for dotted_path, value in overrides.items():
+        if not isinstance(dotted_path, str):
+            continue
+        parts = dotted_path.split(".")
+        if not parts:
+            continue
+        target = config
+        for part in parts[:-1]:
+            if part not in target or not isinstance(target[part], dict):
+                target[part] = {}
+            target = target[part]
+        target[parts[-1]] = value
+
+
 class ResultRecorder:
     def __init__(
         self,
@@ -1028,6 +1045,8 @@ class SuiteEvaluator:
             scenario_config["live"]["ignored_coins"] = deepcopy(
                 ctx.config["live"].get("ignored_coins", {})
             )
+            if ctx.overrides:
+                _apply_config_overrides(scenario_config, ctx.overrides)
             scenario_config["disable_plotting"] = True
 
             analyses = {}

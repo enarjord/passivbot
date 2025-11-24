@@ -45,6 +45,7 @@ class ScenarioEvalContext:
     shared_btc_np: Dict[str, np.ndarray]
     attachments: Dict[str, Dict[str, Any]]
     coin_indices: Dict[str, Optional[List[int]]]
+    overrides: Dict[str, Any]
 
 
 async def prepare_suite_contexts(
@@ -220,6 +221,7 @@ async def prepare_suite_contexts(
                     shared_btc_np=shared_btc,
                     attachments={"hlcvs": {}, "btc": {}},
                     coin_indices={dataset.exchange: None},
+                    overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
                 )
             )
             continue
@@ -288,6 +290,7 @@ async def prepare_suite_contexts(
                 shared_hlcvs_np=dict(preloaded_hlcvs),
                 shared_btc_np=dict(preloaded_btc),
                 attachments={"hlcvs": {}, "btc": {}},
+                overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
             )
         )
 
