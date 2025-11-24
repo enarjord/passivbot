@@ -20,6 +20,8 @@ import hmac
 import hashlib
 import base64
 
+calc_order_price_diff = pbr.calc_order_price_diff
+
 # ---------------------------------------------------------------------------
 # Broker mixin classes for injecting KC-BROKER-NAME on KuCoin futures requests.
 #
@@ -96,6 +98,8 @@ assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
 class KucoinBot(Passivbot):
+    MAX_OPEN_ORDERS = 150
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.custom_id_max_length = 40
@@ -261,6 +265,27 @@ class KucoinBot(Passivbot):
             print_async_exception(fetched_balance)
             traceback.print_exc()
             return False
+
+    async def calc_ideal_orders(self, allow_unstuck: bool = True):
+        # KuCoin enforces a 150 open-order cap; keep only the closest price targets.
+        ideal_orders = await super().calc_ideal_orders(allow_unstuck=allow_unstuck)
+        flattened = []
+        for symbol, orders in ideal_orders.items():
+            if not orders:
+                continue
+            market_price = await self.cm.get_current_close(symbol, max_age_ms=10_000)
+            for order in orders:
+                price_diff = calc_order_price_diff(order["side"], order["price"], market_price)
+                flattened.append((price_diff, symbol, order))
+        limit = getattr(self, "MAX_OPEN_ORDERS", 150)
+        flattened.sort(key=lambda x: x[0])
+        trimmed = flattened[:limit] if limit and limit > 0 else flattened
+        filtered: dict[str, list] = {symbol: [] for symbol in self.active_symbols}
+        for _, symbol, order in trimmed:
+            filtered.setdefault(symbol, []).append(order)
+        for symbol in ideal_orders:
+            filtered.setdefault(symbol, ideal_orders[symbol])
+        return filtered
 
     async def fetch_tickers(self):
         fetched = None
