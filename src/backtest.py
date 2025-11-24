@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import os
 import json
+import sys
 import passivbot_rust as pbr
 from tools.event_loop_policy import set_windows_event_loop_policy
 
@@ -37,6 +38,7 @@ from pure_funcs import (
     ts_to_date,
     sort_dict_keys,
     calc_hash,
+    str2bool,
 )
 import pprint
 from copy import deepcopy
@@ -60,6 +62,33 @@ import traceback
 
 from logging_setup import configure_logging, resolve_log_level
 from suite_runner import extract_suite_config, run_backtest_suite_async
+
+
+def _looks_like_bool_token(value: str) -> bool:
+    if value is None:
+        return False
+    lowered = value.lower()
+    return lowered in {"1", "0", "true", "false", "t", "f", "yes", "no", "y", "n"}
+
+
+def _normalize_optional_bool_flag(argv: list[str], flag: str) -> list[str]:
+    result: list[str] = []
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        if token == flag:
+            next_token = argv[i + 1] if i + 1 < len(argv) else None
+            if (
+                next_token
+                and not next_token.startswith("-")
+                and not _looks_like_bool_token(next_token)
+            ):
+                result.append(f"{flag}=true")
+                i += 1
+                continue
+        result.append(token)
+        i += 1
+    return result
 
 
 def oj(*x):
@@ -1049,8 +1078,12 @@ async def main():
     )
     parser.add_argument(
         "--suite",
-        action="store_true",
-        help="Run all scenarios defined in backtest.suite.",
+        nargs="?",
+        const="true",
+        default=None,
+        type=str2bool,
+        metavar="y/n",
+        help="Enable or disable suite mode (omit to use config).",
     )
     parser.add_argument(
         "--suite-config",
@@ -1071,7 +1104,8 @@ async def main():
     if "logging" in template_config and isinstance(template_config["logging"], dict):
         template_config["logging"].pop("level", None)
     add_arguments_recursively(parser, template_config)
-    args = parser.parse_args()
+    raw_args = _normalize_optional_bool_flag(sys.argv[1:], "--suite")
+    args = parser.parse_args(raw_args)
     cli_log_level = args.log_level
     initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
@@ -1104,8 +1138,8 @@ async def main():
             raise ValueError(f"Suite config {args.suite_config} does not define backtest.suite.")
 
     suite_cfg = extract_suite_config(config, suite_override)
-    if args.suite:
-        suite_cfg["enabled"] = True
+    if args.suite is not None:
+        suite_cfg["enabled"] = bool(args.suite)
 
     if suite_cfg.get("enabled"):
         logging.info("Running backtest suite (%d scenarios)...", len(suite_cfg.get("scenarios", [])))

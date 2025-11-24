@@ -51,6 +51,7 @@ from pure_funcs import (
     sort_dict_keys,
     calc_hash,
     flatten,
+    str2bool,
 )
 from utils import date_to_ts, ts_to_date, utc_ms, make_get_filepath, format_approved_ignored_coins
 from copy import deepcopy
@@ -115,6 +116,33 @@ def _apply_config_overrides(config: Dict[str, Any], overrides: Dict[str, Any]) -
                 target[part] = {}
             target = target[part]
         target[parts[-1]] = value
+
+
+_BOOL_LITERALS = {"1", "0", "true", "false", "t", "f", "yes", "no", "y", "n"}
+
+
+def _looks_like_bool_token(value: str) -> bool:
+    return value.lower() in _BOOL_LITERALS
+
+
+def _normalize_optional_bool_flag(argv: list[str], flag: str) -> list[str]:
+    result: list[str] = []
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        if token == flag:
+            next_token = argv[i + 1] if i + 1 < len(argv) else None
+            if (
+                next_token
+                and not next_token.startswith("-")
+                and not _looks_like_bool_token(next_token)
+            ):
+                result.append(f"{flag}=true")
+                i += 1
+                continue
+        result.append(token)
+        i += 1
+    return result
 
 
 class ResultRecorder:
@@ -1264,8 +1292,12 @@ async def main():
     )
     parser.add_argument(
         "--suite",
-        action="store_true",
-        help="Evaluate candidates across the scenarios defined in optimize.suite.",
+        nargs="?",
+        const="true",
+        default=None,
+        type=str2bool,
+        metavar="y/n",
+        help="Enable or disable optimize.suite (omit to follow config).",
     )
     parser.add_argument(
         "--suite-config",
@@ -1285,6 +1317,7 @@ async def main():
     add_arguments_recursively(parser, template_config)
     add_extra_options(parser)
     raw_args = merge_negative_cli_values(sys.argv[1:])
+    raw_args = _normalize_optional_bool_flag(raw_args, "--suite")
     args = parser.parse_args(raw_args)
     if args.config_path is None:
         logging.info(f"loading default template config configs/template.json")
@@ -1324,8 +1357,8 @@ async def main():
         if suite_override is None:
             raise ValueError(f"Suite config {args.suite_config} must define optimize.suite.")
     suite_cfg = extract_optimize_suite_config(config, suite_override)
-    if args.suite:
-        suite_cfg["enabled"] = True
+    if args.suite is not None:
+        suite_cfg["enabled"] = bool(args.suite)
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     await format_approved_ignored_coins(config, backtest_exchanges)
     interrupted = False
