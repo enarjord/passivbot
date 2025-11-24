@@ -22,7 +22,7 @@ This document provides an overview of the parameters found in `config/template.j
 - **btc_collateral_ltv_cap**: Optional loan-to-value ceiling (`USD debt ÷ equity`) enforced when topping up BTC. Leave `null` (default) to allow unlimited debt, or set to a float (e.g., `0.6`) to stop buying BTC once leverage exceeds that threshold.
 ### Suite Scenarios
 
-- **backtest.suite.enabled**: Master switch for suite runs (`--suite` forces it on).
+- **backtest.suite.enabled**: Master switch for suite runs (`--suite [y/n]` overrides it at runtime).
 - **backtest.suite.include_base_scenario** / **base_label**: Optionally prepend a scenario that mirrors the base config.
 - **backtest.suite.aggregate**: Dict of metric-specific aggregation modes (default `mean`). Keys fall back to the `default` entry if unspecified.
 - **backtest.suite.scenarios**: List of scenario dicts. Supported per-scenario keys:
@@ -292,7 +292,7 @@ When optimizing, parameter values are within the lower and upper bounds.
 
 ### Optimizer Suites
 
-- **optimize.suite.enabled**: Evaluate every candidate across the configured scenarios. Equivalent to the `--suite` CLI flag.
+- **optimize.suite.enabled**: Evaluate every candidate across the configured scenarios. Override via `--suite [y/n]` on `src/optimize.py`.
 - **optimize.suite.include_base_scenario** / **base_label**: Same semantics as the backtest suite.
 - **optimize.suite.aggregate**: Per-metric aggregation rules applied to the scenario results before scoring.
 - **optimize.suite.scenarios**: Scenario dictionaries (same keys as `backtest.suite.scenarios`). Each one may override `coins`, `ignored_coins`, `start_date`, `end_date`, `exchanges`, and `coin_sources`.
