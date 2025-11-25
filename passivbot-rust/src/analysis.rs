@@ -56,6 +56,10 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
 
     // Calculate ADG and standard metrics
     let (gain, adg) = smoothed_terminal_geometric_gain_and_adg(&daily_eqs);
+    let daily_pnl_ratios = calc_daily_pnl_ratios(fills);
+    let adg_pnl = mean(&daily_pnl_ratios);
+    let mdg_pnl = median(&daily_pnl_ratios);
+    let (sharpe_ratio_pnl, sortino_ratio_pnl) = calc_sharpe_and_sortino(&daily_pnl_ratios, adg_pnl);
     let mdg = {
         if daily_eqs_pct_change.is_empty() {
             0.0
@@ -372,6 +376,11 @@ fn analyze_backtest_basic(fills: &[Fill], equities: &Vec<f64>) -> Analysis {
     analysis.adg = adg;
     analysis.mdg = mdg;
     analysis.gain = gain;
+    analysis.adg_pnl = adg_pnl;
+    analysis.mdg_pnl = mdg_pnl;
+    analysis.sharpe_ratio_pnl = sharpe_ratio_pnl;
+    analysis.sortino_ratio_pnl = sortino_ratio_pnl;
+    analysis.mdg_pnl = mdg_pnl;
     analysis.sharpe_ratio = sharpe_ratio;
     analysis.sortino_ratio = sortino_ratio;
     analysis.omega_ratio = omega_ratio;
@@ -444,9 +453,21 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>, exposures_series: &
 
     // Compute weighted metrics as the mean of subset analyses
     analysis.adg_w = subset_analyses.iter().map(|a| a.adg).sum::<f64>() / 10.0;
+    analysis.adg_pnl_w = subset_analyses.iter().map(|a| a.adg_pnl).sum::<f64>() / 10.0;
+    analysis.mdg_pnl_w = subset_analyses.iter().map(|a| a.mdg_pnl).sum::<f64>() / 10.0;
     analysis.mdg_w = subset_analyses.iter().map(|a| a.mdg).sum::<f64>() / 10.0;
     analysis.sharpe_ratio_w = subset_analyses.iter().map(|a| a.sharpe_ratio).sum::<f64>() / 10.0;
     analysis.sortino_ratio_w = subset_analyses.iter().map(|a| a.sortino_ratio).sum::<f64>() / 10.0;
+    analysis.sharpe_ratio_pnl_w = subset_analyses
+        .iter()
+        .map(|a| a.sharpe_ratio_pnl)
+        .sum::<f64>()
+        / 10.0;
+    analysis.sortino_ratio_pnl_w = subset_analyses
+        .iter()
+        .map(|a| a.sortino_ratio_pnl)
+        .sum::<f64>()
+        / 10.0;
     analysis.omega_ratio_w = subset_analyses.iter().map(|a| a.omega_ratio).sum::<f64>() / 10.0;
     analysis.calmar_ratio_w = subset_analyses.iter().map(|a| a.calmar_ratio).sum::<f64>() / 10.0;
     analysis.sterling_ratio_w = subset_analyses
@@ -546,6 +567,83 @@ pub fn analyze_backtest_pair(
         total_wallet_exposures,
     );
     (analysis_usd, analysis_btc)
+}
+
+fn calc_daily_pnl_ratios(fills: &[Fill]) -> Vec<f64> {
+    if fills.is_empty() {
+        return Vec::new();
+    }
+    use std::collections::BTreeMap;
+    let mut daily_totals: BTreeMap<usize, (f64, f64)> = BTreeMap::new(); // day -> (pnl_sum, last_balance)
+
+    for fill in fills {
+        let day = fill.index / 1440;
+        let entry = daily_totals
+            .entry(day)
+            .or_insert((0.0, fill.usd_total_balance));
+        entry.0 += fill.pnl;
+        entry.1 = fill.usd_total_balance;
+    }
+
+    let mut daily_pct = Vec::with_capacity(daily_totals.len());
+    for (_day, (pnl_sum, last_balance)) in daily_totals {
+        if !pnl_sum.is_finite() || !last_balance.is_finite() {
+            continue;
+        }
+        let denom = last_balance.abs().max(1e-12);
+        daily_pct.push(pnl_sum / denom);
+    }
+    daily_pct
+}
+
+fn mean(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        0.0
+    } else {
+        values.iter().sum::<f64>() / values.len() as f64
+    }
+}
+
+fn median(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = sorted.len() / 2;
+    if sorted.len() % 2 == 0 {
+        (sorted[mid - 1] + sorted[mid]) / 2.0
+    } else {
+        sorted[mid]
+    }
+}
+
+fn calc_sharpe_and_sortino(values: &[f64], mean_val: f64) -> (f64, f64) {
+    if values.is_empty() {
+        return (0.0, 0.0);
+    }
+    let std_dev = {
+        let var = values.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / values.len() as f64;
+        var.sqrt()
+    };
+    let sharpe = if std_dev != 0.0 {
+        mean_val / std_dev
+    } else {
+        0.0
+    };
+
+    let downside: Vec<f64> = values.iter().copied().filter(|x| *x < 0.0).collect();
+    let downside_dev = if downside.is_empty() {
+        0.0
+    } else {
+        (downside.iter().map(|x| x.powi(2)).sum::<f64>() / downside.len() as f64).sqrt()
+    };
+    let sortino = if downside_dev != 0.0 {
+        mean_val / downside_dev
+    } else {
+        0.0
+    };
+    (sharpe, sortino)
 }
 
 fn calc_drawdowns(equity_series: &[f64]) -> Vec<f64> {
