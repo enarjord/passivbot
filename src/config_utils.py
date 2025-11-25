@@ -79,6 +79,14 @@ SHARED_METRICS = {
     "loss_profit_ratio",
     "loss_profit_ratio_w",
     "peak_recovery_hours_pnl",
+    "adg_pnl",
+    "adg_pnl_w",
+    "mdg_pnl",
+    "mdg_pnl_w",
+    "sharpe_ratio_pnl",
+    "sharpe_ratio_pnl_w",
+    "sortino_ratio_pnl",
+    "sortino_ratio_pnl_w",
 }
 
 
@@ -1046,9 +1054,7 @@ def _apply_non_live_adjustments(
             seen.add(canon)
     result["optimize"]["scoring"] = canonical_scoring
 
-    original_limits = deepcopy(result["optimize"].get("limits", []))
-    normalized_limits = normalize_limit_entries(original_limits)
-    existing_limits = result["optimize"].get("limits", [])
+    existing_limits = deepcopy(result["optimize"].get("limits", []))
     limits_snapshot = deepcopy(existing_limits)
     normalized_limits = normalize_limit_entries(existing_limits)
     changed_limits = not _limits_structurally_equal(existing_limits, normalized_limits)

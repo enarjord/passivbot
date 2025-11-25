@@ -654,6 +654,14 @@ class Evaluator:
             "position_held_hours_max": 1.0,
             "position_held_hours_median": 1.0,
             "position_unchanged_hours_max": 1.0,
+            "adg_pnl": -1.0,
+            "adg_pnl_w": -1.0,
+            "mdg_pnl": -1.0,
+            "mdg_pnl_w": -1.0,
+            "sharpe_ratio_pnl": -1.0,
+            "sharpe_ratio_pnl_w": -1.0,
+            "sortino_ratio_pnl": -1.0,
+            "sortino_ratio_pnl_w": -1.0,
         }
 
         currency_metric_weights = {

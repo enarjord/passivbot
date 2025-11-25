@@ -942,6 +942,14 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
         "total_wallet_exposure_median",
         "entry_initial_balance_pct_long",
         "entry_initial_balance_pct_short",
+        "adg_pnl",
+        "adg_pnl_w",
+        "mdg_pnl",
+        "mdg_pnl_w",
+        "sharpe_ratio_pnl",
+        "sharpe_ratio_pnl_w",
+        "sortino_ratio_pnl",
+        "sortino_ratio_pnl_w",
     }
 
     result = {}
