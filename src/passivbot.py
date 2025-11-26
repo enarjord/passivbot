@@ -682,11 +682,17 @@ class Passivbot:
             for k, v in self.config.get("coin_overrides", {}).items()
             if (s := self.coin_to_symbol(k))
         }
+        if self.coin_overrides:
+            logging.debug(
+                "Initialized coin overrides for %s",
+                ", ".join(sorted(self.coin_overrides.keys())),
+            )
 
     def config_get(self, path: [str], symbol=None):
         """
         Retrieve a configuration value, preferring per-symbol overrides when provided.
         """
+        log_key = None
         if symbol and symbol in self.coin_overrides:
             d = self.coin_overrides[symbol]
             for p in path:
@@ -696,6 +702,12 @@ class Passivbot:
                     d = None
                     break
             if d is not None:
+                log_key = (symbol, ".".join(path))
+                if not hasattr(self, "_override_hits_logged"):
+                    self._override_hits_logged = set()
+                if log_key not in self._override_hits_logged:
+                    logging.debug("Using override for %s: %s", symbol, ".".join(path))
+                    self._override_hits_logged.add(log_key)
                 return d
 
         # fallback to global config
