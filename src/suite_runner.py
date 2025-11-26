@@ -38,7 +38,7 @@ from utils import (
 )
 from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from shared_arrays import SharedArraySpec
-from metrics_schema import flatten_metric_stats
+from metrics_schema import flatten_metric_stats, merge_suite_payload
 
 
 # --------------------------------------------------------------------------- #
@@ -73,6 +73,7 @@ class SuiteSummary:
     scenarios: List[ScenarioResult]
     aggregate: Dict[str, Any]
     output_dir: Path
+    suite_metrics: Optional[Dict[str, Any]] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -923,6 +924,22 @@ def aggregate_metrics(
     return {"aggregated": aggregates, "stats": stats}
 
 
+def build_suite_metrics_payload(
+    results: Sequence[ScenarioResult], aggregate_summary: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Build the canonical suite metrics payload (aggregate + per-scenario) used by both
+    optimizer and backtester outputs.
+    """
+
+    scenario_metrics = {res.scenario.label: res.metrics for res in results}
+    return merge_suite_payload(
+        aggregate_summary.get("stats", {}),
+        aggregate_values=aggregate_summary.get("aggregated", {}),
+        scenario_metrics=scenario_metrics,
+    )
+
+
 def summarize_scenario_metrics(metrics: Dict[str, Any]) -> Dict[str, Any]:
     """
     Convert a metrics dict containing only stats into a flat metric -> value map,
@@ -1053,17 +1070,19 @@ async def run_backtest_suite_async(
         )
 
     aggregate_summary = aggregate_metrics(results, aggregate_cfg)
+    suite_metrics = build_suite_metrics_payload(results, aggregate_summary)
+    # Persist a lean, canonical payload: shared schema + elapsed per scenario.
     summary_payload = {
         "suite_id": suite_timestamp,
         "meta": {
             "scenarios": [res.scenario.label for res in results],
             "timestamp": suite_timestamp,
         },
-        "aggregate": aggregate_summary,
+        "suite_metrics": suite_metrics,
         "per_scenario": {
             res.scenario.label: {
-                "metrics": summarize_scenario_metrics(res.metrics),
                 "elapsed_seconds": res.elapsed_seconds,
+                "output_path": str(res.output_path) if res.output_path else None,
             }
             for res in results
         },
@@ -1075,6 +1094,7 @@ async def run_backtest_suite_async(
         scenarios=results,
         aggregate=aggregate_summary,
         output_dir=suite_dir,
+        suite_metrics=suite_metrics,
     )
 
 

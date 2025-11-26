@@ -80,8 +80,13 @@ from optimize_suite import (
     prepare_suite_contexts,
     extract_optimize_suite_config,
 )
-from suite_runner import SuiteScenario, ScenarioResult, aggregate_metrics
-from metrics_schema import build_scenario_metrics, flatten_metric_stats, merge_suite_payload
+from suite_runner import (
+    SuiteScenario,
+    ScenarioResult,
+    aggregate_metrics,
+    build_suite_metrics_payload,
+)
+from metrics_schema import build_scenario_metrics, flatten_metric_stats
 
 
 def _ignore_sigint_in_worker():
@@ -1094,7 +1099,6 @@ class SuiteEvaluator:
         else:
             seen_hashes[individual_hash] = None
 
-        per_scenario_metrics: Dict[str, Dict[str, Any]] = {}
         scenario_results: List[ScenarioResult] = []
 
         from tools.iterative_backtester import combine_analyses as combine
@@ -1153,7 +1157,6 @@ class SuiteEvaluator:
                 if isinstance(stats.get("peak_recovery_hours_pnl"), dict)
                 else stats.get("peak_recovery_hours_pnl"),
             )
-            per_scenario_metrics[ctx.label] = combined_metrics
             scenario_results.append(
                 ScenarioResult(
                     scenario=SuiteScenario(
@@ -1171,11 +1174,7 @@ class SuiteEvaluator:
             )
 
         aggregate_summary = aggregate_metrics(scenario_results, self.aggregate_cfg)
-        suite_payload = merge_suite_payload(
-            aggregate_summary.get("stats", {}),
-            aggregate_values=aggregate_summary.get("aggregated", {}),
-            scenario_metrics=per_scenario_metrics,
-        )
+        suite_payload = build_suite_metrics_payload(scenario_results, aggregate_summary)
         aggregate_stats = aggregate_summary.get("stats", {})
 
         flat_stats = flatten_metric_stats(aggregate_stats)
