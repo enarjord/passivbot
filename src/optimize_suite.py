@@ -28,6 +28,7 @@ from suite_runner import (
     collect_suite_coin_sources,
     filter_coins_by_exchange_assignment,
     prepare_master_datasets,
+    _prepare_dataset_subset,
 )
 from utils import format_approved_ignored_coins, load_markets, ts_to_date, utc_ms
 
@@ -155,6 +156,16 @@ async def prepare_suite_contexts(
         scenario_config = parse_overrides(scenario_config, verbose=False)
         scenario_config.setdefault("backtest", {})
         scenario_config["backtest"]["coins"] = {}
+        # Debug visibility to ensure scenario-specific windows/overrides are honored
+        logging.debug(
+            "Suite scenario %s | start=%s end=%s coins=%s overrides=%s",
+            scenario.label,
+            scenario_config["backtest"].get("start_date"),
+            scenario_config["backtest"].get("end_date"),
+            list(scenario_config["backtest"].get("coins", {}).keys())
+            or scenario_config["backtest"].get("coins"),
+            bool(scenario.overrides),
+        )
 
         if has_master_dataset:
             dataset = datasets["combined"]
@@ -181,42 +192,36 @@ async def prepare_suite_contexts(
                     scenario.label,
                 )
                 continue
+            (
+                hlcvs_slice,
+                btc_window,
+                ts_window,
+                mss_slice,
+            ) = _prepare_dataset_subset(
+                dataset,
+                scenario_config,
+                selected_coins,
+                scenario.label,
+            )
             scenario_config["backtest"]["coins"][dataset.exchange] = list(selected_coins)
-            indices = [dataset.coin_index[coin] for coin in selected_coins]
-            if dataset.hlcvs_spec is not None and shared_array_manager is not None:
-                master_view = shared_array_manager.view(dataset.hlcvs_spec)
-            else:
-                master_view = dataset.hlcvs
-            hlcvs_slice = np.ascontiguousarray(master_view[:, indices, :], dtype=np.float64)
             if shared_array_manager is not None:
                 hlcvs_spec, _ = shared_array_manager.create_from(hlcvs_slice)
-                if dataset.btc_spec is not None:
-                    btc_spec = dataset.btc_spec
-                else:
-                    btc_array = np.ascontiguousarray(dataset.btc_usd_prices, dtype=np.float64)
-                    btc_spec, _ = shared_array_manager.create_from(btc_array)
+                btc_spec, _ = shared_array_manager.create_from(np.ascontiguousarray(btc_window))
             else:
                 hlcvs_spec = None
                 btc_spec = None
-            mss_slice = {coin: dataset.mss.get(coin, {}) for coin in selected_coins}
-            if "__meta__" in dataset.mss:
-                mss_slice["__meta__"] = dataset.mss["__meta__"]
 
             shared_hlcvs = {} if hlcvs_spec else {dataset.exchange: hlcvs_slice}
-            shared_btc = (
-                {}
-                if (btc_spec or shared_array_manager is not None)
-                else {dataset.exchange: dataset.btc_usd_prices}
-            )
+            shared_btc = {} if btc_spec else {dataset.exchange: btc_window}
             contexts.append(
                 ScenarioEvalContext(
                     label=scenario.label,
                     config=scenario_config,
                     exchanges=[dataset.exchange],
                     hlcvs_specs={dataset.exchange: hlcvs_spec},
-                    btc_usd_specs={dataset.exchange: btc_spec} if btc_spec else {},
+                    btc_usd_specs={dataset.exchange: btc_spec} if btc_spec is not None else {},
                     msss={dataset.exchange: mss_slice},
-                    timestamps={dataset.exchange: dataset.timestamps},
+                    timestamps={dataset.exchange: ts_window},
                     shared_hlcvs_np=shared_hlcvs,
                     shared_btc_np=shared_btc,
                     attachments={"hlcvs": {}, "btc": {}},
@@ -244,34 +249,32 @@ async def prepare_suite_contexts(
                 continue
             exchanges_for_scenario.append(exchange_key)
             scenario_config["backtest"]["coins"][exchange_key] = list(coins_for_exchange)
-            indices = [dataset.coin_index[coin] for coin in coins_for_exchange]
-            if dataset.hlcvs_spec is not None and shared_array_manager is not None:
-                master_view = shared_array_manager.view(dataset.hlcvs_spec)
-            else:
-                master_view = dataset.hlcvs
-            hlcvs_slice = np.ascontiguousarray(master_view[:, indices, :], dtype=np.float64)
+            (
+                hlcvs_slice,
+                btc_window,
+                ts_window,
+                mss_slice,
+            ) = _prepare_dataset_subset(
+                dataset,
+                scenario_config,
+                coins_for_exchange,
+                scenario.label,
+            )
             if shared_array_manager is not None:
                 hlcvs_spec, _ = shared_array_manager.create_from(hlcvs_slice)
                 hlcvs_specs[exchange_key] = hlcvs_spec
-                if dataset.btc_spec is not None:
-                    btc_specs[exchange_key] = dataset.btc_spec
-                else:
-                    btc_array = np.ascontiguousarray(dataset.btc_usd_prices, dtype=np.float64)
-                    btc_spec, _ = shared_array_manager.create_from(btc_array)
-                    btc_specs[exchange_key] = btc_spec
+                btc_spec, _ = shared_array_manager.create_from(np.ascontiguousarray(btc_window))
+                btc_specs[exchange_key] = btc_spec
             else:
                 hlcvs_specs[exchange_key] = None
                 preloaded_hlcvs[exchange_key] = hlcvs_slice
                 btc_specs[exchange_key] = None
-                preloaded_btc[exchange_key] = dataset.btc_usd_prices
+                preloaded_btc[exchange_key] = btc_window
             coin_index_map[exchange_key] = None
 
-            mss_slice = {coin: dataset.mss.get(coin, {}) for coin in coins_for_exchange}
-            if "__meta__" in dataset.mss:
-                mss_slice["__meta__"] = dataset.mss["__meta__"]
             mss_slices[exchange_key] = mss_slice
 
-            timestamps_map[exchange_key] = dataset.timestamps
+            timestamps_map[exchange_key] = ts_window
 
         if not exchanges_for_scenario:
             logging.warning("Skipping scenario %s: no exchanges after filtering.", scenario.label)

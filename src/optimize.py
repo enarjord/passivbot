@@ -45,6 +45,7 @@ from config_utils import (
     require_config_value,
     merge_negative_cli_values,
     strip_config_metadata,
+    get_optional_config_value,
 )
 from pure_funcs import (
     denumpyize,
@@ -54,6 +55,7 @@ from pure_funcs import (
     str2bool,
 )
 from utils import date_to_ts, ts_to_date, utc_ms, make_get_filepath, format_approved_ignored_coins
+from logging_setup import configure_logging, resolve_log_level
 from copy import deepcopy
 from main import manage_rust_compilation
 import numpy as np
@@ -465,6 +467,30 @@ def ea_mu_plus_lambda_stream(
                     ind.fitness.values = fit_values
                     ind.fitness.constraint_violation = penalty
                     ind.constraint_violation = penalty
+                    if metrics and isinstance(metrics, dict):
+                        suite = metrics.get("suite_metrics", {}) or {}
+                        metric_map = suite.get("metrics", {}) or {}
+                        adg_entry = metric_map.get("adg_pnl", {}) or {}
+                        prh_entry = metric_map.get("peak_recovery_hours_pnl", {}) or {}
+                        logging.debug(
+                            "Eval metrics | idx=%d adg_pnl=%s peak_recovery_hours_pnl=%s",
+                            idx,
+                            adg_entry.get("aggregated"),
+                            prh_entry.get("aggregated"),
+                        )
+                        scenario_labels = suite.get("scenario_labels") or []
+                        if not scenario_labels and isinstance(adg_entry, dict):
+                            scenario_labels = list((adg_entry.get("scenarios") or {}).keys())
+                        for label in scenario_labels:
+                            adg_val = (adg_entry.get("scenarios") or {}).get(label)
+                            prh_val = (prh_entry.get("scenarios") or {}).get(label)
+                            logging.debug(
+                                "Eval metrics scenario | idx=%d label=%s adg_pnl=%s peak_recovery_hours_pnl=%s",
+                                idx,
+                                label,
+                                adg_val,
+                                prh_val,
+                            )
                     if metrics is not None:
                         ind.evaluation_metrics = metrics
                         _record_individual_result(ind, evaluator_config, overrides_list, recorder)
@@ -541,6 +567,13 @@ def ea_mu_plus_lambda_stream(
     record = stats.compile(population) if stats is not None else {}
     logbook.record(gen=0, nevals=nevals, **record)
     log_generation(0, nevals, record)
+
+    if len(population) < 2:
+        logging.warning(
+            "Population too small for crossover/mutation (size=%d); skipping evolution steps",
+            len(population),
+        )
+        return population, logbook
 
     for gen in range(1, ngen + 1):
         offspring = algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
@@ -1081,6 +1114,13 @@ class SuiteEvaluator:
             scenario_config["live"]["ignored_coins"] = deepcopy(
                 ctx.config["live"].get("ignored_coins", {})
             )
+            logging.debug(
+                "Optimizer scenario %s | start=%s end=%s coins=%s",
+                ctx.label,
+                scenario_config["backtest"].get("start_date"),
+                scenario_config["backtest"].get("end_date"),
+                list(scenario_config["backtest"]["coins"].keys()),
+            )
             if ctx.overrides:
                 _apply_config_overrides(scenario_config, ctx.overrides)
             scenario_config["disable_plotting"] = True
@@ -1104,6 +1144,15 @@ class SuiteEvaluator:
                 del equities_array
 
             combined_metrics = combine(analyses)
+            stats = combined_metrics.get("stats", {})
+            logging.debug(
+                "Scenario metrics | label=%s adg_pnl=%s peak_recovery_hours_pnl=%s",
+                ctx.label,
+                stats.get("adg_pnl", {}).get("mean") if isinstance(stats.get("adg_pnl"), dict) else stats.get("adg_pnl"),
+                stats.get("peak_recovery_hours_pnl", {}).get("mean")
+                if isinstance(stats.get("peak_recovery_hours_pnl"), dict)
+                else stats.get("peak_recovery_hours_pnl"),
+            )
             per_scenario_metrics[ctx.label] = combined_metrics
             scenario_results.append(
                 ScenarioResult(
@@ -1313,6 +1362,12 @@ async def main():
         default=None,
         help="Optional config file providing optimize.suite overrides.",
     )
+    parser.add_argument(
+        "--log-level",
+        dest="log_level",
+        default=None,
+        help="Logging verbosity (warning, info, debug, trace or 0-3).",
+    )
     template_config = get_template_config()
     del template_config["bot"]
     keep_live_keys = {
@@ -1327,6 +1382,8 @@ async def main():
     raw_args = merge_negative_cli_values(sys.argv[1:])
     raw_args = _normalize_optional_bool_flag(raw_args, "--suite")
     args = parser.parse_args(raw_args)
+    initial_log_level = resolve_log_level(args.log_level, None, fallback=1)
+    configure_logging(debug=initial_log_level)
     if args.config_path is None:
         logging.info(f"loading default template config configs/template.json")
         config = load_config("configs/template.json", verbose=True)
@@ -1335,6 +1392,10 @@ async def main():
         config = load_config(args.config_path, verbose=True)
     update_config_with_args(config, args, verbose=True)
     config = format_config(config, verbose=False)
+    config_logging_value = get_optional_config_value(config, "logging.level", None)
+    effective_log_level = resolve_log_level(args.log_level, config_logging_value, fallback=1)
+    if effective_log_level != initial_log_level:
+        configure_logging(debug=effective_log_level)
     logging.info(
         "Config normalized for optimization | template=%s | scoring=%s",
         TEMPLATE_CONFIG_MODE,
