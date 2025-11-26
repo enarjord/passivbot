@@ -38,3 +38,12 @@ def test_parse_overrides_renames_coins(monkeypatch):
     assert "btcusdt" not in res["coin_overrides"]
     assert "BTC/USDT" in res["coin_overrides"]
     assert res["coin_overrides"]["BTC/USDT"] == {"bot": {"long": {"entry_grid_spacing_pct": 0.05}}}
+
+
+def test_parse_overrides_retains_coin_flags_key(monkeypatch):
+    cfg = _base_config_with_override("BTC", {"live": {"forced_mode_long": "manual"}})
+    cfg["live"]["coin_flags"] = None
+    monkeypatch.setattr(config_utils, "load_override_config", lambda c, coin: {})
+    res = config_utils.parse_overrides(deepcopy(cfg), verbose=False)
+    assert "coin_flags" in res["live"]
+    assert isinstance(res["live"]["coin_flags"], dict)

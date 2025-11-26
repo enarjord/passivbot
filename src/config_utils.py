@@ -406,7 +406,9 @@ def parse_overrides(config, verbose=True):
                 config.get("live", {}).get("coin_flags"),
                 result["coin_overrides"],
             )
-    result["live"].pop("coin_flags", None) if "live" in result else None
+    if "live" in result:
+        result["live"].pop("coin_flags", None)
+        result["live"].setdefault("coin_flags", {})
     for coin in sorted(result["coin_overrides"]):
         coinf = symbol_to_coin(coin)
         if coinf != coin:
