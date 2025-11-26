@@ -1794,6 +1794,7 @@ EXCHANGE_BOT_CLASSES: Dict[str, Tuple[str, str]] = {
     "binance": ("exchanges.binance", "BinanceBot"),
     "bitget": ("exchanges.bitget", "BitgetBot"),
     "bybit": ("exchanges.bybit", "BybitBot"),
+    "hyperliquid": ("exchanges.hyperliquid", "HyperliquidBot"),
 }
 
 
@@ -1902,6 +1903,11 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
         )
     if exchange == "bybit":
         return BybitFetcher(api=bot.cca)
+    if exchange == "hyperliquid":
+        return HyperliquidFetcher(
+            api=bot.cca,
+            symbol_resolver=lambda value: resolver(value),
+        )
     raise ValueError(f"Unsupported exchange '{exchange}' for fill events CLI")
 
 
@@ -1933,7 +1939,7 @@ async def _run_cli(args: argparse.Namespace) -> None:
         symbol_pool = _extract_symbol_pool(config, args.symbols)
         fetcher = _build_fetcher_for_bot(bot, symbol_pool)
         cache_root = Path(args.cache_root)
-        cache_path = cache_root / f"{bot.exchange}_{bot.user}"
+        cache_path = cache_root / bot.exchange / bot.user
         manager = FillEventsManager(
             exchange=bot.exchange,
             user=bot.user,
