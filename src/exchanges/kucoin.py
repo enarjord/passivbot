@@ -225,12 +225,24 @@ class KucoinBot(Passivbot):
     async def fetch_open_orders(self, symbol: str = None):
         fetched = None
         open_orders = []
+        page_size = 100
+        current_page = 1
         try:
-            fetched = await self.cca.fetch_open_orders(symbol=symbol)
-            for order in fetched:
-                order["position_side"] = self.determine_pos_side(order)
-                order["qty"] = order["amount"]
-            return sorted(fetched, key=lambda x: x["timestamp"])
+            while True:
+                params = {"pageSize": page_size, "currentPage": current_page}
+                fetched = await self.cca.fetch_open_orders(symbol=symbol, params=params)
+                if not fetched:
+                    break
+                for order in fetched:
+                    order["position_side"] = self.determine_pos_side(order)
+                    order["qty"] = order["amount"]
+                open_orders.extend(fetched)
+                if len(fetched) < page_size:
+                    break
+                if len(open_orders) >= self.MAX_OPEN_ORDERS:
+                    break
+                current_page += 1
+            return sorted(open_orders, key=lambda x: x["timestamp"])
         except Exception as e:
             logging.error(f"error fetching open orders {e}")
             print_async_exception(fetched)
