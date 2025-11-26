@@ -140,12 +140,28 @@ class GateIOBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_positions(self) -> ([dict], float):
-        positions, balance_fetched = None, None
+    async def fetch_positions(self) -> [dict]:
+        positions_fetched = None
         try:
-            positions_fetched, balance_fetched = await asyncio.gather(
-                self.cca.fetch_positions(), self.cca.fetch_balance()
-            )
+            positions_fetched = await self.cca.fetch_positions()
+            positions = []
+            for x in positions_fetched:
+                if x["contracts"] != 0.0:
+                    x["size"] = x["contracts"]
+                    x["price"] = x["entryPrice"]
+                    x["position_side"] = x["side"]
+                    positions.append(x)
+            return positions
+        except Exception as e:
+            logging.error(f"error fetching positions {e}")
+            print_async_exception(positions_fetched)
+            traceback.print_exc()
+            return False
+
+    async def fetch_balance(self) -> float:
+        balance_fetched = None
+        try:
+            balance_fetched = await self.cca.fetch_balance()
             if not hasattr(self, "uid") or not self.uid:
                 self.uid = balance_fetched["info"][0]["user"]
                 self.cca.uid = self.uid
@@ -159,13 +175,6 @@ class GateIOBot(Passivbot):
                 balance = float(balance_fetched["info"][0]["cross_available"])
             else:
                 raise Exception(f"unknown margin_mode_name {balance_fetched}")
-            positions = []
-            for x in positions_fetched:
-                if x["contracts"] != 0.0:
-                    x["size"] = x["contracts"]
-                    x["price"] = x["entryPrice"]
-                    x["position_side"] = x["side"]
-                    positions.append(x)
             if not hasattr(self, "previous_hysteresis_balance"):
                 self.previous_hysteresis_balance = balance
             self.previous_hysteresis_balance = pbr.hysteresis(
@@ -173,11 +182,10 @@ class GateIOBot(Passivbot):
                 self.previous_hysteresis_balance,
                 self.hyst_pct,
             )
-            return positions, self.previous_hysteresis_balance
+            return self.previous_hysteresis_balance
         except Exception as e:
-            logging.error(f"error fetching positions and balance {e}")
-            print_async_exception(positions)
-            print_async_exception(balance)
+            logging.error(f"error fetching balance {e}")
+            print_async_exception(balance_fetched)
             traceback.print_exc()
             return False
 

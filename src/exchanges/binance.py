@@ -165,13 +165,10 @@ class BinanceBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_positions(self) -> ([dict], float):
-        # also fetches balance
-        fetched_positions, fetched_balance = None, None
+    async def fetch_positions(self) -> [dict]:
+        fetched_positions = None
         try:
-            fetched_positions, fetched_balance = await asyncio.gather(
-                self.cca.fapiprivatev3_get_positionrisk(), self.cca.fetch_balance()
-            )
+            fetched_positions = await self.cca.fapiprivatev3_get_positionrisk()
             positions = []
             for elm in fetched_positions:
                 if float(elm["positionAmt"]) != 0.0:
@@ -183,6 +180,17 @@ class BinanceBot(Passivbot):
                             "price": float(elm["entryPrice"]),
                         }
                     )
+            return positions
+        except Exception as e:
+            logging.error(f"error fetching positions {e}")
+            print_async_exception(fetched_positions)
+            traceback.print_exc()
+            return False
+
+    async def fetch_balance(self) -> float:
+        fetched_balance = None
+        try:
+            fetched_balance = await self.cca.fetch_balance()
             balance = float(fetched_balance["info"]["totalCrossWalletBalance"])
             if not hasattr(self, "previous_hysteresis_balance"):
                 self.previous_hysteresis_balance = balance
@@ -191,10 +199,9 @@ class BinanceBot(Passivbot):
                 self.previous_hysteresis_balance,
                 self.hyst_pct,
             )
-            return positions, self.previous_hysteresis_balance
+            return self.previous_hysteresis_balance
         except Exception as e:
-            logging.error(f"error fetching positions {e}")
-            print_async_exception(fetched_positions)
+            logging.error(f"error fetching balance {e}")
             print_async_exception(fetched_balance)
             traceback.print_exc()
             return False

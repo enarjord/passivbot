@@ -114,29 +114,11 @@ class BybitBot(Passivbot):
             return False
 
     async def fetch_positions(self):
-        fetched_positions, fetched_balance = None, None
+        fetched_positions = None
         positions = {}
         limit = 200
         try:
-            fetched_positions, fetched_balance = await asyncio.gather(
-                self.cca.fetch_positions(params={"limit": limit}), self.cca.fetch_balance()
-            )
-            balinfo = fetched_balance["info"]["result"]["list"][0]
-            if balinfo["accountType"] == "UNIFIED":
-                balance = 0.0
-                for elm in balinfo["coin"]:
-                    if elm["marginCollateral"] and elm["collateralSwitch"]:
-                        balance += float(elm["usdValue"]) + float(elm["unrealisedPnl"])
-                if not hasattr(self, "previous_hysteresis_balance"):
-                    self.previous_hysteresis_balance = balance
-                self.previous_hysteresis_balance = pbr.hysteresis(
-                    balance,
-                    self.previous_hysteresis_balance,
-                    self.hyst_pct,
-                )
-                balance = self.previous_hysteresis_balance
-            else:
-                balance = fetched_balance[self.quote]["total"]
+            fetched_positions = await self.cca.fetch_positions(params={"limit": limit})
             while True:
                 if all([elm["symbol"] + elm["side"] in positions for elm in fetched_positions]):
                     break
@@ -157,13 +139,39 @@ class BybitBot(Passivbot):
                 fetched_positions = await self.cca.fetch_positions(
                     params={"cursor": next_page_cursor, "limit": limit}
                 )
-            return sorted(positions.values(), key=lambda x: x["timestamp"]), balance
+            return sorted(positions.values(), key=lambda x: x["timestamp"])
         except InvalidNonce as e:
-            logging.warning("Invalid nonce while fetching positions/balance: %s", e)
+            logging.warning("Invalid nonce while fetching positions: %s", e)
             return False
         except Exception as e:
-            logging.error(f"error fetching positions and balance {e}")
+            logging.error(f"error fetching positions {e}")
             print_async_exception(fetched_positions)
+            traceback.print_exc()
+            return False
+
+    async def fetch_balance(self):
+        fetched_balance = None
+        try:
+            fetched_balance = await self.cca.fetch_balance()
+            balinfo = fetched_balance["info"]["result"]["list"][0]
+            if balinfo["accountType"] == "UNIFIED":
+                balance = 0.0
+                for elm in balinfo["coin"]:
+                    if elm["marginCollateral"] and elm["collateralSwitch"]:
+                        balance += float(elm["usdValue"]) + float(elm["unrealisedPnl"])
+                if not hasattr(self, "previous_hysteresis_balance"):
+                    self.previous_hysteresis_balance = balance
+                self.previous_hysteresis_balance = pbr.hysteresis(
+                    balance,
+                    self.previous_hysteresis_balance,
+                    self.hyst_pct,
+                )
+                balance = self.previous_hysteresis_balance
+            else:
+                balance = fetched_balance[self.quote]["total"]
+            return balance
+        except Exception as e:
+            logging.error(f"error fetching balance {e}")
             print_async_exception(fetched_balance)
             traceback.print_exc()
             return False

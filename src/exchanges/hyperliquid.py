@@ -132,29 +132,49 @@ class HyperliquidBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_positions(self) -> ([dict], float):
+    async def _fetch_positions_and_balance(self):
+        info = await self.cca.fetch_balance()
+        positions = [
+            {
+                "symbol": self.coin_to_symbol(x["position"]["coin"]),
+                "position_side": ("long" if (size := float(x["position"]["szi"])) > 0.0 else "short"),
+                "size": size,
+                "price": float(x["position"]["entryPx"]),
+            }
+            for x in info["info"]["assetPositions"]
+        ]
+        balance = float(info["info"]["marginSummary"]["accountValue"]) - sum(
+            [float(x["position"]["unrealizedPnl"]) for x in info["info"]["assetPositions"]]
+        )
+        return positions, balance
+
+    async def fetch_positions(self):
         info = None
         try:
-            info = await self.cca.fetch_balance()
-            balance = float(info["info"]["marginSummary"]["accountValue"]) - sum(
-                [float(x["position"]["unrealizedPnl"]) for x in info["info"]["assetPositions"]]
-            )
-            positions = [
-                {
-                    "symbol": self.coin_to_symbol(x["position"]["coin"]),
-                    "position_side": (
-                        "long" if (size := float(x["position"]["szi"])) > 0.0 else "short"
-                    ),
-                    "size": size,
-                    "price": float(x["position"]["entryPx"]),
-                }
-                for x in info["info"]["assetPositions"]
-            ]
-
-            return positions, balance
+            positions, balance = await self._fetch_positions_and_balance()
+            self._last_hl_positions_balance = (positions, balance)
+            self._hl_positions_balance_applied = False
+            return positions
         except Exception as e:
-            logging.error(f"error fetching positions and balance {e}")
+            logging.error(f"error fetching positions {e}")
             print_async_exception(info)
+            traceback.print_exc()
+            return False
+
+    async def fetch_balance(self):
+        try:
+            cached = getattr(self, "_last_hl_positions_balance", None)
+            applied = getattr(self, "_hl_positions_balance_applied", False)
+            if cached and not applied:
+                positions, balance = cached
+                self._hl_positions_balance_applied = True
+                return balance
+            positions, balance = await self._fetch_positions_and_balance()
+            self._last_hl_positions_balance = (positions, balance)
+            self._hl_positions_balance_applied = True
+            return balance
+        except Exception as e:
+            logging.error(f"error fetching balance {e}")
             traceback.print_exc()
             return False
 

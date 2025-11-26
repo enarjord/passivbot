@@ -224,14 +224,25 @@ class BitgetBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_positions(self) -> ([dict], float):
-        # also fetches balance
-        fetched_positions, fetched_balance = None, None
+    async def fetch_positions(self) -> [dict]:
+        fetched_positions = None
         try:
-            fetched_positions, fetched_balance = await asyncio.gather(
-                self.cca.fetch_positions(),
-                self.cca.fetch_balance(),
-            )
+            fetched_positions = await self.cca.fetch_positions()
+            for i in range(len(fetched_positions)):
+                fetched_positions[i]["position_side"] = fetched_positions[i]["side"]
+                fetched_positions[i]["size"] = fetched_positions[i]["contracts"]
+                fetched_positions[i]["price"] = fetched_positions[i]["entryPrice"]
+            return fetched_positions
+        except Exception as e:
+            logging.error(f"error fetching positions {e}")
+            print_async_exception(fetched_positions)
+            traceback.print_exc()
+            return False
+
+    async def fetch_balance(self) -> float:
+        fetched_balance = None
+        try:
+            fetched_balance = await self.cca.fetch_balance()
             balance_info = [x for x in fetched_balance["info"] if x["marginCoin"] == self.quote][0]
             if (
                 "assetMode" in balance_info
@@ -251,14 +262,9 @@ class BitgetBot(Passivbot):
                 balance = self.previous_hysteresis_balance
             else:
                 balance = float(balance_info["available"])
-            for i in range(len(fetched_positions)):
-                fetched_positions[i]["position_side"] = fetched_positions[i]["side"]
-                fetched_positions[i]["size"] = fetched_positions[i]["contracts"]
-                fetched_positions[i]["price"] = fetched_positions[i]["entryPrice"]
-            return fetched_positions, balance
+            return balance
         except Exception as e:
-            logging.error(f"error fetching positions and balance {e}")
-            print_async_exception(fetched_positions)
+            logging.error(f"error fetching balance {e}")
             print_async_exception(fetched_balance)
             traceback.print_exc()
             return False

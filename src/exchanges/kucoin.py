@@ -250,12 +250,9 @@ class KucoinBot(Passivbot):
             return False
 
     async def fetch_positions(self):
-        fetched_positions, fetched_balance = None, None
+        fetched_positions = None
         try:
-            fetched_positions, fetched_balance = await asyncio.gather(
-                self.cca.fetch_positions(),
-                self.cca.fetch_balance(),
-            )
+            fetched_positions = await self.cca.fetch_positions()
             positions = []
             for p in fetched_positions:
                 positions.append(
@@ -269,11 +266,20 @@ class KucoinBot(Passivbot):
                         },
                     }
                 )
-            balance = fetched_balance["info"]["data"]["marginBalance"]
-            return positions, balance
+            return positions
         except Exception as e:
-            logging.error(f"error fetching positions and balance {e}")
+            logging.error(f"error fetching positions {e}")
             print_async_exception(fetched_positions)
+            traceback.print_exc()
+            return False
+
+    async def fetch_balance(self):
+        fetched_balance = None
+        try:
+            fetched_balance = await self.cca.fetch_balance()
+            return fetched_balance["info"]["data"]["marginBalance"]
+        except Exception as e:
+            logging.error(f"error fetching balance {e}")
             print_async_exception(fetched_balance)
             traceback.print_exc()
             return False
