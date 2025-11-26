@@ -4,41 +4,56 @@ import types
 import pytest
 
 # Stub dependencies before importing hyperliquid
-sys.modules.setdefault(
-    "passivbot_rust",
-    types.SimpleNamespace(
-        qty_to_cost=lambda *args, **kwargs: 0.0,
-        round_dynamic=lambda x, y=None: x,
-        calc_order_price_diff=lambda *args, **kwargs: 0.0,
-        hysteresis=lambda x, y, z: x,
-    ),
-)
+pr_module = types.ModuleType("passivbot_rust")
+pr_module.qty_to_cost = lambda *args, **kwargs: 0.0
+pr_module.round_dynamic = lambda x, y=None: x
+pr_module.calc_order_price_diff = lambda *args, **kwargs: 0.0
+pr_module.hysteresis = lambda x, y, z: x
+pr_module.trailing_bundle_default_py = lambda: (0, 0, 0, 0)
+pr_module.update_trailing_bundle_py = lambda *args, **kwargs: (0, 0, 0, 0)
+pr_module.order_type_id_to_snake = lambda *args, **kwargs: "unknown"
+pr_module.calc_min_entry_qty_py = lambda *args, **kwargs: 0.0
+pr_module.calc_min_close_qty_py = lambda *args, **kwargs: 0.0
 
-# Stub ccxt to bypass version assertion during test import
-fake_errors = types.SimpleNamespace(NetworkError=Exception, RateLimitExceeded=Exception)
-fake_ccxt_errors_module = types.SimpleNamespace(NetworkError=Exception, RateLimitExceeded=Exception)
-sys.modules.setdefault("ccxt.base.errors", fake_ccxt_errors_module)
-fake_ccxt_base = types.SimpleNamespace(errors=fake_errors)
-fake_ccxt = types.SimpleNamespace(
-    __version__="4.4.99",
-    base=fake_ccxt_base,
-    async_support=types.SimpleNamespace(hyperliquid=None, kucoinfutures=None),  # placeholder
-)
-fake_ccxt_pro = types.SimpleNamespace(hyperliquid=None, kucoinfutures=None)
-fake_ccxt.pro = fake_ccxt_pro
-sys.modules.setdefault("ccxt", fake_ccxt)
-sys.modules.setdefault("ccxt.async_support", fake_ccxt)
-sys.modules.setdefault("ccxt.pro", fake_ccxt_pro)
+def _pbr_getattr(name):
+    return lambda *args, **kwargs: 0
+
+pr_module.__getattr__ = _pbr_getattr
+sys.modules["passivbot_rust"] = pr_module
+
+# Stub ccxt modules
+errors_module = types.ModuleType("ccxt.base.errors")
+errors_module.NetworkError = Exception
+errors_module.RateLimitExceeded = Exception
+sys.modules["ccxt.base.errors"] = errors_module
+
+ccxt_base = types.ModuleType("ccxt.base")
+ccxt_base.errors = errors_module
+sys.modules["ccxt.base"] = ccxt_base
+
+ccxt_async = types.ModuleType("ccxt.async_support")
+ccxt_async.hyperliquid = None
+sys.modules["ccxt.async_support"] = ccxt_async
+
+ccxt_pro = types.ModuleType("ccxt.pro")
+ccxt_pro.hyperliquid = None
+sys.modules["ccxt.pro"] = ccxt_pro
+
+ccxt_module = types.ModuleType("ccxt")
+ccxt_module.__version__ = "4.4.99"
+ccxt_module.base = ccxt_base
+ccxt_module.async_support = ccxt_async
+ccxt_module.pro = ccxt_pro
+sys.modules["ccxt"] = ccxt_module
 
 # Stub procedures to bypass ccxt version assertion during import
-fake_procedures = types.SimpleNamespace(
-    assert_correct_ccxt_version=lambda *args, **kwargs: None,
-    print_async_exception=lambda *args, **kwargs: None,
-    load_broker_code=lambda *args, **kwargs: {},
-    load_user_info=lambda *args, **kwargs: {"exchange": "hyperliquid"},
-    get_first_timestamps_unified=lambda *args, **kwargs: {},
-)
-sys.modules.setdefault("procedures", fake_procedures)
+proc_module = types.ModuleType("procedures")
+proc_module.assert_correct_ccxt_version = lambda *args, **kwargs: None
+proc_module.print_async_exception = lambda *args, **kwargs: None
+proc_module.load_broker_code = lambda *args, **kwargs: {}
+proc_module.load_user_info = lambda *args, **kwargs: {"exchange": "hyperliquid"}
+proc_module.get_first_timestamps_unified = lambda *args, **kwargs: {}
+sys.modules["procedures"] = proc_module
 
 from exchanges.hyperliquid import HyperliquidBot
 
