@@ -12,10 +12,18 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 import passivbot_rust as pbr
-from opt_utils import round_floats, dominates
+from opt_utils import round_floats
 from pure_funcs import calc_hash
 from utils import json_dumps_streamlined
 from metrics_schema import flatten_metric_stats
+from pareto_core import (
+    compute_ideal,
+    crowding_distances,
+    dominates_with_violation,
+    extract_objectives,
+    extract_violation,
+    prune_front_with_extremes,
+)
 
 STAT_FIELDS = {"mean", "min", "max", "std"}
 
@@ -101,18 +109,6 @@ def _evaluate_limits(
     return True
 
 
-def _dominates_with_violation(
-    obj_a: tuple,
-    viol_a: float,
-    obj_b: tuple,
-    viol_b: float,
-    tol: float = 1e-12,
-) -> bool:
-    if math.isclose(viol_a, viol_b, rel_tol=0.0, abs_tol=tol):
-        return dominates(obj_a, obj_b)
-    return viol_a < viol_b
-
-
 class ParetoStore:
     def __init__(
         self,
@@ -159,12 +155,10 @@ class ParetoStore:
             if h in self._entries:  # fast‑dedupe
                 return False
 
-            # objective vector = sorted w_i keys
             metrics_block = rounded.get("metrics", {}) or {}
-            objectives = metrics_block.get("objectives", metrics_block)
-            w_keys = sorted(k for k in objectives if k.startswith("w_"))
-            obj = tuple(objectives[k] for k in w_keys)
-            violation = float(metrics_block.get("constraint_violation") or 0.0)
+            scoring_keys = self.scoring_keys or entry.get("optimize", {}).get("scoring")
+            obj, _ = extract_objectives(rounded, scoring_keys=scoring_keys)
+            violation = extract_violation(rounded)
 
             # ───────────── NEW: dedupe on the objective vector ──────────────
             existing_hash = self._objective_lookup.get(obj)
@@ -183,7 +177,7 @@ class ParetoStore:
 
             # discard if dominated by current front
             if any(
-                _dominates_with_violation(
+                dominates_with_violation(
                     self._objectives[idx],
                     self._violations.get(idx, 0.0),
                     obj,
@@ -197,7 +191,7 @@ class ParetoStore:
             dominated = [
                 idx
                 for idx in self._front
-                if _dominates_with_violation(
+                if dominates_with_violation(
                     obj, violation, self._objectives[idx], self._violations.get(idx, 0.0)
                 )
             ]
@@ -311,11 +305,9 @@ class ParetoStore:
         """Trim the Pareto front down by removing the most crowded entries."""
         if n_prune <= 0 or len(self._front) <= n_prune:
             return
-        objs = [self._objectives[idx] for idx in self._front]
-        crowding = self._crowding_distances(np.array(objs, dtype=float))
-        scored = list(zip(self._front, crowding))
-        scored.sort(key=lambda item: item[1])  # lowest crowding removed first
-        to_remove = [hash_id for hash_id, _ in scored[:n_prune]]
+        to_remove = prune_front_with_extremes(
+            self._front, self._objectives, self._violations, len(self._front) - n_prune
+        )
         for hash_id in to_remove:
             self._remove_from_front(hash_id)
 
@@ -367,68 +359,6 @@ class ParetoStore:
                 os.remove(path)
             except OSError:
                 pass
-
-    @staticmethod
-    def _crowding_distances(values: np.ndarray) -> np.ndarray:
-        if values.ndim != 2:
-            return np.zeros(len(values))
-        n, m = values.shape
-        if n == 0:
-            return np.array([])
-        if n <= 2:
-            return np.full(n, np.inf)
-        distances = np.zeros(n)
-        for col in range(m):
-            order = np.argsort(values[:, col])
-            distances[order[0]] = distances[order[-1]] = np.inf
-            column = values[order, col]
-            min_v = column[0]
-            max_v = column[-1]
-            denom = max_v - min_v
-            if denom == 0:
-                continue
-            normalized = (column[2:] - column[:-2]) / denom
-            distances[order[1:-1]] += normalized
-        return distances
-
-
-def compute_ideal(values_matrix, mode="min", weights=None, eps=1e-3, pct=10):
-    # values_matrix:  shape (n_points, n_obj)
-    if mode in ["m", "min"]:
-        return values_matrix.min(axis=0)
-
-    if mode in ["w", "weighted"]:
-        if weights is None:
-            raise ValueError("weights required")
-        vmin = values_matrix.min(axis=0)
-        vmax = values_matrix.max(axis=0)
-        return vmin + weights * (vmax - vmin)
-
-    if mode in ["u", "utopian"]:
-        mins = values_matrix.min(axis=0)
-        ranges = values_matrix.ptp(axis=0)
-        return mins - eps * ranges  # ε‑shift
-
-    if mode in ["p", "percentile"]:
-        return np.percentile(values_matrix, pct, axis=0)
-
-    if mode in ["mi", "midrange"]:
-        return 0.5 * (values_matrix.min(axis=0) + values_matrix.max(axis=0))
-
-    if mode in ["g", "geomedian"]:
-        # one Weiszfeld step is already a good approximation
-        z = values_matrix.mean(axis=0)
-        for _ in range(10):
-            d = np.linalg.norm(values_matrix - z, axis=1)
-            w = np.where(d > 0, 1.0 / d, 0.0)
-            z_new = (values_matrix * w[:, None]).sum(axis=0) / w.sum()
-            if np.allclose(z, z_new, atol=1e-9):
-                break
-            z = z_new
-        return z
-
-    raise ValueError(f"unknown mode {mode}")
-
 
 def comma_separated_values_float(x):
     return [float(z) for z in x.split(",")]
