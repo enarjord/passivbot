@@ -1949,22 +1949,22 @@ class Passivbot:
             self.execution_scheduled = True
         return
 
-    async def handle_balance_update(self, upd, source="WS"):
-        """Process websocket balance updates and trigger execution if equity changes."""
-        try:
-            upd[self.quote]["total"] = round_dynamic(upd[self.quote]["total"], 10)
-            equity = upd[self.quote]["total"] + (await self.calc_upnl_sum())
-            if self.balance != upd[self.quote]["total"]:
+    async def handle_balance_update(self, source="REST"):
+        if not hasattr(self, '_previous_balance'):
+            self._previous_balance = 0.0
+        if self.balance != self._previous_balance:
+            try:
+                equity = self.balance + (await self.calc_upnl_sum())
                 logging.info(
-                    f"balance changed: {self.balance} -> {upd[self.quote]['total']} equity: {equity:.4f} source: {source}"
+                    f"balance changed: {self._previous_balance} -> {self.balance} equity: {equity:.4f} source: {source}"
                 )
+            except Exception as e:
+                logging.error(f"error with handle_balance_update {e}")
+                traceback.print_exc()
+            finally:
+                self._previous_balance = self.balance
                 self.execution_scheduled = True
-            self.balance = max(upd[self.quote]["total"], 1e-12)
-        except Exception as e:
-            logging.error(f"error updating balance from websocket {upd} {e}")
-            traceback.print_exc()
-
-    # Legacy: handle_ohlcv_1m_update removed
+                
 
     async def calc_upnl_sum(self):
         """Compute unrealised PnL across fetched positions using latest prices."""
@@ -3095,7 +3095,7 @@ class Passivbot:
             balance = await self.fetch_balance()
             if balance is None:
                 return False
-            await self.handle_balance_update({self.quote: {"total": balance}}, source="REST")
+            self.balance = balance
             return True
         except RateLimitExceeded:
             logging.warning("rate limit while fetching balance; retrying next cycle")
@@ -3117,6 +3117,8 @@ class Passivbot:
             self.update_balance(),
             self.update_positions(),
         )
+        if balance_ok and positions_ok:
+            await self.handle_balance_update(source="REST")
         return balance_ok, positions_ok
 
     async def update_effective_min_cost(self, symbol=None):
