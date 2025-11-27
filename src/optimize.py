@@ -137,6 +137,7 @@ from suite_runner import (
     build_suite_metrics_payload,
 )
 from metrics_schema import build_scenario_metrics, flatten_metric_stats
+from bounds_utils import quantize_to_step, get_bound_keys_ignored
 
 
 def _ignore_sigint_in_worker():
@@ -309,44 +310,102 @@ Bound = Tuple[float, float]  # (low, high)
 
 
 def enforce_bounds(
-    values: Sequence[float], bounds: Sequence[Bound], sig_digits: int = None
+    values: Sequence[float], bounds: Sequence[Bound], sig_digits: int = None, steps: list = None
 ) -> List[float]:
     """
     Clamp each value to its corresponding [low, high] interval.
-    Also round to significant digits (optional).
+    Also round to significant digits (optional) and quantize to steps (optional).
 
     Args:
         values : iterable of floats (length == len(bounds))
         bounds : iterable of (low, high) pairs
-        sig_digits: int
+        sig_digits: int (optional rounding to significant digits)
+        steps: list of step values for quantization (optional, must match bounds length)
 
     Returns
         List[float]  – clamped copy (original is *not* modified)
     """
     assert len(values) == len(bounds), "values/bounds length mismatch"
+
     rounded = values if sig_digits is None else round_floats(values, sig_digits)
-    return [high if v > high else low if v < low else v for v, (low, high) in zip(rounded, bounds)]
+
+    # apply bounds clamping
+    clamped = [high if v > high else low if v < low else v for v, (low, high) in zip(rounded, bounds)]
+
+    # apply step quantization if specified
+    if steps is not None:
+        assert len(steps) == len(bounds), "steps/bounds length mismatch"
+        result = []
+        for v, (low, high), step in zip(clamped, bounds, steps):
+            result.append(quantize_to_step(v, low, high, step))
+        return result
+
+    return clamped
 
 
-def extract_bounds_tuple_list_from_config(config) -> [Bound]:
+def generate_stepped_value(low, high, step):
     """
-    extracts list of tuples (low, high) which are lower and upper bounds for bot parameters.
-    also sets all bounds to (low, low) if pside is not enabled.
+    Generate a random value from the range [low, high] using discrete steps.
+
+    Args:
+        low: lower bound
+        high: upper bound
+        step: step size for discrete sampling
+
+    Returns:
+        float: a randomly selected value from the stepped range
+    """
+    if step is None or step <= 0:
+        # If no step specified, use continuous uniform sampling
+        return np.random.uniform(low, high)
+
+    # Calculate number of steps
+    n_steps = int((high - low) / step)
+    if n_steps == 0:
+        return low
+
+    # Generate random step index and return corresponding value
+    step_index = np.random.randint(0, n_steps + 1)
+    return low + step_index * step
+
+
+
+
+
+def extract_bounds_and_steps_from_config(config) -> tuple[list[Bound], list[float | None]]:
+    """
+    Extracts list of tuples (low, high) which are lower and upper bounds for bot parameters,
+    and list of step values (or None) for each bound.
+    Also sets all bounds to (low, low) if pside is not enabled.
+    
+    Returns:
+        tuple: (bounds_list, steps_list) where bounds_list contains (low, high) tuples
+               and steps_list contains step values or None
     """
 
     def extract_bound_vals(key, val) -> tuple:
+        """Extract (low, high) from bound value."""
         if isinstance(val, (float, int)):
             return (val, val)
         elif isinstance(val, (tuple, list)):
             if len(val) == 1:
                 return (val[0], val[0])
-            elif len(val) == 2:
+            elif len(val) >= 2:
+                # Return min/max, ignore step if present
                 return tuple(sorted([val[0], val[1]]))
         raise Exception(f"malformed bound {key}: {val}")
+    
+    def extract_step(val) -> float:
+        """Extract step from bound value (third element if present)."""
+        if isinstance(val, (tuple, list)) and len(val) == 3:
+            return val[2]
+        return None
 
     template_config = get_template_config()
     keys_ignored = get_bound_keys_ignored()
     bounds = []
+    steps = []
+    
     for pside in sorted(template_config["bot"]):
         is_enabled = all(
             [
@@ -361,13 +420,25 @@ def extract_bounds_tuple_list_from_config(config) -> [Bound]:
             assert (
                 bound_key in config["optimize"]["bounds"]
             ), f"bound {bound_key} missing from optimize.bounds"
-            bound_vals = extract_bound_vals(bound_key, config["optimize"]["bounds"][bound_key])
+            
+            bound_val = config["optimize"]["bounds"][bound_key]
+            bound_vals = extract_bound_vals(bound_key, bound_val)
+            step_val = extract_step(bound_val)
+            
             bounds.append(bound_vals if is_enabled else (bound_vals[0], bound_vals[0]))
-    return bounds
-
-
-def get_bound_keys_ignored():
-    return ["enforce_exposure_limit"]
+            steps.append(step_val if is_enabled else None)
+            
+            # Check if step allows reaching maximum bound
+            if step_val is not None and step_val > 0 and is_enabled:
+                low, high = bound_vals
+                range_size = high - low
+                if range_size > 0:
+                    n_steps = range_size / step_val
+                    max_reachable = low + int(n_steps) * step_val
+                    if abs(max_reachable - high) > 1e-9:
+                        logging.warning(f"'{bound_key}' with bounds: [{low}, {high}] and step: {step_val} will not reach maximum: {max_reachable}")
+    
+    return bounds, steps
 
 
 # ============================================================================
@@ -672,7 +743,7 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
     return config
 
 
-def config_to_individual(config, bounds, sig_digits=None):
+def config_to_individual(config, bounds, sig_digits=None, steps=None):
     keys_ignored = get_bound_keys_ignored()
     return enforce_bounds(
         [
@@ -683,6 +754,7 @@ def config_to_individual(config, bounds, sig_digits=None):
         ],
         bounds,
         sig_digits,
+        steps,
     )
 
 
@@ -733,7 +805,7 @@ class Evaluator:
         logging.info("Evaluator ready | exchanges=%d", len(self.exchanges))
         self.seen_hashes = seen_hashes if seen_hashes is not None else {}
         self.duplicate_counter = duplicate_counter if duplicate_counter is not None else {"count": 0}
-        self.bounds = extract_bounds_tuple_list_from_config(self.config)
+        self.bounds, self.steps = extract_bounds_and_steps_from_config(self.config)
         self.sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
 
         shared_metric_weights = {
@@ -908,7 +980,7 @@ class Evaluator:
         return perturbed
 
     def evaluate(self, individual, overrides_list):
-        individual[:] = enforce_bounds(individual, self.bounds, self.sig_digits)
+        individual[:] = enforce_bounds(individual, self.bounds, self.sig_digits, self.steps)
         config = individual_to_config(individual, optimizer_overrides, overrides_list, self.config)
         individual_hash = calc_hash(individual)
         if individual_hash in self.seen_hashes:
@@ -928,7 +1000,7 @@ class Evaluator:
             ]
             for perturb_fn in perturbation_funcs:
                 perturbed = perturb_fn(individual)
-                perturbed = enforce_bounds(perturbed, self.bounds, self.sig_digits)
+                perturbed = enforce_bounds(perturbed, self.bounds, self.sig_digits, self.steps)
                 new_hash = calc_hash(perturbed)
                 if new_hash not in self.seen_hashes:
                     individual[:] = perturbed
@@ -1108,7 +1180,7 @@ class SuiteEvaluator:
             ctx.shared_btc_np[exchange] = attachment.array
 
     def evaluate(self, individual, overrides_list):
-        individual[:] = enforce_bounds(individual, self.base.bounds, self.base.sig_digits)
+        individual[:] = enforce_bounds(individual, self.base.bounds, self.base.sig_digits, self.base.steps)
         config = individual_to_config(
             individual, optimizer_overrides, overrides_list, self.base.config
         )
@@ -1133,7 +1205,7 @@ class SuiteEvaluator:
             ]
             for perturb_fn in perturbation_funcs:
                 perturbed = perturb_fn(individual)
-                perturbed = enforce_bounds(perturbed, self.base.bounds, self.base.sig_digits)
+                perturbed = enforce_bounds(perturbed, self.base.bounds, self.base.sig_digits, self.base.steps)
                 new_hash = calc_hash(perturbed)
                 if new_hash not in seen_hashes:
                     individual[:] = perturbed
@@ -1644,7 +1716,14 @@ async def main():
         toolbox = base.Toolbox()
 
         # Define parameter bounds
-        bounds = extract_bounds_tuple_list_from_config(config)
+        bounds, bounds_steps = extract_bounds_and_steps_from_config(config)
+
+        stepped_count = sum(1 for step in bounds_steps if step is not None and step > 0)
+        if stepped_count > 0:
+            logging.info(f"Using stepped sampling for {stepped_count} parameters")
+        else:
+            logging.info("No stepped sampling configured. Using continuous uniform sampling for all parameters.")
+
         sig_digits = config["optimize"]["round_to_n_significant_digits"]
         crossover_eta = config["optimize"].get("crossover_eta", 20.0)
         mutation_eta = config["optimize"].get("mutation_eta", 20.0)
@@ -1657,9 +1736,9 @@ async def main():
         if not isinstance(offspring_multiplier, (int, float)) or offspring_multiplier <= 0.0:
             offspring_multiplier = 1.0
 
-        # Register attribute generators
-        for i, (low, high) in enumerate(bounds):
-            toolbox.register(f"attr_{i}", np.random.uniform, low, high)
+        # Register attribute generators with stepped sampling
+        for i, ((low, high), step) in enumerate(zip(bounds, bounds_steps)):
+            toolbox.register(f"attr_{i}", generate_stepped_value, low, high, step)
 
         # Register genetic operators
         toolbox.register(
@@ -1778,7 +1857,7 @@ async def main():
                 for i in range(len(evaluated_seeds), len(evaluated_seeds) + remaining // 2):
                     population[i] = deepcopy(seed_pool[np.random.choice(range(len(seed_pool)))])
         for i in range(len(population)):
-            population[i][:] = enforce_bounds(population[i], bounds, sig_digits)
+            population[i][:] = enforce_bounds(population[i], bounds, sig_digits, bounds_steps)
 
         logging.info(f"Initial population size: {len(population)}")
 
