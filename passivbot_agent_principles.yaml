@@ -38,3 +38,9 @@ passivbot_agent_principles:
     - Before committing or running code, simulate or dry-run first.
     - When proposing refactors, include before/after diff and rationale.
     - If adding dependencies, explain necessity and impact.
+
+  changelog:
+    - Maintain a top-level CHANGELOG.md as the single source of truth for user-facing changes.
+    - Add concise entries under an Unreleased section as changes land; do not wait until tagging to note important behavior changes.
+    - When tagging a release, move Unreleased entries under a dated version heading and keep Unreleased ready for the next cycle.
+    - Capture breaking changes, migrations, config changes, notable fixes, performance/security updates; keep bullets short and actionable.
