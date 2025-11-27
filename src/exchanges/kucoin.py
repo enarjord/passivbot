@@ -104,7 +104,7 @@ class KucoinBot(Passivbot):
         super().__init__(config)
         self.custom_id_max_length = 40
         self.quote = "USDT"
-        self.hedge_mode = False
+        self.hedge_mode = True
 
     def _get_partner_signature(self, timestamp: str) -> str:
         prehash = f"{timestamp}{self.partner}{self.api_key}"
@@ -522,6 +522,20 @@ class KucoinBot(Passivbot):
         )
         if verbose:
             logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
+
+
+    async def update_exchange_config(self):
+        """Ensure account-level settings (hedge mode) are applied."""
+        try:
+            # Hedge mode enabled so both long/short can coexist.
+            if hasattr(self.cca, "set_position_mode"):
+                res = await self.cca.set_position_mode(True)
+                logging.info(f"set_position_mode hedged=True {res}")
+            else:
+                logging.info("set_position_mode not supported by current KuCoin client; continuing")
+        except Exception as e:
+            logging.warning(f"set_position_mode hedged=True not applied: {e}")
+
 
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call = []
