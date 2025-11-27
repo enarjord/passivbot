@@ -537,8 +537,7 @@ class Passivbot:
         self.refresh_approved_ignored_coins_lists()
         # self.set_live_configs()
         self.set_wallet_exposure_limits()
-        await self.update_positions()
-        await self.update_balance()
+        await self.update_positions_and_balance()
         await self.update_open_orders()
         await self.update_effective_min_cost()
         # Legacy: no 1m OHLCV REST maintenance; CandlestickManager handles caching
@@ -1030,10 +1029,9 @@ class Passivbot:
         """Refresh positions, open orders, realised PnL, and 1m candles."""
         if self.stop_signal_received:
             return False
-        positions_ok = await self.update_positions()
+        balance_ok, positions_ok = await self.update_positions_and_balance()
         if not positions_ok:
             return False
-        await self.update_balance()
         open_orders_ok, pnls_ok = await asyncio.gather(
             self.update_open_orders(),
             self.update_pnls(),
@@ -2908,7 +2906,7 @@ class Passivbot:
                 self.open_orders[elm["symbol"]].append(elm)
             if schedule_update_positions:
                 await asyncio.sleep(1.5)
-                await self.update_positions()
+                await self.update_positions_and_balance()
             return True
         except RateLimitExceeded:
             logging.warning("rate limit while fetching open orders; retrying next cycle")
@@ -3049,7 +3047,7 @@ class Passivbot:
             logging.info(line)
 
     async def update_positions(self):
-        """Fetch positions, update balance (if returned), and reconcile local position state."""
+        """Fetch positions and reconcile local position state."""
         if not hasattr(self, "positions"):
             self.positions = {}
         try:
@@ -3062,20 +3060,9 @@ class Passivbot:
             return False
         if res is None or res is False:
             return False
-        if isinstance(res, tuple):
-            positions_list_new, balance_new = res
-        else:
-            positions_list_new, balance_new = res, None
+        positions_list_new = res
         fetched_positions_old = deepcopy(self.fetched_positions)
         self.fetched_positions = positions_list_new
-        if balance_new is not None:
-            try:
-                await self.handle_balance_update({self.quote: {"total": balance_new}}, source="REST")
-                self._last_balance_from_positions = balance_new
-                self._balance_from_positions_applied = True
-            except Exception as e:
-                logging.error(f"error handling balance from positions {e}")
-                traceback.print_exc()
         try:
             await self.log_position_changes(fetched_positions_old, self.fetched_positions)
         except Exception as e:
@@ -3100,24 +3087,8 @@ class Passivbot:
         return True
 
     async def update_balance(self):
-        """Fetch and apply balance. Uses cached balance from update_positions when available."""
+        """Fetch and apply the latest wallet balance."""
         try:
-            cached = getattr(self, "_last_balance_from_positions", None)
-            applied = getattr(self, "_balance_from_positions_applied", False)
-            if cached is not None:
-                # If it was already applied during update_positions, skip re-applying.
-                if applied:
-                    logging.debug(
-                        "update_balance: using cached balance from positions (already applied); skipping fetch"
-                    )
-                    self._last_balance_from_positions = None
-                    self._balance_from_positions_applied = False
-                    return True
-                await self.handle_balance_update({self.quote: {"total": cached}}, source="REST")
-                self._last_balance_from_positions = None
-                self._balance_from_positions_applied = False
-                return True
-
             if not hasattr(self, "fetch_balance"):
                 logging.debug("update_balance: no fetch_balance implemented")
                 return False
@@ -3139,6 +3110,14 @@ class Passivbot:
             logging.error(f"error updating balance {e}")
             traceback.print_exc()
             return False
+
+    async def update_positions_and_balance(self):
+        """Convenience helper to refresh both positions and balance concurrently."""
+        balance_ok, positions_ok = await asyncio.gather(
+            self.update_balance(),
+            self.update_positions(),
+        )
+        return balance_ok, positions_ok
 
     async def update_effective_min_cost(self, symbol=None):
         """Update the effective minimum order cost for one or all symbols."""
