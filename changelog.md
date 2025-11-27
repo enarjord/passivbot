@@ -15,4 +15,5 @@ All notable user-facing changes will be documented in this file.
 - Pareto pruning preserves per-objective extremes when enforcing max size.
 - Hyperliquid combined balance/position caching test isolated stubs to avoid polluting the rest of the suite.
 - Separated `fetch_positions` and `fetch_balance` responsibilities across all exchange wrappers (each now returns only positions or only balance) and added `update_positions_and_balance()` helper in the core bot to refresh both concurrently.
+- `update_balance()` now only fetches/apply balance, while `update_positions_and_balance()` calls `handle_balance_update` once both balance and positions are refreshed so equity logging always uses fresh positions.
 - KuCoin `get_order_execution_params` now aligns with the latest CCXT payload requirements so orders always include the correct margin/position parameters after the CCXT upgrade.

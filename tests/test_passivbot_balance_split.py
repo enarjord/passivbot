@@ -38,7 +38,7 @@ async def test_update_positions_only_updates_positions(monkeypatch):
     async def fake_log_position_changes(old, new):
         return
 
-    async def fail_handle_balance_update(upd, source="REST"):
+    async def fail_handle_balance_update(source="REST"):
         raise AssertionError("handle_balance_update should not be called by update_positions")
 
     bot.fetch_positions = fake_fetch_positions
@@ -57,16 +57,20 @@ async def test_update_balance_uses_fetch_balance_when_no_cache():
     bot.quote = "USDT"
     calls = {"balance": 0}
 
-    async def fake_handle_balance_update(upd, source="REST"):
+    async def fake_handle_balance_update(source="REST"):
         calls["balance"] += 1
-        assert upd["USDT"]["total"] == pytest.approx(123.0)
+        assert bot.balance == pytest.approx(123.0)
 
     async def fake_fetch_balance():
         return 123.0
 
-    bot.handle_balance_update = fake_handle_balance_update
     bot.fetch_balance = fake_fetch_balance
 
     ok = await bot.update_balance()
     assert ok is True
+    # handle_balance_update should not be called automatically
+    assert calls["balance"] == 0
+    # manual invocation uses latest balance/positions
+    bot.handle_balance_update = fake_handle_balance_update
+    await bot.handle_balance_update()
     assert calls["balance"] == 1
