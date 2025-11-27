@@ -269,7 +269,10 @@ When optimizing, parameter values are within the lower and upper bounds.
 ### Other Optimization Parameters
 
 - **compress_results_file**: If `true`, compresses optimize output results file to save space.
-- **enable_overrides**: List of custom optimizer overrides to enable. Use `optimizer_overrides.py` for overrides. Defaults to none.
+- **enable_overrides**: List of constraint overrides applied during optimization to enforce specific parameter relationships. The optimizer evaluator checks these conditions and apply the overrides before running each backtest (defaults to none):
+  - **"lossless_close_trailing"**: Ensures trailing stops are profitable by enforcing `close_trailing_threshold_pct` > `close_trailing_retracement_pct`. This prevents the retracement from triggering before reaching the minimum profit threshold.
+  - **"forward_tp_grid"**: Creates an ascending take-profit grid where `close_grid_markup_start` < `close_grid_markup_end`
+  - **"backward_tp_grid"**: Creates a descending take-profit grid where `close_grid_markup_start` > `close_grid_markup_end`.
 - **crossover_probability**: Probability of performing crossover between two individuals in the genetic algorithm. Determines how often parents exchange genetic information to create offspring.
 - **crossover_eta**: Crowding factor (η) for simulated-binary crossover. Lower values (<20) allow offspring to move farther away from their parents; higher values keep them closer. Default is `20.0`.
 - **iters**: Number of backtests per optimize session.
