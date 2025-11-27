@@ -3046,8 +3046,8 @@ class Passivbot:
         for line in table.get_string().splitlines():
             logging.info(line)
 
-    async def update_positions(self):
-        """Fetch positions and reconcile local position state."""
+    async def _fetch_and_apply_positions(self):
+        """Fetch raw positions, apply them to local state and return snapshots."""
         if not hasattr(self, "positions"):
             self.positions = {}
         try:
@@ -3059,14 +3059,10 @@ class Passivbot:
             logging.error(f"network error fetching positions: {e}")
             return False
         if res is None or res is False:
-            return False
+            return False, None, None
         positions_list_new = res
         fetched_positions_old = deepcopy(self.fetched_positions)
         self.fetched_positions = positions_list_new
-        try:
-            await self.log_position_changes(fetched_positions_old, self.fetched_positions)
-        except Exception as e:
-            logging.error(f"error logging position changes {e}")
         positions_new = {
             sym: {
                 "long": {"size": 0.0, "price": 0.0},
@@ -3084,6 +3080,18 @@ class Passivbot:
                 }
             positions_new[symbol][pside] = {"size": psize, "price": pprice}
         self.positions = positions_new
+        return True, fetched_positions_old, self.fetched_positions
+
+    async def update_positions(self, *, log_changes: bool = True):
+        """Fetch positions, update local caches, and optionally log any changes."""
+        ok, fetched_positions_old, fetched_positions_new = await self._fetch_and_apply_positions()
+        if not ok:
+            return False
+        if log_changes and fetched_positions_old is not None:
+            try:
+                await self.log_position_changes(fetched_positions_old, fetched_positions_new)
+            except Exception as e:
+                logging.error(f"error logging position changes {e}")
         return True
 
     async def update_balance(self):
@@ -3113,10 +3121,14 @@ class Passivbot:
 
     async def update_positions_and_balance(self):
         """Convenience helper to refresh both positions and balance concurrently."""
-        balance_ok, positions_ok = await asyncio.gather(
-            self.update_balance(),
-            self.update_positions(),
-        )
+        balance_task = asyncio.create_task(self.update_balance())
+        positions_ok, fetched_positions_old, fetched_positions_new = await self._fetch_and_apply_positions()
+        balance_ok = await balance_task
+        if positions_ok and fetched_positions_old is not None:
+            try:
+                await self.log_position_changes(fetched_positions_old, fetched_positions_new)
+            except Exception as e:
+                logging.error(f"error logging position changes {e}")
         if balance_ok and positions_ok:
             await self.handle_balance_update(source="REST")
         return balance_ok, positions_ok
