@@ -14,3 +14,5 @@ All notable user-facing changes will be documented in this file.
 - Suite summaries are leaner: redundant metric dumps removed; canonical metrics schema persisted alongside per-scenario timing.
 - Pareto pruning preserves per-objective extremes when enforcing max size.
 - Hyperliquid combined balance/position caching test isolated stubs to avoid polluting the rest of the suite.
+- Separated `fetch_positions` and `fetch_balance` responsibilities across all exchange wrappers (each now returns only positions or only balance) and added `update_positions_and_balance()` helper in the core bot to refresh both concurrently.
+- KuCoin `get_order_execution_params` now aligns with the latest CCXT payload requirements so orders always include the correct margin/position parameters after the CCXT upgrade.
