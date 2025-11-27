@@ -140,7 +140,7 @@ class GateIOBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_positions(self) -> [dict]:
+    async def fetch_positions(self):
         positions_fetched = None
         try:
             positions_fetched = await self.cca.fetch_positions()
@@ -158,7 +158,7 @@ class GateIOBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_balance(self) -> float:
+    async def fetch_balance(self):
         balance_fetched = None
         try:
             balance_fetched = await self.cca.fetch_balance()

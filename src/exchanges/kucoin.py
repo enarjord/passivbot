@@ -499,6 +499,7 @@ class KucoinBot(Passivbot):
             "reduceOnly": order.get("reduce_only", False),
             "marginMode": "CROSS",
             "clientOid": order.get("custom_id", None),
+            "positionSide": order.get('position_side', '').upper(),
         }
 
     def did_cancel_order(self, executed, order=None) -> bool:

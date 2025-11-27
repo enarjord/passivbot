@@ -103,7 +103,7 @@ class OKXBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_positions(self) -> [dict]:
+    async def fetch_positions(self):
         fetched_positions = None
         try:
             fetched_positions = await self.cca.fetch_positions()
@@ -119,7 +119,7 @@ class OKXBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def fetch_balance(self) -> float:
+    async def fetch_balance(self):
         fetched_balance = None
         try:
             fetched_balance = await self.cca.fetch_balance()
