@@ -263,6 +263,23 @@ LIMIT_PATTERNS = [
 ]
 
 
+def _extract_limit_metrics(exprs: Iterable[str]) -> List[str]:
+    metrics: List[str] = []
+    if not exprs:
+        return metrics
+    for line in exprs:
+        if not line:
+            continue
+        for pattern, _ in LIMIT_PATTERNS:
+            m = pattern.match(line)
+            if m:
+                key = m.group("key")
+                if key not in metrics:
+                    metrics.append(key)
+                break
+    return metrics
+
+
 def _apply_limits(df: pd.DataFrame, exprs: Optional[str]) -> pd.Series:
     if not exprs:
         return pd.Series(True, index=df.index)
@@ -405,6 +422,12 @@ def serve_dash(data_root: str, port: int = 8050):
                         placeholder="Metrics to optimize (closest to ideal)",
                         multi=True,
                     ),
+                    html.Label("Closest config metrics"),
+                    dcc.Dropdown(
+                        id="best-config-metrics",
+                        placeholder="Metrics to show in closest-config table",
+                        multi=True,
+                    ),
                     html.Label("Main plot metrics"),
                     dcc.Dropdown(
                         id="plot-metrics",
@@ -490,6 +513,8 @@ def serve_dash(data_root: str, port: int = 8050):
         Output("correlation-metrics", "value"),
         Output("ideal-metrics", "options"),
         Output("ideal-metrics", "value"),
+        Output("best-config-metrics", "options"),
+        Output("best-config-metrics", "value"),
         Output("limit-expressions", "value"),
         Output("plot-metrics", "options"),
         Output("plot-metrics", "value"),
@@ -508,9 +533,23 @@ def serve_dash(data_root: str, port: int = 8050):
         scenario_metric_options = [
             {"label": metric, "value": metric} for metric in sorted(scenario_metrics_set)
         ]
-        scenario_metric_value = (
-            scenario_metric_options[0]["value"] if scenario_metric_options else None
-        )
+
+        # Prefer scenario metric from scoring metrics / limits, fall back to first available
+        scenario_metric_value = None
+        if scenario_metric_options:
+            available_scenario_metrics = {opt["value"] for opt in scenario_metric_options}
+            for m in run_data.scoring_metrics:
+                if m in available_scenario_metrics:
+                    scenario_metric_value = m
+                    break
+            if scenario_metric_value is None:
+                limit_metrics = _extract_limit_metrics(run_data.default_limits)
+                for m in limit_metrics:
+                    if m in available_scenario_metrics:
+                        scenario_metric_value = m
+                        break
+            if scenario_metric_value is None:
+                scenario_metric_value = scenario_metric_options[0]["value"]
 
         metric_cols = [
             c
@@ -525,12 +564,57 @@ def serve_dash(data_root: str, port: int = 8050):
         param_options = [{"label": col, "value": col} for col in param_cols]
         metric_options = [{"label": col, "value": col} for col in metric_cols]
         param_value = param_cols[0] if param_cols else None
-        metric_value = metric_cols[0] if metric_cols else None
 
-        corr_default = [opt["value"] for opt in metric_options[:5]]
+        # Prefer Y metric from scoring metrics / limits, fall back to first available
+        limit_metrics = _extract_limit_metrics(run_data.default_limits)
+        metric_value = None
+        if metric_cols:
+            for m in run_data.scoring_metrics:
+                if m in metric_cols:
+                    metric_value = m
+                    break
+            if metric_value is None:
+                for m in limit_metrics:
+                    if m in metric_cols:
+                        metric_value = m
+                        break
+            if metric_value is None:
+                metric_value = metric_cols[0]
+
+        # Correlation metrics: prefer scoring metrics, then limit metrics, then fill from all
+        corr_default: List[str] = []
+        available_metrics_set = set(metric_cols)
+        for m in run_data.scoring_metrics:
+            if m in available_metrics_set and m not in corr_default:
+                corr_default.append(m)
+        for m in limit_metrics:
+            if m in available_metrics_set and m not in corr_default:
+                corr_default.append(m)
+        if len(corr_default) < 2:
+            target_len = max(2, min(5, len(metric_cols)))
+            for m in metric_cols:
+                if m not in corr_default:
+                    corr_default.append(m)
+                if len(corr_default) >= target_len:
+                    break
+        corr_default = corr_default[:5]
+
         ideal_default = [
             m for m in run_data.scoring_metrics if m in {opt["value"] for opt in metric_options}
         ]
+
+        # Best-config metrics: prefer scoring metrics, then limit metrics, fall back to first few
+        best_metric_options = metric_options
+        best_metric_default: List[str] = []
+        for m in run_data.scoring_metrics:
+            if m in metric_cols and m not in best_metric_default:
+                best_metric_default.append(m)
+        for m in limit_metrics:
+            if m in metric_cols and m not in best_metric_default:
+                best_metric_default.append(m)
+        if not best_metric_default:
+            best_metric_default = metric_cols[: min(5, len(metric_cols))]
+
         limits_default = "\n".join(run_data.default_limits)
         plot_default = ideal_default if ideal_default else metric_cols[: min(3, len(metric_cols))]
         return (
@@ -546,6 +630,8 @@ def serve_dash(data_root: str, port: int = 8050):
             corr_default,
             metric_options,
             ideal_default,
+            best_metric_options,
+            best_metric_default,
             limits_default,
             metric_options,
             plot_default,
@@ -567,9 +653,17 @@ def serve_dash(data_root: str, port: int = 8050):
         Input("ideal-metrics", "value"),
         Input("limit-expressions", "value"),
         Input("plot-metrics", "value"),
+        Input("best-config-metrics", "value"),
     )
     def update_figures(
-        run_dir, x_metric, y_metric, hist_metric, ideal_metrics, limit_exprs, plot_metrics
+        run_dir,
+        x_metric,
+        y_metric,
+        hist_metric,
+        ideal_metrics,
+        limit_exprs,
+        plot_metrics,
+        best_metrics,
     ):
         run_data = get_run_data(run_dir)
         df = run_data.dataframe
@@ -628,9 +722,22 @@ def serve_dash(data_root: str, port: int = 8050):
             if filtered.shape[0] > 0:
                 best_row = _select_closest_to_ideal(filtered, ideal_metrics)
                 if best_row is not None:
-                    sanitized = {k: v for k, v in best_row.items() if not _looks_like_stat_column(k)}
-                    best_data = [sanitized]
-                    best_columns = [{"name": k, "id": k} for k in sanitized.keys()]
+                    # Restrict displayed metrics based on user selection, defaulting
+                    # to scoring/limit metrics configured upstream.
+                    display: Dict[str, Any] = {}
+                    if "_id" in best_row:
+                        display["_id"] = best_row["_id"]
+                    selected = best_metrics or []
+                    for m in selected:
+                        if m in best_row and not _looks_like_stat_column(str(m)):
+                            display[m] = best_row[m]
+                    if not display:
+                        # Fallback: show all non-stat metrics
+                        display = {
+                            k: v for k, v in best_row.items() if not _looks_like_stat_column(str(k))
+                        }
+                    best_data = [display]
+                    best_columns = [{"name": str(k), "id": str(k)} for k in display.keys()]
 
         return (
             main_fig,
