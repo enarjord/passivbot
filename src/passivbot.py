@@ -364,6 +364,9 @@ class Passivbot:
         self.order_details_str_len = 34
         self.order_type_str_len = 32
         self.stop_websocket = False
+        raw_balance_override = get_optional_live_value(self.config, "balance_override", None)
+        self.balance_override = None if raw_balance_override in (None, "") else float(raw_balance_override)
+        self._balance_override_logged = False
         self.balance = 1e-12
         self.hedge_mode = True
         self.inverse = False
@@ -3097,10 +3100,16 @@ class Passivbot:
     async def update_balance(self):
         """Fetch and apply the latest wallet balance."""
         try:
-            if not hasattr(self, "fetch_balance"):
-                logging.debug("update_balance: no fetch_balance implemented")
-                return False
-            balance = await self.fetch_balance()
+            if self.balance_override is not None:
+                balance = float(self.balance_override)
+                if not self._balance_override_logged:
+                    logging.info("Using balance override: %.6f", balance)
+                    self._balance_override_logged = True
+            else:
+                if not hasattr(self, "fetch_balance"):
+                    logging.debug("update_balance: no fetch_balance implemented")
+                    return False
+                balance = await self.fetch_balance()
             if balance is None:
                 return False
             self.balance = balance

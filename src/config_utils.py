@@ -1970,6 +1970,7 @@ def get_template_config():
             "time_in_force": "good_till_cancelled",
             "warmup_ratio": 0.2,
             "user": "bybit_01",
+            "balance_override": None,
         },
         "optimize": {
             "bounds": {
