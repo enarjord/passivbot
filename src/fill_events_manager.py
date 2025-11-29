@@ -1845,6 +1845,182 @@ class GateioFetcher(BaseFetcher):
                 return "short"
         return "long"
 
+
+class KucoinFetcher(BaseFetcher):
+    """Fetches fill events for Kucoin by combining trade and position history."""
+
+    def __init__(self, api, *, trade_limit: int = 1000, now_func: Optional[Callable[[], int]] = None) -> None:
+        self.api = api
+        self.trade_limit = max(1, trade_limit)
+        self._symbol_resolver = None
+        self._now_func = now_func or (lambda: int(datetime.now(tz=timezone.utc).timestamp() * 1000))
+
+    async def fetch(
+        self,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        trades = await self._fetch_trades(since_ms, until_ms)
+        if not trades:
+            return []
+
+        closes = [
+            t
+            for t in trades
+            if (t["side"] == "sell" and t["position_side"] == "long")
+            or (t["side"] == "buy" and t["position_side"] == "short")
+        ]
+        events: Dict[str, Dict[str, object]] = {t["id"]: dict(t) for t in trades}
+        if closes:
+            ph = await self._fetch_positions_history(
+                start_ms=closes[0]["timestamp"] - 60_000,
+                end_ms=closes[-1]["timestamp"] + 60_000,
+            )
+            self._match_pnls(closes, ph, events)
+
+        ordered = sorted(events.values(), key=lambda ev: ev["timestamp"])
+        if on_batch and ordered:
+            on_batch(ordered)
+        return ordered
+
+    async def _fetch_trades(
+        self, since_ms: Optional[int], until_ms: Optional[int]
+    ) -> List[Dict[str, object]]:
+        now_ms = self._now_func()
+        until_ts = int(until_ms) if until_ms is not None else now_ms + 3_600_000
+        since_ts = int(since_ms) if since_ms is not None else until_ts - 24 * 60 * 60 * 1000
+        week_buffer_ms = int(7 * 24 * 60 * 60 * 1000 * 0.99)
+        limit = min(self.trade_limit, 1000)
+
+        collected: Dict[str, Dict[str, object]] = {}
+        max_fetches = 400
+        start_at = since_ts
+        prev_params = None
+        fetch_count = 0
+
+        while start_at < until_ts and fetch_count < max_fetches:
+            fetch_count += 1
+            end_at = min(start_at + week_buffer_ms, until_ts)
+            params: Dict[str, object] = {"startAt": int(start_at), "endAt": int(end_at), "limit": limit}
+            key = _check_pagination_progress(
+                prev_params, dict(params, _page=fetch_count), "KucoinFetcher._fetch_trades"
+            )
+            if key is None:
+                break
+            prev_params = key
+            batch = await self.api.fetch_my_trades(params=params)
+            if not batch:
+                start_at += week_buffer_ms
+                continue
+
+            batch_sorted = sorted(batch, key=lambda x: x.get("timestamp", 0))
+            for trade in batch_sorted:
+                event = self._normalize_trade(trade)
+                ts = event["timestamp"]
+                if ts < since_ts or ts > until_ts:
+                    continue
+                key = (event.get("id") or "", event.get("order") or "")
+                collected[key] = event
+
+            start_at = int(batch_sorted[-1].get("timestamp", start_at))
+
+        if fetch_count >= max_fetches:
+            logger.warning("KucoinFetcher._fetch_trades: reached pagination cap (%d)", max_fetches)
+
+        return sorted(collected.values(), key=lambda ev: ev["timestamp"])
+
+    async def _fetch_positions_history(
+        self, start_ms: int, end_ms: int
+    ) -> List[Dict[str, object]]:
+        params: Dict[str, object] = {"until": int(end_ms)}
+        results: List[Dict[str, object]] = []
+        day_ms = 86_400_000
+        max_fetches = 400
+        fetch_count = 0
+        while True:
+            fetch_count += 1
+            batch = await self.api.fetch_positions_history(params=params)
+            batch = sorted(batch, key=lambda x: x.get("lastUpdateTimestamp", 0))
+            results = batch + results
+            if not batch:
+                new_until = params["until"] - day_ms
+            else:
+                new_until = batch[0].get("lastUpdateTimestamp", params["until"]) - 1
+            if new_until <= start_ms or fetch_count >= max_fetches:
+                break
+            params["until"] = new_until
+        return results
+
+    def _match_pnls(
+        self,
+        closes: List[Dict[str, object]],
+        positions: List[Dict[str, object]],
+        events: Dict[str, Dict[str, object]],
+    ) -> None:
+        closes_by_symbol: Dict[str, List[Dict[str, object]]] = defaultdict(list)
+        for c in closes:
+            closes_by_symbol[c["symbol"]].append(c)
+        positions_by_symbol: Dict[str, List[Dict[str, object]]] = defaultdict(list)
+        for p in positions:
+            positions_by_symbol[p.get("symbol", "")].append(p)
+
+        seen_trade_ids: set[str] = set()
+        for symbol, pos_list in positions_by_symbol.items():
+            if symbol not in closes_by_symbol:
+                continue
+            for p in pos_list:
+                candidates = sorted(
+                    [c for c in closes_by_symbol[symbol] if c["id"] not in seen_trade_ids],
+                    key=lambda c: abs(c["timestamp"] - p.get("lastUpdateTimestamp", 0)),
+                )
+                if not candidates:
+                    continue
+                best = candidates[0]
+                events[best["id"]]["pnl"] = float(p.get("realizedPnl", 0.0))
+                seen_trade_ids.add(best["id"])
+
+    @staticmethod
+    def _normalize_trade(trade: Dict[str, object]) -> Dict[str, object]:
+        info = trade.get("info", {}) or {}
+        trade_id = str(trade.get("id") or info.get("tradeId") or info.get("id") or "")
+        order_id = str(trade.get("orderId") or info.get("orderId") or info.get("order") or "")
+        timestamp = int(trade.get("timestamp") or info.get("time") or info.get("ts") or 0)
+        symbol = str(trade.get("symbol") or info.get("symbol") or "")
+        side = str(trade.get("side") or info.get("side") or "").lower()
+        qty = abs(float(trade.get("amount") or info.get("size") or info.get("amount") or 0.0))
+        price = float(trade.get("price") or info.get("price") or 0.0)
+        fee = trade.get("fee")
+        reduce_only = bool(trade.get("reduceOnly") or info.get("closeOrder") or False)
+        close_fee_pay = float(info.get("closeFeePay") or 0.0)
+        position_side = KucoinFetcher._determine_position_side(side, reduce_only, close_fee_pay)
+
+        return {
+            "id": trade_id,
+            "order_id": order_id,
+            "timestamp": timestamp,
+            "datetime": ts_to_date(timestamp) if timestamp else "",
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "pnl": 0.0,
+            "fees": fee,
+            "pb_order_type": "",
+            "position_side": position_side,
+            "client_order_id": str(trade.get("clientOrderId") or info.get("clientOid") or ""),
+        }
+
+    @staticmethod
+    def _determine_position_side(side: str, reduce_only: bool, close_fee_pay: float) -> str:
+        side = side.lower()
+        if side == "buy":
+            return "short" if close_fee_pay != 0.0 or reduce_only else "long"
+        if side == "sell":
+            return "long" if close_fee_pay != 0.0 or reduce_only else "short"
+        return "long"
+
     def _normalize_trade(self, trade: Dict[str, object]) -> Dict[str, object]:
         info = trade.get("info", {}) or {}
         trade_id = str(trade.get("id") or info.get("tid") or info.get("hash") or info.get("oid"))
@@ -1935,6 +2111,7 @@ EXCHANGE_BOT_CLASSES: Dict[str, Tuple[str, str]] = {
     "bybit": ("exchanges.bybit", "BybitBot"),
     "hyperliquid": ("exchanges.hyperliquid", "HyperliquidBot"),
     "gateio": ("exchanges.gateio", "GateIOBot"),
+    "kucoin": ("exchanges.kucoin", "KucoinBot"),
 }
 
 
@@ -2052,6 +2229,8 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
         return GateioFetcher(
             api=bot.cca,
         )
+    if exchange == "kucoin":
+        return KucoinFetcher(api=bot.cca)
     raise ValueError(f"Unsupported exchange '{exchange}' for fill events CLI")
 
 
@@ -2117,30 +2296,34 @@ async def _run_cli(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fill events cache refresher")
-    parser.add_argument("--config", type=str, default="configs/template.json", help="Config path")
-    parser.add_argument("--user", type=str, required=True, help="Live user identifier")
-    parser.add_argument("--start", type=str, help="Start datetime (ms or ISO)")
-    parser.add_argument("--end", type=str, help="End datetime (ms or ISO)")
+    parser.add_argument("--config", "-c", type=str, default="configs/template.json", help="Config path")
+    parser.add_argument("--user", "-u", type=str, required=True, help="Live user identifier")
+    parser.add_argument("--start", "-s", type=str, help="Start datetime (ms or ISO)")
+    parser.add_argument("--end", "-e", type=str, help="End datetime (ms or ISO)")
     parser.add_argument(
         "--lookback-days",
+        "-d",
         type=float,
-        default=3.0,
+        default=30.0,
         help="Default lookback window in days when start is omitted",
     )
     parser.add_argument(
         "--log-level",
+        "-l",
         type=str,
         default="info",
         help="Logging verbosity (warning/info/debug/trace or 0-3)",
     )
     parser.add_argument(
         "--cache-root",
+        "-r",
         type=str,
         default="caches/fill_events",
         help="Root directory for fill events cache (default: caches/fill_events)",
     )
     parser.add_argument(
         "--symbols",
+        "-S",
         nargs="*",
         default=None,
         help="Optional explicit symbol list to fetch",
