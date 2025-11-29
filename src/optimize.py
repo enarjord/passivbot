@@ -1,5 +1,6 @@
 import os
 import sys
+import argparse
 
 if sys.platform.startswith("win"):
     # ==== BEGIN fcntl stub for Windows ====
@@ -21,19 +22,43 @@ if sys.platform.startswith("win"):
         sys.modules["fcntl"] = _FcntlStub()
         fcntl = sys.modules["fcntl"]
     # ==== END fcntl stub for Windows ====
-import passivbot_rust as pbr
+
+# Rust extension check before importing compiled module
+from rust_utils import check_and_maybe_compile
+
+_rust_parser = argparse.ArgumentParser(add_help=False)
+_rust_parser.add_argument("--skip-rust-compile", action="store_true", help="Skip Rust build check.")
+_rust_parser.add_argument("--force-rust-compile", action="store_true", help="Force rebuild of Rust extension.")
+_rust_parser.add_argument(
+    "--fail-on-stale-rust",
+    action="store_true",
+    help="Abort if Rust extension appears stale instead of attempting rebuild.",
+)
+_rust_known, _rust_remaining = _rust_parser.parse_known_args()
+try:
+    check_and_maybe_compile(
+        skip=_rust_known.skip_rust_compile
+        or os.environ.get("SKIP_RUST_COMPILE", "").lower() in ("1", "true", "yes"),
+        force=_rust_known.force_rust_compile,
+        fail_on_stale=_rust_known.fail_on_stale_rust,
+    )
+except Exception as exc:
+    print(f"Rust extension check failed: {exc}")
+    sys.exit(1)
+sys.argv = [sys.argv[0]] + _rust_remaining
+
+import passivbot_rust as pbr  # noqa: E402
+from backtest import (
+    prepare_hlcvs_mss,
+    build_backtest_payload,
+    execute_backtest,
+)
 import asyncio
 import argparse
 import multiprocessing
 import signal
 import time
 from collections import defaultdict
-from backtest import (
-    prepare_hlcvs_mss,
-    build_backtest_payload,
-    execute_backtest,
-    expand_analysis,
-)
 from downloader import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from config_utils import (
     get_template_config,
@@ -57,7 +82,6 @@ from pure_funcs import (
 from utils import date_to_ts, ts_to_date, utc_ms, make_get_filepath, format_approved_ignored_coins
 from logging_setup import configure_logging, resolve_log_level
 from copy import deepcopy
-from main import manage_rust_compilation
 import numpy as np
 from uuid import uuid4
 import logging
@@ -1341,7 +1365,6 @@ def configs_to_individuals(cfgs, bounds, sig_digits=0):
 
 
 async def main():
-    manage_rust_compilation()
     parser = argparse.ArgumentParser(prog="optimize", description="run optimizer")
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"
@@ -1786,7 +1809,7 @@ async def main():
             except Exception:
                 logging.exception("Failed to flush recorder")
             recorder.close()
-        if "pool" in locals():
+        if "pool" in locals() and pool is not None:
             if pool_terminated or interrupted:
                 logging.info("Joining terminated worker pool...")
             else:

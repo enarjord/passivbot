@@ -1,15 +1,35 @@
+import os
+import sys
+import argparse
+from rust_utils import check_and_maybe_compile
+
+# Perform Rust compilation check before importing any modules that may load the extension
+_rust_parser = argparse.ArgumentParser(add_help=False)
+_rust_parser.add_argument("--skip-rust-compile", action="store_true", help="Skip Rust build check.")
+_rust_parser.add_argument("--force-rust-compile", action="store_true", help="Force rebuild of Rust extension.")
+_rust_parser.add_argument(
+    "--fail-on-stale-rust",
+    action="store_true",
+    help="Abort if Rust extension appears stale instead of attempting rebuild.",
+)
+_rust_known, _rust_remaining = _rust_parser.parse_known_args()
+try:
+    check_and_maybe_compile(
+        skip=_rust_known.skip_rust_compile
+        or os.environ.get("SKIP_RUST_COMPILE", "").lower() in ("1", "true", "yes"),
+        force=_rust_known.force_rust_compile,
+        fail_on_stale=_rust_known.fail_on_stale_rust,
+    )
+except Exception as exc:
+    print(f"Rust extension check failed: {exc}")
+    sys.exit(1)
+# rebuild argv for the real parser without rust flags
+sys.argv = [sys.argv[0]] + _rust_remaining
+
 import numpy as np
 import pandas as pd
-import os
 import json
-import sys
-import passivbot_rust as pbr
-from tools.event_loop_policy import set_windows_event_loop_policy
-
-# on Windows this will pick the SelectorEventLoopPolicy
-set_windows_event_loop_policy()
 import asyncio
-import argparse
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 from config_utils import (
@@ -56,12 +76,15 @@ from plotting import (
 )
 from collections import defaultdict
 import logging
-from main import manage_rust_compilation
 import gzip
 import traceback
-
 from logging_setup import configure_logging, resolve_log_level
 from suite_runner import extract_suite_config, run_backtest_suite_async
+import passivbot_rust as pbr  # noqa: E402
+from tools.event_loop_policy import set_windows_event_loop_policy
+
+# on Windows this will pick the SelectorEventLoopPolicy
+set_windows_event_loop_policy()
 
 
 def _looks_like_bool_token(value: str) -> bool:
@@ -1066,7 +1089,6 @@ def post_process(
 
 
 async def main():
-    manage_rust_compilation()
     parser = argparse.ArgumentParser(prog="backtest", description="run forager backtest")
     parser.add_argument(
         "config_path", type=str, default=None, nargs="?", help="path to json passivbot config"

@@ -27,7 +27,6 @@ from config_utils import (
 )
 from config_transform import ConfigTransformTracker, record_transform
 from logging_setup import configure_logging
-from main import manage_rust_compilation
 from utils import (
     format_approved_ignored_coins,
     format_end_date,
@@ -978,8 +977,6 @@ async def run_backtest_suite_async(
     disable_plotting: bool,
     suite_output_root: Optional[Path] = None,
 ) -> SuiteSummary:
-    manage_rust_compilation()
-
     exchanges_list = require_config_value(config, "backtest.exchanges")
     for exchange in exchanges_list:
         await load_markets(exchange, verbose=False)

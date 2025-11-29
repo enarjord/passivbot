@@ -52,7 +52,6 @@ from utils import (  # noqa: E402
     ts_to_date,
     utc_ms,
 )
-from main import manage_rust_compilation  # noqa: E402
 from metrics_schema import build_scenario_metrics, flatten_metric_stats  # noqa: E402
 from limit_utils import expand_limit_checks, compute_limit_violation  # noqa: E402
 
@@ -426,7 +425,6 @@ class IterativeBacktestSession:
 
     # ------------------------------------------------------------------
     async def initialize(self) -> None:
-        manage_rust_compilation()
         config = await self._load_config()
         self.backtest_exchanges = list(require_config_value(config, "backtest.exchanges"))
         self.combine_ohlcvs = bool(require_config_value(config, "backtest.combine_ohlcvs"))
