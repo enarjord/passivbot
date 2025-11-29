@@ -365,9 +365,15 @@ class Passivbot:
         self.order_type_str_len = 32
         self.stop_websocket = False
         raw_balance_override = get_optional_live_value(self.config, "balance_override", None)
-        self.balance_override = None if raw_balance_override in (None, "") else float(raw_balance_override)
+        self.balance_override = (
+            None if raw_balance_override in (None, "") else float(raw_balance_override)
+        )
         self._balance_override_logged = False
         self.balance = 1e-12
+        self.previous_hysteresis_balance = None
+        self.balance_hysteresis_snap_pct = float(
+            get_optional_live_value(self.config, "balance_hysteresis_snap_pct", 0.02)
+        )
         self.hedge_mode = True
         self.inverse = False
         self.active_symbols = []
@@ -3112,6 +3118,13 @@ class Passivbot:
                 balance = await self.fetch_balance()
             if balance is None:
                 return False
+            if self.balance_override is None:
+                if self.previous_hysteresis_balance is None:
+                    self.previous_hysteresis_balance = balance
+                balance = pbr.hysteresis(
+                    balance, self.previous_hysteresis_balance, self.balance_hysteresis_snap_pct
+                )
+                self.previous_hysteresis_balance = balance
             self.balance = balance
             return True
         except RateLimitExceeded:

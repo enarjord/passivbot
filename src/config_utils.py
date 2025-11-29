@@ -1971,6 +1971,7 @@ def get_template_config():
             "warmup_ratio": 0.2,
             "user": "bybit_01",
             "balance_override": None,
+            "balance_hysteresis_snap_pct": 0.02,
         },
         "optimize": {
             "bounds": {

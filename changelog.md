@@ -14,6 +14,8 @@ All notable user-facing changes will be documented in this file.
 - Fill events manager: added Gate.io support via ccxt trade fetcher.
 - Rust build pipeline: pre-import staleness checks with skip/force/fail flags, shared helpers, and a `scripts/check_rust_extension.py` reporter; added tests for staleness detection.
 - Rust compile flow now less noisy in normal operation (debug lock prints removed); compile attempts still logged when rebuilding.
+- Balance hysteresis now applied centrally in core bot update_balance; exchange fetch_balance implementations return raw balances.
+- Added configurable `live.balance_hysteresis_snap_pct` (default 0.02); set 0.0 to disable balance hysteresis entirely.
 
 ### Changed
 - Pareto explorer: default metrics for X/Y/histogram, scenario comparison, param scatter, correlation heatmap, and Closest Config now derive from `config.optimize.scoring` and `config.optimize.limits` instead of first-alphabetical metrics; Closest Config table no longer shows raw *_mean/_min/_max/_std stat columns by default.

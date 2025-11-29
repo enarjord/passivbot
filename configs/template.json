@@ -213,6 +213,7 @@
         "recv_window_ms": 5000,
         "time_in_force": "good_till_cancelled",
         "balance_override": null,
+        "balance_hysteresis_snap_pct": 0.02,
         "user": "bybit_01",
         "warmup_ratio": 0.3
     },

@@ -159,14 +159,6 @@ class BybitBot(Passivbot):
                 for elm in balinfo["coin"]:
                     if elm["marginCollateral"] and elm["collateralSwitch"]:
                         balance += float(elm["usdValue"]) + float(elm["unrealisedPnl"])
-                if not hasattr(self, "previous_hysteresis_balance"):
-                    self.previous_hysteresis_balance = balance
-                self.previous_hysteresis_balance = pbr.hysteresis(
-                    balance,
-                    self.previous_hysteresis_balance,
-                    self.hyst_pct,
-                )
-                balance = self.previous_hysteresis_balance
             else:
                 balance = fetched_balance[self.quote]["total"]
             return balance

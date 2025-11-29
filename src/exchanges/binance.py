@@ -192,14 +192,7 @@ class BinanceBot(Passivbot):
         try:
             fetched_balance = await self.cca.fetch_balance()
             balance = float(fetched_balance["info"]["totalCrossWalletBalance"])
-            if not hasattr(self, "previous_hysteresis_balance"):
-                self.previous_hysteresis_balance = balance
-            self.previous_hysteresis_balance = pbr.hysteresis(
-                balance,
-                self.previous_hysteresis_balance,
-                self.hyst_pct,
-            )
-            return self.previous_hysteresis_balance
+            return balance
         except Exception as e:
             logging.error(f"error fetching balance {e}")
             print_async_exception(fetched_balance)

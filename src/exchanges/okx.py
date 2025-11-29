@@ -145,14 +145,6 @@ class OKXBot(Passivbot):
                                 if elm2["ccy"] != self.quote
                                 else 1.0
                             )
-                if not hasattr(self, "previous_hysteresis_balance"):
-                    self.previous_hysteresis_balance = balance
-                self.previous_hysteresis_balance = pbr.hysteresis(
-                    balance,
-                    self.previous_hysteresis_balance,
-                    self.hyst_pct,
-                )
-                balance = self.previous_hysteresis_balance
             else:
                 balance = float(fetched_balance["info"]["data"][0]["details"][0]["cashBal"])
             return balance

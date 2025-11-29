@@ -175,14 +175,7 @@ class GateIOBot(Passivbot):
                 balance = float(balance_fetched["info"][0]["cross_available"])
             else:
                 raise Exception(f"unknown margin_mode_name {balance_fetched}")
-            if not hasattr(self, "previous_hysteresis_balance"):
-                self.previous_hysteresis_balance = balance
-            self.previous_hysteresis_balance = pbr.hysteresis(
-                balance,
-                self.previous_hysteresis_balance,
-                self.hyst_pct,
-            )
-            return self.previous_hysteresis_balance
+            return balance
         except Exception as e:
             logging.error(f"error fetching balance {e}")
             print_async_exception(balance_fetched)

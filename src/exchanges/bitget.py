@@ -252,14 +252,6 @@ class BitgetBot(Passivbot):
                 balance = float(balance_info["unionTotalMargin"]) - float(
                     balance_info["unrealizedPL"]
                 )
-                if not hasattr(self, "previous_hysteresis_balance"):
-                    self.previous_hysteresis_balance = balance
-                self.previous_hysteresis_balance = pbr.hysteresis(
-                    balance,
-                    self.previous_hysteresis_balance,
-                    self.hyst_pct,
-                )
-                balance = self.previous_hysteresis_balance
             else:
                 balance = float(balance_info["available"])
             return balance
