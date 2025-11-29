@@ -574,14 +574,15 @@ fn calc_daily_pnl_ratios(fills: &[Fill]) -> Vec<f64> {
         return Vec::new();
     }
     use std::collections::BTreeMap;
-    let mut daily_totals: BTreeMap<usize, (f64, f64)> = BTreeMap::new(); // day -> (pnl_sum, last_balance)
+    let mut daily_totals: BTreeMap<usize, (f64, f64)> = BTreeMap::new(); // day -> (pnl_sum_with_fees, last_balance)
 
     for fill in fills {
         let day = fill.index / 1440;
         let entry = daily_totals
             .entry(day)
             .or_insert((0.0, fill.usd_total_balance));
-        entry.0 += fill.pnl;
+        // include fees to get net daily pnl
+        entry.0 += fill.pnl + fill.fee_paid;
         entry.1 = fill.usd_total_balance;
     }
 
