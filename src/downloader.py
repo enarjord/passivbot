@@ -209,7 +209,7 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
 def dump_ohlcv_data(data, filepath):
     columns = ["timestamp", "open", "high", "low", "close", "volume"]
     if isinstance(data, pd.DataFrame):
-        data = ensure_millis(data[columns]).astype(float).values
+        data = ensure_millis_df(data[columns]).astype(float).values
     elif isinstance(data, np.ndarray):
         pass
     else:
@@ -233,7 +233,7 @@ def canonicalize_daily_ohlcvs(data, start_ts: int, interval_ms: int = 60_000) ->
         raise TypeError("data must be a pandas DataFrame or numpy array")
 
     df = df.reset_index(drop=True)
-    df = ensure_millis(df)
+    df = ensure_millis_df(df)
     for col in columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -313,7 +313,7 @@ def load_ohlcv_data(filepath: str) -> pd.DataFrame:
         print(
             f"Caught .npy file with duplicate rows: {filepath} Overwrote with deduplicated version."
         )
-    return ensure_millis(pd.DataFrame(arr_deduplicated, columns=columns))
+    return ensure_millis_df(pd.DataFrame(arr_deduplicated, columns=columns))
 
 
 def get_days_in_between(start_day, end_day):
@@ -419,14 +419,14 @@ async def get_zip_bitget(url):
         return pd.DataFrame(columns=col_names)
     dfs = []
     for z in zips:
-        df = ensure_millis(pd.read_excel(z))
+        df = ensure_millis_df(pd.read_excel(z))
         df.columns = col_names + [f"extra_{i}" for i in range(len(df.columns) - len(col_names))]
         dfs.append(df[col_names])
     dfc = pd.concat(dfs).sort_values("timestamp").reset_index(drop=True)
     return dfc[dfc.timestamp != "open_time"]
 
 
-def ensure_millis(df):
+def ensure_millis_df(df):
     """
     Normalize a DataFrame's 'timestamp' column to milliseconds.
 
@@ -951,7 +951,7 @@ class OHLCVManager:
             if not csv.empty:
                 day = Path(fpath).stem
                 dump_daily_ohlcv_data(
-                    ensure_millis(csv),
+                    ensure_millis_df(csv),
                     fpath,
                     date_to_ts(day),
                 )
@@ -1029,7 +1029,7 @@ class OHLCVManager:
             ohlcvs["timestamp"] = ohlcvs.index
             fpath = os.path.join(dirpath, day + ".npy")
             dump_daily_ohlcv_data(
-                ensure_millis(ohlcvs[["timestamp", "open", "high", "low", "close", "volume"]]),
+                ensure_millis_df(ohlcvs[["timestamp", "open", "high", "low", "close", "volume"]]),
                 fpath,
                 date_to_ts(day),
             )
@@ -1082,7 +1082,7 @@ class OHLCVManager:
     async def download_single_bitget(self, base_url, symbolf, day, fpath):
         url = self.get_url_bitget(base_url, symbolf, day)
         res = await get_zip_bitget(url)
-        dump_daily_ohlcv_data(ensure_millis(res), fpath, date_to_ts(day))
+        dump_daily_ohlcv_data(ensure_millis_df(res), fpath, date_to_ts(day))
         if self.verbose:
             logging.info(f"bitget Dumped daily data {fpath}")
 
@@ -1186,7 +1186,7 @@ class OHLCVManager:
                 dfc[c] = pd.to_numeric(dfc[c], errors="coerce")
             dfc = dfc.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
             # Normalize timestamp to ms
-            dfc = ensure_millis(dfc)
+            dfc = ensure_millis_df(dfc)
             # Clip to day and fill minute gaps
             start_ts_day = date_to_ts(day)
             end_ts_day = start_ts_day + 24 * 60 * 60 * 1000
@@ -1206,7 +1206,7 @@ class OHLCVManager:
             dfc["volume"] = dfc["volume"].fillna(0.0)
             dfc = dfc.reset_index().rename(columns={"index": "timestamp"})
             if len(dfc) == 1440:
-                dump_daily_ohlcv_data(ensure_millis(dfc), fpath, start_ts_day)
+                dump_daily_ohlcv_data(ensure_millis_df(dfc), fpath, start_ts_day)
                 if self.verbose:
                     logging.info(f"kucoin Dumped daily data {fpath}")
             else:
@@ -1326,7 +1326,7 @@ class OHLCVManager:
 
         # Dump final day data only if is a full day
         if len(df_day) == 1440:
-            dump_daily_ohlcv_data(ensure_millis(df_day), fpath, start_ts_day)
+            dump_daily_ohlcv_data(ensure_millis_df(df_day), fpath, start_ts_day)
             if self.verbose:
                 logging.info(f"gateio Dumped daily OHLCV data for {symbol} to {fpath}")
 
