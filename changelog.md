@@ -11,6 +11,7 @@ All notable user-facing changes will be documented in this file.
 - KuCoin exchange-config regression tests covering hedge-mode setup and leverage/margin configuration (guards CCXT upgrades).
 - Pareto explorer: added configurable “Closest config metrics” dropdown so users can choose which metrics are shown in the Closest Config table, defaulting to scoring/limit metrics.
 - `live.balance_override` setting/CLI flag to pin balance to a fixed value instead of fetching from the exchange (off by default).
+- Fill events manager: added Gate.io support via ccxt trade fetcher.
 
 ### Changed
 - Pareto explorer: default metrics for X/Y/histogram, scenario comparison, param scatter, correlation heatmap, and Closest Config now derive from `config.optimize.scoring` and `config.optimize.limits` instead of first-alphabetical metrics; Closest Config table no longer shows raw *_mean/_min/_max/_std stat columns by default.
@@ -21,3 +22,4 @@ All notable user-facing changes will be documented in this file.
 - `update_positions_and_balance()` now runs balance and positions concurrently, logs position changes after both complete, and then emits a single balance-change event so equity logging always uses fresh positions.
 - KuCoin `get_order_execution_params` now aligns with the latest CCXT payload requirements so orders always include the correct margin/position parameters after the CCXT upgrade.
 - Added Pareto regression test to ensure per-metric extremes remain present after front pruning.
+- Metric adg_pnl now includes fees paid, effectively making it net pnl instead of gross pnl.
