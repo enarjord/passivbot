@@ -32,6 +32,7 @@ except ImportError:  # pragma: no cover - fallback for package-relative executio
 from config_utils import format_config, load_config
 from logging_setup import configure_logging
 from procedures import load_user_info
+from pure_funcs import ensure_millis
 
 logger = logging.getLogger(__name__)
 
@@ -1706,6 +1707,144 @@ class HyperliquidFetcher(BaseFetcher):
 
         return events
 
+
+class GateioFetcher(BaseFetcher):
+    """Fetches fill events via ccxt.fetch_closed_orders for Gate.io."""
+
+    def __init__(
+        self,
+        api,
+        *,
+        trade_limit: int = 100,
+    ) -> None:
+        self.api = api
+        self.trade_limit = max(1, trade_limit)
+
+    async def fetch(
+        self,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        params: Dict[str, object] = {
+            "status": "finished",
+            "limit": self.trade_limit,
+            "offset": 0,
+        }
+
+        collected: Dict[str, Dict[str, object]] = {}
+        max_fetches = 400
+        fetch_count = 0
+
+        while True:
+            new_key = _check_pagination_progress(
+                None,
+                dict(params, _page=fetch_count),
+                "GateioFetcher.fetch",
+            )
+            if new_key is None:
+                break
+            try:
+                orders = await self.api.fetch_closed_orders(params=params)
+            except RateLimitExceeded as exc:  # pragma: no cover - live API
+                logger.debug("GateioFetcher.fetch: rate-limited (%s); sleeping", exc)
+                await asyncio.sleep(1.0)
+                continue
+            fetch_count += 1
+            if not orders:
+                break
+            for order in orders:
+                event = self._normalize_order(order)
+                ts = event["timestamp"]
+                if since_ms is not None and ts < since_ms:
+                    continue
+                if until_ms is not None and ts > until_ms:
+                    continue
+                collected[event["id"]] = event
+            if on_batch:
+                on_batch(list(collected.values()))
+            if len(orders) < self.trade_limit:
+                break
+            if since_ms is not None:
+                oldest = min(ev["timestamp"] for ev in collected.values()) if collected else None
+                if oldest is not None and oldest <= since_ms:
+                    break
+            params["offset"] = params.get("offset", 0) + self.trade_limit
+            if fetch_count >= max_fetches:
+                logger.warning("GateioFetcher.fetch: reached pagination cap (%d)", max_fetches)
+                break
+
+        ordered = sorted(collected.values(), key=lambda ev: ev["timestamp"])
+        return ordered
+
+    def _normalize_order(self, order: Dict[str, object]) -> Dict[str, object]:
+        info = order.get("info", {}) or {}
+        order_id = str(order.get("id") or info.get("id") or info.get("order_id") or "")
+        ts_raw = (
+            order.get("lastTradeTimestamp")
+            or info.get("update_time_ms")
+            or info.get("update_time")
+            or order.get("timestamp")
+            or info.get("create_time_ms")
+            or info.get("create_time")
+            or 0
+        )
+        try:
+            timestamp = int(ensure_millis(float(ts_raw)))
+        except Exception:
+            try:
+                timestamp = int(float(ts_raw))
+            except Exception:
+                timestamp = 0
+        symbol = str(order.get("symbol") or info.get("symbol") or info.get("contract") or "")
+        side = str(order.get("side") or info.get("side") or "").lower()
+        qty = abs(float(order.get("amount") or info.get("size") or info.get("amount") or 0.0))
+        price = float(order.get("price") or info.get("price") or 0.0)
+        pnl = float(info.get("pnl") or 0.0)
+        pnl_margin = float(info.get("pnl_margin") or 0.0)
+        reduce_only = bool(order.get("reduce_only") or info.get("reduce_only") or False)
+        client_order_id = (
+            order.get("clientOrderId")
+            or info.get("text")
+            or info.get("client_order_id")
+            or ""
+        )
+        pb_type = custom_id_to_snake(str(client_order_id)) if client_order_id else "unknown"
+        is_close = abs(pnl) > 0.0 or abs(pnl_margin) > 0.0 or reduce_only
+        position_side = self._determine_position_side(side, is_close)
+
+        return {
+            "id": order_id,
+            "order_id": order_id,
+            "timestamp": timestamp,
+            "datetime": ts_to_date(timestamp) if timestamp else "",
+            "symbol": str(symbol or ""),
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "pnl": pnl,
+            "fees": None,
+            "pb_order_type": pb_type or "unknown",
+            "position_side": position_side,
+            "client_order_id": str(client_order_id or ""),
+        }
+
+    @staticmethod
+    def _determine_position_side(side: str, is_close: bool) -> str:
+        side = side.lower()
+        if is_close:
+            if side == "buy":
+                return "short"
+            if side == "sell":
+                return "long"
+        else:
+            if side == "buy":
+                return "long"
+            if side == "sell":
+                return "short"
+        return "long"
+
     def _normalize_trade(self, trade: Dict[str, object]) -> Dict[str, object]:
         info = trade.get("info", {}) or {}
         trade_id = str(trade.get("id") or info.get("tid") or info.get("hash") or info.get("oid"))
@@ -1795,6 +1934,7 @@ EXCHANGE_BOT_CLASSES: Dict[str, Tuple[str, str]] = {
     "bitget": ("exchanges.bitget", "BitgetBot"),
     "bybit": ("exchanges.bybit", "BybitBot"),
     "hyperliquid": ("exchanges.hyperliquid", "HyperliquidBot"),
+    "gateio": ("exchanges.gateio", "GateIOBot"),
 }
 
 
@@ -1907,6 +2047,10 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
         return HyperliquidFetcher(
             api=bot.cca,
             symbol_resolver=lambda value: resolver(value),
+        )
+    if exchange == "gateio":
+        return GateioFetcher(
+            api=bot.cca,
         )
     raise ValueError(f"Unsupported exchange '{exchange}' for fill events CLI")
 
