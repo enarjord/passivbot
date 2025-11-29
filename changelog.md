@@ -12,6 +12,8 @@ All notable user-facing changes will be documented in this file.
 - Pareto explorer: added configurable “Closest config metrics” dropdown so users can choose which metrics are shown in the Closest Config table, defaulting to scoring/limit metrics.
 - `live.balance_override` setting/CLI flag to pin balance to a fixed value instead of fetching from the exchange (off by default).
 - Fill events manager: added Gate.io support via ccxt trade fetcher.
+- Rust build pipeline: pre-import staleness checks with skip/force/fail flags, shared helpers, and a `scripts/check_rust_extension.py` reporter; added tests for staleness detection.
+- Rust compile flow now less noisy in normal operation (debug lock prints removed); compile attempts still logged when rebuilding.
 
 ### Changed
 - Pareto explorer: default metrics for X/Y/histogram, scenario comparison, param scatter, correlation heatmap, and Closest Config now derive from `config.optimize.scoring` and `config.optimize.limits` instead of first-alphabetical metrics; Closest Config table no longer shows raw *_mean/_min/_max/_std stat columns by default.
