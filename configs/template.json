@@ -299,6 +299,12 @@
             "short_unstuck_loss_allowance_pct": [0.001,0.05],
             "short_unstuck_threshold": [0.4,0.99]
         },
+        "bounds_steps": {
+            "long_ema_span_0": 30,
+            "long_ema_span_1": 30,
+            "long_filter_volume_ema_span": 60,
+            "long_filter_volatility_ema_span": 60
+        },
         "compress_results_file": true,
         "crossover_eta": 20,
         "crossover_probability": 0.64,

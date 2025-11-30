@@ -974,7 +974,7 @@ def _sync_with_template(
         template_with_extras,
         result,
         verbose=verbose,
-        preserve=[("coin_overrides",)],
+        preserve=[("coin_overrides",), ("optimize", "bounds_steps")],
         tracker=tracker,
     )
     remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose, tracker=tracker)
@@ -2050,6 +2050,7 @@ def get_template_config():
                 "short_unstuck_loss_allowance_pct": [0.001, 0.05],
                 "short_unstuck_threshold": [0.4, 0.95],
             },
+            "bounds_steps": {},
             "compress_results_file": True,
             "crossover_probability": 0.7,
             "crossover_eta": 20.0,
