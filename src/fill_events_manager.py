@@ -370,6 +370,13 @@ class BitgetFetcher(BaseFetcher):
             fetch_count += 1
             payload = await self.api.private_mix_get_v2_mix_order_fill_history(dict(params))
             fill_list = payload.get("data", {}).get("fillList") or []
+            if fetch_count > 1:
+                logger.info(
+                    "BitgetFetcher.fetch: fetch #%d endTime=%s size=%d",
+                    fetch_count,
+                    _format_ms(params.get("endTime")),
+                    len(fill_list),
+                )
             if not fill_list:
                 if since_ms is None:
                     logger.debug("BitgetFetcher.fetch: empty batch without start bound; stopping")
@@ -846,6 +853,7 @@ class BinanceFetcher(BaseFetcher):
         params["endTime"] = int(min(until_ms, since_ms + week_buffer_ms))
         events = []
         previous_key: Optional[Tuple[Tuple[str, object], ...]] = None
+        fetch_count = 0
         while True:
             key = _check_pagination_progress(
                 previous_key,
@@ -855,7 +863,16 @@ class BinanceFetcher(BaseFetcher):
             if key is None:
                 break
             previous_key = key
+            fetch_count += 1
             payload = await self.api.fapiprivate_get_income(params=params)
+            if fetch_count > 1:
+                logger.info(
+                    "BinanceFetcher._fetch_income: fetch #%d startTime=%s endTime=%s size=%d",
+                    fetch_count,
+                    _format_ms(params.get("startTime")),
+                    _format_ms(params.get("endTime")),
+                    len(payload) if payload else 0,
+                )
             if payload == []:
                 if params["startTime"] + week_buffer_ms >= until_ms:
                     break
@@ -888,6 +905,7 @@ class BinanceFetcher(BaseFetcher):
             params: Dict[str, object] = {}
             fetched: Dict[str, Dict[str, object]] = {}
             previous_key: Optional[Tuple[Tuple[str, object], ...]] = None
+            fetch_count = 0
 
             cursor = int(start_bound)
             while cursor <= end_bound:
@@ -902,11 +920,21 @@ class BinanceFetcher(BaseFetcher):
                 if param_key is None:
                     break
                 previous_key = param_key
+                fetch_count += 1
                 batch = await self.api.fetch_my_trades(
                     ccxt_symbol,
                     limit=limit,
                     params=dict(params),
                 )
+                if fetch_count > 1:
+                    logger.info(
+                        "BinanceFetcher._fetch_symbol_trades: fetch #%d symbol=%s start=%s end=%s size=%d",
+                        fetch_count,
+                        ccxt_symbol,
+                        _format_ms(params["startTime"]),
+                        _format_ms(params["endTime"]),
+                        len(batch) if batch else 0,
+                    )
                 if not batch:
                     cursor = window_end + 1
                     continue
@@ -1150,12 +1178,12 @@ class FillEventsManager:
     ) -> None:
         """Fill missing data between `start_ms` and `end_ms` using gap heuristics."""
         await self.ensure_loaded()
-        gap_ms = max(1, int(gap_hours * 60 * 60 * 1000))
         intervals: List[Tuple[int, int]] = []
 
         if not self._events:
             logger.info("FillEventsManager.refresh_range: cache empty, refreshing entire interval")
-            await self.refresh(start_ms=start_ms, end_ms=end_ms)
+            for day_start, day_end in self._split_by_day(start_ms, end_ms):
+                await self.refresh(start_ms=day_start, end_ms=day_end)
             await self.refresh_latest(overlap=overlap)
             return
 
@@ -1163,25 +1191,14 @@ class FillEventsManager:
         earliest = events_sorted[0].timestamp
         latest = events_sorted[-1].timestamp
 
+        # Fetch older data before earliest cached if requested
         if start_ms < earliest:
             upper = earliest if end_ms is None else min(earliest, end_ms)
             if start_ms < upper:
                 intervals.append((start_ms, upper))
 
-        prev_ts = events_sorted[0].timestamp
-        for ev in events_sorted[1:]:
-            cur_ts = ev.timestamp
-            if end_ms is not None and prev_ts >= end_ms:
-                break
-            gap = cur_ts - prev_ts
-            if gap >= gap_ms:
-                gap_start = max(prev_ts, start_ms)
-                gap_end = cur_ts if end_ms is None else min(cur_ts, end_ms)
-                if gap_start < gap_end:
-                    intervals.append((gap_start, gap_end))
-            prev_ts = cur_ts
-
-        if end_ms is not None and latest < end_ms:
+        # Fetch newer data after latest cached if requested
+        if end_ms is not None and end_ms > latest:
             lower = max(latest, start_ms)
             if lower < end_ms:
                 intervals.append((lower, end_ms))
@@ -1197,9 +1214,26 @@ class FillEventsManager:
             logger.info("FillEventsManager.refresh_range: no gaps detected in requested interval")
 
         for start, end in merged:
-            await self.refresh(start_ms=start, end_ms=end)
+            for day_start, day_end in self._split_by_day(start, end):
+                await self.refresh(start_ms=day_start, end_ms=day_end)
 
         await self.refresh_latest(overlap=overlap)
+
+    @staticmethod
+    def _split_by_day(start_ms: int, end_ms: Optional[int]) -> List[Tuple[int, Optional[int]]]:
+        """Split an interval into day-sized chunks [inclusive, exclusive) for safer flushing."""
+        if end_ms is None or end_ms <= start_ms:
+            return [(start_ms, end_ms)]
+        chunks: List[Tuple[int, int]] = []
+        day_ms = 24 * 60 * 60 * 1000
+        cur = start_ms
+        while cur < end_ms:
+            day_start = (cur // day_ms) * day_ms
+            day_end = day_start + day_ms
+            chunk_end = min(day_end, end_ms)
+            chunks.append((cur, chunk_end))
+            cur = chunk_end
+        return chunks
 
     def get_events(
         self,
@@ -1376,6 +1410,13 @@ class BybitFetcher(BaseFetcher):
             prev_params = new_key
             fetch_count += 1
             batch = await self.api.fetch_my_trades(params=params)
+            if fetch_count > 1:
+                logger.info(
+                    "BybitFetcher._fetch_my_trades: fetch #%d endTime=%s size=%d",
+                    fetch_count,
+                    _format_ms(params.get("endTime")),
+                    len(batch) if batch else 0,
+                )
             if not batch:
                 break
             batch.sort(key=lambda x: x["timestamp"])
@@ -1420,6 +1461,13 @@ class BybitFetcher(BaseFetcher):
             prev_params = new_key
             fetch_count += 1
             batch = await self.api.fetch_positions_history(params=params)
+            if fetch_count > 1:
+                logger.info(
+                    "BybitFetcher._fetch_positions_history: fetch #%d endTime=%s size=%d",
+                    fetch_count,
+                    _format_ms(params.get("endTime")),
+                    len(batch) if batch else 0,
+                )
             if not batch:
                 break
             batch.sort(key=lambda x: x["timestamp"])
@@ -1650,6 +1698,13 @@ class HyperliquidFetcher(BaseFetcher):
                 await asyncio.sleep(1.0)
                 continue
             fetch_count += 1
+            if fetch_count > 1:
+                logger.info(
+                    "HyperliquidFetcher.fetch: fetch #%d since=%s size=%d",
+                    fetch_count,
+                    _format_ms(params.get("since")),
+                    len(trades) if trades else 0,
+                )
             if not trades:
                 break
             before_count = len(collected)
@@ -1745,13 +1800,20 @@ class GateioFetcher(BaseFetcher):
             )
             if new_key is None:
                 break
+            fetch_count += 1
             try:
                 orders = await self.api.fetch_closed_orders(params=params)
             except RateLimitExceeded as exc:  # pragma: no cover - live API
                 logger.debug("GateioFetcher.fetch: rate-limited (%s); sleeping", exc)
                 await asyncio.sleep(1.0)
                 continue
-            fetch_count += 1
+            if fetch_count > 1:
+                logger.info(
+                    "GateioFetcher.fetch: fetch #%d offset=%s size=%d",
+                    fetch_count,
+                    params.get("offset"),
+                    len(orders) if orders else 0,
+                )
             if not orders:
                 break
             for order in orders:
@@ -1881,6 +1943,7 @@ class KucoinFetcher(BaseFetcher):
             self._match_pnls(closes, ph, events)
 
         ordered = sorted(events.values(), key=lambda ev: ev["timestamp"])
+        await self._enrich_with_order_details_bulk(ordered, detail_cache)
         if on_batch and ordered:
             on_batch(ordered)
         return ordered
@@ -1891,7 +1954,7 @@ class KucoinFetcher(BaseFetcher):
         now_ms = self._now_func()
         until_ts = int(until_ms) if until_ms is not None else now_ms + 3_600_000
         since_ts = int(since_ms) if since_ms is not None else until_ts - 24 * 60 * 60 * 1000
-        week_buffer_ms = int(7 * 24 * 60 * 60 * 1000 * 0.99)
+        buffer_ms = int(24 * 60 * 60 * 1000 * 0.99)
         limit = min(self.trade_limit, 1000)
 
         collected: Dict[str, Dict[str, object]] = {}
@@ -1902,17 +1965,23 @@ class KucoinFetcher(BaseFetcher):
 
         while start_at < until_ts and fetch_count < max_fetches:
             fetch_count += 1
-            end_at = min(start_at + week_buffer_ms, until_ts)
+            end_at = min(start_at + buffer_ms, until_ts)
             params: Dict[str, object] = {"startAt": int(start_at), "endAt": int(end_at), "limit": limit}
-            key = _check_pagination_progress(
-                prev_params, dict(params, _page=fetch_count), "KucoinFetcher._fetch_trades"
-            )
+            key = _check_pagination_progress(prev_params, dict(params), "KucoinFetcher._fetch_trades")
             if key is None:
                 break
             prev_params = key
             batch = await self.api.fetch_my_trades(params=params)
+            if fetch_count > 1:
+                logger.info(
+                    "KucoinFetcher._fetch_trades: fetch #%d startAt=%s endAt=%s size=%d",
+                    fetch_count,
+                    _format_ms(params["startAt"]),
+                    _format_ms(params["endAt"]),
+                    len(batch) if batch else 0,
+                )
             if not batch:
-                start_at += week_buffer_ms
+                start_at += buffer_ms
                 continue
 
             batch_sorted = sorted(batch, key=lambda x: x.get("timestamp", 0))
@@ -1921,10 +1990,14 @@ class KucoinFetcher(BaseFetcher):
                 ts = event["timestamp"]
                 if ts < since_ts or ts > until_ts:
                     continue
-                key = (event.get("id") or "", event.get("order") or "")
+                key = (event.get("id") or "", event.get("order_id") or "")
                 collected[key] = event
 
-            start_at = int(batch_sorted[-1].get("timestamp", start_at))
+            last_ts = int(batch_sorted[-1].get("timestamp", start_at))
+            if last_ts <= start_at:
+                start_at = start_at + buffer_ms
+            else:
+                start_at = last_ts + 1
 
         if fetch_count >= max_fetches:
             logger.warning("KucoinFetcher._fetch_trades: reached pagination cap (%d)", max_fetches)
@@ -1934,24 +2007,53 @@ class KucoinFetcher(BaseFetcher):
     async def _fetch_positions_history(
         self, start_ms: int, end_ms: int
     ) -> List[Dict[str, object]]:
-        params: Dict[str, object] = {"until": int(end_ms)}
-        results: List[Dict[str, object]] = []
-        day_ms = 86_400_000
+        results: Dict[str, Dict[str, object]] = {}
         max_fetches = 400
         fetch_count = 0
-        while True:
+        buffer_ms = int(24 * 60 * 60 * 1000 * 0.99)
+        limit = 200
+        now_ms = self._now_func()
+        until_ts = int(end_ms) if end_ms is not None else now_ms + 3_600_000
+        since_ts = int(start_ms) if start_ms is not None else until_ts - 24 * 60 * 60 * 1000
+
+        start_at = since_ts
+        prev_params = None
+        while start_at < until_ts and fetch_count < max_fetches:
+            end_at = min(start_at + buffer_ms, until_ts)
+            params: Dict[str, object] = {"from": int(start_at), "to": int(end_at), "limit": limit}
+            key = _check_pagination_progress(
+                prev_params, dict(params), "KucoinFetcher._fetch_positions_history"
+            )
+            if key is None:
+                break
+            prev_params = key
             fetch_count += 1
             batch = await self.api.fetch_positions_history(params=params)
-            batch = sorted(batch, key=lambda x: x.get("lastUpdateTimestamp", 0))
-            results = batch + results
+            if fetch_count > 1:
+                logger.info(
+                    "KucoinFetcher._fetch_positions_history: fetch #%d from=%s to=%s size=%d",
+                    fetch_count,
+                    _format_ms(params.get("from")),
+                    _format_ms(params.get("to")),
+                    len(batch) if batch else 0,
+                )
             if not batch:
-                new_until = params["until"] - day_ms
+                start_at += buffer_ms
+                continue
+            batch_sorted = sorted(batch, key=lambda x: x.get("lastUpdateTimestamp", 0))
+            for pos in batch_sorted:
+                close_id = str(pos.get("info", {}).get("closeId") or pos.get("id") or "")
+                results[close_id] = pos
+            last_ts = int(batch_sorted[-1].get("lastUpdateTimestamp", end_at))
+            if last_ts <= start_at:
+                start_at += buffer_ms
             else:
-                new_until = batch[0].get("lastUpdateTimestamp", params["until"]) - 1
-            if new_until <= start_ms or fetch_count >= max_fetches:
-                break
-            params["until"] = new_until
-        return results
+                start_at = last_ts + 1
+
+        if fetch_count >= max_fetches:
+            logger.warning("KucoinFetcher._fetch_positions_history: reached pagination cap (%d)", max_fetches)
+
+        return sorted(results.values(), key=lambda x: x.get("lastUpdateTimestamp", 0))
 
     def _match_pnls(
         self,
@@ -1985,9 +2087,22 @@ class KucoinFetcher(BaseFetcher):
     def _normalize_trade(trade: Dict[str, object]) -> Dict[str, object]:
         info = trade.get("info", {}) or {}
         trade_id = str(trade.get("id") or info.get("tradeId") or info.get("id") or "")
-        order_id = str(trade.get("orderId") or info.get("orderId") or info.get("order") or "")
-        timestamp = int(trade.get("timestamp") or info.get("time") or info.get("ts") or 0)
-        symbol = str(trade.get("symbol") or info.get("symbol") or "")
+        order_id = str(trade.get("order") or info.get("orderId") or "")
+        ts_raw = (
+            info.get("tradeTime")
+            or trade.get("timestamp")
+            or info.get("createdAt")
+            or info.get("updatedTime")
+            or 0
+        )
+        try:
+            timestamp = int(ensure_millis(float(ts_raw)))
+        except Exception:
+            try:
+                timestamp = int(float(ts_raw))
+            except Exception:
+                timestamp = 0
+        symbol = str(trade.get("symbol") or "")
         side = str(trade.get("side") or info.get("side") or "").lower()
         qty = abs(float(trade.get("amount") or info.get("size") or info.get("amount") or 0.0))
         price = float(trade.get("price") or info.get("price") or 0.0)
@@ -2021,57 +2136,72 @@ class KucoinFetcher(BaseFetcher):
             return "long" if close_fee_pay != 0.0 or reduce_only else "short"
         return "long"
 
-    def _normalize_trade(self, trade: Dict[str, object]) -> Dict[str, object]:
-        info = trade.get("info", {}) or {}
-        trade_id = str(trade.get("id") or info.get("tid") or info.get("hash") or info.get("oid"))
-        order_id = str(trade.get("order") or info.get("oid") or "")
-        timestamp = int(
-            trade.get("timestamp")
-            or info.get("time")
-            or info.get("updatedTime")
-            or info.get("tradeTime")
-            or 0
-        )
-        symbol_raw = trade.get("symbol") or info.get("symbol") or info.get("coin")
-        if self._symbol_resolver:
-            try:
-                symbol = self._symbol_resolver(symbol_raw)
-            except Exception:
-                symbol = str(symbol_raw) if symbol_raw is not None else ""
-        else:
-            symbol = str(symbol_raw) if symbol_raw is not None else ""
-        side = str(trade.get("side") or info.get("side", "")).lower()
-        qty = abs(float(trade.get("amount") or info.get("sz") or 0.0))
-        price = float(trade.get("price") or info.get("px") or 0.0)
-        pnl = float(trade.get("pnl") or info.get("closedPnl") or 0.0)
-        fee = trade.get("fee") or {
-            "currency": info.get("feeToken"),
-            "cost": info.get("fee"),
-        }
-        client_order_id = trade.get("clientOrderId") or info.get("cloid") or info.get("clOrdId") or ""
-        direction = str(info.get("dir", "")).lower()
-        if "short" in direction:
-            position_side = "short"
-        elif "long" in direction:
-            position_side = "long"
-        else:
-            position_side = "long" if side == "buy" else "short"
+    async def _enrich_with_order_details_bulk(
+        self, events: List[Dict[str, object]], detail_cache: Dict[str, Tuple[str, str]]
+    ) -> None:
+        if events is None:
+            return
+        detail_cache = detail_cache or {}
+        tasks: List[asyncio.Task[Optional[Tuple[str, str]]]] = []
+        pending: List[Tuple[Dict[str, object], str]] = []
+        for ev in events:
+            cached = detail_cache.get(ev.get("id"))
+            if cached:
+                ev["client_order_id"], ev["pb_order_type"] = cached
+            has_client = bool(ev.get("client_order_id"))
+            has_type = bool(ev.get("pb_order_type")) and ev["pb_order_type"] != "unknown"
+            if has_client and has_type:
+                continue
+            order_id = ev.get("order_id")
+            symbol = ev.get("symbol")
+            if not order_id:
+                ev.setdefault("pb_order_type", "unknown")
+                continue
+            pending.append((ev, ev.get("id")))
+            tasks.append(asyncio.create_task(self._enrich_with_order_details(order_id, symbol)))
 
-        return {
-            "id": trade_id,
-            "order_id": order_id,
-            "timestamp": timestamp,
-            "datetime": ts_to_date(timestamp) if timestamp else "",
-            "symbol": symbol,
-            "side": side,
-            "qty": qty,
-            "price": price,
-            "pnl": pnl,
-            "fees": fee,
-            "pb_order_type": "",
-            "position_side": position_side,
-            "client_order_id": str(client_order_id or ""),
-        }
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for (ev, ev_id), res in zip(pending, results):
+                if isinstance(res, Exception) or res is None:
+                    ev.setdefault("pb_order_type", ev.get("pb_order_type") or "unknown")
+                    continue
+                client_oid, pb_type = res
+                ev["client_order_id"] = client_oid or ev.get("client_order_id") or ""
+                ev["pb_order_type"] = pb_type or "unknown"
+                if ev_id:
+                    detail_cache[ev_id] = (ev["client_order_id"], ev["pb_order_type"])
+        for ev in events:
+            if not ev.get("pb_order_type"):
+                ev["pb_order_type"] = "unknown"
+
+    async def _enrich_with_order_details(
+        self, order_id: Optional[str], symbol: Optional[str]
+    ) -> Optional[Tuple[str, str]]:
+        if not order_id:
+            return None
+        try:
+            detail = await self.api.fetch_order(order_id, symbol)
+        except Exception as exc:  # pragma: no cover - live API dependent
+            logger.debug(
+                "KucoinFetcher._enrich_with_order_details: fetch_order failed for %s (%s)",
+                order_id,
+                exc,
+            )
+            return None
+        info = detail.get("info") if isinstance(detail, dict) else detail
+        if not isinstance(info, dict):
+            return None
+        client_oid = (
+            detail.get("clientOrderId")
+            or info.get("clientOrderId")
+            or info.get("clientOid")
+            or info.get("clientOid")
+        )
+        if not client_oid:
+            return None
+        client_oid = str(client_oid)
+        return client_oid, custom_id_to_snake(client_oid)
 
 
 # ---------------------------------------------------------------------------
