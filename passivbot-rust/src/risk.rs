@@ -543,6 +543,7 @@ pub struct TwelEnforcerInputPosition {
     pub qty_step: f64,
     pub price_step: f64,
     pub min_qty: f64,
+    pub min_cost: f64,
 }
 
 pub fn calc_twel_enforcer_actions(
@@ -576,6 +577,7 @@ pub fn calc_twel_enforcer_actions(
         qty_step: f64,
         price_step: f64,
         min_qty: f64,
+        min_cost: f64,
         c_mult: f64,
         price_diff: f64,
         psize_to_close: f64,
@@ -634,6 +636,14 @@ pub fn calc_twel_enforcer_actions(
             );
             continue;
         }
+        if pos.min_cost < 0.0 || !pos.min_cost.is_finite() {
+            log::error!(
+                "TWEL enforcer input rejected: idx={} invalid min_cost {}",
+                pos.idx,
+                pos.min_cost
+            );
+            continue;
+        }
         let exposure = calc_wallet_exposure(pos.c_mult, balance, abs_psize, pos.position_price);
         if !exposure.is_finite() {
             log::error!(
@@ -680,6 +690,7 @@ pub fn calc_twel_enforcer_actions(
             qty_step: pos.qty_step,
             price_step: pos.price_step,
             min_qty: pos.min_qty.max(0.0),
+            min_cost: pos.min_cost.max(0.0),
             c_mult: pos.c_mult,
             price_diff,
             psize_to_close: 0.0,
@@ -853,9 +864,24 @@ pub fn calc_twel_enforcer_actions(
             }
             _ => price,
         };
+        let exchange_params = ExchangeParams {
+            qty_step: candidate.qty_step,
+            price_step: candidate.price_step,
+            min_qty: candidate.min_qty,
+            min_cost: candidate.min_cost,
+            c_mult: candidate.c_mult,
+        };
+        let min_entry_qty = calc_min_entry_qty(price, &exchange_params);
+        let mut abs_qty = qty_to_close
+            .max(min_entry_qty)
+            .min(candidate.initial_abs_psize);
+        abs_qty = round_up(abs_qty, candidate.qty_step);
+        if abs_qty < min_entry_qty - qty_tolerance {
+            continue;
+        }
         let qty = match pside {
-            LONG => -qty_to_close,
-            SHORT => qty_to_close,
+            LONG => -abs_qty,
+            SHORT => abs_qty,
             _ => 0.0,
         };
         if qty.abs() <= qty_tolerance {
@@ -903,6 +929,7 @@ mod tests {
         qty_step: f64,
         price_step: f64,
         min_qty: f64,
+        min_cost: f64,
     ) -> TwelEnforcerInputPosition {
         TwelEnforcerInputPosition {
             idx,
@@ -914,6 +941,7 @@ mod tests {
             qty_step,
             price_step,
             min_qty,
+            min_cost,
         }
     }
 
@@ -961,8 +989,8 @@ mod tests {
                              // Position B: psize 12 at 50 => WE = 0.6
                              // Total 1.0 > twel 0.9; need reduce 0.1 exposure strictly below
         let positions = vec![
-            pos(0, 8.0, 50.0, 50.0, wel_base, 1.0, 0.1, 0.1, 0.1),
-            pos(1, 12.0, 50.0, 49.0, wel_base, 1.0, 0.1, 0.1, 0.1),
+            pos(0, 8.0, 50.0, 50.0, wel_base, 1.0, 0.1, 0.1, 0.1, 0.0),
+            pos(1, 12.0, 50.0, 49.0, wel_base, 1.0, 0.1, 0.1, 0.1, 0.0),
         ];
         let actions =
             calc_twel_enforcer_actions(LONG, threshold, twel, 2, balance, &positions, None);
@@ -1007,8 +1035,8 @@ mod tests {
         let balance = 1000.0;
         let twel = 0.4;
         let positions = vec![
-            pos(0, 4.0, 50.0, 50.0, 0.2, 1.0, 0.1, 0.1, 0.1),
-            pos(1, 12.0, 50.0, 48.0, 0.2, 1.0, 0.1, 0.1, 0.1),
+            pos(0, 4.0, 50.0, 50.0, 0.2, 1.0, 0.1, 0.1, 0.1, 0.0),
+            pos(1, 12.0, 50.0, 48.0, 0.2, 1.0, 0.1, 0.1, 0.1, 0.0),
         ];
         let actions = calc_twel_enforcer_actions(LONG, 1.0, twel, 2, balance, &positions, None);
         assert!(
@@ -1052,9 +1080,9 @@ mod tests {
         let twel = 1.2;
         let positions = vec![
             // idx 0: position_price 100, market 60 (underwater, large diff)
-            pos(0, 8.0, 100.0, 60.0, wel_base, 1.0, 0.1, 0.1, 0.1),
+            pos(0, 8.0, 100.0, 60.0, wel_base, 1.0, 0.1, 0.1, 0.1, 0.0),
             // idx 1: position_price 100, market 99 (near breakeven, small diff)
-            pos(1, 7.5, 100.0, 99.0, wel_base, 1.0, 0.1, 0.1, 0.1),
+            pos(1, 7.5, 100.0, 99.0, wel_base, 1.0, 0.1, 0.1, 0.1, 0.0),
         ];
         let actions = calc_twel_enforcer_actions(LONG, 1.0, twel, 2, balance, &positions, None);
         assert!(!actions.is_empty());

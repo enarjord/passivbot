@@ -117,6 +117,7 @@ def test_calc_twel_enforcer_orders_quantizes_results():
             "qty_step": 0.1,
             "price_step": 0.0005,
             "min_qty": 0.0,
+            "min_cost": 0.0,
         }
     ]
     actions = pbr.calc_twel_enforcer_orders_py(

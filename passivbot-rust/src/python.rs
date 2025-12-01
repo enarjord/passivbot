@@ -1793,6 +1793,10 @@ pub fn calc_twel_enforcer_orders_py(
                 .get_item("min_qty")?
                 .ok_or_else(|| PyValueError::new_err("twel enforcer position missing 'min_qty'"))?
                 .extract::<f64>()?,
+            min_cost: dict
+                .get_item("min_cost")?
+                .ok_or_else(|| PyValueError::new_err("twel enforcer position missing 'min_cost'"))?
+                .extract::<f64>()?,
         });
     }
 

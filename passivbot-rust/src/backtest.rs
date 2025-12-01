@@ -1760,6 +1760,7 @@ impl<'a> Backtest<'a> {
                             qty_step: self.exchange_params_list[idx].qty_step,
                             price_step: self.exchange_params_list[idx].price_step,
                             min_qty: self.exchange_params_list[idx].min_qty,
+                            min_cost: self.exchange_params_list[idx].min_cost,
                         });
                     }
                 }
@@ -1806,6 +1807,7 @@ impl<'a> Backtest<'a> {
                             qty_step: self.exchange_params_list[idx].qty_step,
                             price_step: self.exchange_params_list[idx].price_step,
                             min_qty: self.exchange_params_list[idx].min_qty,
+                            min_cost: self.exchange_params_list[idx].min_cost,
                         });
                     }
                 }

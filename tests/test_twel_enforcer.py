@@ -46,6 +46,7 @@ def test_twel_reduces_most_profitable_long_first():
             "qty_step": 0.1,
             "price_step": 0.1,
             "min_qty": 0.0,
+            "min_cost": 0.0,
         },
         {
             "idx": 1,
@@ -57,6 +58,7 @@ def test_twel_reduces_most_profitable_long_first():
             "qty_step": 0.1,
             "price_step": 0.1,
             "min_qty": 0.0,
+            "min_cost": 0.0,
         },
     ]
 
@@ -93,6 +95,7 @@ def test_twel_reduces_most_profitable_short_first():
             "qty_step": 0.1,
             "price_step": 0.1,
             "min_qty": 0.0,
+            "min_cost": 0.0,
         },
         {
             "idx": 1,
@@ -104,6 +107,7 @@ def test_twel_reduces_most_profitable_short_first():
             "qty_step": 0.1,
             "price_step": 0.1,
             "min_qty": 0.0,
+            "min_cost": 0.0,
         },
     ]
 
