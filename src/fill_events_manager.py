@@ -78,6 +78,204 @@ def _merge_fee_lists(
     return [dict(value) for value in merged.values()]
 
 
+def _fee_cost(fees: Optional[Sequence]) -> float:
+    """Sum fee costs defensively, tolerating missing/partial structures."""
+    total = 0.0
+    if not fees:
+        return total
+    items: Sequence
+    if isinstance(fees, dict):
+        items = [fees]
+    else:
+        try:
+            items = list(fees)
+        except Exception:
+            return total
+    for entry in items:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            total += float(entry.get("cost", 0.0))
+        except Exception:
+            continue
+    return total
+
+
+def ensure_qty_signage(events: List[Dict[str, object]]) -> None:
+    """Normalize qty sign convention: buys positive, sells negative."""
+    for ev in events:
+        side = str(ev.get("side") or "").lower()
+        qty = float(ev.get("qty") or ev.get("amount") or 0.0)
+        if qty == 0.0:
+            continue
+        if side == "buy" and qty < 0:
+            ev["qty"] = abs(qty)
+        elif side == "sell" and qty > 0:
+            ev["qty"] = -abs(qty)
+
+
+def annotate_positions_inplace(
+    events: List[Dict[str, object]],
+    state: Optional[Dict[Tuple[str, str], Tuple[float, float]]] = None,
+    *,
+    recompute_pnl: bool = False,
+) -> Dict[Tuple[str, str], Tuple[float, float]]:
+    """
+    Given a list of events (expected in chronological order), compute position
+    size (psize) and vwap (pprice) per (symbol, position_side) after each fill.
+    Qty sign is assumed already normalized (buy +, sell -).
+    If recompute_pnl is True, realized PnL is recomputed per fill from positions.
+    """
+    positions: Dict[Tuple[str, str], Tuple[float, float]] = state or {}
+    grouped: Dict[Tuple[str, str], List[Dict[str, object]]] = defaultdict(list)
+    for ev in events:
+        key = (
+            str(ev.get("symbol") or ""),
+            str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+        )
+        grouped[key].append(ev)
+
+    def _add_reduce(pos_side: str, qty_signed: float) -> Tuple[float, float]:
+        if pos_side == "short":
+            add_amt = max(-qty_signed, 0.0)  # sells are negative -> add
+            reduce_amt = max(qty_signed, 0.0)  # buys positive -> reduce short
+        else:
+            add_amt = max(qty_signed, 0.0)  # buys add to long
+            reduce_amt = max(-qty_signed, 0.0)  # sells reduce long
+        return add_amt, reduce_amt
+
+    for key, evs in grouped.items():
+        # sort by time to ensure chronological
+        evs.sort(key=lambda x: x.get("timestamp", 0))
+        # First forward pass: get tentative sizes with clamping to zero
+        forward_sizes: List[float] = []
+        pos_size = positions.get(key, (0.0, 0.0))[0]
+        for ev in evs:
+            qty_signed = float(ev.get("qty") or ev.get("amount") or 0.0) * float(
+                ev.get("c_mult", 1.0) or 1.0
+            )
+            add_amt, reduce_amt = _add_reduce(key[1], qty_signed)
+            pos_size = max(pos_size + add_amt - reduce_amt, 0.0)
+            forward_sizes.append(pos_size)
+        # Backward pass: reconcile sizes starting from final
+        reconciled_sizes: List[float] = [0.0] * len(evs)
+        current = forward_sizes[-1] if forward_sizes else 0.0
+        for idx in range(len(evs) - 1, -1, -1):
+            ev = evs[idx]
+            qty_signed = float(ev.get("qty") or ev.get("amount") or 0.0) * float(
+                ev.get("c_mult", 1.0) or 1.0
+            )
+            add_amt, reduce_amt = _add_reduce(key[1], qty_signed)
+            before = max(current - add_amt + reduce_amt, 0.0)
+            reconciled_sizes[idx] = current
+            current = before
+
+        # Final forward pass to compute pprice with reconciled sizes
+        pos_size = positions.get(key, (0.0, 0.0))[0]
+        vwap = positions.get(key, (0.0, 0.0))[1]
+        for ev, after_size in zip(evs, reconciled_sizes):
+            qty_signed = float(ev.get("qty") or ev.get("amount") or 0.0) * float(
+                ev.get("c_mult", 1.0) or 1.0
+            )
+            price = float(ev.get("price") or 0.0)
+            add_amt, reduce_amt = _add_reduce(key[1], qty_signed)
+            before_size = max(after_size - add_amt + reduce_amt, 0.0)
+            if recompute_pnl:
+                realized = 0.0
+                if reduce_amt > 0 and before_size > 0 and price > 0 and vwap >= 0:
+                    close_qty = min(before_size, reduce_amt)
+                    if key[1] == "short":
+                        realized = (vwap - price) * close_qty
+                    else:
+                        realized = (price - vwap) * close_qty
+                    ev["pnl"] = realized - _fee_cost(ev.get("fees"))
+            if add_amt > 0:
+                if before_size <= 0:
+                    vwap = price
+                else:
+                    vwap = ((before_size * vwap) + (add_amt * price)) / max(before_size + add_amt, 1e-12)
+            if after_size <= 1e-12:
+                vwap = 0.0
+            ev["psize"] = round(after_size, 12)
+            ev["pprice"] = vwap
+            pos_size, _ = positions.get(key, (0.0, 0.0))
+        positions[key] = (reconciled_sizes[-1] if reconciled_sizes else pos_size, vwap)
+
+    return positions
+
+
+def compute_realized_pnls_from_trades(
+    trades: List[Dict[str, object]]
+) -> Tuple[Dict[str, float], Dict[Tuple[str, str], Tuple[float, float]]]:
+    """
+    Compute realized PnL per trade by reconstructing positions from fills.
+
+    Tracks positions separately per (symbol, position_side) so hedged longs/shorts
+    do not interfere. Position_size is always kept as a positive magnitude for the
+    given side; reductions trigger realized PnL.
+
+    Returns:
+        per_trade_pnl: mapping trade_id -> realized pnl (gross, without fees)
+        final_positions: mapping (symbol, position_side) -> (pos_size, vwap)
+    """
+    per_trade: Dict[str, float] = {}
+    positions: Dict[Tuple[str, str], Tuple[float, float]] = {}
+
+    for trade in sorted(trades, key=lambda x: x.get("timestamp", 0)):
+        trade_id = str(trade.get("id") or "")
+        if not trade_id:
+            continue
+        symbol = str(trade.get("symbol") or "")
+        side = str(trade.get("side") or "").lower()
+        pos_side = str(trade.get("position_side") or trade.get("pside") or "long").lower()
+        qty = abs(float(trade.get("qty") or trade.get("amount") or 0.0))
+        price = float(trade.get("price") or 0.0)
+        if qty <= 0 or price <= 0 or not symbol:
+            per_trade[trade_id] = 0.0
+            continue
+
+        key = (symbol, pos_side)
+        pos_size, vwap = positions.get(key, (0.0, 0.0))
+
+        # Determine whether this trade adds or reduces for this side
+        if pos_side == "short":
+            adds = side == "sell"
+        else:  # long or unknown
+            adds = side == "buy"
+
+        realized = 0.0
+        if not adds:
+            # reducing position
+            if pos_size > 0:
+                closing_qty = min(pos_size, qty)
+                if pos_side == "short":
+                    realized += (vwap - price) * closing_qty
+                else:
+                    realized += (price - vwap) * closing_qty
+                pos_size -= closing_qty
+                if pos_size < 1e-12:
+                    pos_size = 0.0
+                    vwap = 0.0
+                leftover = qty - closing_qty
+                if leftover > 0:
+                    # trade overshoots and becomes a new position in trade direction
+                    pos_size = leftover
+                    vwap = price
+        else:
+            # adding to position
+            new_size = pos_size + qty
+            if pos_size == 0.0:
+                vwap = price
+            else:
+                vwap = ((pos_size * vwap) + (qty * price)) / (pos_size + qty)
+            pos_size = new_size
+
+        positions[key] = (pos_size, vwap)
+        per_trade[trade_id] = realized
+
+    return per_trade, positions
+
+
 def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]:
     """Group events sharing timestamp/symbol/pb_type/side/position."""
     aggregated: Dict[Tuple, Dict[str, object]] = {}
@@ -166,6 +364,9 @@ class FillEvent:
     pb_order_type: str
     position_side: str
     client_order_id: str
+    psize: float = 0.0
+    pprice: float = 0.0
+    raw: Dict[str, object] = None
 
     @property
     def key(self) -> str:
@@ -185,6 +386,9 @@ class FillEvent:
             "pb_order_type": self.pb_order_type,
             "position_side": self.position_side,
             "client_order_id": self.client_order_id,
+            "psize": self.psize,
+            "pprice": self.pprice,
+            "raw": self.raw if self.raw is not None else {},
         }
 
     @classmethod
@@ -217,6 +421,9 @@ class FillEvent:
             pb_order_type=str(data["pb_order_type"]),
             position_side=str(data["position_side"]).lower(),
             client_order_id=str(data["client_order_id"]),
+            psize=float(data.get("psize", 0.0)),
+            pprice=float(data.get("pprice", 0.0)),
+            raw=dict(data.get("raw") or {}),
         )
 
 
@@ -1086,10 +1293,19 @@ class FillEventsManager:
             if self._loaded:
                 return
             cached = self.cache.load()
-            self._events = list(cached)
+            filtered = []
+            dropped = 0
+            for ev in cached:
+                raw_field = getattr(ev, "raw", None)
+                if raw_field is None:
+                    dropped += 1
+                    continue
+                filtered.append(ev)
+            self._events = filtered
             logger.info(
-                "FillEventsManager.ensure_loaded: loaded %d cached events",
+                "FillEventsManager.ensure_loaded: loaded %d cached events (dropped %d without raw)",
                 len(self._events),
+                dropped,
             )
             self._loaded = True
 
@@ -1115,8 +1331,10 @@ class FillEventsManager:
         added_ids: set[str] = set()
 
         def handle_batch(batch: List[Dict[str, object]]) -> None:
+            ensure_qty_signage(batch)
             days_touched: set[str] = set()
             for raw in batch:
+                raw.setdefault("raw", {})
                 try:
                     event = FillEvent.from_dict(raw)
                 except ValueError as exc:
@@ -1182,8 +1400,7 @@ class FillEventsManager:
 
         if not self._events:
             logger.info("FillEventsManager.refresh_range: cache empty, refreshing entire interval")
-            for day_start, day_end in self._split_by_day(start_ms, end_ms):
-                await self.refresh(start_ms=day_start, end_ms=day_end)
+            await self.refresh(start_ms=start_ms, end_ms=end_ms)
             await self.refresh_latest(overlap=overlap)
             return
 
@@ -1214,26 +1431,9 @@ class FillEventsManager:
             logger.info("FillEventsManager.refresh_range: no gaps detected in requested interval")
 
         for start, end in merged:
-            for day_start, day_end in self._split_by_day(start, end):
-                await self.refresh(start_ms=day_start, end_ms=day_end)
+            await self.refresh(start_ms=start, end_ms=end)
 
         await self.refresh_latest(overlap=overlap)
-
-    @staticmethod
-    def _split_by_day(start_ms: int, end_ms: Optional[int]) -> List[Tuple[int, Optional[int]]]:
-        """Split an interval into day-sized chunks [inclusive, exclusive) for safer flushing."""
-        if end_ms is None or end_ms <= start_ms:
-            return [(start_ms, end_ms)]
-        chunks: List[Tuple[int, int]] = []
-        day_ms = 24 * 60 * 60 * 1000
-        cur = start_ms
-        while cur < end_ms:
-            day_start = (cur // day_ms) * day_ms
-            day_end = day_start + day_ms
-            chunk_end = min(day_end, end_ms)
-            chunks.append((cur, chunk_end))
-            cur = chunk_end
-        return chunks
 
     def get_events(
         self,
@@ -1248,7 +1448,11 @@ class FillEventsManager:
             events = [ev for ev in events if ev.timestamp <= end_ms]
         if symbol:
             events = [ev for ev in events if ev.symbol == symbol]
-        return list(events)
+        # Annotate positions on a copy so cache on disk remains untouched
+        payload = [ev.to_dict() for ev in events]
+        ensure_qty_signage(payload)
+        annotate_positions_inplace(payload, recompute_pnl=(self.exchange.lower() == "kucoin"))
+        return [FillEvent.from_dict(ev) for ev in payload]
 
     def get_pnl_sum(
         self,
@@ -1745,6 +1949,7 @@ class HyperliquidFetcher(BaseFetcher):
 
         events = sorted(collected.values(), key=lambda ev: ev["timestamp"])
         events = _coalesce_events(events)
+        annotate_positions_inplace(events)
 
         for event in events:
             cache_entry = detail_cache.get(event["id"])
@@ -1761,6 +1966,50 @@ class HyperliquidFetcher(BaseFetcher):
             on_batch(events)
 
         return events
+
+    @staticmethod
+    def _normalize_trade(trade: Dict[str, object]) -> Dict[str, object]:
+        info = trade.get("info", {}) or {}
+        trade_id = str(trade.get("id") or info.get("hash") or info.get("tid") or "")
+        order_id = str(trade.get("order") or info.get("oid") or "")
+        timestamp = int(
+            trade.get("timestamp")
+            or info.get("time")
+            or info.get("tradeTime")
+            or info.get("updatedTime")
+            or 0
+        )
+        symbol_raw = trade.get("symbol") or info.get("symbol") or info.get("coin")
+        side = str(trade.get("side") or info.get("side") or "").lower()
+        qty = abs(float(trade.get("amount") or info.get("sz") or 0.0))
+        price = float(trade.get("price") or info.get("px") or 0.0)
+        pnl = float(trade.get("pnl") or info.get("closedPnl") or 0.0)
+        fee = trade.get("fee") or {"currency": info.get("feeToken"), "cost": info.get("fee")}
+        client_order_id = trade.get("clientOrderId") or info.get("cloid") or info.get("clOrdId") or ""
+        direction = str(info.get("dir", "")).lower()
+        if "short" in direction:
+            position_side = "short"
+        elif "long" in direction:
+            position_side = "long"
+        else:
+            position_side = "long" if side == "buy" else "short"
+        return {
+            "id": trade_id,
+            "order_id": order_id,
+            "timestamp": timestamp,
+            "datetime": ts_to_date(timestamp) if timestamp else "",
+            "symbol": str(symbol_raw or ""),
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "pnl": pnl,
+            "fees": fee,
+            "pb_order_type": "",
+            "position_side": position_side,
+            "client_order_id": str(client_order_id or ""),
+            "raw": {"my_trade": trade, "info": info},
+            "c_mult": float(info.get("contractMultiplier") or info.get("multiplier") or 1.0),
+        }
 
 
 class GateioFetcher(BaseFetcher):
@@ -1928,19 +2177,29 @@ class KucoinFetcher(BaseFetcher):
         if not trades:
             return []
 
+        # Compute local realized PnL from trades (gross), subtract fees when available
+        local_pnls, _ = compute_realized_pnls_from_trades(trades)
+
         closes = [
             t
             for t in trades
             if (t["side"] == "sell" and t["position_side"] == "long")
             or (t["side"] == "buy" and t["position_side"] == "short")
         ]
-        events: Dict[str, Dict[str, object]] = {t["id"]: dict(t) for t in trades}
+        events: Dict[str, Dict[str, object]] = {}
+        for t in trades:
+            ev = dict(t)
+            fee_cost = _fee_cost(ev.get("fees"))
+            ev["pnl"] = local_pnls.get(ev["id"], 0.0) - fee_cost
+            events[ev["id"]] = ev
+
         if closes:
             ph = await self._fetch_positions_history(
                 start_ms=closes[0]["timestamp"] - 60_000,
                 end_ms=closes[-1]["timestamp"] + 60_000,
             )
             self._match_pnls(closes, ph, events)
+            self._log_discrepancies(local_pnls, ph)
 
         ordered = sorted(events.values(), key=lambda ev: ev["timestamp"])
         await self._enrich_with_order_details_bulk(ordered, detail_cache)
@@ -2082,6 +2341,34 @@ class KucoinFetcher(BaseFetcher):
                 best = candidates[0]
                 events[best["id"]]["pnl"] = float(p.get("realizedPnl", 0.0))
                 seen_trade_ids.add(best["id"])
+
+    @staticmethod
+    def _log_discrepancies(
+        local_pnls: Dict[str, float], positions: List[Dict[str, object]]
+    ) -> None:
+        if not positions or not local_pnls:
+            return
+        # Aggregate by symbol for a rough reconciliation
+        pos_sum: Dict[str, float] = defaultdict(float)
+        for p in positions:
+            sym = p.get("symbol") or p.get("info", {}).get("symbol") or ""
+            if not sym:
+                continue
+            try:
+                pos_sum[sym] += float(p.get("realizedPnl", 0.0))
+            except Exception:
+                continue
+        if not pos_sum:
+            return
+        # Local aggregate by symbol inferred from trade ids is not available here; report global sums
+        local_total = sum(local_pnls.values())
+        remote_total = sum(pos_sum.values())
+        if abs(local_total - remote_total) > max(1e-8, 0.05 * (abs(remote_total) + 1e-8)):
+            logger.warning(
+                "KucoinFetcher: local PnL sum %.6f differs from positions_history sum %.6f",
+                local_total,
+                remote_total,
+            )
 
     @staticmethod
     def _normalize_trade(trade: Dict[str, object]) -> Dict[str, object]:
