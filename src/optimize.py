@@ -712,6 +712,7 @@ class Evaluator:
 
         shared_metric_weights = {
             "positions_held_per_day": 1.0,
+            "positions_held_per_day_w": 1.0,
             "position_held_hours_mean": 1.0,
             "position_held_hours_max": 1.0,
             "position_held_hours_median": 1.0,
