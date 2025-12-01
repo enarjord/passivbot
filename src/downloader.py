@@ -497,10 +497,6 @@ def ensure_millis_df(df):
 
     return df
 
-# Backward-compatible alias for tests expecting ensure_millis(df)
-def ensure_millis(df):
-    return ensure_millis_df(df)
-
 
 class OHLCVManager:
     """

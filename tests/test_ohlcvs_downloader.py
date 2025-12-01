@@ -46,7 +46,7 @@ def test_ensure_millis_seconds_to_ms():
             "volume": [1],
         }
     )
-    out = downloader.ensure_millis(df.copy())
+    out = downloader.ensure_millis_df(df.copy())
     assert out["timestamp"].iloc[0] == 1_600_000_000_000
 
 
@@ -61,7 +61,7 @@ def test_ensure_millis_micros_to_ms():
             "volume": [1],
         }
     )
-    out = downloader.ensure_millis(df.copy())
+    out = downloader.ensure_millis_df(df.copy())
     assert out["timestamp"].iloc[0] == 1_600_000_000_000
 
 
@@ -76,7 +76,7 @@ def test_ensure_millis_ms_unchanged():
             "volume": [1],
         }
     )
-    out = downloader.ensure_millis(df.copy())
+    out = downloader.ensure_millis_df(df.copy())
     assert out["timestamp"].iloc[0] == 1_600_000_000_000
 
 

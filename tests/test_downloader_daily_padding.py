@@ -39,7 +39,7 @@ def test_canonicalize_daily_ohlcvs_inserts_missing_minutes():
         ],
     )
 
-    canonical = dl.canonicalize_daily_ohlcvs(dl.ensure_millis(df), start_ts)
+    canonical = dl.canonicalize_daily_ohlcvs(dl.ensure_millis_df(df), start_ts)
 
     assert len(canonical) == 1440
     ts_missing = start_ts + 60_000
@@ -73,7 +73,7 @@ def test_dump_daily_ohlcv_data_writes_canonical(tmp_path):
     )
     out_path = tmp_path / "2024-02-02.npy"
 
-    dl.dump_daily_ohlcv_data(dl.ensure_millis(df), out_path, start_ts)
+    dl.dump_daily_ohlcv_data(dl.ensure_millis_df(df), out_path, start_ts)
 
     arr = np.load(out_path)
     assert arr.shape == (1440, 6)

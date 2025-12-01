@@ -1295,10 +1295,18 @@ class FillEventsManager:
             if self._loaded:
                 return
             cached = self.cache.load()
-            self._events = sorted(cached, key=lambda ev: ev.timestamp)
+            filtered = []
+            dropped = 0
+            for ev in cached:
+                if getattr(ev, "raw", None) is None:
+                    dropped += 1
+                    continue
+                filtered.append(ev)
+            self._events = sorted(filtered, key=lambda ev: ev.timestamp)
             logger.info(
-                "FillEventsManager.ensure_loaded: loaded %d cached events",
+                "FillEventsManager.ensure_loaded: loaded %d cached events (dropped %d without raw)",
                 len(self._events),
+                dropped,
             )
             self._loaded = True
 
