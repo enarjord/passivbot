@@ -3104,6 +3104,14 @@ class Passivbot:
 
     async def update_balance(self):
         """Fetch and apply the latest wallet balance."""
+        if not hasattr(self, "balance_override"):
+            self.balance_override = None
+        if not hasattr(self, "_balance_override_logged"):
+            self._balance_override_logged = False
+        if not hasattr(self, "previous_hysteresis_balance"):
+            self.previous_hysteresis_balance = None
+        if not hasattr(self, "balance_hysteresis_snap_pct"):
+            self.balance_hysteresis_snap_pct = 0.02
         try:
             if self.balance_override is not None:
                 balance = float(self.balance_override)

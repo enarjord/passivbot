@@ -125,24 +125,7 @@ def check_and_maybe_compile(
     stale = is_stale(compiled_mtime, source_mtime)
 
     if "passivbot_rust" in sys.modules:
-        if stale and fail_on_stale:
-            raise RuntimeError(
-                "passivbot_rust is already imported and stale; restart required (fail-on-stale)."
-            )
-        if stale or force:
-            # We can rebuild for future runs even though this process won't reload it.
-            print("Rust extension is stale but already imported; recompiling for future runs...")
-            if not acquire_lock():
-                raise RuntimeError("Failed to acquire Rust compile lock.")
-            try:
-                if not recompile_rust():
-                    raise RuntimeError("Rust compilation failed.")
-            finally:
-                release_lock()
-            print("Rust extension recompiled; restart this process to load the new binary.")
-        else:
-            print("passivbot_rust already imported; using existing binary.")
-        return
+        raise RuntimeError("passivbot_rust is already imported; restart required.")
 
     needs_compile = force or stale
     if fail_on_stale and stale:

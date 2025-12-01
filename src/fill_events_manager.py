@@ -1295,19 +1295,10 @@ class FillEventsManager:
             if self._loaded:
                 return
             cached = self.cache.load()
-            filtered = []
-            dropped = 0
-            for ev in cached:
-                raw_field = getattr(ev, "raw", None)
-                if raw_field is None:
-                    dropped += 1
-                    continue
-                filtered.append(ev)
-            self._events = filtered
+            self._events = sorted(cached, key=lambda ev: ev.timestamp)
             logger.info(
-                "FillEventsManager.ensure_loaded: loaded %d cached events (dropped %d without raw)",
+                "FillEventsManager.ensure_loaded: loaded %d cached events",
                 len(self._events),
-                dropped,
             )
             self._loaded = True
 
@@ -1409,6 +1400,7 @@ class FillEventsManager:
         events_sorted = self._events
         earliest = events_sorted[0].timestamp
         latest = events_sorted[-1].timestamp
+        gap_ms = max(1, int(gap_hours * 60.0 * 60.0 * 1000.0))
 
         # Fetch older data before earliest cached if requested
         if start_ms < earliest:
@@ -1416,8 +1408,21 @@ class FillEventsManager:
             if start_ms < upper:
                 intervals.append((start_ms, upper))
 
-        # Fetch newer data after latest cached if requested
-        if end_ms is not None and end_ms > latest:
+        # Detect large gaps in cached data
+        prev_ts = earliest
+        for ev in events_sorted[1:]:
+            cur_ts = ev.timestamp
+            if end_ms is not None and cur_ts > end_ms:
+                break
+            if cur_ts - prev_ts >= gap_ms:
+                gap_start = max(prev_ts, start_ms)
+                if gap_start < (end_ms if end_ms is not None else cur_ts):
+                    intervals.append((gap_start, end_ms))
+                break
+            prev_ts = cur_ts
+
+        # Fetch newer data after latest cached if requested (if not already covered)
+        if end_ms is not None and end_ms > latest and (not intervals or intervals[-1][1] != end_ms):
             lower = max(latest, start_ms)
             if lower < end_ms:
                 intervals.append((lower, end_ms))
@@ -1492,9 +1497,8 @@ class FillEventsManager:
     ) -> Dict[str, float]:
         positions: Dict[str, float] = dict(current_positions or {})
         for ev in self._events:
-            sign = 1 if ev.side == "buy" else -1
             key = f"{ev.symbol}:{ev.position_side}"
-            positions[key] = positions.get(key, 0.0) + sign * ev.qty
+            positions[key] = positions.get(key, 0.0) + ev.qty
         return positions
 
     def reconstruct_equity_curve(self, starting_equity: float = 0.0) -> List[Tuple[int, float]]:
