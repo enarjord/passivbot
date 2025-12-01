@@ -1959,7 +1959,7 @@ class Passivbot:
         return
 
     async def handle_balance_update(self, source="REST"):
-        if not hasattr(self, '_previous_balance'):
+        if not hasattr(self, "_previous_balance"):
             self._previous_balance = 0.0
         if self.balance != self._previous_balance:
             try:
@@ -1973,7 +1973,6 @@ class Passivbot:
             finally:
                 self._previous_balance = self.balance
                 self.execution_scheduled = True
-                
 
     async def calc_upnl_sum(self):
         """Compute unrealised PnL across fetched positions using latest prices."""
@@ -3144,7 +3143,9 @@ class Passivbot:
     async def update_positions_and_balance(self):
         """Convenience helper to refresh both positions and balance concurrently."""
         balance_task = asyncio.create_task(self.update_balance())
-        positions_ok, fetched_positions_old, fetched_positions_new = await self._fetch_and_apply_positions()
+        positions_ok, fetched_positions_old, fetched_positions_new = (
+            await self._fetch_and_apply_positions()
+        )
         balance_ok = await balance_task
         if positions_ok and fetched_positions_old is not None:
             try:
@@ -4159,6 +4160,7 @@ class Passivbot:
                     "qty_step": float(self.qty_steps[symbol]),
                     "price_step": float(self.price_steps[symbol]),
                     "min_qty": float(self.min_qtys[symbol]),
+                    "min_cost": float(self.min_costs[symbol]),
                 }
             )
             symbol_idx_map[idx_counter] = symbol
@@ -4390,6 +4392,11 @@ class Passivbot:
                         f"log_range EMA: {completed}/{n} {pct}% elapsed={int(elapsed_s)}s eta~{eta_s}s"
                     )
                     last_log_ms = now_ms
+        if out:
+            top_n = min(8, len(out))
+            top = sorted(out.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+            summary = ", ".join(f"{sym}={val:.6f}" for sym, val in top)
+            logging.info(f"log_range EMA span {span} top{top_n}: {summary}")
         return out
 
     async def calc_volumes(
@@ -4471,6 +4478,11 @@ class Passivbot:
                     elif log_level >= 3:
                         logging.debug(msg)
                     last_log_ms = now_ms
+        if out:
+            top_n = min(8, len(out))
+            top = sorted(out.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+            summary = ", ".join(f"{sym}={val:.2f}" for sym, val in top)
+            logging.info(f"volume EMA span {span} top{top_n}: {summary}")
         return out
 
     async def execute_multiple(self, orders: [dict], type_: str):

@@ -54,9 +54,7 @@ def test_override_file_not_found_yields_empty_override(tmp_path, monkeypatch):
     base_cfg = config_utils.get_template_config()
     base_cfg["live"]["user"] = "tester"
     base_cfg["live"]["base_config_path"] = str(tmp_path / "base.json")
-    base_cfg["coin_overrides"] = {
-        "DOGE": {"override_config_path": "overrides/missing.json"}
-    }
+    base_cfg["coin_overrides"] = {"DOGE": {"override_config_path": "overrides/missing.json"}}
     base_path = tmp_path / "base.json"
     _write_config(base_path, base_cfg)
 

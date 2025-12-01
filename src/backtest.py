@@ -6,7 +6,9 @@ from rust_utils import check_and_maybe_compile
 # Perform Rust compilation check before importing any modules that may load the extension
 _rust_parser = argparse.ArgumentParser(add_help=False)
 _rust_parser.add_argument("--skip-rust-compile", action="store_true", help="Skip Rust build check.")
-_rust_parser.add_argument("--force-rust-compile", action="store_true", help="Force rebuild of Rust extension.")
+_rust_parser.add_argument(
+    "--force-rust-compile", action="store_true", help="Force rebuild of Rust extension."
+)
 _rust_parser.add_argument(
     "--fail-on-stale-rust",
     action="store_true",

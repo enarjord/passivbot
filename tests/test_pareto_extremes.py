@@ -35,7 +35,9 @@ def test_pareto_front_retains_per_metric_extremes(sig_digits):
         candidates.append(_make_candidate(obj, violation=violation))
 
     # Compute best (minimum) per-objective among non-violating candidates after rounding.
-    non_violating = [round_floats(c, sig_digits) for c in candidates if c["metrics"]["constraint_violation"] <= 0]
+    non_violating = [
+        round_floats(c, sig_digits) for c in candidates if c["metrics"]["constraint_violation"] <= 0
+    ]
     assert non_violating, "Expected some non-violating candidates"
 
     best_per_metric = {}

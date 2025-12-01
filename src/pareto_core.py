@@ -13,7 +13,9 @@ class ParetoPoint:
     violation: float = 0.0
 
 
-def extract_objectives(entry: Dict[str, Any], scoring_keys: Optional[Sequence[str]] = None) -> Tuple[Tuple[float, ...], List[str]]:
+def extract_objectives(
+    entry: Dict[str, Any], scoring_keys: Optional[Sequence[str]] = None
+) -> Tuple[Tuple[float, ...], List[str]]:
     """
     Extract the objective vector from a result entry.
     Ordered by scoring keys if provided, otherwise by sorted w_* keys.
@@ -119,7 +121,9 @@ def prune_front_with_extremes(
     return to_remove
 
 
-def compute_ideal(values_matrix: np.ndarray, mode: str = "min", weights=None, eps: float = 1e-3, pct: float = 10):
+def compute_ideal(
+    values_matrix: np.ndarray, mode: str = "min", weights=None, eps: float = 1e-3, pct: float = 10
+):
     # values_matrix:  shape (n_points, n_obj)
     if mode in ["m", "min"]:
         return values_matrix.min(axis=0)

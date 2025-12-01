@@ -360,6 +360,7 @@ class ParetoStore:
             except OSError:
                 pass
 
+
 def comma_separated_values_float(x):
     return [float(z) for z in x.split(",")]
 

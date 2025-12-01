@@ -500,7 +500,7 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>, exposures_series: &
         .map(|a| a.volume_pct_per_day_avg)
         .sum::<f64>()
         / 10.0;
-    
+
     analysis.positions_held_per_day_w = subset_analyses
         .iter()
         .map(|a| a.positions_held_per_day)
