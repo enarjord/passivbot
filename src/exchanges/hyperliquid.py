@@ -358,7 +358,7 @@ class HyperliquidBot(Passivbot):
             return executed
         except Exception as e:
             try:
-                if self.adjust_min_cost_on_error(e):
+                if self.adjust_min_cost_on_error(e, order):
                     return {}
             except Exception as e0:
                 logging.error(f"error with adjust_min_cost_on_error {e0}")
@@ -379,7 +379,7 @@ class HyperliquidBot(Passivbot):
         except:
             return False
 
-    def adjust_min_cost_on_error(self, error):
+    def adjust_min_cost_on_error(self, error, order=None):
         any_adjusted = False
         successful_orders = []
         str_e = error.args[0]
@@ -403,7 +403,7 @@ class HyperliquidBot(Passivbot):
                             raise Exception(f"No symbol match for asset_id={asset_id}")
                         new_min_cost = pbr.round_(self.min_costs[symbol] * 1.1, 0.1)
                         logging.info(
-                            f"caught {elm['error']} {symbol}. Upping min_cost from {self.min_costs[symbol]} to {new_min_cost}"
+                            f"caught {elm['error']} {symbol}. Upping min_cost from {self.min_costs[symbol]} to {new_min_cost}. Order: {order}"
                         )
                         self.min_costs[symbol] = new_min_cost
                         any_adjusted = True

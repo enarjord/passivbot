@@ -193,7 +193,9 @@ def annotate_positions_inplace(
                 if before_size <= 0:
                     vwap = price
                 else:
-                    vwap = ((before_size * vwap) + (add_amt * price)) / max(before_size + add_amt, 1e-12)
+                    vwap = ((before_size * vwap) + (add_amt * price)) / max(
+                        before_size + add_amt, 1e-12
+                    )
             if after_size <= 1e-12:
                 vwap = 0.0
             ev["psize"] = round(after_size, 12)
@@ -205,7 +207,7 @@ def annotate_positions_inplace(
 
 
 def compute_realized_pnls_from_trades(
-    trades: List[Dict[str, object]]
+    trades: List[Dict[str, object]],
 ) -> Tuple[Dict[str, float], Dict[Tuple[str, str], Tuple[float, float]]]:
     """
     Compute realized PnL per trade by reconstructing positions from fills.
@@ -2116,10 +2118,7 @@ class GateioFetcher(BaseFetcher):
         pnl_margin = float(info.get("pnl_margin") or 0.0)
         reduce_only = bool(order.get("reduce_only") or info.get("reduce_only") or False)
         client_order_id = (
-            order.get("clientOrderId")
-            or info.get("text")
-            or info.get("client_order_id")
-            or ""
+            order.get("clientOrderId") or info.get("text") or info.get("client_order_id") or ""
         )
         pb_type = custom_id_to_snake(str(client_order_id)) if client_order_id else "unknown"
         is_close = abs(pnl) > 0.0 or abs(pnl_margin) > 0.0 or reduce_only
@@ -2160,7 +2159,9 @@ class GateioFetcher(BaseFetcher):
 class KucoinFetcher(BaseFetcher):
     """Fetches fill events for Kucoin by combining trade and position history."""
 
-    def __init__(self, api, *, trade_limit: int = 1000, now_func: Optional[Callable[[], int]] = None) -> None:
+    def __init__(
+        self, api, *, trade_limit: int = 1000, now_func: Optional[Callable[[], int]] = None
+    ) -> None:
         self.api = api
         self.trade_limit = max(1, trade_limit)
         self._symbol_resolver = None
@@ -2225,7 +2226,11 @@ class KucoinFetcher(BaseFetcher):
         while start_at < until_ts and fetch_count < max_fetches:
             fetch_count += 1
             end_at = min(start_at + buffer_ms, until_ts)
-            params: Dict[str, object] = {"startAt": int(start_at), "endAt": int(end_at), "limit": limit}
+            params: Dict[str, object] = {
+                "startAt": int(start_at),
+                "endAt": int(end_at),
+                "limit": limit,
+            }
             key = _check_pagination_progress(prev_params, dict(params), "KucoinFetcher._fetch_trades")
             if key is None:
                 break
@@ -2263,9 +2268,7 @@ class KucoinFetcher(BaseFetcher):
 
         return sorted(collected.values(), key=lambda ev: ev["timestamp"])
 
-    async def _fetch_positions_history(
-        self, start_ms: int, end_ms: int
-    ) -> List[Dict[str, object]]:
+    async def _fetch_positions_history(self, start_ms: int, end_ms: int) -> List[Dict[str, object]]:
         results: Dict[str, Dict[str, object]] = {}
         max_fetches = 400
         fetch_count = 0
@@ -2310,7 +2313,9 @@ class KucoinFetcher(BaseFetcher):
                 start_at = last_ts + 1
 
         if fetch_count >= max_fetches:
-            logger.warning("KucoinFetcher._fetch_positions_history: reached pagination cap (%d)", max_fetches)
+            logger.warning(
+                "KucoinFetcher._fetch_positions_history: reached pagination cap (%d)", max_fetches
+            )
 
         return sorted(results.values(), key=lambda x: x.get("lastUpdateTimestamp", 0))
 
@@ -2343,9 +2348,7 @@ class KucoinFetcher(BaseFetcher):
                 seen_trade_ids.add(best["id"])
 
     @staticmethod
-    def _log_discrepancies(
-        local_pnls: Dict[str, float], positions: List[Dict[str, object]]
-    ) -> None:
+    def _log_discrepancies(local_pnls: Dict[str, float], positions: List[Dict[str, object]]) -> None:
         if not positions or not local_pnls:
             return
         # Aggregate by symbol for a rough reconciliation
@@ -2713,7 +2716,9 @@ async def _run_cli(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fill events cache refresher")
-    parser.add_argument("--config", "-c", type=str, default="configs/template.json", help="Config path")
+    parser.add_argument(
+        "--config", "-c", type=str, default="configs/template.json", help="Config path"
+    )
     parser.add_argument("--user", "-u", type=str, required=True, help="Live user identifier")
     parser.add_argument("--start", "-s", type=str, help="Start datetime (ms or ISO)")
     parser.add_argument("--end", "-e", type=str, help="End datetime (ms or ISO)")

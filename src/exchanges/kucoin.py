@@ -499,7 +499,7 @@ class KucoinBot(Passivbot):
             "reduceOnly": order.get("reduce_only", False),
             "marginMode": "CROSS",
             "clientOid": order.get("custom_id", None),
-            "positionSide": order.get('position_side', '').upper(),
+            "positionSide": order.get("position_side", "").upper(),
         }
 
     def did_cancel_order(self, executed, order=None) -> bool:
@@ -524,7 +524,6 @@ class KucoinBot(Passivbot):
         if verbose:
             logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
 
-
     async def update_exchange_config(self):
         """Ensure account-level settings (hedge mode) are applied."""
         try:
@@ -536,7 +535,6 @@ class KucoinBot(Passivbot):
                 logging.info("set_position_mode not supported by current KuCoin client; continuing")
         except Exception as e:
             logging.warning(f"set_position_mode hedged=True not applied: {e}")
-
 
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call = []
