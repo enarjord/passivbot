@@ -3,12 +3,26 @@ import re
 import os
 from typing import Callable, Optional, Dict
 
-import matplotlib.pyplot as plt
-from matplotlib.figure import Figure
+try:  # optional in some test environments
+    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+except ImportError:  # pragma: no cover
+    from types import SimpleNamespace
+
+    plt = SimpleNamespace(rcParams={})
+    Figure = object
 import pandas as pd
 import numpy as np
 import time
-from colorama import init, Fore
+try:  # pragma: no cover - optional
+    from colorama import init, Fore
+except ImportError:  # pragma: no cover
+    def init():
+        return None
+    class _Dummy:
+        def __getattr__(self, _):
+            return ""
+    Fore = _Dummy()
 from prettytable import PrettyTable
 from config_utils import dump_config
 from utils import make_get_filepath

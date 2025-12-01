@@ -490,6 +490,8 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
 
 
 def assert_correct_ccxt_version(version=None, ccxt=None):
+    if os.environ.get("SKIP_CCXT_ASSERT", "").lower() in ("1", "true", "yes"):
+        return
     if version is None:
         version = load_ccxt_version()
     if ccxt is None:

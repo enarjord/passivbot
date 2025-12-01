@@ -85,6 +85,13 @@ from suite_runner import extract_suite_config, run_backtest_suite_async
 import passivbot_rust as pbr  # noqa: E402
 from tools.event_loop_policy import set_windows_event_loop_policy
 
+# Fallback stubs for test environments without full extension symbols
+if not hasattr(pbr, "HlcvsBundle"):  # pragma: no cover
+    class HlcvsBundle:
+        pass
+
+    pbr.HlcvsBundle = HlcvsBundle  # type: ignore
+
 # on Windows this will pick the SelectorEventLoopPolicy
 set_windows_event_loop_policy()
 

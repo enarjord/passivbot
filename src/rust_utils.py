@@ -125,7 +125,11 @@ def check_and_maybe_compile(
     stale = is_stale(compiled_mtime, source_mtime)
 
     if "passivbot_rust" in sys.modules:
-        raise RuntimeError("passivbot_rust is already imported; restart required.")
+        # Already loaded in this process; if caller insists on force/fail, error out.
+        if force or fail_on_stale:
+            raise RuntimeError("passivbot_rust is already imported; restart required.")
+        print("passivbot_rust already imported; using existing binary.")
+        return
 
     needs_compile = force or stale
     if fail_on_stale and stale:

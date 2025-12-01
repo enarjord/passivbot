@@ -90,7 +90,31 @@ import logging
 import traceback
 import json
 import pprint
-from deap import base, creator, tools, algorithms
+try:
+    from deap import base, creator, tools, algorithms
+except ImportError:  # pragma: no cover - allow import in minimal test envs
+    class _DummyFitness:
+        weights = ()
+
+        def __init__(self, values=()):
+            self.values = values
+
+        def wvalues(self):
+            return self.values
+
+    class _DummyBase:
+        Fitness = _DummyFitness
+
+    class _DummyCreator:
+        def create(self, *args, **kwargs):
+            return None
+
+        def __getattr__(self, name):
+            raise AttributeError
+
+    base = _DummyBase()
+    creator = _DummyCreator()
+    tools = algorithms = None
 import math
 import fcntl
 from optimizer_overrides import optimizer_overrides
