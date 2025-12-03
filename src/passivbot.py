@@ -4370,41 +4370,21 @@ class Passivbot:
         syms = list(eligible_symbols)
         tasks = {s: asyncio.create_task(one(s)) for s in syms}
         out = {}
-        # Progress logging for large batches
         n = len(syms)
-        completed = 0
         started_ms = utc_ms()
-        last_log_ms = started_ms
-        for sym in tasks:
+        for sym, task in tasks.items():
             try:
-                val = await tasks[sym]
+                out[sym] = await task
             except Exception:
-                val = 0.0
-            if sym is not None:
-                out[sym] = val
-            completed += 1
-            if n > 20:
-                now_ms = utc_ms()
-                elapsed_ms = now_ms - started_ms
-                should_log = False
-                if completed == n and elapsed_ms >= 5000:
-                    should_log = True
-                elif elapsed_ms >= 5000 and (now_ms - last_log_ms) >= 5000:
-                    should_log = True
-                if should_log:
-                    elapsed_s = max(0.001, elapsed_ms / 1000.0)
-                    rate = completed / elapsed_s
-                    pct = int(100 * completed / n)
-                    eta_s = int((n - completed) / max(1e-6, rate))
-                    logging.info(
-                        f"log_range EMA: {completed}/{n} {pct}% elapsed={int(elapsed_s)}s eta~{eta_s}s"
-                    )
-                    last_log_ms = now_ms
+                out[sym] = 0.0
+        elapsed_s = max(0.001, (utc_ms() - started_ms) / 1000.0)
         if out:
             top_n = min(8, len(out))
             top = sorted(out.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
             summary = ", ".join(f"{symbol_to_coin(sym)}={val:.6f}" for sym, val in top)
-            logging.info(f"log_range EMA span {span} top{top_n}: {summary}")
+            logging.info(
+                f"log_range EMA span {span}: {n} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
+            )
         return out
 
     async def calc_volumes(
@@ -4447,50 +4427,21 @@ class Passivbot:
         syms = list(symbols)
         tasks = {s: asyncio.create_task(one(s)) for s in syms}
         out = {}
-        # Progress logging for large batches
         n = len(syms)
-        completed = 0
         started_ms = utc_ms()
-        last_log_ms = started_ms
-        for sym in tasks:
+        for sym, task in tasks.items():
             try:
-                val = await tasks[sym]
+                out[sym] = await task
             except Exception:
-                val = 0.0
-            if sym is not None:
-                out[sym] = val
-            completed += 1
-            if n > 20:
-                now_ms = utc_ms()
-                elapsed_ms = now_ms - started_ms
-                should_log = False
-                if completed == n and elapsed_ms >= 5000:
-                    should_log = True
-                elif elapsed_ms >= 5000 and (now_ms - last_log_ms) >= 5000:
-                    should_log = True
-                if should_log:
-                    elapsed_s = max(0.001, elapsed_ms / 1000.0)
-                    rate = completed / elapsed_s
-                    pct = int(100 * completed / n)
-                    eta_s = int((n - completed) / max(1e-6, rate))
-                    msg = f"volume EMA: {completed}/{n} {pct}% elapsed={int(elapsed_s)}s eta~{eta_s}s"
-                    log_level = getattr(self, "logging_level", 1)
-                    if completed == n:
-                        threshold = getattr(self, "volume_refresh_info_threshold_seconds", 30.0)
-                        if threshold <= 0 or elapsed_s >= threshold:
-                            logging.info(
-                                f"volume EMA refresh finished for {n} symbols in {int(elapsed_s)}s"
-                            )
-                        elif log_level >= 3:
-                            logging.debug(f"{msg} (below info threshold {int(threshold)}s)")
-                    elif log_level >= 3:
-                        logging.debug(msg)
-                    last_log_ms = now_ms
+                out[sym] = 0.0
+        elapsed_s = max(0.001, (utc_ms() - started_ms) / 1000.0)
         if out:
             top_n = min(8, len(out))
             top = sorted(out.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
             summary = ", ".join(f"{symbol_to_coin(sym)}={val:.2f}" for sym, val in top)
-            logging.info(f"volume EMA span {span} top{top_n}: {summary}")
+            logging.info(
+                f"volume EMA span {span}: {n} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
+            )
         return out
 
     async def execute_multiple(self, orders: [dict], type_: str):
