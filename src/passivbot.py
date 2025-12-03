@@ -4403,7 +4403,7 @@ class Passivbot:
         if out:
             top_n = min(8, len(out))
             top = sorted(out.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
-            summary = ", ".join(f"{sym}={val:.6f}" for sym, val in top)
+            summary = ", ".join(f"{symbol_to_coin(sym)}={val:.6f}" for sym, val in top)
             logging.info(f"log_range EMA span {span} top{top_n}: {summary}")
         return out
 
@@ -4489,7 +4489,7 @@ class Passivbot:
         if out:
             top_n = min(8, len(out))
             top = sorted(out.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
-            summary = ", ".join(f"{sym}={val:.2f}" for sym, val in top)
+            summary = ", ".join(f"{symbol_to_coin(sym)}={val:.2f}" for sym, val in top)
             logging.info(f"volume EMA span {span} top{top_n}: {summary}")
         return out
 
