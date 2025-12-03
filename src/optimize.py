@@ -90,9 +90,11 @@ import logging
 import traceback
 import json
 import pprint
+
 try:
     from deap import base, creator, tools, algorithms
 except ImportError:  # pragma: no cover - allow import in minimal test envs
+
     class _DummyFitness:
         weights = ()
 

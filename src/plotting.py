@@ -14,14 +14,18 @@ except ImportError:  # pragma: no cover
 import pandas as pd
 import numpy as np
 import time
+
 try:  # pragma: no cover - optional
     from colorama import init, Fore
 except ImportError:  # pragma: no cover
+
     def init():
         return None
+
     class _Dummy:
         def __getattr__(self, _):
             return ""
+
     Fore = _Dummy()
 from prettytable import PrettyTable
 from config_utils import dump_config
