@@ -530,7 +530,9 @@ class Passivbot:
         # called at bot startup and once an hour thereafter
         self.init_markets_last_update_ms = utc_ms()
         await self.update_exchange_config()  # set hedge mode
-        self.markets_dict = await load_markets(self.exchange, 0, verbose=False)
+        # Reuse existing ccxt session when available (ensures shared options such as fetchMarkets types).
+        cc_instance = getattr(self, "cca", None)
+        self.markets_dict = await load_markets(self.exchange, 0, verbose=False, cc=cc_instance)
         await self.determine_utc_offset(verbose)
         # ineligible symbols cannot open new positions
         eligible, _, reasons = filter_markets(self.markets_dict, self.exchange, verbose)
