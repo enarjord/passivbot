@@ -3125,7 +3125,14 @@ class Passivbot:
                     logging.debug("update_balance: no fetch_balance implemented")
                     return False
                 balance = await self.fetch_balance()
-            if balance is None:
+            # Only accept numeric balances; keep previous value on failure
+            if balance is None or balance is False:
+                logging.warning("balance fetch failed; keeping previous balance")
+                return False
+            try:
+                balance = float(balance)
+            except (TypeError, ValueError):
+                logging.warning("non-numeric balance fetch result; keeping previous balance")
                 return False
             if self.balance_override is None:
                 if self.previous_hysteresis_balance is None:
