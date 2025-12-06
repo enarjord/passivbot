@@ -24,6 +24,7 @@ from pareto_core import (
     extract_violation,
     prune_front_with_extremes,
 )
+from bounds_utils import enforce_bounds_on_config
 
 STAT_FIELDS = {"mean", "min", "max", "std"}
 
@@ -150,6 +151,8 @@ class ParetoStore:
         if self.scoring_keys is None:
             self.scoring_keys = entry["optimize"]["scoring"]
         rounded = round_floats(entry, self.sig_digits)
+        # Re-apply step bounds after rounding to fix step violations
+        rounded = enforce_bounds_on_config(rounded, self.sig_digits)
         h = calc_hash(rounded)
         with self._lock:
             if h in self._entries:  # fast‑dedupe

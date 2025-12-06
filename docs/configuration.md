@@ -266,6 +266,25 @@ Coins selected for trading are filtered by volume and log range. First, filter c
 
 When optimizing, parameter values are within the lower and upper bounds.
 
+Bounds can be specified as 2 or 3-element arrays for discrete or continuous sampling during optimization.
+- Two-element format `[min, max]`: continuous sampling across the full range (default behavior).
+- Three-element format `[min, max, step]`: discrete sampling at the specified step interval.
+- When a step is specified (third element), the optimizer explores only discrete values at that interval instead of the full continuous range.
+- All genetic algorithm operations (initial population, mutation, crossover) respect the configured steps—values are automatically quantized to the nearest step.
+- Example:
+  ```json
+  "bounds": {
+    "long_ema_span_0": [200, 1440, 30],
+    "long_ema_span_1": [200, 1440, 30],
+    "long_entry_volatility_ema_span_hours": [672, 2688, 60],
+    "long_entry_initial_qty_pct": [0.004, 0.05]
+  }
+  ```
+- In the example above:
+  - `long_ema_span_0` with bounds `[200, 1440, 30]` explores only 42 values (200, 230, 260, ..., 1440).
+  - `long_entry_volatility_ema_span_hours` with bounds `[672, 2688, 60]` explores 34 values (672, 732, 792, ..., 2688).
+  - `long_entry_initial_qty_pct` with bounds `[0.004, 0.05]` uses continuous sampling (no step specified).
+
 ### Other Optimization Parameters
 
 - **compress_results_file**: If `true`, compresses optimize output results file to save space.
@@ -292,7 +311,6 @@ When optimizing, parameter values are within the lower and upper bounds.
   - Suffix `_w` indicates mean across 10 temporal subsets (whole, last_half, last_third, ..., last_tenth) to weigh recent data more heavily.
   - Examples: `["mdg", "sharpe_ratio", "loss_profit_ratio"]`, `["adg", "sortino_ratio", "drawdown_worst"]`, `["sortino_ratio", "omega_ratio", "adg_w", "position_unchanged_hours_max"]`
     - Note: metrics may be suffixed with `_usd` or `_btc` to select denomination. If `config.backtest.btc_collateral_cap` is `0`, BTC values still represent the USD equity translated into BTC terms.
-
 ### Optimizer Suites
 
 - **optimize.suite.enabled**: Evaluate every candidate across the configured scenarios. Override via `--suite [y/n]` on `src/optimize.py`.
