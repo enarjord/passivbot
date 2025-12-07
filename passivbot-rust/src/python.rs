@@ -7,6 +7,10 @@ use crate::constants::{LONG, SHORT};
 use crate::entries::{
     calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
 };
+use crate::hedge::{
+    compute_hedge_orders, DesiredBaseOrder as HedgeDesiredBaseOrder, HedgeAction, HedgeAsset,
+    HedgeMode, HedgePosition, HedgeResult,
+};
 use crate::risk::{
     calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
     GateEntriesDecision, GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
@@ -127,6 +131,20 @@ fn get_u64(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<u64> {
         .ok_or_else(|| PyValueError::new_err(format!("hlcvs meta missing '{key}'")))?
         .extract::<u64>()
         .map_err(|_| PyValueError::new_err(format!("hlcvs meta field '{key}' must be int")))
+}
+
+fn get_usize(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<usize> {
+    dict.get_item(key)?
+        .ok_or_else(|| PyValueError::new_err(format!("missing '{key}'")))?
+        .extract::<usize>()
+        .map_err(|_| PyValueError::new_err(format!("field '{key}' must be int")))
+}
+
+fn get_f64(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<f64> {
+    dict.get_item(key)?
+        .ok_or_else(|| PyValueError::new_err(format!("missing '{key}'")))?
+        .extract::<f64>()
+        .map_err(|_| PyValueError::new_err(format!("field '{key}' must be float")))
 }
 
 fn parse_coin_meta(dict: &Bound<'_, PyDict>, default_index: usize) -> PyResult<CoinMeta> {
@@ -1813,6 +1831,143 @@ pub fn calc_twel_enforcer_orders_py(
         .into_iter()
         .map(|(idx, order)| (idx, order.qty, order.price, order.order_type.id()))
         .collect())
+}
+
+// -------- Hedge overlay (experimental) --------
+
+fn parse_positions_with_idx(any: &Bound<'_, PyAny>) -> PyResult<Vec<HedgePosition>> {
+    let list = any
+        .downcast::<PyList>()
+        .map_err(|_| PyValueError::new_err("positions must be a list"))?;
+    let mut out = Vec::with_capacity(list.len());
+    for item in list {
+        let d = item
+            .downcast::<PyDict>()
+            .map_err(|_| PyValueError::new_err("position entries must be dicts"))?;
+        let idx = get_usize(d, "idx")?;
+        let size = get_f64(d, "size")?;
+        let price = get_f64(d, "price")?;
+        out.push(HedgePosition { idx, size, price });
+    }
+    Ok(out)
+}
+
+fn parse_assets(any: &Bound<'_, PyAny>) -> PyResult<Vec<HedgeAsset>> {
+    let list = any
+        .downcast::<PyList>()
+        .map_err(|_| PyValueError::new_err("eligible assets must be a list"))?;
+    let mut out = Vec::with_capacity(list.len());
+    for item in list {
+        let d = item
+            .downcast::<PyDict>()
+            .map_err(|_| PyValueError::new_err("asset entries must be dicts"))?;
+        let idx = get_usize(d, "idx")?;
+        let bid = get_f64(d, "bid")?;
+        let ask = get_f64(d, "ask")?;
+        let volume_score = get_f64(d, "volume_score")?;
+        let volatility_score = get_f64(d, "volatility_score")?;
+        let mut ep = ExchangeParams::default();
+        if let Some(val) = d.get_item("min_cost")? {
+            ep.min_cost = val.extract::<f64>()?;
+        }
+        if let Some(val) = d.get_item("min_qty")? {
+            ep.min_qty = val.extract::<f64>()?;
+        }
+        if let Some(val) = d.get_item("qty_step")? {
+            ep.qty_step = val.extract::<f64>()?;
+        }
+        if let Some(val) = d.get_item("price_step")? {
+            ep.price_step = val.extract::<f64>()?;
+        }
+        if let Some(val) = d.get_item("c_mult")? {
+            ep.c_mult = val.extract::<f64>()?;
+        }
+        out.push(HedgeAsset {
+            idx,
+            bid,
+            ask,
+            volume_score,
+            volatility_score,
+            exchange_params: ep,
+        });
+    }
+    Ok(out)
+}
+
+fn parse_desired_base(any: &Bound<'_, PyAny>) -> PyResult<Vec<HedgeDesiredBaseOrder>> {
+    let list = any
+        .downcast::<PyList>()
+        .map_err(|_| PyValueError::new_err("desired_base_orders must be a list"))?;
+    let mut out = Vec::with_capacity(list.len());
+    for item in list {
+        let d = item
+            .downcast::<PyDict>()
+            .map_err(|_| PyValueError::new_err("desired base entries must be dicts"))?;
+        let idx = get_usize(d, "idx")?;
+        out.push(HedgeDesiredBaseOrder { idx });
+    }
+    Ok(out)
+}
+
+#[pyfunction]
+#[pyo3(signature = (mode, base_positions, hedge_positions, balance, twel, eligible_assets, desired_base_orders, one_way=false))]
+pub fn compute_hedge_orders_py(
+    mode: &str,
+    base_positions: &Bound<'_, PyAny>,
+    hedge_positions: &Bound<'_, PyAny>,
+    balance: f64,
+    twel: f64,
+    eligible_assets: &Bound<'_, PyAny>,
+    desired_base_orders: &Bound<'_, PyAny>,
+    one_way: bool,
+) -> PyResult<PyObject> {
+    let base_mode = match mode.to_lowercase().as_str() {
+        "hedge_shorts_for_longs" | "longs_with_shorts" | "long_only" => {
+            HedgeMode::HedgeShortsForLongs
+        }
+        "hedge_longs_for_shorts" | "shorts_with_longs" | "short_only" => {
+            HedgeMode::HedgeLongsForShorts
+        }
+        other => return Err(PyValueError::new_err(format!("invalid mode {}", other))),
+    };
+    let base = parse_positions_with_idx(base_positions)?;
+    let hedges = parse_positions_with_idx(hedge_positions)?;
+    let assets = parse_assets(eligible_assets)?;
+    let desired = parse_desired_base(desired_base_orders)?;
+
+    let res: HedgeResult = compute_hedge_orders(
+        base_mode, &base, &hedges, balance, twel, &assets, &desired, one_way,
+    );
+
+    Python::with_gil(|py| {
+        let orders_py = PyList::empty_bound(py);
+        for o in res.orders {
+            let d = PyDict::new_bound(py);
+            d.set_item("idx", o.idx)?;
+            d.set_item("qty", o.qty)?;
+            d.set_item("price", o.price)?;
+            d.set_item(
+                "action",
+                match o.action {
+                    HedgeAction::OpenOrIncrease => "open_or_increase",
+                    HedgeAction::Close => "close",
+                },
+            )?;
+            d.set_item("reason", o.reason)?;
+            orders_py.append(d)?;
+        }
+        let out = PyDict::new_bound(py);
+        out.set_item("orders", orders_py)?;
+        out.set_item(
+            "deferred_base_longs",
+            res.deferred_base_longs.into_iter().collect::<Vec<usize>>(),
+        )?;
+        out.set_item(
+            "deferred_base_shorts",
+            res.deferred_base_shorts.into_iter().collect::<Vec<usize>>(),
+        )?;
+        Ok(out.into_py(py))
+    })
 }
 
 #[pyfunction]

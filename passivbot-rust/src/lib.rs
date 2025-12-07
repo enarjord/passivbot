@@ -4,6 +4,7 @@ mod closes;
 mod coin_selection;
 mod constants;
 mod entries;
+mod hedge;
 mod python;
 mod risk;
 mod trailing;
@@ -60,6 +61,8 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(trailing_bundle_default_py, m)?)?;
     m.add_function(wrap_pyfunction!(update_trailing_bundle_py, m)?)?;
     m.add_function(wrap_pyfunction!(select_coin_indices_py, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_hedge_orders_py, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_hedge_orders_py, m)?)?;
 
     Ok(())
 }

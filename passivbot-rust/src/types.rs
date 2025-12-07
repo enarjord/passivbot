@@ -131,7 +131,7 @@ impl HlcvsBundle {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExchangeParams {
     pub qty_step: f64,
     pub price_step: f64,
