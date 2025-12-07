@@ -171,3 +171,16 @@ def round_floats(obj: Any, sig_digits: int = 6) -> Any:
         return [round_floats(v, sig_digits) for v in obj]
     else:
         return obj
+
+
+def quantize_floats(obj: Any, sig_digits: int = 6, step: float = None) -> Any:
+    if step is None:
+        return round_floats(obj, sig_digits)
+    if isinstance(obj, float):
+        return round(obj / step) * step
+    elif isinstance(obj, dict):
+        return {k: quantize_floats(v, step) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [quantize_floats(v, step) for v in obj]
+    else:
+        return obj
