@@ -524,6 +524,8 @@ def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True):
         raise RuntimeError(f"ccxt exchange '{ex}' not available")
     try:
         cc.options["defaultType"] = "swap"
+        if ex == "hyperliquid":
+            cc.options["fetchMarkets"]["types"] = ["swap"]
     except Exception:
         pass
     try:
