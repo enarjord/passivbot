@@ -82,7 +82,9 @@ class OKXBot(Passivbot):
             # If unknown, keep default True and let later failures flip it off.
             self.okx_pm_account = acct_lv == "pm"
             if self.okx_pm_account:
-                logging.info("OKX account detected as Portfolio Margin (PM); mode/leverage changes may be restricted.")
+                logging.info(
+                    "OKX account detected as Portfolio Margin (PM); mode/leverage changes may be restricted."
+                )
             if not self.okx_dual_side:
                 logging.info("OKX account is in net (one-way) mode; running without posSide/hedge.")
         except Exception as e:
