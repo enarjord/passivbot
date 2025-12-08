@@ -177,7 +177,7 @@ pub struct Position {
     pub price: f64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Positions {
     pub long: HashMap<usize, Position>,
     pub short: HashMap<usize, Position>,
@@ -268,7 +268,7 @@ pub struct BotParams {
     pub unstuck_threshold: f64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TrailingPriceBundle {
     pub min_since_open: f64,
     pub max_since_min: f64,

@@ -11,6 +11,10 @@ use crate::hedge::{
     compute_hedge_orders, DesiredBaseOrder as HedgeDesiredBaseOrder, HedgeAction, HedgeAsset,
     HedgeMode, HedgePosition, HedgeResult,
 };
+use crate::orchestrator::{
+    compute_ideal_orders as compute_ideal_orders_rust, EffectiveNPositions as OrchestratorENP,
+    Mode as OrchestratorMode, OrchestratorContext, SymbolInput,
+};
 use crate::risk::{
     calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
     GateEntriesDecision, GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
@@ -21,7 +25,7 @@ use crate::trailing::{
 use crate::types::OrderType;
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, ExchangeParams, HlcvsBundle,
-    HlcvsMeta, OrderBook, Position, StateParams, TrailingPriceBundle,
+    HlcvsMeta, OrderBook, Position, Positions, StateParams, TrailingPriceBundle,
 };
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
@@ -1998,4 +2002,155 @@ pub fn order_type_snake_to_id(name: &str) -> PyResult<u16> {
 #[pyfunction(name = "get_order_id_type_from_string")]
 pub fn get_order_id_type_from_string_alias(name: &str) -> PyResult<u16> {
     order_type_snake_to_id(name)
+}
+
+// -------- Orchestrator (experimental) --------
+
+#[pyfunction]
+#[pyo3(signature = (
+    balance,
+    symbols,
+    effective_n_positions,
+    allow_unstuck,
+    allowance_long,
+    allowance_short,
+))]
+pub fn compute_ideal_orders_py(
+    balance: f64,
+    symbols: &PyList,
+    effective_n_positions: &PyDict,
+    allow_unstuck: bool,
+    allowance_long: f64,
+    allowance_short: f64,
+) -> PyResult<Vec<Py<PyDict>>> {
+    let enp = OrchestratorENP {
+        long: extract_value(effective_n_positions, "long")?,
+        short: extract_value(effective_n_positions, "short")?,
+    };
+
+    let mut parsed_symbols: Vec<SymbolInput> = Vec::with_capacity(symbols.len());
+    for item in symbols {
+        let dict = item.downcast::<PyDict>()?;
+        parsed_symbols.push(parse_symbol_input(dict)?);
+    }
+
+    let ctx = OrchestratorContext {
+        balance,
+        effective_n_positions: enp,
+        allow_unstuck,
+        allowance_long,
+        allowance_short,
+    };
+
+    let res = compute_ideal_orders_rust(&ctx, &parsed_symbols);
+
+    Python::with_gil(|py| {
+        let mut out: Vec<Py<PyDict>> = Vec::with_capacity(res.orders.len());
+        for o in res.orders {
+            let d = PyDict::new_bound(py);
+            d.set_item("idx", o.idx)?;
+            d.set_item("side", o.side)?;
+            d.set_item("qty", o.qty)?;
+            d.set_item("price", o.price)?;
+            d.set_item("order_type_id", o.order_type.id())?;
+            d.set_item("reduce_only", o.reduce_only)?;
+            out.push(d.unbind());
+        }
+        Ok(out)
+    })
+}
+
+fn dict_expect_dict<'a>(dict: &'a PyDict, key: &str) -> PyResult<&'a PyDict> {
+    dict.get_item(key)?
+        .ok_or_else(|| PyValueError::new_err(format!("missing {}", key)))?
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err(format!("{} must be a dict", key)))
+}
+
+fn parse_mode(dict: &PyDict, key: &str) -> PyResult<OrchestratorMode> {
+    let v: String = extract_value(dict, key)?;
+    match v.as_str() {
+        "normal" => Ok(OrchestratorMode::Normal),
+        "panic" => Ok(OrchestratorMode::Panic),
+        "graceful_stop" => Ok(OrchestratorMode::GracefulStop),
+        "tp_only" => Ok(OrchestratorMode::TpOnly),
+        "manual" => Ok(OrchestratorMode::Manual),
+        other => Err(PyValueError::new_err(format!(
+            "invalid mode {} for {}",
+            other, key
+        ))),
+    }
+}
+
+fn parse_order_book(dict: &PyDict, key: &str) -> PyResult<OrderBook> {
+    let ob = dict_expect_dict(dict, key)?;
+    Ok(OrderBook {
+        bid: extract_value(ob, "bid")?,
+        ask: extract_value(ob, "ask")?,
+    })
+}
+
+fn parse_emabands(dict: &PyDict, key: &str) -> PyResult<EMABands> {
+    let d = dict_expect_dict(dict, key)?;
+    Ok(EMABands {
+        upper: extract_value(d, "upper")?,
+        lower: extract_value(d, "lower")?,
+    })
+}
+
+fn parse_trailing(dict: &PyDict, key: &str) -> PyResult<TrailingPriceBundle> {
+    let d = dict_expect_dict(dict, key)?;
+    Ok(TrailingPriceBundle {
+        min_since_open: extract_value(d, "min_since_open")?,
+        max_since_min: extract_value(d, "max_since_min")?,
+        max_since_open: extract_value(d, "max_since_open")?,
+        min_since_max: extract_value(d, "min_since_max")?,
+    })
+}
+
+fn parse_positions(dict: &PyDict, key: &str) -> PyResult<Positions> {
+    let p = dict_expect_dict(dict, key)?;
+    let mut positions = Positions::default();
+    if let Some(v) = p.get_item("long")? {
+        let d = v.downcast::<PyDict>()?;
+        positions.long.insert(
+            extract_value(d, "idx")?,
+            Position {
+                size: extract_value(d, "size")?,
+                price: extract_value(d, "price")?,
+            },
+        );
+    }
+    if let Some(v) = p.get_item("short")? {
+        let d = v.downcast::<PyDict>()?;
+        positions.short.insert(
+            extract_value(d, "idx")?,
+            Position {
+                size: extract_value(d, "size")?,
+                price: extract_value(d, "price")?,
+            },
+        );
+    }
+    Ok(positions)
+}
+
+fn parse_symbol_input(dict: &PyDict) -> PyResult<SymbolInput> {
+    let idx = extract_value(dict, "idx")?;
+    Ok(SymbolInput {
+        idx,
+        mode_long: parse_mode(dict, "mode_long")?,
+        mode_short: parse_mode(dict, "mode_short")?,
+        order_book: parse_order_book(dict, "order_book")?,
+        ema_bands_long: parse_emabands(dict, "ema_bands_long")?,
+        ema_bands_short: parse_emabands(dict, "ema_bands_short")?,
+        grid_log_range_long: extract_value(dict, "grid_log_range_long")?,
+        grid_log_range_short: extract_value(dict, "grid_log_range_short")?,
+        log_range_long: extract_value(dict, "log_range_long")?,
+        log_range_short: extract_value(dict, "log_range_short")?,
+        trailing_long: parse_trailing(dict, "trailing_long")?,
+        trailing_short: parse_trailing(dict, "trailing_short")?,
+        positions: parse_positions(dict, "positions")?,
+        exchange: exchange_params_from_dict(dict_expect_dict(dict, "exchange")?)?,
+        bot: bot_params_pair_from_dict(dict_expect_dict(dict, "bot")?)?,
+    })
 }

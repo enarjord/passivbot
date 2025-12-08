@@ -6,6 +6,10 @@ use crate::constants::{CLOSE, HIGH, LONG, LOW, NO_POS, SHORT, VOLUME};
 use crate::entries::{
     calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
 };
+use crate::orchestrator::{
+    compute_ideal_orders, EffectiveNPositions as OrchestratorENP, Mode as OrchestratorMode,
+    OrchestratorContext, SymbolInput,
+};
 use crate::risk::{
     calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
     GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
@@ -19,7 +23,14 @@ use crate::utils::{
     calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
     calc_wallet_exposure, hysteresis, qty_to_cost, round_, round_dn,
 };
+use serde::Serialize;
+
+// Temporary toggle to enable the new orchestrator path. Keep false for legacy behaviour.
+const USE_ORCHESTRATOR: bool = true;
+const DEBUG_DUMP_ORDERS: bool = true;
+const DEBUG_MAX_STEPS: usize = 40000;
 use ndarray::{ArrayView1, ArrayView3};
+use serde_json;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -239,6 +250,24 @@ pub struct Backtest<'a> {
     pub total_wallet_exposures: Vec<f64>,
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
     equity_tracking_active: bool,
+    debug_orders: Vec<DebugOrderSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
+struct DebugOrder {
+    qty: f64,
+    price: f64,
+    order_type_id: u16,
+    reduce_only: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct DebugOrderSnapshot {
+    step: usize,
+    side: String,
+    idx: usize,
+    entries: Vec<DebugOrder>,
+    closes: Vec<DebugOrder>,
 }
 
 fn calc_entry_balance_pct(params: &BotParams, effective_n_positions: usize) -> f64 {
@@ -525,6 +554,7 @@ impl<'a> Backtest<'a> {
             did_fill_short: HashSet::new(),
             total_wallet_exposures: Vec::with_capacity(n_timesteps),
             equity_tracking_active: false,
+            debug_orders: Vec::new(),
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
     }
@@ -586,6 +616,17 @@ impl<'a> Backtest<'a> {
             if self.equity_tracking_active {
                 self.update_equities(k);
                 self.record_total_wallet_exposure();
+            }
+        }
+        if DEBUG_DUMP_ORDERS && !self.debug_orders.is_empty() {
+            println!("writing debug");
+            let fname = if USE_ORCHESTRATOR {
+                "debug_orders_orchestrator.json"
+            } else {
+                "debug_orders_legacy.json"
+            };
+            if let Ok(f) = std::fs::File::create(fname) {
+                let _ = serde_json::to_writer_pretty(f, &self.debug_orders);
             }
         }
         let fills = std::mem::take(&mut self.fills);
@@ -1831,6 +1872,10 @@ impl<'a> Backtest<'a> {
     }
 
     fn update_open_orders_all(&mut self, k: usize) {
+        if USE_ORCHESTRATOR {
+            self.update_open_orders_all_orchestrator(k);
+            return;
+        }
         self.open_orders.long.clear();
         self.open_orders.short.clear();
         if self.trading_enabled.long {
@@ -1983,6 +2028,162 @@ impl<'a> Backtest<'a> {
 
         self.gate_entries_portfolio(k, LONG);
         self.gate_entries_portfolio(k, SHORT);
+        self.record_debug_orders(k);
+    }
+
+    fn update_open_orders_all_orchestrator(&mut self, k: usize) {
+        self.open_orders.long.clear();
+        self.open_orders.short.clear();
+
+        let mut active_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
+        if self.positions.long.len() != self.effective_n_positions.long {
+            self.update_actives_long();
+            active_long_indices = self.actives.long.iter().cloned().collect();
+        }
+        let mut active_short_indices: Vec<usize> = self.positions.short.keys().cloned().collect();
+        if self.positions.short.len() != self.effective_n_positions.short {
+            self.update_actives_short();
+            active_short_indices = self.actives.short.iter().cloned().collect();
+        }
+        active_long_indices.sort();
+        active_short_indices.sort();
+
+        let mut symbol_indices: Vec<usize> = active_long_indices
+            .iter()
+            .chain(active_short_indices.iter())
+            .cloned()
+            .collect();
+        symbol_indices.sort();
+        symbol_indices.dedup();
+
+        let balance = self.balance.usd_total_balance_rounded;
+
+        let long_allowance = if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
+            calc_auto_unstuck_allowance(
+                balance,
+                self.bot_params_master.long.unstuck_loss_allowance_pct
+                    * self.bot_params_master.long.total_wallet_exposure_limit,
+                self.pnl_cumsum_max,
+                self.pnl_cumsum_running,
+            )
+        } else {
+            0.0
+        };
+
+        let short_allowance = if self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0 {
+            calc_auto_unstuck_allowance(
+                balance,
+                self.bot_params_master.short.unstuck_loss_allowance_pct
+                    * self.bot_params_master.short.total_wallet_exposure_limit,
+                self.pnl_cumsum_max,
+                self.pnl_cumsum_running,
+            )
+        } else {
+            0.0
+        };
+
+        let mut symbols_input: Vec<SymbolInput> = Vec::with_capacity(symbol_indices.len());
+        for idx in symbol_indices {
+            if !self.coin_is_tradeable_at(idx, k) {
+                continue;
+            }
+            let close_price = self.hlcvs_value(k, idx, CLOSE);
+            let ob = OrderBook {
+                bid: close_price,
+                ask: close_price,
+            };
+            let trailing_long = self
+                .trailing_prices
+                .long
+                .get(&idx)
+                .cloned()
+                .unwrap_or_default();
+            let trailing_short = self
+                .trailing_prices
+                .short
+                .get(&idx)
+                .cloned()
+                .unwrap_or_default();
+            let mut positions = Positions::default();
+            if let Some(p) = self.positions.long.get(&idx) {
+                positions.long.insert(idx, *p);
+            }
+            if let Some(p) = self.positions.short.get(&idx) {
+                positions.short.insert(idx, *p);
+            }
+            symbols_input.push(SymbolInput {
+                idx,
+                mode_long: OrchestratorMode::Normal,
+                mode_short: OrchestratorMode::Normal,
+                order_book: ob,
+                ema_bands_long: self.emas[idx].compute_bands(LONG),
+                ema_bands_short: self.emas[idx].compute_bands(SHORT),
+                grid_log_range_long: self.emas[idx].grid_log_range_long,
+                grid_log_range_short: self.emas[idx].grid_log_range_short,
+                log_range_long: self.emas[idx].log_range_long,
+                log_range_short: self.emas[idx].log_range_short,
+                trailing_long,
+                trailing_short,
+                positions,
+                exchange: self.exchange_params_list[idx].clone(),
+                bot: BotParamsPair {
+                    long: self.bot_params[idx].long.clone(),
+                    short: self.bot_params[idx].short.clone(),
+                },
+            });
+        }
+
+        let ctx = OrchestratorContext {
+            balance,
+            effective_n_positions: OrchestratorENP {
+                long: self.effective_n_positions.long,
+                short: self.effective_n_positions.short,
+            },
+            allow_unstuck: true,
+            allowance_long: long_allowance,
+            allowance_short: short_allowance,
+        };
+
+        let result = compute_ideal_orders(&ctx, &symbols_input);
+
+        for order in result.orders {
+            match order.side {
+                "long" => {
+                    let bundle = self.open_orders.long.entry(order.idx).or_default();
+                    if order.reduce_only {
+                        bundle.closes.push(Order {
+                            qty: order.qty,
+                            price: order.price,
+                            order_type: order.order_type,
+                        });
+                    } else {
+                        bundle.entries.push(Order {
+                            qty: order.qty,
+                            price: order.price,
+                            order_type: order.order_type,
+                        });
+                    }
+                }
+                "short" => {
+                    let bundle = self.open_orders.short.entry(order.idx).or_default();
+                    if order.reduce_only {
+                        bundle.closes.push(Order {
+                            qty: order.qty,
+                            price: order.price,
+                            order_type: order.order_type,
+                        });
+                    } else {
+                        bundle.entries.push(Order {
+                            qty: order.qty,
+                            price: order.price,
+                            order_type: order.order_type,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.record_debug_orders(k);
     }
 
     fn gate_entries_portfolio(&mut self, k: usize, side: usize) {
@@ -2134,6 +2335,78 @@ impl<'a> Backtest<'a> {
                 bundle.entries = new_entries;
             } else {
                 bundle.entries.clear();
+            }
+        }
+    }
+
+    fn record_debug_orders(&mut self, k: usize) {
+        if !DEBUG_DUMP_ORDERS || k > DEBUG_MAX_STEPS {
+            return;
+        }
+        let mut idxs: Vec<usize> = self.open_orders.long.keys().cloned().collect();
+        idxs.sort_unstable();
+        for idx in idxs {
+            if let Some(bundle) = self.open_orders.long.get(&idx) {
+                let entries = bundle
+                    .entries
+                    .iter()
+                    .map(|o| DebugOrder {
+                        qty: o.qty,
+                        price: o.price,
+                        order_type_id: o.order_type.id(),
+                        reduce_only: false,
+                    })
+                    .collect();
+                let closes = bundle
+                    .closes
+                    .iter()
+                    .map(|o| DebugOrder {
+                        qty: o.qty,
+                        price: o.price,
+                        order_type_id: o.order_type.id(),
+                        reduce_only: true,
+                    })
+                    .collect();
+                self.debug_orders.push(DebugOrderSnapshot {
+                    step: k,
+                    side: "long".to_string(),
+                    idx,
+                    entries,
+                    closes,
+                });
+            }
+        }
+        let mut idxs_s: Vec<usize> = self.open_orders.short.keys().cloned().collect();
+        idxs_s.sort_unstable();
+        for idx in idxs_s {
+            if let Some(bundle) = self.open_orders.short.get(&idx) {
+                let entries = bundle
+                    .entries
+                    .iter()
+                    .map(|o| DebugOrder {
+                        qty: o.qty,
+                        price: o.price,
+                        order_type_id: o.order_type.id(),
+                        reduce_only: false,
+                    })
+                    .collect();
+                let closes = bundle
+                    .closes
+                    .iter()
+                    .map(|o| DebugOrder {
+                        qty: o.qty,
+                        price: o.price,
+                        order_type_id: o.order_type.id(),
+                        reduce_only: true,
+                    })
+                    .collect();
+                self.debug_orders.push(DebugOrderSnapshot {
+                    step: k,
+                    side: "short".to_string(),
+                    idx,
+                    entries,
+                    closes,
+                });
             }
         }
     }
