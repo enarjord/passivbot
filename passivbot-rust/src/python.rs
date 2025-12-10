@@ -2040,6 +2040,8 @@ pub fn compute_ideal_orders_py(
         allow_unstuck,
         allowance_long,
         allowance_short,
+        entry_peek_hints: None,
+        debug_step: None,
     };
 
     let res = compute_ideal_orders_rust(&ctx, &parsed_symbols);

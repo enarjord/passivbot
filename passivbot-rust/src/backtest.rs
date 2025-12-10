@@ -7,8 +7,8 @@ use crate::entries::{
     calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
 };
 use crate::orchestrator::{
-    compute_ideal_orders, EffectiveNPositions as OrchestratorENP, Mode as OrchestratorMode,
-    OrchestratorContext, SymbolInput,
+    compute_ideal_orders, EffectiveNPositions as OrchestratorENP, EntryPeekHints,
+    Mode as OrchestratorMode, OrchestratorContext, SymbolInput,
 };
 use crate::risk::{
     calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
@@ -21,18 +21,24 @@ use crate::types::{
 };
 use crate::utils::{
     calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
-    calc_wallet_exposure, hysteresis, qty_to_cost, round_, round_dn,
+    calc_pprice_diff_int, calc_wallet_exposure, hysteresis, qty_to_cost, round_, round_dn,
 };
 use serde::Serialize;
 
 // Temporary toggle to enable the new orchestrator path. Keep false for legacy behaviour.
-const USE_ORCHESTRATOR: bool = true;
-const DEBUG_DUMP_ORDERS: bool = true;
-const DEBUG_MAX_STEPS: usize = 40000;
+const USE_ORCHESTRATOR: bool = false;
+const DEBUG_DUMP_ORDERS: bool = false;
+// Limit debug snapshots to a narrow window around the first legacy/orchestrator divergence.
+const DEBUG_MAX_STEPS: usize = 0;
+// Optional extra window to capture debug orders beyond DEBUG_MAX_STEPS (inclusive bounds).
+// Set to None to disable.
+const DEBUG_EXTRA_WINDOW: Option<(usize, usize)> = Some((291480, 291520));
 use ndarray::{ArrayView1, ArrayView3};
 use serde_json;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs::File;
+use std::io::{BufWriter, Write};
 
 #[derive(Clone, Default, Copy, Debug)]
 pub struct EmaAlphas {
@@ -250,7 +256,7 @@ pub struct Backtest<'a> {
     pub total_wallet_exposures: Vec<f64>,
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
     equity_tracking_active: bool,
-    debug_orders: Vec<DebugOrderSnapshot>,
+    debug_writer: Option<DebugOrderWriter>,
 }
 
 #[derive(Debug, Serialize)]
@@ -264,10 +270,65 @@ struct DebugOrder {
 #[derive(Debug, Serialize)]
 struct DebugOrderSnapshot {
     step: usize,
-    side: String,
+    side: &'static str,
     idx: usize,
     entries: Vec<DebugOrder>,
     closes: Vec<DebugOrder>,
+}
+
+struct DebugOrderWriter {
+    writer: BufWriter<File>,
+    has_entries: bool,
+    closed: bool,
+}
+
+impl DebugOrderWriter {
+    fn new_for_mode() -> Option<Self> {
+        let fname = if USE_ORCHESTRATOR {
+            "debug_orders_orchestrator.json"
+        } else {
+            "debug_orders_legacy.json"
+        };
+        Self::new(fname)
+    }
+
+    fn new(fname: &str) -> Option<Self> {
+        let mut writer = BufWriter::new(File::create(fname).ok()?);
+        writer.write_all(b"[").ok()?;
+        Some(Self {
+            writer,
+            has_entries: false,
+            closed: false,
+        })
+    }
+
+    fn write_snapshot(&mut self, snapshot: &DebugOrderSnapshot) {
+        if self.closed {
+            return;
+        }
+        if self.has_entries {
+            let _ = self.writer.write_all(b",");
+        }
+        if serde_json::to_writer(&mut self.writer, snapshot).is_ok() {
+            let _ = self.writer.write_all(b"\n");
+            self.has_entries = true;
+        }
+    }
+
+    fn finish(&mut self) {
+        if self.closed {
+            return;
+        }
+        let _ = self.writer.write_all(b"]");
+        let _ = self.writer.flush();
+        self.closed = true;
+    }
+}
+
+impl Drop for DebugOrderWriter {
+    fn drop(&mut self) {
+        self.finish();
+    }
 }
 
 fn calc_entry_balance_pct(params: &BotParams, effective_n_positions: usize) -> f64 {
@@ -554,7 +615,11 @@ impl<'a> Backtest<'a> {
             did_fill_short: HashSet::new(),
             total_wallet_exposures: Vec::with_capacity(n_timesteps),
             equity_tracking_active: false,
-            debug_orders: Vec::new(),
+            debug_writer: if DEBUG_DUMP_ORDERS {
+                DebugOrderWriter::new_for_mode()
+            } else {
+                None
+            },
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
     }
@@ -618,16 +683,8 @@ impl<'a> Backtest<'a> {
                 self.record_total_wallet_exposure();
             }
         }
-        if DEBUG_DUMP_ORDERS && !self.debug_orders.is_empty() {
-            println!("writing debug");
-            let fname = if USE_ORCHESTRATOR {
-                "debug_orders_orchestrator.json"
-            } else {
-                "debug_orders_legacy.json"
-            };
-            if let Ok(f) = std::fs::File::create(fname) {
-                let _ = serde_json::to_writer_pretty(f, &self.debug_orders);
-            }
+        if let Some(mut writer) = self.debug_writer.take() {
+            writer.finish();
         }
         let fills = std::mem::take(&mut self.fills);
         let equities = std::mem::take(&mut self.equities);
@@ -789,7 +846,10 @@ impl<'a> Backtest<'a> {
             require_forager: true,
         };
 
-        select_coins(&features, &config)
+        let mut selected = select_coins(&features, &config);
+        // Sort for deterministic ordering (prevents hash-map iteration differences).
+        selected.sort_unstable();
+        selected
     }
 
     fn coin_passes_min_effective_cost(&self, idx: usize, pside: usize) -> bool {
@@ -1517,6 +1577,27 @@ impl<'a> Backtest<'a> {
         } else {
             self.open_orders.long.entry(idx).or_default().closes = [next_close_order].to_vec();
         }
+
+        if k >= 723_490 && k <= 723_520 && idx == 3 {
+            if let Some(bundle) = self.open_orders.long.get(&idx) {
+                eprintln!(
+                    "[legacy dbg sol orders] k={} pos_size={} pos_price={} entries={:?} closes={:?}",
+                    k,
+                    position.size,
+                    position.price,
+                    bundle
+                        .entries
+                        .iter()
+                        .map(|o| (o.qty, o.price, o.order_type.id()))
+                        .collect::<Vec<_>>(),
+                    bundle
+                        .closes
+                        .iter()
+                        .map(|o| (o.qty, o.price, o.order_type.id()))
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
     }
 
     fn update_open_orders_short_single(&mut self, k: usize, idx: usize) {
@@ -1814,6 +1895,32 @@ impl<'a> Backtest<'a> {
                     &inputs,
                     skip_long,
                 );
+                if k >= 667_340 && k <= 667_350 {
+                    let cands: Vec<(usize, f64, f64, f64, f64)> = inputs
+                        .iter()
+                        .map(|p| {
+                            (
+                                p.idx,
+                                p.position_size,
+                                p.position_price,
+                                p.market_price,
+                                calc_pprice_diff_int(LONG, p.position_price, p.market_price),
+                            )
+                        })
+                        .collect();
+                    eprintln!(
+                        "[legacy dbg twel long] k={} thresh={} total_wel={} balance={} actions={:?} candidates={:?}",
+                        k,
+                        long_threshold,
+                        total_wel_long,
+                        balance,
+                        actions
+                            .iter()
+                            .map(|(i, o)| (*i, o.qty, o.price))
+                            .collect::<Vec<_>>(),
+                        cands
+                    );
+                }
                 for (idx, order) in actions {
                     results.push((idx, LONG, order));
                 }
@@ -1907,6 +2014,12 @@ impl<'a> Backtest<'a> {
         }
 
         let (unstucking_idx, unstucking_pside, unstucking_close) = self.calc_unstucking_close(k);
+        if k >= 667_340 && k <= 667_350 && unstucking_pside != NO_POS {
+            eprintln!(
+                "[legacy dbg unstuck] k={} idx={} side={}",
+                k, unstucking_idx, unstucking_pside
+            );
+        }
         if unstucking_pside != NO_POS {
             match unstucking_pside {
                 LONG => {
@@ -2035,6 +2148,7 @@ impl<'a> Backtest<'a> {
         self.open_orders.long.clear();
         self.open_orders.short.clear();
 
+        // Use the same active sets as legacy
         let mut active_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
         if self.positions.long.len() != self.effective_n_positions.long {
             self.update_actives_long();
@@ -2045,15 +2159,20 @@ impl<'a> Backtest<'a> {
             self.update_actives_short();
             active_short_indices = self.actives.short.iter().cloned().collect();
         }
-        active_long_indices.sort();
-        active_short_indices.sort();
+        active_long_indices.sort_unstable();
+        active_short_indices.sort_unstable();
 
-        let mut symbol_indices: Vec<usize> = active_long_indices
-            .iter()
-            .chain(active_short_indices.iter())
-            .cloned()
-            .collect();
-        symbol_indices.sort();
+        let active_long_set: std::collections::HashSet<usize> =
+            active_long_indices.iter().cloned().collect();
+        let active_short_set: std::collections::HashSet<usize> =
+            active_short_indices.iter().cloned().collect();
+
+        // include any coin with an open position even if not currently active
+        let mut symbol_indices: Vec<usize> = active_long_indices.clone();
+        symbol_indices.extend_from_slice(&active_short_indices);
+        symbol_indices.extend(self.positions.long.keys().cloned());
+        symbol_indices.extend(self.positions.short.keys().cloned());
+        symbol_indices.sort_unstable();
         symbol_indices.dedup();
 
         let balance = self.balance.usd_total_balance_rounded;
@@ -2083,10 +2202,83 @@ impl<'a> Backtest<'a> {
         };
 
         let mut symbols_input: Vec<SymbolInput> = Vec::with_capacity(symbol_indices.len());
+        let mut peek_hints = EntryPeekHints::default();
+        if k >= 667_340 && k <= 667_350 {
+            eprintln!(
+                "[orch dbg] k={} symbol_indices={:?} pos_long={:?}",
+                k,
+                symbol_indices,
+                self.positions.long.keys().collect::<Vec<_>>()
+            );
+        }
         for idx in symbol_indices {
-            if !self.coin_is_tradeable_at(idx, k) {
-                continue;
+            // If delisted and position exists, force close and skip further order building
+            if let Some(&delist_timestamp) = self.last_valid_timestamps.get(&idx) {
+                if k >= delist_timestamp {
+                    if let Some(pos) = self.positions.long.get(&idx) {
+                        if pos.size != 0.0 {
+                            let price = round_(
+                                f64::min(
+                                    self.hlcvs_value(k, idx, HIGH)
+                                        - self.exchange_params_list[idx].price_step,
+                                    pos.price,
+                                ),
+                                self.exchange_params_list[idx].price_step,
+                            );
+                            self.open_orders.long.entry(idx).or_default().closes = vec![Order {
+                                qty: -pos.size,
+                                price,
+                                order_type: OrderType::CloseUnstuckLong,
+                            }];
+                            self.open_orders
+                                .long
+                                .entry(idx)
+                                .or_default()
+                                .entries
+                                .clear();
+                            continue;
+                        }
+                    }
+                    if let Some(pos) = self.positions.short.get(&idx) {
+                        if pos.size != 0.0 {
+                            let price = round_(
+                                f64::max(
+                                    self.hlcvs_value(k, idx, LOW)
+                                        + self.exchange_params_list[idx].price_step,
+                                    pos.price,
+                                ),
+                                self.exchange_params_list[idx].price_step,
+                            );
+                            self.open_orders.short.entry(idx).or_default().closes = vec![Order {
+                                qty: pos.size.abs(),
+                                price,
+                                order_type: OrderType::CloseUnstuckShort,
+                            }];
+                            self.open_orders
+                                .short
+                                .entry(idx)
+                                .or_default()
+                                .entries
+                                .clear();
+                            continue;
+                        }
+                    }
+                }
             }
+
+            let tradeable = self.coin_is_tradeable_at(idx, k);
+            let has_long_pos = self
+                .positions
+                .long
+                .get(&idx)
+                .map(|p| p.size != 0.0)
+                .unwrap_or(false);
+            let has_short_pos = self
+                .positions
+                .short
+                .get(&idx)
+                .map(|p| p.size != 0.0)
+                .unwrap_or(false);
             let close_price = self.hlcvs_value(k, idx, CLOSE);
             let ob = OrderBook {
                 bid: close_price,
@@ -2104,6 +2296,8 @@ impl<'a> Backtest<'a> {
                 .get(&idx)
                 .cloned()
                 .unwrap_or_default();
+            let state_long = self.create_state_params(k, idx, LONG);
+            let state_short = self.create_state_params(k, idx, SHORT);
             let mut positions = Positions::default();
             if let Some(p) = self.positions.long.get(&idx) {
                 positions.long.insert(idx, *p);
@@ -2111,10 +2305,22 @@ impl<'a> Backtest<'a> {
             if let Some(p) = self.positions.short.get(&idx) {
                 positions.short.insert(idx, *p);
             }
+            // Always manage existing positions; otherwise follow actives.
+            let mode_long = if has_long_pos || active_long_set.contains(&idx) {
+                OrchestratorMode::Normal
+            } else {
+                OrchestratorMode::Manual
+            };
+            let mode_short = if has_short_pos || active_short_set.contains(&idx) {
+                OrchestratorMode::Normal
+            } else {
+                OrchestratorMode::Manual
+            };
+
             symbols_input.push(SymbolInput {
                 idx,
-                mode_long: OrchestratorMode::Normal,
-                mode_short: OrchestratorMode::Normal,
+                mode_long,
+                mode_short,
                 order_book: ob,
                 ema_bands_long: self.emas[idx].compute_bands(LONG),
                 ema_bands_short: self.emas[idx].compute_bands(SHORT),
@@ -2122,8 +2328,8 @@ impl<'a> Backtest<'a> {
                 grid_log_range_short: self.emas[idx].grid_log_range_short,
                 log_range_long: self.emas[idx].log_range_long,
                 log_range_short: self.emas[idx].log_range_short,
-                trailing_long,
-                trailing_short,
+                trailing_long: trailing_long.clone(),
+                trailing_short: trailing_short.clone(),
                 positions,
                 exchange: self.exchange_params_list[idx].clone(),
                 bot: BotParamsPair {
@@ -2131,6 +2337,68 @@ impl<'a> Backtest<'a> {
                     short: self.bot_params[idx].short.clone(),
                 },
             });
+
+            // Backtest-only peek: if next order won't fill next candle, skip full grid expansion.
+            if self.trading_enabled.long && matches!(mode_long, OrchestratorMode::Normal) {
+                let next = calc_next_entry_long(
+                    &self.exchange_params_list[idx],
+                    &state_long,
+                    self.bp(idx, LONG),
+                    self.positions
+                        .long
+                        .get(&idx)
+                        .unwrap_or(&Position::default()),
+                    &trailing_long,
+                );
+                if self.order_filled(k + 1, idx, &next) {
+                    peek_hints.expand_grid_long.insert(idx);
+                }
+            }
+            if self.trading_enabled.short && matches!(mode_short, OrchestratorMode::Normal) {
+                let next = calc_next_entry_short(
+                    &self.exchange_params_list[idx],
+                    &state_short,
+                    self.bp(idx, SHORT),
+                    self.positions
+                        .short
+                        .get(&idx)
+                        .unwrap_or(&Position::default()),
+                    &trailing_short,
+                );
+                if self.order_filled(k + 1, idx, &next) {
+                    peek_hints.expand_grid_short.insert(idx);
+                }
+            }
+            if self.trading_enabled.long && matches!(mode_long, OrchestratorMode::Normal) {
+                let next_close = calc_next_close_long(
+                    &self.exchange_params_list[idx],
+                    &state_long,
+                    self.bp(idx, LONG),
+                    self.positions
+                        .long
+                        .get(&idx)
+                        .unwrap_or(&Position::default()),
+                    &trailing_long,
+                );
+                if self.order_filled(k + 1, idx, &next_close) {
+                    peek_hints.expand_close_long.insert(idx);
+                }
+            }
+            if self.trading_enabled.short && matches!(mode_short, OrchestratorMode::Normal) {
+                let next_close = calc_next_close_short(
+                    &self.exchange_params_list[idx],
+                    &state_short,
+                    self.bp(idx, SHORT),
+                    self.positions
+                        .short
+                        .get(&idx)
+                        .unwrap_or(&Position::default()),
+                    &trailing_short,
+                );
+                if self.order_filled(k + 1, idx, &next_close) {
+                    peek_hints.expand_close_short.insert(idx);
+                }
+            }
         }
 
         let ctx = OrchestratorContext {
@@ -2142,10 +2410,11 @@ impl<'a> Backtest<'a> {
             allow_unstuck: true,
             allowance_long: long_allowance,
             allowance_short: short_allowance,
+            entry_peek_hints: Some(peek_hints),
+            debug_step: Some(k),
         };
 
         let result = compute_ideal_orders(&ctx, &symbols_input);
-
         for order in result.orders {
             match order.side {
                 "long" => {
@@ -2183,6 +2452,85 @@ impl<'a> Backtest<'a> {
                 _ => {}
             }
         }
+
+        // Align with legacy: trim auto-reduce orders that exceed current position.
+        if self.trading_enabled.long {
+            let long_indices: Vec<usize> = self.open_orders.long.keys().cloned().collect();
+            for idx in long_indices {
+                let has_auto = self
+                    .open_orders
+                    .long
+                    .get(&idx)
+                    .map(|orders| {
+                        orders.closes.iter().any(|o| {
+                            matches!(
+                                o.order_type,
+                                OrderType::CloseAutoReduceWelLong
+                                    | OrderType::CloseAutoReduceTwelLong
+                            )
+                        })
+                    })
+                    .unwrap_or(false);
+                if !has_auto {
+                    continue;
+                }
+                let position_abs = self
+                    .positions
+                    .long
+                    .get(&idx)
+                    .map(|pos| pos.size.abs())
+                    .unwrap_or(0.0);
+                if let Some(orders) = self.open_orders.long.get_mut(&idx) {
+                    Self::trim_reduce_only_orders(
+                        &mut orders.closes,
+                        position_abs,
+                        LONG,
+                        &self.exchange_params_list[idx],
+                    );
+                }
+            }
+        }
+        if self.trading_enabled.short {
+            let short_indices: Vec<usize> = self.open_orders.short.keys().cloned().collect();
+            for idx in short_indices {
+                let has_auto = self
+                    .open_orders
+                    .short
+                    .get(&idx)
+                    .map(|orders| {
+                        orders.closes.iter().any(|o| {
+                            matches!(
+                                o.order_type,
+                                OrderType::CloseAutoReduceWelShort
+                                    | OrderType::CloseAutoReduceTwelShort
+                            )
+                        })
+                    })
+                    .unwrap_or(false);
+                if !has_auto {
+                    continue;
+                }
+                let position_abs = self
+                    .positions
+                    .short
+                    .get(&idx)
+                    .map(|pos| pos.size.abs())
+                    .unwrap_or(0.0);
+                if let Some(orders) = self.open_orders.short.get_mut(&idx) {
+                    Self::trim_reduce_only_orders(
+                        &mut orders.closes,
+                        position_abs,
+                        SHORT,
+                        &self.exchange_params_list[idx],
+                    );
+                }
+            }
+        }
+
+        // Apply portfolio-level entry gating to mirror legacy behaviour.
+        self.gate_entries_portfolio(k, LONG);
+        self.gate_entries_portfolio(k, SHORT);
+
         self.record_debug_orders(k);
     }
 
@@ -2340,74 +2688,79 @@ impl<'a> Backtest<'a> {
     }
 
     fn record_debug_orders(&mut self, k: usize) {
-        if !DEBUG_DUMP_ORDERS || k > DEBUG_MAX_STEPS {
+        if !DEBUG_DUMP_ORDERS
+            || (k > DEBUG_MAX_STEPS
+                && DEBUG_EXTRA_WINDOW
+                    .map(|(start, end)| k < start || k > end)
+                    .unwrap_or(true))
+        {
             return;
         }
-        let mut idxs: Vec<usize> = self.open_orders.long.keys().cloned().collect();
-        idxs.sort_unstable();
-        for idx in idxs {
-            if let Some(bundle) = self.open_orders.long.get(&idx) {
-                let entries = bundle
-                    .entries
-                    .iter()
-                    .map(|o| DebugOrder {
-                        qty: o.qty,
-                        price: o.price,
-                        order_type_id: o.order_type.id(),
-                        reduce_only: false,
-                    })
-                    .collect();
-                let closes = bundle
-                    .closes
-                    .iter()
-                    .map(|o| DebugOrder {
-                        qty: o.qty,
-                        price: o.price,
-                        order_type_id: o.order_type.id(),
-                        reduce_only: true,
-                    })
-                    .collect();
-                self.debug_orders.push(DebugOrderSnapshot {
-                    step: k,
-                    side: "long".to_string(),
-                    idx,
-                    entries,
-                    closes,
+        let Some(writer) = self.debug_writer.as_mut() else {
+            return;
+        };
+
+        for (&idx, bundle) in self.open_orders.long.iter() {
+            if bundle.entries.is_empty() && bundle.closes.is_empty() {
+                continue;
+            }
+            let mut entries = Vec::with_capacity(bundle.entries.len());
+            for o in &bundle.entries {
+                entries.push(DebugOrder {
+                    qty: o.qty,
+                    price: o.price,
+                    order_type_id: o.order_type.id(),
+                    reduce_only: false,
                 });
             }
+            let mut closes = Vec::with_capacity(bundle.closes.len());
+            for o in &bundle.closes {
+                closes.push(DebugOrder {
+                    qty: o.qty,
+                    price: o.price,
+                    order_type_id: o.order_type.id(),
+                    reduce_only: true,
+                });
+            }
+            let snapshot = DebugOrderSnapshot {
+                step: k,
+                side: "long",
+                idx,
+                entries,
+                closes,
+            };
+            writer.write_snapshot(&snapshot);
         }
-        let mut idxs_s: Vec<usize> = self.open_orders.short.keys().cloned().collect();
-        idxs_s.sort_unstable();
-        for idx in idxs_s {
-            if let Some(bundle) = self.open_orders.short.get(&idx) {
-                let entries = bundle
-                    .entries
-                    .iter()
-                    .map(|o| DebugOrder {
-                        qty: o.qty,
-                        price: o.price,
-                        order_type_id: o.order_type.id(),
-                        reduce_only: false,
-                    })
-                    .collect();
-                let closes = bundle
-                    .closes
-                    .iter()
-                    .map(|o| DebugOrder {
-                        qty: o.qty,
-                        price: o.price,
-                        order_type_id: o.order_type.id(),
-                        reduce_only: true,
-                    })
-                    .collect();
-                self.debug_orders.push(DebugOrderSnapshot {
-                    step: k,
-                    side: "short".to_string(),
-                    idx,
-                    entries,
-                    closes,
+        for (&idx, bundle) in self.open_orders.short.iter() {
+            if bundle.entries.is_empty() && bundle.closes.is_empty() {
+                continue;
+            }
+            let mut entries = Vec::with_capacity(bundle.entries.len());
+            for o in &bundle.entries {
+                entries.push(DebugOrder {
+                    qty: o.qty,
+                    price: o.price,
+                    order_type_id: o.order_type.id(),
+                    reduce_only: false,
                 });
             }
+            let mut closes = Vec::with_capacity(bundle.closes.len());
+            for o in &bundle.closes {
+                closes.push(DebugOrder {
+                    qty: o.qty,
+                    price: o.price,
+                    order_type_id: o.order_type.id(),
+                    reduce_only: true,
+                });
+            }
+            let snapshot = DebugOrderSnapshot {
+                step: k,
+                side: "short",
+                idx,
+                entries,
+                closes,
+            };
+            writer.write_snapshot(&snapshot);
         }
     }
 
