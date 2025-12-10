@@ -992,13 +992,19 @@ class Passivbot:
 
     async def run_execution_loop(self):
         """Main execution loop coordinating order generation and exchange interaction."""
+        failed_update_pos_oos_pnls_ohlcvs_count = 0
+        max_n_fails = 10
         while not self.stop_signal_received:
             try:
                 self.execution_scheduled = False
                 self.state_change_detected_by_symbol = set()
                 if not await self.update_pos_oos_pnls_ohlcvs():
                     await asyncio.sleep(0.5)
+                    failed_update_pos_oos_pnls_ohlcvs_count += 1
+                    if failed_update_pos_oos_pnls_ohlcvs_count > max_n_fails:
+                        await self.restart_bot_on_too_many_errors()
                     continue
+                failed_update_pos_oos_pnls_ohlcvs_count = 0
                 res = await self.execute_to_exchange()
                 if self.debug_mode:
                     return res
@@ -3171,6 +3177,8 @@ class Passivbot:
                 logging.error(f"error logging position changes {e}")
         if balance_ok and positions_ok:
             await self.handle_balance_update(source="REST")
+        else:
+            await self.restart_bot_on_too_many_errors()
         return balance_ok, positions_ok
 
     async def update_effective_min_cost(self, symbol=None):
