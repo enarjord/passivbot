@@ -32,6 +32,9 @@ class OKXBot(Passivbot):
             "sell": {"long": "close_long", "short": "open_short"},
         }
         self.custom_id_max_length = 32
+        # Track whether dual-side/hedge mode is available; default to True.
+        self.okx_dual_side = True
+        self.okx_pm_account = False
 
     def create_ccxt_sessions(self):
         if self.ws_enabled:
@@ -59,6 +62,33 @@ class OKXBot(Passivbot):
         self.cca.options.update(self._build_ccxt_options())
         self.cca.options["defaultType"] = "swap"
         self._apply_endpoint_override(self.cca)
+
+    async def _detect_account_config(self):
+        """
+        Inspect account configuration to detect portfolio margin (PM) and position mode.
+        Falls back silently if the endpoint is unavailable.
+        """
+        try:
+            cfg = await self.cca.private_get_account_config()
+            data = cfg.get("data", [{}])
+            data0 = data[0] if data else {}
+            pos_mode = str(data0.get("posMode", "")).lower()  # "long_short_mode" or "net_mode"
+            acct_lv = str(data0.get("acctLv", "")).lower()  # "pm" for portfolio margin accounts
+            if pos_mode == "net_mode":
+                self.okx_dual_side = False
+                self.hedge_mode = False
+            elif pos_mode == "long_short_mode":
+                self.okx_dual_side = True
+            # If unknown, keep default True and let later failures flip it off.
+            self.okx_pm_account = acct_lv == "pm"
+            if self.okx_pm_account:
+                logging.info(
+                    "OKX account detected as Portfolio Margin (PM); mode/leverage changes may be restricted."
+                )
+            if not self.okx_dual_side:
+                logging.info("OKX account is in net (one-way) mode; running without posSide/hedge.")
+        except Exception as e:
+            logging.warning(f"Unable to detect OKX account configuration: {e}")
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
@@ -283,15 +313,18 @@ class OKXBot(Passivbot):
 
     def get_order_execution_params(self, order: dict) -> dict:
         # defined for each exchange
-        return {
+        params = {
             "postOnly": require_live_value(self.config, "time_in_force") == "post_only",
-            "positionSide": order["position_side"],
             "reduceOnly": order["reduce_only"],
             "hedged": True,
             "tag": self.broker_code,
             "clOrdId": order["custom_id"],
             "marginMode": "cross",
         }
+        # Only send positionSide when dual-side mode is confirmed.
+        if self.okx_dual_side:
+            params["positionSide"] = order["position_side"]
+        return params
 
     async def update_exchange_config_by_symbols(self, symbols: [str]):
         coros_to_call_margin_mode = {}
@@ -315,18 +348,36 @@ class OKXBot(Passivbot):
             except Exception as e:
                 if '"code":"59107"' in e.args[0]:
                     to_print += f" cross mode and leverage: {res} {e}"
+                elif '"code":"51039"' in e.args[0]:
+                    logging.warning(
+                        f"{symbol}: unable to adjust margin mode/leverage (possibly PM or open positions): {e}"
+                    )
+                    continue
                 else:
                     logging.error(f"{symbol} error setting cross mode {res} {e}")
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 
     async def update_exchange_config(self):
+        # Detect current account mode; adjust expectations before attempting changes.
+        await self._detect_account_config()
+        if not self.okx_dual_side:
+            # One-way mode: skip attempting to set hedge mode; orders will omit posSide.
+            return
         try:
             res = await self.cca.set_position_mode(True)
             logging.info(f"set hedge mode {res}")
         except Exception as e:
-            if '"code":"59000"' in e.args[0]:
+            msg = e.args[0] if e.args else ""
+            if '"code":"59000"' in msg:
                 logging.info(f"margin mode: {e}")
+            elif '"code":"51039"' in msg or '"code":"51000"' in msg:
+                # Cannot switch to dual/hedge (often due to PM or open orders/positions).
+                self.okx_dual_side = False
+                self.hedge_mode = False
+                logging.warning(
+                    "OKX rejected hedge/dual-side switch (51039/51000). Continuing in net mode without posSide."
+                )
             else:
                 logging.error(f"error setting hedge mode {e}")
 

@@ -90,9 +90,11 @@ import logging
 import traceback
 import json
 import pprint
+
 try:
     from deap import base, creator, tools, algorithms
 except ImportError:  # pragma: no cover - allow import in minimal test envs
+
     class _DummyFitness:
         weights = ()
 
@@ -118,7 +120,7 @@ except ImportError:  # pragma: no cover - allow import in minimal test envs
 import math
 import fcntl
 from optimizer_overrides import optimizer_overrides
-from opt_utils import make_json_serializable, generate_incremental_diff, round_floats
+from opt_utils import make_json_serializable, generate_incremental_diff, round_floats, quantize_floats
 from limit_utils import expand_limit_checks, compute_limit_violation
 from pareto_store import ParetoStore
 import msgpack

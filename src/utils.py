@@ -416,7 +416,12 @@ def filter_markets(markets: dict, exchange: str, verbose=False) -> (dict, dict, 
     return eligible, ineligible, reasons
 
 
-async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24, verbose=True) -> dict:
+async def load_markets(
+    exchange: str,
+    max_age_ms: int = 1000 * 60 * 60 * 24,
+    verbose=True,
+    cc=None,
+) -> dict:
     """
     Standalone helper to load and cache CCXT markets for a given exchange.
 
@@ -426,7 +431,8 @@ async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24, ver
 
     Returns a markets dictionary as provided by ccxt.
     """
-    ex = normalize_exchange_name(exchange)
+    # Prefer cc.id when a ccxt instance is supplied, otherwise use the provided exchange string.
+    ex = normalize_exchange_name(getattr(cc, "id", None) or exchange)
     markets_path = os.path.join("caches", ex, "markets.json")
 
     # Try cache first
@@ -443,17 +449,21 @@ async def load_markets(exchange: str, max_age_ms: int = 1000 * 60 * 60 * 24, ver
         logging.error("Error loading %s: %s", markets_path, e)
 
     # Fetch from exchange via ccxt
-    cc = load_ccxt_instance(ex, enable_rate_limit=True)
+    owned_cc = cc is None
+    if owned_cc:
+        cc = load_ccxt_instance(ex, enable_rate_limit=True)
     try:
         markets = await cc.load_markets(True)
     except Exception as e:
         logging.error(f"Error loading markets from {ex}: {e}")
         raise
     finally:
-        try:
-            await cc.close()
-        except Exception:
-            pass
+        # Only close the ccxt client if we created it here.
+        if owned_cc:
+            try:
+                await cc.close()
+            except Exception:
+                pass
 
     # Dump to cache
     try:
@@ -514,6 +524,8 @@ def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True):
         raise RuntimeError(f"ccxt exchange '{ex}' not available")
     try:
         cc.options["defaultType"] = "swap"
+        if ex == "hyperliquid":
+            cc.options["fetchMarkets"]["types"] = ["swap"]
     except Exception:
         pass
     try:

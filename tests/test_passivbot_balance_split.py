@@ -74,3 +74,21 @@ async def test_update_balance_uses_fetch_balance_when_no_cache():
     bot.handle_balance_update = fake_handle_balance_update
     await bot.handle_balance_update()
     assert calls["balance"] == 1
+
+
+@pytest.mark.asyncio
+async def test_update_balance_failure_keeps_previous():
+    bot = Passivbot.__new__(Passivbot)
+    bot.quote = "USDT"
+    bot.balance = 50.0
+    bot.previous_hysteresis_balance = 50.0
+
+    async def fake_fetch_balance():
+        return False  # simulate failed fetch
+
+    bot.fetch_balance = fake_fetch_balance
+
+    ok = await bot.update_balance()
+    assert ok is False
+    assert bot.balance == pytest.approx(50.0)
+    assert bot.previous_hysteresis_balance == pytest.approx(50.0)

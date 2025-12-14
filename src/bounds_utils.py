@@ -4,6 +4,7 @@ Utilities for enforcing parameter bounds and step constraints.
 This module provides reusable functions for quantizing parameter values
 to discrete steps and enforcing bounds on configuration dictionaries.
 """
+
 import logging
 from typing import Dict
 

@@ -87,6 +87,7 @@ from tools.event_loop_policy import set_windows_event_loop_policy
 
 # Fallback stubs for test environments without full extension symbols
 if not hasattr(pbr, "HlcvsBundle"):  # pragma: no cover
+
     class HlcvsBundle:
         pass
 
