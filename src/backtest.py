@@ -961,6 +961,7 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
 
     shared_keys = {
         "positions_held_per_day",
+        "positions_held_per_day_w",
         "position_held_hours_mean",
         "position_held_hours_max",
         "position_held_hours_median",
