@@ -70,6 +70,7 @@ CURRENCY_METRICS = {
 
 SHARED_METRICS = {
     "positions_held_per_day",
+    "positions_held_per_day_w",
     "position_held_hours_mean",
     "position_held_hours_max",
     "position_held_hours_median",
