@@ -16,6 +16,14 @@ passivbot_agent_principles:
     - Backtester and live bot should share the same Rust logic wherever possible.
     - Use Python primarily for orchestration, bindings, and experimentation.
 
+  notation_and_terminology:
+    - Position side or position direction (long or short) is consistently called, as appropriate, [position_side, pos_side, pside, PositionSide, PosSide, Pside] everywhere in the codebase and in documentation.
+    - Order side or order direction (buy or sell / bid or ask) is consistently called, as appropriate, [side, order_side, Side, OrderSide] everywhere in the codebase and in documentation.
+
+  rounding:
+    - Effective min qty for entries must be observed at all times.
+    - Closes should observe effective min cost too, according to calc_min_entry_qty, the only exception being if pos size is smaller than effective min qty, in which case close qty is set equal to pos size.
+
   error_handling:
     - Fail loudly. Prefer clear exceptions or panics over silent error handling.
     - Assume upstream code is correct; don’t silently compensate for bad data.
