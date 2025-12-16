@@ -4,12 +4,14 @@ use crate::closes::{
 use crate::coin_selection::{select_coins, CoinFeature, SelectionConfig};
 use crate::constants::{CLOSE, HIGH, LONG, LOW, NO_POS, SHORT, VOLUME};
 use crate::entries::{
-    calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
+    calc_entries_long, calc_entries_short, calc_min_entry_qty, calc_next_entry_long,
+    calc_next_entry_short,
 };
-use crate::orchestrator::{
-    compute_ideal_orders, EffectiveNPositions as OrchestratorENP, EntryPeekHints,
-    Mode as OrchestratorMode, OrchestratorContext, SymbolInput,
+use crate::orchestrator::v2 as orchestrator_v2;
+use crate::orchestrator::v2::{
+    EmaBundle as OrchestratorEmaBundle, EmaTimeframeBundle as OrchestratorEmaTimeframeBundle,
 };
+use crate::orchestrator::EntryPeekHints;
 use crate::risk::{
     calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
     GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
@@ -20,25 +22,96 @@ use crate::types::{
     Order, OrderBook, OrderType, Position, Positions, StateParams, TrailingPriceBundle,
 };
 use crate::utils::{
-    calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
-    calc_pprice_diff_int, calc_wallet_exposure, hysteresis, qty_to_cost, round_, round_dn,
+    calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_order_price_diff_ask,
+    calc_order_price_diff_bid, calc_pnl_long, calc_pnl_short, calc_wallet_exposure, hysteresis,
+    qty_to_cost, round_, round_dn, round_up,
 };
 use serde::Serialize;
 
 // Temporary toggle to enable the new orchestrator path. Keep false for legacy behaviour.
-const USE_ORCHESTRATOR: bool = false;
+const USE_ORCHESTRATOR: bool = true;
 const DEBUG_DUMP_ORDERS: bool = false;
+const DEBUG_TRACE_BALANCE: bool = false;
+const DEBUG_DUMP_UNSTUCK_CALC: bool = false;
+// Runtime profiler for the orchestrator path. Enable by setting env var `PASSIVBOT_ORCH_PROFILE=1`.
+const ORCH_PROFILE_ENV: &str = "PASSIVBOT_ORCH_PROFILE";
 // Limit debug snapshots to a narrow window around the first legacy/orchestrator divergence.
 const DEBUG_MAX_STEPS: usize = 0;
 // Optional extra window to capture debug orders beyond DEBUG_MAX_STEPS (inclusive bounds).
 // Set to None to disable.
-const DEBUG_EXTRA_WINDOW: Option<(usize, usize)> = Some((291480, 291520));
+const DEBUG_EXTRA_WINDOW: Option<(usize, usize)> = None;
+// Optional coin filter for debug dumps (by coin name, e.g. Some("LINK")); None dumps all coins.
+const DEBUG_COIN_FILTER: Option<&str> = None;
+// Optional window for unstuck debug dump (inclusive bounds). Set to None to disable.
+const DEBUG_UNSTUCK_WINDOW: Option<(usize, usize)> = None;
+// Optional coin filter for unstuck debug dump (by coin name, e.g. Some("LINK")); None dumps all.
+const DEBUG_UNSTUCK_COIN_FILTER: Option<&str> = None;
+// Optional window for balance trace debug (inclusive bounds). Set to None to disable.
+const DEBUG_TRACE_WINDOW: Option<(usize, usize)> = None;
+// Optional coin filter for balance trace debug (by coin name, e.g. Some("SOL")); None dumps all.
+const DEBUG_TRACE_COIN_FILTER: Option<&str> = None;
 use ndarray::{ArrayView1, ArrayView3};
 use serde_json;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use std::time::Instant;
+
+#[derive(Serialize)]
+struct UnstuckCalcDebug {
+    label: &'static str,
+    step: usize,
+    coin: String,
+    idx: usize,
+    side: usize,
+    balance: f64,
+    balance_bits: u64,
+    allowance: f64,
+    allowance_bits: u64,
+    position_size: f64,
+    position_size_bits: u64,
+    position_price: f64,
+    position_price_bits: u64,
+    current_price: f64,
+    current_price_bits: u64,
+    ema_band_upper: f64,
+    ema_band_upper_bits: u64,
+    ema_band_lower: f64,
+    ema_band_lower_bits: u64,
+    wallet_exposure_limit: f64,
+    wallet_exposure_limit_bits: u64,
+    risk_we_excess_allowance_pct: f64,
+    unstuck_threshold: f64,
+    unstuck_close_pct: f64,
+    unstuck_ema_dist: f64,
+    qty_step: f64,
+    price_step: f64,
+    min_qty: f64,
+    min_cost: f64,
+    c_mult: f64,
+    effective_wel: f64,
+    effective_wel_bits: u64,
+    wallet_exposure: f64,
+    wallet_exposure_bits: u64,
+    ema_price_target: f64,
+    ema_price_target_bits: u64,
+    ema_price_rounded: f64,
+    ema_price_rounded_bits: u64,
+    meets_trigger: bool,
+    min_entry_qty: f64,
+    min_entry_qty_bits: u64,
+    target_qty_raw: f64,
+    target_qty_raw_bits: u64,
+    target_qty_dn: f64,
+    target_qty_dn_bits: u64,
+    close_qty_pre_allowance: f64,
+    close_qty_pre_allowance_bits: u64,
+    pnl_if_closed: f64,
+    pnl_if_closed_bits: u64,
+    close_qty_final: f64,
+    close_qty_final_bits: u64,
+}
 
 #[derive(Clone, Default, Copy, Debug)]
 pub struct EmaAlphas {
@@ -48,8 +121,8 @@ pub struct EmaAlphas {
     pub vol_alpha_short: f64,
     pub log_range_alpha_long: f64,
     pub log_range_alpha_short: f64,
-    pub grid_log_range_alpha_long: f64,
-    pub grid_log_range_alpha_short: f64,
+    pub entry_volatility_logrange_ema_1h_alpha_long: f64,
+    pub entry_volatility_logrange_ema_1h_alpha_short: f64,
 }
 
 #[derive(Clone, Default, Copy, Debug)]
@@ -77,12 +150,12 @@ pub struct EMAs {
     pub log_range_short: f64,
     pub log_range_short_num: f64,
     pub log_range_short_den: f64,
-    pub grid_log_range_long: f64,
-    pub grid_log_range_long_num: f64,
-    pub grid_log_range_long_den: f64,
-    pub grid_log_range_short: f64,
-    pub grid_log_range_short_num: f64,
-    pub grid_log_range_short_den: f64,
+    pub entry_volatility_logrange_ema_1h_long: f64,
+    pub entry_volatility_logrange_ema_1h_long_num: f64,
+    pub entry_volatility_logrange_ema_1h_long_den: f64,
+    pub entry_volatility_logrange_ema_1h_short: f64,
+    pub entry_volatility_logrange_ema_1h_short_num: f64,
+    pub entry_volatility_logrange_ema_1h_short_den: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -223,8 +296,8 @@ pub struct Backtest<'a> {
     needs_volume_ema_short: bool,
     needs_log_range_long: bool,
     needs_log_range_short: bool,
-    needs_grid_log_range_long: bool,
-    needs_grid_log_range_short: bool,
+    needs_entry_volatility_logrange_ema_1h_long: bool,
+    needs_entry_volatility_logrange_ema_1h_short: bool,
     coin_first_valid_idx: Vec<usize>,
     coin_last_valid_idx: Vec<usize>,
     coin_trade_start_idx: Vec<usize>,
@@ -257,6 +330,10 @@ pub struct Backtest<'a> {
     // removed rolling_volume_sum & buffer — replaced by per-coin EMAs in `emas`
     equity_tracking_active: bool,
     debug_writer: Option<DebugOrderWriter>,
+    debug_balance_writer: Option<DebugBalanceWriter>,
+    orchestrator_input_cache_v2: Option<orchestrator_v2::OrchestratorInputV2>,
+    orchestrator_workspace_v2: orchestrator_v2::OrchestratorWorkspaceV2,
+    orch_profile: Option<OrchProfile>,
 }
 
 #[derive(Debug, Serialize)]
@@ -272,6 +349,11 @@ struct DebugOrderSnapshot {
     step: usize,
     side: &'static str,
     idx: usize,
+    coin: String,
+    stage: &'static str,
+    pos_size: f64,
+    pos_price: f64,
+    close_price: f64,
     entries: Vec<DebugOrder>,
     closes: Vec<DebugOrder>,
 }
@@ -331,6 +413,109 @@ impl Drop for DebugOrderWriter {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct BalanceSnapshot {
+    usd_cash_wallet: f64,
+    usd_total_balance: f64,
+    usd_total_balance_rounded: f64,
+    btc_cash_wallet: f64,
+    btc_total_balance: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct DebugBalanceTraceRecord {
+    step: usize,
+    timestamp_ms: u64,
+    coin: String,
+    event: &'static str,
+    order_type_id: u16,
+    fill_qty: f64,
+    fill_price: f64,
+    pnl: f64,
+    fee_paid: f64,
+    btc_price: f64,
+    usd_cash_wallet_before: f64,
+    usd_cash_wallet_after: f64,
+    usd_total_balance_before: f64,
+    usd_total_balance_after: f64,
+    usd_total_balance_rounded_before: f64,
+    usd_total_balance_rounded_after: f64,
+    btc_cash_wallet_before: f64,
+    btc_cash_wallet_after: f64,
+    btc_total_balance_before: f64,
+    btc_total_balance_after: f64,
+}
+
+struct DebugBalanceWriter {
+    writer: BufWriter<File>,
+}
+
+impl DebugBalanceWriter {
+    fn new_for_mode() -> Option<Self> {
+        let fname = if USE_ORCHESTRATOR {
+            "debug_balance_orchestrator.jsonl"
+        } else {
+            "debug_balance_legacy.jsonl"
+        };
+        Self::new(fname)
+    }
+
+    fn new(fname: &str) -> Option<Self> {
+        Some(Self {
+            writer: BufWriter::new(File::create(fname).ok()?),
+        })
+    }
+
+    fn write_record(&mut self, record: &DebugBalanceTraceRecord) {
+        if serde_json::to_writer(&mut self.writer, record).is_ok() {
+            let _ = self.writer.write_all(b"\n");
+        }
+    }
+
+    fn finish(&mut self) {
+        let _ = self.writer.flush();
+    }
+}
+
+impl Drop for DebugBalanceWriter {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
+#[derive(Debug, Default, Serialize)]
+struct OrchProfile {
+    mode: &'static str,
+    steps: u64,
+    total_ns: u64,
+    clear_orders_ns: u64,
+    peek_hints_ns: u64,
+    input_update_ns: u64,
+    compute_ns: u64,
+    distribute_ns: u64,
+    sort_bundles_ns: u64,
+}
+
+impl OrchProfile {
+    #[inline]
+    fn add_ns(field: &mut u64, elapsed: std::time::Duration) {
+        *field = field.saturating_add(elapsed.as_nanos() as u64);
+    }
+
+    fn write_to_file(&self) {
+        let fname = match self.mode {
+            "orchestrator" => "measurements/orch_profile_orchestrator.json",
+            "legacy" => "measurements/orch_profile_legacy.json",
+            _ => "measurements/orch_profile.json",
+        };
+        if let Ok(file) = File::create(fname) {
+            let mut w = BufWriter::new(file);
+            let _ = serde_json::to_writer_pretty(&mut w, self);
+            let _ = w.flush();
+        }
+    }
+}
+
 fn calc_entry_balance_pct(params: &BotParams, effective_n_positions: usize) -> f64 {
     if effective_n_positions == 0 {
         return 0.0;
@@ -341,6 +526,732 @@ fn calc_entry_balance_pct(params: &BotParams, effective_n_positions: usize) -> f
 }
 
 impl<'a> Backtest<'a> {
+    #[inline]
+    fn snapshot_balance(&self) -> BalanceSnapshot {
+        BalanceSnapshot {
+            usd_cash_wallet: self.balance.usd_cash_wallet,
+            usd_total_balance: self.balance.usd_total_balance,
+            usd_total_balance_rounded: self.balance.usd_total_balance_rounded,
+            btc_cash_wallet: self.balance.btc_cash_wallet,
+            btc_total_balance: self.balance.btc_total_balance,
+        }
+    }
+
+    fn debug_dump_unstuck_calc(&self, k: usize, idx: usize, side: usize, label: &'static str) {
+        if !DEBUG_DUMP_UNSTUCK_CALC {
+            return;
+        }
+        if DEBUG_UNSTUCK_WINDOW
+            .map(|(start, end)| k < start || k > end)
+            .unwrap_or(true)
+        {
+            return;
+        }
+
+        let coin = self
+            .backtest_params
+            .coins
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| format!("idx_{idx}"));
+        if let Some(want) = DEBUG_UNSTUCK_COIN_FILTER {
+            if coin != want {
+                return;
+            }
+        }
+
+        let position = match side {
+            LONG => self.positions.long.get(&idx).copied().unwrap_or_default(),
+            SHORT => self.positions.short.get(&idx).copied().unwrap_or_default(),
+            _ => return,
+        };
+        if position.size == 0.0 || !position.price.is_finite() || position.price <= 0.0 {
+            return;
+        }
+
+        let balance = self.balance.usd_total_balance_rounded;
+        let allowance = match side {
+            LONG => {
+                if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
+                    calc_auto_unstuck_allowance(
+                        balance,
+                        self.bot_params_master.long.unstuck_loss_allowance_pct
+                            * self.bot_params_master.long.total_wallet_exposure_limit,
+                        self.pnl_cumsum_max,
+                        self.pnl_cumsum_running,
+                    )
+                } else {
+                    0.0
+                }
+            }
+            SHORT => {
+                if self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0 {
+                    calc_auto_unstuck_allowance(
+                        balance,
+                        self.bot_params_master.short.unstuck_loss_allowance_pct
+                            * self.bot_params_master.short.total_wallet_exposure_limit,
+                        self.pnl_cumsum_max,
+                        self.pnl_cumsum_running,
+                    )
+                } else {
+                    0.0
+                }
+            }
+            _ => 0.0,
+        };
+
+        let bp = self.bp(idx, side);
+        let ema_bands = self.emas[idx].compute_bands(side);
+        let current_price = self.hlcvs_value(k, idx, CLOSE);
+        let ex = &self.exchange_params_list[idx];
+
+        let size_abs = position.size.abs();
+        let allowance_multiplier = 1.0 + bp.risk_we_excess_allowance_pct.max(0.0);
+        let effective_wel = bp.wallet_exposure_limit * allowance_multiplier;
+        let wallet_exposure = calc_wallet_exposure(ex.c_mult, balance, size_abs, position.price);
+        let ema_price_target = match side {
+            LONG => ema_bands.upper * (1.0 + bp.unstuck_ema_dist),
+            SHORT => ema_bands.lower * (1.0 - bp.unstuck_ema_dist),
+            _ => 0.0,
+        };
+        let ema_price_rounded = match side {
+            LONG => round_up(ema_price_target, ex.price_step),
+            SHORT => round_dn(ema_price_target, ex.price_step),
+            _ => 0.0,
+        };
+        let meets_trigger = match side {
+            LONG => current_price >= ema_price_rounded,
+            SHORT => current_price <= ema_price_rounded,
+            _ => false,
+        };
+
+        let min_entry_qty = calc_min_entry_qty(current_price, ex);
+        let target_qty_raw = crate::utils::cost_to_qty(
+            balance * effective_wel * bp.unstuck_close_pct,
+            current_price,
+            ex.c_mult,
+        );
+        let target_qty_dn = round_dn(target_qty_raw, ex.qty_step).max(0.0);
+        let close_qty_pre_allowance = match side {
+            LONG => -f64::min(size_abs, f64::max(min_entry_qty, target_qty_dn)),
+            SHORT => f64::min(size_abs, f64::max(min_entry_qty, target_qty_dn)),
+            _ => 0.0,
+        };
+
+        let pnl_if_closed = match side {
+            LONG => calc_pnl_long(
+                position.price,
+                current_price,
+                close_qty_pre_allowance,
+                ex.c_mult,
+            ),
+            SHORT => calc_pnl_short(
+                position.price,
+                current_price,
+                close_qty_pre_allowance,
+                ex.c_mult,
+            ),
+            _ => 0.0,
+        };
+
+        let mut close_qty_final = close_qty_pre_allowance;
+        if allowance > 0.0 && pnl_if_closed < 0.0 {
+            let pnl_abs = pnl_if_closed.abs();
+            if pnl_abs > allowance {
+                let scaled_qty = close_qty_pre_allowance.abs() * (allowance / pnl_abs);
+                let scaled_qty = f64::min(size_abs, scaled_qty);
+                let scaled_qty = f64::max(min_entry_qty, round_dn(scaled_qty, ex.qty_step));
+                close_qty_final = match side {
+                    LONG => -scaled_qty,
+                    SHORT => scaled_qty,
+                    _ => close_qty_pre_allowance,
+                };
+            }
+        }
+
+        let payload = UnstuckCalcDebug {
+            label,
+            step: k,
+            coin,
+            idx,
+            side,
+            balance,
+            balance_bits: balance.to_bits(),
+            allowance,
+            allowance_bits: allowance.to_bits(),
+            position_size: position.size,
+            position_size_bits: position.size.to_bits(),
+            position_price: position.price,
+            position_price_bits: position.price.to_bits(),
+            current_price,
+            current_price_bits: current_price.to_bits(),
+            ema_band_upper: ema_bands.upper,
+            ema_band_upper_bits: ema_bands.upper.to_bits(),
+            ema_band_lower: ema_bands.lower,
+            ema_band_lower_bits: ema_bands.lower.to_bits(),
+            wallet_exposure_limit: bp.wallet_exposure_limit,
+            wallet_exposure_limit_bits: bp.wallet_exposure_limit.to_bits(),
+            risk_we_excess_allowance_pct: bp.risk_we_excess_allowance_pct,
+            unstuck_threshold: bp.unstuck_threshold,
+            unstuck_close_pct: bp.unstuck_close_pct,
+            unstuck_ema_dist: bp.unstuck_ema_dist,
+            qty_step: ex.qty_step,
+            price_step: ex.price_step,
+            min_qty: ex.min_qty,
+            min_cost: ex.min_cost,
+            c_mult: ex.c_mult,
+            effective_wel,
+            effective_wel_bits: effective_wel.to_bits(),
+            wallet_exposure,
+            wallet_exposure_bits: wallet_exposure.to_bits(),
+            ema_price_target,
+            ema_price_target_bits: ema_price_target.to_bits(),
+            ema_price_rounded,
+            ema_price_rounded_bits: ema_price_rounded.to_bits(),
+            meets_trigger,
+            min_entry_qty,
+            min_entry_qty_bits: min_entry_qty.to_bits(),
+            target_qty_raw,
+            target_qty_raw_bits: target_qty_raw.to_bits(),
+            target_qty_dn,
+            target_qty_dn_bits: target_qty_dn.to_bits(),
+            close_qty_pre_allowance,
+            close_qty_pre_allowance_bits: close_qty_pre_allowance.to_bits(),
+            pnl_if_closed,
+            pnl_if_closed_bits: pnl_if_closed.to_bits(),
+            close_qty_final,
+            close_qty_final_bits: close_qty_final.to_bits(),
+        };
+
+        let fname = match label {
+            "legacy" => "debug_unstuck_calc_legacy.json",
+            "orchestrator" => "debug_unstuck_calc_orchestrator.json",
+            _ => "debug_unstuck_calc.json",
+        };
+        if let Ok(mut f) = File::create(fname) {
+            let _ = serde_json::to_writer_pretty(&mut f, &payload);
+            let _ = writeln!(f);
+        }
+    }
+
+    fn record_balance_trace(
+        &mut self,
+        k: usize,
+        idx: usize,
+        event: &'static str,
+        order: &Order,
+        fill_qty: f64,
+        fill_price: f64,
+        pnl: f64,
+        fee_paid: f64,
+        before: BalanceSnapshot,
+        after: BalanceSnapshot,
+    ) {
+        if !DEBUG_TRACE_BALANCE {
+            return;
+        }
+        if DEBUG_TRACE_WINDOW
+            .map(|(start, end)| k < start || k > end)
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        let coin = self
+            .backtest_params
+            .coins
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| format!("idx_{idx}"));
+        if let Some(want) = DEBUG_TRACE_COIN_FILTER {
+            if coin != want {
+                return;
+            }
+        }
+
+        let Some(writer) = self.debug_balance_writer.as_mut() else {
+            return;
+        };
+
+        let timestamp_ms = self.first_timestamp_ms + (k as u64) * 60_000;
+        let record = DebugBalanceTraceRecord {
+            step: k,
+            timestamp_ms,
+            coin,
+            event,
+            order_type_id: order.order_type.id(),
+            fill_qty,
+            fill_price,
+            pnl,
+            fee_paid,
+            btc_price: self.btc_usd_prices[k],
+            usd_cash_wallet_before: before.usd_cash_wallet,
+            usd_cash_wallet_after: after.usd_cash_wallet,
+            usd_total_balance_before: before.usd_total_balance,
+            usd_total_balance_after: after.usd_total_balance,
+            usd_total_balance_rounded_before: before.usd_total_balance_rounded,
+            usd_total_balance_rounded_after: after.usd_total_balance_rounded,
+            btc_cash_wallet_before: before.btc_cash_wallet,
+            btc_cash_wallet_after: after.btc_cash_wallet,
+            btc_total_balance_before: before.btc_total_balance,
+            btc_total_balance_after: after.btc_total_balance,
+        };
+        writer.write_record(&record);
+    }
+
+    /// Build a fully-populated `orchestrator::v2::OrchestratorInputV2` snapshot for timestep `k`.
+    ///
+    /// Not wired into execution yet; intended to be used by the `USE_ORCHESTRATOR` toggle once
+    /// the legacy-vs-orchestrator comparison harness is updated.
+    pub fn build_orchestrator_input_v2(
+        &self,
+        k: usize,
+        peek_hints: Option<EntryPeekHints>,
+    ) -> orchestrator_v2::OrchestratorInputV2 {
+        self.build_orchestrator_input_v2_iter(k, peek_hints, 0..self.n_coins)
+    }
+
+    fn build_orchestrator_input_v2_indices(
+        &self,
+        k: usize,
+        peek_hints: Option<EntryPeekHints>,
+        indices: &[usize],
+    ) -> orchestrator_v2::OrchestratorInputV2 {
+        self.build_orchestrator_input_v2_iter(k, peek_hints, indices.iter().copied())
+    }
+
+    fn build_orchestrator_input_v2_iter<I>(
+        &self,
+        k: usize,
+        peek_hints: Option<EntryPeekHints>,
+        indices: I,
+    ) -> orchestrator_v2::OrchestratorInputV2
+    where
+        I: IntoIterator<Item = usize>,
+    {
+        let balance = self.balance.usd_total_balance_rounded;
+
+        let long_allowance = if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
+            calc_auto_unstuck_allowance(
+                balance,
+                self.bot_params_master.long.unstuck_loss_allowance_pct
+                    * self.bot_params_master.long.total_wallet_exposure_limit,
+                self.pnl_cumsum_max,
+                self.pnl_cumsum_running,
+            )
+        } else {
+            0.0
+        };
+        let short_allowance = if self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0 {
+            calc_auto_unstuck_allowance(
+                balance,
+                self.bot_params_master.short.unstuck_loss_allowance_pct
+                    * self.bot_params_master.short.total_wallet_exposure_limit,
+                self.pnl_cumsum_max,
+                self.pnl_cumsum_running,
+            )
+        } else {
+            0.0
+        };
+
+        let symbols: Vec<orchestrator_v2::SymbolInputV2> = indices
+            .into_iter()
+            .map(|idx| {
+                let (start, end) = self.coin_valid_range(idx).unwrap_or((0, 0));
+                let price_idx = k.clamp(start, end);
+                let close_price = self.hlcvs_value(price_idx, idx, CLOSE).max(f64::EPSILON);
+
+                let order_book = OrderBook {
+                    bid: close_price,
+                    ask: close_price,
+                };
+                let exchange = self.exchange_params_list[idx].clone();
+                let effective_min_cost =
+                    qty_to_cost(exchange.min_qty, close_price, exchange.c_mult)
+                        .max(exchange.min_cost);
+
+                let tradable = self.coin_is_tradeable_at(idx, k);
+                let next_candle = if k + 1 < self.hlcvs.shape()[0] {
+                    let tradable_next = self.coin_is_tradeable_at(idx, k + 1);
+                    let (low, high) = if tradable_next {
+                        (
+                            self.hlcvs_value(k + 1, idx, LOW),
+                            self.hlcvs_value(k + 1, idx, HIGH),
+                        )
+                    } else {
+                        (0.0, 0.0)
+                    };
+                    Some(orchestrator_v2::NextCandle {
+                        low,
+                        high,
+                        tradable: tradable_next,
+                    })
+                } else {
+                    None
+                };
+                let valid_now = self.coin_is_valid_at(idx, k);
+
+                let pos_long = *self
+                    .positions
+                    .long
+                    .get(&idx)
+                    .unwrap_or(&Position::default());
+                let pos_short = *self
+                    .positions
+                    .short
+                    .get(&idx)
+                    .unwrap_or(&Position::default());
+
+                let mut mode_long: Option<orchestrator_v2::TradingMode> = None;
+                let mut mode_short: Option<orchestrator_v2::TradingMode> = None;
+
+                // Backtest delist behaviour: if a coin is delisted (ends early), switch to panic at the
+                // last valid candle so we force a close while the market is still "tradeable".
+                if let Some(&delist_timestamp) = self.last_valid_timestamps.get(&idx) {
+                    if k >= delist_timestamp {
+                        if pos_long.size != 0.0 {
+                            mode_long = Some(orchestrator_v2::TradingMode::Panic);
+                        }
+                        if pos_short.size != 0.0 {
+                            mode_short = Some(orchestrator_v2::TradingMode::Panic);
+                        }
+                    }
+                } else {
+                    // Fallback: if data is already invalid and we still have a position, panic as well.
+                    if !valid_now && pos_long.size != 0.0 {
+                        mode_long = Some(orchestrator_v2::TradingMode::Panic);
+                    }
+                    if !valid_now && pos_short.size != 0.0 {
+                        mode_short = Some(orchestrator_v2::TradingMode::Panic);
+                    }
+                }
+
+                // filter_by_min_effective_cost => GracefulStop (blocks only initial entries).
+                if self.backtest_params.filter_by_min_effective_cost {
+                    if !self.coin_passes_min_effective_cost(idx, LONG) && pos_long.size == 0.0 {
+                        mode_long = Some(orchestrator_v2::TradingMode::GracefulStop);
+                    }
+                    if !self.coin_passes_min_effective_cost(idx, SHORT) && pos_short.size == 0.0 {
+                        mode_short = Some(orchestrator_v2::TradingMode::GracefulStop);
+                    }
+                }
+
+                // Build EMA bundle (per-coin spans; must match how EMAs were computed).
+                let mut m1 = OrchestratorEmaTimeframeBundle::default();
+                let mut h1 = OrchestratorEmaTimeframeBundle::default();
+
+                // 1m close EMAs (3 spans) per pside
+                {
+                    let bp = &self.bot_params[idx].long;
+                    let mut spans = [
+                        bp.ema_span_0,
+                        bp.ema_span_1,
+                        (bp.ema_span_0 * bp.ema_span_1).sqrt(),
+                    ];
+                    spans.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    for (span, value) in spans.into_iter().zip(self.emas[idx].long.into_iter()) {
+                        m1.close.push((span, value));
+                    }
+                }
+                {
+                    let bp = &self.bot_params[idx].short;
+                    let mut spans = [
+                        bp.ema_span_0,
+                        bp.ema_span_1,
+                        (bp.ema_span_0 * bp.ema_span_1).sqrt(),
+                    ];
+                    spans.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    for (span, value) in spans.into_iter().zip(self.emas[idx].short.into_iter()) {
+                        m1.close.push((span, value));
+                    }
+                }
+
+                // 1m volume/log-range EMAs (used by forager); these are global by spec.
+                // We assume the spans match across coins (as the backtest EMA alphas were built per-coin).
+                let vol_span_long = self.bot_params_master.long.filter_volume_ema_span as f64;
+                let vol_span_short = self.bot_params_master.short.filter_volume_ema_span as f64;
+                let lr_span_long = self.bot_params_master.long.filter_volatility_ema_span as f64;
+                let lr_span_short = self.bot_params_master.short.filter_volatility_ema_span as f64;
+
+                debug_assert_eq!(
+                    self.bot_params[idx].long.filter_volume_ema_span as f64, vol_span_long,
+                    "coin {} long filter_volume_ema_span differs from master",
+                    idx
+                );
+                debug_assert_eq!(
+                    self.bot_params[idx].short.filter_volume_ema_span as f64, vol_span_short,
+                    "coin {} short filter_volume_ema_span differs from master",
+                    idx
+                );
+                debug_assert_eq!(
+                    self.bot_params[idx].long.filter_volatility_ema_span as f64, lr_span_long,
+                    "coin {} long filter_volatility_ema_span differs from master",
+                    idx
+                );
+                debug_assert_eq!(
+                    self.bot_params[idx].short.filter_volatility_ema_span as f64, lr_span_short,
+                    "coin {} short filter_volatility_ema_span differs from master",
+                    idx
+                );
+
+                m1.volume.push((vol_span_long, self.emas[idx].vol_long));
+                m1.volume.push((vol_span_short, self.emas[idx].vol_short));
+                m1.log_range
+                    .push((lr_span_long, self.emas[idx].log_range_long));
+                m1.log_range
+                    .push((lr_span_short, self.emas[idx].log_range_short));
+
+                // 1h log-range EMA for grid spacing/trailing volatility weight (per-coin span).
+                {
+                    let span = self.bot_params[idx].long.entry_volatility_ema_span_hours;
+                    if span > 0.0 {
+                        h1.log_range
+                            .push((span, self.emas[idx].entry_volatility_logrange_ema_1h_long));
+                    }
+                }
+                {
+                    let span = self.bot_params[idx].short.entry_volatility_ema_span_hours;
+                    if span > 0.0 {
+                        h1.log_range
+                            .push((span, self.emas[idx].entry_volatility_logrange_ema_1h_short));
+                    }
+                }
+
+                let emas = OrchestratorEmaBundle { m1, h1 };
+
+                let trailing_long = self
+                    .trailing_prices
+                    .long
+                    .get(&idx)
+                    .cloned()
+                    .unwrap_or_default();
+                let trailing_short = self
+                    .trailing_prices
+                    .short
+                    .get(&idx)
+                    .cloned()
+                    .unwrap_or_default();
+
+                orchestrator_v2::SymbolInputV2 {
+                    symbol_idx: idx,
+                    order_book,
+                    exchange,
+                    tradable,
+                    next_candle,
+                    effective_min_cost,
+                    emas,
+                    long: orchestrator_v2::SymbolSideInput {
+                        mode: mode_long,
+                        position: pos_long,
+                        trailing: trailing_long,
+                        bot_params: self.bot_params[idx].long.clone(),
+                    },
+                    short: orchestrator_v2::SymbolSideInput {
+                        mode: mode_short,
+                        position: pos_short,
+                        trailing: trailing_short,
+                        bot_params: self.bot_params[idx].short.clone(),
+                    },
+                }
+            })
+            .collect();
+
+        orchestrator_v2::OrchestratorInputV2 {
+            balance,
+            global: orchestrator_v2::OrchestratorGlobal {
+                filter_by_min_effective_cost: self.backtest_params.filter_by_min_effective_cost,
+                unstuck_allowance_long: long_allowance,
+                unstuck_allowance_short: short_allowance,
+                global_bot_params: self.bot_params_master.clone(),
+            },
+            symbols,
+            peek_hints,
+        }
+    }
+
+    fn get_orchestrator_input_v2_cached(
+        &mut self,
+        k: usize,
+        peek_hints: Option<EntryPeekHints>,
+    ) -> orchestrator_v2::OrchestratorInputV2 {
+        // Take ownership temporarily to avoid borrow conflicts while we also read from `self`.
+        let mut input = self
+            .orchestrator_input_cache_v2
+            .take()
+            .unwrap_or_else(|| self.build_orchestrator_input_v2_iter(k, None, 0..self.n_coins));
+
+        input.balance = self.balance.usd_total_balance_rounded;
+
+        let balance = input.balance;
+        input.global.unstuck_allowance_long =
+            if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
+                calc_auto_unstuck_allowance(
+                    balance,
+                    self.bot_params_master.long.unstuck_loss_allowance_pct
+                        * self.bot_params_master.long.total_wallet_exposure_limit,
+                    self.pnl_cumsum_max,
+                    self.pnl_cumsum_running,
+                )
+            } else {
+                0.0
+            };
+        input.global.unstuck_allowance_short =
+            if self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0 {
+                calc_auto_unstuck_allowance(
+                    balance,
+                    self.bot_params_master.short.unstuck_loss_allowance_pct
+                        * self.bot_params_master.short.total_wallet_exposure_limit,
+                    self.pnl_cumsum_max,
+                    self.pnl_cumsum_running,
+                )
+            } else {
+                0.0
+            };
+
+        input.peek_hints = peek_hints;
+
+        for sym in input.symbols.iter_mut() {
+            let idx = sym.symbol_idx;
+            let (start, end) = self.coin_valid_range(idx).unwrap_or((0, 0));
+            let price_idx = k.clamp(start, end);
+            let close_price = self.hlcvs_value(price_idx, idx, CLOSE).max(f64::EPSILON);
+
+            sym.order_book.bid = close_price;
+            sym.order_book.ask = close_price;
+            sym.tradable = self.coin_is_tradeable_at(idx, k);
+            sym.next_candle = if k + 1 < self.hlcvs.shape()[0] {
+                let tradable_next = self.coin_is_tradeable_at(idx, k + 1);
+                let (low, high) = if tradable_next {
+                    (
+                        self.hlcvs_value(k + 1, idx, LOW),
+                        self.hlcvs_value(k + 1, idx, HIGH),
+                    )
+                } else {
+                    (0.0, 0.0)
+                };
+                Some(orchestrator_v2::NextCandle {
+                    low,
+                    high,
+                    tradable: tradable_next,
+                })
+            } else {
+                None
+            };
+
+            let exchange = &sym.exchange;
+            sym.effective_min_cost =
+                qty_to_cost(exchange.min_qty, close_price, exchange.c_mult).max(exchange.min_cost);
+
+            let pos_long = *self
+                .positions
+                .long
+                .get(&idx)
+                .unwrap_or(&Position::default());
+            let pos_short = *self
+                .positions
+                .short
+                .get(&idx)
+                .unwrap_or(&Position::default());
+            sym.long.position = pos_long;
+            sym.short.position = pos_short;
+
+            sym.long.trailing = self
+                .trailing_prices
+                .long
+                .get(&idx)
+                .cloned()
+                .unwrap_or_default();
+            sym.short.trailing = self
+                .trailing_prices
+                .short
+                .get(&idx)
+                .cloned()
+                .unwrap_or_default();
+
+            // Bot params are mostly static, but `wallet_exposure_limit` may be dynamically updated
+            // per timestep based on `effective_n_positions` and eligible coin count.
+            sym.long.bot_params.wallet_exposure_limit =
+                self.bot_params[idx].long.wallet_exposure_limit;
+            sym.short.bot_params.wallet_exposure_limit =
+                self.bot_params[idx].short.wallet_exposure_limit;
+
+            let valid_now = self.coin_is_valid_at(idx, k);
+            let mut mode_long: Option<orchestrator_v2::TradingMode> = None;
+            let mut mode_short: Option<orchestrator_v2::TradingMode> = None;
+
+            if let Some(&delist_timestamp) = self.last_valid_timestamps.get(&idx) {
+                if k >= delist_timestamp {
+                    if pos_long.size != 0.0 {
+                        mode_long = Some(orchestrator_v2::TradingMode::Panic);
+                    }
+                    if pos_short.size != 0.0 {
+                        mode_short = Some(orchestrator_v2::TradingMode::Panic);
+                    }
+                }
+            } else {
+                if !valid_now && pos_long.size != 0.0 {
+                    mode_long = Some(orchestrator_v2::TradingMode::Panic);
+                }
+                if !valid_now && pos_short.size != 0.0 {
+                    mode_short = Some(orchestrator_v2::TradingMode::Panic);
+                }
+            }
+
+            if self.backtest_params.filter_by_min_effective_cost {
+                if !self.coin_passes_min_effective_cost(idx, LONG) && pos_long.size == 0.0 {
+                    mode_long = Some(orchestrator_v2::TradingMode::GracefulStop);
+                }
+                if !self.coin_passes_min_effective_cost(idx, SHORT) && pos_short.size == 0.0 {
+                    mode_short = Some(orchestrator_v2::TradingMode::GracefulStop);
+                }
+            }
+
+            sym.long.mode = mode_long;
+            sym.short.mode = mode_short;
+
+            // Update EMA values (spans are stable; we overwrite only values).
+            // m1.close: 3 long then 3 short.
+            if sym.emas.m1.close.len() >= 6 {
+                for (i, v) in self.emas[idx].long.iter().copied().enumerate() {
+                    sym.emas.m1.close[i].1 = v;
+                }
+                for (i, v) in self.emas[idx].short.iter().copied().enumerate() {
+                    sym.emas.m1.close[i + 3].1 = v;
+                }
+            }
+            if sym.emas.m1.volume.len() >= 2 {
+                sym.emas.m1.volume[0].1 = self.emas[idx].vol_long;
+                sym.emas.m1.volume[1].1 = self.emas[idx].vol_short;
+            }
+            if sym.emas.m1.log_range.len() >= 2 {
+                sym.emas.m1.log_range[0].1 = self.emas[idx].log_range_long;
+                sym.emas.m1.log_range[1].1 = self.emas[idx].log_range_short;
+            }
+            match sym.emas.h1.log_range.len() {
+                2 => {
+                    sym.emas.h1.log_range[0].1 =
+                        self.emas[idx].entry_volatility_logrange_ema_1h_long;
+                    sym.emas.h1.log_range[1].1 =
+                        self.emas[idx].entry_volatility_logrange_ema_1h_short;
+                }
+                1 => {
+                    let span0 = sym.emas.h1.log_range[0].0;
+                    if (span0 - self.bot_params[idx].long.entry_volatility_ema_span_hours).abs()
+                        < 1e-12
+                    {
+                        sym.emas.h1.log_range[0].1 =
+                            self.emas[idx].entry_volatility_logrange_ema_1h_long;
+                    } else {
+                        sym.emas.h1.log_range[0].1 =
+                            self.emas[idx].entry_volatility_logrange_ema_1h_short;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        input
+    }
     #[inline(always)]
     fn col(&self, idx: usize) -> usize {
         self.active_coin_indices[idx]
@@ -498,12 +1409,12 @@ impl<'a> Backtest<'a> {
                     log_range_short: 0.0,
                     log_range_short_num: 0.0,
                     log_range_short_den: 1.0,
-                    grid_log_range_long: 0.0,
-                    grid_log_range_long_num: 0.0,
-                    grid_log_range_long_den: 1.0,
-                    grid_log_range_short: 0.0,
-                    grid_log_range_short_num: 0.0,
-                    grid_log_range_short_den: 1.0,
+                    entry_volatility_logrange_ema_1h_long: 0.0,
+                    entry_volatility_logrange_ema_1h_long_num: 0.0,
+                    entry_volatility_logrange_ema_1h_long_den: 1.0,
+                    entry_volatility_logrange_ema_1h_short: 0.0,
+                    entry_volatility_logrange_ema_1h_short_num: 0.0,
+                    entry_volatility_logrange_ema_1h_short_den: 1.0,
                 }
             })
             .collect();
@@ -573,10 +1484,10 @@ impl<'a> Backtest<'a> {
                     || bp.short.entry_trailing_retracement_volatility_weight != 0.0
                     || bp.short.entry_trailing_grid_ratio != 0.0
             }),
-            needs_grid_log_range_long: bot_params
+            needs_entry_volatility_logrange_ema_1h_long: bot_params
                 .iter()
                 .any(|bp| bp.long.entry_volatility_ema_span_hours > 0.0),
-            needs_grid_log_range_short: bot_params
+            needs_entry_volatility_logrange_ema_1h_short: bot_params
                 .iter()
                 .any(|bp| bp.short.entry_volatility_ema_span_hours > 0.0),
             coin_first_valid_idx: first_valid_idx,
@@ -620,6 +1531,25 @@ impl<'a> Backtest<'a> {
             } else {
                 None
             },
+            debug_balance_writer: if DEBUG_TRACE_BALANCE {
+                DebugBalanceWriter::new_for_mode()
+            } else {
+                None
+            },
+            orchestrator_input_cache_v2: None,
+            orchestrator_workspace_v2: orchestrator_v2::OrchestratorWorkspaceV2::default(),
+            orch_profile: std::env::var(ORCH_PROFILE_ENV)
+                .ok()
+                .as_deref()
+                .filter(|v| *v == "1")
+                .map(|_| OrchProfile {
+                    mode: if USE_ORCHESTRATOR {
+                        "orchestrator"
+                    } else {
+                        "legacy"
+                    },
+                    ..OrchProfile::default()
+                }),
             // EMAs already initialized in `emas`; no rolling buffers needed
         }
     }
@@ -685,6 +1615,12 @@ impl<'a> Backtest<'a> {
         }
         if let Some(mut writer) = self.debug_writer.take() {
             writer.finish();
+        }
+        if let Some(mut writer) = self.debug_balance_writer.take() {
+            writer.finish();
+        }
+        if let Some(profile) = self.orch_profile.take() {
+            profile.write_to_file();
         }
         let fills = std::mem::take(&mut self.fills);
         let equities = std::mem::take(&mut self.equities);
@@ -808,7 +1744,11 @@ impl<'a> Backtest<'a> {
         }
 
         if self.n_coins <= max_positions && !self.backtest_params.filter_by_min_effective_cost {
-            return (0..self.n_coins).collect();
+            // Only consider coins which are tradeable at the current step; otherwise we may waste
+            // "slots" on delisted/not-yet-listed symbols.
+            return (0..self.n_coins)
+                .filter(|&idx| self.coin_is_tradeable_at(idx, self.current_step))
+                .collect();
         }
 
         let volume_drop_pct = match pside {
@@ -825,7 +1765,8 @@ impl<'a> Backtest<'a> {
         let features: Vec<CoinFeature> = (0..self.n_coins)
             .map(|idx| CoinFeature {
                 index: idx,
-                enabled: self.coin_passes_min_effective_cost(idx, pside),
+                enabled: self.coin_is_tradeable_at(idx, self.current_step)
+                    && self.coin_passes_min_effective_cost(idx, pside),
                 volume_score: match pside {
                     LONG => self.emas[idx].vol_long,
                     SHORT => self.emas[idx].vol_short,
@@ -848,7 +1789,6 @@ impl<'a> Backtest<'a> {
 
         let mut selected = select_coins(&features, &config);
         // Sort for deterministic ordering (prevents hash-map iteration differences).
-        selected.sort_unstable();
         selected
     }
 
@@ -895,9 +1835,9 @@ impl<'a> Backtest<'a> {
                 ask: close_price,
             },
             ema_bands: self.emas[idx].compute_bands(pside),
-            grid_log_range: match pside {
-                LONG => self.emas[idx].grid_log_range_long,
-                SHORT => self.emas[idx].grid_log_range_short,
+            entry_volatility_logrange_ema_1h: match pside {
+                LONG => self.emas[idx].entry_volatility_logrange_ema_1h_long,
+                SHORT => self.emas[idx].entry_volatility_logrange_ema_1h_short,
                 _ => 0.0,
             },
         }
@@ -1037,7 +1977,11 @@ impl<'a> Backtest<'a> {
 
     fn compute_total_wallet_exposure(&self) -> f64 {
         let mut total = 0.0;
-        for (&idx, position) in &self.positions.long {
+        // Deterministic summation order (HashMap iteration order is randomized per process).
+        let mut long_keys: Vec<usize> = self.positions.long.keys().copied().collect();
+        long_keys.sort_unstable();
+        for idx in long_keys {
+            let position = self.positions.long.get(&idx).expect("idx from keys");
             if position.size != 0.0 {
                 total += calc_wallet_exposure(
                     self.exchange_params_list[idx].c_mult,
@@ -1047,7 +1991,10 @@ impl<'a> Backtest<'a> {
                 );
             }
         }
-        for (&idx, position) in &self.positions.short {
+        let mut short_keys: Vec<usize> = self.positions.short.keys().copied().collect();
+        short_keys.sort_unstable();
+        for idx in short_keys {
+            let position = self.positions.short.get(&idx).expect("idx from keys");
             if position.size != 0.0 {
                 total += calc_wallet_exposure(
                     self.exchange_params_list[idx].c_mult,
@@ -1127,9 +2074,8 @@ impl<'a> Backtest<'a> {
         self.did_fill_long.clear();
         self.did_fill_short.clear();
         if self.trading_enabled.long {
-            let mut open_orders_keys_long: Vec<usize> =
-                self.open_orders.long.keys().cloned().collect();
-            open_orders_keys_long.sort();
+            // `BTreeMap` keys are already sorted.
+            let open_orders_keys_long: Vec<usize> = self.open_orders.long.keys().cloned().collect();
             for idx in open_orders_keys_long {
                 // Process close fills long
                 if !self.open_orders.long[&idx].closes.is_empty() {
@@ -1168,9 +2114,9 @@ impl<'a> Backtest<'a> {
             }
         }
         if self.trading_enabled.short {
-            let mut open_orders_keys_short: Vec<usize> =
+            // `BTreeMap` keys are already sorted.
+            let open_orders_keys_short: Vec<usize> =
                 self.open_orders.short.keys().cloned().collect();
-            open_orders_keys_short.sort();
             for idx in open_orders_keys_short {
                 // Process close fills short
                 if !self.open_orders.short[&idx].closes.is_empty() {
@@ -1236,7 +2182,21 @@ impl<'a> Backtest<'a> {
         );
         self.pnl_cumsum_running += pnl;
         self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
+        let balance_before = self.snapshot_balance();
         self.update_balance(k, pnl, fee_paid);
+        let balance_after = self.snapshot_balance();
+        self.record_balance_trace(
+            k,
+            idx,
+            "close_long",
+            close_fill,
+            adjusted_close_qty,
+            close_fill.price,
+            pnl,
+            fee_paid,
+            balance_before,
+            balance_after,
+        );
 
         let current_pprice = self.positions.long[&idx].price;
         if new_psize == 0.0 {
@@ -1303,7 +2263,21 @@ impl<'a> Backtest<'a> {
         );
         self.pnl_cumsum_running += pnl;
         self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
+        let balance_before = self.snapshot_balance();
         self.update_balance(k, pnl, fee_paid);
+        let balance_after = self.snapshot_balance();
+        self.record_balance_trace(
+            k,
+            idx,
+            "close_short",
+            order,
+            adjusted_close_qty,
+            order.price,
+            pnl,
+            fee_paid,
+            balance_before,
+            balance_after,
+        );
 
         let current_pprice = self.positions.short[&idx].price;
         if new_psize == 0.0 {
@@ -1350,7 +2324,21 @@ impl<'a> Backtest<'a> {
             order.price,
             self.exchange_params_list[idx].c_mult,
         ) * self.backtest_params.maker_fee;
+        let balance_before = self.snapshot_balance();
         self.update_balance(k, 0.0, fee_paid);
+        let balance_after = self.snapshot_balance();
+        self.record_balance_trace(
+            k,
+            idx,
+            "entry_long",
+            order,
+            order.qty,
+            order.price,
+            0.0,
+            fee_paid,
+            balance_before,
+            balance_after,
+        );
 
         let position_entry = self
             .positions
@@ -1405,7 +2393,21 @@ impl<'a> Backtest<'a> {
             order.price,
             self.exchange_params_list[idx].c_mult,
         ) * self.backtest_params.maker_fee;
+        let balance_before = self.snapshot_balance();
         self.update_balance(k, 0.0, fee_paid);
+        let balance_after = self.snapshot_balance();
+        self.record_balance_trace(
+            k,
+            idx,
+            "entry_short",
+            order,
+            order.qty,
+            order.price,
+            0.0,
+            fee_paid,
+            balance_before,
+            balance_after,
+        );
         let position_entry = self
             .positions
             .short
@@ -1557,6 +2559,10 @@ impl<'a> Backtest<'a> {
         } else {
             self.open_orders.long.entry(idx).or_default().entries = [next_entry_order].to_vec();
         }
+        // Filter inactive placeholder orders (qty==0.0) returned by some next-order calculators.
+        if let Some(bundle) = self.open_orders.long.get_mut(&idx) {
+            bundle.entries.retain(|o| o.qty != 0.0);
+        }
         let next_close_order = calc_next_close_long(
             &self.exchange_params_list[idx],
             &state_params,
@@ -1577,26 +2583,9 @@ impl<'a> Backtest<'a> {
         } else {
             self.open_orders.long.entry(idx).or_default().closes = [next_close_order].to_vec();
         }
-
-        if k >= 723_490 && k <= 723_520 && idx == 3 {
-            if let Some(bundle) = self.open_orders.long.get(&idx) {
-                eprintln!(
-                    "[legacy dbg sol orders] k={} pos_size={} pos_price={} entries={:?} closes={:?}",
-                    k,
-                    position.size,
-                    position.price,
-                    bundle
-                        .entries
-                        .iter()
-                        .map(|o| (o.qty, o.price, o.order_type.id()))
-                        .collect::<Vec<_>>(),
-                    bundle
-                        .closes
-                        .iter()
-                        .map(|o| (o.qty, o.price, o.order_type.id()))
-                        .collect::<Vec<_>>(),
-                );
-            }
+        // Filter inactive placeholder orders (qty==0.0) e.g. CloseTrailingLong with qty=0.
+        if let Some(bundle) = self.open_orders.long.get_mut(&idx) {
+            bundle.closes.retain(|o| o.qty != 0.0);
         }
     }
 
@@ -1657,6 +2646,9 @@ impl<'a> Backtest<'a> {
         } else {
             self.open_orders.short.entry(idx).or_default().entries = [next_entry_order].to_vec();
         }
+        if let Some(bundle) = self.open_orders.short.get_mut(&idx) {
+            bundle.entries.retain(|o| o.qty != 0.0);
+        }
 
         let next_close_order = calc_next_close_short(
             &self.exchange_params_list[idx],
@@ -1676,6 +2668,9 @@ impl<'a> Backtest<'a> {
             );
         } else {
             self.open_orders.short.entry(idx).or_default().closes = [next_close_order].to_vec()
+        }
+        if let Some(bundle) = self.open_orders.short.get_mut(&idx) {
+            bundle.closes.retain(|o| o.qty != 0.0);
         }
     }
 
@@ -1733,6 +2728,7 @@ impl<'a> Backtest<'a> {
             let mut keys: Vec<usize> = self.positions.long.keys().cloned().collect();
             keys.sort_unstable();
             for idx in keys {
+                self.debug_dump_unstuck_calc(k, idx, LONG, "legacy");
                 if !self.coin_is_tradeable_at(idx, k) {
                     continue;
                 }
@@ -1768,6 +2764,7 @@ impl<'a> Backtest<'a> {
             let mut keys: Vec<usize> = self.positions.short.keys().cloned().collect();
             keys.sort_unstable();
             for idx in keys {
+                self.debug_dump_unstuck_calc(k, idx, SHORT, "legacy");
                 if !self.coin_is_tradeable_at(idx, k) {
                     continue;
                 }
@@ -1895,32 +2892,6 @@ impl<'a> Backtest<'a> {
                     &inputs,
                     skip_long,
                 );
-                if k >= 667_340 && k <= 667_350 {
-                    let cands: Vec<(usize, f64, f64, f64, f64)> = inputs
-                        .iter()
-                        .map(|p| {
-                            (
-                                p.idx,
-                                p.position_size,
-                                p.position_price,
-                                p.market_price,
-                                calc_pprice_diff_int(LONG, p.position_price, p.market_price),
-                            )
-                        })
-                        .collect();
-                    eprintln!(
-                        "[legacy dbg twel long] k={} thresh={} total_wel={} balance={} actions={:?} candidates={:?}",
-                        k,
-                        long_threshold,
-                        total_wel_long,
-                        balance,
-                        actions
-                            .iter()
-                            .map(|(i, o)| (*i, o.qty, o.price))
-                            .collect::<Vec<_>>(),
-                        cands
-                    );
-                }
                 for (idx, order) in actions {
                     results.push((idx, LONG, order));
                 }
@@ -2014,12 +2985,6 @@ impl<'a> Backtest<'a> {
         }
 
         let (unstucking_idx, unstucking_pside, unstucking_close) = self.calc_unstucking_close(k);
-        if k >= 667_340 && k <= 667_350 && unstucking_pside != NO_POS {
-            eprintln!(
-                "[legacy dbg unstuck] k={} idx={} side={}",
-                k, unstucking_idx, unstucking_pside
-            );
-        }
         if unstucking_pside != NO_POS {
             match unstucking_pside {
                 LONG => {
@@ -2027,25 +2992,24 @@ impl<'a> Backtest<'a> {
                         .long
                         .entry(unstucking_idx)
                         .or_default()
-                        .closes = vec![unstucking_close];
+                        .closes
+                        .push(unstucking_close);
                 }
                 SHORT => {
                     self.open_orders
                         .short
                         .entry(unstucking_idx)
                         .or_default()
-                        .closes = vec![unstucking_close];
+                        .closes
+                        .push(unstucking_close);
                 }
                 _ => unreachable!(),
             }
         }
 
-        let skip = if unstucking_pside != NO_POS {
-            Some((unstucking_idx, unstucking_pside))
-        } else {
-            None
-        };
-        let enforcer_orders = self.calc_twel_enforcer_orders(k, skip);
+        // Match orchestrator behavior: enforcer closes and unstuck closes are added in addition to
+        // normal closes. Final reduce-only trimming ensures we don't exceed position size.
+        let enforcer_orders = self.calc_twel_enforcer_orders(k, None);
         for (idx, pside, order) in enforcer_orders {
             match pside {
                 LONG => self
@@ -2066,10 +3030,13 @@ impl<'a> Backtest<'a> {
             }
         }
 
+        // Snapshot the full close set before reduce-only trimming.
+        self.record_debug_orders_stage(k, "legacy_pre_trim");
+
         if self.trading_enabled.long {
             let long_indices: Vec<usize> = self.open_orders.long.keys().cloned().collect();
             for idx in long_indices {
-                let has_auto = self
+                let has_special_close = self
                     .open_orders
                     .long
                     .get(&idx)
@@ -2079,11 +3046,12 @@ impl<'a> Backtest<'a> {
                                 o.order_type,
                                 OrderType::CloseAutoReduceWelLong
                                     | OrderType::CloseAutoReduceTwelLong
+                                    | OrderType::CloseUnstuckLong
                             )
                         })
                     })
                     .unwrap_or(false);
-                if !has_auto {
+                if !has_special_close {
                     continue;
                 }
                 let position_abs = self
@@ -2092,12 +3060,14 @@ impl<'a> Backtest<'a> {
                     .get(&idx)
                     .map(|pos| pos.size.abs())
                     .unwrap_or(0.0);
+                let market_price = self.hlcvs_value(k, idx, CLOSE);
                 if let Some(orders) = self.open_orders.long.get_mut(&idx) {
                     Self::trim_reduce_only_orders(
                         &mut orders.closes,
                         position_abs,
                         LONG,
                         &self.exchange_params_list[idx],
+                        market_price,
                     );
                 }
             }
@@ -2105,7 +3075,7 @@ impl<'a> Backtest<'a> {
         if self.trading_enabled.short {
             let short_indices: Vec<usize> = self.open_orders.short.keys().cloned().collect();
             for idx in short_indices {
-                let has_auto = self
+                let has_special_close = self
                     .open_orders
                     .short
                     .get(&idx)
@@ -2115,11 +3085,12 @@ impl<'a> Backtest<'a> {
                                 o.order_type,
                                 OrderType::CloseAutoReduceWelShort
                                     | OrderType::CloseAutoReduceTwelShort
+                                    | OrderType::CloseUnstuckShort
                             )
                         })
                     })
                     .unwrap_or(false);
-                if !has_auto {
+                if !has_special_close {
                     continue;
                 }
                 let position_abs = self
@@ -2128,410 +3099,115 @@ impl<'a> Backtest<'a> {
                     .get(&idx)
                     .map(|pos| pos.size.abs())
                     .unwrap_or(0.0);
+                let market_price = self.hlcvs_value(k, idx, CLOSE);
                 if let Some(orders) = self.open_orders.short.get_mut(&idx) {
                     Self::trim_reduce_only_orders(
                         &mut orders.closes,
                         position_abs,
                         SHORT,
                         &self.exchange_params_list[idx],
+                        market_price,
                     );
                 }
             }
         }
 
+        // Snapshot after reduce-only trimming (but before portfolio entry gating).
+        self.record_debug_orders_stage(k, "legacy_post_trim");
+
         self.gate_entries_portfolio(k, LONG);
         self.gate_entries_portfolio(k, SHORT);
-        self.record_debug_orders(k);
+        self.record_debug_orders_stage(k, "legacy_final");
     }
 
     fn update_open_orders_all_orchestrator(&mut self, k: usize) {
+        let total_t0 = Instant::now();
+        if let Some(p) = self.orch_profile.as_mut() {
+            p.steps = p.steps.saturating_add(1);
+        }
+
+        let t0 = Instant::now();
         self.open_orders.long.clear();
         self.open_orders.short.clear();
-
-        // Use the same active sets as legacy
-        let mut active_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
-        if self.positions.long.len() != self.effective_n_positions.long {
-            self.update_actives_long();
-            active_long_indices = self.actives.long.iter().cloned().collect();
+        if let Some(p) = self.orch_profile.as_mut() {
+            OrchProfile::add_ns(&mut p.clear_orders_ns, t0.elapsed());
         }
-        let mut active_short_indices: Vec<usize> = self.positions.short.keys().cloned().collect();
-        if self.positions.short.len() != self.effective_n_positions.short {
-            self.update_actives_short();
-            active_short_indices = self.actives.short.iter().cloned().collect();
+
+        // Backtest-only peek: if next order will fill next candle, expand the full grid.
+        // The orchestrator can do this internally when provided `next_candle` in the input.
+        let t0 = Instant::now();
+        let peek_hints: Option<EntryPeekHints> = None;
+        if let Some(p) = self.orch_profile.as_mut() {
+            OrchProfile::add_ns(&mut p.peek_hints_ns, t0.elapsed());
         }
-        active_long_indices.sort_unstable();
-        active_short_indices.sort_unstable();
 
-        let active_long_set: std::collections::HashSet<usize> =
-            active_long_indices.iter().cloned().collect();
-        let active_short_set: std::collections::HashSet<usize> =
-            active_short_indices.iter().cloned().collect();
+        // Debug: dump exact unstuck calculation inputs/components for parity investigations.
+        for (&idx, _pos) in self.positions.long.iter() {
+            self.debug_dump_unstuck_calc(k, idx, LONG, "orchestrator");
+        }
+        for (&idx, _pos) in self.positions.short.iter() {
+            self.debug_dump_unstuck_calc(k, idx, SHORT, "orchestrator");
+        }
 
-        // include any coin with an open position even if not currently active
-        let mut symbol_indices: Vec<usize> = active_long_indices.clone();
-        symbol_indices.extend_from_slice(&active_short_indices);
-        symbol_indices.extend(self.positions.long.keys().cloned());
-        symbol_indices.extend(self.positions.short.keys().cloned());
-        symbol_indices.sort_unstable();
-        symbol_indices.dedup();
+        let (res, input_update_elapsed, compute_elapsed) = {
+            let t0 = Instant::now();
+            let input = self.get_orchestrator_input_v2_cached(k, peek_hints);
+            let input_update_elapsed = t0.elapsed();
 
-        let balance = self.balance.usd_total_balance_rounded;
-
-        let long_allowance = if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
-            calc_auto_unstuck_allowance(
-                balance,
-                self.bot_params_master.long.unstuck_loss_allowance_pct
-                    * self.bot_params_master.long.total_wallet_exposure_limit,
-                self.pnl_cumsum_max,
-                self.pnl_cumsum_running,
+            let t1 = Instant::now();
+            let res = orchestrator_v2::compute_ideal_orders_v2_with_workspace(
+                &input,
+                &mut self.orchestrator_workspace_v2,
             )
-        } else {
-            0.0
+            .unwrap_or_else(|e| panic!("orchestrator v2 error at k {}: {:?}", k, e));
+            let compute_elapsed = t1.elapsed();
+            self.orchestrator_input_cache_v2 = Some(input);
+            (res, input_update_elapsed, compute_elapsed)
         };
-
-        let short_allowance = if self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0 {
-            calc_auto_unstuck_allowance(
-                balance,
-                self.bot_params_master.short.unstuck_loss_allowance_pct
-                    * self.bot_params_master.short.total_wallet_exposure_limit,
-                self.pnl_cumsum_max,
-                self.pnl_cumsum_running,
-            )
-        } else {
-            0.0
-        };
-
-        let mut symbols_input: Vec<SymbolInput> = Vec::with_capacity(symbol_indices.len());
-        let mut peek_hints = EntryPeekHints::default();
-        if k >= 667_340 && k <= 667_350 {
-            eprintln!(
-                "[orch dbg] k={} symbol_indices={:?} pos_long={:?}",
-                k,
-                symbol_indices,
-                self.positions.long.keys().collect::<Vec<_>>()
-            );
-        }
-        for idx in symbol_indices {
-            // If delisted and position exists, force close and skip further order building
-            if let Some(&delist_timestamp) = self.last_valid_timestamps.get(&idx) {
-                if k >= delist_timestamp {
-                    if let Some(pos) = self.positions.long.get(&idx) {
-                        if pos.size != 0.0 {
-                            let price = round_(
-                                f64::min(
-                                    self.hlcvs_value(k, idx, HIGH)
-                                        - self.exchange_params_list[idx].price_step,
-                                    pos.price,
-                                ),
-                                self.exchange_params_list[idx].price_step,
-                            );
-                            self.open_orders.long.entry(idx).or_default().closes = vec![Order {
-                                qty: -pos.size,
-                                price,
-                                order_type: OrderType::CloseUnstuckLong,
-                            }];
-                            self.open_orders
-                                .long
-                                .entry(idx)
-                                .or_default()
-                                .entries
-                                .clear();
-                            continue;
-                        }
-                    }
-                    if let Some(pos) = self.positions.short.get(&idx) {
-                        if pos.size != 0.0 {
-                            let price = round_(
-                                f64::max(
-                                    self.hlcvs_value(k, idx, LOW)
-                                        + self.exchange_params_list[idx].price_step,
-                                    pos.price,
-                                ),
-                                self.exchange_params_list[idx].price_step,
-                            );
-                            self.open_orders.short.entry(idx).or_default().closes = vec![Order {
-                                qty: pos.size.abs(),
-                                price,
-                                order_type: OrderType::CloseUnstuckShort,
-                            }];
-                            self.open_orders
-                                .short
-                                .entry(idx)
-                                .or_default()
-                                .entries
-                                .clear();
-                            continue;
-                        }
-                    }
-                }
-            }
-
-            let tradeable = self.coin_is_tradeable_at(idx, k);
-            let has_long_pos = self
-                .positions
-                .long
-                .get(&idx)
-                .map(|p| p.size != 0.0)
-                .unwrap_or(false);
-            let has_short_pos = self
-                .positions
-                .short
-                .get(&idx)
-                .map(|p| p.size != 0.0)
-                .unwrap_or(false);
-            let close_price = self.hlcvs_value(k, idx, CLOSE);
-            let ob = OrderBook {
-                bid: close_price,
-                ask: close_price,
-            };
-            let trailing_long = self
-                .trailing_prices
-                .long
-                .get(&idx)
-                .cloned()
-                .unwrap_or_default();
-            let trailing_short = self
-                .trailing_prices
-                .short
-                .get(&idx)
-                .cloned()
-                .unwrap_or_default();
-            let state_long = self.create_state_params(k, idx, LONG);
-            let state_short = self.create_state_params(k, idx, SHORT);
-            let mut positions = Positions::default();
-            if let Some(p) = self.positions.long.get(&idx) {
-                positions.long.insert(idx, *p);
-            }
-            if let Some(p) = self.positions.short.get(&idx) {
-                positions.short.insert(idx, *p);
-            }
-            // Always manage existing positions; otherwise follow actives.
-            let mode_long = if has_long_pos || active_long_set.contains(&idx) {
-                OrchestratorMode::Normal
-            } else {
-                OrchestratorMode::Manual
-            };
-            let mode_short = if has_short_pos || active_short_set.contains(&idx) {
-                OrchestratorMode::Normal
-            } else {
-                OrchestratorMode::Manual
-            };
-
-            symbols_input.push(SymbolInput {
-                idx,
-                mode_long,
-                mode_short,
-                order_book: ob,
-                ema_bands_long: self.emas[idx].compute_bands(LONG),
-                ema_bands_short: self.emas[idx].compute_bands(SHORT),
-                grid_log_range_long: self.emas[idx].grid_log_range_long,
-                grid_log_range_short: self.emas[idx].grid_log_range_short,
-                log_range_long: self.emas[idx].log_range_long,
-                log_range_short: self.emas[idx].log_range_short,
-                trailing_long: trailing_long.clone(),
-                trailing_short: trailing_short.clone(),
-                positions,
-                exchange: self.exchange_params_list[idx].clone(),
-                bot: BotParamsPair {
-                    long: self.bot_params[idx].long.clone(),
-                    short: self.bot_params[idx].short.clone(),
-                },
-            });
-
-            // Backtest-only peek: if next order won't fill next candle, skip full grid expansion.
-            if self.trading_enabled.long && matches!(mode_long, OrchestratorMode::Normal) {
-                let next = calc_next_entry_long(
-                    &self.exchange_params_list[idx],
-                    &state_long,
-                    self.bp(idx, LONG),
-                    self.positions
-                        .long
-                        .get(&idx)
-                        .unwrap_or(&Position::default()),
-                    &trailing_long,
-                );
-                if self.order_filled(k + 1, idx, &next) {
-                    peek_hints.expand_grid_long.insert(idx);
-                }
-            }
-            if self.trading_enabled.short && matches!(mode_short, OrchestratorMode::Normal) {
-                let next = calc_next_entry_short(
-                    &self.exchange_params_list[idx],
-                    &state_short,
-                    self.bp(idx, SHORT),
-                    self.positions
-                        .short
-                        .get(&idx)
-                        .unwrap_or(&Position::default()),
-                    &trailing_short,
-                );
-                if self.order_filled(k + 1, idx, &next) {
-                    peek_hints.expand_grid_short.insert(idx);
-                }
-            }
-            if self.trading_enabled.long && matches!(mode_long, OrchestratorMode::Normal) {
-                let next_close = calc_next_close_long(
-                    &self.exchange_params_list[idx],
-                    &state_long,
-                    self.bp(idx, LONG),
-                    self.positions
-                        .long
-                        .get(&idx)
-                        .unwrap_or(&Position::default()),
-                    &trailing_long,
-                );
-                if self.order_filled(k + 1, idx, &next_close) {
-                    peek_hints.expand_close_long.insert(idx);
-                }
-            }
-            if self.trading_enabled.short && matches!(mode_short, OrchestratorMode::Normal) {
-                let next_close = calc_next_close_short(
-                    &self.exchange_params_list[idx],
-                    &state_short,
-                    self.bp(idx, SHORT),
-                    self.positions
-                        .short
-                        .get(&idx)
-                        .unwrap_or(&Position::default()),
-                    &trailing_short,
-                );
-                if self.order_filled(k + 1, idx, &next_close) {
-                    peek_hints.expand_close_short.insert(idx);
-                }
-            }
+        if let Some(p) = self.orch_profile.as_mut() {
+            OrchProfile::add_ns(&mut p.input_update_ns, input_update_elapsed);
+            OrchProfile::add_ns(&mut p.compute_ns, compute_elapsed);
         }
 
-        let ctx = OrchestratorContext {
-            balance,
-            effective_n_positions: OrchestratorENP {
-                long: self.effective_n_positions.long,
-                short: self.effective_n_positions.short,
-            },
-            allow_unstuck: true,
-            allowance_long: long_allowance,
-            allowance_short: short_allowance,
-            entry_peek_hints: Some(peek_hints),
-            debug_step: Some(k),
-        };
-
-        let result = compute_ideal_orders(&ctx, &symbols_input);
-        for order in result.orders {
-            match order.side {
-                "long" => {
-                    let bundle = self.open_orders.long.entry(order.idx).or_default();
-                    if order.reduce_only {
-                        bundle.closes.push(Order {
-                            qty: order.qty,
-                            price: order.price,
-                            order_type: order.order_type,
-                        });
+        let t0 = Instant::now();
+        for o in res.orders {
+            let order = Order {
+                qty: o.qty,
+                price: o.price,
+                order_type: o.order_type,
+            };
+            match o.pside {
+                orchestrator_v2::PositionSide::Long => {
+                    let bundle = self.open_orders.long.entry(o.symbol_idx).or_default();
+                    if orchestrator_v2::is_close_order_type(order.order_type) {
+                        bundle.closes.push(order);
                     } else {
-                        bundle.entries.push(Order {
-                            qty: order.qty,
-                            price: order.price,
-                            order_type: order.order_type,
-                        });
+                        bundle.entries.push(order);
                     }
                 }
-                "short" => {
-                    let bundle = self.open_orders.short.entry(order.idx).or_default();
-                    if order.reduce_only {
-                        bundle.closes.push(Order {
-                            qty: order.qty,
-                            price: order.price,
-                            order_type: order.order_type,
-                        });
+                orchestrator_v2::PositionSide::Short => {
+                    let bundle = self.open_orders.short.entry(o.symbol_idx).or_default();
+                    if orchestrator_v2::is_close_order_type(order.order_type) {
+                        bundle.closes.push(order);
                     } else {
-                        bundle.entries.push(Order {
-                            qty: order.qty,
-                            price: order.price,
-                            order_type: order.order_type,
-                        });
+                        bundle.entries.push(order);
                     }
                 }
-                _ => {}
             }
         }
-
-        // Align with legacy: trim auto-reduce orders that exceed current position.
-        if self.trading_enabled.long {
-            let long_indices: Vec<usize> = self.open_orders.long.keys().cloned().collect();
-            for idx in long_indices {
-                let has_auto = self
-                    .open_orders
-                    .long
-                    .get(&idx)
-                    .map(|orders| {
-                        orders.closes.iter().any(|o| {
-                            matches!(
-                                o.order_type,
-                                OrderType::CloseAutoReduceWelLong
-                                    | OrderType::CloseAutoReduceTwelLong
-                            )
-                        })
-                    })
-                    .unwrap_or(false);
-                if !has_auto {
-                    continue;
-                }
-                let position_abs = self
-                    .positions
-                    .long
-                    .get(&idx)
-                    .map(|pos| pos.size.abs())
-                    .unwrap_or(0.0);
-                if let Some(orders) = self.open_orders.long.get_mut(&idx) {
-                    Self::trim_reduce_only_orders(
-                        &mut orders.closes,
-                        position_abs,
-                        LONG,
-                        &self.exchange_params_list[idx],
-                    );
-                }
-            }
-        }
-        if self.trading_enabled.short {
-            let short_indices: Vec<usize> = self.open_orders.short.keys().cloned().collect();
-            for idx in short_indices {
-                let has_auto = self
-                    .open_orders
-                    .short
-                    .get(&idx)
-                    .map(|orders| {
-                        orders.closes.iter().any(|o| {
-                            matches!(
-                                o.order_type,
-                                OrderType::CloseAutoReduceWelShort
-                                    | OrderType::CloseAutoReduceTwelShort
-                            )
-                        })
-                    })
-                    .unwrap_or(false);
-                if !has_auto {
-                    continue;
-                }
-                let position_abs = self
-                    .positions
-                    .short
-                    .get(&idx)
-                    .map(|pos| pos.size.abs())
-                    .unwrap_or(0.0);
-                if let Some(orders) = self.open_orders.short.get_mut(&idx) {
-                    Self::trim_reduce_only_orders(
-                        &mut orders.closes,
-                        position_abs,
-                        SHORT,
-                        &self.exchange_params_list[idx],
-                    );
-                }
-            }
+        if let Some(p) = self.orch_profile.as_mut() {
+            OrchProfile::add_ns(&mut p.distribute_ns, t0.elapsed());
         }
 
-        // Apply portfolio-level entry gating to mirror legacy behaviour.
-        self.gate_entries_portfolio(k, LONG);
-        self.gate_entries_portfolio(k, SHORT);
+        // `compute_ideal_orders_v2` returns orders already sorted by the same distance metric used
+        // by the live bot; preserving insertion order keeps per-symbol entry/close ordering stable
+        // without an extra per-step sort pass.
 
-        self.record_debug_orders(k);
+        self.record_debug_orders_stage(k, "orch_final");
+
+        if let Some(p) = self.orch_profile.as_mut() {
+            OrchProfile::add_ns(&mut p.total_ns, total_t0.elapsed());
+        }
     }
 
     fn gate_entries_portfolio(&mut self, k: usize, side: usize) {
@@ -2687,7 +3363,7 @@ impl<'a> Backtest<'a> {
         }
     }
 
-    fn record_debug_orders(&mut self, k: usize) {
+    fn record_debug_orders_stage(&mut self, k: usize, stage: &'static str) {
         if !DEBUG_DUMP_ORDERS
             || (k > DEBUG_MAX_STEPS
                 && DEBUG_EXTRA_WINDOW
@@ -2696,14 +3372,30 @@ impl<'a> Backtest<'a> {
         {
             return;
         }
-        let Some(writer) = self.debug_writer.as_mut() else {
+        if self.debug_writer.is_none() {
             return;
         };
+
+        let want_coin = DEBUG_COIN_FILTER;
+        let mut snapshots: Vec<DebugOrderSnapshot> = Vec::new();
 
         for (&idx, bundle) in self.open_orders.long.iter() {
             if bundle.entries.is_empty() && bundle.closes.is_empty() {
                 continue;
             }
+            let coin = self
+                .backtest_params
+                .coins
+                .get(idx)
+                .cloned()
+                .unwrap_or_else(|| format!("idx_{idx}"));
+            if let Some(w) = want_coin {
+                if coin != w {
+                    continue;
+                }
+            }
+            let position = self.positions.long.get(&idx).copied().unwrap_or_default();
+            let close_price = self.hlcvs_value(k, idx, CLOSE);
             let mut entries = Vec::with_capacity(bundle.entries.len());
             for o in &bundle.entries {
                 entries.push(DebugOrder {
@@ -2726,15 +3418,33 @@ impl<'a> Backtest<'a> {
                 step: k,
                 side: "long",
                 idx,
+                coin,
+                stage,
+                pos_size: position.size,
+                pos_price: position.price,
+                close_price,
                 entries,
                 closes,
             };
-            writer.write_snapshot(&snapshot);
+            snapshots.push(snapshot);
         }
         for (&idx, bundle) in self.open_orders.short.iter() {
             if bundle.entries.is_empty() && bundle.closes.is_empty() {
                 continue;
             }
+            let coin = self
+                .backtest_params
+                .coins
+                .get(idx)
+                .cloned()
+                .unwrap_or_else(|| format!("idx_{idx}"));
+            if let Some(w) = want_coin {
+                if coin != w {
+                    continue;
+                }
+            }
+            let position = self.positions.short.get(&idx).copied().unwrap_or_default();
+            let close_price = self.hlcvs_value(k, idx, CLOSE);
             let mut entries = Vec::with_capacity(bundle.entries.len());
             for o in &bundle.entries {
                 entries.push(DebugOrder {
@@ -2757,10 +3467,22 @@ impl<'a> Backtest<'a> {
                 step: k,
                 side: "short",
                 idx,
+                coin,
+                stage,
+                pos_size: position.size,
+                pos_price: position.price,
+                close_price,
                 entries,
                 closes,
             };
-            writer.write_snapshot(&snapshot);
+            snapshots.push(snapshot);
+        }
+
+        let Some(writer) = self.debug_writer.as_mut() else {
+            return;
+        };
+        for s in &snapshots {
+            writer.write_snapshot(s);
         }
     }
 
@@ -2770,6 +3492,7 @@ impl<'a> Backtest<'a> {
         position_abs: f64,
         side: usize,
         exchange_params: &ExchangeParams,
+        market_price: f64,
     ) {
         const QTY_TOLERANCE: f64 = 1e-9;
         if closes.is_empty() {
@@ -2780,41 +3503,159 @@ impl<'a> Backtest<'a> {
             return;
         }
 
+        let mp = if market_price.is_finite() && market_price > 0.0 {
+            market_price
+        } else {
+            0.0
+        };
+
+        let calc_diff = |order: &Order| -> f64 {
+            if mp <= 0.0 {
+                return 0.0;
+            }
+            match side {
+                LONG => calc_order_price_diff_ask(order.price, mp),
+                SHORT => calc_order_price_diff_bid(order.price, mp),
+                _ => 0.0,
+            }
+        };
+
+        // Drop any placeholder orders.
+        closes.retain(|o| o.qty.abs() > QTY_TOLERANCE && o.price.is_finite() && o.price > 0.0);
+        if closes.is_empty() {
+            return;
+        }
+
+        let total_abs: f64 = closes.iter().map(|o| o.qty.abs()).sum();
+        let min_qty = calc_min_entry_qty(mp, exchange_params);
+        let allow_below_min = position_abs < min_qty;
+
+        let enforce_no_dust_remainder = |orders: &mut Vec<Order>| {
+            if orders.is_empty() {
+                return;
+            }
+            // Ensure deterministic ordering for selection of which order absorbs the remainder.
+            orders.sort_by(|a, b| {
+                let da = calc_diff(a);
+                let db = calc_diff(b);
+                match da.partial_cmp(&db).unwrap_or(Ordering::Equal) {
+                    Ordering::Equal => a
+                        .order_type
+                        .id()
+                        .cmp(&b.order_type.id())
+                        .then_with(|| a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal))
+                        .then_with(|| a.qty.partial_cmp(&b.qty).unwrap_or(Ordering::Equal)),
+                    other => other,
+                }
+            });
+
+            // If position is below effective min qty, collapse to a single full close (spec exception).
+            if allow_below_min {
+                let full = round_(position_abs, exchange_params.qty_step);
+                if full <= QTY_TOLERANCE {
+                    orders.clear();
+                    return;
+                }
+                orders[0].qty = if side == LONG { -full } else { full };
+                orders.truncate(1);
+                return;
+            }
+
+            // If sum(closes) leaves a remainder smaller than effective min qty, absorb it into the
+            // closest-to-fill close so we don't strand an uncloseable dust remainder.
+            let total_abs: f64 = orders.iter().map(|o| o.qty.abs()).sum();
+            let remainder = position_abs - total_abs;
+            if remainder > QTY_TOLERANCE && remainder + QTY_TOLERANCE < min_qty {
+                let mut new_abs = orders[0].qty.abs() + remainder;
+                new_abs = round_(new_abs, exchange_params.qty_step)
+                    .min(round_(position_abs, exchange_params.qty_step));
+                if new_abs > QTY_TOLERANCE {
+                    orders[0].qty = if side == LONG { -new_abs } else { new_abs };
+                }
+            }
+        };
+
+        // If no trimming needed, only enforce deterministic ordering (closest-to-fill first).
+        if total_abs <= position_abs + QTY_TOLERANCE {
+            enforce_no_dust_remainder(closes);
+            return;
+        }
+
+        // Trim furthest-from-fill first (ties: lower order_type_id trimmed first), matching
+        // orchestrator semantics.
         let mut closes_sorted = closes.clone();
-        closes_sorted.sort_by(|a, b| match side {
-            LONG => a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal),
-            SHORT => b.price.partial_cmp(&a.price).unwrap_or(Ordering::Equal),
-            _ => Ordering::Equal,
+        closes_sorted.sort_by(|a, b| {
+            let da = calc_diff(a);
+            let db = calc_diff(b);
+            match db.partial_cmp(&da).unwrap_or(Ordering::Equal) {
+                Ordering::Equal => a
+                    .order_type
+                    .id()
+                    .cmp(&b.order_type.id())
+                    .then_with(|| a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal))
+                    .then_with(|| a.qty.partial_cmp(&b.qty).unwrap_or(Ordering::Equal)),
+                other => other,
+            }
         });
 
-        let mut trimmed: Vec<Order> = Vec::with_capacity(closes.len());
-        let mut remaining = position_abs;
-
+        let mut excess = total_abs - position_abs;
+        let mut kept: Vec<Order> = Vec::with_capacity(closes_sorted.len());
         for mut order in closes_sorted {
-            if remaining <= QTY_TOLERANCE {
-                break;
+            if excess <= QTY_TOLERANCE {
+                kept.push(order);
+                continue;
             }
-            let mut qty_abs = order.qty.abs().min(remaining);
-            qty_abs = round_dn(qty_abs, exchange_params.qty_step);
+            let qty_abs = order.qty.abs();
             if qty_abs <= QTY_TOLERANCE {
                 continue;
             }
+            if qty_abs <= excess + QTY_TOLERANCE {
+                // Drop whole order.
+                excess -= qty_abs;
+                continue;
+            }
+            // Trim this order down to remove remaining excess.
+            let mut new_abs = qty_abs - excess;
+            let step = exchange_params.qty_step;
+            // Use nearest rounding to avoid occasional one-step under-trims due to float
+            // representation noise (which would otherwise trigger the dust-remainder absorber
+            // and shift qty into the closer-to-fill order).
+            new_abs = round_(new_abs, step);
+
+            if new_abs <= QTY_TOLERANCE {
+                continue;
+            }
+            if !allow_below_min && new_abs < min_qty {
+                // Prefer dropping dust rather than keeping a too-small order.
+                excess = 0.0;
+                continue;
+            }
+
             order.qty = if order.qty.is_sign_negative() {
-                -qty_abs
+                -new_abs
             } else {
-                qty_abs
+                new_abs
             };
-            trimmed.push(order);
-            remaining -= qty_abs;
+            excess = 0.0;
+            kept.push(order);
         }
 
-        trimmed.sort_by(|a, b| match side {
-            LONG => a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal),
-            SHORT => b.price.partial_cmp(&a.price).unwrap_or(Ordering::Equal),
-            _ => Ordering::Equal,
+        // Deterministic final ordering: closest-to-fill first (diff asc), then order_type_id.
+        kept.sort_by(|a, b| {
+            let da = calc_diff(a);
+            let db = calc_diff(b);
+            match da.partial_cmp(&db).unwrap_or(Ordering::Equal) {
+                Ordering::Equal => a
+                    .order_type
+                    .id()
+                    .cmp(&b.order_type.id())
+                    .then_with(|| a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal))
+                    .then_with(|| a.qty.partial_cmp(&b.qty).unwrap_or(Ordering::Equal)),
+                other => other,
+            }
         });
-
-        *closes = trimmed;
+        enforce_no_dust_remainder(&mut kept);
+        *closes = kept;
     }
 
     fn update_emas(&mut self, k: usize) {
@@ -2862,8 +3703,10 @@ impl<'a> Backtest<'a> {
             }
             self.last_hour_boundary_ms = hour_boundary;
 
-            // Update hourly log-range EMAs for grid spacing adjustments
-            if self.needs_grid_log_range_long || self.needs_grid_log_range_short {
+            // Update hourly log-range EMAs for entry volatility adjustments
+            if self.needs_entry_volatility_logrange_ema_1h_long
+                || self.needs_entry_volatility_logrange_ema_1h_short
+            {
                 for i in 0..self.n_coins {
                     if self.coin_valid_range(i).is_none() {
                         continue;
@@ -2877,23 +3720,24 @@ impl<'a> Backtest<'a> {
                         continue;
                     }
                     let hour_log_range = (bucket.high / bucket.low).ln();
-                    let grid_alpha_long = self.ema_alphas[i].grid_log_range_alpha_long;
-                    let grid_alpha_short = self.ema_alphas[i].grid_log_range_alpha_short;
+                    let alpha_long = self.ema_alphas[i].entry_volatility_logrange_ema_1h_alpha_long;
+                    let alpha_short =
+                        self.ema_alphas[i].entry_volatility_logrange_ema_1h_alpha_short;
                     let emas = &mut self.emas[i];
-                    if self.needs_grid_log_range_long && grid_alpha_long > 0.0 {
-                        emas.grid_log_range_long = update_adjusted_ema(
+                    if self.needs_entry_volatility_logrange_ema_1h_long && alpha_long > 0.0 {
+                        emas.entry_volatility_logrange_ema_1h_long = update_adjusted_ema(
                             hour_log_range,
-                            grid_alpha_long,
-                            &mut emas.grid_log_range_long_num,
-                            &mut emas.grid_log_range_long_den,
+                            alpha_long,
+                            &mut emas.entry_volatility_logrange_ema_1h_long_num,
+                            &mut emas.entry_volatility_logrange_ema_1h_long_den,
                         );
                     }
-                    if self.needs_grid_log_range_short && grid_alpha_short > 0.0 {
-                        emas.grid_log_range_short = update_adjusted_ema(
+                    if self.needs_entry_volatility_logrange_ema_1h_short && alpha_short > 0.0 {
+                        emas.entry_volatility_logrange_ema_1h_short = update_adjusted_ema(
                             hour_log_range,
-                            grid_alpha_short,
-                            &mut emas.grid_log_range_short_num,
-                            &mut emas.grid_log_range_short_den,
+                            alpha_short,
+                            &mut emas.entry_volatility_logrange_ema_1h_short_num,
+                            &mut emas.entry_volatility_logrange_ema_1h_short_den,
                         );
                     }
                 }
@@ -3034,7 +3878,7 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
         log_range_alpha_long: 2.0 / (bot_params_pair.long.filter_volatility_ema_span as f64 + 1.0),
         log_range_alpha_short: 2.0
             / (bot_params_pair.short.filter_volatility_ema_span as f64 + 1.0),
-        grid_log_range_alpha_long: {
+        entry_volatility_logrange_ema_1h_alpha_long: {
             let span = bot_params_pair.long.entry_volatility_ema_span_hours;
             if span > 0.0 {
                 2.0 / (span + 1.0)
@@ -3042,7 +3886,7 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
                 0.0
             }
         },
-        grid_log_range_alpha_short: {
+        entry_volatility_logrange_ema_1h_alpha_short: {
             let span = bot_params_pair.short.entry_volatility_ema_span_hours;
             if span > 0.0 {
                 2.0 / (span + 1.0)
@@ -3050,6 +3894,68 @@ fn calc_ema_alphas(bot_params_pair: &BotParamsPair) -> EmaAlphas {
                 0.0
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::{Array1, Array3};
+
+    #[test]
+    fn cached_orchestrator_input_updates_dynamic_wallet_exposure_limit() {
+        let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.wallet_exposure_limit = 0.1;
+        bp_pair.long.entry_initial_qty_pct = 0.1;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            filter_by_min_effective_cost: false,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        let input = bt.get_orchestrator_input_v2_cached(1, None);
+        assert!(
+            (input.symbols[0].long.bot_params.wallet_exposure_limit - 0.1).abs() < 1e-12,
+            "expected cached input WEL to match initial bot_params"
+        );
+        bt.orchestrator_input_cache_v2 = Some(input);
+
+        bt.bot_params[0].long.wallet_exposure_limit = 0.2;
+
+        let input = bt.get_orchestrator_input_v2_cached(1, None);
+        assert!(
+            (input.symbols[0].long.bot_params.wallet_exposure_limit - 0.2).abs() < 1e-12,
+            "expected cached input WEL to update after bot_params change"
+        );
+        bt.orchestrator_input_cache_v2 = Some(input);
     }
 }
 

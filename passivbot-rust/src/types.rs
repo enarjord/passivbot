@@ -217,7 +217,7 @@ pub struct StateParams {
     pub balance: f64,
     pub order_book: OrderBook,
     pub ema_bands: EMABands,
-    pub grid_log_range: f64,
+    pub entry_volatility_logrange_ema_1h: f64,
 }
 
 #[derive(Clone, Default, Debug)]

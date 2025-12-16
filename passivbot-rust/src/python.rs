@@ -422,6 +422,7 @@ pub fn gate_entries_by_twel_py(
         qty,
         price,
         order_type,
+        ..
     } in gated
     {
         result.push((idx, qty, price, order_type.id()));
@@ -1037,7 +1038,7 @@ pub fn calc_next_entry_long_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_lower: f64,
-    grid_log_range: f64,
+    entry_volatility_logrange_ema_1h: f64,
     order_book_bid: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -1057,7 +1058,7 @@ pub fn calc_next_entry_long_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
-        grid_log_range,
+        entry_volatility_logrange_ema_1h,
         ..Default::default()
     };
     let bot_params = BotParams {
@@ -1213,7 +1214,7 @@ pub fn calc_next_entry_short_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_upper: f64,
-    grid_log_range: f64,
+    entry_volatility_logrange_ema_1h: f64,
     order_book_ask: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -1233,7 +1234,7 @@ pub fn calc_next_entry_short_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
-        grid_log_range,
+        entry_volatility_logrange_ema_1h,
         ..Default::default()
     };
     let bot_params = BotParams {
@@ -1389,7 +1390,7 @@ pub fn calc_entries_long_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_lower: f64,
-    grid_log_range: f64,
+    entry_volatility_logrange_ema_1h: f64,
     order_book_bid: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -1410,7 +1411,7 @@ pub fn calc_entries_long_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
-        grid_log_range,
+        entry_volatility_logrange_ema_1h,
         ..Default::default()
     };
 
@@ -1490,7 +1491,7 @@ pub fn calc_entries_short_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_upper: f64,
-    grid_log_range: f64,
+    entry_volatility_logrange_ema_1h: f64,
     order_book_ask: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -1511,7 +1512,7 @@ pub fn calc_entries_short_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
-        grid_log_range,
+        entry_volatility_logrange_ema_1h,
         ..Default::default()
     };
 
@@ -2138,20 +2139,30 @@ fn parse_positions(dict: &PyDict, key: &str) -> PyResult<Positions> {
 
 fn parse_symbol_input(dict: &PyDict) -> PyResult<SymbolInput> {
     let idx = extract_value(dict, "idx")?;
+    let positions = parse_positions(dict, "positions")?;
     Ok(SymbolInput {
         idx,
         mode_long: parse_mode(dict, "mode_long")?,
         mode_short: parse_mode(dict, "mode_short")?,
+        active_long: extract_value(dict, "active_long").unwrap_or(false),
+        active_short: extract_value(dict, "active_short").unwrap_or(false),
         order_book: parse_order_book(dict, "order_book")?,
         ema_bands_long: parse_emabands(dict, "ema_bands_long")?,
         ema_bands_short: parse_emabands(dict, "ema_bands_short")?,
-        grid_log_range_long: extract_value(dict, "grid_log_range_long")?,
-        grid_log_range_short: extract_value(dict, "grid_log_range_short")?,
+        entry_volatility_logrange_ema_1h_long: extract_value(
+            dict,
+            "entry_volatility_logrange_ema_1h_long",
+        )?,
+        entry_volatility_logrange_ema_1h_short: extract_value(
+            dict,
+            "entry_volatility_logrange_ema_1h_short",
+        )?,
         log_range_long: extract_value(dict, "log_range_long")?,
         log_range_short: extract_value(dict, "log_range_short")?,
         trailing_long: parse_trailing(dict, "trailing_long")?,
         trailing_short: parse_trailing(dict, "trailing_short")?,
-        positions: parse_positions(dict, "positions")?,
+        position_long: positions.long.get(&idx).copied(),
+        position_short: positions.short.get(&idx).copied(),
         exchange: exchange_params_from_dict(dict_expect_dict(dict, "exchange")?)?,
         bot: bot_params_pair_from_dict(dict_expect_dict(dict, "bot")?)?,
     })
