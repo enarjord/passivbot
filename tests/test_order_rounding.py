@@ -56,7 +56,7 @@ def test_calc_entries_long_py_quantizes_results():
         max_since_open=0.0,
         min_since_max=0.0,
         ema_bands_lower=0.6545,
-        grid_log_range=0.0,
+        entry_volatility_logrange_ema_1h=0.0,
         order_book_bid=0.66,
     )
     result = pbr.calc_entries_long_py(**params)

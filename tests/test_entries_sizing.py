@@ -50,7 +50,7 @@ def test_initial_entry_qty_long_respects_min_qty_and_allowance():
         max_since_open=0.0,
         min_since_max=0.0,
         ema_bands_lower=95.0,
-        grid_log_range=0.0,
+        entry_volatility_logrange_ema_1h=0.0,
         order_book_bid=94.0,
     )
 
@@ -98,7 +98,7 @@ def test_initial_entry_qty_short_respects_allowance():
         max_since_open=0.0,
         min_since_max=0.0,
         ema_bands_upper=105.0,
-        grid_log_range=0.0,
+        entry_volatility_logrange_ema_1h=0.0,
         order_book_ask=106.0,
     )
 
@@ -146,7 +146,7 @@ def test_reentry_blocked_when_cap_reached():
         max_since_open=0.0,
         min_since_max=0.0,
         ema_bands_lower=95.0,
-        grid_log_range=0.0,
+        entry_volatility_logrange_ema_1h=0.0,
         order_book_bid=94.0,
     )
 
@@ -188,7 +188,7 @@ def test_reentry_long_is_cropped_to_cap():
         max_since_open=0.0,
         min_since_max=0.0,
         ema_bands_lower=100.0,
-        grid_log_range=0.0,
+        entry_volatility_logrange_ema_1h=0.0,
         order_book_bid=95.0,
     )
 
@@ -236,7 +236,7 @@ def test_reentry_short_is_cropped_to_cap():
         max_since_open=0.0,
         min_since_max=0.0,
         ema_bands_upper=100.0,
-        grid_log_range=0.0,
+        entry_volatility_logrange_ema_1h=0.0,
         order_book_ask=105.0,
     )
 
