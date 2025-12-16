@@ -173,14 +173,60 @@ def round_floats(obj: Any, sig_digits: int = 6) -> Any:
         return obj
 
 
-def quantize_floats(obj: Any, sig_digits: int = 6, step: float = None) -> Any:
-    if step is None:
-        return round_floats(obj, sig_digits)
+def round_floats_sig_digits(obj: Any, sig_digits: int) -> Any:
     if isinstance(obj, float):
-        return round(obj / step) * step
+        return pbr.round_dynamic(obj, sig_digits)
     elif isinstance(obj, dict):
-        return {k: quantize_floats(v, step) for k, v in obj.items()}
+        return {k: round_floats_sig_digits(v, sig_digits) for k, v in obj.items()}
     elif isinstance(obj, list):
-        return [quantize_floats(v, step) for v in obj]
+        return [round_floats_sig_digits(v, sig_digits) for v in obj]
+    elif isinstance(obj, tuple):
+        return tuple([round_floats_sig_digits(v, sig_digits) for v in obj])
     else:
         return obj
+
+def round_floats_step(obj: Any, step: float) -> Any:
+    if isinstance(obj, float):
+        return pbr.round_(obj, step)
+    elif isinstance(obj, dict):
+        return {k: round_floats_step(v, step) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [round_floats_step(v, step) for v in obj]
+    elif isinstance(obj, tuple):
+        return tuple([round_floats_step(v, step) for v in obj])
+    else:
+        return obj
+
+def quantize_floats(obj: Any, sig_digits: int = None, step: float = None) -> Any:
+    """
+    if step is given, round by step
+    else, round by sig_digits
+    """
+    if step is None:
+        if sig_digits is None:
+            raise Exception("must provide sig_digits or step")
+        return round_floats_sig_digits(obj, sig_digits)
+    else:
+        return round_floats_step(obj, step)
+
+
+def enforce_bounds_v2(obj: Any, bounds: Any = None, sig_digits: int = None):
+    """
+    apply floor/ceil capping and rounding to each element in obj
+    obj may be a bot config:
+        - take bounds from config.optimize.bounds
+        - apply to config.bot
+    obj may be a list of floats:
+        - assert len(obj) == len(bounds)
+        - obj is on form [float]
+        - bounds is on form [[float]]
+        - each element of bounds must be len==2 or len==3
+        - bound[0] is lower bound; bound[1] is upper bound
+        - if len bound element == 3, consider bound[2] as step
+        - if len bound element == 2, use sig_digits (raise if missing)
+    """
+    pass
+
+
+
+
