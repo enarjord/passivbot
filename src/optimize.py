@@ -49,7 +49,7 @@ except Exception as exc:
     sys.exit(1)
 sys.argv = [sys.argv[0]] + _rust_remaining
 
-import passivbot_rust as pbr  # noqa: E402
+import passivbot_rust as pbr
 from backtest import (
     prepare_hlcvs_mss,
     build_backtest_payload,

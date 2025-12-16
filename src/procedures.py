@@ -20,6 +20,7 @@ from utils import (
     get_file_mod_ms,
     date_to_ts,
     get_first_ohlcv_iteratively,
+    load_ccxt_instance,
 )
 import sys
 import passivbot_rust as pbr
@@ -348,8 +349,7 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
     ccxt_clients = {}
     for ex_name in sorted(exchange_map):
         try:
-            ccxt_clients[ex_name] = getattr(ccxta, ex_name)()
-            ccxt_clients[ex_name].options["defaultType"] = "swap"
+            ccxt_clients[ex_name] = load_ccxt_instance(ex_name)
         except Exception as e:
             print(f"Error loading {ex_name} from ccxt. Skipping. {e}")
             del exchange_map[ex_name]
