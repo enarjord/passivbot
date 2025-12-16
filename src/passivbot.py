@@ -233,10 +233,7 @@ def calc_pnl(position_side, entry_price, close_price, qty, inverse, c_mult):
 
 def order_market_diff(side: str, order_price: float, market_price: float) -> float:
     """Return side-aware relative price diff between order and market."""
-    try:
-        return float(calc_order_price_diff(side, float(order_price), float(market_price)))
-    except Exception:
-        return 0.0
+    return float(calc_order_price_diff(side, float(order_price), float(market_price)))
 
 
 from pure_funcs import (
@@ -740,7 +737,7 @@ class Passivbot:
         self,
         ema_bounds_long: Dict[str, Tuple[float, float]],
         ema_bounds_short: Dict[str, Tuple[float, float]],
-        entry_grid_log_ranges: Dict[str, Dict[str, float]],
+        entry_volatility_logrange_ema_1h: Dict[str, Dict[str, float]],
     ) -> None:
 
         ema_debug_logging_enabled = False
@@ -770,7 +767,7 @@ class Passivbot:
             for symbol, (lower, upper) in sorted(bounds.items()):
                 span0 = _safe_span(pside, "ema_span_0", symbol)
                 span1 = _safe_span(pside, "ema_span_1", symbol)
-                grid_lr = (entry_grid_log_ranges or {}).get(pside, {}).get(symbol)
+                grid_lr = (entry_volatility_logrange_ema_1h or {}).get(pside, {}).get(symbol)
                 parts = [f"{symbol}"]
                 if span0 is not None or span1 is not None:
                     parts.append(
@@ -1048,6 +1045,8 @@ class Passivbot:
             return False
         balance_ok, positions_ok = await self.update_positions_and_balance()
         if not positions_ok:
+            return False
+        if not balance_ok:
             return False
         open_orders_ok, pnls_ok = await asyncio.gather(
             self.update_open_orders(),
@@ -3177,8 +3176,6 @@ class Passivbot:
                 logging.error(f"error logging position changes {e}")
         if balance_ok and positions_ok:
             await self.handle_balance_update(source="REST")
-        else:
-            await self.restart_bot_on_too_many_errors()
         return balance_ok, positions_ok
 
     async def update_effective_min_cost(self, symbol=None):
@@ -3206,9 +3203,11 @@ class Passivbot:
 
     async def calc_ideal_orders(self, allow_unstuck: bool = True):
         """Compute desired entry and exit orders for every active symbol."""
-        last_prices, ema_anchor, entry_grid_log_ranges = await self._load_price_context()
+        last_prices, ema_anchor, entry_volatility_logrange_ema_1h = await self._load_price_context()
 
-        order_plan = self._build_base_orders(last_prices, ema_anchor, entry_grid_log_ranges)
+        order_plan = self._build_base_orders(
+            last_prices, ema_anchor, entry_volatility_logrange_ema_1h
+        )
         close_candidates = order_plan.close_candidates
 
         unstucking_symbol, unstucking_close = await self.calc_unstucking_close(
@@ -3259,7 +3258,10 @@ class Passivbot:
         """Fetch latest prices and EMA/log-range anchors required for order calculation."""
         to_update_last_prices: set[str] = set()
         to_update_emas: dict[str, set[str]] = {"long": set(), "short": set()}
-        to_update_grid_log_ranges: dict[str, dict[str, float]] = {"long": {}, "short": {}}
+        to_update_entry_volatility_logrange_ema_1h: dict[str, dict[str, float]] = {
+            "long": {},
+            "short": {},
+        }
 
         for pside in self.PB_modes:
             for symbol in self.PB_modes[pside]:
@@ -3279,7 +3281,9 @@ class Passivbot:
                             self.bp(pside, "entry_volatility_ema_span_hours", symbol)
                         )
                         if grid_log_span_hours > 0.0:
-                            to_update_grid_log_ranges[pside][symbol] = max(1e-6, grid_log_span_hours)
+                            to_update_entry_volatility_logrange_ema_1h[pside][symbol] = max(
+                                1e-6, grid_log_span_hours
+                            )
 
         def build_ema_items(symbols_set: set[str], pside: str) -> list[tuple[str, float, float]]:
             return [
@@ -3291,16 +3295,16 @@ class Passivbot:
                 for sym in symbols_set
             ]
 
-        def build_grid_log_range_items(pside: str) -> list[tuple[str, float]]:
-            return list(to_update_grid_log_ranges[pside].items())
+        def build_entry_volatility_logrange_items(pside: str) -> list[tuple[str, float]]:
+            return list(to_update_entry_volatility_logrange_ema_1h[pside].items())
 
-        entry_grid_log_ranges: dict[str, dict[str, float]] = {"long": {}, "short": {}}
+        entry_volatility_logrange_ema_1h: dict[str, dict[str, float]] = {"long": {}, "short": {}}
         (
             last_prices,
             ema_bounds_long,
             ema_bounds_short,
-            entry_grid_log_ranges["long"],
-            entry_grid_log_ranges["short"],
+            entry_volatility_logrange_ema_1h["long"],
+            entry_volatility_logrange_ema_1h["short"],
         ) = await asyncio.gather(
             self.cm.get_last_prices(list(to_update_last_prices), max_age_ms=10_000),
             self.cm.get_ema_bounds_many(
@@ -3310,26 +3314,28 @@ class Passivbot:
                 build_ema_items(to_update_emas["short"], "short"), max_age_ms=30_000
             ),
             self.cm.get_latest_ema_log_range_many(
-                build_grid_log_range_items("long"), tf="1h", max_age_ms=600_000
+                build_entry_volatility_logrange_items("long"), tf="1h", max_age_ms=600_000
             ),
             self.cm.get_latest_ema_log_range_many(
-                build_grid_log_range_items("short"), tf="1h", max_age_ms=600_000
+                build_entry_volatility_logrange_items("short"), tf="1h", max_age_ms=600_000
             ),
         )
 
-        self.maybe_log_ema_debug(ema_bounds_long, ema_bounds_short, entry_grid_log_ranges)
+        self.maybe_log_ema_debug(
+            ema_bounds_long, ema_bounds_short, entry_volatility_logrange_ema_1h
+        )
 
         ema_anchor = {
             "long": {s: ema_bounds_long[s][0] for s in ema_bounds_long},
             "short": {s: ema_bounds_short[s][1] for s in ema_bounds_short},
         }
-        return last_prices, ema_anchor, entry_grid_log_ranges
+        return last_prices, ema_anchor, entry_volatility_logrange_ema_1h
 
     def _build_base_orders(
         self,
         last_prices: Dict[str, float],
         ema_anchor: Dict[str, Dict[str, float]],
-        entry_grid_log_ranges: Dict[str, Dict[str, float]],
+        entry_volatility_logrange_ema_1h: Dict[str, Dict[str, float]],
     ) -> BaseOrderPlan:
         """Construct initial close/entry order tuples and gating payloads."""
         close_candidates: defaultdict = defaultdict(list)
@@ -3389,7 +3395,7 @@ class Passivbot:
                     self.trailing_prices[symbol][pside]["max_since_open"],
                     self.trailing_prices[symbol][pside]["min_since_max"],
                     ema_anchor[pside].get(symbol, last_prices.get(symbol, float("nan"))),
-                    entry_grid_log_ranges.get(pside, {}).get(symbol, 0.0),
+                    entry_volatility_logrange_ema_1h.get(pside, {}).get(symbol, 0.0),
                     last_prices[symbol],
                 )
 
