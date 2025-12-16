@@ -90,18 +90,29 @@
                 {
                     "coins": ["ADA","BTC","ETH","SOL","XRP"],
                     "label": "pure_trailing",
-                    "overrides": {"bot.long.entry_trailing_grid_ratio":1, "bot.long.close_trailing_grid_ratio":1},
+                    "overrides": {
+                        "bot.long.close_trailing_grid_ratio": 1,
+                        "bot.long.entry_trailing_grid_ratio": 1
+                    },
                     "start_date": "2024-07"
                 },
                 {
                     "coins": ["ADA","BTC","ETH","SOL","XRP"],
                     "label": "pure_grid",
-                    "overrides": {"bot.long.entry_trailing_grid_ratio":0, "bot.long.close_trailing_grid_ratio":0},
+                    "overrides": {
+                        "bot.long.close_trailing_grid_ratio": 0,
+                        "bot.long.entry_trailing_grid_ratio": 0
+                    },
                     "start_date": "2024-07"
                 },
                 {
                     "label": "n_positions=3",
                     "overrides": {"bot.long.n_positions":3},
+                    "start_date": "2024-07"
+                },
+                {
+                    "label": "ltwel=2",
+                    "overrides": {"bot.long.total_wallet_exposure_limit":2},
                     "start_date": "2024-07"
                 }
             ]
@@ -109,43 +120,43 @@
     },
     "bot": {
         "long": {
-            "close_grid_markup_end": 0.00294,
-            "close_grid_markup_start": 0.00401,
-            "close_grid_qty_pct": 0.328,
+            "close_grid_markup_end": 0.00198,
+            "close_grid_markup_start": 0.00285,
+            "close_grid_qty_pct": 0.352,
             "close_trailing_grid_ratio": -0.541,
-            "close_trailing_qty_pct": 0.133,
-            "close_trailing_retracement_pct": 0.00214,
-            "close_trailing_threshold_pct": 0.0344,
-            "ema_span_0": 1130.0,
-            "ema_span_1": 1370.0,
-            "entry_grid_double_down_factor": 2.28,
-            "entry_grid_spacing_pct": 0.0147,
-            "entry_grid_spacing_volatility_weight": 93.7,
-            "entry_grid_spacing_we_weight": 4.35,
-            "entry_initial_ema_dist": 0.00245,
-            "entry_initial_qty_pct": 0.0159,
-            "entry_trailing_double_down_factor": 0.443,
-            "entry_trailing_grid_ratio": -0.519,
-            "entry_trailing_retracement_pct": 0.00724,
-            "entry_trailing_retracement_volatility_weight": 140.0,
-            "entry_trailing_retracement_we_weight": 18.6,
-            "entry_trailing_threshold_pct": 0.00911,
-            "entry_trailing_threshold_volatility_weight": 199.0,
-            "entry_trailing_threshold_we_weight": 2.11,
-            "entry_volatility_ema_span_hours": 2540.0,
+            "close_trailing_qty_pct": 0.138,
+            "close_trailing_retracement_pct": 0.00802,
+            "close_trailing_threshold_pct": 0.0349,
+            "ema_span_0": 972,
+            "ema_span_1": 1430,
+            "entry_grid_double_down_factor": 2.29,
+            "entry_grid_spacing_pct": 0.0145,
+            "entry_grid_spacing_volatility_weight": 92.7,
+            "entry_grid_spacing_we_weight": 4.65,
+            "entry_initial_ema_dist": -0.00455,
+            "entry_initial_qty_pct": 0.0108,
+            "entry_trailing_double_down_factor": 0.448,
+            "entry_trailing_grid_ratio": -0.523,
+            "entry_trailing_retracement_pct": 0.00789,
+            "entry_trailing_retracement_volatility_weight": 137,
+            "entry_trailing_retracement_we_weight": 17.4,
+            "entry_trailing_threshold_pct": 0.0102,
+            "entry_trailing_threshold_volatility_weight": 200,
+            "entry_trailing_threshold_we_weight": 1.08,
+            "entry_volatility_ema_span_hours": 2520,
             "filter_volatility_drop_pct": 0,
-            "filter_volatility_ema_span": 103.0,
-            "filter_volume_drop_pct": 0.5,
-            "filter_volume_ema_span": 2160,
+            "filter_volatility_ema_span": 133,
+            "filter_volume_drop_pct": 0.503,
+            "filter_volume_ema_span": 1480,
             "n_positions": 7,
-            "risk_twel_enforcer_threshold": 0.99,
-            "risk_we_excess_allowance_pct": 0.907,
-            "risk_wel_enforcer_threshold": 0.985,
+            "risk_twel_enforcer_threshold": 0.988,
+            "risk_we_excess_allowance_pct": 0.952,
+            "risk_wel_enforcer_threshold": 0.99,
             "total_wallet_exposure_limit": 1,
-            "unstuck_close_pct": 0.0182,
-            "unstuck_ema_dist": -0.0906,
-            "unstuck_loss_allowance_pct": 0.00143,
-            "unstuck_threshold": 0.447
+            "unstuck_close_pct": 0.0118,
+            "unstuck_ema_dist": -0.0905,
+            "unstuck_loss_allowance_pct": 0.00129,
+            "unstuck_threshold": 0.42
         },
         "short": {
             "close_grid_markup_end": 0.001,
@@ -191,6 +202,8 @@
     "live": {
         "approved_coins": "configs/approved_coins.json",
         "auto_gs": true,
+        "balance_hysteresis_snap_pct": 0.02,
+        "balance_override": null,
         "empty_means_all_approved": true,
         "execution_delay_seconds": 2,
         "filter_by_min_effective_cost": true,
@@ -212,8 +225,6 @@
         "price_distance_threshold": 0.002,
         "recv_window_ms": 5000,
         "time_in_force": "good_till_cancelled",
-        "balance_override": null,
-        "balance_hysteresis_snap_pct": 0.02,
         "user": "bybit_01",
         "warmup_ratio": 0.3
     },
@@ -305,9 +316,21 @@
         "enable_overrides": [],
         "iters": 500000,
         "limits": [
-            {"metric":"drawdown_worst_btc","penalize_if":"greater_than","value":0.9},
-            {"metric":"drawdown_worst_usd","penalize_if":"greater_than","value":0.9},
-            {"metric":"loss_profit_ratio","penalize_if":"greater_than","value":0.6},
+            {
+                "metric": "drawdown_worst_btc",
+                "penalize_if": "greater_than",
+                "value": 0.9
+            },
+            {
+                "metric": "drawdown_worst_usd",
+                "penalize_if": "greater_than",
+                "value": 0.9
+            },
+            {
+                "metric": "loss_profit_ratio",
+                "penalize_if": "greater_than",
+                "value": 0.6
+            },
             {
                 "metric": "adg_pnl_w",
                 "penalize_if": "less_than",
