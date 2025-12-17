@@ -264,7 +264,53 @@ Coins selected for trading are filtered by volume and log range. First, filter c
 
 ### Bounds
 
-When optimizing, parameter values are within the lower and upper bounds.
+When optimizing, parameter values are constrained within the lower and upper bounds. Bounds support an optional third element specifying a discrete step size for grid-based optimization.
+
+**Bounds Formats:**
+
+- `[low, high]` - Continuous optimization between `low` and `high` (current behavior, unchanged)
+- `[low, high, step]` - Discrete optimization with values constrained to the grid: `low`, `low + step`, `low + 2*step`, ..., `high`
+- `[low, high, 0]` or `[low, high, null]` - Treated as continuous (equivalent to `[low, high]`)
+- Single value (e.g., `0.5`) - Fixed parameter (not optimized)
+
+**Step Behavior:**
+
+When a step is defined, the optimizer only explores values on the discrete grid. The genetic algorithm performs crossover and mutation in *index space* (i.e., the indices of valid grid values) to ensure offspring values always land on the grid.
+
+For example, with bounds `[0.01, 0.10, 0.02]`:
+- Valid values are: 0.01, 0.03, 0.05, 0.07, 0.09
+- The optimizer will never produce values like 0.02 or 0.04
+
+**When to Use Stepped Bounds:**
+
+- **Integer parameters**: Use step `1` for parameters that should be integers (e.g., `n_positions`)
+- **Coarse search**: Use larger steps to reduce search space and speed up optimization
+- **Known granularity**: When you know the parameter only makes sense at certain intervals
+
+**Example Configuration:**
+
+```json
+"optimize": {
+    "bounds": {
+        "long_n_positions": [1, 20, 1],
+        "long_total_wallet_exposure_limit": [0.1, 2.0, 0.1],
+        "long_entry_grid_spacing_pct": [0.005, 0.05, 0.005],
+        "long_ema_span_0": [100, 10000],
+        "long_ema_span_1": [200, 20000]
+    }
+}
+```
+
+In this example:
+- `n_positions`: Integers from 1 to 20
+- `total_wallet_exposure_limit`: Values 0.1, 0.2, 0.3, ..., 2.0
+- `entry_grid_spacing_pct`: Values 0.005, 0.01, 0.015, ..., 0.05
+- `ema_span_0` and `ema_span_1`: Continuous optimization (no step defined)
+
+**Validation:**
+
+- Step must be positive; negative or zero steps are treated as continuous
+- Step must not exceed the range (`high - low`); if it does, a warning is logged and the parameter is treated as continuous
 
 ### Other Optimization Parameters
 
