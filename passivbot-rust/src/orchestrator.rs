@@ -5,34 +5,30 @@
 //! snapshot of state and configuration. No defaults, no silent fallbacks: callers must provide
 //! fully-populated inputs.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use crate::closes::{
-    calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
-};
-use crate::constants::{LONG, SHORT};
-use crate::entries::{
-    calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
-    wallet_exposure_limit_with_allowance,
-};
-use crate::risk::{
-    calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
-    GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
-};
-use crate::types::{
-    BotParamsPair, EMABands, ExchangeParams, Order, OrderBook, OrderType, Position, StateParams,
-    TrailingPriceBundle,
-};
-use crate::utils::calc_wallet_exposure;
+/// Backtest-only performance hint: allow next-only vs full-grid expansion on a per-symbol basis.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntryPeekHints {
+    pub expand_grid_long: HashSet<usize>,
+    pub expand_grid_short: HashSet<usize>,
+    pub expand_close_long: HashSet<usize>,
+    pub expand_close_short: HashSet<usize>,
+}
 
-/// Orchestrator v2 (spec-aligned rewrite).
-///
-/// This is introduced alongside the existing orchestrator path to keep the crate compiling while
-/// wiring is refactored later. The goal is for v2 to become the single source of truth for both
-/// backtest and live bots.
-pub mod v2 {
-    use std::collections::HashMap;
+impl EntryPeekHints {
+    #[inline]
+    pub fn clear(&mut self) {
+        self.expand_grid_long.clear();
+        self.expand_grid_short.clear();
+        self.expand_close_long.clear();
+        self.expand_close_short.clear();
+    }
+}
 
+mod core {
     use crate::closes::{
         calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
     };
@@ -54,8 +50,10 @@ pub mod v2 {
         calc_new_psize_pprice, calc_order_price_diff_ask, calc_order_price_diff_bid,
         calc_pside_price_diff_int, calc_wallet_exposure, round_, round_dn,
     };
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
     pub enum PositionSide {
         Long,
         Short,
@@ -71,7 +69,8 @@ pub mod v2 {
         }
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
     pub enum TradingMode {
         Normal,
         Panic,
@@ -80,7 +79,8 @@ pub mod v2 {
         Manual,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct IdealOrder {
         pub symbol_idx: usize,
         pub pside: PositionSide,
@@ -90,7 +90,8 @@ pub mod v2 {
         pub order_type: OrderType,
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case", deny_unknown_fields)]
     pub enum OrchestratorWarning {
         DisabledPsideHasPosition {
             symbol_idx: usize,
@@ -102,7 +103,8 @@ pub mod v2 {
         },
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case", deny_unknown_fields)]
     pub enum OrchestratorError {
         InvalidOrderBook {
             symbol_idx: usize,
@@ -121,13 +123,15 @@ pub mod v2 {
         },
     }
 
-    #[derive(Debug, Default, Clone)]
+    #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct OrchestratorDiagnostics {
         pub warnings: Vec<OrchestratorWarning>,
     }
 
-    #[derive(Debug, Default, Clone)]
-    pub struct OrchestratorOutputV2 {
+    #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct OrchestratorOutput {
         pub orders: Vec<IdealOrder>,
         pub diagnostics: OrchestratorDiagnostics,
     }
@@ -137,29 +141,36 @@ pub mod v2 {
     /// Kept as a small vector to avoid float keys requiring `Ord`.
     pub type EmaBySpan = Vec<(f64, f64)>;
 
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct EmaTimeframeBundle {
         pub close: EmaBySpan,
         pub log_range: EmaBySpan,
         pub volume: EmaBySpan,
     }
 
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct EmaBundle {
         pub m1: EmaTimeframeBundle,
         pub h1: EmaTimeframeBundle,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct OrchestratorGlobal {
         pub filter_by_min_effective_cost: bool,
         pub unstuck_allowance_long: f64,
         pub unstuck_allowance_short: f64,
+        /// If true, output orders are globally sorted by the canonical (live-bot) distance metric.
+        /// Backtest does not require this global ordering and may disable it for performance.
+        pub sort_global: bool,
         /// Global bot params (not modifiable by per-coin overrides).
         pub global_bot_params: BotParamsPair,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct SymbolSideInput {
         /// `None` means “forager-eligible default”.
         /// `Some(Normal)` means “forced Normal” (always selected).
@@ -170,15 +181,17 @@ pub mod v2 {
         pub bot_params: BotParams,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct NextCandle {
         pub low: f64,
         pub high: f64,
         pub tradable: bool,
     }
 
-    #[derive(Debug, Clone)]
-    pub struct SymbolInputV2 {
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct SymbolInput {
         pub symbol_idx: usize,
         pub order_book: OrderBook, // must have bid>0 and ask>0
         pub exchange: ExchangeParams,
@@ -192,11 +205,12 @@ pub mod v2 {
         pub short: SymbolSideInput,
     }
 
-    #[derive(Debug, Clone)]
-    pub struct OrchestratorInputV2 {
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct OrchestratorInput {
         pub balance: f64,
         pub global: OrchestratorGlobal,
-        pub symbols: Vec<SymbolInputV2>,
+        pub symbols: Vec<SymbolInput>,
         /// Backtest-only performance hint: allow next-only vs full-grid expansion.
         pub peek_hints: Option<super::EntryPeekHints>,
     }
@@ -594,7 +608,7 @@ pub mod v2 {
     }
 
     fn fill_forced_normal_indices(
-        symbols: &[SymbolInputV2],
+        symbols: &[SymbolInput],
         pside: PositionSide,
         out: &mut Vec<usize>,
     ) {
@@ -611,7 +625,7 @@ pub mod v2 {
     }
 
     fn build_forager_features_into(
-        symbols: &[SymbolInputV2],
+        symbols: &[SymbolInput],
         pside: PositionSide,
         span_volume: f64,
         span_volatility: f64,
@@ -722,10 +736,10 @@ pub mod v2 {
 
     /// Reusable buffers for performance-critical backtest loops.
     ///
-    /// Callers must ensure outputs don't depend on previous contents; `compute_ideal_orders_v2_with_workspace`
+    /// Callers must ensure outputs don't depend on previous contents; `compute_ideal_orders_with_workspace`
     /// fully overwrites the relevant buffers each call.
     #[derive(Default)]
-    pub struct OrchestratorWorkspaceV2 {
+    pub struct OrchestratorWorkspace {
         actives_long: Vec<bool>,
         actives_short: Vec<bool>,
         per_long: Vec<Option<PerSymbolOrders>>,
@@ -733,6 +747,16 @@ pub mod v2 {
         forced_long: Vec<usize>,
         forced_short: Vec<usize>,
         features: Vec<CoinFeature>,
+        gate_positions_long: Vec<GateEntriesPosition>,
+        gate_positions_short: Vec<GateEntriesPosition>,
+        twel_positions: Vec<TwelEnforcerInputPosition>,
+        unstuck_inputs: Vec<UnstuckPositionInput>,
+        all_entries: Vec<IdealOrder>,
+        gate_current_positions: Vec<Option<(f64, f64, f64)>>,
+        gate_scratch: Vec<Option<(f64, f64, f64, f64)>>,
+        gate_keep: Vec<u8>,
+        gate_qty_by_order_idx: Vec<f64>,
+        gate_out: Vec<IdealOrder>,
     }
 
     fn gate_entries_by_twel_deterministic(
@@ -741,7 +765,12 @@ pub mod v2 {
         total_wallet_exposure_limit: f64,
         positions: &[GateEntriesPosition],
         entries: &mut Vec<IdealOrder>,
-        symbols: &[SymbolInputV2],
+        symbols: &[SymbolInput],
+        current_positions: &mut Vec<Option<(f64, f64, f64)>>,
+        scratch: &mut Vec<Option<(f64, f64, f64, f64)>>,
+        keep: &mut Vec<u8>,
+        qty_by_order_idx: &mut Vec<f64>,
+        out: &mut Vec<IdealOrder>,
     ) {
         const QTY_EPS: f64 = 1e-12;
         const EXP_EPS: f64 = 1e-12;
@@ -764,7 +793,8 @@ pub mod v2 {
             effective_min_qty: f64,
         }
 
-        let mut current_positions: HashMap<usize, (f64, f64, f64)> = HashMap::new();
+        current_positions.resize(symbols.len(), None);
+        current_positions.fill(None);
         let mut current_twe = 0.0_f64;
         for pos in positions {
             if !pos.position_price.is_finite()
@@ -778,7 +808,9 @@ pub mod v2 {
             if exposure.is_finite() {
                 current_twe += exposure;
             }
-            current_positions.insert(pos.idx, (abs_psize, pos.position_price, pos.c_mult));
+            if pos.idx < current_positions.len() {
+                current_positions[pos.idx] = Some((abs_psize, pos.position_price, pos.c_mult));
+            }
         }
         if current_twe >= total_wallet_exposure_limit - EXP_EPS {
             entries.clear();
@@ -835,12 +867,11 @@ pub mod v2 {
             return;
         }
 
-        // Compute TWEL if all `selection` entries were filled, using a scratch map to avoid
-        // cloning the whole position state for each trial.
-        let mut scratch: HashMap<usize, (f64, f64, f64, f64)> =
-            HashMap::with_capacity(current_positions.len().max(8));
+        // Compute TWEL if all `selection` entries were filled, using a scratch vec (O(1) by idx)
+        // to avoid hashing and repeated allocation in hot loops.
+        scratch.resize(symbols.len(), None);
         let mut compute_twe_if_filled = |selection: &[(usize, f64)]| -> f64 {
-            scratch.clear();
+            scratch.fill(None);
             let mut twe = current_twe;
             for (cand_idx, qty) in selection {
                 let candidate = &candidates[*cand_idx];
@@ -848,18 +879,19 @@ pub mod v2 {
                 if qty <= QTY_EPS {
                     continue;
                 }
+                let sym_idx = candidate.symbol_idx;
+                if sym_idx >= scratch.len() {
+                    continue;
+                }
 
-                let (psize, pprice, c_mult, exposure) =
-                    if let Some(v) = scratch.get(&candidate.symbol_idx) {
-                        *v
-                    } else if let Some((psize, pprice, c_mult)) =
-                        current_positions.get(&candidate.symbol_idx)
-                    {
-                        let exp = calc_wallet_exposure(*c_mult, balance, *psize, *pprice);
-                        (*psize, *pprice, *c_mult, exp)
-                    } else {
-                        (0.0, candidate.price, candidate.c_mult, 0.0)
-                    };
+                let (psize, pprice, c_mult, exposure) = if let Some(v) = scratch[sym_idx] {
+                    v
+                } else if let Some((psize, pprice, c_mult)) = current_positions[sym_idx] {
+                    let exp = calc_wallet_exposure(c_mult, balance, psize, pprice);
+                    (psize, pprice, c_mult, exp)
+                } else {
+                    (0.0, candidate.price, candidate.c_mult, 0.0)
+                };
 
                 let old_exp = if exposure.is_finite() { exposure } else { 0.0 };
                 let (new_psize, new_pprice) =
@@ -878,10 +910,7 @@ pub mod v2 {
                     };
 
                 twe += new_exp - old_exp;
-                scratch.insert(
-                    candidate.symbol_idx,
-                    (new_psize, new_pprice, c_mult, new_exp),
-                );
+                scratch[sym_idx] = Some((new_psize, new_pprice, c_mult, new_exp));
             }
             twe
         };
@@ -970,16 +999,19 @@ pub mod v2 {
         }
 
         // Apply included decisions back into entries.
-        let mut keep: Vec<bool> = vec![false; entries.len()];
-        let mut qty_by_order_idx: Vec<f64> = vec![f64::NAN; entries.len()];
+        keep.resize(entries.len(), 0);
+        keep.fill(0);
+        qty_by_order_idx.resize(entries.len(), f64::NAN);
+        qty_by_order_idx.fill(f64::NAN);
         for (cand_idx, qty) in included {
             let c = &candidates[cand_idx];
-            keep[c.order_idx] = true;
+            keep[c.order_idx] = 1;
             qty_by_order_idx[c.order_idx] = qty;
         }
-        let mut out: Vec<IdealOrder> = Vec::with_capacity(entries.len());
+        out.clear();
+        out.reserve(entries.len());
         for (order_idx, mut o) in entries.drain(..).enumerate() {
-            if !keep[order_idx] {
+            if keep[order_idx] == 0 {
                 continue;
             }
             let qty_abs = qty_by_order_idx[order_idx];
@@ -1000,20 +1032,20 @@ pub mod v2 {
             }
             out.push(o);
         }
-        *entries = out;
+        std::mem::swap(entries, out);
     }
 
-    pub fn compute_ideal_orders_v2(
-        input: &OrchestratorInputV2,
-    ) -> Result<OrchestratorOutputV2, OrchestratorError> {
-        let mut workspace = OrchestratorWorkspaceV2::default();
-        compute_ideal_orders_v2_with_workspace(input, &mut workspace)
+    pub fn compute_ideal_orders(
+        input: &OrchestratorInput,
+    ) -> Result<OrchestratorOutput, OrchestratorError> {
+        let mut workspace = OrchestratorWorkspace::default();
+        compute_ideal_orders_with_workspace(input, &mut workspace)
     }
 
-    pub fn compute_ideal_orders_v2_with_workspace(
-        input: &OrchestratorInputV2,
-        workspace: &mut OrchestratorWorkspaceV2,
-    ) -> Result<OrchestratorOutputV2, OrchestratorError> {
+    pub fn compute_ideal_orders_with_workspace(
+        input: &OrchestratorInput,
+        workspace: &mut OrchestratorWorkspace,
+    ) -> Result<OrchestratorOutput, OrchestratorError> {
         if !input.balance.is_finite() {
             return Err(OrchestratorError::NonFiniteInput {
                 field: "balance",
@@ -1759,7 +1791,7 @@ pub mod v2 {
         }
 
         // Unstuck: select one global unstuck close and add it (do not replace).
-        let mut unstuck_inputs: Vec<UnstuckPositionInput> = Vec::new();
+        workspace.unstuck_inputs.clear();
         for s in per_long.iter().filter_map(|v| v.as_ref()) {
             if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) || s.pos.size == 0.0 {
                 continue;
@@ -1773,7 +1805,7 @@ pub mod v2 {
                 continue;
             }
             let ema_bands = derive_ema_bands(s.symbol_idx, &sym.emas, bot)?;
-            unstuck_inputs.push(UnstuckPositionInput {
+            workspace.unstuck_inputs.push(UnstuckPositionInput {
                 idx: s.symbol_idx,
                 side: LONG,
                 position_size: s.pos.size,
@@ -1806,7 +1838,7 @@ pub mod v2 {
                 continue;
             }
             let ema_bands = derive_ema_bands(s.symbol_idx, &sym.emas, bot)?;
-            unstuck_inputs.push(UnstuckPositionInput {
+            workspace.unstuck_inputs.push(UnstuckPositionInput {
                 idx: s.symbol_idx,
                 side: SHORT,
                 position_size: s.pos.size,
@@ -1830,7 +1862,7 @@ pub mod v2 {
             input.balance,
             input.global.unstuck_allowance_long,
             input.global.unstuck_allowance_short,
-            &unstuck_inputs,
+            &workspace.unstuck_inputs,
         ) {
             let ideal = IdealOrder {
                 symbol_idx: idx,
@@ -1859,7 +1891,7 @@ pub mod v2 {
 
         // TWEL enforcer: add auto-reduce closes in addition to normal closes.
         if enabled_long {
-            let mut positions: Vec<TwelEnforcerInputPosition> = Vec::new();
+            workspace.twel_positions.clear();
             for s in per_long.iter().filter_map(|v| v.as_ref()) {
                 if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) || s.pos.size == 0.0 {
                     continue;
@@ -1873,7 +1905,7 @@ pub mod v2 {
                 }
                 let sym = &input.symbols[s.symbol_idx];
                 let bot = &sym.long.bot_params;
-                positions.push(TwelEnforcerInputPosition {
+                workspace.twel_positions.push(TwelEnforcerInputPosition {
                     idx: s.symbol_idx,
                     position_size: s.pos.size,
                     position_price: s.pos.price,
@@ -1900,7 +1932,7 @@ pub mod v2 {
                     .total_wallet_exposure_limit,
                 enp_long,
                 input.balance,
-                &positions,
+                &workspace.twel_positions,
                 None,
             );
             for (idx, order) in actions {
@@ -1916,7 +1948,7 @@ pub mod v2 {
             }
         }
         if enabled_short {
-            let mut positions: Vec<TwelEnforcerInputPosition> = Vec::new();
+            workspace.twel_positions.clear();
             for s in per_short.iter().filter_map(|v| v.as_ref()) {
                 if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) || s.pos.size == 0.0 {
                     continue;
@@ -1929,7 +1961,7 @@ pub mod v2 {
                 }
                 let sym = &input.symbols[s.symbol_idx];
                 let bot = &sym.short.bot_params;
-                positions.push(TwelEnforcerInputPosition {
+                workspace.twel_positions.push(TwelEnforcerInputPosition {
                     idx: s.symbol_idx,
                     position_size: s.pos.size,
                     position_price: s.pos.price,
@@ -1956,7 +1988,7 @@ pub mod v2 {
                     .total_wallet_exposure_limit,
                 enp_short,
                 input.balance,
-                &positions,
+                &workspace.twel_positions,
                 None,
             );
             for (idx, order) in actions {
@@ -1994,34 +2026,32 @@ pub mod v2 {
             );
         }
 
-        // Portfolio TWEL gating of entries per pside.
-        let positions_long: Vec<GateEntriesPosition> = input
-            .symbols
-            .iter()
-            .filter(|s| s.long.position.size != 0.0)
-            .map(|s| GateEntriesPosition {
-                idx: s.symbol_idx,
-                position_size: s.long.position.size,
-                position_price: s.long.position.price,
-                c_mult: s.exchange.c_mult,
-            })
-            .collect();
-        let positions_short: Vec<GateEntriesPosition> = input
-            .symbols
-            .iter()
-            .filter(|s| s.short.position.size != 0.0)
-            .map(|s| GateEntriesPosition {
-                idx: s.symbol_idx,
-                position_size: s.short.position.size,
-                position_price: s.short.position.price,
-                c_mult: s.exchange.c_mult,
-            })
-            .collect();
+        // Portfolio TWEL gating of entries per pside (reuse workspace buffers).
+        workspace.gate_positions_long.clear();
+        workspace.gate_positions_short.clear();
+        for s in input.symbols.iter() {
+            if s.long.position.size != 0.0 {
+                workspace.gate_positions_long.push(GateEntriesPosition {
+                    idx: s.symbol_idx,
+                    position_size: s.long.position.size,
+                    position_price: s.long.position.price,
+                    c_mult: s.exchange.c_mult,
+                });
+            }
+            if s.short.position.size != 0.0 {
+                workspace.gate_positions_short.push(GateEntriesPosition {
+                    idx: s.symbol_idx,
+                    position_size: s.short.position.size,
+                    position_price: s.short.position.price,
+                    c_mult: s.exchange.c_mult,
+                });
+            }
+        }
 
         if enabled_long {
-            let mut all_entries: Vec<IdealOrder> = Vec::new();
+            workspace.all_entries.clear();
             for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
-                all_entries.append(&mut s.entries);
+                workspace.all_entries.append(&mut s.entries);
             }
             gate_entries_by_twel_deterministic(
                 PositionSide::Long,
@@ -2032,11 +2062,16 @@ pub mod v2 {
                     .long
                     .total_wallet_exposure_limit
                     .max(0.0),
-                &positions_long,
-                &mut all_entries,
+                &workspace.gate_positions_long,
+                &mut workspace.all_entries,
                 &input.symbols,
+                &mut workspace.gate_current_positions,
+                &mut workspace.gate_scratch,
+                &mut workspace.gate_keep,
+                &mut workspace.gate_qty_by_order_idx,
+                &mut workspace.gate_out,
             );
-            for e in all_entries.drain(..) {
+            for e in workspace.all_entries.drain(..) {
                 if let Some(s) = per_long.get_mut(e.symbol_idx).and_then(|v| v.as_mut()) {
                     s.entries.push(e);
                 }
@@ -2048,9 +2083,9 @@ pub mod v2 {
         }
 
         if enabled_short {
-            let mut all_entries: Vec<IdealOrder> = Vec::new();
+            workspace.all_entries.clear();
             for s in per_short.iter_mut().filter_map(|v| v.as_mut()) {
-                all_entries.append(&mut s.entries);
+                workspace.all_entries.append(&mut s.entries);
             }
             gate_entries_by_twel_deterministic(
                 PositionSide::Short,
@@ -2061,11 +2096,16 @@ pub mod v2 {
                     .short
                     .total_wallet_exposure_limit
                     .max(0.0),
-                &positions_short,
-                &mut all_entries,
+                &workspace.gate_positions_short,
+                &mut workspace.all_entries,
                 &input.symbols,
+                &mut workspace.gate_current_positions,
+                &mut workspace.gate_scratch,
+                &mut workspace.gate_keep,
+                &mut workspace.gate_qty_by_order_idx,
+                &mut workspace.gate_out,
             );
-            for e in all_entries.drain(..) {
+            for e in workspace.all_entries.drain(..) {
                 if let Some(s) = per_short.get_mut(e.symbol_idx).and_then(|v| v.as_mut()) {
                     s.entries.push(e);
                 }
@@ -2076,7 +2116,54 @@ pub mod v2 {
             }
         }
 
-        // Collect and sort.
+        // If global output sorting is disabled (backtest), we still need deterministic per-symbol
+        // ordering for fill-priority. Sort per-symbol entries/closes by the canonical key.
+        if !input.global.sort_global {
+            for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
+                let ob = &input.symbols[s.symbol_idx].order_book;
+                s.closes.sort_by(|a, b| {
+                    let ka = canonical_sort_key(a, ob);
+                    let kb = canonical_sort_key(b, ob);
+                    ka.0.partial_cmp(&kb.0)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| ka.4.cmp(&kb.4))
+                        .then_with(|| ka.5.partial_cmp(&kb.5).unwrap_or(std::cmp::Ordering::Equal))
+                        .then_with(|| ka.6.partial_cmp(&kb.6).unwrap_or(std::cmp::Ordering::Equal))
+                });
+                s.entries.sort_by(|a, b| {
+                    let ka = canonical_sort_key(a, ob);
+                    let kb = canonical_sort_key(b, ob);
+                    ka.0.partial_cmp(&kb.0)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| ka.4.cmp(&kb.4))
+                        .then_with(|| ka.5.partial_cmp(&kb.5).unwrap_or(std::cmp::Ordering::Equal))
+                        .then_with(|| ka.6.partial_cmp(&kb.6).unwrap_or(std::cmp::Ordering::Equal))
+                });
+            }
+            for s in per_short.iter_mut().filter_map(|v| v.as_mut()) {
+                let ob = &input.symbols[s.symbol_idx].order_book;
+                s.closes.sort_by(|a, b| {
+                    let ka = canonical_sort_key(a, ob);
+                    let kb = canonical_sort_key(b, ob);
+                    ka.0.partial_cmp(&kb.0)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| ka.4.cmp(&kb.4))
+                        .then_with(|| ka.5.partial_cmp(&kb.5).unwrap_or(std::cmp::Ordering::Equal))
+                        .then_with(|| ka.6.partial_cmp(&kb.6).unwrap_or(std::cmp::Ordering::Equal))
+                });
+                s.entries.sort_by(|a, b| {
+                    let ka = canonical_sort_key(a, ob);
+                    let kb = canonical_sort_key(b, ob);
+                    ka.0.partial_cmp(&kb.0)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| ka.4.cmp(&kb.4))
+                        .then_with(|| ka.5.partial_cmp(&kb.5).unwrap_or(std::cmp::Ordering::Equal))
+                        .then_with(|| ka.6.partial_cmp(&kb.6).unwrap_or(std::cmp::Ordering::Equal))
+                });
+            }
+        }
+
+        // Collect and (optionally) globally sort.
         let mut total_orders: usize = 0;
         for s in per_long.iter().filter_map(|v| v.as_ref()) {
             total_orders += s.closes.len() + s.entries.len();
@@ -2094,22 +2181,24 @@ pub mod v2 {
             orders.append(&mut s.entries);
         }
 
-        orders.sort_by(|a, b| {
-            let oba = &input.symbols[a.symbol_idx].order_book;
-            let obb = &input.symbols[b.symbol_idx].order_book;
-            let ka = canonical_sort_key(a, oba);
-            let kb = canonical_sort_key(b, obb);
-            ka.0.partial_cmp(&kb.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| ka.1.cmp(&kb.1))
-                .then_with(|| ka.2.cmp(&kb.2))
-                .then_with(|| ka.3.cmp(&kb.3))
-                .then_with(|| ka.4.cmp(&kb.4))
-                .then_with(|| ka.5.partial_cmp(&kb.5).unwrap_or(std::cmp::Ordering::Equal))
-                .then_with(|| ka.6.partial_cmp(&kb.6).unwrap_or(std::cmp::Ordering::Equal))
-        });
+        if input.global.sort_global {
+            orders.sort_by(|a, b| {
+                let oba = &input.symbols[a.symbol_idx].order_book;
+                let obb = &input.symbols[b.symbol_idx].order_book;
+                let ka = canonical_sort_key(a, oba);
+                let kb = canonical_sort_key(b, obb);
+                ka.0.partial_cmp(&kb.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| ka.1.cmp(&kb.1))
+                    .then_with(|| ka.2.cmp(&kb.2))
+                    .then_with(|| ka.3.cmp(&kb.3))
+                    .then_with(|| ka.4.cmp(&kb.4))
+                    .then_with(|| ka.5.partial_cmp(&kb.5).unwrap_or(std::cmp::Ordering::Equal))
+                    .then_with(|| ka.6.partial_cmp(&kb.6).unwrap_or(std::cmp::Ordering::Equal))
+            });
+        }
 
-        Ok(OrchestratorOutputV2 {
+        Ok(OrchestratorOutput {
             orders,
             diagnostics,
         })
@@ -2120,7 +2209,7 @@ pub mod v2 {
         use super::*;
         use std::collections::HashSet;
 
-        fn make_basic_symbol(idx: usize) -> SymbolInputV2 {
+        fn make_basic_symbol(idx: usize) -> SymbolInput {
             let mut emas = EmaBundle::default();
             emas.m1.close.push((10.0_f64, 100.0));
             emas.m1.close.push((20.0_f64, 100.0));
@@ -2138,7 +2227,7 @@ pub mod v2 {
             bp.wallet_exposure_limit = 1.0;
             bp.entry_initial_qty_pct = 1.0;
 
-            SymbolInputV2 {
+            SymbolInput {
                 symbol_idx: idx,
                 order_book: OrderBook {
                     bid: 100.0,
@@ -2187,12 +2276,13 @@ pub mod v2 {
                 tradable: true,
             });
 
-            let input = OrchestratorInputV2 {
+            let input = OrchestratorInput {
                 balance: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
+                    sort_global: true,
                     global_bot_params: {
                         let mut pair = BotParamsPair::default();
                         pair.long.total_wallet_exposure_limit = 1000.0;
@@ -2204,7 +2294,7 @@ pub mod v2 {
                 peek_hints: None,
             };
 
-            let out = compute_ideal_orders_v2(&input).unwrap();
+            let out = compute_ideal_orders(&input).unwrap();
             let n_entries_no_fill = out
                 .orders
                 .iter()
@@ -2218,11 +2308,11 @@ pub mod v2 {
                 high: 0.0,
                 tradable: true,
             });
-            let input_fill = OrchestratorInputV2 {
+            let input_fill = OrchestratorInput {
                 symbols: vec![sym_fill],
                 ..input
             };
-            let out_fill = compute_ideal_orders_v2(&input_fill).unwrap();
+            let out_fill = compute_ideal_orders(&input_fill).unwrap();
             let n_entries_fill = out_fill
                 .orders
                 .iter()
@@ -2271,18 +2361,19 @@ pub mod v2 {
             global_bp.long.filter_volume_drop_pct = 0.0;
             global_bp.long.filter_volatility_drop_pct = 0.0;
 
-            let input = OrchestratorInputV2 {
+            let input = OrchestratorInput {
                 balance: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
+                    sort_global: true,
                     global_bot_params: global_bp,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
             };
-            let out = compute_ideal_orders_v2(&input).unwrap();
+            let out = compute_ideal_orders(&input).unwrap();
             // With no position and GracefulStop, we should not emit any entries.
             assert!(out.orders.iter().all(|o| is_close_order_type(o.order_type)));
         }
@@ -2302,19 +2393,20 @@ pub mod v2 {
             global_bp.short.total_wallet_exposure_limit = 1.0;
             global_bp.short.n_positions = 1;
 
-            let input = OrchestratorInputV2 {
+            let input = OrchestratorInput {
                 balance: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
+                    sort_global: true,
                     global_bot_params: global_bp,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
             };
 
-            let err = compute_ideal_orders_v2(&input).unwrap_err();
+            let err = compute_ideal_orders(&input).unwrap_err();
             assert_eq!(
                 err,
                 OrchestratorError::NonContiguousSymbolIdx {
@@ -2374,7 +2466,7 @@ pub mod v2 {
             // Regression: only allow opening initial positions on empty slots.
             // If `n_positions=4` and we already have 2 positions, we must allow at most 2
             // additional initial-entry coins, even if selection would pick 4 candidates.
-            let mut syms: Vec<SymbolInputV2> = (0..6).map(make_basic_symbol).collect();
+            let mut syms: Vec<SymbolInput> = (0..6).map(make_basic_symbol).collect();
 
             // Existing long positions occupy slots.
             syms[0].long.position = Position {
@@ -2404,19 +2496,20 @@ pub mod v2 {
             global_bp.short.total_wallet_exposure_limit = 0.0;
             global_bp.short.n_positions = 0;
 
-            let input = OrchestratorInputV2 {
+            let input = OrchestratorInput {
                 balance: 1_000_000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
+                    sort_global: true,
                     global_bot_params: global_bp,
                 },
                 symbols: syms,
                 peek_hints: None,
             };
 
-            let out = compute_ideal_orders_v2(&input).unwrap();
+            let out = compute_ideal_orders(&input).unwrap();
             let mut entry_syms: HashSet<usize> = HashSet::new();
             for o in out.orders {
                 if o.pside == PositionSide::Long && o.qty > 0.0 && o.symbol_idx >= 2 {
@@ -2466,6 +2559,11 @@ pub mod v2 {
                 },
             ];
 
+            let mut current_positions: Vec<Option<(f64, f64, f64)>> = Vec::new();
+            let mut scratch: Vec<Option<(f64, f64, f64, f64)>> = Vec::new();
+            let mut keep: Vec<u8> = Vec::new();
+            let mut qty_by_order_idx: Vec<f64> = Vec::new();
+            let mut out: Vec<IdealOrder> = Vec::new();
             gate_entries_by_twel_deterministic(
                 PositionSide::Long,
                 balance,
@@ -2473,6 +2571,11 @@ pub mod v2 {
                 &positions,
                 &mut entries,
                 &symbols,
+                &mut current_positions,
+                &mut scratch,
+                &mut keep,
+                &mut qty_by_order_idx,
+                &mut out,
             );
 
             assert_eq!(entries.len(), 1);
@@ -2518,6 +2621,11 @@ pub mod v2 {
                 order_type: OrderType::EntryTrailingNormalLong,
             }];
 
+            let mut current_positions: Vec<Option<(f64, f64, f64)>> = Vec::new();
+            let mut scratch: Vec<Option<(f64, f64, f64, f64)>> = Vec::new();
+            let mut keep: Vec<u8> = Vec::new();
+            let mut qty_by_order_idx: Vec<f64> = Vec::new();
+            let mut out: Vec<IdealOrder> = Vec::new();
             gate_entries_by_twel_deterministic(
                 PositionSide::Long,
                 balance,
@@ -2525,6 +2633,11 @@ pub mod v2 {
                 &positions,
                 &mut entries,
                 &symbols,
+                &mut current_positions,
+                &mut scratch,
+                &mut keep,
+                &mut qty_by_order_idx,
+                &mut out,
             );
 
             assert!(entries.is_empty(), "expected dust entry to be dropped");
@@ -2585,992 +2698,23 @@ pub mod v2 {
             global_bp.long.total_wallet_exposure_limit = 1.0;
             global_bp.long.n_positions = 1;
 
-            let input = OrchestratorInputV2 {
+            let input = OrchestratorInput {
                 balance: 1000.0,
                 global: OrchestratorGlobal {
                     filter_by_min_effective_cost: false,
                     unstuck_allowance_long: 1000.0,
                     unstuck_allowance_short: 1000.0,
+                    sort_global: true,
                     global_bot_params: global_bp,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
             };
-            let out = compute_ideal_orders_v2(&input).unwrap();
+            let out = compute_ideal_orders(&input).unwrap();
             assert_eq!(out.orders.len(), 1);
             assert_eq!(out.orders[0].order_type, OrderType::ClosePanicLong);
         }
     }
 }
 
-/// Per-symbol/symbol-side mode.
-#[derive(Debug, Clone, Copy)]
-pub enum Mode {
-    Normal,
-    Panic,
-    GracefulStop,
-    TpOnly,
-    Manual,
-}
-
-/// Complete snapshot for one symbol.
-#[derive(Debug, Clone)]
-pub struct SymbolInput {
-    pub idx: usize,
-    pub mode_long: Mode,
-    pub mode_short: Mode,
-    pub active_long: bool,
-    pub active_short: bool,
-    pub order_book: OrderBook,
-    pub ema_bands_long: EMABands,
-    pub ema_bands_short: EMABands,
-    pub entry_volatility_logrange_ema_1h_long: f64,
-    pub entry_volatility_logrange_ema_1h_short: f64,
-    pub log_range_long: f64,
-    pub log_range_short: f64,
-    pub trailing_long: TrailingPriceBundle,
-    pub trailing_short: TrailingPriceBundle,
-    pub position_long: Option<Position>,
-    pub position_short: Option<Position>,
-    pub exchange: ExchangeParams,
-    pub bot: BotParamsPair,
-}
-
-/// Global configuration/state.
-#[derive(Debug, Clone)]
-pub struct OrchestratorContext {
-    pub balance: f64,
-    pub effective_n_positions: EffectiveNPositions,
-    pub allow_unstuck: bool,
-    pub allowance_long: f64,
-    pub allowance_short: f64,
-    /// Optional entry-peek hints (used by backtester to mirror legacy lookahead).
-    pub entry_peek_hints: Option<EntryPeekHints>,
-    pub debug_step: Option<usize>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct EffectiveNPositions {
-    pub long: usize,
-    pub short: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct OrderEnvelope {
-    pub idx: usize,
-    pub side: &'static str,
-    pub qty: f64,
-    pub price: f64,
-    pub order_type: OrderType,
-    pub reduce_only: bool,
-    pub original_idx: usize,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct EntryPeekHints {
-    pub expand_grid_long: HashSet<usize>,
-    pub expand_grid_short: HashSet<usize>,
-    pub expand_close_long: HashSet<usize>,
-    pub expand_close_short: HashSet<usize>,
-}
-
-impl EntryPeekHints {
-    #[inline]
-    pub fn clear(&mut self) {
-        self.expand_grid_long.clear();
-        self.expand_grid_short.clear();
-        self.expand_close_long.clear();
-        self.expand_close_short.clear();
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct OrchestratorResult {
-    pub orders: Vec<OrderEnvelope>,
-}
-
-fn should_skip_entries(mode: Mode, has_position: bool) -> bool {
-    match mode {
-        Mode::Manual => true,
-        Mode::GracefulStop | Mode::TpOnly => !has_position,
-        Mode::Panic => true,
-        Mode::Normal => false,
-    }
-}
-
-fn should_skip_closes(mode: Mode, _has_position: bool) -> bool {
-    match mode {
-        Mode::Manual => true,
-        Mode::GracefulStop => false,
-        Mode::TpOnly => false,
-        Mode::Panic => false,
-        Mode::Normal => false,
-    }
-}
-
-fn calc_symbol_orders_long(
-    ctx: &OrchestratorContext,
-    s: &SymbolInput,
-    state: &StateParams,
-    _positions_vec: &[GateEntriesPosition],
-    enforcer_positions: &[TwelEnforcerInputPosition],
-    unstuck: Option<&Order>,
-    skip_enforcer_idx: Option<usize>,
-    expand_entries: bool,
-    expand_closes: bool,
-) -> Vec<OrderEnvelope> {
-    const QTY_EPS: f64 = 1e-12;
-    let pos = s.position_long.unwrap_or(Position {
-        size: 0.0,
-        price: 0.0,
-    });
-    let has_pos = pos.size != 0.0;
-
-    let mut entries: Vec<OrderEnvelope> = Vec::new();
-    if !should_skip_entries(s.mode_long, has_pos) {
-        if expand_entries {
-            for e in calc_entries_long(&s.exchange, state, &s.bot.long, &pos, &s.trailing_long) {
-                if e.qty.abs() <= QTY_EPS {
-                    continue;
-                }
-                entries.push(OrderEnvelope {
-                    idx: s.idx,
-                    side: "long",
-                    qty: e.qty,
-                    price: e.price,
-                    order_type: e.order_type,
-                    reduce_only: false,
-                    original_idx: 0,
-                });
-            }
-        } else {
-            let e = calc_next_entry_long(&s.exchange, state, &s.bot.long, &pos, &s.trailing_long);
-            if e.qty.abs() > QTY_EPS {
-                entries.push(OrderEnvelope {
-                    idx: s.idx,
-                    side: "long",
-                    qty: e.qty,
-                    price: e.price,
-                    order_type: e.order_type,
-                    reduce_only: false,
-                    original_idx: 0,
-                });
-            }
-        }
-    }
-
-    let mut closes: Vec<OrderEnvelope> = Vec::new();
-    if !should_skip_closes(s.mode_long, has_pos) {
-        if expand_closes {
-            for c in calc_closes_long(&s.exchange, state, &s.bot.long, &pos, &s.trailing_long) {
-                if c.qty.abs() <= QTY_EPS {
-                    continue;
-                }
-                closes.push(OrderEnvelope {
-                    idx: s.idx,
-                    side: "long",
-                    qty: c.qty,
-                    price: c.price,
-                    order_type: c.order_type,
-                    reduce_only: true,
-                    original_idx: 0,
-                });
-            }
-        } else {
-            let c = calc_next_close_long(&s.exchange, state, &s.bot.long, &pos, &s.trailing_long);
-            if c.qty.abs() > QTY_EPS {
-                closes.push(OrderEnvelope {
-                    idx: s.idx,
-                    side: "long",
-                    qty: c.qty,
-                    price: c.price,
-                    order_type: c.order_type,
-                    reduce_only: true,
-                    original_idx: 0,
-                });
-            }
-        }
-    }
-
-    if let Some(unstuck_order) = unstuck {
-        closes.clear();
-        closes.push(OrderEnvelope::from_order(
-            s.idx,
-            "long",
-            *unstuck_order,
-            true,
-        ));
-    }
-
-    // TWEL enforcer orders
-    let enforcer_actions = calc_twel_enforcer_actions(
-        LONG,
-        s.bot.long.risk_twel_enforcer_threshold,
-        s.bot.long.total_wallet_exposure_limit,
-        ctx.effective_n_positions.long,
-        ctx.balance,
-        enforcer_positions,
-        skip_enforcer_idx,
-    );
-
-    let mut out: Vec<OrderEnvelope> = entries;
-    out.append(&mut closes);
-    let allow_twel = !out
-        .iter()
-        .any(|o| o.reduce_only && matches!(o.order_type, OrderType::CloseAutoReduceWelLong));
-    if allow_twel {
-        for (idx, o) in enforcer_actions {
-            if idx == s.idx {
-                if o.qty.abs() <= QTY_EPS {
-                    continue;
-                }
-                out.push(OrderEnvelope::from_order(s.idx, "long", o, true));
-            }
-        }
-    }
-
-    // Trim reduce-only qty to position size
-    for o in out.iter_mut().filter(|o| o.reduce_only) {
-        let max_qty = pos.size.abs();
-        if o.qty.abs() > max_qty {
-            o.qty = if o.qty.is_sign_negative() {
-                -max_qty
-            } else {
-                max_qty
-            };
-        }
-    }
-
-    out
-}
-
-fn calc_symbol_orders_short(
-    ctx: &OrchestratorContext,
-    s: &SymbolInput,
-    state: &StateParams,
-    _positions_vec: &[GateEntriesPosition],
-    enforcer_positions: &[TwelEnforcerInputPosition],
-    unstuck: Option<&Order>,
-    skip_enforcer_idx: Option<usize>,
-    expand_entries: bool,
-    expand_closes: bool,
-) -> Vec<OrderEnvelope> {
-    const QTY_EPS: f64 = 1e-12;
-    let pos = s.position_short.unwrap_or(Position {
-        size: 0.0,
-        price: 0.0,
-    });
-    let has_pos = pos.size != 0.0;
-
-    let mut entries: Vec<OrderEnvelope> = Vec::new();
-    if !should_skip_entries(s.mode_short, has_pos) {
-        if expand_entries {
-            for e in calc_entries_short(&s.exchange, state, &s.bot.short, &pos, &s.trailing_short) {
-                if e.qty.abs() <= QTY_EPS {
-                    continue;
-                }
-                entries.push(OrderEnvelope {
-                    idx: s.idx,
-                    side: "short",
-                    qty: e.qty,
-                    price: e.price,
-                    order_type: e.order_type,
-                    reduce_only: false,
-                    original_idx: 0,
-                });
-            }
-        } else {
-            let e =
-                calc_next_entry_short(&s.exchange, state, &s.bot.short, &pos, &s.trailing_short);
-            if e.qty.abs() > QTY_EPS {
-                entries.push(OrderEnvelope {
-                    idx: s.idx,
-                    side: "short",
-                    qty: e.qty,
-                    price: e.price,
-                    order_type: e.order_type,
-                    reduce_only: false,
-                    original_idx: 0,
-                });
-            }
-        }
-    }
-
-    let mut closes: Vec<OrderEnvelope> = Vec::new();
-    if !should_skip_closes(s.mode_short, has_pos) {
-        if expand_closes {
-            for c in calc_closes_short(&s.exchange, state, &s.bot.short, &pos, &s.trailing_short) {
-                if c.qty.abs() <= QTY_EPS {
-                    continue;
-                }
-                closes.push(OrderEnvelope {
-                    idx: s.idx,
-                    side: "short",
-                    qty: c.qty,
-                    price: c.price,
-                    order_type: c.order_type,
-                    reduce_only: true,
-                    original_idx: 0,
-                });
-            }
-        } else {
-            let c =
-                calc_next_close_short(&s.exchange, state, &s.bot.short, &pos, &s.trailing_short);
-            if c.qty.abs() > QTY_EPS {
-                closes.push(OrderEnvelope {
-                    idx: s.idx,
-                    side: "short",
-                    qty: c.qty,
-                    price: c.price,
-                    order_type: c.order_type,
-                    reduce_only: true,
-                    original_idx: 0,
-                });
-            }
-        }
-    }
-
-    if let Some(unstuck_order) = unstuck {
-        closes.clear();
-        closes.push(OrderEnvelope::from_order(
-            s.idx,
-            "short",
-            *unstuck_order,
-            true,
-        ));
-    }
-
-    let enforcer_actions = calc_twel_enforcer_actions(
-        SHORT,
-        s.bot.short.risk_twel_enforcer_threshold,
-        s.bot.short.total_wallet_exposure_limit,
-        ctx.effective_n_positions.short,
-        ctx.balance,
-        enforcer_positions,
-        skip_enforcer_idx,
-    );
-
-    let mut out: Vec<OrderEnvelope> = entries;
-    out.append(&mut closes);
-    let allow_twel = !out
-        .iter()
-        .any(|o| o.reduce_only && matches!(o.order_type, OrderType::CloseAutoReduceWelShort));
-    if allow_twel {
-        for (idx, o) in enforcer_actions {
-            if idx == s.idx {
-                if o.qty.abs() <= QTY_EPS {
-                    continue;
-                }
-                out.push(OrderEnvelope::from_order(s.idx, "short", o, true));
-            }
-        }
-    }
-
-    for o in out.iter_mut().filter(|o| o.reduce_only) {
-        let max_qty = pos.size.abs();
-        if o.qty.abs() > max_qty {
-            o.qty = if o.qty.is_sign_negative() {
-                -max_qty
-            } else {
-                max_qty
-            };
-        }
-    }
-
-    out
-}
-
-impl OrderEnvelope {
-    fn new(
-        idx: usize,
-        side: &'static str,
-        qty: f64,
-        price: f64,
-        order_type: OrderType,
-        reduce_only: bool,
-    ) -> Self {
-        OrderEnvelope {
-            idx,
-            side,
-            qty,
-            price,
-            order_type,
-            reduce_only,
-            original_idx: 0,
-        }
-    }
-
-    fn from_order(idx: usize, side: &'static str, order: Order, reduce_only: bool) -> Self {
-        OrderEnvelope {
-            idx,
-            side,
-            qty: order.qty,
-            price: order.price,
-            order_type: order.order_type,
-            reduce_only,
-            original_idx: 0,
-        }
-    }
-
-    fn to_order(&self) -> Order {
-        Order {
-            qty: self.qty,
-            price: self.price,
-            order_type: self.order_type,
-        }
-    }
-}
-
-fn build_gate_candidates(
-    pside: usize,
-    s: &SymbolInput,
-    entries: &[OrderEnvelope],
-    market_price: f64,
-) -> Vec<GateEntriesCandidate> {
-    entries
-        .iter()
-        .map(|o| GateEntriesCandidate {
-            idx: s.idx,
-            qty: o.qty,
-            price: o.price,
-            qty_step: s.exchange.qty_step,
-            min_qty: s.exchange.min_qty,
-            min_cost: s.exchange.min_cost,
-            c_mult: s.exchange.c_mult,
-            market_price,
-            order_type: o.order_type,
-        })
-        .filter(|c| match pside {
-            LONG => c.qty > 0.0,
-            SHORT => c.qty < 0.0,
-            _ => false,
-        })
-        .collect()
-}
-
-fn build_gate_positions(pside: usize, symbols: &[SymbolInput]) -> Vec<GateEntriesPosition> {
-    symbols
-        .iter()
-        .filter_map(|s| match pside {
-            LONG => s
-                .position_long
-                .as_ref()
-                .map(|p| (s.idx, p.size, p.price, s.exchange.c_mult)),
-            SHORT => s
-                .position_short
-                .as_ref()
-                .map(|p| (s.idx, p.size, p.price, s.exchange.c_mult)),
-            _ => None,
-        })
-        .map(|(idx, size, price, c_mult)| GateEntriesPosition {
-            idx,
-            position_size: size,
-            position_price: price,
-            c_mult,
-        })
-        .collect()
-}
-
-fn build_enforcer_positions(
-    pside: usize,
-    symbols: &[SymbolInput],
-    market_price_lookup: &[OrderBook],
-    wel_blocked: &HashSet<usize>,
-) -> Vec<TwelEnforcerInputPosition> {
-    symbols
-        .iter()
-        .filter_map(|s| {
-            if wel_blocked.contains(&s.idx) {
-                return None;
-            }
-            let (pos_opt, price) = match pside {
-                LONG => (
-                    s.position_long.as_ref(),
-                    market_price_lookup.get(s.idx).map(|ob| ob.bid),
-                ),
-                SHORT => (
-                    s.position_short.as_ref(),
-                    market_price_lookup.get(s.idx).map(|ob| ob.ask),
-                ),
-                _ => (None, None),
-            };
-            pos_opt.and_then(|p| {
-                let mprice = price?;
-                Some(TwelEnforcerInputPosition {
-                    idx: s.idx,
-                    position_size: p.size,
-                    position_price: p.price,
-                    market_price: mprice,
-                    base_wallet_exposure_limit: match pside {
-                        LONG => s.bot.long.wallet_exposure_limit,
-                        SHORT => s.bot.short.wallet_exposure_limit,
-                        _ => 0.0,
-                    },
-                    c_mult: s.exchange.c_mult,
-                    qty_step: s.exchange.qty_step,
-                    price_step: s.exchange.price_step,
-                    min_qty: s.exchange.min_qty,
-                    min_cost: s.exchange.min_cost,
-                })
-            })
-        })
-        .collect()
-}
-
-fn extract_market_price(ob: &OrderBook) -> f64 {
-    if ob.bid > 0.0 {
-        ob.bid
-    } else if ob.ask > 0.0 {
-        ob.ask
-    } else {
-        0.0
-    }
-}
-
-fn gate_portfolio_entries(
-    balance: f64,
-    symbols: &[SymbolInput],
-    orders: &[OrderEnvelope],
-) -> Vec<OrderEnvelope> {
-    if orders.is_empty() {
-        return Vec::new();
-    }
-
-    let positions_long_payload = build_gate_positions(LONG, symbols);
-    let positions_short_payload = build_gate_positions(SHORT, symbols);
-    let total_wel_long = symbols
-        .iter()
-        .map(|s| s.bot.long.total_wallet_exposure_limit)
-        .fold(0.0, f64::max);
-    let total_wel_short = symbols
-        .iter()
-        .map(|s| s.bot.short.total_wallet_exposure_limit)
-        .fold(0.0, f64::max);
-
-    let lookup_symbol = |idx: usize| symbols.iter().find(|s| s.idx == idx);
-
-    let mut reduce_only: Vec<OrderEnvelope> = Vec::new();
-    let mut entry_candidates_long: Vec<(usize, GateEntriesCandidate)> = Vec::new();
-    let mut entry_candidates_short: Vec<(usize, GateEntriesCandidate)> = Vec::new();
-
-    for (i, o) in orders.iter().enumerate() {
-        if o.reduce_only {
-            reduce_only.push(o.clone());
-            continue;
-        }
-        if let Some(sym) = lookup_symbol(o.idx) {
-            let cand = GateEntriesCandidate {
-                idx: o.idx,
-                qty: o.qty.abs(),
-                price: o.price,
-                qty_step: sym.exchange.qty_step,
-                min_qty: sym.exchange.min_qty,
-                min_cost: sym.exchange.min_cost,
-                c_mult: sym.exchange.c_mult,
-                market_price: extract_market_price(&sym.order_book),
-                order_type: o.order_type,
-            };
-            match o.side {
-                "long" => entry_candidates_long.push((i, cand)),
-                "short" => entry_candidates_short.push((i, cand)),
-                _ => (),
-            }
-        }
-    }
-
-    let mut final_orders: Vec<OrderEnvelope> = Vec::with_capacity(orders.len());
-    final_orders.extend(reduce_only.into_iter());
-
-    if total_wel_long <= 0.0 || balance <= 0.0 {
-        // no long trading allowed; keep only reduce-only
-    } else if !entry_candidates_long.is_empty() {
-        let gated = gate_entries_by_twel(
-            LONG,
-            balance,
-            total_wel_long,
-            &positions_long_payload,
-            &entry_candidates_long
-                .iter()
-                .map(|(_, c)| c.clone())
-                .collect::<Vec<_>>(),
-        );
-        for decision in gated {
-            let cand_idx = decision.original_order;
-            if let Some((orig_idx, _)) = entry_candidates_long.get(cand_idx) {
-                let mut o = orders[*orig_idx].clone();
-                o.qty = decision.qty;
-                o.price = decision.price;
-                final_orders.push(o);
-            }
-        }
-    } else {
-        for (orig_idx, _) in entry_candidates_long {
-            final_orders.push(orders[orig_idx].clone());
-        }
-    }
-
-    if total_wel_short <= 0.0 || balance <= 0.0 {
-        // no short trading allowed; keep only reduce-only
-    } else if !entry_candidates_short.is_empty() {
-        let gated = gate_entries_by_twel(
-            SHORT,
-            balance,
-            total_wel_short,
-            &positions_short_payload,
-            &entry_candidates_short
-                .iter()
-                .map(|(_, c)| c.clone())
-                .collect::<Vec<_>>(),
-        );
-        for decision in gated {
-            let cand_idx = decision.original_order;
-            if let Some((orig_idx, _)) = entry_candidates_short.get(cand_idx) {
-                let mut o = orders[*orig_idx].clone();
-                o.qty = -decision.qty.abs();
-                o.price = decision.price;
-                final_orders.push(o);
-            }
-        }
-    } else {
-        for (orig_idx, _) in entry_candidates_short {
-            final_orders.push(orders[orig_idx].clone());
-        }
-    }
-
-    final_orders
-}
-
-/// Compute ideal orders for all symbols.
-pub fn compute_ideal_orders(
-    ctx: &OrchestratorContext,
-    symbols: &[SymbolInput],
-) -> OrchestratorResult {
-    let max_idx = symbols.iter().map(|s| s.idx).max().unwrap_or(0);
-    let mut ob_lookup: Vec<OrderBook> = vec![OrderBook::default(); max_idx + 1];
-    for s in symbols {
-        if s.idx < ob_lookup.len() {
-            ob_lookup[s.idx] = s.order_book.clone();
-        }
-    }
-
-    let mut wel_blocked_long: HashSet<usize> = HashSet::new();
-    let mut wel_blocked_short: HashSet<usize> = HashSet::new();
-    for s in symbols {
-        if let Some(p) = s.position_long.as_ref() {
-            let allowed = wallet_exposure_limit_with_allowance(&s.bot.long);
-            if allowed > 0.0 && s.bot.long.risk_wel_enforcer_threshold > 0.0 {
-                let we = calc_wallet_exposure(s.exchange.c_mult, ctx.balance, p.size, p.price);
-                if we > allowed * s.bot.long.risk_wel_enforcer_threshold {
-                    wel_blocked_long.insert(s.idx);
-                }
-            }
-        }
-        if let Some(p) = s.position_short.as_ref() {
-            let allowed = wallet_exposure_limit_with_allowance(&s.bot.short);
-            if allowed > 0.0 && s.bot.short.risk_wel_enforcer_threshold > 0.0 {
-                let we = calc_wallet_exposure(s.exchange.c_mult, ctx.balance, p.size, p.price);
-                if we > allowed * s.bot.short.risk_wel_enforcer_threshold {
-                    wel_blocked_short.insert(s.idx);
-                }
-            }
-        }
-    }
-
-    // Unstuck selection across all positions
-    let mut unstuck_inputs: Vec<UnstuckPositionInput> = Vec::new();
-    if ctx.allow_unstuck {
-        for s in symbols {
-            if let Some(p) = s.position_long.as_ref() {
-                if p.size > 0.0 {
-                    let ob = ob_lookup.get(s.idx).expect("order book missing");
-                    unstuck_inputs.push(UnstuckPositionInput {
-                        idx: s.idx,
-                        side: LONG,
-                        position_size: p.size,
-                        position_price: p.price,
-                        wallet_exposure_limit: s.bot.long.wallet_exposure_limit,
-                        risk_we_excess_allowance_pct: s.bot.long.risk_we_excess_allowance_pct,
-                        unstuck_threshold: s.bot.long.unstuck_threshold,
-                        unstuck_close_pct: s.bot.long.unstuck_close_pct,
-                        unstuck_ema_dist: s.bot.long.unstuck_ema_dist,
-                        ema_band_upper: s.ema_bands_long.upper,
-                        ema_band_lower: s.ema_bands_long.lower,
-                        current_price: ob.ask,
-                        price_step: s.exchange.price_step,
-                        qty_step: s.exchange.qty_step,
-                        min_qty: s.exchange.min_qty,
-                        min_cost: s.exchange.min_cost,
-                        c_mult: s.exchange.c_mult,
-                    });
-                }
-            }
-            if let Some(p) = s.position_short.as_ref() {
-                if p.size < 0.0 {
-                    let ob = ob_lookup.get(s.idx).expect("order book missing");
-                    unstuck_inputs.push(UnstuckPositionInput {
-                        idx: s.idx,
-                        side: SHORT,
-                        position_size: p.size,
-                        position_price: p.price,
-                        wallet_exposure_limit: s.bot.short.wallet_exposure_limit,
-                        risk_we_excess_allowance_pct: s.bot.short.risk_we_excess_allowance_pct,
-                        unstuck_threshold: s.bot.short.unstuck_threshold,
-                        unstuck_close_pct: s.bot.short.unstuck_close_pct,
-                        unstuck_ema_dist: s.bot.short.unstuck_ema_dist,
-                        ema_band_upper: s.ema_bands_short.upper,
-                        ema_band_lower: s.ema_bands_short.lower,
-                        current_price: ob.bid,
-                        price_step: s.exchange.price_step,
-                        qty_step: s.exchange.qty_step,
-                        min_qty: s.exchange.min_qty,
-                        min_cost: s.exchange.min_cost,
-                        c_mult: s.exchange.c_mult,
-                    });
-                }
-            }
-        }
-    }
-
-    let positions_long = build_gate_positions(LONG, symbols);
-    let positions_short = build_gate_positions(SHORT, symbols);
-    let enforcer_pos_long = build_enforcer_positions(LONG, symbols, &ob_lookup, &wel_blocked_long);
-    let enforcer_pos_short =
-        build_enforcer_positions(SHORT, symbols, &ob_lookup, &wel_blocked_short);
-
-    let mut result = OrchestratorResult::default();
-    result.orders.reserve(symbols.len() * 4);
-
-    let mut unstuck_idx: Option<usize> = None;
-    let mut unstuck_side: Option<usize> = None;
-    let mut unstuck_order: Option<Order> = None;
-    if ctx.allow_unstuck {
-        if let Some((idx, side, order)) = calc_unstucking_action(
-            ctx.balance,
-            ctx.allowance_long,
-            ctx.allowance_short,
-            &unstuck_inputs,
-        ) {
-            unstuck_idx = Some(idx);
-            unstuck_side = Some(side);
-            unstuck_order = Some(order);
-        }
-    }
-    let skip_enforcer_long = if unstuck_side == Some(LONG) {
-        unstuck_idx
-    } else {
-        None
-    };
-    let skip_enforcer_short = if unstuck_side == Some(SHORT) {
-        unstuck_idx
-    } else {
-        None
-    };
-
-    for s in symbols {
-        let state_long = StateParams {
-            balance: ctx.balance,
-            order_book: s.order_book.clone(),
-            ema_bands: s.ema_bands_long.clone(),
-            entry_volatility_logrange_ema_1h: s.entry_volatility_logrange_ema_1h_long,
-        };
-        let state_short = StateParams {
-            balance: ctx.balance,
-            order_book: s.order_book.clone(),
-            ema_bands: s.ema_bands_short.clone(),
-            entry_volatility_logrange_ema_1h: s.entry_volatility_logrange_ema_1h_short,
-        };
-
-        let allow_long_side = s.bot.long.total_wallet_exposure_limit > 0.0;
-        let allow_short_side = s.bot.short.total_wallet_exposure_limit > 0.0;
-
-        let expand_entries_long = ctx
-            .entry_peek_hints
-            .as_ref()
-            .map(|h| h.expand_grid_long.contains(&s.idx))
-            .unwrap_or(true);
-        let expand_entries_short = ctx
-            .entry_peek_hints
-            .as_ref()
-            .map(|h| h.expand_grid_short.contains(&s.idx))
-            .unwrap_or(true);
-        let expand_closes_long = ctx
-            .entry_peek_hints
-            .as_ref()
-            .map(|h| h.expand_close_long.contains(&s.idx))
-            .unwrap_or(true);
-        let expand_closes_short = ctx
-            .entry_peek_hints
-            .as_ref()
-            .map(|h| h.expand_close_short.contains(&s.idx))
-            .unwrap_or(true);
-
-        let has_long_pos = s
-            .position_long
-            .as_ref()
-            .map(|p| p.size != 0.0)
-            .unwrap_or(false);
-        let has_short_pos = s
-            .position_short
-            .as_ref()
-            .map(|p| p.size != 0.0)
-            .unwrap_or(false);
-
-        let mut mode_long = s.mode_long;
-        if !allow_long_side && !has_long_pos {
-            mode_long = Mode::TpOnly;
-        } else if !s.active_long && !has_long_pos {
-            mode_long = Mode::Manual;
-        }
-        let mut mode_short = s.mode_short;
-        if !allow_short_side && !has_short_pos {
-            mode_short = Mode::TpOnly;
-        } else if !s.active_short && !has_short_pos {
-            mode_short = Mode::Manual;
-        }
-
-        let mut orders_long = calc_symbol_orders_long(
-            ctx,
-            &SymbolInput {
-                mode_long,
-                ..s.clone()
-            },
-            &state_long,
-            &positions_long,
-            &enforcer_pos_long,
-            if unstuck_side == Some(LONG) && unstuck_idx == Some(s.idx) {
-                unstuck_order.as_ref()
-            } else {
-                None
-            },
-            skip_enforcer_long,
-            expand_entries_long,
-            expand_closes_long,
-        );
-        let mut orders_short = calc_symbol_orders_short(
-            ctx,
-            &SymbolInput {
-                mode_short,
-                ..s.clone()
-            },
-            &state_short,
-            &positions_short,
-            &enforcer_pos_short,
-            if unstuck_side == Some(SHORT) && unstuck_idx == Some(s.idx) {
-                unstuck_order.as_ref()
-            } else {
-                None
-            },
-            skip_enforcer_short,
-            expand_entries_short,
-            expand_closes_short,
-        );
-
-        result.orders.append(&mut orders_long);
-        result.orders.append(&mut orders_short);
-    }
-
-    if !result.orders.is_empty() {
-        result.orders = gate_portfolio_entries(ctx.balance, symbols, &result.orders);
-    }
-
-    result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::{BotParams, EMABands, ExchangeParams};
-
-    fn make_symbol(idx: usize, total_wel: f64) -> SymbolInput {
-        SymbolInput {
-            idx,
-            mode_long: Mode::Normal,
-            mode_short: Mode::Normal,
-            active_long: false,
-            active_short: false,
-            order_book: OrderBook {
-                bid: 10.0,
-                ask: 10.0,
-            },
-            ema_bands_long: EMABands {
-                upper: 0.0,
-                lower: 0.0,
-            },
-            ema_bands_short: EMABands {
-                upper: 0.0,
-                lower: 0.0,
-            },
-            entry_volatility_logrange_ema_1h_long: 0.0,
-            entry_volatility_logrange_ema_1h_short: 0.0,
-            log_range_long: 0.0,
-            log_range_short: 0.0,
-            trailing_long: TrailingPriceBundle::default(),
-            trailing_short: TrailingPriceBundle::default(),
-            position_long: None,
-            position_short: None,
-            exchange: ExchangeParams {
-                qty_step: 1.0,
-                price_step: 0.1,
-                min_qty: 0.0,
-                min_cost: 0.0,
-                c_mult: 1.0,
-                ..Default::default()
-            },
-            bot: BotParamsPair {
-                long: BotParams {
-                    total_wallet_exposure_limit: total_wel,
-                    ..Default::default()
-                },
-                short: BotParams {
-                    total_wallet_exposure_limit: total_wel,
-                    ..Default::default()
-                },
-            },
-        }
-    }
-
-    #[test]
-    fn test_portfolio_gating_limits_total_exposure() {
-        let symbols = vec![make_symbol(0, 0.1), make_symbol(1, 0.1)];
-        let mut orders = Vec::new();
-        orders.push(OrderEnvelope {
-            idx: 0,
-            side: "long",
-            qty: 1.0,
-            price: 10.0,
-            order_type: OrderType::EntryGridNormalLong,
-            reduce_only: false,
-            original_idx: 0,
-        });
-        orders.push(OrderEnvelope {
-            idx: 1,
-            side: "long",
-            qty: 20.0,
-            price: 10.0,
-            order_type: OrderType::EntryGridNormalLong,
-            reduce_only: false,
-            original_idx: 1,
-        });
-        orders.push(OrderEnvelope {
-            idx: 0,
-            side: "long",
-            qty: -5.0,
-            price: 9.5,
-            order_type: OrderType::CloseGridLong,
-            reduce_only: true,
-            original_idx: 2,
-        });
-
-        let gated = gate_portfolio_entries(1_000.0, &symbols, &orders);
-        assert!(gated
-            .iter()
-            .any(|o| o.reduce_only && (o.qty + 5.0).abs() < 1e-9));
-        let entries: Vec<_> = gated.iter().filter(|o| !o.reduce_only).collect();
-        assert_eq!(entries.len(), 1);
-        let exposure: f64 = entries
-            .iter()
-            .map(|o| (o.qty.abs() * o.price) / 1_000.0)
-            .sum();
-        assert!(exposure <= 0.1001, "exposure too high: {}", exposure);
-    }
-}
+pub use core::*;

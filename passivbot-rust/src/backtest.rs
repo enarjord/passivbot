@@ -7,11 +7,11 @@ use crate::entries::{
     calc_entries_long, calc_entries_short, calc_min_entry_qty, calc_next_entry_long,
     calc_next_entry_short,
 };
-use crate::orchestrator::v2 as orchestrator_v2;
-use crate::orchestrator::v2::{
+use crate::orchestrator;
+use crate::orchestrator::{
     EmaBundle as OrchestratorEmaBundle, EmaTimeframeBundle as OrchestratorEmaTimeframeBundle,
+    EntryPeekHints,
 };
-use crate::orchestrator::EntryPeekHints;
 use crate::risk::{
     calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
     GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
@@ -331,8 +331,8 @@ pub struct Backtest<'a> {
     equity_tracking_active: bool,
     debug_writer: Option<DebugOrderWriter>,
     debug_balance_writer: Option<DebugBalanceWriter>,
-    orchestrator_input_cache_v2: Option<orchestrator_v2::OrchestratorInputV2>,
-    orchestrator_workspace_v2: orchestrator_v2::OrchestratorWorkspaceV2,
+    orchestrator_input_cache: Option<orchestrator::OrchestratorInput>,
+    orchestrator_workspace: orchestrator::OrchestratorWorkspace,
     orch_profile: Option<OrchProfile>,
 }
 
@@ -799,33 +799,33 @@ impl<'a> Backtest<'a> {
         writer.write_record(&record);
     }
 
-    /// Build a fully-populated `orchestrator::v2::OrchestratorInputV2` snapshot for timestep `k`.
+    /// Build a fully-populated `orchestrator::OrchestratorInput` snapshot for timestep `k`.
     ///
     /// Not wired into execution yet; intended to be used by the `USE_ORCHESTRATOR` toggle once
     /// the legacy-vs-orchestrator comparison harness is updated.
-    pub fn build_orchestrator_input_v2(
+    pub fn build_orchestrator_input(
         &self,
         k: usize,
         peek_hints: Option<EntryPeekHints>,
-    ) -> orchestrator_v2::OrchestratorInputV2 {
-        self.build_orchestrator_input_v2_iter(k, peek_hints, 0..self.n_coins)
+    ) -> orchestrator::OrchestratorInput {
+        self.build_orchestrator_input_iter(k, peek_hints, 0..self.n_coins)
     }
 
-    fn build_orchestrator_input_v2_indices(
+    fn build_orchestrator_input_indices(
         &self,
         k: usize,
         peek_hints: Option<EntryPeekHints>,
         indices: &[usize],
-    ) -> orchestrator_v2::OrchestratorInputV2 {
-        self.build_orchestrator_input_v2_iter(k, peek_hints, indices.iter().copied())
+    ) -> orchestrator::OrchestratorInput {
+        self.build_orchestrator_input_iter(k, peek_hints, indices.iter().copied())
     }
 
-    fn build_orchestrator_input_v2_iter<I>(
+    fn build_orchestrator_input_iter<I>(
         &self,
         k: usize,
         peek_hints: Option<EntryPeekHints>,
         indices: I,
-    ) -> orchestrator_v2::OrchestratorInputV2
+    ) -> orchestrator::OrchestratorInput
     where
         I: IntoIterator<Item = usize>,
     {
@@ -854,7 +854,7 @@ impl<'a> Backtest<'a> {
             0.0
         };
 
-        let symbols: Vec<orchestrator_v2::SymbolInputV2> = indices
+        let symbols: Vec<orchestrator::SymbolInput> = indices
             .into_iter()
             .map(|idx| {
                 let (start, end) = self.coin_valid_range(idx).unwrap_or((0, 0));
@@ -881,7 +881,7 @@ impl<'a> Backtest<'a> {
                     } else {
                         (0.0, 0.0)
                     };
-                    Some(orchestrator_v2::NextCandle {
+                    Some(orchestrator::NextCandle {
                         low,
                         high,
                         tradable: tradable_next,
@@ -902,37 +902,37 @@ impl<'a> Backtest<'a> {
                     .get(&idx)
                     .unwrap_or(&Position::default());
 
-                let mut mode_long: Option<orchestrator_v2::TradingMode> = None;
-                let mut mode_short: Option<orchestrator_v2::TradingMode> = None;
+                let mut mode_long: Option<orchestrator::TradingMode> = None;
+                let mut mode_short: Option<orchestrator::TradingMode> = None;
 
                 // Backtest delist behaviour: if a coin is delisted (ends early), switch to panic at the
                 // last valid candle so we force a close while the market is still "tradeable".
                 if let Some(&delist_timestamp) = self.last_valid_timestamps.get(&idx) {
                     if k >= delist_timestamp {
                         if pos_long.size != 0.0 {
-                            mode_long = Some(orchestrator_v2::TradingMode::Panic);
+                            mode_long = Some(orchestrator::TradingMode::Panic);
                         }
                         if pos_short.size != 0.0 {
-                            mode_short = Some(orchestrator_v2::TradingMode::Panic);
+                            mode_short = Some(orchestrator::TradingMode::Panic);
                         }
                     }
                 } else {
                     // Fallback: if data is already invalid and we still have a position, panic as well.
                     if !valid_now && pos_long.size != 0.0 {
-                        mode_long = Some(orchestrator_v2::TradingMode::Panic);
+                        mode_long = Some(orchestrator::TradingMode::Panic);
                     }
                     if !valid_now && pos_short.size != 0.0 {
-                        mode_short = Some(orchestrator_v2::TradingMode::Panic);
+                        mode_short = Some(orchestrator::TradingMode::Panic);
                     }
                 }
 
                 // filter_by_min_effective_cost => GracefulStop (blocks only initial entries).
                 if self.backtest_params.filter_by_min_effective_cost {
                     if !self.coin_passes_min_effective_cost(idx, LONG) && pos_long.size == 0.0 {
-                        mode_long = Some(orchestrator_v2::TradingMode::GracefulStop);
+                        mode_long = Some(orchestrator::TradingMode::GracefulStop);
                     }
                     if !self.coin_passes_min_effective_cost(idx, SHORT) && pos_short.size == 0.0 {
-                        mode_short = Some(orchestrator_v2::TradingMode::GracefulStop);
+                        mode_short = Some(orchestrator::TradingMode::GracefulStop);
                     }
                 }
 
@@ -1032,7 +1032,7 @@ impl<'a> Backtest<'a> {
                     .cloned()
                     .unwrap_or_default();
 
-                orchestrator_v2::SymbolInputV2 {
+                orchestrator::SymbolInput {
                     symbol_idx: idx,
                     order_book,
                     exchange,
@@ -1040,13 +1040,13 @@ impl<'a> Backtest<'a> {
                     next_candle,
                     effective_min_cost,
                     emas,
-                    long: orchestrator_v2::SymbolSideInput {
+                    long: orchestrator::SymbolSideInput {
                         mode: mode_long,
                         position: pos_long,
                         trailing: trailing_long,
                         bot_params: self.bot_params[idx].long.clone(),
                     },
-                    short: orchestrator_v2::SymbolSideInput {
+                    short: orchestrator::SymbolSideInput {
                         mode: mode_short,
                         position: pos_short,
                         trailing: trailing_short,
@@ -1056,12 +1056,13 @@ impl<'a> Backtest<'a> {
             })
             .collect();
 
-        orchestrator_v2::OrchestratorInputV2 {
+        orchestrator::OrchestratorInput {
             balance,
-            global: orchestrator_v2::OrchestratorGlobal {
+            global: orchestrator::OrchestratorGlobal {
                 filter_by_min_effective_cost: self.backtest_params.filter_by_min_effective_cost,
                 unstuck_allowance_long: long_allowance,
                 unstuck_allowance_short: short_allowance,
+                sort_global: false,
                 global_bot_params: self.bot_params_master.clone(),
             },
             symbols,
@@ -1069,16 +1070,16 @@ impl<'a> Backtest<'a> {
         }
     }
 
-    fn get_orchestrator_input_v2_cached(
+    fn get_orchestrator_input_cached(
         &mut self,
         k: usize,
         peek_hints: Option<EntryPeekHints>,
-    ) -> orchestrator_v2::OrchestratorInputV2 {
+    ) -> orchestrator::OrchestratorInput {
         // Take ownership temporarily to avoid borrow conflicts while we also read from `self`.
         let mut input = self
-            .orchestrator_input_cache_v2
+            .orchestrator_input_cache
             .take()
-            .unwrap_or_else(|| self.build_orchestrator_input_v2_iter(k, None, 0..self.n_coins));
+            .unwrap_or_else(|| self.build_orchestrator_input_iter(k, None, 0..self.n_coins));
 
         input.balance = self.balance.usd_total_balance_rounded;
 
@@ -1129,7 +1130,7 @@ impl<'a> Backtest<'a> {
                 } else {
                     (0.0, 0.0)
                 };
-                Some(orchestrator_v2::NextCandle {
+                Some(orchestrator::NextCandle {
                     low,
                     high,
                     tradable: tradable_next,
@@ -1176,33 +1177,33 @@ impl<'a> Backtest<'a> {
                 self.bot_params[idx].short.wallet_exposure_limit;
 
             let valid_now = self.coin_is_valid_at(idx, k);
-            let mut mode_long: Option<orchestrator_v2::TradingMode> = None;
-            let mut mode_short: Option<orchestrator_v2::TradingMode> = None;
+            let mut mode_long: Option<orchestrator::TradingMode> = None;
+            let mut mode_short: Option<orchestrator::TradingMode> = None;
 
             if let Some(&delist_timestamp) = self.last_valid_timestamps.get(&idx) {
                 if k >= delist_timestamp {
                     if pos_long.size != 0.0 {
-                        mode_long = Some(orchestrator_v2::TradingMode::Panic);
+                        mode_long = Some(orchestrator::TradingMode::Panic);
                     }
                     if pos_short.size != 0.0 {
-                        mode_short = Some(orchestrator_v2::TradingMode::Panic);
+                        mode_short = Some(orchestrator::TradingMode::Panic);
                     }
                 }
             } else {
                 if !valid_now && pos_long.size != 0.0 {
-                    mode_long = Some(orchestrator_v2::TradingMode::Panic);
+                    mode_long = Some(orchestrator::TradingMode::Panic);
                 }
                 if !valid_now && pos_short.size != 0.0 {
-                    mode_short = Some(orchestrator_v2::TradingMode::Panic);
+                    mode_short = Some(orchestrator::TradingMode::Panic);
                 }
             }
 
             if self.backtest_params.filter_by_min_effective_cost {
                 if !self.coin_passes_min_effective_cost(idx, LONG) && pos_long.size == 0.0 {
-                    mode_long = Some(orchestrator_v2::TradingMode::GracefulStop);
+                    mode_long = Some(orchestrator::TradingMode::GracefulStop);
                 }
                 if !self.coin_passes_min_effective_cost(idx, SHORT) && pos_short.size == 0.0 {
-                    mode_short = Some(orchestrator_v2::TradingMode::GracefulStop);
+                    mode_short = Some(orchestrator::TradingMode::GracefulStop);
                 }
             }
 
@@ -1536,8 +1537,8 @@ impl<'a> Backtest<'a> {
             } else {
                 None
             },
-            orchestrator_input_cache_v2: None,
-            orchestrator_workspace_v2: orchestrator_v2::OrchestratorWorkspaceV2::default(),
+            orchestrator_input_cache: None,
+            orchestrator_workspace: orchestrator::OrchestratorWorkspace::default(),
             orch_profile: std::env::var(ORCH_PROFILE_ENV)
                 .ok()
                 .as_deref()
@@ -3151,17 +3152,17 @@ impl<'a> Backtest<'a> {
 
         let (res, input_update_elapsed, compute_elapsed) = {
             let t0 = Instant::now();
-            let input = self.get_orchestrator_input_v2_cached(k, peek_hints);
+            let input = self.get_orchestrator_input_cached(k, peek_hints);
             let input_update_elapsed = t0.elapsed();
 
             let t1 = Instant::now();
-            let res = orchestrator_v2::compute_ideal_orders_v2_with_workspace(
+            let res = orchestrator::compute_ideal_orders_with_workspace(
                 &input,
-                &mut self.orchestrator_workspace_v2,
+                &mut self.orchestrator_workspace,
             )
-            .unwrap_or_else(|e| panic!("orchestrator v2 error at k {}: {:?}", k, e));
+            .unwrap_or_else(|e| panic!("orchestrator error at k {}: {:?}", k, e));
             let compute_elapsed = t1.elapsed();
-            self.orchestrator_input_cache_v2 = Some(input);
+            self.orchestrator_input_cache = Some(input);
             (res, input_update_elapsed, compute_elapsed)
         };
         if let Some(p) = self.orch_profile.as_mut() {
@@ -3177,17 +3178,17 @@ impl<'a> Backtest<'a> {
                 order_type: o.order_type,
             };
             match o.pside {
-                orchestrator_v2::PositionSide::Long => {
+                orchestrator::PositionSide::Long => {
                     let bundle = self.open_orders.long.entry(o.symbol_idx).or_default();
-                    if orchestrator_v2::is_close_order_type(order.order_type) {
+                    if orchestrator::is_close_order_type(order.order_type) {
                         bundle.closes.push(order);
                     } else {
                         bundle.entries.push(order);
                     }
                 }
-                orchestrator_v2::PositionSide::Short => {
+                orchestrator::PositionSide::Short => {
                     let bundle = self.open_orders.short.entry(o.symbol_idx).or_default();
-                    if orchestrator_v2::is_close_order_type(order.order_type) {
+                    if orchestrator::is_close_order_type(order.order_type) {
                         bundle.closes.push(order);
                     } else {
                         bundle.entries.push(order);
@@ -3199,9 +3200,8 @@ impl<'a> Backtest<'a> {
             OrchProfile::add_ns(&mut p.distribute_ns, t0.elapsed());
         }
 
-        // `compute_ideal_orders_v2` returns orders already sorted by the same distance metric used
-        // by the live bot; preserving insertion order keeps per-symbol entry/close ordering stable
-        // without an extra per-step sort pass.
+        // The orchestrator guarantees deterministic per-symbol entry/close ordering; we preserve
+        // insertion order here to avoid any extra per-step sort pass in the backtester.
 
         self.record_debug_orders_stage(k, "orch_final");
 
@@ -3941,21 +3941,21 @@ mod tests {
             &backtest_params,
         );
 
-        let input = bt.get_orchestrator_input_v2_cached(1, None);
+        let input = bt.get_orchestrator_input_cached(1, None);
         assert!(
             (input.symbols[0].long.bot_params.wallet_exposure_limit - 0.1).abs() < 1e-12,
             "expected cached input WEL to match initial bot_params"
         );
-        bt.orchestrator_input_cache_v2 = Some(input);
+        bt.orchestrator_input_cache = Some(input);
 
         bt.bot_params[0].long.wallet_exposure_limit = 0.2;
 
-        let input = bt.get_orchestrator_input_v2_cached(1, None);
+        let input = bt.get_orchestrator_input_cached(1, None);
         assert!(
             (input.symbols[0].long.bot_params.wallet_exposure_limit - 0.2).abs() < 1e-12,
             "expected cached input WEL to update after bot_params change"
         );
-        bt.orchestrator_input_cache_v2 = Some(input);
+        bt.orchestrator_input_cache = Some(input);
     }
 }
 

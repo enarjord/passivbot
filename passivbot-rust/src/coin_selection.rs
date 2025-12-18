@@ -38,65 +38,111 @@ impl SelectionConfig {
 }
 
 pub fn select_coins(features: &[CoinFeature], cfg: &SelectionConfig) -> Vec<usize> {
-    let enabled: Vec<&CoinFeature> = features.iter().filter(|f| f.enabled).collect();
-    if enabled.is_empty() {
+    // Work on positions within the `features` slice to avoid assuming contiguity of `CoinFeature.index`.
+    let mut enabled_pos: Vec<usize> = Vec::new();
+    enabled_pos.reserve(features.len());
+    for (pos, f) in features.iter().enumerate() {
+        if f.enabled {
+            enabled_pos.push(pos);
+        }
+    }
+    if enabled_pos.is_empty() {
         return Vec::new();
     }
 
     if !cfg.require_forager {
-        return enabled.iter().map(|f| f.index).collect();
+        // Preserve deterministic ordering matching the input slice.
+        return enabled_pos.iter().map(|&p| features[p].index).collect();
     }
 
     let max_positions = cfg.max_positions.max(1);
-    let mut candidates = select_by_volume(&enabled, cfg, max_positions);
-    select_by_volatility(&mut candidates, cfg, max_positions)
+    select_by_volume(features, &mut enabled_pos, cfg, max_positions);
+    select_by_volatility(features, &mut enabled_pos, cfg, max_positions)
 }
 
-fn select_by_volume<'a>(
-    enabled: &[&'a CoinFeature],
+fn select_by_volume(
+    features: &[CoinFeature],
+    positions: &mut Vec<usize>,
     cfg: &SelectionConfig,
     max_positions: usize,
-) -> Vec<&'a CoinFeature> {
-    let mut ranked = enabled.to_vec();
-    ranked.sort_unstable_by(|a, b| compare_desc(a.volume_score, b.volume_score, a.index, b.index));
+) {
+    if positions.is_empty() {
+        return;
+    }
 
     let drop = cfg.volume_drop();
-    let mut keep = ((ranked.len() as f64) * (1.0 - drop)).round() as usize;
+    let mut keep = ((positions.len() as f64) * (1.0 - drop)).round() as usize;
     if keep == 0 {
         keep = 1;
     }
-    keep = keep.max(max_positions).min(ranked.len());
-    ranked.truncate(keep);
-    ranked
+    keep = keep.max(max_positions).min(positions.len());
+    if keep >= positions.len() {
+        return;
+    }
+
+    // Select the top `keep` by volume score using a deterministic comparator (score desc, idx asc).
+    let cmp_volume = |pa: &usize, pb: &usize| {
+        let a = &features[*pa];
+        let b = &features[*pb];
+        compare_desc(a.volume_score, b.volume_score, a.index, b.index)
+    };
+    positions.select_nth_unstable_by(keep.saturating_sub(1), cmp_volume);
+    positions.truncate(keep);
 }
 
 fn select_by_volatility(
-    candidates: &mut Vec<&CoinFeature>,
+    features: &[CoinFeature],
+    positions: &mut Vec<usize>,
     cfg: &SelectionConfig,
     max_positions: usize,
 ) -> Vec<usize> {
-    if candidates.is_empty() {
+    if positions.is_empty() {
         return Vec::new();
     }
 
-    candidates.sort_unstable_by(|a, b| {
-        compare_desc(a.volatility_score, b.volatility_score, a.index, b.index)
-    });
-
     let drop = cfg.volatility_drop();
-    let mut keep = ((candidates.len() as f64) * (1.0 - drop)).round() as usize;
+    let mut keep = ((positions.len() as f64) * (1.0 - drop)).round() as usize;
     if keep == 0 {
         keep = 1;
     }
-    keep = keep.max(max_positions).min(candidates.len());
+    keep = keep.max(max_positions).min(positions.len());
 
-    let drop_count = candidates.len().saturating_sub(keep);
-    let retained = &candidates[drop_count..];
+    let cmp_vol = |pa: &usize, pb: &usize| {
+        let a = &features[*pa];
+        let b = &features[*pb];
+        compare_desc(a.volatility_score, b.volatility_score, a.index, b.index)
+    };
 
-    retained
+    // Match legacy behavior:
+    // 1) sort by volatility (desc)
+    // 2) drop the first `drop_count` entries
+    // 3) return the next `max_positions`
+    //
+    // We avoid a full sort by:
+    // - partitioning at `drop_count` to discard the top segment
+    // - selecting the top `max_positions` within the retained tail
+    // - sorting only that small subset for deterministic order
+    let drop_count = positions.len().saturating_sub(keep);
+    if drop_count > 0 && drop_count < positions.len() {
+        positions.select_nth_unstable_by(drop_count, cmp_vol);
+    }
+    let tail_start = drop_count.min(positions.len());
+    let tail_len = positions.len().saturating_sub(tail_start);
+    if tail_len == 0 {
+        return Vec::new();
+    }
+
+    let take = max_positions.min(tail_len);
+    {
+        let tail = &mut positions[tail_start..];
+        if take < tail.len() {
+            tail.select_nth_unstable_by(take.saturating_sub(1), cmp_vol);
+        }
+        tail[..take].sort_unstable_by(cmp_vol);
+    }
+    positions[tail_start..tail_start + take]
         .iter()
-        .take(max_positions)
-        .map(|f| f.index)
+        .map(|&p| features[p].index)
         .collect()
 }
 
