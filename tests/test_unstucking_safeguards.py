@@ -229,8 +229,7 @@ async def test_calc_orders_emits_single_unstuck(monkeypatch):
 
     import types as _types
 
-    async def fake_calc(self, allow_unstuck=True):
-        assert allow_unstuck is True
+    async def fake_calc(self):
         return {
             symbol: [
                 _make_unstuck_order(symbol, 0x1234, 101.0),
@@ -273,9 +272,10 @@ async def test_existing_unstuck_blocks_new(monkeypatch):
 
     flags = {}
 
-    async def fake_calc(self, allow_unstuck=True):
-        flags["allow_unstuck"] = allow_unstuck
-        if not allow_unstuck:
+    async def fake_calc(self):
+        allow_new_unstuck = not self.has_open_unstuck_order()
+        flags["allow_new_unstuck"] = allow_new_unstuck
+        if not allow_new_unstuck:
             return {symbol: []}
         return {symbol: [_make_unstuck_order(symbol, 0x1234, 101.0)]}
 
@@ -283,7 +283,7 @@ async def test_existing_unstuck_blocks_new(monkeypatch):
 
     to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
 
-    assert flags.get("allow_unstuck") is False
+    assert flags.get("allow_new_unstuck") is False
     assert all(
         not order["custom_id"].startswith("0x1234") for order in to_create
     ), "No new unstuck orders should be created when one is live"
@@ -301,7 +301,7 @@ async def test_manual_mode_skips_side_orders(monkeypatch):
     ]
     bot.active_symbols = [symbol]
 
-    async def fake_calc(self, allow_unstuck=True):
+    async def fake_calc(self):
         return {}
 
     bot.calc_ideal_orders = types.MethodType(fake_calc, bot)
@@ -327,7 +327,7 @@ async def test_tp_only_filters_entry_orders(monkeypatch):
     bot.open_orders[symbol] = []
     bot.active_symbols = [symbol]
 
-    async def fake_calc(self, allow_unstuck=True):
+    async def fake_calc(self):
         return {
             symbol: [
                 _make_order(
@@ -377,7 +377,7 @@ async def test_orders_sorted_by_market_diff(monkeypatch):
     ]
     bot.active_symbols = [symbol]
 
-    async def fake_calc(self, allow_unstuck=True):
+    async def fake_calc(self):
         return {
             symbol: [
                 _make_order(symbol, side="buy", position_side="long", price=101.0, custom_hex=0x0007),
