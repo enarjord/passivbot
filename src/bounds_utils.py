@@ -9,7 +9,10 @@ import logging
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
-from deap import tools
+try:
+    from deap import tools as deap_tools
+except ImportError:  # pragma: no cover - allow import in minimal test envs
+    deap_tools = None
 
 from config_utils import get_template_config
 from opt_utils import round_floats
@@ -321,8 +324,6 @@ def enforce_bounds_on_config(config: dict, sig_digits: int = None) -> dict:
         if not bot:
             return config
 
-        keys_ignored = get_bound_keys_ignored()
-
         # Process each pside
         for pside in sorted(bot.keys()):
             pside_params = bot[pside]
@@ -331,9 +332,6 @@ def enforce_bounds_on_config(config: dict, sig_digits: int = None) -> dict:
 
             # Process each parameter
             for param_key in sorted(pside_params.keys()):
-                if param_key in keys_ignored:
-                    continue
-
                 # Look up bounds for this parameter
                 bound_key = f"{pside}_{param_key}"
                 if bound_key not in bounds_dict:
@@ -357,11 +355,6 @@ def enforce_bounds_on_config(config: dict, sig_digits: int = None) -> dict:
         return config
 
 
-def get_bound_keys_ignored():
-    """Return set of parameter keys that should be ignored when processing bounds."""
-    return {"enforce_exposure_limit"}
-
-
 def enforce_bounds(
     values: Sequence[float], bounds: Sequence[Bound], sig_digits: int = None
 ) -> List[float]:
@@ -378,10 +371,13 @@ def enforce_bounds(
         List[float]  – clamped and quantized copy (original is *not* modified)
     """
     assert len(values) == len(bounds), "values/bounds length mismatch"
-    rounded = values if sig_digits is None else round_floats(values, sig_digits)
     result = []
-    for v, (low, high, step) in zip(rounded, bounds):
-        result.append(quantize_to_step(v, low, high, step))
+    for v, (low, high, step) in zip(values, bounds):
+        if is_stepped(step):
+            result.append(quantize_to_step(v, low, high, step))
+        else:
+            rounded = v if sig_digits is None else round_floats(v, sig_digits)
+            result.append(high if rounded > high else low if rounded < low else rounded)
     return result
 
 
@@ -391,6 +387,8 @@ def extract_bound_vals(key, val) -> Bound:
         # Single value means fixed
         return (float(val), float(val), None)
     elif isinstance(val, (tuple, list)):
+        if len(val) == 0:
+            raise Exception(f"malformed bound {key}: empty array")
         if len(val) == 1:
             return (float(val[0]), float(val[0]), None)
         elif len(val) == 2:
@@ -398,21 +396,44 @@ def extract_bound_vals(key, val) -> Bound:
             return (low, high, None)
         elif len(val) >= 3:
             low, high = sorted([float(val[0]), float(val[1])])
+            if len(val) > 3:
+                logging.warning(
+                    "Bound %s has %d elements; expected 1, 2, or 3. Ignoring step and using sig_digits.",
+                    key,
+                    len(val),
+                )
+                return (low, high, None)
             step_raw = val[2]
-            # Treat 0, None, or null as continuous
-            if step_raw is None or step_raw == 0:
-                step = None
-            else:
+            if step_raw is None:
+                logging.warning(
+                    "Bound %s step is null; treating as continuous and using sig_digits.", key
+                )
+                return (low, high, None)
+            try:
                 step = float(step_raw)
-                # Validate step is positive and not larger than range
-                if step <= 0:
-                    step = None
-                elif step > (high - low) and high != low:
-                    logging.warning(
-                        f"Step {step} for bound {key} is larger than range [{low}, {high}], "
-                        f"treating as continuous"
-                    )
-                    step = None
+            except Exception:
+                logging.warning(
+                    "Bound %s step is not a number (%r); treating as continuous and using sig_digits.",
+                    key,
+                    step_raw,
+                )
+                return (low, high, None)
+            if step <= 0:
+                logging.warning(
+                    "Bound %s step must be > 0 (got %s); treating as continuous and using sig_digits.",
+                    key,
+                    step,
+                )
+                return (low, high, None)
+            if high != low and step > (high - low):
+                logging.warning(
+                    "Bound %s step=%s is larger than range [%s, %s]; treating as continuous and using sig_digits.",
+                    key,
+                    step,
+                    low,
+                    high,
+                )
+                return (low, high, None)
             return (low, high, step)
     raise Exception(f"malformed bound {key}: {val}")
 
@@ -430,7 +451,6 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
         - single value: fixed parameter (low=high, step=None)
     """
     template_config = get_template_config()
-    keys_ignored = get_bound_keys_ignored()
     bounds = []
     for pside in sorted(template_config["bot"]):
         is_enabled = all(
@@ -440,8 +460,6 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
             ]
         )
         for key in sorted(template_config["bot"][pside]):
-            if key in keys_ignored:
-                continue
             bound_key = f"{pside}_{key}"
             assert (
                 bound_key in config["optimize"]["bounds"]
@@ -478,13 +496,15 @@ def mutPolynomialBoundedWrapper(individual, eta, low, up, indpb, bounds=None):
     Returns:
         A tuple of one individual, mutated with consideration for equal lower and upper bounds.
     """
+    if deap_tools is None:  # pragma: no cover
+        raise ModuleNotFoundError("deap is required for optimizer mutation operators")
     n = len(individual)
     steps = extract_steps(bounds, n)
 
     index_ind, index_low, index_up = to_index_space(individual, bounds, steps, low, up)
     temp_low, temp_up, equal_mask = prepare_bounds_for_deap(index_low, index_up)
 
-    tools.mutPolynomialBounded(index_ind, eta, temp_low, temp_up, indpb)
+    deap_tools.mutPolynomialBounded(index_ind, eta, temp_low, temp_up, indpb)
 
     individual[:] = from_index_space(index_ind, bounds, steps, low, equal_mask)
     return (individual,)
@@ -510,6 +530,8 @@ def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up, bounds=None):
     Returns:
         A tuple of two individuals after crossover operation.
     """
+    if deap_tools is None:  # pragma: no cover
+        raise ModuleNotFoundError("deap is required for optimizer crossover operators")
     n = len(ind1)
     steps = extract_steps(bounds, n)
 
@@ -517,7 +539,7 @@ def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up, bounds=None):
     index_ind2, _, _ = to_index_space(ind2, bounds, steps, low, up)
     temp_low, temp_up, equal_mask = prepare_bounds_for_deap(index_low, index_up)
 
-    tools.cxSimulatedBinaryBounded(index_ind1, index_ind2, eta, temp_low, temp_up)
+    deap_tools.cxSimulatedBinaryBounded(index_ind1, index_ind2, eta, temp_low, temp_up)
 
     ind1[:] = from_index_space(index_ind1, bounds, steps, low, equal_mask)
     ind2[:] = from_index_space(index_ind2, bounds, steps, low, equal_mask)

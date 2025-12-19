@@ -144,7 +144,6 @@ from bounds_utils import (
     quantize_to_step,
     is_stepped,
     random_on_grid,
-    get_bound_keys_ignored,
     enforce_bounds,
     extract_bound_vals,
     extract_bounds_tuple_list_from_config,
@@ -227,10 +226,12 @@ class ResultRecorder:
         compress: bool,
         write_all_results: bool,
         pareto_max_size: int = 300,
+        bounds: Optional[Sequence[Bound]] = None,
     ):
         self.store = ParetoStore(
             directory=results_dir,
             sig_digits=sig_digits,
+            bounds=bounds,
             flush_interval=flush_interval,
             log_name="optimizer.pareto",
             max_size=pareto_max_size,
@@ -522,13 +523,10 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
     """
     assume individual is already bound enforced (or will be after)
     """
-    keys_ignored = get_bound_keys_ignored()
     config = deepcopy(template)
     i = 0
     for pside in sorted(config["bot"]):
         for key in sorted(config["bot"][pside]):
-            if key in keys_ignored:
-                continue
             config["bot"][pside][key] = individual[i]
             i += 1
         config = optimizer_overrides(overrides_list, config, pside)
@@ -537,13 +535,11 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
 
 
 def config_to_individual(config, bounds, sig_digits=None):
-    keys_ignored = get_bound_keys_ignored()
     return enforce_bounds(
         [
             config["bot"][pside][key]
             for pside in sorted(config["bot"])
             for key in sorted(config["bot"][pside])
-            if key not in keys_ignored
         ],
         bounds,
         sig_digits,
@@ -1515,6 +1511,7 @@ async def main():
             compress=config["optimize"]["compress_results_file"],
             write_all_results=config["optimize"].get("write_all_results", True),
             pareto_max_size=pareto_max,
+            bounds=evaluator.bounds,
         )
 
         n_objectives = len(config["optimize"]["scoring"])
@@ -1528,7 +1525,7 @@ async def main():
         toolbox = base.Toolbox()
 
         # Define parameter bounds
-        bounds = extract_bounds_tuple_list_from_config(config)
+        bounds = evaluator.bounds
         sig_digits = config["optimize"]["round_to_n_significant_digits"]
         crossover_eta = config["optimize"].get("crossover_eta", 20.0)
         mutation_eta = config["optimize"].get("mutation_eta", 20.0)
