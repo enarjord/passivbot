@@ -6,9 +6,13 @@ to discrete steps and enforcing bounds on configuration dictionaries.
 """
 
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
+from deap import tools
+
+from config_utils import get_template_config
+from opt_utils import round_floats
 
 
 # Bound: (low, high) for continuous, or (low, high, step) for stepped params
@@ -258,14 +262,13 @@ def prepare_bounds_for_deap(
 
 def from_index_space(
     index_values: List[float],
-    target: List[float],
     bounds,
     steps: List[Optional[float]],
     low: List[float],
     equal_mask: np.ndarray,
-) -> None:
+) -> List[float]:
     """
-    Convert index-space values back to parameter space, modifying target in-place.
+    Convert index-space values back to parameter space.
 
     For stepped parameters, indices are converted back to values on the grid.
     For continuous parameters, values are copied directly.
@@ -273,20 +276,24 @@ def from_index_space(
 
     Args:
         index_values: Values in index space (modified by DEAP operator)
-        target: Target list to write results into (modified in-place)
         bounds: List of bound tuples (used for stepped parameters)
         steps: List of step values (from extract_steps)
         low: Original low bounds (used for equal-bounds reset)
         equal_mask: Boolean mask indicating which parameters have equal bounds
+
+    Returns:
+        List[float]: Values converted back to parameter space
     """
+    result = []
     for i, step in enumerate(steps):
         if equal_mask[i]:
-            target[i] = low[i]
+            result.append(low[i])
         elif is_stepped(step):
             low_val, high_val, _ = bounds[i]
-            target[i] = index_to_value(index_values[i], low_val, high_val, step)
+            result.append(index_to_value(index_values[i], low_val, high_val, step))
         else:
-            target[i] = index_values[i]
+            result.append(index_values[i])
+    return result
 
 
 def enforce_bounds_on_config(config: dict, sig_digits: int = None) -> dict:
@@ -353,3 +360,165 @@ def enforce_bounds_on_config(config: dict, sig_digits: int = None) -> dict:
 def get_bound_keys_ignored():
     """Return set of parameter keys that should be ignored when processing bounds."""
     return {"enforce_exposure_limit"}
+
+
+def enforce_bounds(
+    values: Sequence[float], bounds: Sequence[Bound], sig_digits: int = None
+) -> List[float]:
+    """
+    Clamp each value to its corresponding [low, high] interval and quantize to step if defined.
+    Also round to significant digits (optional).
+
+    Args:
+        values : iterable of floats (length == len(bounds))
+        bounds : iterable of (low, high, step) tuples
+        sig_digits: int
+
+    Returns
+        List[float]  – clamped and quantized copy (original is *not* modified)
+    """
+    assert len(values) == len(bounds), "values/bounds length mismatch"
+    rounded = values if sig_digits is None else round_floats(values, sig_digits)
+    result = []
+    for v, (low, high, step) in zip(rounded, bounds):
+        result.append(quantize_to_step(v, low, high, step))
+    return result
+
+
+def extract_bound_vals(key, val) -> Bound:
+    """Extract (low, high, step) from a bound specification."""
+    if isinstance(val, (float, int)):
+        # Single value means fixed
+        return (float(val), float(val), None)
+    elif isinstance(val, (tuple, list)):
+        if len(val) == 1:
+            return (float(val[0]), float(val[0]), None)
+        elif len(val) == 2:
+            low, high = sorted([float(val[0]), float(val[1])])
+            return (low, high, None)
+        elif len(val) >= 3:
+            low, high = sorted([float(val[0]), float(val[1])])
+            step_raw = val[2]
+            # Treat 0, None, or null as continuous
+            if step_raw is None or step_raw == 0:
+                step = None
+            else:
+                step = float(step_raw)
+                # Validate step is positive and not larger than range
+                if step <= 0:
+                    step = None
+                elif step > (high - low) and high != low:
+                    logging.warning(
+                        f"Step {step} for bound {key} is larger than range [{low}, {high}], "
+                        f"treating as continuous"
+                    )
+                    step = None
+            return (low, high, step)
+    raise Exception(f"malformed bound {key}: {val}")
+
+
+def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
+    """
+    Extracts list of tuples (low, high, step) which are lower/upper bounds
+    and optional step size for bot parameters.
+    Also sets all bounds to (low, low, step) if pside is not enabled.
+
+    Supported formats:
+        - [low, high]: continuous optimization (step=None)
+        - [low, high, step]: discrete optimization with given step
+        - [low, high, 0] or [low, high, null]: treated as continuous
+        - single value: fixed parameter (low=high, step=None)
+    """
+    template_config = get_template_config()
+    keys_ignored = get_bound_keys_ignored()
+    bounds = []
+    for pside in sorted(template_config["bot"]):
+        is_enabled = all(
+            [
+                extract_bound_vals(k, config["optimize"]["bounds"][k])[1] > 0.0
+                for k in [f"{pside}_n_positions", f"{pside}_total_wallet_exposure_limit"]
+            ]
+        )
+        for key in sorted(template_config["bot"][pside]):
+            if key in keys_ignored:
+                continue
+            bound_key = f"{pside}_{key}"
+            assert (
+                bound_key in config["optimize"]["bounds"]
+            ), f"bound {bound_key} missing from optimize.bounds"
+            bound_vals = extract_bound_vals(bound_key, config["optimize"]["bounds"][bound_key])
+            if is_enabled:
+                bounds.append(bound_vals)
+            else:
+                # Disabled: fix to low value, preserve step for consistency
+                bounds.append((bound_vals[0], bound_vals[0], bound_vals[2]))
+    return bounds
+
+
+# === DEAP genetic operator wrappers =========================================
+
+
+def mutPolynomialBoundedWrapper(individual, eta, low, up, indpb, bounds=None):
+    """
+    A wrapper around DEAP's mutPolynomialBounded function to pre-process
+    bounds and handle the case where lower and upper bounds may be equal.
+
+    For stepped parameters (where bounds[i][2] is defined and > 0), mutation
+    is performed in index space to ensure offspring values stay on the grid.
+
+    Args:
+        individual: Sequence individual to be mutated.
+        eta: Crowding degree of the mutation.
+        low: A value or sequence of values that is the lower bound of the search space.
+        up: A value or sequence of values that is the upper bound of the search space.
+        indpb: Independent probability for each attribute to be mutated.
+        bounds: Optional list of (low, high, step) tuples. If provided, stepped
+                parameters are mutated in index space.
+
+    Returns:
+        A tuple of one individual, mutated with consideration for equal lower and upper bounds.
+    """
+    n = len(individual)
+    steps = extract_steps(bounds, n)
+
+    index_ind, index_low, index_up = to_index_space(individual, bounds, steps, low, up)
+    temp_low, temp_up, equal_mask = prepare_bounds_for_deap(index_low, index_up)
+
+    tools.mutPolynomialBounded(index_ind, eta, temp_low, temp_up, indpb)
+
+    individual[:] = from_index_space(index_ind, bounds, steps, low, equal_mask)
+    return (individual,)
+
+
+def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up, bounds=None):
+    """
+    A wrapper around DEAP's cxSimulatedBinaryBounded function to pre-process
+    bounds and handle the case where lower and upper bounds may be equal.
+
+    For stepped parameters (where bounds[i][2] is defined and > 0), crossover
+    is performed in index space to ensure offspring values stay on the grid.
+
+    Args:
+        ind1: The first individual participating in the crossover.
+        ind2: The second individual participating in the crossover.
+        eta: Crowding degree of the crossover.
+        low: A value or sequence of values that is the lower bound of the search space.
+        up: A value or sequence of values that is the upper bound of the search space.
+        bounds: Optional list of (low, high, step) tuples. If provided, stepped
+                parameters are crossed over in index space.
+
+    Returns:
+        A tuple of two individuals after crossover operation.
+    """
+    n = len(ind1)
+    steps = extract_steps(bounds, n)
+
+    index_ind1, index_low, index_up = to_index_space(ind1, bounds, steps, low, up)
+    index_ind2, _, _ = to_index_space(ind2, bounds, steps, low, up)
+    temp_low, temp_up, equal_mask = prepare_bounds_for_deap(index_low, index_up)
+
+    tools.cxSimulatedBinaryBounded(index_ind1, index_ind2, eta, temp_low, temp_up)
+
+    ind1[:] = from_index_space(index_ind1, bounds, steps, low, equal_mask)
+    ind2[:] = from_index_space(index_ind2, bounds, steps, low, equal_mask)
+    return ind1, ind2
