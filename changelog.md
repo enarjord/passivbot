@@ -31,3 +31,4 @@ All notable user-facing changes will be documented in this file.
 - Risk management docs refreshed and consolidated; new notes on unstucking, WEL/TWEL enforcers, and conditional stop-loss concepts.
 - Balance updates now keep the previous value on fetch failures (no more transient zero balances); warnings are logged and the standard restart-on-errors flow handles persistent issues.
 - EMA log spam reduced: volume/log-range EMA summaries only emit when rankings change, keeping live logs quieter.
+- Suite configuration is canonical under `backtest.suite` for both backtesting and optimizer runs; `optimize.suite` (if present) is ignored and removed during config normalization.
