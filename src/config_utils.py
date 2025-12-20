@@ -70,6 +70,7 @@ CURRENCY_METRICS = {
 
 SHARED_METRICS = {
     "positions_held_per_day",
+    "positions_held_per_day_w",
     "position_held_hours_mean",
     "position_held_hours_max",
     "position_held_hours_median",
@@ -974,7 +975,11 @@ def _sync_with_template(
         template_with_extras,
         result,
         verbose=verbose,
-        preserve=[("coin_overrides",)],
+        preserve=[
+            ("coin_overrides",),
+            ("backtest", "suite", "aggregate"),
+            ("backtest", "suite", "scenarios"),
+        ],
         tracker=tracker,
     )
     remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose, tracker=tracker)
@@ -1087,9 +1092,6 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     else:
         existing_log = []
     tracker = ConfigTransformTracker()
-    optimize_suite_defined = (
-        isinstance(config.get("optimize"), dict) and "suite" in config["optimize"]
-    )
     coin_sources_input = deepcopy(config.get("backtest", {}).get("coin_sources"))
     template = get_template_config()
     flavor = detect_flavor(config, template)
@@ -1108,10 +1110,14 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
         result.setdefault("backtest", {})["coin_sources"] = coin_sources_input
     _preserve_coin_sources(result)
 
-    if not optimize_suite_defined:
-        backtest_suite = result.get("backtest", {}).get("suite")
-        if backtest_suite is not None:
-            result.setdefault("optimize", {})["suite"] = deepcopy(backtest_suite)
+    if isinstance(result.get("optimize"), dict) and "suite" in result["optimize"]:
+        logging.warning(
+            "Config contains optimize.suite, but suite configuration is now canonical under "
+            "backtest.suite only. optimize.suite will be ignored and deleted; backtest.suite will "
+            "be used. If you need different suite definitions, pass --suite-config with a file "
+            "containing backtest.suite."
+        )
+        del result["optimize"]["suite"]
 
     if not live_only:
         # unneeded adjustments if running live
@@ -2066,12 +2072,5 @@ def get_template_config():
             "scoring": ["adg", "sharpe_ratio"],
             "write_all_results": True,
             "pareto_max_size": 300,
-            "suite": {
-                "enabled": False,
-                "include_base_scenario": False,
-                "base_label": "base",
-                "aggregate": {"default": "mean"},
-                "scenarios": [],
-            },
         },
     }
