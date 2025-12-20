@@ -130,11 +130,11 @@ from shared_arrays import SharedArrayManager, attach_shared_array
 from optimize_suite import (
     ScenarioEvalContext,
     prepare_suite_contexts,
-    extract_optimize_suite_config,
 )
 from suite_runner import (
     SuiteScenario,
     ScenarioResult,
+    extract_suite_config,
     aggregate_metrics,
     build_suite_metrics_payload,
 )
@@ -1411,13 +1411,13 @@ async def main():
         default=None,
         type=str2bool,
         metavar="y/n",
-        help="Enable or disable optimize.suite (omit to follow config).",
+        help="Enable or disable backtest.suite for optimizer run (omit to follow config).",
     )
     parser.add_argument(
         "--suite-config",
         type=str,
         default=None,
-        help="Optional config file providing optimize.suite overrides.",
+        help="Optional config file providing backtest.suite overrides.",
     )
     parser.add_argument(
         "--log-level",
@@ -1478,13 +1478,15 @@ async def main():
     if args.suite_config:
         logging.info("loading suite config %s", args.suite_config)
         suite_override = (
-            load_config(args.suite_config, verbose=False).get("optimize", {}).get("suite")
+            load_config(args.suite_config, verbose=False).get("backtest", {}).get("suite")
         )
         if suite_override is None:
-            raise ValueError(f"Suite config {args.suite_config} must define optimize.suite.")
-    suite_cfg = extract_optimize_suite_config(config, suite_override)
+            raise ValueError(f"Suite config {args.suite_config} must define backtest.suite.")
+    suite_cfg = extract_suite_config(config, suite_override)
     if args.suite is not None:
-        suite_cfg["enabled"] = bool(args.suite)
+        enabled = bool(args.suite)
+        suite_cfg["enabled"] = enabled
+        config.setdefault("backtest", {}).setdefault("suite", {})["enabled"] = enabled
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     await format_approved_ignored_coins(config, backtest_exchanges)
     interrupted = False

@@ -10,8 +10,8 @@ python3 src/optimize.py [path/to/config.json]
 
 - Defaults to `configs/template.json` if no config is specified
 - Use existing configs as starting points: `--start path/to/config(s)`
-- Enable suite scenarios defined in the config with `--suite [y/n]` (omit value to enable)
-- Layer an external suite definition via `--suite-config path/to/file.json`
+- Enable suite scenarios defined in `backtest.suite` with `--suite [y/n]` (omit value to enable)
+- Layer an external `backtest.suite` definition via `--suite-config path/to/file.json`
 
 Example:
 ```bash
@@ -38,7 +38,7 @@ configured.
 
 ### Optimizer Suites
 
-`optimize.suite` mirrors the structure of `backtest.suite` and allows every candidate to
+The optimizer reuses `backtest.suite` and allows every candidate to
 be evaluated across multiple scenarios before scoring. Each scenario can override coins,
 date ranges, exchanges, and `coin_sources`. The optimizer prepares a single shared
 dataset that covers the union of the requested data so additional scenarios add minimal
@@ -46,15 +46,15 @@ overhead.
 
 Key fields:
 
-- `optimize.suite.enabled`: can also be toggled with `--suite [y/n]`
-- `optimize.suite.include_base_scenario` / `base_label`
-- `optimize.suite.scenarios`: same schema as backtest scenarios
+- `backtest.suite.enabled`: can also be toggled with `--suite [y/n]`
+- `backtest.suite.include_base_scenario` / `base_label`
+- `backtest.suite.scenarios`: same schema as backtest scenarios
 
 During evaluation the optimizer records:
 
 - Per-scenario combined metrics (the same mean/min/max/std set produced by standalone
   backtests). These are exposed on each individual as `<label>__{metric}`.
-- Aggregated metrics computed with the `optimize.suite.aggregate` rules (default `mean`).
+- Aggregated metrics computed with the `backtest.suite.aggregate` rules (default `mean`).
   These aggregated values feed directly into `optimize.scoring` and `optimize.limits`.
 
 Result directories stay under `optimize_results/`, but the coin portion of the folder

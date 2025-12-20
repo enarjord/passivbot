@@ -34,6 +34,21 @@ This document provides an overview of the parameters found in `config/template.j
 
 Refer to `configs/examples/suite_example.json` for a practical template.
 
+Example per-metric aggregation:
+
+```json
+"backtest": {
+  "suite": {
+    "aggregate": {
+      "default": "mean",
+      "mdg_usd": "median",
+      "sharpe_ratio": "std",
+      "drawdown_worst_usd": "max"
+    }
+  }
+}
+```
+
 ## Logging
 
 - **level**: Controls global verbosity for Passivbot and tooling.
@@ -295,12 +310,14 @@ When optimizing, parameter values are within the lower and upper bounds.
 
 ### Optimizer Suites
 
-- **optimize.suite.enabled**: Evaluate every candidate across the configured scenarios. Override via `--suite [y/n]` on `src/optimize.py`.
-- **optimize.suite.include_base_scenario** / **base_label**: Same semantics as the backtest suite.
-- **optimize.suite.aggregate**: Per-metric aggregation rules applied to the scenario results before scoring.
-- **optimize.suite.scenarios**: Scenario dictionaries (same keys as `backtest.suite.scenarios`). Each one may override `coins`, `ignored_coins`, `start_date`, `end_date`, `exchanges`, and `coin_sources`.
+The optimizer uses `backtest.suite` as its canonical suite configuration when `--suite [y/n]` is enabled.
 
-The optimizer automatically uploads all scenario slices into shared memory so the extra evaluations add minimal overhead.
+- **backtest.suite.enabled**: Can be toggled for optimizer runs via `--suite [y/n]` on `src/optimize.py`.
+- **backtest.suite.include_base_scenario** / **base_label**: Include the base scenario alongside the configured scenarios.
+- **backtest.suite.aggregate**: Per-metric aggregation rules applied to scenario results before feeding into `optimize.scoring` and `optimize.limits`.
+- **backtest.suite.scenarios**: Scenario dictionaries. Each one may override `coins`, `ignored_coins`, `start_date`, `end_date`, `exchanges`, and `coin_sources`.
+
+Use `--suite-config path/to/file.json` to layer a different `backtest.suite` definition at runtime.
 
 ### Optimization Limits
 
