@@ -7,14 +7,31 @@ to discrete steps and enforcing bounds on configuration dictionaries.
 
 import logging
 from dataclasses import dataclass
+import math
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from opt_utils import round_floats
-
 # Epsilon for floating-point comparisons in step calculations
 STEP_EPSILON = 1e-9
+
+
+def round_to_sig_digits(value: float, sig_digits: int) -> float:
+    """
+    Pure-python significant-digit rounding.
+
+    This intentionally avoids depending on passivbot_rust so unit tests can run
+    in environments where the native extension is stubbed or unavailable.
+    """
+    if sig_digits is None:
+        return value
+    if not isinstance(value, (int, float)):
+        raise TypeError(f"value must be numeric, got {type(value).__name__}")
+    value = float(value)
+    if value == 0.0 or not math.isfinite(value):
+        return value
+    digits = sig_digits - 1 - int(math.floor(math.log10(abs(value))))
+    return round(value, digits)
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +264,6 @@ def enforce_bounds(
         if bound.is_stepped:
             result.append(bound.quantize(v))
         else:
-            rounded = v if sig_digits is None else round_floats(v, sig_digits)
+            rounded = v if sig_digits is None else round_to_sig_digits(v, sig_digits)
             result.append(bound.high if rounded > bound.high else bound.low if rounded < bound.low else rounded)
     return result

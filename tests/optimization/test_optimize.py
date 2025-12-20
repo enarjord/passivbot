@@ -588,6 +588,7 @@ class TestConstraintAwareFitness:
     def test_lower_violation_dominates(self):
         # Create a concrete fitness class from ConstraintAwareFitness
         # This is how deap requires it to be created
+        pytest.importorskip("deap")
         from deap import creator, base
 
         # Clean up if it exists from previous test
@@ -611,6 +612,7 @@ class TestConstraintAwareFitness:
 
     def test_dominates_with_same_violation(self):
         # With same constraint violation, regular dominance applies
+        pytest.importorskip("deap")
         from deap import creator, base
 
         # Clean up if it exists
