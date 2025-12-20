@@ -29,7 +29,7 @@ from optimize import (
     ConstraintAwareFitness,
     ResultRecorder,
 )
-from optimization.bounds_utils import Bound
+from optimization.bounds import Bound
 
 
 class TestApplyConfigOverrides:
@@ -554,7 +554,7 @@ class TestConfigsToIndividuals:
         from config_utils import get_template_config
         config = get_template_config()
         # Use actual bounds from the template
-        from optimization.bounds_utils import extract_bounds_tuple_list_from_config
+        from optimization.config_adapter import extract_bounds_tuple_list_from_config
         bounds = extract_bounds_tuple_list_from_config(config)
 
         result = configs_to_individuals([config], bounds, 6)
@@ -566,7 +566,7 @@ class TestConfigsToIndividuals:
     def test_creates_twe_variant(self):
         from config_utils import get_template_config
         config = get_template_config()
-        from optimization.bounds_utils import extract_bounds_tuple_list_from_config
+        from optimization.config_adapter import extract_bounds_tuple_list_from_config
         bounds = extract_bounds_tuple_list_from_config(config)
 
         result = configs_to_individuals([config], bounds, 6)

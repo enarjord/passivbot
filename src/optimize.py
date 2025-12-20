@@ -139,10 +139,12 @@ from suite_runner import (
     build_suite_metrics_payload,
 )
 from metrics_schema import build_scenario_metrics, flatten_metric_stats
-from optimization.bounds_utils import (
+from optimization.bounds import (
     Bound,
     enforce_bounds,
-    extract_bounds_tuple_list_from_config,
+)
+from optimization.config_adapter import extract_bounds_tuple_list_from_config
+from optimization.deap_adapters import (
     mutPolynomialBoundedWrapper,
     cxSimulatedBinaryBoundedWrapper,
 )
@@ -1547,16 +1549,12 @@ async def main():
             "mate",
             cxSimulatedBinaryBoundedWrapper,
             eta=crossover_eta,
-            low=[b.low for b in bounds],
-            up=[b.high for b in bounds],
             bounds=bounds,
         )
         toolbox.register(
             "mutate",
             mutPolynomialBoundedWrapper,
             eta=mutation_eta,
-            low=[b.low for b in bounds],
-            up=[b.high for b in bounds],
             indpb=mutation_indpb,
             bounds=bounds,
         )

@@ -16,7 +16,7 @@ from opt_utils import round_floats
 from pure_funcs import calc_hash
 from utils import json_dumps_streamlined
 from metrics_schema import flatten_metric_stats
-from optimization.bounds_utils import Bound
+from optimization.bounds import Bound
 from pareto_core import (
     compute_ideal,
     crowding_distances,
