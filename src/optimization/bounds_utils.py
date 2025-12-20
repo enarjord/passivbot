@@ -6,6 +6,7 @@ to discrete steps and enforcing bounds on configuration dictionaries.
 """
 
 import logging
+from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -18,9 +19,210 @@ from config_utils import get_template_config
 from opt_utils import round_floats
 
 
-# Bound: (low, high) for continuous, or (low, high, step) for stepped params
-# step=None or step=0 means continuous (no quantization)
-Bound = Tuple[float, float, Optional[float]]  # (low, high, step)
+@dataclass(frozen=True, slots=True)
+class Bound:
+    """
+    Represents parameter bounds for optimization.
+
+    For continuous parameters, step is None.
+    For stepped (discrete) parameters, step defines the grid spacing.
+
+    Args:
+        low: Lower bound
+        high: Upper bound
+        step: Step size for discrete parameters (None for continuous)
+    """
+    low: float
+    high: float
+    step: Optional[float] = None
+
+    @property
+    def is_stepped(self) -> bool:
+        """Check if this represents a stepped (discrete) parameter."""
+        return self.step is not None and self.step > 0
+
+    @property
+    def max_index(self) -> int:
+        """
+        Get the maximum valid index for a stepped parameter.
+
+        Returns the largest n where low + n*step <= high.
+        Raises ValueError if parameter is not stepped.
+        """
+        if not self.is_stepped:
+            raise ValueError("max_index only valid for stepped parameters")
+        return int((self.high - self.low + 1e-9) / self.step)
+
+    def quantize(self, value: float) -> float:
+        """
+        Quantize a value to the nearest step within bounds.
+
+        For continuous parameters, just clamps to [low, high].
+        For stepped parameters, snaps to the nearest grid point.
+
+        Args:
+            value: Value to quantize
+
+        Returns:
+            Quantized value clamped to valid bounds
+        """
+        if not self.is_stepped:
+            return max(self.low, min(self.high, value))
+
+        # Clamp to bounds first
+        clamped = max(self.low, min(self.high, value))
+
+        # Find nearest step (using int + 0.5 for proper rounding)
+        n_steps_from_low = int((clamped - self.low) / self.step + 0.5)
+
+        # Clamp index to valid range
+        clamped_index = max(0, min(self.max_index, n_steps_from_low))
+
+        quantized = self.low + clamped_index * self.step
+
+        # Final safety clamp
+        return max(self.low, min(self.high, quantized))
+
+    def random_on_grid(self) -> float:
+        """
+        Generate a random value respecting step constraints.
+
+        For continuous parameters, returns uniform random in [low, high].
+        For stepped parameters, returns random value on the grid.
+
+        Returns:
+            Random value
+        """
+        if not self.is_stepped:
+            return np.random.uniform(self.low, self.high)
+        random_idx = np.random.randint(0, self.max_index + 1)
+        return self.low + random_idx * self.step
+
+    def value_to_index(self, value: float) -> float:
+        """
+        Convert a parameter value to index space.
+
+        For continuous parameters, returns value unchanged.
+        For stepped parameters, returns the index (0-based).
+
+        Args:
+            value: Parameter value
+
+        Returns:
+            Index in step space, or original value if continuous
+        """
+        if not self.is_stepped:
+            return value
+        return (value - self.low) / self.step
+
+    def index_to_value(self, index: float) -> float:
+        """
+        Convert an index back to a parameter value.
+
+        For continuous parameters, returns index clamped to bounds.
+        For stepped parameters, converts index to grid value.
+
+        Args:
+            index: Index in step space (or value if continuous)
+
+        Returns:
+            Parameter value
+        """
+        if not self.is_stepped:
+            return max(self.low, min(self.high, index))
+        # Round to nearest integer index and convert
+        rounded_index = int(index + 0.5)
+        clamped_index = max(0, min(self.max_index, rounded_index))
+        return self.low + clamped_index * self.step
+
+    def get_index_bounds(self) -> Tuple[float, float]:
+        """
+        Get the bounds in index space.
+
+        For continuous parameters, returns (low, high).
+        For stepped parameters, returns (0, max_index).
+
+        Returns:
+            (low_index, high_index)
+        """
+        if not self.is_stepped:
+            return (self.low, self.high)
+        return (0.0, float(self.max_index))
+
+    @classmethod
+    def from_config(cls, key: str, val) -> "Bound":
+        """
+        Extract and validate a Bound from config value.
+
+        Supported formats:
+        - Single value: fixed parameter (low=high)
+        - [low, high]: continuous optimization
+        - [low, high, step]: discrete optimization with step
+        - [low, high, 0] or [low, high, null]: continuous
+
+        Args:
+            key: Parameter key (for error messages)
+            val: Config value (number, list, or tuple)
+
+        Returns:
+            Validated Bound instance
+
+        Raises:
+            Exception: If bound specification is malformed
+        """
+        if isinstance(val, (float, int)):
+            return cls(float(val), float(val), None)
+
+        if isinstance(val, (tuple, list)):
+            if len(val) == 0:
+                raise Exception(f"malformed bound {key}: empty array")
+            if len(val) == 1:
+                return cls(float(val[0]), float(val[0]), None)
+            if len(val) == 2:
+                low, high = sorted([float(val[0]), float(val[1])])
+                return cls(low, high, None)
+            if len(val) >= 3:
+                low, high = sorted([float(val[0]), float(val[1])])
+                if len(val) > 3:
+                    logging.warning(
+                        "Bound %s has %d elements; expected 1, 2, or 3. Ignoring step and using sig_digits.",
+                        key, len(val),
+                    )
+                    return cls(low, high, None)
+
+                step_raw = val[2]
+                if step_raw is None:
+                    logging.warning(
+                        "Bound %s step is null; treating as continuous and using sig_digits.", key
+                    )
+                    return cls(low, high, None)
+
+                try:
+                    step = float(step_raw)
+                except Exception:
+                    logging.warning(
+                        "Bound %s step is not a number (%r); treating as continuous and using sig_digits.",
+                        key, step_raw,
+                    )
+                    return cls(low, high, None)
+
+                if step <= 0:
+                    logging.warning(
+                        "Bound %s step must be > 0 (got %s); treating as continuous and using sig_digits.",
+                        key, step,
+                    )
+                    return cls(low, high, None)
+
+                if high != low and step > (high - low):
+                    logging.warning(
+                        "Bound %s step=%s is larger than range [%s, %s]; treating as continuous and using sig_digits.",
+                        key, step, low, high,
+                    )
+                    return cls(low, high, None)
+
+                return cls(low, high, step)
+
+        raise Exception(f"malformed bound {key}: {val}")
 
 
 def get_max_index(low: float, high: float, step: float) -> int:
@@ -36,9 +238,10 @@ def get_max_index(low: float, high: float, step: float) -> int:
 
     Returns:
         int: maximum valid index
+
+    Note: Consider using Bound.max_index property instead.
     """
-    # Add small epsilon to handle floating point precision issues
-    return int((high - low + 1e-9) / step)
+    return Bound(low, high, step).max_index
 
 
 def is_stepped(step: Optional[float]) -> bool:
@@ -50,6 +253,8 @@ def is_stepped(step: Optional[float]) -> bool:
 
     Returns:
         bool: True if step is defined and positive
+
+    Note: Consider using Bound.is_stepped property instead.
     """
     return step is not None and step > 0
 
@@ -69,12 +274,10 @@ def random_on_grid(low: float, high: float, step: Optional[float]) -> float:
 
     Returns:
         float: random value on the grid (or uniform if continuous)
+
+    Note: Consider using Bound.random_on_grid() method instead.
     """
-    if not is_stepped(step):
-        return np.random.uniform(low, high)
-    max_idx = get_max_index(low, high, step)
-    random_idx = np.random.randint(0, max_idx + 1)
-    return low + random_idx * step
+    return Bound(low, high, step).random_on_grid()
 
 
 def quantize_to_step(value: float, low: float, high: float, step: Optional[float] = None) -> float:
@@ -89,24 +292,10 @@ def quantize_to_step(value: float, low: float, high: float, step: Optional[float
 
     Returns:
         float: quantized value clamped to the valid grid within [low, high]
+
+    Note: Consider using Bound.quantize() method instead.
     """
-    if not is_stepped(step):
-        return max(low, min(high, value))
-
-    # Clamp to bounds first
-    clamped = max(low, min(high, value))
-
-    # Find nearest step (using int + 0.5 for proper rounding, not banker's rounding)
-    n_steps_from_low = int((clamped - low) / step + 0.5)
-
-    # Clamp index to valid range
-    max_index = get_max_index(low, high, step)
-    clamped_index = max(0, min(max_index, n_steps_from_low))
-
-    quantized = low + clamped_index * step
-
-    # Final safety clamp (should be redundant but kept for safety)
-    return max(low, min(high, quantized))
+    return Bound(low, high, step).quantize(value)
 
 
 def value_to_index(value: float, low: float, high: float, step: Optional[float]) -> float:
@@ -124,10 +313,10 @@ def value_to_index(value: float, low: float, high: float, step: Optional[float])
 
     Returns:
         float: index in step space, or original value if continuous
+
+    Note: Consider using Bound.value_to_index() method instead.
     """
-    if not is_stepped(step):
-        return value
-    return (value - low) / step
+    return Bound(low, high, step).value_to_index(value)
 
 
 def index_to_value(index: float, low: float, high: float, step: Optional[float]) -> float:
@@ -145,14 +334,10 @@ def index_to_value(index: float, low: float, high: float, step: Optional[float])
 
     Returns:
         float: parameter value, quantized to step if applicable
+
+    Note: Consider using Bound.index_to_value() method instead.
     """
-    if not is_stepped(step):
-        return max(low, min(high, index))
-    # Round to nearest integer index and convert back to value
-    rounded_index = int(index + 0.5)
-    max_index = get_max_index(low, high, step)
-    clamped_index = max(0, min(max_index, rounded_index))
-    return low + clamped_index * step
+    return Bound(low, high, step).index_to_value(index)
 
 
 def get_index_bounds(low: float, high: float, step: Optional[float]) -> Tuple[float, float]:
@@ -169,22 +354,21 @@ def get_index_bounds(low: float, high: float, step: Optional[float]) -> Tuple[fl
 
     Returns:
         Tuple[float, float]: (low_index, high_index)
+
+    Note: Consider using Bound.get_index_bounds() method instead.
     """
-    if not is_stepped(step):
-        return (low, high)
-    max_index = get_max_index(low, high, step)
-    return (0.0, float(max_index))
+    return Bound(low, high, step).get_index_bounds()
 
 
 # === Index-space conversion helpers for genetic operators ==================
 
 
-def extract_steps(bounds, n: int) -> List[Optional[float]]:
+def extract_steps(bounds: Optional[Sequence[Bound]], n: int) -> List[Optional[float]]:
     """
     Extract step values from a bounds list.
 
     Args:
-        bounds: List of bound tuples, or None
+        bounds: List of Bound instances, or None
         n: Expected number of parameters
 
     Returns:
@@ -192,7 +376,7 @@ def extract_steps(bounds, n: int) -> List[Optional[float]]:
     """
     if bounds is None or len(bounds) != n:
         return [None] * n
-    return [b[2] for b in bounds]
+    return [b.step for b in bounds]
 
 
 def to_index_space(
@@ -224,9 +408,9 @@ def to_index_space(
 
     for i, (val, step) in enumerate(zip(values, steps)):
         if is_stepped(step):
-            low_val, high_val, _ = bounds[i]
-            index_values.append(value_to_index(val, low_val, high_val, step))
-            idx_low, idx_up = get_index_bounds(low_val, high_val, step)
+            bound = bounds[i]
+            index_values.append(value_to_index(val, bound.low, bound.high, step))
+            idx_low, idx_up = get_index_bounds(bound.low, bound.high, step)
             index_low.append(idx_low)
             index_up.append(idx_up)
         else:
@@ -292,8 +476,8 @@ def from_index_space(
         if equal_mask[i]:
             result.append(low[i])
         elif is_stepped(step):
-            low_val, high_val, _ = bounds[i]
-            result.append(index_to_value(index_values[i], low_val, high_val, step))
+            bound = bounds[i]
+            result.append(index_to_value(index_values[i], bound.low, bound.high, step))
         else:
             result.append(index_values[i])
     return result
@@ -364,7 +548,7 @@ def enforce_bounds(
 
     Args:
         values : iterable of floats (length == len(bounds))
-        bounds : iterable of (low, high, step) tuples
+        bounds : iterable of Bound instances or (low, high, step) tuples
         sig_digits: int
 
     Returns
@@ -372,7 +556,13 @@ def enforce_bounds(
     """
     assert len(values) == len(bounds), "values/bounds length mismatch"
     result = []
-    for v, (low, high, step) in zip(values, bounds):
+    for v, b in zip(values, bounds):
+        # Handle both Bound instances and tuples for backward compatibility
+        if isinstance(b, tuple):
+            low, high, step = b
+        else:
+            low, high, step = b.low, b.high, b.step
+
         if is_stepped(step):
             result.append(quantize_to_step(v, low, high, step))
         else:
@@ -382,60 +572,19 @@ def enforce_bounds(
 
 
 def extract_bound_vals(key, val) -> Bound:
-    """Extract (low, high, step) from a bound specification."""
-    if isinstance(val, (float, int)):
-        # Single value means fixed
-        return (float(val), float(val), None)
-    elif isinstance(val, (tuple, list)):
-        if len(val) == 0:
-            raise Exception(f"malformed bound {key}: empty array")
-        if len(val) == 1:
-            return (float(val[0]), float(val[0]), None)
-        elif len(val) == 2:
-            low, high = sorted([float(val[0]), float(val[1])])
-            return (low, high, None)
-        elif len(val) >= 3:
-            low, high = sorted([float(val[0]), float(val[1])])
-            if len(val) > 3:
-                logging.warning(
-                    "Bound %s has %d elements; expected 1, 2, or 3. Ignoring step and using sig_digits.",
-                    key,
-                    len(val),
-                )
-                return (low, high, None)
-            step_raw = val[2]
-            if step_raw is None:
-                logging.warning(
-                    "Bound %s step is null; treating as continuous and using sig_digits.", key
-                )
-                return (low, high, None)
-            try:
-                step = float(step_raw)
-            except Exception:
-                logging.warning(
-                    "Bound %s step is not a number (%r); treating as continuous and using sig_digits.",
-                    key,
-                    step_raw,
-                )
-                return (low, high, None)
-            if step <= 0:
-                logging.warning(
-                    "Bound %s step must be > 0 (got %s); treating as continuous and using sig_digits.",
-                    key,
-                    step,
-                )
-                return (low, high, None)
-            if high != low and step > (high - low):
-                logging.warning(
-                    "Bound %s step=%s is larger than range [%s, %s]; treating as continuous and using sig_digits.",
-                    key,
-                    step,
-                    low,
-                    high,
-                )
-                return (low, high, None)
-            return (low, high, step)
-    raise Exception(f"malformed bound {key}: {val}")
+    """
+    Extract a Bound from a bound specification.
+
+    Wrapper around Bound.from_config() for backward compatibility.
+
+    Args:
+        key: Parameter key (for error messages)
+        val: Config value
+
+    Returns:
+        Bound instance
+    """
+    return Bound.from_config(key, val)
 
 
 def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
@@ -455,7 +604,7 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
     for pside in sorted(template_config["bot"]):
         is_enabled = all(
             [
-                extract_bound_vals(k, config["optimize"]["bounds"][k])[1] > 0.0
+                extract_bound_vals(k, config["optimize"]["bounds"][k]).high > 0.0
                 for k in [f"{pside}_n_positions", f"{pside}_total_wallet_exposure_limit"]
             ]
         )
@@ -469,7 +618,7 @@ def extract_bounds_tuple_list_from_config(config) -> List[Bound]:
                 bounds.append(bound_vals)
             else:
                 # Disabled: fix to low value, preserve step for consistency
-                bounds.append((bound_vals[0], bound_vals[0], bound_vals[2]))
+                bounds.append(Bound(bound_vals.low, bound_vals.low, bound_vals.step))
     return bounds
 
 

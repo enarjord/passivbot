@@ -139,7 +139,7 @@ from suite_runner import (
     build_suite_metrics_payload,
 )
 from metrics_schema import build_scenario_metrics, flatten_metric_stats
-from bounds_utils import (
+from optimization.bounds_utils import (
     Bound,
     quantize_to_step,
     is_stepped,
@@ -695,24 +695,24 @@ class Evaluator:
             if np.random.random() < change_chance:  # x% chance of leaving unchanged
                 perturbed.append(val)
                 continue
-            low, high, bound_step = self.bounds[i]
-            if high == low:
+            bound = self.bounds[i]
+            if bound.high == bound.low:
                 perturbed.append(val)
                 continue
 
             # For stepped parameters, move by the defined step
-            if is_stepped(bound_step):
-                step = bound_step
+            if is_stepped(bound.step):
+                step = bound.step
             elif val != 0.0:
                 exponent = math.floor(math.log10(abs(val))) - (self.sig_digits - 1)
                 step = 10**exponent
             else:
-                step = (high - low) * 10 ** -(self.sig_digits - 1)
+                step = (bound.high - bound.low) * 10 ** -(self.sig_digits - 1)
 
             direction = np.random.choice([-1.0, 1.0])
             new_val = val + step * direction
             # For stepped params, don't round_dynamic; quantization will happen in enforce_bounds
-            if is_stepped(bound_step):
+            if is_stepped(bound.step):
                 perturbed.append(new_val)
             else:
                 perturbed.append(pbr.round_dynamic(new_val, self.sig_digits))
@@ -722,13 +722,13 @@ class Evaluator:
     def perturb_x_pct(self, individual, magnitude=0.01):
         perturbed = []
         for i, val in enumerate(individual):
-            low, high, bound_step = self.bounds[i]
-            if high == low:
+            bound = self.bounds[i]
+            if bound.high == bound.low:
                 perturbed.append(val)
                 continue
             new_val = val * (1 + np.random.uniform(-magnitude, magnitude))
             # For stepped params, don't round_dynamic; quantization will happen in enforce_bounds
-            if is_stepped(bound_step):
+            if is_stepped(bound.step):
                 perturbed.append(new_val)
             else:
                 perturbed.append(pbr.round_dynamic(new_val, self.sig_digits))
@@ -739,14 +739,14 @@ class Evaluator:
         n = len(individual)
         indices = np.random.choice(n, max(1, int(frac * n)), replace=False)
         for i in indices:
-            low, high, bound_step = self.bounds[i]
-            if low != high:
-                if is_stepped(bound_step):
+            bound = self.bounds[i]
+            if bound.low != bound.high:
+                if is_stepped(bound.step):
                     # For stepped params, move by +/- step
                     direction = np.random.choice([-1.0, 1.0])
-                    perturbed[i] = individual[i] + bound_step * direction
+                    perturbed[i] = individual[i] + bound.step * direction
                 else:
-                    delta = (high - low) * 0.01
+                    delta = (bound.high - bound.low) * 0.01
                     perturbed[i] = individual[i] + delta * np.random.uniform(-1.0, 1.0)
         return perturbed
 
@@ -755,36 +755,36 @@ class Evaluator:
         n = len(individual)
         indices = np.random.choice(n, max(1, int(frac * n)), replace=False)
         for i in indices:
-            low, high, bound_step = self.bounds[i]
-            if low != high:
-                perturbed[i] = random_on_grid(low, high, bound_step)
+            bound = self.bounds[i]
+            if bound.low != bound.high:
+                perturbed[i] = random_on_grid(bound.low, bound.high, bound.step)
         return perturbed
 
     def perturb_gaussian(self, individual, scale=0.01):
         perturbed = []
         for i, val in enumerate(individual):
-            low, high, bound_step = self.bounds[i]
-            if high == low:
+            bound = self.bounds[i]
+            if bound.high == bound.low:
                 perturbed.append(val)
                 continue
-            if is_stepped(bound_step):
+            if is_stepped(bound.step):
                 # For stepped params, generate gaussian number of steps to move
-                max_steps = (high - low) / bound_step
+                max_steps = (bound.high - bound.low) / bound.step
                 n_steps = int(np.random.normal(0, scale * max_steps) + 0.5)
-                perturbed.append(val + n_steps * bound_step)
+                perturbed.append(val + n_steps * bound.step)
             else:
-                noise = np.random.normal(0, scale * (high - low))
+                noise = np.random.normal(0, scale * (bound.high - bound.low))
                 perturbed.append(val + noise)
         return perturbed
 
     def perturb_large_uniform(self, individual):
         perturbed = []
         for i in range(len(individual)):
-            low, high, bound_step = self.bounds[i]
-            if low == high:
-                perturbed.append(low)
+            bound = self.bounds[i]
+            if bound.low == bound.high:
+                perturbed.append(bound.low)
             else:
-                perturbed.append(random_on_grid(low, high, bound_step))
+                perturbed.append(random_on_grid(bound.low, bound.high, bound.step))
         return perturbed
 
     def evaluate(self, individual, overrides_list):

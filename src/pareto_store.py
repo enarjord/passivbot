@@ -16,7 +16,7 @@ from opt_utils import round_floats
 from pure_funcs import calc_hash
 from utils import json_dumps_streamlined
 from metrics_schema import flatten_metric_stats
-from bounds_utils import Bound, is_stepped, quantize_to_step
+from optimization.bounds_utils import Bound, is_stepped, quantize_to_step
 from pareto_core import (
     compute_ideal,
     crowding_distances,
@@ -115,12 +115,12 @@ def _quantize_entry_bot_params_with_bounds(
                     len(bounds),
                 )
                 return entry
-            low, high, step = bounds[idx]
+            bound = bounds[idx]
             value = pside_params[key]
-            if is_stepped(step):
-                pside_params[key] = quantize_to_step(value, low, high, step)
+            if is_stepped(bound.step):
+                pside_params[key] = quantize_to_step(value, bound.low, bound.high, bound.step)
             else:
-                pside_params[key] = high if value > high else low if value < low else value
+                pside_params[key] = bound.high if value > bound.high else bound.low if value < bound.low else value
             idx += 1
 
     if idx != len(bounds):
