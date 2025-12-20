@@ -45,6 +45,10 @@ Top-level suite keys:
 - `base_label`: name for the base scenario when included
 - `scenarios`: list of dictionaries as described above
 
+If `include_base_scenario=true`, the suite will run **one extra scenario** using the base backtest
+settings (date range, coins, exchanges, etc.). For example, two listed scenarios + `include_base_scenario=true`
+produces three scenario results.
+
 During a suite run Passivbot prepares one master OHLCV dataset that spans the union of all scenario date ranges and coins, then slices it per scenario so repeated downloads are avoided. Results are written to:
 
 ```
@@ -55,6 +59,26 @@ Every suite also receives a `suite_summary.json` containing per-scenario metrics
 Each scenario’s entry exposes `metrics.stats[metric] = {mean,min,max,std}` so you can inspect exchange-combined performance without digging through `analysis.json` files.
 
 See `configs/examples/suite_example.json` for a minimal multi-scenario setup.
+
+### Comparing Exchanges
+
+To compare performance across exchanges (similar to older “per-exchange analyses”), define one scenario per exchange by using the scenario-level `exchanges` field:
+
+```json
+"backtest": {
+  "suite": {
+    "enabled": true,
+    "include_base_scenario": false,
+    "aggregate": {"default": "mean"},
+    "scenarios": [
+      {"label": "binance_only", "exchanges": ["binance"]},
+      {"label": "bybit_only", "exchanges": ["bybit"]}
+    ]
+  }
+}
+```
+
+Each scenario will then run against only that exchange’s data, and `suite_summary.json` will contain separate `metrics.stats` blocks for `binance_only` and `bybit_only`.
 
 ## Coin Sources
 

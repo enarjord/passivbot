@@ -75,8 +75,8 @@ Each evaluation written to disk now includes a compact `suite_metrics` payload:
 }
 ```
 
-Only aggregated statistics remain in `analyses_combined`; the verbose per-scenario
-flattened keys have been removed to keep Pareto members and `all_results.bin` lean.
+Pareto members store a compact metrics payload under `metrics.stats` (and `suite_metrics` when suite
+mode is enabled) instead of the older `analyses_combined` / per-exchange analysis blocks.
 
 ## Optimization Process
 
@@ -98,7 +98,8 @@ optimize_results/YYYY-MM-DDTHH_MM_SS_{exchanges}_{n_days}days_{coin_label}_{hash
 Contents:
 - `all_results.bin`: Binary log of all evaluated configs (msgpack format)
 - `pareto/`: JSON files for Pareto-optimal configurations
-  - Named `{distance}_{hash}.json` where `distance` is normalized distance to ideal point
+  - Named `{hash}.json`
+  - Files are added/removed over time as the Pareto front updates and is pruned to `optimize.pareto_max_size`
 - `index.json`: List of Pareto member hashes
 
 ## Analyzing Results
