@@ -2072,12 +2072,5 @@ def get_template_config():
             "scoring": ["adg", "sharpe_ratio"],
             "write_all_results": True,
             "pareto_max_size": 300,
-            "suite": {
-                "enabled": False,
-                "include_base_scenario": False,
-                "base_label": "base",
-                "aggregate": {"default": "mean"},
-                "scenarios": [],
-            },
         },
     }
