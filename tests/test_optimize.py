@@ -262,7 +262,7 @@ class TestConfigToIndividual:
                 "short": {"param1": 3.5, "param2": 4.5},
             }
         }
-        bounds = [(0.0, 10.0, 0.0), (0.0, 10.0, 0.0), (0.0, 10.0, 0.0), (0.0, 10.0, 0.0)]
+        bounds = [Bound(0.0, 10.0) for _ in range(4)]
         sig_digits = 6
 
         result = config_to_individual(config, bounds, sig_digits)
@@ -281,7 +281,7 @@ class TestConfigToIndividual:
                 "short": {"z_param": 300.0, "a_param": 400.0},
             }
         }
-        bounds = [(0.0, 1000.0, 0.0)] * 4
+        bounds = [Bound(0.0, 1000.0)] * 4
         sig_digits = 6
 
         result = config_to_individual(config, bounds, sig_digits)

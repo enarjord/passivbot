@@ -141,11 +141,7 @@ from suite_runner import (
 from metrics_schema import build_scenario_metrics, flatten_metric_stats
 from optimization.bounds_utils import (
     Bound,
-    quantize_to_step,
-    is_stepped,
-    random_on_grid,
     enforce_bounds,
-    extract_bound_vals,
     extract_bounds_tuple_list_from_config,
     mutPolynomialBoundedWrapper,
     cxSimulatedBinaryBoundedWrapper,
@@ -701,7 +697,7 @@ class Evaluator:
                 continue
 
             # For stepped parameters, move by the defined step
-            if is_stepped(bound.step):
+            if bound.is_stepped:
                 step = bound.step
             elif val != 0.0:
                 exponent = math.floor(math.log10(abs(val))) - (self.sig_digits - 1)
@@ -712,7 +708,7 @@ class Evaluator:
             direction = np.random.choice([-1.0, 1.0])
             new_val = val + step * direction
             # For stepped params, don't round_dynamic; quantization will happen in enforce_bounds
-            if is_stepped(bound.step):
+            if bound.is_stepped:
                 perturbed.append(new_val)
             else:
                 perturbed.append(pbr.round_dynamic(new_val, self.sig_digits))
@@ -728,7 +724,7 @@ class Evaluator:
                 continue
             new_val = val * (1 + np.random.uniform(-magnitude, magnitude))
             # For stepped params, don't round_dynamic; quantization will happen in enforce_bounds
-            if is_stepped(bound.step):
+            if bound.is_stepped:
                 perturbed.append(new_val)
             else:
                 perturbed.append(pbr.round_dynamic(new_val, self.sig_digits))
@@ -741,7 +737,7 @@ class Evaluator:
         for i in indices:
             bound = self.bounds[i]
             if bound.low != bound.high:
-                if is_stepped(bound.step):
+                if bound.is_stepped:
                     # For stepped params, move by +/- step
                     direction = np.random.choice([-1.0, 1.0])
                     perturbed[i] = individual[i] + bound.step * direction
@@ -757,7 +753,7 @@ class Evaluator:
         for i in indices:
             bound = self.bounds[i]
             if bound.low != bound.high:
-                perturbed[i] = random_on_grid(bound.low, bound.high, bound.step)
+                perturbed[i] = bound.random_on_grid()
         return perturbed
 
     def perturb_gaussian(self, individual, scale=0.01):
@@ -767,7 +763,7 @@ class Evaluator:
             if bound.high == bound.low:
                 perturbed.append(val)
                 continue
-            if is_stepped(bound.step):
+            if bound.is_stepped:
                 # For stepped params, generate gaussian number of steps to move
                 max_steps = (bound.high - bound.low) / bound.step
                 n_steps = int(np.random.normal(0, scale * max_steps) + 0.5)
@@ -784,7 +780,7 @@ class Evaluator:
             if bound.low == bound.high:
                 perturbed.append(bound.low)
             else:
-                perturbed.append(random_on_grid(bound.low, bound.high, bound.step))
+                perturbed.append(bound.random_on_grid())
         return perturbed
 
     def evaluate(self, individual, overrides_list):
@@ -1541,8 +1537,7 @@ async def main():
         # Register attribute generators (generating on-grid values for stepped params)
         def _make_random_attr(bound):
             """Generate a random value respecting step constraints."""
-            low, high, step = bound
-            return random_on_grid(low, high, step)
+            return bound.random_on_grid()
 
         for i, bound in enumerate(bounds):
             toolbox.register(f"attr_{i}", _make_random_attr, bound)
@@ -1552,16 +1547,16 @@ async def main():
             "mate",
             cxSimulatedBinaryBoundedWrapper,
             eta=crossover_eta,
-            low=[b[0] for b in bounds],
-            up=[b[1] for b in bounds],
+            low=[b.low for b in bounds],
+            up=[b.high for b in bounds],
             bounds=bounds,
         )
         toolbox.register(
             "mutate",
             mutPolynomialBoundedWrapper,
             eta=mutation_eta,
-            low=[b[0] for b in bounds],
-            up=[b[1] for b in bounds],
+            low=[b.low for b in bounds],
+            up=[b.high for b in bounds],
             indpb=mutation_indpb,
             bounds=bounds,
         )
@@ -1645,9 +1640,7 @@ async def main():
 
         def _make_random_individual():
             """Generate a random individual respecting step constraints."""
-            values = []
-            for low, high, step in bounds:
-                values.append(random_on_grid(low, high, step))
+            values = [bound.random_on_grid() for bound in bounds]
             return creator.Individual(values)
 
         population = [_make_random_individual() for _ in range(population_size)]
