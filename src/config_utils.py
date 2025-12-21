@@ -1092,6 +1092,9 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
     else:
         existing_log = []
     tracker = ConfigTransformTracker()
+    optimize_suite_defined = (
+        isinstance(config.get("optimize"), dict) and "suite" in config["optimize"]
+    )
     coin_sources_input = deepcopy(config.get("backtest", {}).get("coin_sources"))
     template = get_template_config()
     flavor = detect_flavor(config, template)
@@ -1110,14 +1113,15 @@ def format_config(config: dict, verbose=True, live_only=False, base_config_path:
         result.setdefault("backtest", {})["coin_sources"] = coin_sources_input
     _preserve_coin_sources(result)
 
-    if isinstance(result.get("optimize"), dict) and "suite" in result["optimize"]:
+    if optimize_suite_defined:
         logging.warning(
             "Config contains optimize.suite, but suite configuration is now canonical under "
             "backtest.suite only. optimize.suite will be ignored and deleted; backtest.suite will "
             "be used. If you need different suite definitions, pass --suite-config with a file "
             "containing backtest.suite."
         )
-        del result["optimize"]["suite"]
+        if isinstance(result.get("optimize"), dict) and "suite" in result["optimize"]:
+            del result["optimize"]["suite"]
 
     if not live_only:
         # unneeded adjustments if running live
