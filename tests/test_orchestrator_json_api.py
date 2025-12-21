@@ -381,6 +381,8 @@ def test_unstuck_is_added_in_addition_to_close_grid_and_capped():
     assert "close_unstuck_long" in order_types
     assert "close_grid_long" in order_types
 
-    closes = [o for o in out["orders"] if o["order_type"].startswith("close_") and o["pside"] == "long"]
+    closes = [
+        o for o in out["orders"] if o["order_type"].startswith("close_") and o["pside"] == "long"
+    ]
     total_close_qty = -sum(o["qty"] for o in closes if o["qty"] < 0.0)
     assert total_close_qty <= 10.0 + 1e-9

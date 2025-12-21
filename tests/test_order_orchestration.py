@@ -244,7 +244,7 @@ async def test_calc_orders_to_cancel_and_create_reconciles_orders(monkeypatch):
         ]
     }
 
-    async def fake_calc_ideal_orders(self, allow_unstuck=True):
+    async def fake_calc_ideal_orders(self):
         return ideal
 
     bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
@@ -288,7 +288,7 @@ async def test_order_hysteresis_skips_near_identical_cancel_create(monkeypatch):
         ]
     }
 
-    async def fake_calc_ideal_orders(self, allow_unstuck=True):
+    async def fake_calc_ideal_orders(self):
         return ideal
 
     bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
@@ -309,7 +309,7 @@ async def test_to_create_orders_sorted_by_market_diff(monkeypatch):
 
     ideal = {symbol: [slow_fill, fast_fill]}  # Deliberately unsorted
 
-    async def fake_calc_ideal_orders(self, allow_unstuck=True):
+    async def fake_calc_ideal_orders(self):
         return ideal
 
     bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
@@ -339,7 +339,7 @@ async def test_only_one_unstuck_order_survives(monkeypatch):
         ],
     }
 
-    async def fake_calc_ideal_orders(self, allow_unstuck=True):
+    async def fake_calc_ideal_orders(self):
         return ideal
 
     bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)

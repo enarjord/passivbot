@@ -3372,7 +3372,14 @@ class Passivbot:
 
     async def _load_orchestrator_ema_bundle(
         self, symbols: list[str], modes: dict[str, dict[str, str]]
-    ) -> tuple[dict[str, dict[float, float]], dict[str, dict[float, float]], dict[str, dict[float, float]], dict[str, dict[float, float]], dict[str, float], dict[str, float]]:
+    ) -> tuple[
+        dict[str, dict[float, float]],
+        dict[str, dict[float, float]],
+        dict[str, dict[float, float]],
+        dict[str, dict[float, float]],
+        dict[str, float],
+        dict[str, float],
+    ]:
         """Fetch the EMA values required by the Rust orchestrator for the given symbols.
 
         Returns:
@@ -3409,8 +3416,12 @@ class Passivbot:
         lr_span_long = float(self.bot_value("long", "filter_volatility_ema_span") or 0.0)
         vol_span_short = float(self.bot_value("short", "filter_volume_ema_span") or 0.0)
         lr_span_short = float(self.bot_value("short", "filter_volatility_ema_span") or 0.0)
-        m1_volume_spans = sorted({s for s in (vol_span_long, vol_span_short) if s > 0.0 and math.isfinite(s)})
-        m1_lr_spans = sorted({s for s in (lr_span_long, lr_span_short) if s > 0.0 and math.isfinite(s)})
+        m1_volume_spans = sorted(
+            {s for s in (vol_span_long, vol_span_short) if s > 0.0 and math.isfinite(s)}
+        )
+        m1_lr_spans = sorted(
+            {s for s in (lr_span_long, lr_span_short) if s > 0.0 and math.isfinite(s)}
+        )
 
         async def fetch_map(symbol: str, spans: list[float], fn):
             out: dict[float, float] = {}
@@ -3430,13 +3441,17 @@ class Passivbot:
             return float(await self.cm.get_latest_ema_close(symbol, span=span, max_age_ms=30_000))
 
         async def ema_qv(symbol: str, span: float) -> float:
-            return float(await self.cm.get_latest_ema_quote_volume(symbol, span=span, max_age_ms=60_000))
+            return float(
+                await self.cm.get_latest_ema_quote_volume(symbol, span=span, max_age_ms=60_000)
+            )
 
         async def ema_lr_1m(symbol: str, span: float) -> float:
             return float(await self.cm.get_latest_ema_log_range(symbol, span=span, max_age_ms=60_000))
 
         async def ema_lr_1h(symbol: str, span: float) -> float:
-            return float(await self.cm.get_latest_ema_log_range(symbol, span=span, tf="1h", max_age_ms=600_000))
+            return float(
+                await self.cm.get_latest_ema_log_range(symbol, span=span, tf="1h", max_age_ms=600_000)
+            )
 
         close_tasks = {
             sym: asyncio.create_task(fetch_map(sym, sorted(need_close_spans[sym]), ema_close))
@@ -3446,8 +3461,12 @@ class Passivbot:
             sym: asyncio.create_task(fetch_map(sym, sorted(need_h1_lr_spans[sym]), ema_lr_1h))
             for sym in symbols
         }
-        vol_tasks = {sym: asyncio.create_task(fetch_map(sym, m1_volume_spans, ema_qv)) for sym in symbols}
-        lr1m_tasks = {sym: asyncio.create_task(fetch_map(sym, m1_lr_spans, ema_lr_1m)) for sym in symbols}
+        vol_tasks = {
+            sym: asyncio.create_task(fetch_map(sym, m1_volume_spans, ema_qv)) for sym in symbols
+        }
+        lr1m_tasks = {
+            sym: asyncio.create_task(fetch_map(sym, m1_lr_spans, ema_lr_1m)) for sym in symbols
+        }
 
         m1_close_emas: dict[str, dict[float, float]] = {}
         m1_volume_emas: dict[str, dict[float, float]] = {}
@@ -3535,7 +3554,9 @@ class Passivbot:
                 )
 
             def side_input(pside: str) -> dict:
-                mode = self._pb_mode_to_orchestrator_mode(self.PB_modes.get(pside, {}).get(symbol, "manual"))
+                mode = self._pb_mode_to_orchestrator_mode(
+                    self.PB_modes.get(pside, {}).get(symbol, "manual")
+                )
                 pos = self.positions.get(symbol, {}).get(pside, {"size": 0.0, "price": 0.0})
                 trailing = self.trailing_prices.get(symbol, {}).get(pside)
                 if not trailing:
@@ -3556,7 +3577,9 @@ class Passivbot:
 
             # Build EMA bundle for this symbol.
             m1_close_pairs = [[float(k), float(v)] for k, v in sorted(m1_close_emas[symbol].items())]
-            m1_volume_pairs = [[float(k), float(v)] for k, v in sorted(m1_volume_emas[symbol].items())]
+            m1_volume_pairs = [
+                [float(k), float(v)] for k, v in sorted(m1_volume_emas[symbol].items())
+            ]
             m1_lr_pairs = [[float(k), float(v)] for k, v in sorted(m1_log_range_emas[symbol].items())]
             h1_lr_pairs = [[float(k), float(v)] for k, v in sorted(h1_log_range_emas[symbol].items())]
 
@@ -3575,7 +3598,11 @@ class Passivbot:
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
                     "emas": {
-                        "m1": {"close": m1_close_pairs, "log_range": m1_lr_pairs, "volume": m1_volume_pairs},
+                        "m1": {
+                            "close": m1_close_pairs,
+                            "log_range": m1_lr_pairs,
+                            "volume": m1_volume_pairs,
+                        },
                         "h1": {"close": [], "log_range": h1_lr_pairs, "volume": []},
                     },
                     "long": side_input("long"),
@@ -3719,9 +3746,7 @@ class Passivbot:
             }
             (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
             (out_dir / "diff.json").write_text(json.dumps(diff, indent=2, sort_keys=True))
-            (out_dir / "legacy_orders.json").write_text(
-                json.dumps(legacy, indent=2, sort_keys=True)
-            )
+            (out_dir / "legacy_orders.json").write_text(json.dumps(legacy, indent=2, sort_keys=True))
             (out_dir / "orchestrator_orders.json").write_text(
                 json.dumps(orchestrator, indent=2, sort_keys=True)
             )
@@ -3807,9 +3832,7 @@ class Passivbot:
             ),
         )
 
-        self.maybe_log_ema_debug(
-            ema_bounds_long, ema_bounds_short, entry_volatility_logrange_ema_1h
-        )
+        self.maybe_log_ema_debug(ema_bounds_long, ema_bounds_short, entry_volatility_logrange_ema_1h)
 
         ema_anchor = {
             "long": {s: ema_bounds_long[s][0] for s in ema_bounds_long},

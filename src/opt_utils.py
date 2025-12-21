@@ -185,6 +185,7 @@ def round_floats_sig_digits(obj: Any, sig_digits: int) -> Any:
     else:
         return obj
 
+
 def round_floats_step(obj: Any, step: float) -> Any:
     if isinstance(obj, float):
         return pbr.round_(obj, step)
@@ -196,6 +197,7 @@ def round_floats_step(obj: Any, step: float) -> Any:
         return tuple([round_floats_step(v, step) for v in obj])
     else:
         return obj
+
 
 def quantize_floats(obj: Any, sig_digits: int = None, step: float = None) -> Any:
     """
@@ -226,7 +228,3 @@ def enforce_bounds_v2(obj: Any, bounds: Any = None, sig_digits: int = None):
         - if len bound element == 2, use sig_digits (raise if missing)
     """
     pass
-
-
-
-

@@ -17,7 +17,9 @@ def test_optimize_suite_is_ignored_and_removed(caplog):
     assert "suite" not in formatted.get("optimize", {})
     assert formatted["backtest"]["suite"]["enabled"] is True
     assert formatted["backtest"]["suite"]["base_label"] == "bt-base"
-    assert formatted["backtest"]["suite"]["scenarios"] == [{"label": "s1", "start_date": "2022-01-01"}]
+    assert formatted["backtest"]["suite"]["scenarios"] == [
+        {"label": "s1", "start_date": "2022-01-01"}
+    ]
     assert any("optimize.suite" in rec.message for rec in caplog.records)
 
 
