@@ -3219,14 +3219,20 @@ class Passivbot:
     async def calc_ideal_orders(self):
         """Compute desired entry and exit orders for every active symbol."""
         if COMPARE_ORCHESTRATOR:
-            legacy = await self.calc_ideal_orders_legacy()
-            orchestrator, orch_snapshot = await self.calc_ideal_orders_orchestrator(
-                return_snapshot=True
-            )
-            diff = self._diff_legacy_vs_orchestrator(legacy, orchestrator)
-            self._log_legacy_vs_orchestrator_diff(diff)
-            self._maybe_dump_orchestrator_discrepancy(diff, orch_snapshot, legacy, orchestrator)
-            return legacy
+            try:
+                snapshot = await self._load_compare_market_snapshot()
+                legacy = await self.calc_ideal_orders_legacy_from_snapshot(snapshot)
+                orchestrator, orch_snapshot = await self.calc_ideal_orders_orchestrator_from_snapshot(
+                    snapshot, return_snapshot=True
+                )
+                diff = self._diff_legacy_vs_orchestrator(legacy, orchestrator)
+                self._log_legacy_vs_orchestrator_diff(diff)
+                self._maybe_dump_orchestrator_discrepancy(diff, orch_snapshot, legacy, orchestrator)
+                return legacy
+            except Exception as e:
+                logging.error(f"orchestrator compare mode failed; falling back to legacy: {e}")
+                traceback.print_exc()
+                return await self.calc_ideal_orders_legacy()
 
         if USE_ORCHESTRATOR:
             return await self.calc_ideal_orders_orchestrator()
@@ -3245,9 +3251,7 @@ class Passivbot:
             allow_new_unstuck=not self.has_open_unstuck_order()
         )
         if unstucking_close[0] != 0.0:
-            close_candidates[unstucking_symbol] = [
-                x for x in close_candidates[unstucking_symbol] if not "close" in x[2]
-            ]
+            # Add unstuck in addition to any existing closes to reduce churn; cap later.
             close_candidates[unstucking_symbol].append(unstucking_close)
 
         self._apply_twel_entry_gating(order_plan)
@@ -3264,22 +3268,39 @@ class Passivbot:
             unstucking_close,
         )
 
-        # ensure close qtys don't exceed pos sizes
-        for symbol in ideal_orders_f:
-            for i in range(len(ideal_orders_f[symbol])):
-                order = ideal_orders_f[symbol][i]
-                if order["reduce_only"]:
-                    pos_size_abs = abs(
-                        self.positions[order["symbol"]][order["position_side"]]["size"]
-                    )
-                    if abs(order["qty"]) > pos_size_abs:
-                        logging.warning(
-                            "trimmed reduce-only qty to position size | order=%s | position=%s",
-                            order,
-                            self.positions[order["symbol"]],
-                        )
-                        order["qty"] = pos_size_abs
-        return ideal_orders_f
+        return self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
+
+    async def calc_ideal_orders_legacy_from_snapshot(self, snapshot: dict):
+        last_prices = snapshot["last_prices"]
+        ema_anchor = snapshot["ema_anchor"]
+        entry_volatility_logrange_ema_1h = snapshot["entry_volatility_logrange_ema_1h"]
+
+        order_plan = self._build_base_orders(
+            last_prices, ema_anchor, entry_volatility_logrange_ema_1h
+        )
+        close_candidates = order_plan.close_candidates
+
+        unstucking_symbol, unstucking_close = await self.calc_unstucking_close_from_snapshot(
+            snapshot, allow_new_unstuck=not self.has_open_unstuck_order()
+        )
+        if unstucking_close[0] != 0.0:
+            close_candidates[unstucking_symbol].append(unstucking_close)
+
+        self._apply_twel_entry_gating(order_plan)
+
+        ideal_orders_f, wel_blocked_symbols = self._to_executable_orders(
+            close_candidates, last_prices
+        )
+
+        ideal_orders_f = self._inject_twel_enforcer_orders(
+            ideal_orders_f,
+            wel_blocked_symbols,
+            last_prices,
+            unstucking_symbol,
+            unstucking_close,
+        )
+
+        return self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
 
     def _bot_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
         """Build a dict matching Rust `BotParams` for JSON orchestrator input."""
@@ -3369,6 +3390,335 @@ class Passivbot:
             else:
                 out[pside] = 0.0
         return out
+
+    async def calc_unstucking_close_from_snapshot(
+        self, snapshot: dict, *, allow_new_unstuck: bool
+    ) -> (str, tuple[float, float, str, int]):
+        empty = (0.0, 0.0, "", pbr.get_order_id_type_from_string("empty"))
+        if not allow_new_unstuck or len(getattr(self, "pnls", [])) == 0:
+            return "", empty
+
+        unstuck_allowances = snapshot.get("unstuck_allowances", {"long": 0.0, "short": 0.0})
+
+        if unstuck_allowances["long"] <= 0.0 and unstuck_allowances["short"] <= 0.0:
+            return "", empty
+
+        last_prices = snapshot["last_prices"]
+        ema_bounds = snapshot["ema_bounds"]  # pside -> symbol -> (lower, upper)
+
+        positions_payload = []
+        idx_map = {}
+        idx_counter = 0
+
+        for symbol in sorted(self.positions):
+            current_price = float(last_prices.get(symbol, 0.0))
+            if not math.isfinite(current_price) or current_price <= 0.0:
+                continue
+
+            for pside in ["long", "short"]:
+                if unstuck_allowances.get(pside, 0.0) <= 0.0:
+                    continue
+                if not self.has_position(pside, symbol):
+                    continue
+                lo, hi = ema_bounds.get(pside, {}).get(symbol, (0.0, 0.0))
+                if not (math.isfinite(lo) and math.isfinite(hi) and lo > 0.0 and hi > 0.0):
+                    continue
+
+                payload = {
+                    "idx": idx_counter,
+                    "side": pside,
+                    "position_size": float(self.positions[symbol][pside]["size"]),
+                    "position_price": float(self.positions[symbol][pside]["price"]),
+                    "wallet_exposure_limit": float(self.bp(pside, "wallet_exposure_limit", symbol)),
+                    "risk_we_excess_allowance_pct": float(
+                        self.bp(pside, "risk_we_excess_allowance_pct", symbol)
+                    ),
+                    "unstuck_threshold": float(self.bp(pside, "unstuck_threshold", symbol)),
+                    "unstuck_close_pct": float(self.bp(pside, "unstuck_close_pct", symbol)),
+                    "unstuck_ema_dist": float(self.bp(pside, "unstuck_ema_dist", symbol)),
+                    "ema_band_upper": float(hi),
+                    "ema_band_lower": float(lo),
+                    "current_price": current_price,
+                    "price_step": float(self.price_steps[symbol]),
+                    "qty_step": float(self.qty_steps[symbol]),
+                    "min_qty": float(self.min_qtys[symbol]),
+                    "min_cost": float(self.min_costs[symbol]),
+                    "c_mult": float(self.c_mults[symbol]),
+                }
+                positions_payload.append(payload)
+                idx_map[idx_counter] = (symbol, pside)
+                idx_counter += 1
+
+        if not positions_payload:
+            return "", empty
+
+        result = pbr.calc_unstucking_close_py(
+            float(self.balance),
+            float(unstuck_allowances.get("long", 0.0)),
+            float(unstuck_allowances.get("short", 0.0)),
+            positions_payload,
+        )
+        if not result:
+            return "", empty
+
+        idx, _side_code, qty, price, order_type_id = result
+        symbol_pside = idx_map.get(idx)
+        if symbol_pside is None:
+            return "", empty
+        symbol, _ = symbol_pside
+        return symbol, (qty, price, snake_of(order_type_id), order_type_id)
+
+    async def _load_compare_market_snapshot(self) -> dict:
+        symbols = sorted(set(getattr(self, "active_symbols", []) or []))
+        last_prices = await self.cm.get_last_prices(symbols, max_age_ms=10_000)
+
+        allow_new_unstuck = not self.has_open_unstuck_order()
+        unstuck_allowances = self._calc_unstuck_allowances_live(allow_new_unstuck=allow_new_unstuck)
+
+        close_spans: dict[str, set[float]] = {s: set() for s in symbols}
+        h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
+
+        for pside in ["long", "short"]:
+            for symbol in symbols:
+                s0 = float(self.bp(pside, "ema_span_0", symbol) or 0.0)
+                s1 = float(self.bp(pside, "ema_span_1", symbol) or 0.0)
+                s2 = (s0 * s1) ** 0.5 if s0 > 0.0 and s1 > 0.0 else 0.0
+                for sp in (s0, s1, s2):
+                    if sp > 0.0 and math.isfinite(sp):
+                        close_spans[symbol].add(sp)
+                h1 = float(self.bp(pside, "entry_volatility_ema_span_hours", symbol) or 0.0)
+                if h1 > 0.0 and math.isfinite(h1):
+                    h1_lr_spans[symbol].add(h1)
+
+        vol_spans = sorted(
+            {
+                s
+                for s in (
+                    float(self.bot_value("long", "filter_volume_ema_span") or 0.0),
+                    float(self.bot_value("short", "filter_volume_ema_span") or 0.0),
+                )
+                if s > 0.0 and math.isfinite(s)
+            }
+        )
+        lr_spans = sorted(
+            {
+                s
+                for s in (
+                    float(self.bot_value("long", "filter_volatility_ema_span") or 0.0),
+                    float(self.bot_value("short", "filter_volatility_ema_span") or 0.0),
+                )
+                if s > 0.0 and math.isfinite(s)
+            }
+        )
+
+        async def fetch_map(symbol: str, spans: list[float], fn):
+            out: dict[float, float] = {}
+            if not spans:
+                return out
+            tasks = [asyncio.create_task(fn(symbol, sp)) for sp in spans]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for sp, res in zip(spans, results):
+                if isinstance(res, Exception):
+                    raise Exception(f"EMA fetch failed | {symbol=} {sp=} | err={res}")
+                val = float(res)
+                if not math.isfinite(val):
+                    raise Exception(f"EMA fetch returned non-finite | {symbol=} {sp=} | val={val}")
+                out[float(sp)] = val
+            if len(out) != len(spans):
+                missing = [sp for sp in spans if float(sp) not in out]
+                raise Exception(f"EMA map missing values | {symbol=} | missing={missing}")
+            return out
+
+        async def ema_close(symbol: str, span: float) -> float:
+            return float(await self.cm.get_latest_ema_close(symbol, span=span, max_age_ms=30_000))
+
+        async def ema_qv(symbol: str, span: float) -> float:
+            return float(await self.cm.get_latest_ema_quote_volume(symbol, span=span, max_age_ms=60_000))
+
+        async def ema_lr_1m(symbol: str, span: float) -> float:
+            return float(await self.cm.get_latest_ema_log_range(symbol, span=span, max_age_ms=60_000))
+
+        async def ema_lr_1h(symbol: str, span: float) -> float:
+            return float(await self.cm.get_latest_ema_log_range(symbol, span=span, tf="1h", max_age_ms=600_000))
+
+        m1_close_emas: dict[str, dict[float, float]] = {}
+        m1_volume_emas: dict[str, dict[float, float]] = {}
+        m1_log_range_emas: dict[str, dict[float, float]] = {}
+        h1_log_range_emas: dict[str, dict[float, float]] = {}
+
+        for sym in symbols:
+            m1_close_emas[sym] = await fetch_map(sym, sorted(close_spans[sym]), ema_close)
+            m1_volume_emas[sym] = await fetch_map(sym, vol_spans, ema_qv)
+            m1_log_range_emas[sym] = await fetch_map(sym, lr_spans, ema_lr_1m)
+            h1_log_range_emas[sym] = await fetch_map(sym, sorted(h1_lr_spans[sym]), ema_lr_1h)
+
+        ema_bounds: dict[str, dict[str, tuple[float, float]]] = {"long": {}, "short": {}}
+        ema_anchor: dict[str, dict[str, float]] = {"long": {}, "short": {}}
+        for pside in ["long", "short"]:
+            for symbol in symbols:
+                s0 = float(self.bp(pside, "ema_span_0", symbol) or 0.0)
+                s1 = float(self.bp(pside, "ema_span_1", symbol) or 0.0)
+                s2 = (s0 * s1) ** 0.5 if s0 > 0.0 and s1 > 0.0 else 0.0
+                vals = []
+                for sp in (s0, s1, s2):
+                    v = m1_close_emas[symbol].get(sp)
+                    if v is not None and math.isfinite(v) and v > 0.0:
+                        vals.append(float(v))
+                if vals:
+                    lo, hi = min(vals), max(vals)
+                else:
+                    lo, hi = 0.0, 0.0
+                ema_bounds[pside][symbol] = (lo, hi)
+                ema_anchor[pside][symbol] = lo if pside == "long" else hi
+
+        entry_volatility: dict[str, dict[str, float]] = {"long": {}, "short": {}}
+        for pside in ["long", "short"]:
+            for symbol in symbols:
+                if float(self.bp(pside, "entry_grid_spacing_volatility_weight", symbol) or 0.0) == 0.0:
+                    continue
+                span = float(self.bp(pside, "entry_volatility_ema_span_hours", symbol) or 0.0)
+                if span > 0.0 and math.isfinite(span):
+                    entry_volatility[pside][symbol] = float(h1_log_range_emas[symbol].get(span, 0.0))
+
+        return {
+            "symbols": symbols,
+            "last_prices": last_prices,
+            "unstuck_allowances": unstuck_allowances,
+            "ema_bounds": ema_bounds,
+            "ema_anchor": ema_anchor,
+            "entry_volatility_logrange_ema_1h": entry_volatility,
+            "m1_close_emas": m1_close_emas,
+            "m1_volume_emas": m1_volume_emas,
+            "m1_log_range_emas": m1_log_range_emas,
+            "h1_log_range_emas": h1_log_range_emas,
+        }
+
+    async def calc_ideal_orders_orchestrator_from_snapshot(
+        self, snapshot: dict, *, return_snapshot: bool
+    ):
+        symbols = snapshot["symbols"]
+        last_prices = snapshot["last_prices"]
+        m1_close_emas = snapshot["m1_close_emas"]
+        m1_volume_emas = snapshot["m1_volume_emas"]
+        m1_log_range_emas = snapshot["m1_log_range_emas"]
+        h1_log_range_emas = snapshot["h1_log_range_emas"]
+
+        unstuck_allowances = snapshot.get("unstuck_allowances", {"long": 0.0, "short": 0.0})
+
+        global_bp = {
+            "long": self._bot_params_to_rust_dict("long", None),
+            "short": self._bot_params_to_rust_dict("short", None),
+        }
+        input_dict = {
+            "balance": float(self.balance),
+            "global": {
+                "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),
+                "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
+                "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
+                "sort_global": True,
+                "global_bot_params": global_bp,
+            },
+            "symbols": [],
+            "peek_hints": None,
+        }
+
+        symbol_to_idx: dict[str, int] = {s: i for i, s in enumerate(symbols)}
+        idx_to_symbol: dict[int, str] = {i: s for s, i in symbol_to_idx.items()}
+
+        for symbol in symbols:
+            idx = symbol_to_idx[symbol]
+            mprice = float(last_prices.get(symbol, 0.0))
+            if not math.isfinite(mprice) or mprice <= 0.0:
+                raise Exception(f"invalid market price for {symbol}: {mprice}")
+
+            active = bool(self.markets_dict.get(symbol, {}).get("active", True))
+            effective_min_cost = float(getattr(self, "effective_min_cost", {}).get(symbol, 0.0) or 0.0)
+            if effective_min_cost <= 0.0:
+                effective_min_cost = float(
+                    max(
+                        pbr.qty_to_cost(self.min_qtys[symbol], mprice, self.c_mults[symbol]),
+                        self.min_costs[symbol],
+                    )
+                )
+
+            def side_input(pside: str) -> dict:
+                mode = self._pb_mode_to_orchestrator_mode(
+                    self.PB_modes.get(pside, {}).get(symbol, "manual")
+                )
+                pos = self.positions.get(symbol, {}).get(pside, {"size": 0.0, "price": 0.0})
+                trailing = self.trailing_prices.get(symbol, {}).get(pside)
+                if not trailing:
+                    trailing = _trailing_bundle_default_dict()
+                else:
+                    trailing = dict(trailing)
+                return {
+                    "mode": mode,
+                    "position": {"size": float(pos["size"]), "price": float(pos["price"])},
+                    "trailing": {
+                        "min_since_open": float(trailing.get("min_since_open", 0.0)),
+                        "max_since_min": float(trailing.get("max_since_min", 0.0)),
+                        "max_since_open": float(trailing.get("max_since_open", 0.0)),
+                        "min_since_max": float(trailing.get("min_since_max", 0.0)),
+                    },
+                    "bot_params": self._bot_params_to_rust_dict(pside, symbol),
+                }
+
+            m1_close_pairs = [[float(k), float(v)] for k, v in sorted(m1_close_emas[symbol].items())]
+            m1_volume_pairs = [[float(k), float(v)] for k, v in sorted(m1_volume_emas[symbol].items())]
+            m1_lr_pairs = [[float(k), float(v)] for k, v in sorted(m1_log_range_emas[symbol].items())]
+            h1_lr_pairs = [[float(k), float(v)] for k, v in sorted(h1_log_range_emas[symbol].items())]
+
+            input_dict["symbols"].append(
+                {
+                    "symbol_idx": int(idx),
+                    "order_book": {"bid": mprice, "ask": mprice},
+                    "exchange": {
+                        "qty_step": float(self.qty_steps[symbol]),
+                        "price_step": float(self.price_steps[symbol]),
+                        "min_qty": float(self.min_qtys[symbol]),
+                        "min_cost": float(self.min_costs[symbol]),
+                        "c_mult": float(self.c_mults[symbol]),
+                    },
+                    "tradable": bool(active),
+                    "next_candle": None,
+                    "effective_min_cost": float(effective_min_cost),
+                    "emas": {
+                        "m1": {"close": m1_close_pairs, "log_range": m1_lr_pairs, "volume": m1_volume_pairs},
+                        "h1": {"close": [], "log_range": h1_lr_pairs, "volume": []},
+                    },
+                    "long": side_input("long"),
+                    "short": side_input("short"),
+                }
+            )
+
+        out_json = pbr.compute_ideal_orders_json(json.dumps(input_dict))
+        out = json.loads(out_json)
+        orders = out.get("orders", [])
+
+        ideal_orders: dict[str, list] = {}
+        for o in orders:
+            symbol = idx_to_symbol.get(int(o["symbol_idx"]))
+            if symbol is None:
+                continue
+            order_type = str(o["order_type"])
+            order_type_id = int(pbr.order_type_snake_to_id(order_type))
+            tup = (float(o["qty"]), float(o["price"]), order_type, order_type_id)
+            ideal_orders.setdefault(symbol, []).append(tup)
+
+        ideal_orders_f, _wel_blocked = self._to_executable_orders(ideal_orders, last_prices)
+        ideal_orders_f = self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
+
+        if return_snapshot:
+            snapshot_out = {
+                "ts_ms": int(utc_ms()),
+                "exchange": str(getattr(self, "exchange", "")),
+                "user": str(self.config_get(["live", "user"]) or ""),
+                "active_symbols": list(symbols),
+                "orchestrator_input": input_dict,
+                "orchestrator_output": out,
+            }
+            return ideal_orders_f, snapshot_out
+        return ideal_orders_f, None
 
     async def _load_orchestrator_ema_bundle(
         self, symbols: list[str], modes: dict[str, dict[str, str]]
@@ -3625,22 +3975,8 @@ class Passivbot:
             ideal_orders.setdefault(symbol, []).append(tup)
 
         ideal_orders_f, _wel_blocked = self._to_executable_orders(ideal_orders, last_prices)
+        ideal_orders_f = self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
 
-        # ensure close qtys don't exceed pos sizes
-        for symbol in ideal_orders_f:
-            for i in range(len(ideal_orders_f[symbol])):
-                order = ideal_orders_f[symbol][i]
-                if order.get("reduce_only"):
-                    pos_size_abs = abs(
-                        self.positions[order["symbol"]][order["position_side"]]["size"]
-                    )
-                    if abs(order["qty"]) > pos_size_abs:
-                        logging.warning(
-                            "trimmed reduce-only qty to position size | order=%s | position=%s",
-                            order,
-                            self.positions[order["symbol"]],
-                        )
-                        order["qty"] = pos_size_abs
         if return_snapshot:
             snapshot = {
                 "ts_ms": int(utc_ms()),
@@ -4044,16 +4380,21 @@ class Passivbot:
                     }
                 )
                 seen.add(seen_key)
-        return self._finalize_reduce_only_orders(ideal_orders_f), wel_blocked_symbols
+        return self._finalize_reduce_only_orders(ideal_orders_f, last_prices), wel_blocked_symbols
 
-    def _finalize_reduce_only_orders(self, orders_by_symbol: Dict[str, list]) -> Dict[str, list]:
-        """Bound reduce-only quantities so they never exceed the current position size."""
+    def _finalize_reduce_only_orders(
+        self, orders_by_symbol: Dict[str, list], last_prices: Dict[str, float]
+    ) -> Dict[str, list]:
+        """Bound reduce-only quantities so they never exceed the current position size (per order and in sum)."""
         for symbol, orders in orders_by_symbol.items():
+            market_price = float(last_prices.get(symbol, 0.0))
+
+            # 1) clamp each reduce-only order to position size
             for order in orders:
                 if not order.get("reduce_only"):
                     continue
                 pos = self.positions.get(order["symbol"], {}).get(order["position_side"], {})
-                pos_size_abs = abs(pos.get("size", 0.0))
+                pos_size_abs = abs(float(pos.get("size", 0.0)))
                 if abs(order["qty"]) > pos_size_abs:
                     logging.warning(
                         "trimmed reduce-only qty to position size | order=%s | position=%s",
@@ -4061,6 +4402,38 @@ class Passivbot:
                         pos,
                     )
                     order["qty"] = pos_size_abs
+
+            # 2) cap sum(reduce_only qty) <= pos size by reducing furthest-from-market closes first
+            for pside in ("long", "short"):
+                pos_size_abs = abs(float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0)))
+                if pos_size_abs <= 0.0:
+                    continue
+                ro = [o for o in orders if o.get("reduce_only") and o.get("position_side") == pside]
+                if not ro:
+                    continue
+                total = sum(float(o.get("qty", 0.0)) for o in ro)
+                if total <= pos_size_abs + 1e-12:
+                    continue
+                excess = total - pos_size_abs
+                # furthest first: larger order_market_diff
+                ro_sorted = sorted(
+                    ro,
+                    key=lambda o: order_market_diff(o.get("side", ""), float(o.get("price", 0.0)), market_price),
+                    reverse=True,
+                )
+                for o in ro_sorted:
+                    if excess <= 0.0:
+                        break
+                    q = float(o.get("qty", 0.0))
+                    if q <= 0.0:
+                        continue
+                    reduce_by = min(q, excess)
+                    new_q = q - reduce_by
+                    o["qty"] = float(round(new_q, 12))
+                    excess -= reduce_by
+                # drop any zeroed reduce-only orders
+                orders_by_symbol[symbol] = [o for o in orders_by_symbol[symbol] if not (o.get("reduce_only") and float(o.get("qty", 0.0)) <= 0.0)]
+
         return orders_by_symbol
 
     async def calc_unstucking_close(self, allow_new_unstuck: bool = True) -> (float, float, str, int):
