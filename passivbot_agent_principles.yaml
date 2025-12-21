@@ -24,6 +24,9 @@ passivbot_agent_principles:
     - Effective min qty for entries must be observed at all times.
     - Closes should observe effective min cost too, according to calc_min_entry_qty, the only exception being if pos size is smaller than effective min qty, in which case close qty is set equal to pos size.
 
+  indicators:
+    - EMA spans are floats; do not round derived spans (e.g. span2 = sqrt(span0 * span1)).
+
   error_handling:
     - Fail loudly. Prefer clear exceptions or panics over silent error handling.
     - Assume upstream code is correct; don’t silently compensate for bad data.
