@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 import json
 import hashlib
-from typing import Callable, Dict, Optional, Sequence
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 import glob
 import math
 import time
@@ -16,6 +16,7 @@ from opt_utils import round_floats
 from pure_funcs import calc_hash
 from utils import json_dumps_streamlined
 from metrics_schema import flatten_metric_stats
+from optimization.bounds import Bound
 from pareto_core import (
     compute_ideal,
     crowding_distances,
@@ -93,6 +94,44 @@ def _suite_metrics_to_stats(entry: Dict[str, Any]) -> Tuple[Dict[str, float], Di
     return stats_flat, aggregated_values
 
 
+def _quantize_entry_bot_params_with_bounds(
+    entry: dict, bounds: Sequence[Bound], log: logging.Logger
+) -> dict:
+    bot = entry.get("bot", {})
+    if not isinstance(bot, dict):
+        return entry
+
+    idx = 0
+    for pside in sorted(bot):
+        pside_params = bot.get(pside, {})
+        if not isinstance(pside_params, dict):
+            continue
+        for key in sorted(pside_params):
+            if idx >= len(bounds):
+                log.warning(
+                    "ParetoStore bounds length mismatch: bot has more params than bounds "
+                    "(at least %d > %d); skipping remaining params",
+                    idx + 1,
+                    len(bounds),
+                )
+                return entry
+            bound = bounds[idx]
+            value = pside_params[key]
+            if bound.is_stepped:
+                pside_params[key] = bound.quantize(value)
+            else:
+                pside_params[key] = bound.high if value > bound.high else bound.low if value < bound.low else value
+            idx += 1
+
+    if idx != len(bounds):
+        log.warning(
+            "ParetoStore bounds length mismatch: bounds has %d entries but bot has %d params",
+            len(bounds),
+            idx,
+        )
+    return entry
+
+
 def _evaluate_limits(
     specs: Sequence[LimitSpec],
     stats_flat: Dict[str, float],
@@ -114,6 +153,7 @@ class ParetoStore:
         self,
         directory: str,
         sig_digits: int = 6,
+        bounds: Optional[Sequence[Bound]] = None,
         flush_interval: int = 60,
         log_name: str | None = None,
         max_size: int = 300,
@@ -122,6 +162,7 @@ class ParetoStore:
         self.directory = directory
         self.pareto_dir = os.path.join(self.directory, "pareto")
         self.sig_digits = sig_digits
+        self.bounds = bounds
         self.flush_interval = flush_interval  # seconds
         self.max_size = max(1, int(max_size))
         os.makedirs(os.path.join(self.directory, "pareto"), exist_ok=True)
@@ -150,6 +191,8 @@ class ParetoStore:
         if self.scoring_keys is None:
             self.scoring_keys = entry["optimize"]["scoring"]
         rounded = round_floats(entry, self.sig_digits)
+        if self.bounds is not None:
+            rounded = _quantize_entry_bot_params_with_bounds(rounded, self.bounds, self._log)
         h = calc_hash(rounded)
         with self._lock:
             if h in self._entries:  # fast‑dedupe

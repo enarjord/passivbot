@@ -124,7 +124,7 @@ from opt_utils import make_json_serializable, generate_incremental_diff, round_f
 from limit_utils import expand_limit_checks, compute_limit_violation
 from pareto_store import ParetoStore
 import msgpack
-from typing import Sequence, Tuple, List, Dict, Any
+from typing import Sequence, Tuple, List, Dict, Any, Optional
 from itertools import permutations
 from shared_arrays import SharedArrayManager, attach_shared_array
 from optimize_suite import (
@@ -139,6 +139,15 @@ from suite_runner import (
     build_suite_metrics_payload,
 )
 from metrics_schema import build_scenario_metrics, flatten_metric_stats
+from optimization.bounds import (
+    Bound,
+    enforce_bounds,
+)
+from optimization.config_adapter import extract_bounds_tuple_list_from_config
+from optimization.deap_adapters import (
+    mutPolynomialBoundedWrapper,
+    cxSimulatedBinaryBoundedWrapper,
+)
 
 
 def _ignore_sigint_in_worker():
@@ -215,10 +224,12 @@ class ResultRecorder:
         compress: bool,
         write_all_results: bool,
         pareto_max_size: int = 300,
+        bounds: Optional[Sequence[Bound]] = None,
     ):
         self.store = ParetoStore(
             directory=results_dir,
             sig_digits=sig_digits,
+            bounds=bounds,
             flush_interval=flush_interval,
             log_name="optimizer.pareto",
             max_size=pareto_max_size,
@@ -303,156 +314,6 @@ def _format_objectives(values: Sequence[float]) -> str:
     if not values:
         return "[]"
     return "[" + ", ".join(f"{float(v):.3g}" for v in values) + "]"
-
-
-# === bounds helpers =========================================================
-
-Bound = Tuple[float, float]  # (low, high)
-
-
-def enforce_bounds(
-    values: Sequence[float], bounds: Sequence[Bound], sig_digits: int = None
-) -> List[float]:
-    """
-    Clamp each value to its corresponding [low, high] interval.
-    Also round to significant digits (optional).
-
-    Args:
-        values : iterable of floats (length == len(bounds))
-        bounds : iterable of (low, high) pairs
-        sig_digits: int
-
-    Returns
-        List[float]  – clamped copy (original is *not* modified)
-    """
-    assert len(values) == len(bounds), "values/bounds length mismatch"
-    rounded = values if sig_digits is None else round_floats(values, sig_digits)
-    return [high if v > high else low if v < low else v for v, (low, high) in zip(rounded, bounds)]
-
-
-def extract_bounds_tuple_list_from_config(config) -> [Bound]:
-    """
-    extracts list of tuples (low, high) which are lower and upper bounds for bot parameters.
-    also sets all bounds to (low, low) if pside is not enabled.
-    """
-
-    def extract_bound_vals(key, val) -> tuple:
-        if isinstance(val, (float, int)):
-            return (val, val)
-        elif isinstance(val, (tuple, list)):
-            if len(val) == 1:
-                return (val[0], val[0])
-            elif len(val) == 2:
-                return tuple(sorted([val[0], val[1]]))
-        raise Exception(f"malformed bound {key}: {val}")
-
-    template_config = get_template_config()
-    keys_ignored = get_bound_keys_ignored()
-    bounds = []
-    for pside in sorted(template_config["bot"]):
-        is_enabled = all(
-            [
-                extract_bound_vals(k, config["optimize"]["bounds"][k])[1] > 0.0
-                for k in [f"{pside}_n_positions", f"{pside}_total_wallet_exposure_limit"]
-            ]
-        )
-        for key in sorted(template_config["bot"][pside]):
-            if key in keys_ignored:
-                continue
-            bound_key = f"{pside}_{key}"
-            assert (
-                bound_key in config["optimize"]["bounds"]
-            ), f"bound {bound_key} missing from optimize.bounds"
-            bound_vals = extract_bound_vals(bound_key, config["optimize"]["bounds"][bound_key])
-            bounds.append(bound_vals if is_enabled else (bound_vals[0], bound_vals[0]))
-    return bounds
-
-
-def get_bound_keys_ignored():
-    return ["enforce_exposure_limit"]
-
-
-# ============================================================================
-
-
-def mutPolynomialBoundedWrapper(individual, eta, low, up, indpb):
-    """
-    A wrapper around DEAP's mutPolynomialBounded function to pre-process
-    bounds and handle the case where lower and upper bounds may be equal.
-
-    Args:
-        individual: Sequence individual to be mutated.
-        eta: Crowding degree of the mutation.
-        low: A value or sequence of values that is the lower bound of the search space.
-        up: A value or sequence of values that is the upper bound of the search space.
-        indpb: Independent probability for each attribute to be mutated.
-
-    Returns:
-        A tuple of one individual, mutated with consideration for equal lower and upper bounds.
-    """
-    # Convert low and up to numpy arrays for easier manipulation
-    low_array = np.array(low)
-    up_array = np.array(up)
-
-    # Identify dimensions where lower and upper bounds are equal
-    equal_bounds_mask = low_array == up_array
-
-    # Temporarily adjust bounds for those dimensions
-    # This adjustment is arbitrary and won't affect the outcome since the mutation
-    # won't be effective in these dimensions
-    temp_low = np.where(equal_bounds_mask, low_array - 1e-6, low_array)
-    temp_up = np.where(equal_bounds_mask, up_array + 1e-6, up_array)
-
-    # Call the original mutPolynomialBounded function with the temporarily adjusted bounds
-    tools.mutPolynomialBounded(individual, eta, list(temp_low), list(temp_up), indpb)
-
-    # Reset values in dimensions with originally equal bounds to ensure they remain unchanged
-    for i, equal in enumerate(equal_bounds_mask):
-        if equal:
-            individual[i] = low[i]
-
-    return (individual,)
-
-
-def cxSimulatedBinaryBoundedWrapper(ind1, ind2, eta, low, up):
-    """
-    A wrapper around DEAP's cxSimulatedBinaryBounded function to pre-process
-    bounds and handle the case where lower and upper bounds may be equal.
-
-    Args:
-        ind1: The first individual participating in the crossover.
-        ind2: The second individual participating in the crossover.
-        eta: Crowding degree of the crossover.
-        low: A value or sequence of values that is the lower bound of the search space.
-        up: A value or sequence of values that is the upper bound of the search space.
-
-    Returns:
-        A tuple of two individuals after crossover operation.
-    """
-    # Convert low and up to numpy arrays for easier manipulation
-    low_array = np.array(low)
-    up_array = np.array(up)
-
-    # Identify dimensions where lower and upper bounds are equal
-    equal_bounds_mask = low_array == up_array
-
-    # Temporarily adjust bounds for those dimensions to prevent division by zero
-    # This adjustment is arbitrary and won't affect the outcome since the crossover
-    # won't modify these dimensions
-    low_array[equal_bounds_mask] -= 1e-6
-    up_array[equal_bounds_mask] += 1e-6
-
-    # Call the original cxSimulatedBinaryBounded function with adjusted bounds
-    tools.cxSimulatedBinaryBounded(ind1, ind2, eta, list(low_array), list(up_array))
-
-    # Ensure that values in dimensions with originally equal bounds are reset
-    # to the bound value (since they should not be modified)
-    for i, equal in enumerate(equal_bounds_mask):
-        if equal:
-            ind1[i] = low[i]
-            ind2[i] = low[i]
-
-    return ind1, ind2
 
 
 def _record_individual_result(individual, evaluator_config, overrides_list, recorder):
@@ -660,13 +521,10 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
     """
     assume individual is already bound enforced (or will be after)
     """
-    keys_ignored = get_bound_keys_ignored()
     config = deepcopy(template)
     i = 0
     for pside in sorted(config["bot"]):
         for key in sorted(config["bot"][pside]):
-            if key in keys_ignored:
-                continue
             config["bot"][pside][key] = individual[i]
             i += 1
         config = optimizer_overrides(overrides_list, config, pside)
@@ -675,13 +533,11 @@ def individual_to_config(individual, optimizer_overrides, overrides_list, templa
 
 
 def config_to_individual(config, bounds, sig_digits=None):
-    keys_ignored = get_bound_keys_ignored()
     return enforce_bounds(
         [
             config["bot"][pside][key]
             for pside in sorted(config["bot"])
             for key in sorted(config["bot"][pside])
-            if key not in keys_ignored
         ],
         bounds,
         sig_digits,
@@ -837,76 +693,96 @@ class Evaluator:
             if np.random.random() < change_chance:  # x% chance of leaving unchanged
                 perturbed.append(val)
                 continue
-            low, high = self.bounds[i]
-            if high == low:
+            bound = self.bounds[i]
+            if bound.high == bound.low:
                 perturbed.append(val)
                 continue
 
-            if val != 0.0:
+            # For stepped parameters, move by the defined step
+            if bound.is_stepped:
+                step = bound.step
+            elif val != 0.0:
                 exponent = math.floor(math.log10(abs(val))) - (self.sig_digits - 1)
                 step = 10**exponent
             else:
-                step = (high - low) * 10 ** -(self.sig_digits - 1)
+                step = (bound.high - bound.low) * 10 ** -(self.sig_digits - 1)
 
             direction = np.random.choice([-1.0, 1.0])
-            perturbed.append(pbr.round_dynamic(val + step * direction, self.sig_digits))
+            new_val = val + step * direction
+            # For stepped params, don't round_dynamic; quantization will happen in enforce_bounds
+            if bound.is_stepped:
+                perturbed.append(new_val)
+            else:
+                perturbed.append(pbr.round_dynamic(new_val, self.sig_digits))
 
         return perturbed
 
     def perturb_x_pct(self, individual, magnitude=0.01):
         perturbed = []
         for i, val in enumerate(individual):
-            low, high = self.bounds[i]
-            if high == low:
+            bound = self.bounds[i]
+            if bound.high == bound.low:
                 perturbed.append(val)
                 continue
-            new_val = pbr.round_dynamic(
-                val * (1 + np.random.uniform(-magnitude, magnitude)), self.sig_digits
-            )
-            perturbed.append(new_val)
+            new_val = val * (1 + np.random.uniform(-magnitude, magnitude))
+            # For stepped params, don't round_dynamic; quantization will happen in enforce_bounds
+            if bound.is_stepped:
+                perturbed.append(new_val)
+            else:
+                perturbed.append(pbr.round_dynamic(new_val, self.sig_digits))
         return perturbed
 
     def perturb_random_subset(self, individual, frac=0.2):
-        perturbed = individual.copy()
+        perturbed = list(individual)
         n = len(individual)
         indices = np.random.choice(n, max(1, int(frac * n)), replace=False)
         for i in indices:
-            low, high = self.bounds[i]
-            if low != high:
-                delta = (high - low) * 0.01
-                step = delta * np.random.uniform(-1.0, 1.0)
-                perturbed[i] = individual[i] + step
+            bound = self.bounds[i]
+            if bound.low != bound.high:
+                if bound.is_stepped:
+                    # For stepped params, move by +/- step
+                    direction = np.random.choice([-1.0, 1.0])
+                    perturbed[i] = individual[i] + bound.step * direction
+                else:
+                    delta = (bound.high - bound.low) * 0.01
+                    perturbed[i] = individual[i] + delta * np.random.uniform(-1.0, 1.0)
         return perturbed
 
     def perturb_sample_some(self, individual, frac=0.2):
-        perturbed = individual.copy()
+        perturbed = list(individual)
         n = len(individual)
         indices = np.random.choice(n, max(1, int(frac * n)), replace=False)
         for i in indices:
-            low, high = self.bounds[i]
-            if low != high:
-                perturbed[i] = np.random.uniform(low, high)
+            bound = self.bounds[i]
+            if bound.low != bound.high:
+                perturbed[i] = bound.random_on_grid()
         return perturbed
 
     def perturb_gaussian(self, individual, scale=0.01):
         perturbed = []
         for i, val in enumerate(individual):
-            low, high = self.bounds[i]
-            if high == low:
+            bound = self.bounds[i]
+            if bound.high == bound.low:
                 perturbed.append(val)
                 continue
-            noise = np.random.normal(0, scale * (high - low))
-            perturbed.append(val + noise)
+            if bound.is_stepped:
+                # For stepped params, generate gaussian number of steps to move
+                max_steps = (bound.high - bound.low) / bound.step
+                n_steps = int(np.random.normal(0, scale * max_steps) + 0.5)
+                perturbed.append(val + n_steps * bound.step)
+            else:
+                noise = np.random.normal(0, scale * (bound.high - bound.low))
+                perturbed.append(val + noise)
         return perturbed
 
     def perturb_large_uniform(self, individual):
         perturbed = []
         for i in range(len(individual)):
-            low, high = self.bounds[i]
-            if low == high:
-                perturbed.append(low)
+            bound = self.bounds[i]
+            if bound.low == bound.high:
+                perturbed.append(bound.low)
             else:
-                perturbed.append(np.random.uniform(low, high))
+                perturbed.append(bound.random_on_grid())
         return perturbed
 
     def evaluate(self, individual, overrides_list):
@@ -1635,6 +1511,7 @@ async def main():
             compress=config["optimize"]["compress_results_file"],
             write_all_results=config["optimize"].get("write_all_results", True),
             pareto_max_size=pareto_max,
+            bounds=evaluator.bounds,
         )
 
         n_objectives = len(config["optimize"]["scoring"])
@@ -1648,7 +1525,7 @@ async def main():
         toolbox = base.Toolbox()
 
         # Define parameter bounds
-        bounds = extract_bounds_tuple_list_from_config(config)
+        bounds = evaluator.bounds
         sig_digits = config["optimize"]["round_to_n_significant_digits"]
         crossover_eta = config["optimize"].get("crossover_eta", 20.0)
         mutation_eta = config["optimize"].get("mutation_eta", 20.0)
@@ -1661,25 +1538,27 @@ async def main():
         if not isinstance(offspring_multiplier, (int, float)) or offspring_multiplier <= 0.0:
             offspring_multiplier = 1.0
 
-        # Register attribute generators
-        for i, (low, high) in enumerate(bounds):
-            toolbox.register(f"attr_{i}", np.random.uniform, low, high)
+        # Register attribute generators (generating on-grid values for stepped params)
+        def _make_random_attr(bound):
+            """Generate a random value respecting step constraints."""
+            return bound.random_on_grid()
 
-        # Register genetic operators
+        for i, bound in enumerate(bounds):
+            toolbox.register(f"attr_{i}", _make_random_attr, bound)
+
+        # Register genetic operators with bounds for step-aware crossover/mutation
         toolbox.register(
             "mate",
             cxSimulatedBinaryBoundedWrapper,
             eta=crossover_eta,
-            low=[low for low, high in bounds],
-            up=[high for low, high in bounds],
+            bounds=bounds,
         )
         toolbox.register(
             "mutate",
             mutPolynomialBoundedWrapper,
             eta=mutation_eta,
-            low=[low for low, high in bounds],
-            up=[high for low, high in bounds],
             indpb=mutation_indpb,
+            bounds=bounds,
         )
         toolbox.register("select", tools.selNSGA2)
         toolbox.register("evaluate", evaluator_for_pool.evaluate, overrides_list=overrides_list)
@@ -1760,7 +1639,9 @@ async def main():
         )
 
         def _make_random_individual():
-            return creator.Individual([np.random.uniform(low, high) for low, high in bounds])
+            """Generate a random individual respecting step constraints."""
+            values = [bound.random_on_grid() for bound in bounds]
+            return creator.Individual(values)
 
         population = [_make_random_individual() for _ in range(population_size)]
         if starting_individuals:
