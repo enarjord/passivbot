@@ -364,6 +364,6 @@ class GateIOBot(Passivbot):
     async def update_exchange_config(self):
         pass
 
-    async def calc_ideal_orders(self, allow_unstuck: bool = True):
-        ideal_orders = await super().calc_ideal_orders(allow_unstuck=allow_unstuck)
+    async def calc_ideal_orders(self):
+        ideal_orders = await super().calc_ideal_orders()
         return ideal_orders

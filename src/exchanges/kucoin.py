@@ -284,9 +284,9 @@ class KucoinBot(Passivbot):
             traceback.print_exc()
             return False
 
-    async def calc_ideal_orders(self, allow_unstuck: bool = True):
+    async def calc_ideal_orders(self):
         # KuCoin enforces a 150 open-order cap; keep only the closest price targets.
-        ideal_orders = await super().calc_ideal_orders(allow_unstuck=allow_unstuck)
+        ideal_orders = await super().calc_ideal_orders()
         flattened = []
         for symbol, orders in ideal_orders.items():
             if not orders:
