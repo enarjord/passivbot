@@ -2382,8 +2382,8 @@ class CandlestickManager:
     async def get_ema_bounds(
         self,
         symbol: str,
-        span_0: int,
-        span_1: int,
+        span_0: float,
+        span_1: float,
         max_age_ms: Optional[int] = None,
         *,
         timeframe: Optional[str] = None,
@@ -2391,12 +2391,13 @@ class CandlestickManager:
     ) -> Tuple[float, float]:
         """Return (lower, upper) bounds from EMAs at spans {span_0, span_1, span_2}.
 
-        span_2 = round(sqrt(span_0 * span_1)). Forwards timeframe and TTL to
-        get_latest_ema_close. Computes the three EMAs concurrently.
+        span_2 = sqrt(span_0 * span_1). Spans are treated as floats (no rounding),
+        matching the canonical EMA-alpha formulation `2/(span+1)`.
+        Forwards timeframe and TTL to get_latest_ema_close and computes the three EMAs concurrently.
         """
         from math import isfinite
 
-        s2 = int(round((float(span_0) * float(span_1)) ** 0.5))
+        s2 = (float(span_0) * float(span_1)) ** 0.5
         e0, e1, e2 = await asyncio.gather(
             self.get_latest_ema_close(
                 symbol, span_0, max_age_ms=max_age_ms, timeframe=timeframe, tf=tf
@@ -2435,7 +2436,7 @@ class CandlestickManager:
 
     async def get_ema_bounds_many(
         self,
-        items: List[Tuple[str, int, int]],
+        items: List[Tuple[str, float, float]],
         *,
         max_age_ms: Optional[int] = 60_000,
         timeframe: Optional[str] = None,
@@ -2449,7 +2450,7 @@ class CandlestickManager:
         if not items:
             return out
 
-        async def one(sym: str, s0: int, s1: int) -> Tuple[float, float]:
+        async def one(sym: str, s0: float, s1: float) -> Tuple[float, float]:
             try:
                 lo, hi = await self.get_ema_bounds(
                     sym, s0, s1, max_age_ms=max_age_ms, timeframe=timeframe, tf=tf
