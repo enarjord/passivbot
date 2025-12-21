@@ -22,6 +22,7 @@ import inspect
 import passivbot_rust as pbr
 import logging
 import math
+from pathlib import Path
 from candlestick_manager import CandlestickManager, CANDLE_DTYPE
 from typing import Dict, Iterable, Tuple, List, Optional, Any
 from logging_setup import configure_logging, resolve_log_level
@@ -87,6 +88,10 @@ import re
 _USE_ORCHESTRATOR_ENV = os.environ.get("USE_ORCHESTRATOR", "0").strip().lower()
 USE_ORCHESTRATOR = _USE_ORCHESTRATOR_ENV in {"1", "true", "yes", "y", "on"}
 COMPARE_ORCHESTRATOR = _USE_ORCHESTRATOR_ENV in {"compare", "diff"}
+
+# When running with USE_ORCHESTRATOR=compare, dump mismatches to disk for offline replay.
+ORCH_DIFF_DUMP_DIR = os.environ.get("ORCH_DIFF_DUMP_DIR", "discrepancies/live_orchestrator")
+ORCH_DIFF_MAX_DUMPS = int(os.environ.get("ORCH_DIFF_MAX_DUMPS", "50"))
 
 from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
@@ -3215,8 +3220,12 @@ class Passivbot:
         """Compute desired entry and exit orders for every active symbol."""
         if COMPARE_ORCHESTRATOR:
             legacy = await self.calc_ideal_orders_legacy()
-            orchestrator = await self.calc_ideal_orders_orchestrator()
-            self._log_legacy_vs_orchestrator_diff(legacy, orchestrator)
+            orchestrator, orch_snapshot = await self.calc_ideal_orders_orchestrator(
+                return_snapshot=True
+            )
+            diff = self._diff_legacy_vs_orchestrator(legacy, orchestrator)
+            self._log_legacy_vs_orchestrator_diff(diff)
+            self._maybe_dump_orchestrator_discrepancy(diff, orch_snapshot, legacy, orchestrator)
             return legacy
 
         if USE_ORCHESTRATOR:
@@ -3463,12 +3472,12 @@ class Passivbot:
             log_ranges_long,
         )
 
-    async def calc_ideal_orders_orchestrator(self):
+    async def calc_ideal_orders_orchestrator(self, *, return_snapshot: bool = False):
         """Compute desired orders using Rust orchestrator (JSON API)."""
         # Use the same symbol universe as legacy live path (pre-selected in execution_cycle).
         symbols = sorted(set(getattr(self, "active_symbols", []) or []))
         if not symbols:
-            return {}
+            return ({}, None) if return_snapshot else {}
 
         last_prices = await self.cm.get_last_prices(symbols, max_age_ms=10_000)
 
@@ -3605,38 +3614,53 @@ class Passivbot:
                             self.positions[order["symbol"]],
                         )
                         order["qty"] = pos_size_abs
+        if return_snapshot:
+            snapshot = {
+                "ts_ms": int(utc_ms()),
+                "exchange": str(getattr(self, "exchange", "")),
+                "user": str(self.config_get(["live", "user"]) or ""),
+                "active_symbols": list(symbols),
+                "orchestrator_input": input_dict,
+                "orchestrator_output": out,
+            }
+            return ideal_orders_f, snapshot
         return ideal_orders_f
 
-    def _log_legacy_vs_orchestrator_diff(self, legacy: dict, orchestrator: dict) -> None:
+    def _normalize_orders_for_diff(self, orders_by_symbol: dict) -> set[tuple]:
+        out: set[tuple] = set()
+        for sym, orders in (orders_by_symbol or {}).items():
+            for o in orders:
+                try:
+                    cid = o.get("custom_id", "")
+                    tid = try_decode_type_id_from_custom_id(cid)
+                    otype = snake_of(tid) if tid is not None else ""
+                    out.add(
+                        (
+                            sym,
+                            o.get("position_side"),
+                            o.get("side"),
+                            round(float(o.get("qty", 0.0)), 12),
+                            round(float(o.get("price", 0.0)), 12),
+                            bool(o.get("reduce_only")),
+                            otype,
+                        )
+                    )
+                except Exception:
+                    continue
+        return out
+
+    def _diff_legacy_vs_orchestrator(self, legacy: dict, orchestrator: dict) -> dict:
+        a = self._normalize_orders_for_diff(legacy)
+        b = self._normalize_orders_for_diff(orchestrator)
+        only_legacy = sorted(a - b)
+        only_orch = sorted(b - a)
+        return {"only_legacy": only_legacy, "only_orchestrator": only_orch}
+
+    def _log_legacy_vs_orchestrator_diff(self, diff: dict) -> None:
         """Log a compact diff between two ideal-orders maps (legacy vs orchestrator)."""
         try:
-            def normalize(orders_by_symbol: dict) -> set[tuple]:
-                out: set[tuple] = set()
-                for sym, orders in (orders_by_symbol or {}).items():
-                    for o in orders:
-                        try:
-                            cid = o.get("custom_id", "")
-                            tid = try_decode_type_id_from_custom_id(cid)
-                            otype = snake_of(tid) if tid is not None else ""
-                            out.add(
-                                (
-                                    sym,
-                                    o.get("position_side"),
-                                    o.get("side"),
-                                    round(float(o.get("qty", 0.0)), 12),
-                                    round(float(o.get("price", 0.0)), 12),
-                                    bool(o.get("reduce_only")),
-                                    otype,
-                                )
-                            )
-                        except Exception:
-                            continue
-                return out
-
-            a = normalize(legacy)
-            b = normalize(orchestrator)
-            only_legacy = sorted(a - b)
-            only_orch = sorted(b - a)
+            only_legacy = diff.get("only_legacy") or []
+            only_orch = diff.get("only_orchestrator") or []
             if only_legacy or only_orch:
                 logging.warning(
                     "legacy vs orchestrator diff | only_legacy=%d only_orch=%d sample_legacy=%s sample_orch=%s",
@@ -3647,6 +3671,70 @@ class Passivbot:
                 )
         except Exception as exc:
             logging.error("failed legacy-vs-orchestrator diff: %s", exc)
+
+    def _maybe_dump_orchestrator_discrepancy(
+        self,
+        diff: dict,
+        orch_snapshot: dict | None,
+        legacy: dict,
+        orchestrator: dict,
+    ) -> None:
+        only_legacy = diff.get("only_legacy") or []
+        only_orch = diff.get("only_orchestrator") or []
+        if not only_legacy and not only_orch:
+            return
+        if orch_snapshot is None:
+            return
+
+        if not hasattr(self, "_orch_diff_dump_count"):
+            self._orch_diff_dump_count = 0
+        if self._orch_diff_dump_count >= ORCH_DIFF_MAX_DUMPS:
+            return
+
+        # Dedupe by a stable signature to avoid dumping every cycle when mismatch persists.
+        sig = json.dumps(
+            {"only_legacy": only_legacy[:50], "only_orchestrator": only_orch[:50]},
+            sort_keys=True,
+        )
+        if getattr(self, "_last_orch_diff_sig", None) == sig:
+            return
+        self._last_orch_diff_sig = sig
+
+        try:
+            base = Path(ORCH_DIFF_DUMP_DIR)
+            base.mkdir(parents=True, exist_ok=True)
+            ts = ts_to_date(int(utc_ms())).replace(":", "_").replace(" ", "T")
+            run_id = f"{ts}_{uuid4().hex[:8]}"
+            out_dir = base / run_id
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            meta = {
+                "ts_ms": int(utc_ms()),
+                "exchange": str(getattr(self, "exchange", "")),
+                "user": str(self.config_get(["live", "user"]) or ""),
+                "active_symbols": list(getattr(self, "active_symbols", []) or []),
+                "compare_env": _USE_ORCHESTRATOR_ENV,
+                "diff_counts": {"only_legacy": len(only_legacy), "only_orchestrator": len(only_orch)},
+                "diff_sample": {"only_legacy": only_legacy[:10], "only_orchestrator": only_orch[:10]},
+            }
+            (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
+            (out_dir / "diff.json").write_text(json.dumps(diff, indent=2, sort_keys=True))
+            (out_dir / "legacy_orders.json").write_text(
+                json.dumps(legacy, indent=2, sort_keys=True)
+            )
+            (out_dir / "orchestrator_orders.json").write_text(
+                json.dumps(orchestrator, indent=2, sort_keys=True)
+            )
+            (out_dir / "orchestrator_input.json").write_text(
+                json.dumps(orch_snapshot.get("orchestrator_input"), indent=2, sort_keys=True)
+            )
+            (out_dir / "orchestrator_output.json").write_text(
+                json.dumps(orch_snapshot.get("orchestrator_output"), indent=2, sort_keys=True)
+            )
+            self._orch_diff_dump_count += 1
+            logging.warning("dumped legacy-orchestrator discrepancy to %s", str(out_dir))
+        except Exception as exc:
+            logging.error("failed dumping orchestrator discrepancy: %s", exc)
 
     # Legacy calc_ema_bound removed; pricing uses CandlestickManager EMA bounds
 
