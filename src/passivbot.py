@@ -452,6 +452,15 @@ class Passivbot:
         disk_cap = require_live_value(config, "max_disk_candles_per_symbol_per_tf")
         if disk_cap is not None:
             cm_kwargs["max_disk_candles_per_symbol_per_tf"] = int(disk_cap)
+        lock_timeout = get_optional_live_value(config, "candle_lock_timeout_seconds", None)
+        if lock_timeout not in (None, ""):
+            try:
+                cm_kwargs["lock_timeout_seconds"] = float(lock_timeout)
+            except Exception:
+                logging.warning(
+                    "Unable to parse live.candle_lock_timeout_seconds=%r; using default",
+                    lock_timeout,
+                )
         self.cm = CandlestickManager(**cm_kwargs)
         # TTL (minutes) for EMA candles on non-traded symbols
         ttl_min = require_live_value(config, "inactive_coin_candle_ttl_minutes")
@@ -3511,46 +3520,99 @@ class Passivbot:
             }
         )
 
-        async def fetch_map(symbol: str, spans: list[float], fn):
-            out: dict[float, float] = {}
-            if not spans:
-                return out
-            tasks = [asyncio.create_task(fn(symbol, sp)) for sp in spans]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for sp, res in zip(spans, results):
-                if isinstance(res, Exception):
-                    raise Exception(f"EMA fetch failed | {symbol=} {sp=} | err={res}")
-                val = float(res)
-                if not math.isfinite(val):
-                    raise Exception(f"EMA fetch returned non-finite | {symbol=} {sp=} | val={val}")
-                out[float(sp)] = val
-            if len(out) != len(spans):
-                missing = [sp for sp in spans if float(sp) not in out]
-                raise Exception(f"EMA map missing values | {symbol=} | missing={missing}")
-            return out
-
-        async def ema_close(symbol: str, span: float) -> float:
-            return float(await self.cm.get_latest_ema_close(symbol, span=span, max_age_ms=30_000))
-
-        async def ema_qv(symbol: str, span: float) -> float:
-            return float(await self.cm.get_latest_ema_quote_volume(symbol, span=span, max_age_ms=60_000))
-
-        async def ema_lr_1m(symbol: str, span: float) -> float:
-            return float(await self.cm.get_latest_ema_log_range(symbol, span=span, max_age_ms=60_000))
-
-        async def ema_lr_1h(symbol: str, span: float) -> float:
-            return float(await self.cm.get_latest_ema_log_range(symbol, span=span, tf="1h", max_age_ms=600_000))
-
         m1_close_emas: dict[str, dict[float, float]] = {}
         m1_volume_emas: dict[str, dict[float, float]] = {}
         m1_log_range_emas: dict[str, dict[float, float]] = {}
         h1_log_range_emas: dict[str, dict[float, float]] = {}
 
+        def ema_from_tail(series: np.ndarray, span: float) -> float:
+            n = max(1, int(math.ceil(float(span))))
+            if series.size < n:
+                tail = series
+            else:
+                tail = series[-n:]
+            if tail.size == 0:
+                return float("nan")
+            # Use CandlestickManager's canonical EMA (pandas ewm adjust=True) implementation.
+            return float(self.cm._ema(np.asarray(tail, dtype=np.float64), float(span)))  # type: ignore[attr-defined]
+
+        now = int(utc_ms())
+        one_min_ms = 60_000
+        one_hour_ms = 3_600_000
+
         for sym in symbols:
-            m1_close_emas[sym] = await fetch_map(sym, sorted(close_spans[sym]), ema_close)
-            m1_volume_emas[sym] = await fetch_map(sym, vol_spans, ema_qv)
-            m1_log_range_emas[sym] = await fetch_map(sym, lr_spans, ema_lr_1m)
-            h1_log_range_emas[sym] = await fetch_map(sym, sorted(h1_lr_spans[sym]), ema_lr_1h)
+            close_list = sorted(close_spans[sym])
+            h1_lr_list = sorted(h1_lr_spans[sym])
+            m1_close_emas[sym] = {}
+            m1_volume_emas[sym] = {}
+            m1_log_range_emas[sym] = {}
+            h1_log_range_emas[sym] = {}
+
+            # Fetch 1m candles once and compute all needed 1m EMAs from slices of the tail.
+            needed_1m = sorted(set(close_list) | set(vol_spans) | set(lr_spans))
+            if needed_1m:
+                max_span = max(needed_1m)
+                max_n = max(1, int(math.ceil(float(max_span))))
+                end_ts = (now // one_min_ms) * one_min_ms - one_min_ms
+                start_ts = end_ts - one_min_ms * (max_n - 1)
+                arr_1m = await self.cm.get_candles(
+                    sym, start_ts=int(start_ts), end_ts=int(end_ts), max_age_ms=30_000
+                )
+                if arr_1m is None or arr_1m.size == 0:
+                    raise Exception(f"EMA snapshot got no 1m candles | {sym=} {start_ts=} {end_ts=}")
+                arr_1m = np.sort(arr_1m, order="ts")
+                c = np.asarray(arr_1m["c"], dtype=np.float64)
+                h = np.asarray(arr_1m["h"], dtype=np.float64)
+                l = np.asarray(arr_1m["l"], dtype=np.float64)
+                bv = np.asarray(arr_1m["bv"], dtype=np.float64)
+                typical = (h + l + c) / 3.0
+                qv = bv * typical
+                lr = np.log(np.maximum(h, 1e-12) / np.maximum(l, 1e-12))
+
+                for sp in close_list:
+                    v = ema_from_tail(c, sp)
+                    if not math.isfinite(v):
+                        raise Exception(f"EMA snapshot non-finite m1 close | {sym=} {sp=} {v=}")
+                    m1_close_emas[sym][float(sp)] = float(v)
+                for sp in vol_spans:
+                    v = ema_from_tail(qv, sp)
+                    if not math.isfinite(v):
+                        raise Exception(
+                            f"EMA snapshot non-finite m1 quote_volume | {sym=} {sp=} {v=}"
+                        )
+                    m1_volume_emas[sym][float(sp)] = float(v)
+                for sp in lr_spans:
+                    v = ema_from_tail(lr, sp)
+                    if not math.isfinite(v):
+                        raise Exception(f"EMA snapshot non-finite m1 log_range | {sym=} {sp=} {v=}")
+                    m1_log_range_emas[sym][float(sp)] = float(v)
+
+            # Fetch 1h candles once and compute all needed 1h log-range EMAs.
+            if h1_lr_list:
+                max_span_h1 = max(h1_lr_list)
+                max_n_h1 = max(1, int(math.ceil(float(max_span_h1))))
+                end_ts_h1 = (now // one_hour_ms) * one_hour_ms - one_hour_ms
+                start_ts_h1 = end_ts_h1 - one_hour_ms * (max_n_h1 - 1)
+                arr_1h = await self.cm.get_candles(
+                    sym,
+                    start_ts=int(start_ts_h1),
+                    end_ts=int(end_ts_h1),
+                    max_age_ms=600_000,
+                    timeframe="1h",
+                )
+                if arr_1h is None or arr_1h.size == 0:
+                    raise Exception(
+                        f"EMA snapshot got no 1h candles | {sym=} {start_ts_h1=} {end_ts_h1=}"
+                    )
+                arr_1h = np.sort(arr_1h, order="ts")
+                h = np.asarray(arr_1h["h"], dtype=np.float64)
+                l = np.asarray(arr_1h["l"], dtype=np.float64)
+                lr_h1 = np.log(np.maximum(h, 1e-12) / np.maximum(l, 1e-12))
+                for sp in h1_lr_list:
+                    v = ema_from_tail(lr_h1, sp)
+                    if not math.isfinite(v):
+                        raise Exception(f"EMA snapshot non-finite h1 log_range | {sym=} {sp=} {v=}")
+                    h1_log_range_emas[sym][float(sp)] = float(v)
 
         ema_bounds: dict[str, dict[str, tuple[float, float]]] = {"long": {}, "short": {}}
         ema_anchor: dict[str, dict[str, float]] = {"long": {}, "short": {}}
@@ -3574,7 +3636,10 @@ class Passivbot:
         entry_volatility: dict[str, dict[str, float]] = {"long": {}, "short": {}}
         for pside in ["long", "short"]:
             for symbol in symbols:
-                if float(self.bp(pside, "entry_grid_spacing_volatility_weight", symbol) or 0.0) == 0.0:
+                if (
+                    float(self.bp(pside, "entry_grid_spacing_volatility_weight", symbol) or 0.0)
+                    == 0.0
+                ):
                     continue
                 span = float(self.bp(pside, "entry_volatility_ema_span_hours", symbol) or 0.0)
                 if span > 0.0 and math.isfinite(span):
@@ -3632,7 +3697,9 @@ class Passivbot:
                 raise Exception(f"invalid market price for {symbol}: {mprice}")
 
             active = bool(self.markets_dict.get(symbol, {}).get("active", True))
-            effective_min_cost = float(getattr(self, "effective_min_cost", {}).get(symbol, 0.0) or 0.0)
+            effective_min_cost = float(
+                getattr(self, "effective_min_cost", {}).get(symbol, 0.0) or 0.0
+            )
             if effective_min_cost <= 0.0:
                 effective_min_cost = float(
                     max(
@@ -3664,7 +3731,9 @@ class Passivbot:
                 }
 
             m1_close_pairs = [[float(k), float(v)] for k, v in sorted(m1_close_emas[symbol].items())]
-            m1_volume_pairs = [[float(k), float(v)] for k, v in sorted(m1_volume_emas[symbol].items())]
+            m1_volume_pairs = [
+                [float(k), float(v)] for k, v in sorted(m1_volume_emas[symbol].items())
+            ]
             m1_lr_pairs = [[float(k), float(v)] for k, v in sorted(m1_log_range_emas[symbol].items())]
             h1_lr_pairs = [[float(k), float(v)] for k, v in sorted(h1_log_range_emas[symbol].items())]
 
@@ -3683,7 +3752,11 @@ class Passivbot:
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
                     "emas": {
-                        "m1": {"close": m1_close_pairs, "log_range": m1_lr_pairs, "volume": m1_volume_pairs},
+                        "m1": {
+                            "close": m1_close_pairs,
+                            "log_range": m1_lr_pairs,
+                            "volume": m1_volume_pairs,
+                        },
                         "h1": {"close": [], "log_range": h1_lr_pairs, "volume": []},
                     },
                     "long": side_input("long"),
@@ -4405,7 +4478,9 @@ class Passivbot:
 
             # 2) cap sum(reduce_only qty) <= pos size by reducing furthest-from-market closes first
             for pside in ("long", "short"):
-                pos_size_abs = abs(float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0)))
+                pos_size_abs = abs(
+                    float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0))
+                )
                 if pos_size_abs <= 0.0:
                     continue
                 ro = [o for o in orders if o.get("reduce_only") and o.get("position_side") == pside]
@@ -4418,7 +4493,9 @@ class Passivbot:
                 # furthest first: larger order_market_diff
                 ro_sorted = sorted(
                     ro,
-                    key=lambda o: order_market_diff(o.get("side", ""), float(o.get("price", 0.0)), market_price),
+                    key=lambda o: order_market_diff(
+                        o.get("side", ""), float(o.get("price", 0.0)), market_price
+                    ),
                     reverse=True,
                 )
                 for o in ro_sorted:
@@ -4432,7 +4509,11 @@ class Passivbot:
                     o["qty"] = float(round(new_q, 12))
                     excess -= reduce_by
                 # drop any zeroed reduce-only orders
-                orders_by_symbol[symbol] = [o for o in orders_by_symbol[symbol] if not (o.get("reduce_only") and float(o.get("qty", 0.0)) <= 0.0)]
+                orders_by_symbol[symbol] = [
+                    o
+                    for o in orders_by_symbol[symbol]
+                    if not (o.get("reduce_only") and float(o.get("qty", 0.0)) <= 0.0)
+                ]
 
         return orders_by_symbol
 

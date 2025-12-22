@@ -278,6 +278,7 @@ class CandlestickManager:
         debug: int | bool = False,
         # Optional global concurrency limiter for remote ccxt calls
         max_concurrent_requests: int | None = None,
+        lock_timeout_seconds: float | None = None,
     ) -> None:
         self.exchange = exchange
         # If no explicit exchange_name provided, infer from ccxt instance id
@@ -313,6 +314,13 @@ class CandlestickManager:
         self._step_warning_keys: set[Tuple[str, str, str]] = set()
         # Timeout parameters for cross-process fetch locks
         self._lock_timeout_seconds = float(_LOCK_TIMEOUT_SECONDS)
+        if lock_timeout_seconds is not None:
+            try:
+                candidate = float(lock_timeout_seconds)
+                if candidate > 0.0 and math.isfinite(candidate):
+                    self._lock_timeout_seconds = candidate
+            except Exception:
+                pass
         self._lock_stale_seconds = float(_LOCK_STALE_SECONDS)
         self._lock_backoff_initial = float(_LOCK_BACKOFF_INITIAL)
         self._lock_backoff_max = float(_LOCK_BACKOFF_MAX)
