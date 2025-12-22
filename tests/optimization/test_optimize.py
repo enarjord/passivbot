@@ -4,6 +4,7 @@ Characterization tests for src/optimize.py
 These tests capture the current behavior of optimize.py functions and classes
 to enable safe refactoring. They document how the code actually works today.
 """
+
 import math
 import os
 import tempfile
@@ -441,9 +442,7 @@ class TestApplyFineTuneBounds:
 
     def test_fine_tune_missing_key_logs(self):
         config = {
-            "optimize": {
-                "bounds": {}
-            },
+            "optimize": {"bounds": {}},
             "bot": {
                 "long": {"param1": 0.5},
             },
@@ -470,10 +469,12 @@ class TestExtractConfigs:
 
     def test_json_file_loaded(self):
         from config_utils import get_template_config
+
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             # Write a minimal valid config
             template = get_template_config()
             import json
+
             f.write(json.dumps(template))
             path = f.name
         try:
@@ -496,10 +497,11 @@ class TestExtractConfigs:
     def test_pareto_txt_file(self):
         from config_utils import get_template_config
         import json
+
         with tempfile.NamedTemporaryFile(mode="w", suffix="_pareto.txt", delete=False) as f:
             template = get_template_config()
-            f.write(json.dumps(template) + '\n')
-            f.write(json.dumps(template) + '\n')
+            f.write(json.dumps(template) + "\n")
+            f.write(json.dumps(template) + "\n")
             path = f.name
         try:
             result = extract_configs(path)
@@ -518,6 +520,7 @@ class TestGetStartingConfigs:
     def test_single_file(self):
         from config_utils import get_template_config
         import json
+
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             template = get_template_config()
             f.write(json.dumps(template))
@@ -531,6 +534,7 @@ class TestGetStartingConfigs:
     def test_directory(self):
         from config_utils import get_template_config
         import json
+
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create two JSON files
             template = get_template_config()
@@ -552,9 +556,11 @@ class TestConfigsToIndividuals:
 
     def test_single_config(self):
         from config_utils import get_template_config
+
         config = get_template_config()
         # Use actual bounds from the template
         from optimization.config_adapter import extract_bounds_tuple_list_from_config
+
         bounds = extract_bounds_tuple_list_from_config(config)
 
         result = configs_to_individuals([config], bounds, 6)
@@ -565,8 +571,10 @@ class TestConfigsToIndividuals:
 
     def test_creates_twe_variant(self):
         from config_utils import get_template_config
+
         config = get_template_config()
         from optimization.config_adapter import extract_bounds_tuple_list_from_config
+
         bounds = extract_bounds_tuple_list_from_config(config)
 
         result = configs_to_individuals([config], bounds, 6)

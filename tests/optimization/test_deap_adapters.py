@@ -11,6 +11,7 @@ from optimization.deap_adapters import (
     cxSimulatedBinaryBoundedWrapper,
 )
 
+
 class TestDeapAdapters:
     """Test DEAP adapter functions."""
 

@@ -19,6 +19,7 @@ class TestConfigAdapter:
         # We need more bounds to satisfy extract_bounds_tuple_list_from_config
         # because it iterates over template_config["bot"]
         from config_utils import get_template_config
+
         template = get_template_config()
         for pside in template["bot"]:
             for key in template["bot"][pside]:
@@ -29,7 +30,7 @@ class TestConfigAdapter:
         bounds = extract_bounds_tuple_list_from_config(config)
         assert len(bounds) > 0
         assert isinstance(bounds[0], Bound)
-        
+
         # Find index for a short parameter
         short_param_idx = None
         current_idx = 0
@@ -41,6 +42,6 @@ class TestConfigAdapter:
                 current_idx += 1
             if short_param_idx is not None:
                 break
-        
+
         # Short should be disabled (fixed to low)
         assert bounds[short_param_idx].low == bounds[short_param_idx].high
