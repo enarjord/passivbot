@@ -57,6 +57,24 @@ def test_build_scenarios_handles_exchanges_and_coin_sources():
     assert scenario.coin_sources == {"BTC": "binance"}
 
 
+def test_build_scenarios_normalizes_coins_and_coin_sources():
+    suite_cfg = {
+        "scenarios": [
+            {
+                "label": "X",
+                "coins": ["BTC/USDT:USDT", "ETHUSDT"],
+                "ignored_coins": ["SOL/USDT:USDT"],
+                "coin_sources": {"BTC/USDT:USDT": "binance", "ETHUSDT": "bybit"},
+            }
+        ],
+    }
+    scenarios, *_ = build_scenarios(suite_cfg)
+    scenario = scenarios[0]
+    assert scenario.coins == ["BTC", "ETH"]
+    assert scenario.ignored_coins == ["SOL"]
+    assert scenario.coin_sources == {"BTC": "binance", "ETH": "bybit"}
+
+
 def test_apply_scenario_filters_unavailable_coins():
     base_config = {
         "backtest": {
