@@ -120,7 +120,9 @@ def _quantize_entry_bot_params_with_bounds(
             if bound.is_stepped:
                 pside_params[key] = bound.quantize(value)
             else:
-                pside_params[key] = bound.high if value > bound.high else bound.low if value < bound.low else value
+                pside_params[key] = (
+                    bound.high if value > bound.high else bound.low if value < bound.low else value
+                )
             idx += 1
 
     if idx != len(bounds):

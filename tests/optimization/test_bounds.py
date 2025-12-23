@@ -169,4 +169,3 @@ class TestBoundUtils:
     def test_enforce_bounds_mismatch_raises(self):
         with pytest.raises(ValueError, match="length mismatch"):
             enforce_bounds([1.0], [Bound(0.0, 1.0), Bound(0.0, 1.0)])
-

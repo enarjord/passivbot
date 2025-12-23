@@ -12,7 +12,13 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from config_utils import load_config, parse_overrides, require_config_value, require_live_value, format_config
+from config_utils import (
+    load_config,
+    parse_overrides,
+    require_config_value,
+    require_live_value,
+    format_config,
+)
 from shared_arrays import attach_shared_array
 from suite_runner import (
     SuiteScenario,

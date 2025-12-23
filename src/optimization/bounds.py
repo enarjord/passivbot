@@ -47,6 +47,7 @@ class Bound:
         high: Upper bound
         step: Step size for discrete parameters (None for continuous)
     """
+
     low: float
     high: float
     step: Optional[float] = None
@@ -201,7 +202,8 @@ class Bound:
                 if len(val) > 3:
                     logging.warning(
                         "Bound %s has %d elements; expected 1, 2, or 3. Ignoring step and using sig_digits.",
-                        key, len(val),
+                        key,
+                        len(val),
                     )
                     return cls(low, high, None)
 
@@ -217,21 +219,26 @@ class Bound:
                 except Exception:
                     logging.warning(
                         "Bound %s step is not a number (%r); treating as continuous and using sig_digits.",
-                        key, step_raw,
+                        key,
+                        step_raw,
                     )
                     return cls(low, high, None)
 
                 if step <= 0:
                     logging.warning(
                         "Bound %s step must be > 0 (got %s); treating as continuous and using sig_digits.",
-                        key, step,
+                        key,
+                        step,
                     )
                     return cls(low, high, None)
 
                 if high != low and step > (high - low):
                     logging.warning(
                         "Bound %s step=%s is larger than range [%s, %s]; treating as continuous and using sig_digits.",
-                        key, step, low, high,
+                        key,
+                        step,
+                        low,
+                        high,
                     )
                     return cls(low, high, None)
 
@@ -265,5 +272,7 @@ def enforce_bounds(
             result.append(bound.quantize(v))
         else:
             rounded = v if sig_digits is None else round_to_sig_digits(v, sig_digits)
-            result.append(bound.high if rounded > bound.high else bound.low if rounded < bound.low else rounded)
+            result.append(
+                bound.high if rounded > bound.high else bound.low if rounded < bound.low else rounded
+            )
     return result
