@@ -2733,8 +2733,9 @@ class CandlestickManager:
             pass
 
         existing = self._ensure_symbol_cache(symbol)
-        existing_sorted = np.sort(existing, order="ts") if existing.size else existing
-        existing_last_ts = int(existing_sorted[-1]["ts"]) if existing_sorted.size else None
+        existing_last_ts = (
+            int(np.asarray(existing["ts"], dtype=np.int64).max()) if existing.size else None
+        )
         if existing.size == 0:
             proposed_since = end_exclusive - self.default_window_candles * ONE_MIN_MS
         else:
@@ -2768,8 +2769,9 @@ class CandlestickManager:
                 pass
 
             existing = self._ensure_symbol_cache(symbol)
-            existing_sorted = np.sort(existing, order="ts") if existing.size else existing
-            existing_last_ts = int(existing_sorted[-1]["ts"]) if existing_sorted.size else None
+            existing_last_ts = (
+                int(np.asarray(existing["ts"], dtype=np.int64).max()) if existing.size else None
+            )
             if existing.size == 0:
                 since = end_exclusive - self.default_window_candles * ONE_MIN_MS
             else:
