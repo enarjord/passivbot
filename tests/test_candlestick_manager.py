@@ -189,6 +189,16 @@ async def test_tf_persistence_via_get_candles(tmp_path, monkeypatch):
     assert f"{symbol}::1h" in cm._index
 
 
+def test_merge_overwrite_prefers_new_on_conflict(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    ts = _floor_minute(int(time.time() * 1000))
+    existing = np.array([(ts, 1.0, 1.0, 1.0, 1.0, 1.0)], dtype=CANDLE_DTYPE)
+    new = np.array([(ts, 2.0, 2.0, 2.0, 2.0, 2.0)], dtype=CANDLE_DTYPE)
+    merged = cm._merge_overwrite(existing, new)
+    assert merged.size == 1
+    assert float(merged[0]["c"]) == pytest.approx(2.0)
+
+
 @pytest.mark.asyncio
 async def test_tf_loads_from_disk_without_network(tmp_path, monkeypatch):
     class _Ex:
@@ -498,3 +508,44 @@ async def test_get_current_close_tail_fetch_merges_and_primes(monkeypatch, tmp_p
     out = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_finalized, max_age_ms=60_000)
     assert out.size > 0
     assert calls["paginated"] == 0
+
+
+@pytest.mark.asyncio
+async def test_refresh_bounds_disk_load_range(monkeypatch, tmp_path):
+    fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    class _Ex:
+        id = "okx"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="okx",
+        cache_dir=str(tmp_path / "caches"),
+        default_window_candles=100,
+        overlap_candles=30,
+    )
+    symbol = "BTC/USDT:USDT"
+    calls = []
+
+    def fake_load_from_disk(symbol_, start_ts, end_ts, *, timeframe=None, tf=None):
+        calls.append((int(start_ts), int(end_ts), (timeframe or tf)))
+        return None
+
+    async def fake_fetch(
+        symbol_, since_ms, end_exclusive_ms, *, timeframe=None, tf=None, on_batch=None
+    ):
+        return np.empty((0,), dtype=CANDLE_DTYPE)
+
+    monkeypatch.setattr(cm, "_load_from_disk", fake_load_from_disk)
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_fetch)
+
+    await cm.refresh(symbol)
+
+    end_exclusive = _floor_minute(fixed_now_ms)
+    lookback_candles = max(100, 30) + 10
+    disk_since = max(0, end_exclusive - lookback_candles * ONE_MIN_MS)
+
+    assert calls
+    assert all(end == end_exclusive for _, end, _ in calls)
+    assert all(start >= disk_since for start, _, _ in calls)
