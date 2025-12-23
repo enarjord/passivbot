@@ -1066,18 +1066,15 @@ class CandlestickManager:
         b = _ensure_dtype(new)
         # Put existing first, then new; then keep last seen per ts to prefer new
         combo = np.concatenate([a, b])
-        combo = np.sort(combo, order="ts")
-        ts = combo["ts"].astype(np.int64)
-        # deduplicate keeping last occurrence
-        keep = np.ones(len(combo), dtype=bool)
-        # scan from end, mark first-seen; then reverse mask
-        seen = {}
-        for i in range(len(combo) - 1, -1, -1):
-            t = int(ts[i])
-            if t in seen:
-                keep[i] = False
-            else:
-                seen[t] = True
+        # Stable sort ensures that for equal timestamps, rows from `new` remain after `existing`.
+        combo = np.sort(combo, order="ts", kind="stable")
+        ts = combo["ts"].astype(np.int64, copy=False)
+        if combo.size <= 1:
+            return combo
+        # Deduplicate keeping the last occurrence per timestamp (vectorized).
+        keep = np.empty(combo.size, dtype=bool)
+        keep[:-1] = ts[:-1] != ts[1:]
+        keep[-1] = True
         merged = combo[keep]
         # Enforce in-memory retention: keep only the latest N candles per symbol (applied by caller after assign)
         return merged
@@ -2725,8 +2722,13 @@ class CandlestickManager:
         if through_ts is not None:
             end_exclusive = min(end_exclusive, _floor_minute(int(through_ts)) + ONE_MIN_MS)
 
+        # Refresh only needs to reconcile recent on-disk candles to avoid unnecessary
+        # full-history loads/sorts. Historical ranges are handled on-demand via get_candles().
+        lookback_candles = max(int(self.default_window_candles), int(self.overlap_candles)) + 10
+        disk_since = max(0, int(end_exclusive) - int(lookback_candles) * ONE_MIN_MS)
+
         try:
-            self._load_from_disk(symbol, 0, end_exclusive, timeframe="1m")
+            self._load_from_disk(symbol, disk_since, end_exclusive, timeframe="1m")
         except Exception:
             pass
 
@@ -2761,7 +2763,7 @@ class CandlestickManager:
         async with self._acquire_fetch_lock(symbol, "1m"):
             # Re-evaluate with lock in case another process already fetched.
             try:
-                self._load_from_disk(symbol, 0, end_exclusive, timeframe="1m")
+                self._load_from_disk(symbol, disk_since, end_exclusive, timeframe="1m")
             except Exception:
                 pass
 
