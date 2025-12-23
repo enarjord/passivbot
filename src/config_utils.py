@@ -1549,7 +1549,20 @@ def remove_unused_keys_recursively(
         return
     if not isinstance(dst, dict) or not isinstance(src, dict):
         return
-    for k in sorted(list(dst.keys())):
+    # Defensive: configs can contain non-string keys (e.g. from user edits or JSON coercions).
+    # Template keys are always strings, so non-string keys are always unused and should be removed.
+    for k in list(dst.keys()):
+        if isinstance(k, str):
+            continue
+        removed = dst.pop(k)
+        current_path = parent + [str(k)]
+        _log_config(
+            verbose, logging.INFO, "Removed unused key from config: %s", ".".join(current_path)
+        )
+        if tracker is not None:
+            tracker.remove(current_path, removed)
+
+    for k in sorted([k for k in dst.keys() if isinstance(k, str)]):
         current_path = parent + [k]
         if _path_is_preserved(current_path):
             continue
