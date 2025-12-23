@@ -1018,7 +1018,17 @@ def _normalize_coin_sources(raw: Any) -> Dict[str, str]:
     for coin, exchange in raw.items():
         if exchange is None:
             continue
-        normalized[str(coin)] = str(exchange)
+        coin_key = symbol_to_coin(str(coin), verbose=False)
+        if not coin_key:
+            continue
+        exchange_value = str(exchange)
+        existing = normalized.get(coin_key)
+        if existing is not None and existing != exchange_value:
+            raise ValueError(
+                f"backtest.coin_sources maps conflicting exchanges for {coin_key}: "
+                f"{existing} and {exchange_value}"
+            )
+        normalized[coin_key] = exchange_value
     return normalized
 
 
@@ -1853,6 +1863,7 @@ def get_template_config():
             "btc_collateral_ltv_cap": None,
             "combine_ohlcvs": True,
             "compress_cache": True,
+            "coin_sources": {},
             "end_date": "now",
             "exchanges": ["binance", "bybit", "gateio", "bitget"],
             "filter_by_min_effective_cost": None,

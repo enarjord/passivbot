@@ -31,6 +31,7 @@ from utils import (
     format_approved_ignored_coins,
     format_end_date,
     load_markets,
+    symbol_to_coin,
     ts_to_date,
     utc_ms,
     date_to_ts,
@@ -115,7 +116,39 @@ def _coerce_coin_source_dict(value: Any) -> Optional[Dict[str, str]]:
         return None
     if not isinstance(value, dict):
         raise ValueError("scenario coin_sources must be a mapping of coin -> exchange")
-    return {str(coin): str(exchange) for coin, exchange in value.items() if exchange is not None}
+    normalized: Dict[str, str] = {}
+    raw_keys: Dict[str, str] = {}
+    for coin, exchange in value.items():
+        if exchange is None:
+            continue
+        coin_key = symbol_to_coin(str(coin), verbose=False)
+        if not coin_key:
+            continue
+        exchange_value = str(exchange)
+        existing = normalized.get(coin_key)
+        if existing is not None and existing != exchange_value:
+            raise ValueError(
+                "scenario coin_sources maps conflicting exchanges for "
+                f"{coin_key}: {raw_keys.get(coin_key, coin_key)}->{existing} and {coin}->{exchange_value}"
+            )
+        normalized[coin_key] = exchange_value
+        raw_keys.setdefault(coin_key, str(coin))
+    return normalized or None
+
+
+def _normalize_coin_list(value: Any) -> Optional[List[str]]:
+    if value is None:
+        return None
+    coins_raw = _flatten_coin_list(value)
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for entry in coins_raw:
+        coin = symbol_to_coin(str(entry), verbose=False)
+        if not coin or coin in seen:
+            continue
+        seen.add(coin)
+        normalized.append(coin)
+    return normalized
 
 
 def resolve_coin_sources(
@@ -170,17 +203,21 @@ def build_scenarios(
         overrides = raw.get("overrides")
         if overrides is not None and not isinstance(overrides, dict):
             raise ValueError(f"Scenario overrides for '{raw.get('label')}' must be a mapping")
+        scenario_coins = (
+            _normalize_coin_list(raw.get("coins")) if raw.get("coins") is not None else None
+        )
+        scenario_ignored = (
+            _normalize_coin_list(raw.get("ignored_coins"))
+            if raw.get("ignored_coins") is not None
+            else None
+        )
         scenarios.append(
             SuiteScenario(
                 label=str(raw.get("label") or f"scenario_{idx:02d}"),
                 start_date=raw.get("start_date"),
                 end_date=raw.get("end_date"),
-                coins=list(raw.get("coins", [])) if raw.get("coins") is not None else None,
-                ignored_coins=(
-                    list(raw.get("ignored_coins", []))
-                    if raw.get("ignored_coins") is not None
-                    else None
-                ),
+                coins=scenario_coins,
+                ignored_coins=scenario_ignored,
                 exchanges=exchanges_list,
                 coin_sources=coin_source_map,
                 overrides=deepcopy(overrides) if overrides else None,
