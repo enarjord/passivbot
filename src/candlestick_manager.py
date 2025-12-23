@@ -2597,6 +2597,103 @@ class CandlestickManager:
         cache[key] = (res, int(end_ts), int(now))
         return res
 
+    async def get_latest_ema_metrics(
+        self,
+        symbol: str,
+        spans_by_metric: Dict[str, float],
+        max_age_ms: Optional[int] = None,
+        *,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
+    ) -> Dict[str, float]:
+        """Compute multiple latest-EMA metrics with a single candles fetch.
+
+        This is an optimization wrapper around get_candles() + EMA calculations. It preserves the
+        per-metric behavior of get_latest_ema_* helpers by:
+        - Using a single `get_candles()` call for the largest requested span.
+        - For 1m candles: applying gap standardization per metric window (same as get_candles()).
+        - Caching results in `self._ema_cache` per (metric, span, timeframe).
+        """
+        out: Dict[str, float] = {}
+        if not spans_by_metric:
+            return out
+
+        out_tf = timeframe if timeframe is not None else tf
+        period_ms = _tf_to_ms(out_tf)
+        # Use the largest span to fetch a superset window.
+        max_span = max(float(s) for s in spans_by_metric.values())
+        max_candles = max(1, int(math.ceil(max_span)))
+        start_ts, end_ts = await self._latest_finalized_range(max_span, period_ms=period_ms)
+        now = _utc_now_ms()
+        tf_key = str(period_ms)
+
+        cache = self._ema_cache.setdefault(symbol, {})
+        missing: List[str] = []
+        for metric_key, span in spans_by_metric.items():
+            key = (str(metric_key), float(span), tf_key)
+            if max_age_ms is not None and max_age_ms > 0 and key in cache:
+                val, cached_end_ts, computed_at = cache[key]
+                if int(cached_end_ts) == int(end_ts) and (now - int(computed_at)) <= int(max_age_ms):
+                    out[str(metric_key)] = float(val)
+                    continue
+            missing.append(str(metric_key))
+
+        if not missing:
+            return out
+
+        # Fetch raw candles for the superset range once.
+        # For 1m, we re-apply standardize_gaps per metric window to match per-call behavior.
+        raw = await self.get_candles(
+            symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            max_age_ms=max_age_ms,
+            strict=True if period_ms == ONE_MIN_MS else False,
+            timeframe=out_tf,
+        )
+        if raw.size == 0:
+            for metric_key in missing:
+                out[metric_key] = float("nan")
+            return out
+
+        def series_for(metric_key: str, arr: np.ndarray) -> np.ndarray:
+            if metric_key == "volume":
+                return np.asarray(arr["bv"], dtype=np.float64)
+            if metric_key == "qv":
+                return np.asarray(arr["bv"], dtype=np.float64) * (
+                    np.asarray(arr["h"], dtype=np.float64)
+                    + np.asarray(arr["l"], dtype=np.float64)
+                    + np.asarray(arr["c"], dtype=np.float64)
+                ) / 3.0
+            if metric_key == "log_range":
+                return np.log(
+                    np.maximum(np.asarray(arr["h"], dtype=np.float64), 1e-12)
+                    / np.maximum(np.asarray(arr["l"], dtype=np.float64), 1e-12)
+                )
+            if metric_key == "close":
+                return np.asarray(arr["c"], dtype=np.float64)
+            raise KeyError(f"Unknown EMA metric_key {metric_key!r}")
+
+        for metric_key in missing:
+            span = float(spans_by_metric[metric_key])
+            span_candles = max(1, int(math.ceil(span)))
+            # Get window ending at end_ts. Prefer slicing by tail length; if data is short, use what we have.
+            tail = raw[-span_candles:] if raw.size > span_candles else raw
+            if period_ms == ONE_MIN_MS:
+                # Re-apply gap standardization on the requested metric window.
+                # This matches get_candles(strict=False) behavior for the same [start,end] window.
+                metric_start_ts = int(end_ts - period_ms * (span_candles - 1))
+                tail = self.standardize_gaps(tail, start_ts=metric_start_ts, end_ts=end_ts, strict=False)
+            if tail.size == 0:
+                out[metric_key] = float("nan")
+                continue
+            series = series_for(metric_key, tail)
+            res = float(self._ema(series, span))
+            out[metric_key] = res
+            cache[(metric_key, span, tf_key)] = (res, int(end_ts), int(now))
+
+        return out
+
     async def get_latest_ema_log_range(
         self,
         symbol: str,

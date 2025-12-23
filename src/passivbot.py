@@ -1842,12 +1842,12 @@ class Passivbot:
             volatility_drop = self.bot_value(pside, "filter_volatility_drop_pct")
             max_n_positions = self.get_max_n_positions(pside)
             if clip_pct > 0.0:
-                volumes = await self.calc_volumes(pside, symbols=candidates)
+                volumes, log_ranges = await self.calc_volumes_and_log_ranges(pside, symbols=candidates)
             else:
                 volumes = {
                     symbol: float(len(candidates) - idx) for idx, symbol in enumerate(candidates)
                 }
-            log_ranges = await self.calc_log_range(pside, eligible_symbols=candidates)
+                log_ranges = await self.calc_log_range(pside, eligible_symbols=candidates)
             features = [
                 {
                     "index": idx,
@@ -1877,6 +1877,95 @@ class Passivbot:
             # all approved coins are selected, no filtering by volume and log range
             ideal_coins = sorted(eligible)
         return ideal_coins
+
+    async def calc_volumes_and_log_ranges(
+        self,
+        pside: str,
+        symbols: Optional[Iterable[str]] = None,
+        *,
+        max_age_ms: Optional[int] = 60_000,
+    ) -> Tuple[Dict[str, float], Dict[str, float]]:
+        """Compute 1m EMA quote volume and 1m EMA log range per symbol with one candles fetch.
+
+        This uses CandlestickManager.get_latest_ema_metrics() to avoid calling get_candles() twice
+        per symbol (once for volume and once for log range).
+        """
+        span_volume = int(round(self.bot_value(pside, "filter_volume_ema_span")))
+        span_volatility = int(round(self.bot_value(pside, "filter_volatility_ema_span")))
+        if symbols is None:
+            symbols = self.get_symbols_approved_or_has_pos(pside)
+
+        async def one(symbol: str):
+            try:
+                if max_age_ms is not None:
+                    ttl = int(max_age_ms)
+                else:
+                    has_pos = self.has_position(symbol)
+                    has_oo = (
+                        bool(self.open_orders.get(symbol)) if hasattr(self, "open_orders") else False
+                    )
+                    ttl = (
+                        60_000
+                        if (has_pos or has_oo)
+                        else int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
+                    )
+                res = await self.cm.get_latest_ema_metrics(
+                    symbol,
+                    {"qv": span_volume, "log_range": span_volatility},
+                    max_age_ms=ttl,
+                    timeframe=None,
+                )
+                vol = float(res.get("qv", float("nan")))
+                lr = float(res.get("log_range", float("nan")))
+                return (0.0 if not np.isfinite(vol) else vol, 0.0 if not np.isfinite(lr) else lr)
+            except Exception:
+                return (0.0, 0.0)
+
+        syms = list(symbols)
+        tasks = {s: asyncio.create_task(one(s)) for s in syms}
+        volumes: Dict[str, float] = {}
+        log_ranges: Dict[str, float] = {}
+        started_ms = utc_ms()
+        for sym, task in tasks.items():
+            try:
+                vol, lr = await task
+            except Exception:
+                vol, lr = 0.0, 0.0
+            volumes[sym] = float(vol)
+            log_ranges[sym] = float(lr)
+
+        # Preserve the low-noise "top ranking changed" logging from calc_volumes/calc_log_range.
+        elapsed_s = max(0.001, (utc_ms() - started_ms) / 1000.0)
+        if volumes:
+            top_n = min(8, len(volumes))
+            top = sorted(volumes.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+            top_syms = tuple(sym for sym, _ in top)
+            if not hasattr(self, "_volume_top_cache"):
+                self._volume_top_cache = {}
+            cache_key = (pside, span_volume)
+            last_top = self._volume_top_cache.get(cache_key)
+            if last_top != top_syms:
+                self._volume_top_cache[cache_key] = top_syms
+                summary = ", ".join(f"{symbol_to_coin(sym)}={val:.2f}" for sym, val in top)
+                logging.info(
+                    f"volume EMA span {span_volume}: {len(syms)} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
+                )
+        if log_ranges:
+            top_n = min(8, len(log_ranges))
+            top = sorted(log_ranges.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+            top_syms = tuple(sym for sym, _ in top)
+            if not hasattr(self, "_log_range_top_cache"):
+                self._log_range_top_cache = {}
+            cache_key = (pside, span_volatility)
+            last_top = self._log_range_top_cache.get(cache_key)
+            if last_top != top_syms:
+                self._log_range_top_cache[cache_key] = top_syms
+                summary = ", ".join(f"{symbol_to_coin(sym)}={val:.6f}" for sym, val in top)
+                logging.info(
+                    f"log_range EMA span {span_volatility}: {len(syms)} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
+                )
+
+        return volumes, log_ranges
 
     def warn_on_high_effective_min_cost(self, pside):
         """Log a warning if min effective cost filtering removes every candidate."""

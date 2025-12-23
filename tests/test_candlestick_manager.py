@@ -200,6 +200,64 @@ def test_merge_overwrite_prefers_new_on_conflict(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_get_latest_ema_metrics_calls_get_candles_once_and_caches(monkeypatch, tmp_path):
+    fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "BTC/USDT:USDT"
+
+    # Provide a deterministic window of 10 candles.
+    base = _floor_minute(fixed_now_ms) - ONE_MIN_MS * 20
+    ts = [base + i * ONE_MIN_MS for i in range(10)]
+    arr = np.zeros(len(ts), dtype=CANDLE_DTYPE)
+    arr["ts"] = np.asarray(ts, dtype=np.int64)
+    arr["h"] = np.linspace(100.0, 109.0, len(ts)).astype(np.float32)
+    arr["l"] = (arr["h"] - 1.0).astype(np.float32)
+    arr["c"] = (arr["h"] - 0.5).astype(np.float32)
+    arr["bv"] = np.linspace(1.0, 2.0, len(ts)).astype(np.float32)
+
+    # Force the manager to use this exact range.
+    end_ts = ts[-1]
+    start_ts = end_ts - 9 * ONE_MIN_MS
+    async def fake_latest_finalized_range(span, period_ms=ONE_MIN_MS):
+        return (start_ts, end_ts)
+
+    monkeypatch.setattr(cm, "_latest_finalized_range", fake_latest_finalized_range)
+
+    calls = {"n": 0}
+
+    async def fake_get_candles(symbol_, *, start_ts=None, end_ts=None, max_age_ms=None, strict=False, timeframe=None, tf=None):
+        calls["n"] += 1
+        return arr
+
+    monkeypatch.setattr(cm, "get_candles", fake_get_candles)
+
+    spans = {"qv": 5.0, "log_range": 3.0}
+    out1 = await cm.get_latest_ema_metrics(symbol, spans, max_age_ms=60_000, timeframe=None)
+    assert calls["n"] == 1
+    assert set(out1.keys()) == set(spans.keys())
+
+    qv_series = np.asarray(arr[-5:]["bv"], dtype=np.float64) * (
+        np.asarray(arr[-5:]["h"], dtype=np.float64)
+        + np.asarray(arr[-5:]["l"], dtype=np.float64)
+        + np.asarray(arr[-5:]["c"], dtype=np.float64)
+    ) / 3.0
+    lr_series = np.log(
+        np.maximum(np.asarray(arr[-3:]["h"], dtype=np.float64), 1e-12)
+        / np.maximum(np.asarray(arr[-3:]["l"], dtype=np.float64), 1e-12)
+    )
+    assert out1["qv"] == pytest.approx(float(cm._ema(qv_series, 5.0)))
+    assert out1["log_range"] == pytest.approx(float(cm._ema(lr_series, 3.0)))
+
+    # Second call should hit EMA cache (no new get_candles call).
+    out2 = await cm.get_latest_ema_metrics(symbol, spans, max_age_ms=60_000, timeframe=None)
+    assert calls["n"] == 1
+    assert out2["qv"] == pytest.approx(out1["qv"])
+    assert out2["log_range"] == pytest.approx(out1["log_range"])
+
+
+@pytest.mark.asyncio
 async def test_tf_loads_from_disk_without_network(tmp_path, monkeypatch):
     class _Ex:
         id = "okx"
