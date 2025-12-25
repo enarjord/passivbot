@@ -1977,15 +1977,6 @@ def get_template_config():
                 "unstuck_threshold": 0.916,
             },
         },
-        "hedge": {
-            "mode": "off",
-            "threshold": 0.0,
-            "tolerance_pct": 0.05,
-            "allocation_min_fraction": 0.1,
-            "max_n_positions": 0,
-            "hedge_excess_allowance_pct": 0.2,
-            "one_way": True,
-        },
         "coin_overrides": {},
         "live": {
             "approved_coins": {"long": [], "short": []},

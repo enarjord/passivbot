@@ -1064,7 +1064,6 @@ impl<'a> Backtest<'a> {
                 unstuck_allowance_short: short_allowance,
                 sort_global: false,
                 global_bot_params: self.bot_params_master.clone(),
-                hedge: self.backtest_params.hedge.clone(),
             },
             symbols,
             peek_hints,

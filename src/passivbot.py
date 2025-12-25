@@ -3771,28 +3771,6 @@ class Passivbot:
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
                 "sort_global": True,
                 "global_bot_params": global_bp,
-                "hedge": {
-                    "threshold": float(self.config_get(["hedge", "threshold"], default=0.0) or 0.0),
-                    "tolerance_pct": float(
-                        self.config_get(["hedge", "tolerance_pct"], default=0.05) or 0.05
-                    ),
-                    "hedge_excess_allowance_pct": float(
-                        self.config_get(["hedge", "hedge_excess_allowance_pct"], default=0.20)
-                        or 0.20
-                    ),
-                    "max_n_positions": int(
-                        round(float(self.config_get(["hedge", "max_n_positions"], default=0) or 0))
-                    ),
-                    "allocation_min_fraction": float(
-                        self.config_get(["hedge", "allocation_min_fraction"], default=0.10) or 0.10
-                    ),
-                    "mode": str(
-                        self.config_get(["hedge", "mode"], default="hedge_shorts_for_longs")
-                        or "hedge_shorts_for_longs"
-                    ),
-                    "one_way": True,
-                    "approved_hedge_symbols": [],
-                },
             },
             "symbols": [],
             "peek_hints": None,
@@ -3800,24 +3778,6 @@ class Passivbot:
 
         symbol_to_idx: dict[str, int] = {s: i for i, s in enumerate(symbols)}
         idx_to_symbol: dict[int, str] = {i: s for s, i in symbol_to_idx.items()}
-
-        # Hedge approved coins -> indices (config uses coin tickers, not full symbols).
-        try:
-            approved = self.config_get(["live", "approved_coins"], default={}) or {}
-            approved_short = approved.get("short", []) if isinstance(approved, dict) else approved
-            approved_short = set(str(x) for x in (approved_short or []))
-        except Exception:
-            approved_short = set()
-        if approved_short:
-            hedge_idxs: list[int] = []
-            for symbol in symbols:
-                try:
-                    coin = symbol_to_coin(symbol)
-                except Exception:
-                    continue
-                if coin in approved_short:
-                    hedge_idxs.append(int(symbol_to_idx[symbol]))
-            input_dict["global"]["hedge"]["approved_hedge_symbols"] = sorted(set(hedge_idxs))
 
         for symbol in symbols:
             idx = symbol_to_idx[symbol]
@@ -4081,28 +4041,6 @@ class Passivbot:
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
                 "sort_global": True,
                 "global_bot_params": global_bp,
-                "hedge": {
-                    "threshold": float(self.config_get(["hedge", "threshold"], default=0.0) or 0.0),
-                    "tolerance_pct": float(
-                        self.config_get(["hedge", "tolerance_pct"], default=0.05) or 0.05
-                    ),
-                    "hedge_excess_allowance_pct": float(
-                        self.config_get(["hedge", "hedge_excess_allowance_pct"], default=0.20)
-                        or 0.20
-                    ),
-                    "max_n_positions": int(
-                        round(float(self.config_get(["hedge", "max_n_positions"], default=0) or 0))
-                    ),
-                    "allocation_min_fraction": float(
-                        self.config_get(["hedge", "allocation_min_fraction"], default=0.10) or 0.10
-                    ),
-                    "mode": str(
-                        self.config_get(["hedge", "mode"], default="hedge_shorts_for_longs")
-                        or "hedge_shorts_for_longs"
-                    ),
-                    "one_way": True,
-                    "approved_hedge_symbols": [],
-                },
             },
             "symbols": [],
             "peek_hints": None,
@@ -4110,23 +4048,6 @@ class Passivbot:
 
         symbol_to_idx: dict[str, int] = {s: i for i, s in enumerate(symbols)}
         idx_to_symbol: dict[int, str] = {i: s for s, i in symbol_to_idx.items()}
-
-        try:
-            approved = self.config_get(["live", "approved_coins"], default={}) or {}
-            approved_short = approved.get("short", []) if isinstance(approved, dict) else approved
-            approved_short = set(str(x) for x in (approved_short or []))
-        except Exception:
-            approved_short = set()
-        if approved_short:
-            hedge_idxs: list[int] = []
-            for symbol in symbols:
-                try:
-                    coin = symbol_to_coin(symbol)
-                except Exception:
-                    continue
-                if coin in approved_short:
-                    hedge_idxs.append(int(symbol_to_idx[symbol]))
-            input_dict["global"]["hedge"]["approved_hedge_symbols"] = sorted(set(hedge_idxs))
 
         for symbol in symbols:
             idx = symbol_to_idx[symbol]

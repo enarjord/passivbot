@@ -466,22 +466,6 @@ def subset_backtest_payload(
         if key in new_backtest_params and isinstance(new_backtest_params[key], list):
             new_backtest_params[key] = _select(new_backtest_params[key])
 
-    # Remap hedge approved indices to the subset coin indexing.
-    hedge = new_backtest_params.get("hedge")
-    if isinstance(hedge, dict):
-        approved = hedge.get("approved_hedge_symbols")
-        if isinstance(approved, list):
-            pos_to_new = {pos: new_idx for new_idx, pos in enumerate(selected_positions)}
-            remapped = []
-            for old_idx in approved:
-                try:
-                    old_idx_int = int(old_idx)
-                except Exception:
-                    continue
-                if old_idx_int in pos_to_new:
-                    remapped.append(pos_to_new[old_idx_int])
-            hedge["approved_hedge_symbols"] = remapped
-
     return BacktestPayload(
         bundle=new_bundle,
         bot_params_list=new_bot,
@@ -959,55 +943,6 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "filter_by_min_effective_cost": bool(
                 require_config_value(config, "backtest.filter_by_min_effective_cost")
             ),
-        }
-
-        # Hedge overlay (optional; default disabled).
-        hedge_cfg = config.get("hedge", {}) or {}
-        try:
-            threshold = float(hedge_cfg.get("threshold", 0.0) or 0.0)
-        except Exception:
-            threshold = 0.0
-        try:
-            tolerance_pct = float(hedge_cfg.get("tolerance_pct", 0.05) or 0.05)
-        except Exception:
-            tolerance_pct = 0.05
-        try:
-            hedge_excess_allowance_pct = float(
-                hedge_cfg.get("hedge_excess_allowance_pct", 0.20) or 0.20
-            )
-        except Exception:
-            hedge_excess_allowance_pct = 0.20
-        try:
-            max_n_positions = int(round(float(hedge_cfg.get("max_n_positions", 0) or 0)))
-        except Exception:
-            max_n_positions = 0
-        try:
-            allocation_min_fraction = float(hedge_cfg.get("allocation_min_fraction", 0.10) or 0.10)
-        except Exception:
-            allocation_min_fraction = 0.10
-        mode = str(hedge_cfg.get("mode", "hedge_shorts_for_longs") or "hedge_shorts_for_longs")
-        one_way = bool(hedge_cfg.get("one_way", True))
-
-        approved_coins = require_live_value(config, "approved_coins")
-        approved_hedge_coins = []
-        if isinstance(approved_coins, dict):
-            approved_hedge_coins = list(approved_coins.get("short", []) or [])
-        elif isinstance(approved_coins, list):
-            approved_hedge_coins = list(approved_coins)
-        coin_to_idx = {c: i for i, c in enumerate(coins)}
-        approved_hedge_symbols = [coin_to_idx[c] for c in approved_hedge_coins if c in coin_to_idx]
-        if not approved_hedge_symbols and bool(require_live_value(config, "empty_means_all_approved")):
-            approved_hedge_symbols = list(range(len(coins)))
-
-        backtest_params["hedge"] = {
-            "threshold": threshold,
-            "tolerance_pct": tolerance_pct,
-            "hedge_excess_allowance_pct": hedge_excess_allowance_pct,
-            "max_n_positions": max_n_positions,
-            "allocation_min_fraction": allocation_min_fraction,
-            "mode": mode,
-            "one_way": one_way,
-            "approved_hedge_symbols": approved_hedge_symbols,
         }
     return bot_params_list, exchange_params, backtest_params
 

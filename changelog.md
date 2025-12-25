@@ -5,7 +5,6 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 ### Added
-- WIP market-neutral hedging overlay for backtesting (new `hedge` config section; Rust hedging module and orchestrator plumbing).
 - Shared Pareto core (`pareto_core.py`) with constraint-aware dominance, crowding, and extreme-preserving pruning; reused by ParetoStore.
 - Canonical suite metrics payload now shared by backtest and optimizer; suite summaries include the same schema as Pareto members.
 - Targeted Pareto tests to ensure consistency.
