@@ -1,40 +1,43 @@
-//! Hedge overlay (experimental, isolated).
+//! Hedge overlay (WIP).
 //!
-//! This module is intentionally self contained and not wired into the rest of the code base.
-//! It encodes the long-only + mirrored shorts rules (1-7) and the symmetric short-only + mirrored longs.
-//! Defaults are hardcoded; plumbing from config will be added later.
-//! Quantities follow core conventions: base longs/hedge longs positive, base shorts/hedge shorts negative.
+//! Implements a reactive market-neutral overlay:
+//! - Base is long-only or short-only.
+//! - Hedge positions are on the opposite pside.
+//! - One-way constraint (v0): never hold long and short simultaneously on the same symbol.
+//! - Signed conventions: buy qty/long psize positive; sell qty/short psize negative.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::types::ExchangeParams;
-use crate::utils::{cost_to_qty, qty_to_cost, round_, round_up};
+use serde::{Deserialize, Serialize};
 
-/// Default parameters (hardcoded for the prototype).
-const DEFAULT_TOLERANCE: f64 = 0.05;
-const DEFAULT_HEDGE_EXCESS_ALLOWANCE_PCT: f64 = 0.20;
+use crate::types::ExchangeParams;
+use crate::utils::{calc_new_psize_pprice, cost_to_qty, qty_to_cost, round_, round_dn, round_up};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HedgePosition {
     pub idx: usize,
     /// Signed size: longs positive, shorts negative.
     pub size: f64,
+    /// Average entry price (pprice).
     pub price: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct HedgeAsset {
+pub struct HedgeSymbol {
     pub idx: usize,
     pub bid: f64,
     pub ask: f64,
     pub volume_score: f64,
     pub volatility_score: f64,
     pub exchange_params: ExchangeParams,
+    pub effective_min_cost: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DesiredBaseOrder {
     pub idx: usize,
+    /// Signed qty following internal conventions (buy > 0, sell < 0).
+    pub qty: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -54,13 +57,14 @@ pub struct HedgeOrder {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct HedgeResult {
+pub struct HedgeCycleOutput {
     pub orders: Vec<HedgeOrder>,
-    pub deferred_base_longs: HashSet<usize>,
-    pub deferred_base_shorts: HashSet<usize>,
+    /// In one-way mode, base entry orders on these symbols must be gated/canceled this cycle.
+    pub gate_base_entries: HashSet<usize>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HedgeMode {
     /// Base is long-only, hedges are shorts.
     HedgeShortsForLongs,
@@ -68,16 +72,79 @@ pub enum HedgeMode {
     HedgeLongsForShorts,
 }
 
-/// Gross exposure = sum(|size| * price) / balance.
-fn gross_exposure(positions: &[HedgePosition], balance: f64) -> f64 {
-    positions
-        .iter()
-        .map(|p| qty_to_cost(p.size.abs(), p.price, 1.0) / balance)
-        .sum()
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HedgeConfig {
+    /// 0 disables hedging; 1 targets equal hedge/base exposure; 0.5 targets 50% hedge exposure, etc.
+    pub threshold: f64,
+    /// Tolerance is absolute exposure band: `tolerance_band = base_twel * tolerance_pct`.
+    pub tolerance_pct: f64,
+    /// Cap looseness multiplier.
+    pub hedge_excess_allowance_pct: f64,
+    /// Max number of hedge positions. If 0, default to base side `n_positions`.
+    pub max_n_positions: usize,
+    /// Minimum fraction of remaining hedge budget to spend per allocation step (avoids churn).
+    pub allocation_min_fraction: f64,
+    /// Eligible symbols for opening new hedges (e.g. approved_coins.short in HedgeShortsForLongs).
+    pub approved_hedge_symbols: Vec<usize>,
+    /// v0: one-way only.
+    pub one_way: bool,
+    /// Hedge direction.
+    pub mode: HedgeMode,
+}
+
+impl Default for HedgeConfig {
+    fn default() -> Self {
+        Self {
+            threshold: 0.0,
+            tolerance_pct: 0.05,
+            hedge_excess_allowance_pct: 0.20,
+            max_n_positions: 0,
+            allocation_min_fraction: 0.10,
+            approved_hedge_symbols: Vec::new(),
+            one_way: true,
+            mode: HedgeMode::HedgeShortsForLongs,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HedgeError {
+    pub message: String,
+}
+
+impl HedgeError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+fn market_price(sym: &HedgeSymbol) -> f64 {
+    (sym.bid + sym.ask) * 0.5
+}
+
+fn effective_min_entry_qty(effective_min_cost: f64, entry_price: f64, ep: &ExchangeParams) -> f64 {
+    f64::max(
+        ep.min_qty,
+        round_up(
+            cost_to_qty(effective_min_cost, entry_price, ep.c_mult),
+            ep.qty_step,
+        ),
+    )
+}
+
+/// Exposure uses pprice (avg entry) like elsewhere in passivbot.
+fn position_exposure(pos: &HedgePosition, sym: &HedgeSymbol, balance: f64) -> f64 {
+    if pos.size == 0.0 {
+        return 0.0;
+    }
+    qty_to_cost(pos.size.abs(), pos.price, sym.exchange_params.c_mult) / balance
 }
 
 /// Borda ranking: low volatility + high volume. Lower score is better.
-fn rank_assets_borda(eligible: &[HedgeAsset]) -> Vec<HedgeAsset> {
+fn rank_assets_borda(eligible: &[HedgeSymbol]) -> Vec<HedgeSymbol> {
     if eligible.is_empty() {
         return vec![];
     }
@@ -94,7 +161,7 @@ fn rank_assets_borda(eligible: &[HedgeAsset]) -> Vec<HedgeAsset> {
     for (i, s) in by_volume.iter().enumerate() {
         volume_rank.insert(s.idx, i);
     }
-    let mut scored: Vec<(usize, HedgeAsset)> = eligible
+    let mut scored: Vec<(usize, HedgeSymbol)> = eligible
         .iter()
         .map(|s| {
             let vr = *vol_rank.get(&s.idx).unwrap_or(&eligible.len());
@@ -106,273 +173,498 @@ fn rank_assets_borda(eligible: &[HedgeAsset]) -> Vec<HedgeAsset> {
     scored.into_iter().map(|(_, s)| s).collect()
 }
 
-/// Reduce slot count until per-slot cost meets min_cost.
-fn compute_slot_count(
-    target_exposure: f64,
-    balance: f64,
-    max_slots: usize,
-    min_cost: f64,
-) -> usize {
-    if max_slots == 0 {
-        return 0;
+fn underwaterness_long(pprice: f64, sym: &HedgeSymbol) -> f64 {
+    if pprice <= 0.0 {
+        return 0.0;
     }
-    let mut slots = max_slots;
-    loop {
-        let per_slot_notional = (target_exposure * balance) / (slots as f64);
-        if per_slot_notional + 1e-12 >= min_cost {
-            return slots;
+    1.0 - market_price(sym) / pprice
+}
+
+fn underwaterness_short(pprice: f64, sym: &HedgeSymbol) -> f64 {
+    if pprice <= 0.0 {
+        return 0.0;
+    }
+    market_price(sym) / pprice - 1.0
+}
+
+fn validate_symbols_contiguous(symbols: &[HedgeSymbol]) -> Result<(), HedgeError> {
+    for (i, s) in symbols.iter().enumerate() {
+        if s.idx != i {
+            return Err(HedgeError::new(format!(
+                "symbols must be indexed by idx (symbols[i].idx == i); got symbols[{}].idx={}",
+                i, s.idx
+            )));
         }
-        if slots == 1 {
-            return 1;
+        if !(s.bid.is_finite() && s.ask.is_finite() && s.bid > 0.0 && s.ask > 0.0) {
+            return Err(HedgeError::new(format!(
+                "invalid order book for idx {}: bid={} ask={}",
+                s.idx, s.bid, s.ask
+            )));
         }
-        slots -= 1;
+        if !(s.effective_min_cost.is_finite() && s.effective_min_cost > 0.0) {
+            return Err(HedgeError::new(format!(
+                "non-finite effective_min_cost for idx {}: {}",
+                s.idx, s.effective_min_cost
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_config(cfg: &HedgeConfig) -> Result<(), HedgeError> {
+    for (name, v) in [
+        ("threshold", cfg.threshold),
+        ("tolerance_pct", cfg.tolerance_pct),
+        ("hedge_excess_allowance_pct", cfg.hedge_excess_allowance_pct),
+        ("allocation_min_fraction", cfg.allocation_min_fraction),
+    ] {
+        if !v.is_finite() {
+            return Err(HedgeError::new(format!(
+                "hedge config {} is non-finite: {}",
+                name, v
+            )));
+        }
+    }
+    if cfg.threshold < 0.0 {
+        return Err(HedgeError::new("hedge.threshold must be >= 0.0"));
+    }
+    if cfg.tolerance_pct < 0.0 {
+        return Err(HedgeError::new("hedge.tolerance_pct must be >= 0.0"));
+    }
+    if cfg.hedge_excess_allowance_pct < 0.0 {
+        return Err(HedgeError::new(
+            "hedge.hedge_excess_allowance_pct must be >= 0.0",
+        ));
+    }
+    if cfg.allocation_min_fraction <= 0.0 || cfg.allocation_min_fraction > 1.0 {
+        return Err(HedgeError::new(
+            "hedge.allocation_min_fraction must be in (0.0, 1.0]",
+        ));
+    }
+    Ok(())
+}
+
+fn base_entry_wants_symbol(mode: HedgeMode, desired_qty: f64) -> bool {
+    match mode {
+        HedgeMode::HedgeShortsForLongs => desired_qty > 0.0,
+        HedgeMode::HedgeLongsForShorts => desired_qty < 0.0,
     }
 }
 
-/// Compute desired hedge orders.
-pub fn compute_hedge_orders(
-    base_mode: HedgeMode,
-    base_positions: &[HedgePosition],
-    hedge_positions: &[HedgePosition],
-    balance: f64,
-    twel: f64,
-    eligible_assets: &[HedgeAsset],
+fn hedge_entry_price(mode: HedgeMode, sym: &HedgeSymbol) -> f64 {
+    match mode {
+        HedgeMode::HedgeShortsForLongs => sym.ask, // sell to open/increase short (maker)
+        HedgeMode::HedgeLongsForShorts => sym.bid, // buy to open/increase long (maker)
+    }
+}
+
+fn hedge_close_price(mode: HedgeMode, sym: &HedgeSymbol) -> f64 {
+    match mode {
+        HedgeMode::HedgeShortsForLongs => sym.bid, // buy to close short (maker)
+        HedgeMode::HedgeLongsForShorts => sym.ask, // sell to close long (maker)
+    }
+}
+
+fn hedge_close_qty_for_full_close(mode: HedgeMode, pos: &HedgePosition, sym: &HedgeSymbol) -> f64 {
+    let qty_step = sym.exchange_params.qty_step;
+    let abs_size = pos.size.abs();
+    let rounded = round_(abs_size, qty_step);
+    if rounded == 0.0 { abs_size } else { rounded }.copysign(match mode {
+        HedgeMode::HedgeShortsForLongs => 1.0,  // buy
+        HedgeMode::HedgeLongsForShorts => -1.0, // sell
+    })
+}
+
+/// Compute hedge orders and collision gating.
+///
+/// - `symbols` must be indexed by `idx` (i.e. `symbols[i].idx == i`).
+/// - `positions_long/short` are the current open positions per pside (signed sizes).
+/// - `desired_base_orders` are the base ideal orders for this cycle (used for collisions/exclusions).
+/// - `base_twel` and `base_n_positions` are taken from the base pside's bot params.
+pub fn compute_hedge_cycle(
+    cfg: &HedgeConfig,
+    symbols: &[HedgeSymbol],
+    positions_long: &[HedgePosition],
+    positions_short: &[HedgePosition],
     desired_base_orders: &[DesiredBaseOrder],
-    one_way: bool,
-) -> HedgeResult {
-    let mut result = HedgeResult::default();
-    if balance <= 0.0 {
-        return result;
+    balance: f64,
+    base_twel: f64,
+    base_n_positions: usize,
+) -> Result<HedgeCycleOutput, HedgeError> {
+    validate_config(cfg)?;
+    validate_symbols_contiguous(symbols)?;
+
+    if !(balance.is_finite() && balance > 0.0) {
+        return Err(HedgeError::new(format!(
+            "balance must be > 0 and finite; got {}",
+            balance
+        )));
+    }
+    if !(base_twel.is_finite() && base_twel >= 0.0) {
+        return Err(HedgeError::new(format!(
+            "base_twel must be >= 0 and finite; got {}",
+            base_twel
+        )));
     }
 
-    let desired_base_set: HashSet<usize> = desired_base_orders.iter().map(|o| o.idx).collect();
+    let (base_positions, hedge_positions) = match cfg.mode {
+        HedgeMode::HedgeShortsForLongs => (positions_long, positions_short),
+        HedgeMode::HedgeLongsForShorts => (positions_short, positions_long),
+    };
 
-    // Map current hedge positions by idx.
+    // One-way invariant (v0).
+    if cfg.one_way {
+        let mut long_set: HashSet<usize> = HashSet::new();
+        for p in positions_long.iter().filter(|p| p.size != 0.0) {
+            long_set.insert(p.idx);
+        }
+        for p in positions_short.iter().filter(|p| p.size != 0.0) {
+            if long_set.contains(&p.idx) {
+                return Err(HedgeError::new(format!(
+                    "one-way violation: both long and short positions open on idx {}",
+                    p.idx
+                )));
+            }
+        }
+    }
+
+    let mut out = HedgeCycleOutput::default();
+
+    let base_open: HashSet<usize> = base_positions
+        .iter()
+        .filter(|p| p.size != 0.0)
+        .map(|p| p.idx)
+        .collect();
+
+    // Base entry intents for one-way exclusions and collision gating.
+    let base_entry_intents: HashSet<usize> = desired_base_orders
+        .iter()
+        .filter(|o| base_entry_wants_symbol(cfg.mode, o.qty))
+        .map(|o| o.idx)
+        .collect();
+
     let hedge_map: HashMap<usize, HedgePosition> = hedge_positions
         .iter()
+        .filter(|p| p.size != 0.0)
         .cloned()
         .map(|p| (p.idx, p))
         .collect();
 
-    // Collision handling for one-way: if base wants an idx already hedged on opposite side, close hedge and defer base order.
-    if one_way {
-        for idx in &desired_base_set {
-            if let Some(hp) = hedge_map.get(idx) {
-                if let Some(asset) = eligible_assets.iter().find(|s| s.idx == *idx) {
-                    let qty = round_(hp.size.abs(), asset.exchange_params.qty_step);
-                    if qty > 0.0 {
-                        // Close the hedge (direction depends on hedge mode).
-                        let close_qty = match base_mode {
-                            HedgeMode::HedgeShortsForLongs => qty, // buy to close short => +qty
-                            HedgeMode::HedgeLongsForShorts => -qty, // sell to close long => -qty
-                        };
-                        result.orders.push(HedgeOrder {
-                            idx: *idx,
-                            qty: close_qty,
-                            price: asset.bid,
-                            action: HedgeAction::Close,
-                            reason: "collision_with_base".to_string(),
-                        });
-                    }
-                    match base_mode {
-                        HedgeMode::HedgeShortsForLongs => {
-                            result.deferred_base_longs.insert(*idx);
-                        }
-                        HedgeMode::HedgeLongsForShorts => {
-                            result.deferred_base_shorts.insert(*idx);
-                        }
-                    }
+    // One-way collisions: if base wants to open on idx where a hedge exists, close hedge and gate base entry.
+    if cfg.one_way {
+        for idx in &base_entry_intents {
+            if let Some(pos) = hedge_map.get(idx) {
+                if *idx >= symbols.len() {
+                    return Err(HedgeError::new(format!(
+                        "missing symbol market data for collision close idx {}",
+                        idx
+                    )));
+                }
+                let sym = &symbols[*idx];
+                let close_qty = hedge_close_qty_for_full_close(cfg.mode, pos, sym);
+                if close_qty != 0.0 {
+                    out.orders.push(HedgeOrder {
+                        idx: *idx,
+                        qty: close_qty,
+                        price: hedge_close_price(cfg.mode, sym),
+                        action: HedgeAction::Close,
+                        reason: "collision_with_base".to_string(),
+                    });
+                    out.gate_base_entries.insert(*idx);
                 }
             }
         }
     }
 
-    // Active hedge positions excluding collisions we just closed.
-    let active_hedges: Vec<HedgePosition> = hedge_positions
+    // Active hedges excluding collisions we are closing.
+    let mut active_hedges: Vec<HedgePosition> = hedge_positions
         .iter()
-        .filter(|p| !desired_base_set.contains(&p.idx))
+        .filter(|p| p.size != 0.0 && !out.gate_base_entries.contains(&p.idx))
         .cloned()
         .collect();
 
-    let gross_base = gross_exposure(base_positions, balance);
-    let gross_hedge = gross_exposure(&active_hedges, balance);
-    let net = gross_base - gross_hedge;
-
-    // Tolerance band.
-    if net.abs() <= DEFAULT_TOLERANCE * twel {
-        return result;
+    // Compute exposures.
+    let mut gross_base: f64 = 0.0;
+    for p in base_positions.iter().filter(|p| p.size != 0.0) {
+        let sym = &symbols[p.idx];
+        gross_base += position_exposure(p, sym, balance);
+    }
+    let mut gross_hedge: f64 = 0.0;
+    for p in active_hedges.iter().filter(|p| p.size != 0.0) {
+        let sym = &symbols[p.idx];
+        gross_hedge += position_exposure(p, sym, balance);
     }
 
-    // Target hedge exposure mirrors gross_base.
-    let target_hedge_exposure = gross_base;
-    let remaining_hedge_exposure = (target_hedge_exposure - gross_hedge).max(0.0);
-    let mut reduce_hedge_exposure = (gross_hedge - target_hedge_exposure).max(0.0);
-
-    // Filter eligible hedge assets (exclude desired base assets if one-way).
-    let eligible_filtered: Vec<HedgeAsset> = eligible_assets
-        .iter()
-        .filter(|s| !one_way || !desired_base_set.contains(&s.idx))
-        .cloned()
-        .collect();
-    let ranked = rank_assets_borda(&eligible_filtered);
-    if ranked.is_empty() {
-        return result;
+    let target_hedge = gross_base * cfg.threshold;
+    let tolerance_band = base_twel * cfg.tolerance_pct;
+    let diff = gross_hedge - target_hedge;
+    if diff.abs() <= tolerance_band + 1e-12 {
+        return Ok(out);
     }
 
-    // Slot count and per-slot cap.
-    let max_slots = ranked.len().min(base_positions.len().max(1));
-    let slots = compute_slot_count(
-        target_hedge_exposure,
-        balance,
-        max_slots,
-        ranked[0].exchange_params.min_cost,
-    );
-    let per_slot_target = if slots > 0 {
-        (target_hedge_exposure * balance) / slots as f64
+    // Determine per-position cap.
+    let max_positions_cfg = if cfg.max_n_positions == 0 {
+        base_n_positions
     } else {
-        0.0
+        cfg.max_n_positions
     };
-    let per_slot_cap = per_slot_target * (1.0 + DEFAULT_HEDGE_EXCESS_ALLOWANCE_PCT);
+    let max_positions = max_positions_cfg.max(1);
+    let cap_exposure =
+        (base_twel * cfg.threshold / max_positions as f64) * (1.0 + cfg.hedge_excess_allowance_pct);
 
-    // Working map of hedge state.
-    let hedge_state: HashMap<usize, HedgePosition> = ranked
-        .iter()
-        .map(|s| {
-            let p = active_hedges
-                .iter()
-                .find(|p| p.idx == s.idx)
-                .cloned()
-                .unwrap_or(HedgePosition {
-                    idx: s.idx,
-                    size: 0.0,
-                    price: s.ask,
-                });
-            (s.idx, p)
-        })
-        .collect();
-
-    // Reduce hedge if overexposed: close least underwater first.
-    if reduce_hedge_exposure > DEFAULT_TOLERANCE * twel {
-        let mut hedges_vec: Vec<(f64, HedgeAsset, HedgePosition)> = ranked
-            .iter()
-            .filter_map(|asset| {
-                let pos = hedge_state.get(&asset.idx)?;
-                if pos.size == 0.0 {
-                    return None;
-                }
-                let underwater = match base_mode {
-                    HedgeMode::HedgeShortsForLongs => {
-                        if pos.price > 0.0 {
-                            asset.ask / pos.price - 1.0
-                        } else {
-                            0.0
-                        }
-                    }
-                    HedgeMode::HedgeLongsForShorts => {
-                        if pos.price > 0.0 {
-                            asset.bid / pos.price - 1.0
-                        } else {
-                            0.0
-                        }
-                    }
-                };
-                Some((underwater, asset.clone(), pos.clone()))
-            })
-            .collect();
+    // Reduce hedge exposure: close least underwater first (full close).
+    if diff > tolerance_band {
         // least underwater first
-        hedges_vec.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        for (_, asset, pos) in hedges_vec {
-            if reduce_hedge_exposure <= 0.0 {
+        active_hedges.sort_by(|a, b| {
+            let sa = &symbols[a.idx];
+            let sb = &symbols[b.idx];
+            let ua = match cfg.mode {
+                HedgeMode::HedgeShortsForLongs => underwaterness_short(a.price, sa),
+                HedgeMode::HedgeLongsForShorts => underwaterness_long(a.price, sa),
+            };
+            let ub = match cfg.mode {
+                HedgeMode::HedgeShortsForLongs => underwaterness_short(b.price, sb),
+                HedgeMode::HedgeLongsForShorts => underwaterness_long(b.price, sb),
+            };
+            ua.partial_cmp(&ub).unwrap()
+        });
+
+        for pos in active_hedges.iter() {
+            if gross_hedge <= target_hedge + tolerance_band {
                 break;
             }
-            let notional = qty_to_cost(pos.size.abs(), pos.price, asset.exchange_params.c_mult);
-            let reduce_notional = notional.min(reduce_hedge_exposure * balance);
-            let mut qty = cost_to_qty(reduce_notional, asset.bid, asset.exchange_params.c_mult);
-            qty = round_(qty, asset.exchange_params.qty_step);
-            if qty <= 0.0 {
+            let sym = &symbols[pos.idx];
+            let close_qty = hedge_close_qty_for_full_close(cfg.mode, pos, sym);
+            if close_qty == 0.0 {
                 continue;
             }
-            let signed_qty = match base_mode {
-                HedgeMode::HedgeShortsForLongs => qty,  // buy to close short
-                HedgeMode::HedgeLongsForShorts => -qty, // sell to close long
-            };
-            result.orders.push(HedgeOrder {
-                idx: asset.idx,
-                qty: signed_qty,
-                price: asset.bid,
+            out.orders.push(HedgeOrder {
+                idx: pos.idx,
+                qty: close_qty,
+                price: hedge_close_price(cfg.mode, sym),
                 action: HedgeAction::Close,
                 reason: "rebalance_reduce".to_string(),
             });
-            reduce_hedge_exposure -=
-                qty_to_cost(qty.abs(), asset.bid, asset.exchange_params.c_mult) / balance;
+            gross_hedge -= position_exposure(pos, sym, balance);
         }
-        return result;
+        return Ok(out);
     }
 
     // Add/open hedges if underexposed.
-    if remaining_hedge_exposure > DEFAULT_TOLERANCE * twel {
-        let mut hedges_vec: Vec<(f64, HedgeAsset, HedgePosition)> = ranked
-            .iter()
-            .filter_map(|asset| {
-                let pos = hedge_state.get(&asset.idx)?.clone();
-                let underwater = if pos.size != 0.0 && pos.price > 0.0 {
-                    match base_mode {
-                        HedgeMode::HedgeShortsForLongs => asset.ask / pos.price - 1.0,
-                        HedgeMode::HedgeLongsForShorts => asset.bid / pos.price - 1.0,
-                    }
-                } else {
-                    1.0 // seed new positions first
-                };
-                Some((underwater, asset.clone(), pos))
-            })
-            .collect();
-        // most underwater first
-        hedges_vec.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-
-        let mut allowance_notional = remaining_hedge_exposure * balance;
-
-        for (_, asset, pos) in hedges_vec {
-            if allowance_notional <= 0.0 {
-                break;
-            }
-            let current_notional =
-                qty_to_cost(pos.size.abs(), pos.price, asset.exchange_params.c_mult);
-            let target_notional = per_slot_target.min(per_slot_cap);
-            if current_notional >= target_notional - 1e-12 {
-                continue;
-            }
-            let to_add_notional = (target_notional - current_notional).min(allowance_notional);
-            if to_add_notional <= 0.0 {
-                continue;
-            }
-            let mut qty = cost_to_qty(to_add_notional, asset.ask, asset.exchange_params.c_mult);
-            qty = round_up(qty, asset.exchange_params.qty_step);
-            if qty <= 0.0 {
-                continue;
-            }
-            // Respect min_cost/min_qty
-            let cost_after = qty_to_cost(qty, asset.ask, asset.exchange_params.c_mult);
-            if cost_after < asset.exchange_params.min_cost - 1e-9
-                || qty < asset.exchange_params.min_qty - 1e-9
-            {
-                continue;
-            }
-            let signed_qty = match base_mode {
-                HedgeMode::HedgeShortsForLongs => -qty, // sell to open/increase short
-                HedgeMode::HedgeLongsForShorts => qty,  // buy to open/increase long
-            };
-            result.orders.push(HedgeOrder {
-                idx: asset.idx,
-                qty: signed_qty,
-                price: asset.ask,
-                action: HedgeAction::OpenOrIncrease,
-                reason: "rebalance_add".to_string(),
-            });
-            allowance_notional -= cost_after;
-        }
+    let mut remaining_budget_notional = (target_hedge - gross_hedge).max(0.0) * balance;
+    if remaining_budget_notional <= 0.0 {
+        return Ok(out);
     }
 
-    result
+    // Build eligible symbols list:
+    // - restricted to approved_hedge_symbols for *opening*
+    // - exclude base open symbols and base entry intents (one-way)
+    let approved_set: HashSet<usize> = cfg.approved_hedge_symbols.iter().copied().collect();
+    let mut eligible: Vec<HedgeSymbol> = Vec::new();
+    for &idx in &cfg.approved_hedge_symbols {
+        if idx >= symbols.len() {
+            continue;
+        }
+        if cfg.one_way && (base_open.contains(&idx) || base_entry_intents.contains(&idx)) {
+            continue;
+        }
+        eligible.push(symbols[idx].clone());
+    }
+    let ranked = rank_assets_borda(&eligible);
+
+    // Working hedge state (simulate in-cycle allocations).
+    let mut hedge_state: HashMap<usize, HedgePosition> = HashMap::new();
+    for p in active_hedges.iter().cloned() {
+        hedge_state.insert(p.idx, p);
+    }
+
+    // Bootstrap: open minimum-size hedges on as many distinct eligible symbols as possible.
+    let mut open_count = hedge_state.len();
+    for sym in ranked.iter() {
+        if remaining_budget_notional <= 0.0 {
+            break;
+        }
+        if open_count >= max_positions {
+            break;
+        }
+        if hedge_state.contains_key(&sym.idx) {
+            continue;
+        }
+        let entry_price = hedge_entry_price(cfg.mode, sym);
+        let min_qty =
+            effective_min_entry_qty(sym.effective_min_cost, entry_price, &sym.exchange_params);
+        let min_cost = qty_to_cost(min_qty, entry_price, sym.exchange_params.c_mult);
+        let cap_notional = cap_exposure * balance;
+        if cap_notional + 1e-12 < min_cost {
+            continue;
+        }
+        if remaining_budget_notional + 1e-12 < min_cost {
+            continue;
+        }
+        let signed_qty = match cfg.mode {
+            HedgeMode::HedgeShortsForLongs => -min_qty,
+            HedgeMode::HedgeLongsForShorts => min_qty,
+        };
+        out.orders.push(HedgeOrder {
+            idx: sym.idx,
+            qty: signed_qty,
+            price: entry_price,
+            action: HedgeAction::OpenOrIncrease,
+            reason: "rebalance_open_min".to_string(),
+        });
+        hedge_state.insert(
+            sym.idx,
+            HedgePosition {
+                idx: sym.idx,
+                size: signed_qty,
+                price: entry_price,
+            },
+        );
+        remaining_budget_notional -= min_cost;
+        open_count += 1;
+    }
+
+    // Allocation: add to most underwater hedges, chunked to avoid churn.
+    // Aggregate qty per idx into one order per symbol per cycle (deterministic).
+    let mut qty_by_idx: HashMap<usize, f64> = HashMap::new();
+
+    // Safety: cap the number of allocations.
+    let mut iter: usize = 0;
+    while remaining_budget_notional > 0.0 {
+        iter += 1;
+        if iter > 200 {
+            break;
+        }
+        let target_hedge_now = gross_base * cfg.threshold;
+        let current_gross_hedge: f64 = hedge_state
+            .values()
+            .map(|p| position_exposure(p, &symbols[p.idx], balance))
+            .sum();
+        let need = (target_hedge_now - current_gross_hedge).max(0.0) * balance;
+        if need <= tolerance_band * balance {
+            break;
+        }
+        if remaining_budget_notional <= 0.0 {
+            break;
+        }
+
+        // Choose most underwater hedge with remaining cap room.
+        let mut best: Option<(f64, usize)> = None;
+        for (idx, pos) in hedge_state.iter() {
+            if pos.size == 0.0 {
+                continue;
+            }
+            if !approved_set.contains(idx) {
+                continue;
+            }
+            let sym = &symbols[*idx];
+            let pos_exposure = position_exposure(pos, sym, balance);
+            if pos_exposure >= cap_exposure - 1e-12 {
+                continue;
+            }
+            let u = match cfg.mode {
+                HedgeMode::HedgeShortsForLongs => underwaterness_short(pos.price, sym),
+                HedgeMode::HedgeLongsForShorts => underwaterness_long(pos.price, sym),
+            };
+            best = match best {
+                None => Some((u, *idx)),
+                Some((bu, bidx)) => {
+                    if u > bu + 1e-12 {
+                        Some((u, *idx))
+                    } else if (u - bu).abs() <= 1e-12 && *idx < bidx {
+                        Some((u, *idx))
+                    } else {
+                        Some((bu, bidx))
+                    }
+                }
+            };
+        }
+        let Some((_u, idx)) = best else { break };
+
+        let sym = &symbols[idx];
+        let entry_price = hedge_entry_price(cfg.mode, sym);
+        let min_qty =
+            effective_min_entry_qty(sym.effective_min_cost, entry_price, &sym.exchange_params);
+        let min_cost = qty_to_cost(min_qty, entry_price, sym.exchange_params.c_mult);
+
+        let pos = hedge_state.get(&idx).cloned().unwrap_or(HedgePosition {
+            idx,
+            size: 0.0,
+            price: 0.0,
+        });
+        let current_exposure = position_exposure(&pos, sym, balance);
+        let remaining_cap_notional = ((cap_exposure - current_exposure).max(0.0)) * balance;
+        if remaining_cap_notional + 1e-12 < min_cost {
+            break;
+        }
+
+        let chunk = (cfg.allocation_min_fraction * remaining_budget_notional)
+            .max(min_cost)
+            .min(need)
+            .min(remaining_cap_notional)
+            .min(remaining_budget_notional);
+        if chunk + 1e-12 < min_cost {
+            break;
+        }
+
+        let mut qty = cost_to_qty(chunk, entry_price, sym.exchange_params.c_mult);
+        qty = round_dn(qty, sym.exchange_params.qty_step);
+        if qty + 1e-12 < min_qty {
+            qty = min_qty;
+        }
+        if qty <= 0.0 {
+            break;
+        }
+        let signed_qty = match cfg.mode {
+            HedgeMode::HedgeShortsForLongs => -qty,
+            HedgeMode::HedgeLongsForShorts => qty,
+        };
+        let cost_after = qty_to_cost(qty, entry_price, sym.exchange_params.c_mult);
+        if cost_after + 1e-12 < min_cost {
+            break;
+        }
+        if cost_after > remaining_budget_notional + 1e-12 {
+            break;
+        }
+
+        // Update aggregate.
+        *qty_by_idx.entry(idx).or_insert(0.0) += signed_qty;
+
+        // Update simulated psize/pprice.
+        let (new_psize, new_pprice) = calc_new_psize_pprice(
+            pos.size,
+            pos.price,
+            signed_qty,
+            entry_price,
+            sym.exchange_params.qty_step,
+        );
+        hedge_state.insert(
+            idx,
+            HedgePosition {
+                idx,
+                size: new_psize,
+                price: new_pprice,
+            },
+        );
+        remaining_budget_notional -= cost_after;
+    }
+
+    for (idx, qty) in qty_by_idx {
+        if qty == 0.0 {
+            continue;
+        }
+        let sym = &symbols[idx];
+        let entry_price = hedge_entry_price(cfg.mode, sym);
+        out.orders.push(HedgeOrder {
+            idx,
+            qty,
+            price: entry_price,
+            action: HedgeAction::OpenOrIncrease,
+            reason: "rebalance_add".to_string(),
+        });
+    }
+
+    Ok(out)
 }
 
 // ---------------- Tests ----------------
@@ -381,8 +673,8 @@ pub fn compute_hedge_orders(
 mod tests {
     use super::*;
 
-    fn asset(idx: usize, bid: f64, ask: f64, vol: f64, vola: f64, min_cost: f64) -> HedgeAsset {
-        HedgeAsset {
+    fn sym(idx: usize, bid: f64, ask: f64, vol: f64, vola: f64, min_cost: f64) -> HedgeSymbol {
+        HedgeSymbol {
             idx,
             bid,
             ask,
@@ -395,14 +687,15 @@ mod tests {
                 min_cost,
                 c_mult: 1.0,
             },
+            effective_min_cost: min_cost,
         }
     }
 
     #[test]
     fn test_rank_borda_prefers_low_vol_high_volume() {
-        let a = asset(0, 10.0, 10.0, 1000.0, 0.1, 1.0);
-        let b = asset(1, 10.0, 10.0, 900.0, 0.2, 1.0);
-        let c = asset(2, 10.0, 10.0, 800.0, 0.05, 1.0);
+        let a = sym(0, 10.0, 10.0, 1000.0, 0.1, 1.0);
+        let b = sym(1, 10.0, 10.0, 900.0, 0.2, 1.0);
+        let c = sym(2, 10.0, 10.0, 800.0, 0.05, 1.0);
         let ranked = rank_assets_borda(&[a.clone(), b.clone(), c.clone()]);
         assert_eq!(ranked[0].idx, 0); // best volume, decent vol
         assert_eq!(ranked[1].idx, 2); // best vol
@@ -410,57 +703,65 @@ mod tests {
 
     #[test]
     fn test_no_action_within_tolerance() {
+        let cfg = HedgeConfig {
+            threshold: 1.0,
+            tolerance_pct: 0.10,
+            approved_hedge_symbols: vec![1],
+            ..Default::default()
+        };
+        let symbols = vec![
+            sym(0, 10.0, 10.0, 1.0, 1.0, 1.0),
+            sym(1, 10.0, 10.0, 1.0, 1.0, 1.0),
+        ];
         let longs = vec![HedgePosition {
             idx: 0,
             size: 1.0,
             price: 10.0,
         }];
-        let shorts: Vec<HedgePosition> = vec![HedgePosition {
+        let shorts = vec![HedgePosition {
             idx: 1,
             size: -1.0,
             price: 10.0,
         }];
-        let eligible = vec![asset(1, 10.0, 10.0, 1000.0, 0.1, 1.0)];
-        let res = compute_hedge_orders(
-            HedgeMode::HedgeShortsForLongs,
-            &longs,
-            &shorts,
-            100.0,
-            1.5,
-            &eligible,
-            &[],
-            false,
-        );
-        assert!(res.orders.is_empty());
+        let res = compute_hedge_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1).unwrap();
+        assert!(res.orders.is_empty() && res.gate_base_entries.is_empty());
     }
 
     #[test]
     fn test_add_shorts_when_underhedged() {
+        let cfg = HedgeConfig {
+            threshold: 1.0,
+            tolerance_pct: 0.0,
+            approved_hedge_symbols: vec![1, 2],
+            ..Default::default()
+        };
+        let symbols = vec![
+            sym(0, 10.0, 10.0, 1.0, 1.0, 1.0),
+            sym(1, 10.0, 10.0, 1000.0, 0.1, 1.0),
+            sym(2, 10.0, 10.0, 900.0, 0.2, 1.0),
+        ];
         let longs = vec![HedgePosition {
             idx: 0,
             size: 10.0,
             price: 10.0,
         }]; // exposure = 1.0
         let shorts: Vec<HedgePosition> = vec![]; // none
-        let eligible = vec![
-            asset(1, 10.0, 10.0, 1000.0, 0.1, 1.0),
-            asset(2, 10.0, 10.0, 900.0, 0.2, 1.0),
-        ];
-        let res = compute_hedge_orders(
-            HedgeMode::HedgeShortsForLongs,
-            &longs,
-            &shorts,
-            100.0,
-            1.5,
-            &eligible,
-            &[],
-            false,
-        );
+        let res = compute_hedge_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1).unwrap();
         assert!(res.orders.iter().any(|o| o.qty < 0.0));
     }
 
     #[test]
     fn test_reduce_shorts_when_overhedged() {
+        let cfg = HedgeConfig {
+            threshold: 1.0,
+            tolerance_pct: 0.0,
+            approved_hedge_symbols: vec![1],
+            ..Default::default()
+        };
+        let symbols = vec![
+            sym(0, 10.0, 10.0, 1.0, 1.0, 1.0),
+            sym(1, 10.0, 10.0, 1.0, 1.0, 1.0),
+        ];
         let longs = vec![HedgePosition {
             idx: 0,
             size: 5.0,
@@ -471,22 +772,19 @@ mod tests {
             size: -10.0,
             price: 10.0,
         }]; // exposure 1.0
-        let eligible = vec![asset(1, 10.0, 10.0, 1000.0, 0.1, 1.0)];
-        let res = compute_hedge_orders(
-            HedgeMode::HedgeShortsForLongs,
-            &longs,
-            &shorts,
-            100.0,
-            1.5,
-            &eligible,
-            &[],
-            false,
-        );
+        let res = compute_hedge_cycle(&cfg, &symbols, &longs, &shorts, &[], 100.0, 1.5, 1).unwrap();
         assert!(res.orders.iter().any(|o| o.qty > 0.0));
     }
 
     #[test]
-    fn test_collision_defers_long_and_closes_short() {
+    fn test_collision_gates_base_entry_and_closes_hedge() {
+        let cfg = HedgeConfig {
+            threshold: 1.0,
+            tolerance_pct: 0.0,
+            approved_hedge_symbols: vec![0],
+            ..Default::default()
+        };
+        let symbols = vec![sym(0, 10.0, 10.0, 1.0, 1.0, 1.0)];
         let longs = vec![HedgePosition {
             idx: 0,
             size: 10.0,
@@ -497,19 +795,10 @@ mod tests {
             size: -1.0,
             price: 10.0,
         }];
-        let eligible = vec![asset(0, 10.0, 10.0, 1000.0, 0.1, 1.0)];
-        let desired_long = vec![DesiredBaseOrder { idx: 0 }];
-        let res = compute_hedge_orders(
-            HedgeMode::HedgeShortsForLongs,
-            &longs,
-            &shorts,
-            100.0,
-            1.5,
-            &eligible,
-            &desired_long,
-            true,
-        );
-        assert!(res.deferred_base_longs.contains(&0));
+        let desired = vec![DesiredBaseOrder { idx: 0, qty: 1.0 }];
+        let res =
+            compute_hedge_cycle(&cfg, &symbols, &longs, &shorts, &desired, 100.0, 1.5, 1).unwrap();
+        assert!(res.gate_base_entries.contains(&0));
         assert!(res
             .orders
             .iter()
@@ -518,23 +807,25 @@ mod tests {
 
     #[test]
     fn test_short_only_mode_adds_longs() {
+        let cfg = HedgeConfig {
+            threshold: 1.0,
+            tolerance_pct: 0.0,
+            approved_hedge_symbols: vec![1],
+            mode: HedgeMode::HedgeLongsForShorts,
+            ..Default::default()
+        };
+        let symbols = vec![
+            sym(0, 10.0, 10.0, 1.0, 1.0, 1.0),
+            sym(1, 10.0, 10.0, 1.0, 1.0, 1.0),
+        ];
         let shorts = vec![HedgePosition {
             idx: 0,
             size: -10.0,
             price: 10.0,
         }]; // base exposure 1.0
         let hedges: Vec<HedgePosition> = vec![];
-        let eligible = vec![asset(1, 10.0, 10.0, 1000.0, 0.1, 1.0)];
-        let res = compute_hedge_orders(
-            HedgeMode::HedgeLongsForShorts,
-            &shorts,
-            &hedges,
-            100.0,
-            1.5,
-            &eligible,
-            &[],
-            false,
-        );
+        let res =
+            compute_hedge_cycle(&cfg, &symbols, &hedges, &shorts, &[], 100.0, 1.5, 1).unwrap();
         assert!(res
             .orders
             .iter()

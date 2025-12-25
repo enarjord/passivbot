@@ -516,7 +516,7 @@ pub fn analyze_backtest(fills: &[Fill], equities: &Vec<f64>, exposures_series: &
     } else {
         fills
             .iter()
-            .map(|fill| fill.total_wallet_exposure)
+            .map(|fill| fill.twe_net)
             .filter(|value| value.is_finite())
             .collect()
     };

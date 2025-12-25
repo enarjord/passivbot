@@ -170,6 +170,8 @@ pub struct BacktestParams {
     pub btc_collateral_ltv_cap: Option<f64>,
     pub metrics_only: bool,
     pub filter_by_min_effective_cost: bool,
+    /// Optional hedge overlay configuration (default disabled).
+    pub hedge: crate::hedge::HedgeConfig,
 }
 
 #[derive(Default, Debug, Clone, Copy, Serialize, Deserialize)]
@@ -344,6 +346,11 @@ pub enum OrderType {
     CloseAutoReduceWelLong = 24,
     CloseAutoReduceWelShort = 25,
 
+    EntryHedgeLong = 26,
+    CloseHedgeLong = 27,
+    EntryHedgeShort = 28,
+    CloseHedgeShort = 29,
+
     Empty = 65535,
 }
 
@@ -377,6 +384,8 @@ impl OrderType {
                 | CloseAutoReduceTwelLong
                 | CloseAutoReduceWelLong
                 | ClosePanicLong
+                | EntryHedgeLong
+                | CloseHedgeLong
         )
     }
 }
@@ -416,8 +425,10 @@ pub struct Fill {
     pub position_size: f64,
     pub position_price: f64,
     pub order_type: OrderType,
-    pub wallet_exposure: f64,
-    pub total_wallet_exposure: f64,
+    pub wallet_exposure: f64, // signed: long positive, short negative
+    pub twe_long: f64,
+    pub twe_short: f64, // signed negative
+    pub twe_net: f64,   // twe_long + twe_short
 }
 
 #[derive(Debug, Clone, Serialize)]

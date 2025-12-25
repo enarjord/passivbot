@@ -800,9 +800,14 @@ def detect_flavor(config: dict, template: dict) -> str:
         return "pb_multi"
     if "common" in config:
         return "v7_legacy"
-    if all(k in config for k in template):
+    required_current = {"bot", "live", "backtest", "optimize"}
+    if required_current.issubset(config):
         return "current"
-    if "config" in config and all(k in config["config"] for k in template):
+    if (
+        "config" in config
+        and isinstance(config["config"], dict)
+        and required_current.issubset(config["config"])
+    ):
         return "nested_current"
     if "bot" in config and "live" in config:
         return "live_only"
@@ -1971,6 +1976,15 @@ def get_template_config():
                 "unstuck_loss_allowance_pct": 0.03,
                 "unstuck_threshold": 0.916,
             },
+        },
+        "hedge": {
+            "mode": "off",
+            "threshold": 0.0,
+            "tolerance_pct": 0.05,
+            "allocation_min_fraction": 0.1,
+            "max_n_positions": 0,
+            "hedge_excess_allowance_pct": 0.2,
+            "one_way": True,
         },
         "coin_overrides": {},
         "live": {

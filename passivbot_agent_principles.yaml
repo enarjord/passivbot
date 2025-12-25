@@ -19,6 +19,7 @@ passivbot_agent_principles:
   notation_and_terminology:
     - Position side or position direction (long or short) is consistently called, as appropriate, [position_side, pos_side, pside, PositionSide, PosSide, Pside] everywhere in the codebase and in documentation.
     - Order side or order direction (buy or sell / bid or ask) is consistently called, as appropriate, [side, order_side, Side, OrderSide] everywhere in the codebase and in documentation.
+    - Throughout the codebase, qty and pos_size use signed conventions: buy qty and long pos_size are positive; sell qty and short pos_size are negative. The only exception is at the final stage when the live bot sends an exchange payload and the exchange requires abs(qty).
 
   rounding:
     - Effective min qty for entries must be observed at all times.

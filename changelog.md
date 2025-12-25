@@ -5,6 +5,7 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 ### Added
+- WIP market-neutral hedging overlay for backtesting (new `hedge` config section; Rust hedging module and orchestrator plumbing).
 - Shared Pareto core (`pareto_core.py`) with constraint-aware dominance, crowding, and extreme-preserving pruning; reused by ParetoStore.
 - Canonical suite metrics payload now shared by backtest and optimizer; suite summaries include the same schema as Pareto members.
 - Targeted Pareto tests to ensure consistency.
@@ -20,6 +21,7 @@ All notable user-facing changes will be documented in this file.
 - Live: added `live.candle_lock_timeout_seconds` to control how long CandlestickManager waits for per-symbol candle locks when multiple bot instances share the same cache (default 10s).
 
 ### Changed
+- Backtest fills now include signed `wallet_exposure` and `twe_long`/`twe_short`/`twe_net` (replacing the previous `total_wallet_exposure` fill column).
 - Pareto explorer: default metrics for X/Y/histogram, scenario comparison, param scatter, correlation heatmap, and Closest Config now derive from `config.optimize.scoring` and `config.optimize.limits` instead of first-alphabetical metrics; Closest Config table no longer shows raw *_mean/_min/_max/_std stat columns by default.
 - Suite summaries are leaner: redundant metric dumps removed; canonical metrics schema persisted alongside per-scenario timing.
 - Pareto pruning preserves per-objective extremes when enforcing max size.

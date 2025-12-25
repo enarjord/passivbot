@@ -1,4 +1,13 @@
 {
+    "hedge": {
+        "allocation_min_fraction": 0.1,
+        "hedge_excess_allowance_pct": 0.2,
+        "max_n_positions": 0,
+        "mode": "hedge_shorts_for_longs",
+        "one_way": true,
+        "threshold": 1.0,
+        "tolerance_pct": 0.05
+    },
     "backtest": {
         "balance_sample_divider": 60,
         "base_dir": "backtests",
