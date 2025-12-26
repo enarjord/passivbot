@@ -1,5 +1,4 @@
-use crate::coin_selection::{select_coins, CoinFeature, SelectionConfig};
-use crate::constants::{CLOSE, HIGH, LONG, LOW, NO_POS, SHORT, VOLUME};
+use crate::constants::{CLOSE, HIGH, LONG, LOW, SHORT, VOLUME};
 use crate::entries::calc_min_entry_qty;
 use crate::orchestrator;
 use crate::orchestrator::{
@@ -9,12 +8,11 @@ use crate::orchestrator::{
 use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle};
 use crate::types::{
     BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities, ExchangeParams, Fill,
-    Order, OrderBook, OrderType, Position, Positions, StateParams, TrailingPriceBundle,
+    Order, OrderBook, Position, Positions, TrailingPriceBundle,
 };
 use crate::utils::{
-    calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_order_price_diff_ask,
-    calc_order_price_diff_bid, calc_pnl_long, calc_pnl_short, calc_wallet_exposure, hysteresis,
-    qty_to_cost, round_, round_dn, round_up,
+    calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
+    calc_wallet_exposure, hysteresis, qty_to_cost, round_, round_dn, round_up,
 };
 use serde::Serialize;
 
@@ -41,7 +39,6 @@ const DEBUG_TRACE_WINDOW: Option<(usize, usize)> = None;
 const DEBUG_TRACE_COIN_FILTER: Option<&str> = None;
 use ndarray::{ArrayView1, ArrayView3};
 use serde_json;
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -242,12 +239,6 @@ pub struct OpenOrderBundle {
 }
 
 #[derive(Default, Debug)]
-pub struct Actives {
-    long: HashSet<usize>,
-    short: HashSet<usize>,
-}
-
-#[derive(Default, Debug)]
 pub struct TrailingPrices {
     pub long: HashMap<usize, TrailingPriceBundle>,
     pub short: HashMap<usize, TrailingPriceBundle>,
@@ -301,7 +292,6 @@ pub struct Backtest<'a> {
     positions: Positions,
     open_orders: OpenOrders,
     trailing_prices: TrailingPrices,
-    actives: Actives,
     pnl_cumsum_running: f64,
     pnl_cumsum_max: f64,
     fills: Vec<Fill>,
@@ -766,24 +756,6 @@ impl<'a> Backtest<'a> {
             btc_total_balance_after: after.btc_total_balance,
         };
         writer.write_record(&record);
-    }
-
-    /// Build a fully-populated `orchestrator::OrchestratorInput` snapshot for timestep `k`.
-    pub fn build_orchestrator_input(
-        &self,
-        k: usize,
-        peek_hints: Option<EntryPeekHints>,
-    ) -> orchestrator::OrchestratorInput {
-        self.build_orchestrator_input_iter(k, peek_hints, 0..self.n_coins)
-    }
-
-    fn build_orchestrator_input_indices(
-        &self,
-        k: usize,
-        peek_hints: Option<EntryPeekHints>,
-        indices: &[usize],
-    ) -> orchestrator::OrchestratorInput {
-        self.build_orchestrator_input_iter(k, peek_hints, indices.iter().copied())
     }
 
     fn build_orchestrator_input_iter<I>(
@@ -1469,7 +1441,6 @@ impl<'a> Backtest<'a> {
             current_step: 0,
             open_orders: OpenOrders::default(),
             trailing_prices: TrailingPrices::default(),
-            actives: Actives::default(),
             pnl_cumsum_running: 0.0,
             pnl_cumsum_max: 0.0,
             fills: Vec::new(),
@@ -1696,65 +1667,6 @@ impl<'a> Backtest<'a> {
         self.coin_is_valid_at(idx, k) && k >= trade_start
     }
 
-    pub fn calc_preferred_coins(&mut self, pside: usize) -> Vec<usize> {
-        let max_positions = match pside {
-            LONG => self.effective_n_positions.long,
-            SHORT => self.effective_n_positions.short,
-            _ => 0,
-        };
-        if max_positions == 0 {
-            return Vec::new();
-        }
-
-        if self.n_coins <= max_positions && !self.backtest_params.filter_by_min_effective_cost {
-            // Only consider coins which are tradeable at the current step; otherwise we may waste
-            // "slots" on delisted/not-yet-listed symbols.
-            return (0..self.n_coins)
-                .filter(|&idx| self.coin_is_tradeable_at(idx, self.current_step))
-                .collect();
-        }
-
-        let volume_drop_pct = match pside {
-            LONG => self.bot_params_master.long.filter_volume_drop_pct,
-            SHORT => self.bot_params_master.short.filter_volume_drop_pct,
-            _ => 0.0,
-        };
-        let volatility_drop_pct = match pside {
-            LONG => self.bot_params_master.long.filter_volatility_drop_pct,
-            SHORT => self.bot_params_master.short.filter_volatility_drop_pct,
-            _ => 0.0,
-        };
-
-        let features: Vec<CoinFeature> = (0..self.n_coins)
-            .map(|idx| CoinFeature {
-                index: idx,
-                enabled: self.coin_is_tradeable_at(idx, self.current_step)
-                    && self.coin_passes_min_effective_cost(idx, pside),
-                volume_score: match pside {
-                    LONG => self.emas[idx].vol_long,
-                    SHORT => self.emas[idx].vol_short,
-                    _ => 0.0,
-                },
-                volatility_score: match pside {
-                    LONG => self.emas[idx].log_range_long,
-                    SHORT => self.emas[idx].log_range_short,
-                    _ => 0.0,
-                },
-            })
-            .collect();
-
-        let config = SelectionConfig {
-            max_positions,
-            volume_drop_pct,
-            volatility_drop_pct,
-            require_forager: true,
-        };
-
-        let mut selected = select_coins(&features, &config);
-        // Sort for deterministic ordering (prevents hash-map iteration differences).
-        selected
-    }
-
     fn coin_passes_min_effective_cost(&self, idx: usize, pside: usize) -> bool {
         if !self.backtest_params.filter_by_min_effective_cost {
             return true;
@@ -1784,26 +1696,6 @@ impl<'a> Backtest<'a> {
         let projected_cost =
             self.balance.usd_total_balance * effective_limit * bot.entry_initial_qty_pct;
         projected_cost >= min_cost
-    }
-
-    fn create_state_params(&self, k: usize, idx: usize, pside: usize) -> StateParams {
-        let mut close_price = self.hlcvs_value(k, idx, CLOSE);
-        if !close_price.is_finite() {
-            close_price = 0.0;
-        }
-        StateParams {
-            balance: self.balance.usd_total_balance_rounded,
-            order_book: OrderBook {
-                bid: close_price,
-                ask: close_price,
-            },
-            ema_bands: self.emas[idx].compute_bands(pside),
-            entry_volatility_logrange_ema_1h: match pside {
-                LONG => self.emas[idx].entry_volatility_logrange_ema_1h_long,
-                SHORT => self.emas[idx].entry_volatility_logrange_ema_1h_short,
-                _ => 0.0,
-            },
-        }
     }
 
     fn update_balance(&mut self, k: usize, pnl: f64, fee_paid: f64) {
@@ -1971,69 +1863,6 @@ impl<'a> Backtest<'a> {
         }
         let twe_net = twe_long + twe_short;
         (twe_long, twe_short, twe_net)
-    }
-
-    fn update_actives_long(&mut self) -> Vec<usize> {
-        let n_positions = self.effective_n_positions.long;
-
-        let mut current_positions: Vec<usize> = self.positions.long.keys().cloned().collect();
-        current_positions.sort();
-        let preferred_coins = if current_positions.len() < n_positions {
-            self.calc_preferred_coins(LONG)
-        } else {
-            Vec::new()
-        };
-
-        let actives = &mut self.actives.long;
-        actives.clear();
-
-        for &idx in &current_positions {
-            actives.insert(idx);
-        }
-
-        let mut actives_without_pos = Vec::new();
-        for &idx in &preferred_coins {
-            if actives.len() >= n_positions {
-                break;
-            }
-            if actives.insert(idx) {
-                actives_without_pos.push(idx);
-            }
-        }
-
-        actives_without_pos
-    }
-
-    fn update_actives_short(&mut self) -> Vec<usize> {
-        let n_positions = self.effective_n_positions.short;
-
-        let mut current_positions: Vec<usize> = self.positions.short.keys().cloned().collect();
-        current_positions.sort();
-
-        let preferred_coins = if current_positions.len() < n_positions {
-            self.calc_preferred_coins(SHORT)
-        } else {
-            Vec::new()
-        };
-
-        let actives = &mut self.actives.short;
-        actives.clear();
-
-        for &idx in &current_positions {
-            actives.insert(idx);
-        }
-
-        let mut actives_without_pos = Vec::new();
-        for &idx in &preferred_coins {
-            if actives.len() >= n_positions {
-                break;
-            }
-            if actives.insert(idx) {
-                actives_without_pos.push(idx);
-            }
-        }
-
-        actives_without_pos
     }
 
     fn check_for_fills(&mut self, k: usize) {
@@ -2706,177 +2535,6 @@ impl<'a> Backtest<'a> {
     }
 
     #[inline]
-    fn trim_reduce_only_orders(
-        closes: &mut Vec<Order>,
-        position_abs: f64,
-        side: usize,
-        exchange_params: &ExchangeParams,
-        market_price: f64,
-    ) {
-        const QTY_TOLERANCE: f64 = 1e-9;
-        if closes.is_empty() {
-            return;
-        }
-        if position_abs <= QTY_TOLERANCE {
-            closes.clear();
-            return;
-        }
-
-        let mp = if market_price.is_finite() && market_price > 0.0 {
-            market_price
-        } else {
-            0.0
-        };
-
-        let calc_diff = |order: &Order| -> f64 {
-            if mp <= 0.0 {
-                return 0.0;
-            }
-            match side {
-                LONG => calc_order_price_diff_ask(order.price, mp),
-                SHORT => calc_order_price_diff_bid(order.price, mp),
-                _ => 0.0,
-            }
-        };
-
-        // Drop any placeholder orders.
-        closes.retain(|o| o.qty.abs() > QTY_TOLERANCE && o.price.is_finite() && o.price > 0.0);
-        if closes.is_empty() {
-            return;
-        }
-
-        let total_abs: f64 = closes.iter().map(|o| o.qty.abs()).sum();
-        let min_qty = calc_min_entry_qty(mp, exchange_params);
-        let allow_below_min = position_abs < min_qty;
-
-        let enforce_no_dust_remainder = |orders: &mut Vec<Order>| {
-            if orders.is_empty() {
-                return;
-            }
-            // Ensure deterministic ordering for selection of which order absorbs the remainder.
-            orders.sort_by(|a, b| {
-                let da = calc_diff(a);
-                let db = calc_diff(b);
-                match da.partial_cmp(&db).unwrap_or(Ordering::Equal) {
-                    Ordering::Equal => a
-                        .order_type
-                        .id()
-                        .cmp(&b.order_type.id())
-                        .then_with(|| a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal))
-                        .then_with(|| a.qty.partial_cmp(&b.qty).unwrap_or(Ordering::Equal)),
-                    other => other,
-                }
-            });
-
-            // If position is below effective min qty, collapse to a single full close (spec exception).
-            if allow_below_min {
-                let full = round_(position_abs, exchange_params.qty_step);
-                if full <= QTY_TOLERANCE {
-                    orders.clear();
-                    return;
-                }
-                orders[0].qty = if side == LONG { -full } else { full };
-                orders.truncate(1);
-                return;
-            }
-
-            // If sum(closes) leaves a remainder smaller than effective min qty, absorb it into the
-            // closest-to-fill close so we don't strand an uncloseable dust remainder.
-            let total_abs: f64 = orders.iter().map(|o| o.qty.abs()).sum();
-            let remainder = position_abs - total_abs;
-            if remainder > QTY_TOLERANCE && remainder + QTY_TOLERANCE < min_qty {
-                let mut new_abs = orders[0].qty.abs() + remainder;
-                new_abs = round_(new_abs, exchange_params.qty_step)
-                    .min(round_(position_abs, exchange_params.qty_step));
-                if new_abs > QTY_TOLERANCE {
-                    orders[0].qty = if side == LONG { -new_abs } else { new_abs };
-                }
-            }
-        };
-
-        // If no trimming needed, only enforce deterministic ordering (closest-to-fill first).
-        if total_abs <= position_abs + QTY_TOLERANCE {
-            enforce_no_dust_remainder(closes);
-            return;
-        }
-
-        // Trim furthest-from-fill first (ties: lower order_type_id trimmed first), matching
-        // orchestrator semantics.
-        let mut closes_sorted = closes.clone();
-        closes_sorted.sort_by(|a, b| {
-            let da = calc_diff(a);
-            let db = calc_diff(b);
-            match db.partial_cmp(&da).unwrap_or(Ordering::Equal) {
-                Ordering::Equal => a
-                    .order_type
-                    .id()
-                    .cmp(&b.order_type.id())
-                    .then_with(|| a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal))
-                    .then_with(|| a.qty.partial_cmp(&b.qty).unwrap_or(Ordering::Equal)),
-                other => other,
-            }
-        });
-
-        let mut excess = total_abs - position_abs;
-        let mut kept: Vec<Order> = Vec::with_capacity(closes_sorted.len());
-        for mut order in closes_sorted {
-            if excess <= QTY_TOLERANCE {
-                kept.push(order);
-                continue;
-            }
-            let qty_abs = order.qty.abs();
-            if qty_abs <= QTY_TOLERANCE {
-                continue;
-            }
-            if qty_abs <= excess + QTY_TOLERANCE {
-                // Drop whole order.
-                excess -= qty_abs;
-                continue;
-            }
-            // Trim this order down to remove remaining excess.
-            let mut new_abs = qty_abs - excess;
-            let step = exchange_params.qty_step;
-            // Use nearest rounding to avoid occasional one-step under-trims due to float
-            // representation noise (which would otherwise trigger the dust-remainder absorber
-            // and shift qty into the closer-to-fill order).
-            new_abs = round_(new_abs, step);
-
-            if new_abs <= QTY_TOLERANCE {
-                continue;
-            }
-            if !allow_below_min && new_abs < min_qty {
-                // Prefer dropping dust rather than keeping a too-small order.
-                excess = 0.0;
-                continue;
-            }
-
-            order.qty = if order.qty.is_sign_negative() {
-                -new_abs
-            } else {
-                new_abs
-            };
-            excess = 0.0;
-            kept.push(order);
-        }
-
-        // Deterministic final ordering: closest-to-fill first (diff asc), then order_type_id.
-        kept.sort_by(|a, b| {
-            let da = calc_diff(a);
-            let db = calc_diff(b);
-            match da.partial_cmp(&db).unwrap_or(Ordering::Equal) {
-                Ordering::Equal => a
-                    .order_type
-                    .id()
-                    .cmp(&b.order_type.id())
-                    .then_with(|| a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal))
-                    .then_with(|| a.qty.partial_cmp(&b.qty).unwrap_or(Ordering::Equal)),
-                other => other,
-            }
-        });
-        enforce_no_dust_remainder(&mut kept);
-        *closes = kept;
-    }
-
     fn update_emas(&mut self, k: usize) {
         // Compute/refresh latest 1h bucket on whole-hour boundaries
         let current_ts = self.first_timestamp_ms + (k as u64) * 60_000u64;

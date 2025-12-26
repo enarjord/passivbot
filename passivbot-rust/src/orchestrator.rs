@@ -18,16 +18,6 @@ pub struct EntryPeekHints {
     pub expand_close_short: HashSet<usize>,
 }
 
-impl EntryPeekHints {
-    #[inline]
-    pub fn clear(&mut self) {
-        self.expand_grid_long.clear();
-        self.expand_grid_short.clear();
-        self.expand_close_long.clear();
-        self.expand_close_short.clear();
-    }
-}
-
 mod core {
     use crate::closes::{
         calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
@@ -324,10 +314,6 @@ mod core {
         }
         let req = balance * effective_limit * bot.entry_initial_qty_pct;
         req >= effective_min_cost
-    }
-
-    fn forager_enabled(bp: &BotParams) -> bool {
-        bp.filter_volume_drop_pct > 0.0 || bp.filter_volatility_drop_pct > 0.0
     }
 
     fn market_price_for_order_side(ob: &OrderBook, qty: f64) -> f64 {
@@ -785,7 +771,6 @@ mod core {
             symbol_idx: usize,
             qty: f64,
             price: f64,
-            market_price: f64,
             qty_step: f64,
             c_mult: f64,
             order_type: OrderType,
@@ -854,7 +839,6 @@ mod core {
                 symbol_idx: o.symbol_idx,
                 qty: qty_abs,
                 price: o.price,
-                market_price,
                 qty_step: exch.qty_step,
                 c_mult: exch.c_mult,
                 order_type: o.order_type,
