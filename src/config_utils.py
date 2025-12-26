@@ -1978,7 +1978,7 @@ def get_template_config():
             },
         },
         "hedge": {
-            "mode": "off",
+            "mode": "hedge_shorts_for_longs",
             "threshold": 0.0,
             "tolerance_pct": 0.05,
             "allocation_min_fraction": 0.1,

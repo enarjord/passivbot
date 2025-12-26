@@ -196,6 +196,54 @@ Coins selected for trading are filtered by volume and log range. First, filter c
   - Log range is computed from 1m OHLCVs as `mean(ln(high / low))`.
   - In forager mode, the bot selects coins with the highest log-range values for opening positions.
 
+## Hedge Overlay (WIP)
+
+Passivbot has an experimental market-neutral hedging overlay. It is designed for:
+
+- base long-only + hedge shorts (`hedge_shorts_for_longs`), or
+- base short-only + hedge longs (`hedge_longs_for_shorts`)
+
+Hedging is enabled when `hedge.threshold > 0.0`. For a higher-level explanation, see `hedging.md`.
+
+Important constraints (v0):
+
+- One-way mode only: no simultaneous long+short on the same symbol.
+- The opposite base side must be disabled:
+  - `hedge_shorts_for_longs` requires base short disabled (`bot.short.n_positions = 0` or `bot.short.total_wallet_exposure_limit = 0.0`).
+  - `hedge_longs_for_shorts` requires base long disabled (`bot.long.n_positions = 0` or `bot.long.total_wallet_exposure_limit = 0.0`).
+
+### Hedge Parameters
+
+- **hedge.mode**:
+  - Hedge direction.
+  - Allowed values: `hedge_shorts_for_longs`, `hedge_longs_for_shorts`.
+- **hedge.threshold**:
+  - Target hedge exposure as a multiple of base exposure.
+  - `0.0` disables hedging; `1.0` targets equal hedge/base exposure; `0.5` targets half, etc.
+- **hedge.tolerance_pct**:
+  - Absolute tolerance band to avoid churn.
+  - Internally: `tolerance_band = base_twel * tolerance_pct`.
+- **hedge.max_n_positions**:
+  - Maximum number of hedge positions.
+  - `0` means “use base side `n_positions`”.
+- **hedge.hedge_excess_allowance_pct**:
+  - Per-hedge position cap looseness.
+  - Each hedge position is capped (in exposure terms) to:
+    `cap_exposure = (base_twel * hedge.threshold / max_positions) * (1 + hedge_excess_allowance_pct)`.
+- **hedge.allocation_min_fraction**:
+  - Chunking control when allocating additional hedge notional to existing hedges.
+  - Must be in `(0.0, 1.0]`. Higher values reduce churn but make rebalancing coarser.
+- **hedge.one_way**:
+  - Must be `true` for v0. (The Rust hedger errors on one-way violations.)
+
+### Hedge Universe (Which Coins May Be Hedged)
+
+Hedge positions are only opened on an approved universe derived from:
+
+- `live.approved_coins.short`
+
+In backtests, this is mapped to the backtest coin universe and passed into Rust as `approved_hedge_symbols` (internal indices).
+
 ## Coin Overrides
 - **coin_overrides**:
   - Specify full or partial configs for individual coins, overriding values from master config.

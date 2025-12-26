@@ -6,6 +6,7 @@ docs_dir: docs
 nav:
   - Home: README.md
   - Configuration: configuration.md
+  - Hedging (WIP): hedging.md
   - Running live: live.md
   - Backtesting: backtesting.md
   - Optimizing: optimizing.md
