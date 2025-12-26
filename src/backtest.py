@@ -996,7 +996,9 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             approved_hedge_coins = list(approved_coins)
         coin_to_idx = {c: i for i, c in enumerate(coins)}
         approved_hedge_symbols = [coin_to_idx[c] for c in approved_hedge_coins if c in coin_to_idx]
-        if not approved_hedge_symbols and bool(require_live_value(config, "empty_means_all_approved")):
+        if not approved_hedge_symbols and bool(
+            require_live_value(config, "empty_means_all_approved")
+        ):
             approved_hedge_symbols = list(range(len(coins)))
 
         backtest_params["hedge"] = {

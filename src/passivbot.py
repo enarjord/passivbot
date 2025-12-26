@@ -1842,7 +1842,9 @@ class Passivbot:
             volatility_drop = self.bot_value(pside, "filter_volatility_drop_pct")
             max_n_positions = self.get_max_n_positions(pside)
             if clip_pct > 0.0:
-                volumes, log_ranges = await self.calc_volumes_and_log_ranges(pside, symbols=candidates)
+                volumes, log_ranges = await self.calc_volumes_and_log_ranges(
+                    pside, symbols=candidates
+                )
             else:
                 volumes = {
                     symbol: float(len(candidates) - idx) for idx, symbol in enumerate(candidates)
@@ -3777,8 +3779,7 @@ class Passivbot:
                         self.config_get(["hedge", "tolerance_pct"], default=0.05) or 0.05
                     ),
                     "hedge_excess_allowance_pct": float(
-                        self.config_get(["hedge", "hedge_excess_allowance_pct"], default=0.20)
-                        or 0.20
+                        self.config_get(["hedge", "hedge_excess_allowance_pct"], default=0.20) or 0.20
                     ),
                     "max_n_positions": int(
                         round(float(self.config_get(["hedge", "max_n_positions"], default=0) or 0))
@@ -4087,8 +4088,7 @@ class Passivbot:
                         self.config_get(["hedge", "tolerance_pct"], default=0.05) or 0.05
                     ),
                     "hedge_excess_allowance_pct": float(
-                        self.config_get(["hedge", "hedge_excess_allowance_pct"], default=0.20)
-                        or 0.20
+                        self.config_get(["hedge", "hedge_excess_allowance_pct"], default=0.20) or 0.20
                     ),
                     "max_n_positions": int(
                         round(float(self.config_get(["hedge", "max_n_positions"], default=0) or 0))
