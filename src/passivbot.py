@@ -1842,7 +1842,9 @@ class Passivbot:
             volatility_drop = self.bot_value(pside, "filter_volatility_drop_pct")
             max_n_positions = self.get_max_n_positions(pside)
             if clip_pct > 0.0:
-                volumes, log_ranges = await self.calc_volumes_and_log_ranges(pside, symbols=candidates)
+                volumes, log_ranges = await self.calc_volumes_and_log_ranges(
+                    pside, symbols=candidates
+                )
             else:
                 volumes = {
                     symbol: float(len(candidates) - idx) for idx, symbol in enumerate(candidates)

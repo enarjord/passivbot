@@ -1819,7 +1819,6 @@ pub fn calc_twel_enforcer_orders_py(
         .collect())
 }
 
-
 #[pyfunction]
 pub fn order_type_id_to_snake(id: u16) -> PyResult<String> {
     let ot = OrderType::try_from(id)

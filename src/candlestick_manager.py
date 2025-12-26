@@ -2660,11 +2660,15 @@ class CandlestickManager:
             if metric_key == "volume":
                 return np.asarray(arr["bv"], dtype=np.float64)
             if metric_key == "qv":
-                return np.asarray(arr["bv"], dtype=np.float64) * (
-                    np.asarray(arr["h"], dtype=np.float64)
-                    + np.asarray(arr["l"], dtype=np.float64)
-                    + np.asarray(arr["c"], dtype=np.float64)
-                ) / 3.0
+                return (
+                    np.asarray(arr["bv"], dtype=np.float64)
+                    * (
+                        np.asarray(arr["h"], dtype=np.float64)
+                        + np.asarray(arr["l"], dtype=np.float64)
+                        + np.asarray(arr["c"], dtype=np.float64)
+                    )
+                    / 3.0
+                )
             if metric_key == "log_range":
                 return np.log(
                     np.maximum(np.asarray(arr["h"], dtype=np.float64), 1e-12)
@@ -2683,7 +2687,9 @@ class CandlestickManager:
                 # Re-apply gap standardization on the requested metric window.
                 # This matches get_candles(strict=False) behavior for the same [start,end] window.
                 metric_start_ts = int(end_ts - period_ms * (span_candles - 1))
-                tail = self.standardize_gaps(tail, start_ts=metric_start_ts, end_ts=end_ts, strict=False)
+                tail = self.standardize_gaps(
+                    tail, start_ts=metric_start_ts, end_ts=end_ts, strict=False
+                )
             if tail.size == 0:
                 out[metric_key] = float("nan")
                 continue

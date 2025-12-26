@@ -2714,7 +2714,6 @@ mod core {
             assert_eq!(out.orders.len(), 1);
             assert_eq!(out.orders[0].order_type, OrderType::ClosePanicLong);
         }
-
     }
 }
 

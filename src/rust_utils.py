@@ -73,7 +73,11 @@ def compiled_extension_paths() -> List[Path]:
     When running `src/*.py` scripts, `src/` is typically first on `sys.path`, so a local
     `src/passivbot_rust*.so` will shadow an installed site-packages build.
     """
-    return _local_extension_candidates() + _installed_extension_candidates() + _target_extension_candidates()
+    return (
+        _local_extension_candidates()
+        + _installed_extension_candidates()
+        + _target_extension_candidates()
+    )
 
 
 def preferred_compiled_mtime() -> Optional[float]:
@@ -85,7 +89,11 @@ def preferred_compiled_mtime() -> Optional[float]:
     2) installed site-packages `passivbot_rust/passivbot_rust*.so`
     3) `passivbot-rust/target/release/libpassivbot_rust.*`
     """
-    for group in (_local_extension_candidates(), _installed_extension_candidates(), _target_extension_candidates()):
+    for group in (
+        _local_extension_candidates(),
+        _installed_extension_candidates(),
+        _target_extension_candidates(),
+    ):
         mtimes = [p.stat().st_mtime for p in group if p.exists()]
         if mtimes:
             return max(mtimes)

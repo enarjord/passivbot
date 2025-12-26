@@ -220,6 +220,7 @@ async def test_get_latest_ema_metrics_calls_get_candles_once_and_caches(monkeypa
     # Force the manager to use this exact range.
     end_ts = ts[-1]
     start_ts = end_ts - 9 * ONE_MIN_MS
+
     async def fake_latest_finalized_range(span, period_ms=ONE_MIN_MS):
         return (start_ts, end_ts)
 
@@ -227,7 +228,9 @@ async def test_get_latest_ema_metrics_calls_get_candles_once_and_caches(monkeypa
 
     calls = {"n": 0}
 
-    async def fake_get_candles(symbol_, *, start_ts=None, end_ts=None, max_age_ms=None, strict=False, timeframe=None, tf=None):
+    async def fake_get_candles(
+        symbol_, *, start_ts=None, end_ts=None, max_age_ms=None, strict=False, timeframe=None, tf=None
+    ):
         calls["n"] += 1
         return arr
 
@@ -238,11 +241,15 @@ async def test_get_latest_ema_metrics_calls_get_candles_once_and_caches(monkeypa
     assert calls["n"] == 1
     assert set(out1.keys()) == set(spans.keys())
 
-    qv_series = np.asarray(arr[-5:]["bv"], dtype=np.float64) * (
-        np.asarray(arr[-5:]["h"], dtype=np.float64)
-        + np.asarray(arr[-5:]["l"], dtype=np.float64)
-        + np.asarray(arr[-5:]["c"], dtype=np.float64)
-    ) / 3.0
+    qv_series = (
+        np.asarray(arr[-5:]["bv"], dtype=np.float64)
+        * (
+            np.asarray(arr[-5:]["h"], dtype=np.float64)
+            + np.asarray(arr[-5:]["l"], dtype=np.float64)
+            + np.asarray(arr[-5:]["c"], dtype=np.float64)
+        )
+        / 3.0
+    )
     lr_series = np.log(
         np.maximum(np.asarray(arr[-3:]["h"], dtype=np.float64), 1e-12)
         / np.maximum(np.asarray(arr[-3:]["l"], dtype=np.float64), 1e-12)
