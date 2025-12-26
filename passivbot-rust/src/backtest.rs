@@ -1,20 +1,10 @@
-use crate::closes::{
-    calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
-};
 use crate::coin_selection::{select_coins, CoinFeature, SelectionConfig};
 use crate::constants::{CLOSE, HIGH, LONG, LOW, NO_POS, SHORT, VOLUME};
-use crate::entries::{
-    calc_entries_long, calc_entries_short, calc_min_entry_qty, calc_next_entry_long,
-    calc_next_entry_short,
-};
+use crate::entries::calc_min_entry_qty;
 use crate::orchestrator;
 use crate::orchestrator::{
     EmaBundle as OrchestratorEmaBundle, EmaTimeframeBundle as OrchestratorEmaTimeframeBundle,
     EntryPeekHints,
-};
-use crate::risk::{
-    calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
-    GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
 };
 use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle};
 use crate::types::{
@@ -28,14 +18,13 @@ use crate::utils::{
 };
 use serde::Serialize;
 
-// Temporary toggle to enable the new orchestrator path. Keep false for legacy behaviour.
-const USE_ORCHESTRATOR: bool = true;
+// Orchestrator-only: legacy backtest order-generation path removed in this branch.
 const DEBUG_DUMP_ORDERS: bool = false;
 const DEBUG_TRACE_BALANCE: bool = false;
 const DEBUG_DUMP_UNSTUCK_CALC: bool = false;
 // Runtime profiler for the orchestrator path. Enable by setting env var `PASSIVBOT_ORCH_PROFILE=1`.
 const ORCH_PROFILE_ENV: &str = "PASSIVBOT_ORCH_PROFILE";
-// Limit debug snapshots to a narrow window around the first legacy/orchestrator divergence.
+// Limit debug snapshots to a narrow window in the backtest.
 const DEBUG_MAX_STEPS: usize = 0;
 // Optional extra window to capture debug orders beyond DEBUG_MAX_STEPS (inclusive bounds).
 // Set to None to disable.
@@ -60,7 +49,6 @@ use std::time::Instant;
 
 #[derive(Serialize)]
 struct UnstuckCalcDebug {
-    label: &'static str,
     step: usize,
     coin: String,
     idx: usize,
@@ -366,12 +354,7 @@ struct DebugOrderWriter {
 
 impl DebugOrderWriter {
     fn new_for_mode() -> Option<Self> {
-        let fname = if USE_ORCHESTRATOR {
-            "debug_orders_orchestrator.json"
-        } else {
-            "debug_orders_legacy.json"
-        };
-        Self::new(fname)
+        Self::new("debug_orders_orchestrator.json")
     }
 
     fn new(fname: &str) -> Option<Self> {
@@ -452,12 +435,7 @@ struct DebugBalanceWriter {
 
 impl DebugBalanceWriter {
     fn new_for_mode() -> Option<Self> {
-        let fname = if USE_ORCHESTRATOR {
-            "debug_balance_orchestrator.jsonl"
-        } else {
-            "debug_balance_legacy.jsonl"
-        };
-        Self::new(fname)
+        Self::new("debug_balance_orchestrator.jsonl")
     }
 
     fn new(fname: &str) -> Option<Self> {
@@ -503,11 +481,7 @@ impl OrchProfile {
     }
 
     fn write_to_file(&self) {
-        let fname = match self.mode {
-            "orchestrator" => "measurements/orch_profile_orchestrator.json",
-            "legacy" => "measurements/orch_profile_legacy.json",
-            _ => "measurements/orch_profile.json",
-        };
+        let fname = "measurements/orch_profile_orchestrator.json";
         if let Ok(file) = File::create(fname) {
             let mut w = BufWriter::new(file);
             let _ = serde_json::to_writer_pretty(&mut w, self);
@@ -537,7 +511,7 @@ impl<'a> Backtest<'a> {
         }
     }
 
-    fn debug_dump_unstuck_calc(&self, k: usize, idx: usize, side: usize, label: &'static str) {
+    fn debug_dump_unstuck_calc(&self, k: usize, idx: usize, side: usize) {
         if !DEBUG_DUMP_UNSTUCK_CALC {
             return;
         }
@@ -670,7 +644,6 @@ impl<'a> Backtest<'a> {
         }
 
         let payload = UnstuckCalcDebug {
-            label,
             step: k,
             coin,
             idx,
@@ -723,11 +696,7 @@ impl<'a> Backtest<'a> {
             close_qty_final_bits: close_qty_final.to_bits(),
         };
 
-        let fname = match label {
-            "legacy" => "debug_unstuck_calc_legacy.json",
-            "orchestrator" => "debug_unstuck_calc_orchestrator.json",
-            _ => "debug_unstuck_calc.json",
-        };
+        let fname = "debug_unstuck_calc_orchestrator.json";
         if let Ok(mut f) = File::create(fname) {
             let _ = serde_json::to_writer_pretty(&mut f, &payload);
             let _ = writeln!(f);
@@ -800,9 +769,6 @@ impl<'a> Backtest<'a> {
     }
 
     /// Build a fully-populated `orchestrator::OrchestratorInput` snapshot for timestep `k`.
-    ///
-    /// Not wired into execution yet; intended to be used by the `USE_ORCHESTRATOR` toggle once
-    /// the legacy-vs-orchestrator comparison harness is updated.
     pub fn build_orchestrator_input(
         &self,
         k: usize,
@@ -1544,11 +1510,7 @@ impl<'a> Backtest<'a> {
                 .as_deref()
                 .filter(|v| *v == "1")
                 .map(|_| OrchProfile {
-                    mode: if USE_ORCHESTRATOR {
-                        "orchestrator"
-                    } else {
-                        "legacy"
-                    },
+                    mode: "orchestrator",
                     ..OrchProfile::default()
                 }),
             // EMAs already initialized in `emas`; no rolling buffers needed
@@ -2513,179 +2475,6 @@ impl<'a> Backtest<'a> {
         }
     }
 
-    fn update_open_orders_long_single(&mut self, k: usize, idx: usize) {
-        if !self.coin_is_valid_at(idx, k) {
-            return;
-        }
-        let state_params = self.create_state_params(k, idx, LONG);
-        let position = self
-            .positions
-            .long
-            .get(&idx)
-            .cloned()
-            .unwrap_or(Position::default());
-
-        // check if coin is delisted; if so, close pos as unstuck close
-        if self.positions.long.contains_key(&idx) {
-            if let Some(&delist_timestamp) = self.last_valid_timestamps.get(&idx) {
-                if k >= delist_timestamp {
-                    self.open_orders.long.entry(idx).or_default().closes = vec![Order {
-                        qty: -self.positions.long[&idx].size,
-                        price: round_(
-                            f64::min(
-                                self.hlcvs_value(k, idx, HIGH)
-                                    - self.exchange_params_list[idx].price_step,
-                                self.positions.long[&idx].price,
-                            ),
-                            self.exchange_params_list[idx].price_step,
-                        ),
-                        order_type: OrderType::CloseUnstuckLong,
-                    }];
-                    self.open_orders
-                        .long
-                        .entry(idx)
-                        .or_default()
-                        .entries
-                        .clear();
-                    return;
-                }
-            }
-        }
-
-        let next_entry_order = calc_next_entry_long(
-            &self.exchange_params_list[idx],
-            &state_params,
-            self.bp(idx, LONG),
-            &position,
-            &self.trailing_prices.long[&idx],
-        );
-        // peek next candle to see if order will fill
-        if self.order_filled(k + 1, idx, &next_entry_order) {
-            self.open_orders.long.entry(idx).or_default().entries = calc_entries_long(
-                &self.exchange_params_list[idx],
-                &state_params,
-                self.bp(idx, LONG),
-                &position,
-                &self.trailing_prices.long[&idx],
-            );
-        } else {
-            self.open_orders.long.entry(idx).or_default().entries = [next_entry_order].to_vec();
-        }
-        // Filter inactive placeholder orders (qty==0.0) returned by some next-order calculators.
-        if let Some(bundle) = self.open_orders.long.get_mut(&idx) {
-            bundle.entries.retain(|o| o.qty != 0.0);
-        }
-        let next_close_order = calc_next_close_long(
-            &self.exchange_params_list[idx],
-            &state_params,
-            self.bp(idx, LONG),
-            &position,
-            &self.trailing_prices.long[&idx],
-        );
-        // peek next candle to see if order will fill
-        if self.order_filled(k + 1, idx, &next_close_order) {
-            // calc all orders
-            self.open_orders.long.entry(idx).or_default().closes = calc_closes_long(
-                &self.exchange_params_list[idx],
-                &state_params,
-                self.bp(idx, LONG),
-                &position,
-                &self.trailing_prices.long[&idx],
-            );
-        } else {
-            self.open_orders.long.entry(idx).or_default().closes = [next_close_order].to_vec();
-        }
-        // Filter inactive placeholder orders (qty==0.0) e.g. CloseTrailingLong with qty=0.
-        if let Some(bundle) = self.open_orders.long.get_mut(&idx) {
-            bundle.closes.retain(|o| o.qty != 0.0);
-        }
-    }
-
-    fn update_open_orders_short_single(&mut self, k: usize, idx: usize) {
-        if !self.coin_is_valid_at(idx, k) {
-            return;
-        }
-        let state_params = self.create_state_params(k, idx, SHORT);
-        let position = self
-            .positions
-            .short
-            .get(&idx)
-            .cloned()
-            .unwrap_or(Position::default());
-
-        // check if coin is delisted; if so, close pos as unstuck close
-        if self.positions.short.contains_key(&idx) {
-            if let Some(&delist_timestamp) = self.last_valid_timestamps.get(&idx) {
-                if k >= delist_timestamp {
-                    self.open_orders.short.entry(idx).or_default().closes = vec![Order {
-                        qty: self.positions.short[&idx].size.abs(),
-                        price: round_(
-                            f64::max(
-                                self.hlcvs_value(k, idx, LOW)
-                                    + self.exchange_params_list[idx].price_step,
-                                self.positions.short[&idx].price,
-                            ),
-                            self.exchange_params_list[idx].price_step,
-                        ),
-                        order_type: OrderType::CloseUnstuckShort,
-                    }];
-                    self.open_orders
-                        .short
-                        .entry(idx)
-                        .or_default()
-                        .entries
-                        .clear();
-                    return;
-                }
-            }
-        }
-        let next_entry_order = calc_next_entry_short(
-            &self.exchange_params_list[idx],
-            &state_params,
-            self.bp(idx, SHORT),
-            &position,
-            &self.trailing_prices.short[&idx],
-        );
-        // peek next candle to see if order will fill
-        if self.order_filled(k + 1, idx, &next_entry_order) {
-            self.open_orders.short.entry(idx).or_default().entries = calc_entries_short(
-                &self.exchange_params_list[idx],
-                &state_params,
-                self.bp(idx, SHORT),
-                &position,
-                &self.trailing_prices.short[&idx],
-            );
-        } else {
-            self.open_orders.short.entry(idx).or_default().entries = [next_entry_order].to_vec();
-        }
-        if let Some(bundle) = self.open_orders.short.get_mut(&idx) {
-            bundle.entries.retain(|o| o.qty != 0.0);
-        }
-
-        let next_close_order = calc_next_close_short(
-            &self.exchange_params_list[idx],
-            &state_params,
-            self.bp(idx, SHORT),
-            &position,
-            &self.trailing_prices.short[&idx],
-        );
-        // peek next candle to see if order will fill
-        if self.order_filled(k + 1, idx, &next_close_order) {
-            self.open_orders.short.entry(idx).or_default().closes = calc_closes_short(
-                &self.exchange_params_list[idx],
-                &state_params,
-                self.bp(idx, SHORT),
-                &position,
-                &self.trailing_prices.short[&idx],
-            );
-        } else {
-            self.open_orders.short.entry(idx).or_default().closes = [next_close_order].to_vec()
-        }
-        if let Some(bundle) = self.open_orders.short.get_mut(&idx) {
-            bundle.closes.retain(|o| o.qty != 0.0);
-        }
-    }
-
     fn order_filled(&self, k: usize, idx: usize, order: &Order) -> bool {
         if !self.coin_is_tradeable_at(idx, k) {
             return false;
@@ -2700,436 +2489,8 @@ impl<'a> Backtest<'a> {
         }
     }
 
-    fn calc_unstucking_close(&mut self, k: usize) -> (usize, usize, Order) {
-        let balance = self.balance.usd_total_balance_rounded;
-        if balance <= 0.0 {
-            return (NO_POS, NO_POS, Order::default());
-        }
-
-        let long_allowance = if self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0 {
-            calc_auto_unstuck_allowance(
-                balance,
-                self.bot_params_master.long.unstuck_loss_allowance_pct
-                    * self.bot_params_master.long.total_wallet_exposure_limit,
-                self.pnl_cumsum_max,
-                self.pnl_cumsum_running,
-            )
-        } else {
-            0.0
-        };
-
-        let short_allowance = if self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0 {
-            calc_auto_unstuck_allowance(
-                balance,
-                self.bot_params_master.short.unstuck_loss_allowance_pct
-                    * self.bot_params_master.short.total_wallet_exposure_limit,
-                self.pnl_cumsum_max,
-                self.pnl_cumsum_running,
-            )
-        } else {
-            0.0
-        };
-
-        if long_allowance <= 0.0 && short_allowance <= 0.0 {
-            return (NO_POS, NO_POS, Order::default());
-        }
-
-        let mut inputs: Vec<UnstuckPositionInput> = Vec::new();
-
-        if long_allowance > 0.0 {
-            let mut keys: Vec<usize> = self.positions.long.keys().cloned().collect();
-            keys.sort_unstable();
-            for idx in keys {
-                self.debug_dump_unstuck_calc(k, idx, LONG, "legacy");
-                if !self.coin_is_tradeable_at(idx, k) {
-                    continue;
-                }
-                if let Some(position) = self.positions.long.get(&idx) {
-                    let ema_bands = self.emas[idx].compute_bands(LONG);
-                    let current_price = self.hlcvs_value(k, idx, CLOSE);
-                    inputs.push(UnstuckPositionInput {
-                        idx,
-                        side: LONG,
-                        position_size: position.size,
-                        position_price: position.price,
-                        wallet_exposure_limit: self.bp(idx, LONG).wallet_exposure_limit,
-                        risk_we_excess_allowance_pct: self
-                            .bp(idx, LONG)
-                            .risk_we_excess_allowance_pct,
-                        unstuck_threshold: self.bp(idx, LONG).unstuck_threshold,
-                        unstuck_close_pct: self.bp(idx, LONG).unstuck_close_pct,
-                        unstuck_ema_dist: self.bp(idx, LONG).unstuck_ema_dist,
-                        ema_band_upper: ema_bands.upper,
-                        ema_band_lower: ema_bands.lower,
-                        current_price,
-                        price_step: self.exchange_params_list[idx].price_step,
-                        qty_step: self.exchange_params_list[idx].qty_step,
-                        min_qty: self.exchange_params_list[idx].min_qty,
-                        min_cost: self.exchange_params_list[idx].min_cost,
-                        c_mult: self.exchange_params_list[idx].c_mult,
-                    });
-                }
-            }
-        }
-
-        if short_allowance > 0.0 {
-            let mut keys: Vec<usize> = self.positions.short.keys().cloned().collect();
-            keys.sort_unstable();
-            for idx in keys {
-                self.debug_dump_unstuck_calc(k, idx, SHORT, "legacy");
-                if !self.coin_is_tradeable_at(idx, k) {
-                    continue;
-                }
-                if let Some(position) = self.positions.short.get(&idx) {
-                    let ema_bands = self.emas[idx].compute_bands(SHORT);
-                    let current_price = self.hlcvs_value(k, idx, CLOSE);
-                    inputs.push(UnstuckPositionInput {
-                        idx,
-                        side: SHORT,
-                        position_size: position.size,
-                        position_price: position.price,
-                        wallet_exposure_limit: self.bp(idx, SHORT).wallet_exposure_limit,
-                        risk_we_excess_allowance_pct: self
-                            .bp(idx, SHORT)
-                            .risk_we_excess_allowance_pct,
-                        unstuck_threshold: self.bp(idx, SHORT).unstuck_threshold,
-                        unstuck_close_pct: self.bp(idx, SHORT).unstuck_close_pct,
-                        unstuck_ema_dist: self.bp(idx, SHORT).unstuck_ema_dist,
-                        ema_band_upper: ema_bands.upper,
-                        ema_band_lower: ema_bands.lower,
-                        current_price,
-                        price_step: self.exchange_params_list[idx].price_step,
-                        qty_step: self.exchange_params_list[idx].qty_step,
-                        min_qty: self.exchange_params_list[idx].min_qty,
-                        min_cost: self.exchange_params_list[idx].min_cost,
-                        c_mult: self.exchange_params_list[idx].c_mult,
-                    });
-                }
-            }
-        }
-
-        if let Some((idx, side, order)) =
-            calc_unstucking_action(balance, long_allowance, short_allowance, &inputs)
-        {
-            return (idx, side, order);
-        }
-
-        (NO_POS, NO_POS, Order::default())
-    }
-    fn calc_twel_enforcer_orders(
-        &self,
-        k: usize,
-        skip: Option<(usize, usize)>,
-    ) -> Vec<(usize, usize, Order)> {
-        let mut results: Vec<(usize, usize, Order)> = Vec::new();
-        let balance = self.balance.usd_total_balance_rounded;
-        if balance <= 0.0 {
-            return results;
-        }
-
-        let skip_long = skip.filter(|(_, side)| *side == LONG).map(|(idx, _)| idx);
-        let skip_short = skip.filter(|(_, side)| *side == SHORT).map(|(idx, _)| idx);
-
-        let wel_blocked_long: HashSet<usize> = self
-            .open_orders
-            .long
-            .iter()
-            .filter_map(|(&idx, orders)| {
-                if orders
-                    .closes
-                    .iter()
-                    .any(|o| o.order_type == OrderType::CloseAutoReduceWelLong)
-                {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        let wel_blocked_short: HashSet<usize> = self
-            .open_orders
-            .short
-            .iter()
-            .filter_map(|(&idx, orders)| {
-                if orders
-                    .closes
-                    .iter()
-                    .any(|o| o.order_type == OrderType::CloseAutoReduceWelShort)
-                {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let long_threshold = self.bot_params_master.long.risk_twel_enforcer_threshold;
-        if long_threshold >= 0.0 {
-            let total_wel_long = self
-                .bot_params_master
-                .long
-                .total_wallet_exposure_limit
-                .max(0.0);
-            if total_wel_long > 0.0 {
-                let mut inputs: Vec<TwelEnforcerInputPosition> =
-                    Vec::with_capacity(self.positions.long.len());
-                let mut indices: Vec<usize> = self.positions.long.keys().cloned().collect();
-                indices.sort_unstable();
-                for idx in indices {
-                    if wel_blocked_long.contains(&idx) {
-                        continue;
-                    }
-                    if let Some(position) = self.positions.long.get(&idx) {
-                        let market_price = self.hlcvs_value(k, idx, CLOSE);
-                        inputs.push(TwelEnforcerInputPosition {
-                            idx,
-                            position_size: position.size,
-                            position_price: position.price,
-                            market_price,
-                            base_wallet_exposure_limit: self.bp(idx, LONG).wallet_exposure_limit,
-                            c_mult: self.exchange_params_list[idx].c_mult,
-                            qty_step: self.exchange_params_list[idx].qty_step,
-                            price_step: self.exchange_params_list[idx].price_step,
-                            min_qty: self.exchange_params_list[idx].min_qty,
-                            min_cost: self.exchange_params_list[idx].min_cost,
-                        });
-                    }
-                }
-                let actions = calc_twel_enforcer_actions(
-                    LONG,
-                    long_threshold,
-                    total_wel_long,
-                    self.effective_n_positions.long.max(1),
-                    balance,
-                    &inputs,
-                    skip_long,
-                );
-                for (idx, order) in actions {
-                    results.push((idx, LONG, order));
-                }
-            }
-        }
-
-        let short_threshold = self.bot_params_master.short.risk_twel_enforcer_threshold;
-        if short_threshold >= 0.0 {
-            let total_wel_short = self
-                .bot_params_master
-                .short
-                .total_wallet_exposure_limit
-                .max(0.0);
-            if total_wel_short > 0.0 {
-                let mut inputs: Vec<TwelEnforcerInputPosition> =
-                    Vec::with_capacity(self.positions.short.len());
-                let mut indices: Vec<usize> = self.positions.short.keys().cloned().collect();
-                indices.sort_unstable();
-                for idx in indices {
-                    if wel_blocked_short.contains(&idx) {
-                        continue;
-                    }
-                    if let Some(position) = self.positions.short.get(&idx) {
-                        let market_price = self.hlcvs_value(k, idx, CLOSE);
-                        inputs.push(TwelEnforcerInputPosition {
-                            idx,
-                            position_size: position.size,
-                            position_price: position.price,
-                            market_price,
-                            base_wallet_exposure_limit: self.bp(idx, SHORT).wallet_exposure_limit,
-                            c_mult: self.exchange_params_list[idx].c_mult,
-                            qty_step: self.exchange_params_list[idx].qty_step,
-                            price_step: self.exchange_params_list[idx].price_step,
-                            min_qty: self.exchange_params_list[idx].min_qty,
-                            min_cost: self.exchange_params_list[idx].min_cost,
-                        });
-                    }
-                }
-
-                let actions = calc_twel_enforcer_actions(
-                    SHORT,
-                    short_threshold,
-                    total_wel_short,
-                    self.effective_n_positions.short.max(1),
-                    balance,
-                    &inputs,
-                    skip_short,
-                );
-                for (idx, order) in actions {
-                    results.push((idx, SHORT, order));
-                }
-            }
-        }
-
-        results
-    }
-
     fn update_open_orders_all(&mut self, k: usize) {
-        if USE_ORCHESTRATOR {
-            self.update_open_orders_all_orchestrator(k);
-            return;
-        }
-        self.open_orders.long.clear();
-        self.open_orders.short.clear();
-        if self.trading_enabled.long {
-            let mut active_long_indices: Vec<usize> = self.positions.long.keys().cloned().collect();
-            if self.positions.long.len() != self.effective_n_positions.long {
-                self.update_actives_long();
-                active_long_indices = self.actives.long.iter().cloned().collect();
-            }
-            active_long_indices.sort();
-            for &idx in &active_long_indices {
-                if self.coin_is_tradeable_at(idx, k) {
-                    self.update_open_orders_long_single(k, idx);
-                }
-            }
-        }
-        if self.trading_enabled.short {
-            let mut active_short_indices: Vec<usize> =
-                self.positions.short.keys().cloned().collect();
-            if self.positions.short.len() != self.effective_n_positions.short {
-                self.update_actives_short();
-                active_short_indices = self.actives.short.iter().cloned().collect();
-            }
-            active_short_indices.sort();
-            for &idx in &active_short_indices {
-                if self.coin_is_tradeable_at(idx, k) {
-                    self.update_open_orders_short_single(k, idx);
-                }
-            }
-        }
-
-        let (unstucking_idx, unstucking_pside, unstucking_close) = self.calc_unstucking_close(k);
-        if unstucking_pside != NO_POS {
-            match unstucking_pside {
-                LONG => {
-                    self.open_orders
-                        .long
-                        .entry(unstucking_idx)
-                        .or_default()
-                        .closes
-                        .push(unstucking_close);
-                }
-                SHORT => {
-                    self.open_orders
-                        .short
-                        .entry(unstucking_idx)
-                        .or_default()
-                        .closes
-                        .push(unstucking_close);
-                }
-                _ => unreachable!(),
-            }
-        }
-
-        // Match orchestrator behavior: enforcer closes and unstuck closes are added in addition to
-        // normal closes. Final reduce-only trimming ensures we don't exceed position size.
-        let enforcer_orders = self.calc_twel_enforcer_orders(k, None);
-        for (idx, pside, order) in enforcer_orders {
-            match pside {
-                LONG => self
-                    .open_orders
-                    .long
-                    .entry(idx)
-                    .or_default()
-                    .closes
-                    .push(order),
-                SHORT => self
-                    .open_orders
-                    .short
-                    .entry(idx)
-                    .or_default()
-                    .closes
-                    .push(order),
-                _ => (),
-            }
-        }
-
-        // Snapshot the full close set before reduce-only trimming.
-        self.record_debug_orders_stage(k, "legacy_pre_trim");
-
-        if self.trading_enabled.long {
-            let long_indices: Vec<usize> = self.open_orders.long.keys().cloned().collect();
-            for idx in long_indices {
-                let has_special_close = self
-                    .open_orders
-                    .long
-                    .get(&idx)
-                    .map(|orders| {
-                        orders.closes.iter().any(|o| {
-                            matches!(
-                                o.order_type,
-                                OrderType::CloseAutoReduceWelLong
-                                    | OrderType::CloseAutoReduceTwelLong
-                                    | OrderType::CloseUnstuckLong
-                            )
-                        })
-                    })
-                    .unwrap_or(false);
-                if !has_special_close {
-                    continue;
-                }
-                let position_abs = self
-                    .positions
-                    .long
-                    .get(&idx)
-                    .map(|pos| pos.size.abs())
-                    .unwrap_or(0.0);
-                let market_price = self.hlcvs_value(k, idx, CLOSE);
-                if let Some(orders) = self.open_orders.long.get_mut(&idx) {
-                    Self::trim_reduce_only_orders(
-                        &mut orders.closes,
-                        position_abs,
-                        LONG,
-                        &self.exchange_params_list[idx],
-                        market_price,
-                    );
-                }
-            }
-        }
-        if self.trading_enabled.short {
-            let short_indices: Vec<usize> = self.open_orders.short.keys().cloned().collect();
-            for idx in short_indices {
-                let has_special_close = self
-                    .open_orders
-                    .short
-                    .get(&idx)
-                    .map(|orders| {
-                        orders.closes.iter().any(|o| {
-                            matches!(
-                                o.order_type,
-                                OrderType::CloseAutoReduceWelShort
-                                    | OrderType::CloseAutoReduceTwelShort
-                                    | OrderType::CloseUnstuckShort
-                            )
-                        })
-                    })
-                    .unwrap_or(false);
-                if !has_special_close {
-                    continue;
-                }
-                let position_abs = self
-                    .positions
-                    .short
-                    .get(&idx)
-                    .map(|pos| pos.size.abs())
-                    .unwrap_or(0.0);
-                let market_price = self.hlcvs_value(k, idx, CLOSE);
-                if let Some(orders) = self.open_orders.short.get_mut(&idx) {
-                    Self::trim_reduce_only_orders(
-                        &mut orders.closes,
-                        position_abs,
-                        SHORT,
-                        &self.exchange_params_list[idx],
-                        market_price,
-                    );
-                }
-            }
-        }
-
-        // Snapshot after reduce-only trimming (but before portfolio entry gating).
-        self.record_debug_orders_stage(k, "legacy_post_trim");
-
-        self.gate_entries_portfolio(k, LONG);
-        self.gate_entries_portfolio(k, SHORT);
-        self.record_debug_orders_stage(k, "legacy_final");
+        self.update_open_orders_all_orchestrator(k);
     }
 
     fn update_open_orders_all_orchestrator(&mut self, k: usize) {
@@ -3155,10 +2516,10 @@ impl<'a> Backtest<'a> {
 
         // Debug: dump exact unstuck calculation inputs/components for parity investigations.
         for (&idx, _pos) in self.positions.long.iter() {
-            self.debug_dump_unstuck_calc(k, idx, LONG, "orchestrator");
+            self.debug_dump_unstuck_calc(k, idx, LONG);
         }
         for (&idx, _pos) in self.positions.short.iter() {
-            self.debug_dump_unstuck_calc(k, idx, SHORT, "orchestrator");
+            self.debug_dump_unstuck_calc(k, idx, SHORT);
         }
 
         let (res, input_update_elapsed, compute_elapsed) = {
@@ -3218,159 +2579,6 @@ impl<'a> Backtest<'a> {
 
         if let Some(p) = self.orch_profile.as_mut() {
             OrchProfile::add_ns(&mut p.total_ns, total_t0.elapsed());
-        }
-    }
-
-    fn gate_entries_portfolio(&mut self, k: usize, side: usize) {
-        let (trading_enabled, total_limit) = match side {
-            LONG => (
-                self.trading_enabled.long,
-                self.bot_params_master.long.total_wallet_exposure_limit,
-            ),
-            SHORT => (
-                self.trading_enabled.short,
-                self.bot_params_master.short.total_wallet_exposure_limit,
-            ),
-            _ => (false, 0.0),
-        };
-        if !trading_enabled {
-            return;
-        }
-        let open_orders_side = match side {
-            LONG => &mut self.open_orders.long,
-            SHORT => &mut self.open_orders.short,
-            _ => return,
-        };
-        if total_limit <= 0.0 {
-            for bundle in open_orders_side.values_mut() {
-                bundle.entries.clear();
-            }
-            return;
-        }
-        let balance = self.balance.usd_total_balance_rounded;
-        if balance <= 0.0 {
-            for bundle in open_orders_side.values_mut() {
-                bundle.entries.clear();
-            }
-            return;
-        }
-        let positions_payload: Vec<GateEntriesPosition> = match side {
-            LONG => {
-                let mut indices: Vec<usize> = self.positions.long.keys().cloned().collect();
-                indices.sort_unstable();
-                indices
-                    .into_iter()
-                    .filter_map(|idx| {
-                        self.positions
-                            .long
-                            .get(&idx)
-                            .map(|pos| GateEntriesPosition {
-                                idx,
-                                position_size: pos.size,
-                                position_price: pos.price,
-                                c_mult: self.exchange_params_list[idx].c_mult,
-                            })
-                    })
-                    .collect()
-            }
-            SHORT => {
-                let mut indices: Vec<usize> = self.positions.short.keys().cloned().collect();
-                indices.sort_unstable();
-                indices
-                    .into_iter()
-                    .filter_map(|idx| {
-                        self.positions
-                            .short
-                            .get(&idx)
-                            .map(|pos| GateEntriesPosition {
-                                idx,
-                                position_size: pos.size,
-                                position_price: pos.price,
-                                c_mult: self.exchange_params_list[idx].c_mult,
-                            })
-                    })
-                    .collect()
-            }
-            _ => Vec::new(),
-        };
-
-        let mut entry_candidates: Vec<GateEntriesCandidate> = Vec::new();
-        {
-            let mut order_indices: Vec<usize> = open_orders_side.keys().cloned().collect();
-            order_indices.sort_unstable();
-            for idx in order_indices {
-                let col = self.active_coin_indices[idx];
-                let raw_market_price = self.hlcvs[[k, col, CLOSE]];
-                let bundle = match open_orders_side.get(&idx) {
-                    Some(bundle) => bundle,
-                    None => continue,
-                };
-                if bundle.entries.is_empty() {
-                    continue;
-                }
-                let params = &self.exchange_params_list[idx];
-                for order in &bundle.entries {
-                    let qty = order.qty.abs();
-                    if qty <= 0.0 || order.price <= 0.0 {
-                        continue;
-                    }
-                    let mut market_price = raw_market_price;
-                    if !market_price.is_finite() || market_price <= 0.0 {
-                        market_price = if order.price > 0.0 {
-                            order.price
-                        } else {
-                            params.price_step
-                        };
-                    }
-                    entry_candidates.push(GateEntriesCandidate {
-                        idx,
-                        qty,
-                        price: order.price,
-                        qty_step: params.qty_step,
-                        min_qty: params.min_qty,
-                        min_cost: params.min_cost,
-                        c_mult: params.c_mult,
-                        market_price,
-                        order_type: order.order_type,
-                    });
-                }
-            }
-        }
-        if entry_candidates.is_empty() {
-            return;
-        }
-        let gated = gate_entries_by_twel(
-            side,
-            balance,
-            total_limit,
-            &positions_payload,
-            &entry_candidates,
-        );
-        let mut new_entries_map: HashMap<usize, Vec<Order>> = HashMap::new();
-        for decision in gated {
-            let qty_signed = if side == LONG {
-                decision.qty
-            } else {
-                -decision.qty
-            };
-            new_entries_map
-                .entry(decision.idx)
-                .or_default()
-                .push(Order {
-                    qty: qty_signed,
-                    price: decision.price,
-                    order_type: decision.order_type,
-                });
-        }
-        for (&idx, bundle) in open_orders_side.iter_mut() {
-            if bundle.entries.is_empty() {
-                continue;
-            }
-            if let Some(new_entries) = new_entries_map.remove(&idx) {
-                bundle.entries = new_entries;
-            } else {
-                bundle.entries.clear();
-            }
         }
     }
 
