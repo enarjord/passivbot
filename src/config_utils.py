@@ -1550,6 +1550,7 @@ def remove_unused_keys_recursively(
     if not isinstance(dst, dict) or not isinstance(src, dict):
         return
     def _sort_key(value) -> tuple[str, str]:
+        """Sort keys by type name, then by string representation."""
         return (type(value).__name__, str(value))
 
     for k in sorted(list(dst.keys()), key=_sort_key):
