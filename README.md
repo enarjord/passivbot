@@ -207,6 +207,8 @@ If the robot is profitable, consider donating as showing gratitude for its devel
 0x4b7b5bf6bea228052b775c052843fde1c63ec530  
 - USDT or USDC Arbitrum One:  
 0x4b7b5bf6bea228052b775c052843fde1c63ec530  
+- Zcash (ZEC):  
+t1Zi1f1YHa5uYNyeJEf98Hh6otxxXyUWuRr  
 
 Bitcoin (BTC) via Strike:  
 enarjord@strike.me
