@@ -10,6 +10,7 @@ def parse_requirements(filename):
 setup(
     name="passivbot",
     version="0.1.0",
+    python_requires=">=3.12",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     rust_extensions=[

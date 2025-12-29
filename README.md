@@ -36,6 +36,8 @@ Passivbot manages underperforming, or "stuck", positions by realizing small loss
 
 To install Passivbot and its dependencies, follow the steps below.
 
+Passivbot requires **Python 3.12**. Earlier versions are not supported.
+
 ### Step 1: Clone the Repository
 
 First, clone the Passivbot repository to the local machine:
@@ -64,7 +66,7 @@ python3 -m venv venv
 
  **Windows (Command Prompt or PowerShell):**
 ```cmd
-python -m venv venv
+py -3.12 -m venv venv
 ```
 
 Activate the virtual environment:
@@ -149,7 +151,7 @@ python3 -m jupyter lab
 
 ## Requirements
 
-- Python >= 3.8
+- Python >= 3.12
 - [requirements.txt](requirements.txt) dependencies
 
 ## Pre-optimized configurations
