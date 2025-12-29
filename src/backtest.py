@@ -64,12 +64,8 @@ from pure_funcs import (
 )
 import pprint
 from copy import deepcopy
-from downloader import (
-    prepare_hlcvs,
-    prepare_hlcvs_combined,
-    compute_backtest_warmup_minutes,
-    compute_per_coin_warmup_minutes,
-)
+from hlcv_preparation import prepare_hlcvs, prepare_hlcvs_combined
+from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from pathlib import Path
 from plotting import (
     create_forager_balance_figures,
@@ -851,7 +847,7 @@ def ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map=None):
         meta["trade_start_index"] = trade_start_idx
 
 
-async def prepare_hlcvs_mss(config, exchange):
+async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = False):
     base_dir = require_config_value(config, "backtest.base_dir")
     results_path = oj(base_dir, exchange, "")
     warmup_map = compute_per_coin_warmup_minutes(config)
@@ -871,10 +867,12 @@ async def prepare_hlcvs_mss(config, exchange):
     if exchange == "combined":
         forced_sources = config.get("backtest", {}).get("coin_sources")
         mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs_combined(
-            config, forced_sources=forced_sources
+            config, forced_sources=forced_sources, force_refetch_gaps=force_refetch_gaps
         )
     else:
-        mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(config, exchange)
+        mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(
+            config, exchange, force_refetch_gaps=force_refetch_gaps
+        )
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
     ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
     logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")
@@ -1124,6 +1122,29 @@ async def main():
         help="Logging verbosity (warning, info, debug, trace or 0-3).",
     )
     parser.add_argument(
+        "--cm-debug",
+        nargs="?",
+        const=1,
+        type=int,
+        default=None,
+        help="CandlestickManager debug level (0=off, 1=network only, 2=all). "
+        "If passed without value, defaults to 1. Overrides config backtest.cm_debug_level.",
+    )
+    parser.add_argument(
+        "--cm-progress",
+        nargs="?",
+        const=30.0,
+        type=float,
+        default=None,
+        help="CandlestickManager INFO progress log interval in seconds (0 disables). "
+        "If passed without value, defaults to 30. Overrides config backtest.cm_progress_log_interval_seconds.",
+    )
+    parser.add_argument(
+        "--cm-remote",
+        action="store_true",
+        help="Show a per-exchange per-coin remote request progress bar (updates on every CCXT/archive request).",
+    )
+    parser.add_argument(
         "--suite",
         nargs="?",
         const="true",
@@ -1137,6 +1158,12 @@ async def main():
         type=str,
         default=None,
         help="Optional config file providing backtest.suite overrides.",
+    )
+    parser.add_argument(
+        "--force-refetch-gaps",
+        action="store_true",
+        help="Force refetch all known gaps (clears gap cache before downloading). "
+        "Useful when you suspect gaps may have been incorrectly marked as persistent.",
     )
     template_config = get_template_config()
     del template_config["optimize"]
@@ -1173,6 +1200,16 @@ async def main():
         logging_section = {}
     config["logging"] = logging_section
     logging_section["level"] = effective_log_level
+
+    if args.cm_debug is not None:
+        config.setdefault("backtest", {})
+        config["backtest"]["cm_debug_level"] = int(args.cm_debug)
+    if args.cm_progress is not None:
+        config.setdefault("backtest", {})
+        config["backtest"]["cm_progress_log_interval_seconds"] = float(args.cm_progress)
+    if bool(getattr(args, "cm_remote", False)):
+        config.setdefault("backtest", {})
+        config["backtest"]["cm_remote_fetch_bar"] = True
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     config = parse_overrides(config, verbose=True)
 
@@ -1209,10 +1246,11 @@ async def main():
     config["disable_plotting"] = args.disable_plotting
     config["backtest"]["cache_dir"] = {}
     config["backtest"]["coins"] = {}
+    force_refetch_gaps = getattr(args, "force_refetch_gaps", False)
     if bool(require_config_value(config, "backtest.combine_ohlcvs")):
         exchange = "combined"
         coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps = (
-            await prepare_hlcvs_mss(config, exchange)
+            await prepare_hlcvs_mss(config, exchange, force_refetch_gaps=force_refetch_gaps)
         )
         exchange_preference = defaultdict(list)
         for coin in coins:
@@ -1240,7 +1278,9 @@ async def main():
         configs = {exchange: deepcopy(config) for exchange in backtest_exchanges}
         tasks = {}
         for exchange in backtest_exchanges:
-            tasks[exchange] = asyncio.create_task(prepare_hlcvs_mss(configs[exchange], exchange))
+            tasks[exchange] = asyncio.create_task(
+                prepare_hlcvs_mss(configs[exchange], exchange, force_refetch_gaps=force_refetch_gaps)
+            )
         for exchange in tasks:
             coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps = await tasks[
                 exchange
