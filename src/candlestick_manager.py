@@ -329,6 +329,8 @@ class CandlestickManager:
         except Exception:
             self._progress_log_interval_seconds = 0.0
         self._progress_last_log: Dict[Tuple[str, str, str], float] = {}
+        self._warning_last_log: Dict[str, float] = {}  # throttle repeated warnings
+        self._warning_throttle_seconds: float = 300.0  # 5 minutes between repeated warnings
         self._remote_fetch_callback = remote_fetch_callback
         # Cache of legacy shard paths per (exchange, symbol, tf)
         self._legacy_shard_paths_cache: Dict[Tuple[str, str, str], Dict[str, str]] = {}
@@ -629,6 +631,20 @@ class CandlestickManager:
             return
         self._progress_last_log[key] = now
         self._log("debug", event, **fields)
+
+    def _throttled_warning(self, throttle_key: str, event: str, **fields) -> None:
+        """Emit a warning at most once per throttle window (default 5 min).
+
+        Use this for warnings that may repeat frequently but only need to
+        inform the user once. After the throttle window expires, the warning
+        will be emitted again if the condition persists.
+        """
+        now = time.monotonic()
+        last = self._warning_last_log.get(throttle_key, 0.0)
+        if (now - last) < self._warning_throttle_seconds:
+            return
+        self._warning_last_log[throttle_key] = now
+        self._log("warning", event, **fields)
 
     def _emit_remote_fetch(self, payload: Dict[str, Any]) -> None:
         cb = getattr(self, "_remote_fetch_callback", None)
@@ -2097,8 +2113,8 @@ class CandlestickManager:
                 # fallback: keep behavior safe (no warning rather than exploding)
                 missing_count = 0
             if missing_count:
-                self._log(
-                    "warning",
+                self._throttled_warning(
+                    "standardize_gaps_strict_missing",  # throttle key
                     "standardize_gaps_strict_missing",
                     missing=int(missing_count),
                     start_ts=effective_lo,
