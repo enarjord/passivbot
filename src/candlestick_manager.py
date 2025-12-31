@@ -703,6 +703,7 @@ class CandlestickManager:
             meta.setdefault("known_gaps", [])  # list of [start_ts, end_ts]
             meta.setdefault("last_refresh_ms", 0)
             meta.setdefault("last_final_ts", 0)
+            meta.setdefault("inception_ts", None)  # first known candle timestamp
             self._index[key] = idx
             self._index_mtime[key] = current_mtime
             self._log(
@@ -722,6 +723,7 @@ class CandlestickManager:
         meta.setdefault("known_gaps", [])
         meta.setdefault("last_refresh_ms", 0)
         meta.setdefault("last_final_ts", 0)
+        meta.setdefault("inception_ts", None)  # first known candle timestamp
         self._index[key] = idx
         self._index_mtime[key] = current_mtime
         if current_mtime is not None:
@@ -1277,24 +1279,32 @@ class CandlestickManager:
         merge_cache: bool = False,
         last_refresh_ms: Optional[int] = None,
         defer_index: bool = False,
+        skip_memory_retention: bool = False,
     ) -> None:
         """Merge `batch` into memory (optional) and persist incrementally to disk.
 
         Args:
             defer_index: If True, defer index.json write until flush_deferred_index is called.
+            skip_memory_retention: If True, skip memory retention enforcement to preserve
+                full historical data in cache (useful for backtest data preparation).
         """
         if batch.size == 0:
             return
         arr = np.sort(_ensure_dtype(batch), order="ts")
         tf_norm = self._normalize_timeframe_arg(timeframe, tf)
 
+        # Update inception_ts if this is new earliest data for 1m (defer save until end)
+        if tf_norm == "1m":
+            self._maybe_update_inception_ts(symbol, arr, save=not defer_index)
+
         if merge_cache or tf_norm == "1m":
             merged_cache = self._merge_overwrite(self._ensure_symbol_cache(symbol), arr)
             self._cache[symbol] = merged_cache
-            try:
-                self._enforce_memory_retention(symbol)
-            except Exception:
-                pass
+            if not skip_memory_retention:
+                try:
+                    self._enforce_memory_retention(symbol)
+                except Exception:
+                    pass
             if last_refresh_ms is not None and merged_cache.size:
                 self._set_last_refresh_meta(
                     symbol,
@@ -1424,16 +1434,21 @@ class CandlestickManager:
         *,
         reason: str = GAP_REASON_AUTO,
         increment_retry: bool = True,
+        retry_count: Optional[int] = None,
     ) -> None:
         """Add or update a known gap with enhanced metadata.
 
         If a gap overlapping with [start_ts, end_ts] already exists:
         - Extends the gap to cover the full range
-        - Increments retry_count if increment_retry is True
+        - Increments retry_count if increment_retry is True (unless retry_count is specified)
         - Updates reason if provided
 
         If retry_count reaches _GAP_MAX_RETRIES, the gap is considered persistent
         and will not be re-fetched unless force_refetch_gaps is used.
+
+        Args:
+            retry_count: If specified, set retry_count directly instead of incrementing.
+                         Useful for pre-inception gaps that should be immediately persistent.
         """
         now_ms = int(time.time() * 1000)
         gaps = self._get_known_gaps_enhanced(symbol)
@@ -1445,7 +1460,9 @@ class CandlestickManager:
                 # Overlapping - extend and optionally increment retry
                 gap["start_ts"] = min(gap["start_ts"], int(start_ts))
                 gap["end_ts"] = max(gap["end_ts"], int(end_ts))
-                if increment_retry:
+                if retry_count is not None:
+                    gap["retry_count"] = retry_count
+                elif increment_retry:
                     gap["retry_count"] = gap.get("retry_count", 0) + 1
                 if reason != GAP_REASON_AUTO:
                     gap["reason"] = reason
@@ -1453,10 +1470,11 @@ class CandlestickManager:
                 break
 
         if not updated:
+            initial_retry = retry_count if retry_count is not None else (1 if increment_retry else 0)
             new_gap: GapEntry = {
                 "start_ts": int(start_ts),
                 "end_ts": int(end_ts),
-                "retry_count": 1 if increment_retry else 0,
+                "retry_count": initial_retry,
                 "reason": reason,
                 "added_at": now_ms,
             }
@@ -1649,6 +1667,45 @@ class CandlestickManager:
             meta["last_final_ts"] = int(last_final_ts)
         self._index[symbol] = idx
         self._save_index(symbol)
+
+    # ----- Inception tracking -----
+
+    def _get_inception_ts(self, symbol: str) -> Optional[int]:
+        """Return the known inception timestamp (first candle) for this symbol, or None."""
+        idx = self._ensure_symbol_index(symbol)
+        try:
+            val = idx.get("meta", {}).get("inception_ts")
+            return int(val) if val is not None else None
+        except Exception:
+            return None
+
+    def _set_inception_ts(self, symbol: str, ts: int, *, save: bool = True) -> None:
+        """Set the inception timestamp for this symbol (only if earlier than current or unset)."""
+        idx = self._ensure_symbol_index(symbol)
+        meta = idx.setdefault("meta", {})
+        current = meta.get("inception_ts")
+        # Only update if unset or if new ts is earlier
+        if current is None or int(ts) < int(current):
+            meta["inception_ts"] = int(ts)
+            self._index[f"{symbol}::1m"] = idx
+            if save:
+                self._save_index(symbol)
+            self._log(
+                "info",
+                "inception_ts_updated",
+                symbol=symbol,
+                old_ts=current,
+                new_ts=int(ts),
+            )
+
+    def _maybe_update_inception_ts(self, symbol: str, arr: np.ndarray, *, save: bool = True) -> None:
+        """Update inception_ts if arr contains an earlier timestamp than known."""
+        if arr.size == 0:
+            return
+        first_ts = int(arr[0]["ts"]) if arr.ndim else int(arr["ts"])
+        current = self._get_inception_ts(symbol)
+        if current is None or first_ts < current:
+            self._set_inception_ts(symbol, first_ts, save=save)
 
     # ----- CCXT fetching -----
 
@@ -2442,6 +2499,33 @@ class CandlestickManager:
         """
         if not self._archive_supported():
             return
+
+        # Skip fetches before known inception date
+        inception_ts = self._get_inception_ts(symbol)
+        if inception_ts is not None and start_ts < inception_ts:
+            # Mark pre-inception range as persistent gap (no retries needed)
+            pre_inception_end = min(inception_ts - ONE_MIN_MS, end_ts)
+            if start_ts <= pre_inception_end:
+                self._add_known_gap(
+                    symbol,
+                    start_ts,
+                    pre_inception_end,
+                    reason="pre_inception",
+                    retry_count=_GAP_MAX_RETRIES,  # Mark as persistent immediately
+                )
+                self._log(
+                    "debug",
+                    "skip_pre_inception_fetch",
+                    symbol=symbol,
+                    original_start=start_ts,
+                    inception_ts=inception_ts,
+                    clipped_start=inception_ts,
+                )
+            # Clip to inception date
+            start_ts = inception_ts
+            if start_ts > end_ts:
+                return  # Nothing left to fetch
+
         day_map = self._date_keys_between(start_ts, end_ts)
         shard_paths = self._iter_shard_paths(symbol, tf="1m")
         legacy_paths = self._get_legacy_shard_paths(symbol, "1m")
@@ -2528,6 +2612,7 @@ class CandlestickManager:
                     else:
                         arr = result[1]
                         # Defer index write - we'll flush once at the end of the batch
+                        # Skip memory retention to preserve full historical data for backtesting
                         self._persist_batch(
                             symbol,
                             arr,
@@ -2535,6 +2620,7 @@ class CandlestickManager:
                             merge_cache=True,
                             last_refresh_ms=_utc_now_ms(),
                             defer_index=True,
+                            skip_memory_retention=True,
                         )
                         shard_paths[day_key] = self._shard_path(symbol, day_key, tf="1m")
                         self._log(
@@ -2937,12 +3023,14 @@ class CandlestickManager:
                                 def _persist_hist_batch(batch: np.ndarray) -> None:
                                     nonlocal persisted_batches
                                     persisted_batches = True
+                                    # Skip memory retention to preserve full historical data
                                     self._persist_batch(
                                         symbol,
                                         batch,
                                         timeframe="1m",
                                         merge_cache=True,
                                         last_refresh_ms=now,
+                                        skip_memory_retention=True,
                                     )
                                 self._log(
                                     "info",
@@ -2976,12 +3064,14 @@ class CandlestickManager:
                                             span_end_excl,
                                         )
                                     if fetched.size and not persisted_batches:
+                                        # Skip memory retention to preserve full historical data
                                         self._persist_batch(
                                             symbol,
                                             fetched,
                                             timeframe="1m",
                                             merge_cache=True,
                                             last_refresh_ms=now,
+                                            skip_memory_retention=True,
                                         )
                             arr = (
                                 np.sort(self._cache[symbol], order="ts")
