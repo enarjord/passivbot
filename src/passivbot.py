@@ -4864,6 +4864,13 @@ async def main():
         default=None,
         help="Logging verbosity (warning, info, debug, trace or 0-3).",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Enable verbose (debug) logging. Equivalent to --log-level debug.",
+    )
 
     template_config = get_template_config()
     del template_config["optimize"]
@@ -4873,7 +4880,8 @@ async def main():
     add_arguments_recursively(parser, template_config)
     raw_args = merge_negative_cli_values(sys.argv[1:])
     args = parser.parse_args(raw_args)
-    cli_log_level = args.log_level
+    # --verbose flag overrides --log-level to debug (level 2)
+    cli_log_level = "debug" if args.verbose else args.log_level
     initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     config = load_config(args.config_path, live_only=True)

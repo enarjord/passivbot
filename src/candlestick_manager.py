@@ -620,7 +620,7 @@ class CandlestickManager:
             self.log.error(msg)
 
     def _progress_log(self, key: Tuple[str, str, str], event: str, **fields) -> None:
-        """Emit throttled INFO progress logs when enabled."""
+        """Emit throttled DEBUG progress logs when enabled."""
         if self._progress_log_interval_seconds <= 0.0:
             return
         now = time.monotonic()
@@ -628,7 +628,7 @@ class CandlestickManager:
         if (now - last) < self._progress_log_interval_seconds:
             return
         self._progress_last_log[key] = now
-        self._log("info", event, **fields)
+        self._log("debug", event, **fields)
 
     def _emit_remote_fetch(self, payload: Dict[str, Any]) -> None:
         cb = getattr(self, "_remote_fetch_callback", None)
@@ -1111,7 +1111,7 @@ class CandlestickManager:
             if not load_keys:
                 return
             self._log(
-                "info",
+                "debug",
                 "disk_load_plan",
                 symbol=symbol,
                 timeframe=tf_norm,
@@ -1129,7 +1129,7 @@ class CandlestickManager:
                 if now - last_progress_log >= 5.0 or i == len(load_keys):
                     last_progress_log = now
                     self._log(
-                        "info",
+                        "debug",
                         "disk_load_progress",
                         symbol=symbol,
                         timeframe=tf_norm,
@@ -1143,7 +1143,7 @@ class CandlestickManager:
                 return
             merged_disk = np.sort(np.concatenate(arrays), order="ts")
             self._log(
-                "info",
+                "debug",
                 "disk_load_done",
                 symbol=symbol,
                 timeframe=tf_norm,
@@ -1691,7 +1691,7 @@ class CandlestickManager:
             if save:
                 self._save_index(symbol)
             self._log(
-                "info",
+                "debug",
                 "inception_ts_updated",
                 symbol=symbol,
                 old_ts=current,
@@ -2058,7 +2058,7 @@ class CandlestickManager:
             leading_gap_minutes = (first_real_ts - lo) // ONE_MIN_MS
             if leading_gap_minutes > 0:
                 self._log(
-                    "info",
+                    "debug",
                     "standardize_gaps_skipping_leading",
                     requested_start_ts=lo,
                     actual_start_ts=first_real_ts,
