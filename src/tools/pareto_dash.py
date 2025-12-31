@@ -361,6 +361,71 @@ RUN_CACHE: Dict[str, RunData] = {}
 HISTORY_CACHE: Dict[str, pd.DataFrame] = {}
 
 
+def compute_weighted_score(df: pd.DataFrame, weights: Dict[str, float]) -> pd.Series:
+    """Compute a weighted score for each row based on normalized metrics.
+
+    Higher weights = more important. Metrics are normalized 0-1 and summed.
+    """
+    if df.empty or not weights:
+        return pd.Series(0.0, index=df.index)
+
+    score = pd.Series(0.0, index=df.index)
+    total_weight = 0.0
+
+    for metric, weight in weights.items():
+        if metric not in df.columns or weight == 0:
+            continue
+        col = df[metric]
+        col_min = col.min()
+        col_max = col.max()
+        if pd.isna(col_min) or pd.isna(col_max) or col_max <= col_min:
+            continue
+        # Normalize to 0-1
+        normalized = (col - col_min) / (col_max - col_min)
+        score += normalized * weight
+        total_weight += weight
+
+    if total_weight > 0:
+        score = score / total_weight  # Normalize by total weight
+    return score
+
+
+def compute_pareto_frontier(df: pd.DataFrame, metrics: List[str], maximize: bool = True) -> pd.Series:
+    """Compute which points are on the Pareto frontier.
+
+    Returns a boolean Series indicating frontier membership.
+    Assumes higher is better for all metrics if maximize=True.
+    """
+    if df.empty or not metrics:
+        return pd.Series(False, index=df.index)
+
+    # Get values for the metrics
+    available = [m for m in metrics if m in df.columns]
+    if not available:
+        return pd.Series(False, index=df.index)
+
+    values = df[available].values
+    n = len(df)
+    is_frontier = np.ones(n, dtype=bool)
+
+    for i in range(n):
+        if not is_frontier[i]:
+            continue
+        for j in range(n):
+            if i == j or not is_frontier[j]:
+                continue
+            # Check if j dominates i (j is better in all metrics)
+            if maximize:
+                dominates = np.all(values[j] >= values[i]) and np.any(values[j] > values[i])
+            else:
+                dominates = np.all(values[j] <= values[i]) and np.any(values[j] < values[i])
+            if dominates:
+                is_frontier[i] = False
+                break
+
+    return pd.Series(is_frontier, index=df.index)
+
+
 def get_run_data(run_dir: str) -> RunData:
     if run_dir not in RUN_CACHE:
         RUN_CACHE[run_dir] = load_pareto_dataframe(run_dir)
@@ -375,7 +440,7 @@ def get_history_dataframe(run_dir: str) -> pd.DataFrame:
 
 def serve_dash(data_root: str, port: int = 8050):
     try:
-        from dash import Dash, Input, Output, State, dcc, html, dash_table, callback_context, no_update
+        from dash import Dash, Input, Output, State, dcc, html, dash_table, callback_context, no_update, ALL
         import dash_bootstrap_components as dbc
         import plotly.express as px
         import plotly.graph_objects as go
@@ -451,14 +516,52 @@ def serve_dash(data_root: str, port: int = 8050):
 
         # Filters section
         make_control_card("Filters", [
-            dbc.Label("Limit Expressions"),
+            dbc.Label("Quick Filters"),
+            html.Div(id="range-sliders-container"),
+            html.Hr(),
+            dbc.Label("Filter Presets"),
+            dbc.ButtonGroup([
+                dbc.Button("Conservative", id="preset-conservative", color="success", size="sm", outline=True),
+                dbc.Button("Balanced", id="preset-balanced", color="primary", size="sm", outline=True),
+                dbc.Button("Aggressive", id="preset-aggressive", color="danger", size="sm", outline=True),
+            ], className="mb-2 w-100"),
+            html.Hr(),
+            dbc.Label("Custom Expressions"),
             dbc.Textarea(
                 id="limit-expressions",
                 placeholder="One per line, e.g.:\nprofit_sum >= 0\ndrawdown_max <= 0.5",
-                style={"height": "100px", "fontFamily": "monospace", "fontSize": "12px"},
+                style={"height": "80px", "fontFamily": "monospace", "fontSize": "11px"},
             ),
             dbc.Button("Clear Filters", id="clear-filters", color="secondary", size="sm", className="mt-2"),
         ], "filters"),
+
+        # Pareto Frontier section
+        make_control_card("Pareto Frontier", [
+            dbc.Checklist(
+                id="show-frontier-only",
+                options=[{"label": "Show frontier only", "value": "frontier"}],
+                value=[],
+                switch=True,
+            ),
+            dbc.Checklist(
+                id="highlight-frontier",
+                options=[{"label": "Highlight frontier points", "value": "highlight"}],
+                value=["highlight"],
+                switch=True,
+            ),
+            dbc.Label("Frontier Metrics", className="mt-2"),
+            dcc.Dropdown(
+                id="frontier-metrics",
+                placeholder="Select metrics for frontier",
+                multi=True,
+            ),
+        ], "frontier"),
+
+        # Scoring section
+        make_control_card("Weighted Scoring", [
+            html.Div(id="scoring-weights-container"),
+            dbc.Button("Apply Weights", id="apply-weights", color="primary", size="sm", className="mt-2"),
+        ], "scoring"),
 
         # Scenarios section
         make_control_card("Scenarios", [
@@ -495,6 +598,8 @@ def serve_dash(data_root: str, port: int = 8050):
         # Store for selected config
         dcc.Store(id="selected-config-id", data=None),
         dcc.Store(id="selected-configs-list", data=[]),
+        dcc.Store(id="range-slider-values", data={}),
+        dcc.Store(id="scoring-weights", data={}),
     ])
 
     app.layout = dbc.Container([
@@ -629,13 +734,40 @@ def serve_dash(data_root: str, port: int = 8050):
     def render_compare_tab(run_data: RunData, df: pd.DataFrame):
         """Compare tab for side-by-side config comparison."""
         return html.Div([
-            dbc.Alert(
-                "Select configs by clicking on points in the scatter plots, then view comparison here.",
-                color="info",
-            ),
-            html.H5("Selected Configs for Comparison"),
-            html.Div(id="comparison-table"),
-            dcc.Graph(id="radar-comparison", style={"height": "400px"}),
+            dbc.Row([
+                dbc.Col([
+                    dbc.Alert(
+                        "Click points in scatter plots to add configs to comparison (up to 5). "
+                        "Use Shift+Click to add multiple configs.",
+                        color="info",
+                    ),
+                    dbc.Label("Configs to Compare"),
+                    dcc.Dropdown(
+                        id="compare-configs-dropdown",
+                        placeholder="Select configs to compare",
+                        multi=True,
+                        options=[{"label": row["_id"][:20] + "...", "value": row["_id"]}
+                                 for _, row in df.head(100).iterrows()] if not df.empty else [],
+                    ),
+                    dbc.Button("Clear Selection", id="clear-comparison", color="secondary", size="sm", className="mt-2"),
+                ], width=12),
+            ]),
+            dbc.Row([
+                dbc.Col([
+                    html.H5("Radar Comparison", className="mt-3"),
+                    dcc.Graph(id="radar-comparison", style={"height": "450px"}),
+                ], width=6),
+                dbc.Col([
+                    html.H5("Metrics Comparison", className="mt-3"),
+                    html.Div(id="comparison-table", style={"maxHeight": "450px", "overflowY": "auto"}),
+                ], width=6),
+            ]),
+            dbc.Row([
+                dbc.Col([
+                    html.H5("Parameter Differences", className="mt-3"),
+                    html.Div(id="param-diff-table", style={"maxHeight": "300px", "overflowY": "auto"}),
+                ], width=12),
+            ]),
         ])
 
     def render_export_tab(run_data: RunData, df: pd.DataFrame, selected_id: str):
@@ -679,8 +811,9 @@ def serve_dash(data_root: str, port: int = 8050):
         Output("y-metric", "value"),
         Output("color-metric", "value"),
         Input("run-selection", "value"),
+        Input("scoring-weights", "data"),
     )
-    def update_metric_choices(run_dir):
+    def update_metric_choices(run_dir, scoring_weights):
         run_data = get_run_data(run_dir)
         df = run_data.dataframe
         numeric_cols = [
@@ -689,11 +822,15 @@ def serve_dash(data_root: str, port: int = 8050):
             and not _looks_like_stat_column(c) and not c.startswith("bot.")
         ]
         options = [{"label": col, "value": col} for col in numeric_cols]
+        # Add weighted score option if weights have been set
+        color_options = options.copy()
+        if scoring_weights:
+            color_options.insert(0, {"label": "Weighted Score", "value": "_weighted_score"})
         preferred = [col for col in run_data.scoring_metrics if col in numeric_cols]
         default_x = preferred[0] if preferred else (numeric_cols[0] if numeric_cols else None)
         default_y = preferred[1] if len(preferred) > 1 else (numeric_cols[1] if len(numeric_cols) > 1 else default_x)
         default_color = preferred[2] if len(preferred) > 2 else None
-        return options, options, options, default_x, default_y, default_color
+        return options, options, color_options, default_x, default_y, default_color
 
     @app.callback(
         Output("scenario-selection", "options"),
@@ -705,6 +842,10 @@ def serve_dash(data_root: str, port: int = 8050):
         Output("metric-y", "options"),
         Output("metric-y", "value"),
         Output("limit-expressions", "value"),
+        Output("frontier-metrics", "options"),
+        Output("frontier-metrics", "value"),
+        Output("range-sliders-container", "children"),
+        Output("scoring-weights-container", "children"),
         Input("run-selection", "value"),
     )
     def update_secondary_controls(run_dir):
@@ -736,12 +877,56 @@ def serve_dash(data_root: str, port: int = 8050):
 
         limits_default = "\n".join(run_data.default_limits)
 
+        # Frontier metrics - default to scoring metrics
+        frontier_options = [{"label": col, "value": col} for col in metric_cols]
+        frontier_default = run_data.scoring_metrics[:3] if run_data.scoring_metrics else metric_cols[:3]
+
+        # Range sliders for top scoring metrics
+        slider_metrics = run_data.scoring_metrics[:3] if run_data.scoring_metrics else metric_cols[:3]
+        range_sliders = []
+        for metric in slider_metrics:
+            if metric in df.columns:
+                col_min = float(df[metric].min()) if pd.notna(df[metric].min()) else 0
+                col_max = float(df[metric].max()) if pd.notna(df[metric].max()) else 1
+                range_sliders.append(html.Div([
+                    dbc.Label(metric, style={"fontSize": "11px"}),
+                    dcc.RangeSlider(
+                        id={"type": "range-slider", "metric": metric},
+                        min=col_min,
+                        max=col_max,
+                        value=[col_min, col_max],
+                        marks=None,
+                        tooltip={"placement": "bottom", "always_visible": False},
+                        step=(col_max - col_min) / 100 if col_max > col_min else 0.01,
+                    ),
+                ], className="mb-2"))
+
+        # Scoring weights inputs
+        weight_inputs = []
+        for metric in run_data.scoring_metrics[:5]:
+            weight_inputs.append(dbc.Row([
+                dbc.Col(dbc.Label(metric[:20], style={"fontSize": "10px"}), width=8),
+                dbc.Col(dbc.Input(
+                    id={"type": "weight-input", "metric": metric},
+                    type="number",
+                    value=1.0,
+                    min=0,
+                    max=10,
+                    step=0.1,
+                    size="sm",
+                    style={"fontSize": "11px"},
+                ), width=4),
+            ], className="mb-1"))
+
         return (
             scenario_options, scenario_value,
             scenario_metric_options, scenario_metric_value,
             param_options, param_value,
             metric_options, metric_value,
             limits_default,
+            frontier_options, frontier_default,
+            range_sliders,
+            weight_inputs,
         )
 
     # =========================================================================
@@ -785,8 +970,13 @@ def serve_dash(data_root: str, port: int = 8050):
         Input("color-metric", "value"),
         Input("limit-expressions", "value"),
         Input("selected-config-id", "data"),
+        Input("show-frontier-only", "value"),
+        Input("highlight-frontier", "value"),
+        Input("frontier-metrics", "value"),
+        Input("scoring-weights", "data"),
     )
-    def update_scatter_plots(run_dir, x_metric, y_metric, color_metric, limit_exprs, selected_id):
+    def update_scatter_plots(run_dir, x_metric, y_metric, color_metric, limit_exprs, selected_id,
+                             show_frontier_only, highlight_frontier, frontier_metrics, scoring_weights):
         run_data = get_run_data(run_dir)
         df = run_data.dataframe
 
@@ -801,19 +991,54 @@ def serve_dash(data_root: str, port: int = 8050):
             empty = px.scatter(title="No configs pass filters")
             return empty, empty
 
+        # Compute weighted score if weights provided
+        if scoring_weights:
+            df_filtered["_weighted_score"] = compute_weighted_score(df_filtered, scoring_weights)
+
+        # Compute Pareto frontier
+        frontier_cols = frontier_metrics if frontier_metrics else [x_metric, y_metric]
+        is_frontier = compute_pareto_frontier(df_filtered, frontier_cols, maximize=True)
+        df_filtered["_is_frontier"] = is_frontier
+
+        # Filter to frontier only if requested
+        if show_frontier_only and "frontier" in show_frontier_only:
+            df_filtered = df_filtered[df_filtered["_is_frontier"]].copy()
+            if df_filtered.empty:
+                empty = px.scatter(title="No configs on frontier")
+                return empty, empty
+
         # Add selection marker
         df_filtered["_selected"] = df_filtered["_id"] == selected_id
 
-        # Create scatter plot
-        fig = px.scatter(
-            df_filtered,
-            x=x_metric,
-            y=y_metric,
-            color=color_metric if color_metric and color_metric in df_filtered.columns else None,
-            hover_data=["_id"],
-            title=f"{y_metric} vs {x_metric}",
-            custom_data=["_id"],
-        )
+        # Determine color and symbol based on frontier status
+        if highlight_frontier and "highlight" in highlight_frontier:
+            # Use different colors for frontier vs non-frontier
+            df_filtered["_frontier_label"] = df_filtered["_is_frontier"].map(
+                {True: "Frontier", False: "Dominated"}
+            )
+            fig = px.scatter(
+                df_filtered,
+                x=x_metric,
+                y=y_metric,
+                color="_frontier_label",
+                color_discrete_map={"Frontier": "#2ecc71", "Dominated": "#95a5a6"},
+                hover_data=["_id"],
+                title=f"{y_metric} vs {x_metric} ({is_frontier.sum()} on frontier)",
+                custom_data=["_id"],
+            )
+            # Make frontier points larger
+            fig.for_each_trace(lambda t: t.update(marker_size=12) if t.name == "Frontier" else t.update(marker_size=6, opacity=0.5))
+        else:
+            # Standard scatter with optional color metric
+            fig = px.scatter(
+                df_filtered,
+                x=x_metric,
+                y=y_metric,
+                color=color_metric if color_metric and color_metric in df_filtered.columns else None,
+                hover_data=["_id"],
+                title=f"{y_metric} vs {x_metric}",
+                custom_data=["_id"],
+            )
 
         # Highlight selected point
         if selected_id and selected_id in df_filtered["_id"].values:
@@ -1115,10 +1340,275 @@ def serve_dash(data_root: str, port: int = 8050):
         return dict(content=json_str, filename=filename)
 
     # =========================================================================
+    # CALLBACKS - Filter presets
+    # =========================================================================
+
+    @app.callback(
+        Output("limit-expressions", "value", allow_duplicate=True),
+        Input("preset-conservative", "n_clicks"),
+        Input("preset-balanced", "n_clicks"),
+        Input("preset-aggressive", "n_clicks"),
+        State("run-selection", "value"),
+        prevent_initial_call=True,
+    )
+    def apply_filter_preset(cons_clicks, bal_clicks, agg_clicks, run_dir):
+        ctx = callback_context
+        if not ctx.triggered:
+            return no_update
+
+        trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
+        run_data = get_run_data(run_dir)
+
+        # Build preset expressions based on typical metrics
+        if trigger_id == "preset-conservative":
+            # Low risk: prioritize low drawdown, longer holding allowed
+            expressions = []
+            if "adg_pnl" in run_data.aggregated_metrics:
+                expressions.append("adg_pnl >= 0")
+            if "drawdown_max" in run_data.aggregated_metrics:
+                expressions.append("drawdown_max <= 0.3")
+            if "loss_profit_ratio" in run_data.aggregated_metrics:
+                expressions.append("loss_profit_ratio <= 0.5")
+            return "\n".join(expressions)
+
+        elif trigger_id == "preset-balanced":
+            # Balanced: moderate constraints
+            expressions = []
+            if "adg_pnl" in run_data.aggregated_metrics:
+                expressions.append("adg_pnl >= 0")
+            if "drawdown_max" in run_data.aggregated_metrics:
+                expressions.append("drawdown_max <= 0.5")
+            return "\n".join(expressions)
+
+        elif trigger_id == "preset-aggressive":
+            # Aggressive: prioritize profit, allow higher risk
+            expressions = []
+            if "adg_pnl" in run_data.aggregated_metrics:
+                expressions.append("adg_pnl >= 0.001")
+            return "\n".join(expressions)
+
+        return no_update
+
+    # =========================================================================
+    # CALLBACKS - Range sliders
+    # =========================================================================
+
+    @app.callback(
+        Output("limit-expressions", "value", allow_duplicate=True),
+        Input({"type": "range-slider", "metric": ALL}, "value"),
+        State("run-selection", "value"),
+        State("limit-expressions", "value"),
+        prevent_initial_call=True,
+    )
+    def apply_range_slider_filters(slider_values, run_dir, current_exprs):
+        ctx = callback_context
+        if not ctx.triggered or not slider_values:
+            return no_update
+
+        run_data = get_run_data(run_dir)
+        df = run_data.dataframe
+
+        # Get the slider metrics
+        slider_metrics = run_data.scoring_metrics[:3] if run_data.scoring_metrics else run_data.aggregated_metrics[:3]
+
+        # Build new expressions from sliders
+        slider_exprs = []
+        for i, metric in enumerate(slider_metrics):
+            if i < len(slider_values) and slider_values[i] and metric in df.columns:
+                low, high = slider_values[i]
+                col_min = float(df[metric].min()) if pd.notna(df[metric].min()) else 0
+                col_max = float(df[metric].max()) if pd.notna(df[metric].max()) else 1
+                # Only add if slider has been moved from defaults
+                if low > col_min + 1e-9:
+                    slider_exprs.append(f"{metric} >= {low:.6g}")
+                if high < col_max - 1e-9:
+                    slider_exprs.append(f"{metric} <= {high:.6g}")
+
+        # Remove old slider-based expressions from current expressions
+        if current_exprs:
+            lines = [line.strip() for line in current_exprs.splitlines()]
+            # Filter out lines that match slider metrics
+            filtered_lines = []
+            for line in lines:
+                is_slider_expr = False
+                for metric in slider_metrics:
+                    if line.startswith(f"{metric} >=") or line.startswith(f"{metric} <="):
+                        is_slider_expr = True
+                        break
+                if not is_slider_expr and line:
+                    filtered_lines.append(line)
+        else:
+            filtered_lines = []
+
+        # Combine with slider expressions
+        all_exprs = filtered_lines + slider_exprs
+        return "\n".join(all_exprs)
+
+    # =========================================================================
+    # CALLBACKS - Weighted scoring
+    # =========================================================================
+
+    @app.callback(
+        Output("scoring-weights", "data"),
+        Input("apply-weights", "n_clicks"),
+        Input({"type": "weight-input", "metric": ALL}, "value"),
+        State("run-selection", "value"),
+        prevent_initial_call=True,
+    )
+    def update_scoring_weights(n_clicks, weight_values, run_dir):
+        ctx = callback_context
+        if not ctx.triggered:
+            return no_update
+
+        run_data = get_run_data(run_dir)
+        weight_metrics = run_data.scoring_metrics[:5]
+
+        # Build weights dict
+        weights = {}
+        for i, metric in enumerate(weight_metrics):
+            if i < len(weight_values) and weight_values[i] is not None:
+                weights[metric] = float(weight_values[i])
+            else:
+                weights[metric] = 1.0
+
+        return weights
+
+    # =========================================================================
+    # CALLBACKS - Comparison (radar chart, comparison table)
+    # =========================================================================
+
+    @app.callback(
+        Output("radar-comparison", "figure"),
+        Output("comparison-table", "children"),
+        Output("param-diff-table", "children"),
+        Input("compare-configs-dropdown", "value"),
+        Input("run-selection", "value"),
+    )
+    def update_comparison(selected_configs, run_dir):
+        run_data = get_run_data(run_dir)
+        df = run_data.dataframe
+
+        empty_radar = go.Figure()
+        empty_radar.update_layout(title="Select configs to compare")
+        empty_table = html.P("No configs selected", className="text-muted")
+
+        if not selected_configs or len(selected_configs) < 1:
+            return empty_radar, empty_table, empty_table
+
+        # Get data for selected configs
+        selected_df = df[df["_id"].isin(selected_configs)]
+        if selected_df.empty:
+            return empty_radar, empty_table, empty_table
+
+        # Radar chart with scoring metrics
+        metrics_for_radar = run_data.scoring_metrics[:8]
+        available_metrics = [m for m in metrics_for_radar if m in selected_df.columns]
+
+        if len(available_metrics) >= 3:
+            # Normalize metrics to 0-1 for radar chart
+            radar_data = []
+            for _, row in selected_df.iterrows():
+                values = []
+                for metric in available_metrics:
+                    val = row[metric]
+                    if pd.notna(val):
+                        col_min = df[metric].min()
+                        col_max = df[metric].max()
+                        if col_max > col_min:
+                            normalized = (val - col_min) / (col_max - col_min)
+                        else:
+                            normalized = 0.5
+                        values.append(normalized)
+                    else:
+                        values.append(0)
+                values.append(values[0])  # Close the polygon
+                radar_data.append({
+                    "name": row["_id"][:12] + "...",
+                    "values": values,
+                })
+
+            radar_fig = go.Figure()
+            colors = px.colors.qualitative.Set1
+            for i, data in enumerate(radar_data):
+                radar_fig.add_trace(go.Scatterpolar(
+                    r=data["values"],
+                    theta=available_metrics + [available_metrics[0]],
+                    fill="toself",
+                    name=data["name"],
+                    line_color=colors[i % len(colors)],
+                    opacity=0.6,
+                ))
+            radar_fig.update_layout(
+                polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+                title="Metrics Comparison (normalized)",
+                showlegend=True,
+            )
+        else:
+            radar_fig = empty_radar
+
+        # Metrics comparison table
+        metrics_to_show = run_data.scoring_metrics[:10] + run_data.aggregated_metrics[:5]
+        metrics_to_show = list(dict.fromkeys(metrics_to_show))
+        metrics_to_show = [m for m in metrics_to_show if m in selected_df.columns]
+
+        table_rows = []
+        for metric in metrics_to_show:
+            row_data = [html.Td(metric, style={"fontWeight": "bold", "fontSize": "11px"})]
+            for _, config_row in selected_df.iterrows():
+                val = config_row[metric]
+                formatted = f"{val:.4f}" if pd.notna(val) else "-"
+                row_data.append(html.Td(formatted, style={"fontSize": "11px"}))
+            table_rows.append(html.Tr(row_data))
+
+        header = [html.Th("Metric")] + [
+            html.Th(row["_id"][:10] + "...", style={"fontSize": "10px"})
+            for _, row in selected_df.iterrows()
+        ]
+        metrics_table = dbc.Table([
+            html.Thead(html.Tr(header)),
+            html.Tbody(table_rows),
+        ], bordered=True, size="sm", striped=True)
+
+        # Parameter differences table
+        param_cols = [c for c in run_data.param_metrics if c in selected_df.columns]
+        param_rows = []
+        for param in param_cols[:20]:  # Limit to 20 params
+            values = selected_df[param].values
+            # Only show if there's variation
+            if len(set(values)) > 1:
+                row_data = [html.Td(param.replace("bot.", ""), style={"fontWeight": "bold", "fontSize": "10px"})]
+                for val in values:
+                    formatted = f"{val:.4f}" if isinstance(val, float) else str(val)
+                    row_data.append(html.Td(formatted, style={"fontSize": "10px"}))
+                param_rows.append(html.Tr(row_data))
+
+        if param_rows:
+            param_header = [html.Th("Parameter")] + [
+                html.Th(row["_id"][:10] + "...", style={"fontSize": "9px"})
+                for _, row in selected_df.iterrows()
+            ]
+            param_table = dbc.Table([
+                html.Thead(html.Tr(param_header)),
+                html.Tbody(param_rows),
+            ], bordered=True, size="sm", striped=True)
+        else:
+            param_table = html.P("No parameter differences found", className="text-muted")
+
+        return radar_fig, metrics_table, param_table
+
+    @app.callback(
+        Output("compare-configs-dropdown", "value"),
+        Input("clear-comparison", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def clear_comparison(n_clicks):
+        return []
+
+    # =========================================================================
     # CALLBACKS - Collapsible sections
     # =========================================================================
 
-    for section in ["metrics", "filters", "scenarios", "parameters"]:
+    for section in ["metrics", "filters", "frontier", "scoring", "scenarios", "parameters"]:
         @app.callback(
             Output(f"{section}-collapse", "is_open"),
             Input(f"{section}-toggle", "n_clicks"),
