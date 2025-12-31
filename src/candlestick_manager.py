@@ -1471,15 +1471,20 @@ class CandlestickManager:
 
         # Check if we have an overlapping gap to update
         updated = False
+        previous_retry_count = 0
         for gap in gaps:
             if gap["start_ts"] <= end_ts + ONE_MIN_MS and gap["end_ts"] >= start_ts - ONE_MIN_MS:
                 # Overlapping - extend and optionally increment retry
                 gap["start_ts"] = min(gap["start_ts"], int(start_ts))
                 gap["end_ts"] = max(gap["end_ts"], int(end_ts))
+                previous_retry_count = gap.get("retry_count", 0)
                 if retry_count is not None:
                     gap["retry_count"] = retry_count
                 elif increment_retry:
-                    gap["retry_count"] = gap.get("retry_count", 0) + 1
+                    # Cap retry_count at _GAP_MAX_RETRIES to prevent unbounded growth
+                    # and avoid redundant disk writes for persistent gaps
+                    new_retry_count = previous_retry_count + 1
+                    gap["retry_count"] = min(new_retry_count, _GAP_MAX_RETRIES)
                 if reason != GAP_REASON_AUTO:
                     gap["reason"] = reason
                 updated = True
@@ -1505,24 +1510,31 @@ class CandlestickManager:
                 retry_count=new_gap["retry_count"],
             )
         else:
-            # Log when a gap becomes persistent
+            # Log warning only when gap transitions from retryable to persistent
+            # (retry_count goes from <max to >=max). Use throttling to prevent spam
+            # in edge cases where the same gap is processed multiple times.
             updated_gap = next(
                 (g for g in gaps if g["start_ts"] <= end_ts + ONE_MIN_MS and g["end_ts"] >= start_ts - ONE_MIN_MS),
                 None
             )
-            if updated_gap and updated_gap.get("retry_count", 0) >= _GAP_MAX_RETRIES:
-                gap_minutes = (updated_gap["end_ts"] - updated_gap["start_ts"]) // ONE_MIN_MS + 1
-                self._log(
-                    "warning",
-                    "gap_persistent",
-                    symbol=symbol,
-                    start_ts=updated_gap["start_ts"],
-                    end_ts=updated_gap["end_ts"],
-                    gap_minutes=gap_minutes,
-                    retry_count=updated_gap["retry_count"],
-                    reason=updated_gap.get("reason", GAP_REASON_AUTO),
-                    msg=f"Gap marked as persistent after {_GAP_MAX_RETRIES} retries. Use --force-refetch-gaps to retry.",
-                )
+            if updated_gap:
+                current_retry_count = updated_gap.get("retry_count", 0)
+                # Only warn on transition to persistent status
+                if current_retry_count >= _GAP_MAX_RETRIES and previous_retry_count < _GAP_MAX_RETRIES:
+                    gap_minutes = (updated_gap["end_ts"] - updated_gap["start_ts"]) // ONE_MIN_MS + 1
+                    # Use throttled warning to handle edge cases (concurrent calls, etc.)
+                    throttle_key = f"gap_persistent_{symbol}_{updated_gap['start_ts']}_{updated_gap['end_ts']}"
+                    self._throttled_warning(
+                        throttle_key,
+                        "gap_persistent",
+                        symbol=symbol,
+                        start_ts=updated_gap["start_ts"],
+                        end_ts=updated_gap["end_ts"],
+                        gap_minutes=gap_minutes,
+                        retry_count=current_retry_count,
+                        reason=updated_gap.get("reason", GAP_REASON_AUTO),
+                        msg=f"Gap marked as persistent after {_GAP_MAX_RETRIES} retries. Use --force-refetch-gaps to retry.",
+                    )
 
         self._save_known_gaps_enhanced(symbol, gaps)
 
@@ -2989,10 +3001,14 @@ class CandlestickManager:
 
                 # Skip fetch if all missing spans are already known persistent gaps
                 missing_before = self._missing_spans(sub, start_ts, end_ts)
-                known_enhanced = self._get_known_gaps_enhanced(symbol)
 
                 def span_in_persistent_gap(s: int, e: int) -> bool:
-                    """Check if span is fully contained in a persistent (max retries) gap."""
+                    """Check if span is fully contained in a persistent (max retries) gap.
+
+                    NOTE: We reload gaps fresh each call to avoid stale closures when
+                    _add_known_gap() is called within the same function context.
+                    """
+                    known_enhanced = self._get_known_gaps_enhanced(symbol)
                     for gap in known_enhanced:
                         if s >= gap["start_ts"] and e <= gap["end_ts"]:
                             # Only consider it "known" if it's persistent (max retries reached)
@@ -3274,10 +3290,10 @@ class CandlestickManager:
             inclusive_end = end_ts if historical else min(end_ts, end_current)
             missing = self._missing_spans(sub, start_ts, inclusive_end)
             if missing:
-                known_enhanced_present = self._get_known_gaps_enhanced(symbol)
-
                 # Helper to test if a span is fully inside any persistent known gap
                 def span_in_persistent_gap_present(s: int, e: int) -> bool:
+                    """Check if span is in persistent gap. Reloads gaps to avoid stale data."""
+                    known_enhanced_present = self._get_known_gaps_enhanced(symbol)
                     for gap in known_enhanced_present:
                         if s >= gap["start_ts"] and e <= gap["end_ts"]:
                             if not self._should_retry_gap(gap):
