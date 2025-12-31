@@ -123,6 +123,12 @@ def latest_source_mtime(root: Path = Path("passivbot-rust")) -> Optional[float]:
                 mtimes.append(file_path.stat().st_mtime)
         except OSError:
             continue
+    for file_path in root.glob("*.rs"):
+        try:
+            if file_path.exists():
+                mtimes.append(file_path.stat().st_mtime)
+        except OSError:
+            continue
     for scan_root in tracked_roots:
         if not scan_root.exists():
             continue

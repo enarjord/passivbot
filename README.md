@@ -36,6 +36,8 @@ Passivbot manages underperforming, or "stuck", positions by realizing small loss
 
 To install Passivbot and its dependencies, follow the steps below.
 
+Passivbot requires **Python 3.12**. Earlier versions are not supported.
+
 ### Step 1: Clone the Repository
 
 First, clone the Passivbot repository to the local machine:
@@ -64,7 +66,7 @@ python3 -m venv venv
 
  **Windows (Command Prompt or PowerShell):**
 ```cmd
-python -m venv venv
+py -3.12 -m venv venv
 ```
 
 Activate the virtual environment:
@@ -149,7 +151,7 @@ python3 -m jupyter lab
 
 ## Requirements
 
-- Python >= 3.8
+- Python >= 3.12
 - [requirements.txt](requirements.txt) dependencies
 
 ## Pre-optimized configurations
@@ -207,6 +209,8 @@ If the robot is profitable, consider donating as showing gratitude for its devel
 0x4b7b5bf6bea228052b775c052843fde1c63ec530  
 - USDT or USDC Arbitrum One:  
 0x4b7b5bf6bea228052b775c052843fde1c63ec530  
+- Zcash (ZEC):  
+u1jlans93rrqusqx2wp5020aezyt0q22l4tuy7ezkna06fuyaa2gxzremf50wsj3k83a4cm0cncs6zt9urlpte7a3nzvq992z48jxzem455acmhmhhwfwjcjwl8z79vlznla0r3jln6ety565254h96whnllcmepmpqu3ft9hxtqvkn0m7  
 
 Bitcoin (BTC) via Strike:  
 enarjord@strike.me

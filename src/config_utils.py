@@ -1567,16 +1567,23 @@ def remove_unused_keys_recursively(
         if tracker is not None:
             tracker.remove(current_path, removed)
 
-    for k in sorted([k for k in dst.keys() if isinstance(k, str)]):
+    def _sort_key(value) -> tuple[str, str]:
+        """Sort keys by type name, then by string representation."""
+        return (type(value).__name__, str(value))
+
+    for k in sorted(list(dst.keys()), key=_sort_key):
         current_path = parent + [k]
         if _path_is_preserved(current_path):
             continue
-        if k.startswith("_"):
+        if isinstance(k, str) and k.startswith("_"):
             continue
         if k not in src:
             removed = dst.pop(k)
             _log_config(
-                verbose, logging.INFO, "Removed unused key from config: %s", ".".join(current_path)
+                verbose,
+                logging.INFO,
+                "Removed unused key from config: %s",
+                ".".join(map(str, current_path)),
             )
             if tracker is not None:
                 tracker.remove(current_path, removed)
