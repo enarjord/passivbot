@@ -94,7 +94,6 @@
                         "bot.long.close_trailing_grid_ratio": 1,
                         "bot.long.entry_trailing_grid_ratio": 1
                     },
-                    "start_date": "2024-07"
                 },
                 {
                     "coins": ["ADA","BTC","ETH","SOL","XRP"],
@@ -103,17 +102,14 @@
                         "bot.long.close_trailing_grid_ratio": 0,
                         "bot.long.entry_trailing_grid_ratio": 0
                     },
-                    "start_date": "2024-07"
                 },
                 {
                     "label": "n_positions=3",
                     "overrides": {"bot.long.n_positions":3},
-                    "start_date": "2024-07"
                 },
                 {
                     "label": "ltwel=2",
                     "overrides": {"bot.long.total_wallet_exposure_limit":2},
-                    "start_date": "2024-07"
                 }
             ]
         }
@@ -365,6 +361,7 @@
         "population_size": 250,
         "round_to_n_significant_digits": 3,
         "scoring": [
+            "adg_pnl",
             "adg_pnl_w",
             "mdg_pnl_w",
             "loss_profit_ratio",
