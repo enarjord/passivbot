@@ -148,6 +148,11 @@ def ensure_parent_directory(
 
 
 def load_user_info(user: str, api_keys_path="api-keys.json") -> dict:
+    """Load user credentials from api-keys.json.
+
+    Returns all fields from the user's entry, plus empty string defaults
+    for legacy fields to maintain backwards compatibility with existing bots.
+    """
     if api_keys_path is None:
         api_keys_path = "api-keys.json"
     try:
@@ -156,18 +161,15 @@ def load_user_info(user: str, api_keys_path="api-keys.json") -> dict:
         raise Exception(f"error loading api keys file {api_keys_path} {e}")
     if user not in api_keys:
         raise Exception(f"user {user} not found in {api_keys_path}")
-    return {
-        k: api_keys[user][k] if k in api_keys[user] else ""
-        for k in [
-            "exchange",
-            "key",
-            "secret",
-            "passphrase",
-            "wallet_address",
-            "private_key",
-            "is_vault",
-        ]
-    }
+
+    # Start with empty string defaults for legacy fields (backwards compatibility)
+    legacy_fields = ["exchange", "key", "secret", "passphrase", "wallet_address", "private_key", "is_vault"]
+    result = {k: "" for k in legacy_fields}
+
+    # Overlay all fields from the user's entry (passthrough for CCXTBot)
+    result.update(api_keys[user])
+
+    return result
 
 
 def load_exchange_key_secret_passphrase(
@@ -194,7 +196,7 @@ def load_exchange_key_secret_passphrase(
 
 def load_broker_code(exchange: str) -> str:
     try:
-        return hjson.load(open("broker_codes.hjson"))[exchange]
+        return hjson.load(open("broker_codes.hjson")).get(exchange, "")
     except Exception as e:
         print(f"failed to load broker code", e)
         traceback.print_exc()
