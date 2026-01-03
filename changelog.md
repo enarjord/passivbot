@@ -18,6 +18,8 @@ All notable user-facing changes will be documented in this file.
 - Added configurable `live.balance_hysteresis_snap_pct` (default 0.02); set 0.0 to disable balance hysteresis entirely.
 - Optimizer: bounds now support optional step size `[low, high, step]` for grid-based optimization; stepped parameters stay on-grid through sampling, crossover/mutation, and Pareto storage.
 - Live: added `live.candle_lock_timeout_seconds` to control how long CandlestickManager waits for per-symbol candle locks when multiple bot instances share the same cache (default 10s).
+- Rust orchestrator JSON API for unified order planning across live and backtest.
+- Backtest HLCV preparation pipeline now routes through CandlestickManager with shared warmup utilities.
 
 ### Changed
 - Backtest fills now include signed `wallet_exposure` and `twe_long`/`twe_short`/`twe_net` (replacing the previous `total_wallet_exposure` fill column).
@@ -35,3 +37,4 @@ All notable user-facing changes will be documented in this file.
 - EMA log spam reduced: volume/log-range EMA summaries only emit when rankings change, keeping live logs quieter.
 - Suite configuration is canonical under `backtest.suite` for both backtesting and optimizer runs; `optimize.suite` (if present) is ignored and removed during config normalization.
 - Live orchestrator compare mode now derives all EMA inputs from a single per-symbol candle snapshot (1m + 1h), reducing redundant candle-lock contention and false compare failures in multi-bot deployments.
+- Live order generation now runs exclusively through the Rust orchestrator; legacy Python order planning paths are removed.
