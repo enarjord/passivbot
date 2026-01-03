@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+## v7.6.0 - 2026-01-03
+
 ### Added
 - Shared Pareto core (`pareto_core.py`) with constraint-aware dominance, crowding, and extreme-preserving pruning; reused by ParetoStore.
 - Canonical suite metrics payload now shared by backtest and optimizer; suite summaries include the same schema as Pareto members.
