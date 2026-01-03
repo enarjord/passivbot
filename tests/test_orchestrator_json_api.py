@@ -386,3 +386,84 @@ def test_unstuck_is_added_in_addition_to_close_grid_and_capped():
     ]
     total_close_qty = -sum(o["qty"] for o in closes if o["qty"] < 0.0)
     assert total_close_qty <= 10.0 + 1e-9
+
+
+def test_orders_include_entries_and_closes():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "entry_initial_qty_pct": 0.1,
+        "entry_grid_spacing_pct": 0.01,
+        "close_grid_qty_pct": 1.0,
+        "close_grid_markup_start": 0.01,
+        "close_grid_markup_end": 0.01,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=1.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    out = compute(pbr, inp)
+    order_types = {o["order_type"] for o in out["orders"]}
+    assert any(t.startswith("entry_") for t in order_types)
+    assert any(t.startswith("close_") for t in order_types)
+
+
+def test_twel_entry_gating_blocks_new_entries():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "entry_initial_qty_pct": 0.1,
+        "entry_grid_spacing_pct": 0.01,
+        "total_wallet_exposure_limit": 0.1,
+        "wallet_exposure_limit": 0.1,
+        "n_positions": 1,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=1.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    out = compute(pbr, inp)
+    assert not any(o["order_type"].startswith("entry_") for o in out["orders"])
+
+
+def test_twel_enforcer_emits_auto_reduce():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.4,
+        "total_wallet_exposure_limit": 0.9,
+        "risk_twel_enforcer_threshold": 1.0,
+        "n_positions": 2,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym0 = make_symbol(
+        0,
+        bid=50.0,
+        ask=50.0,
+        long_pos_size=8.0,
+        long_pos_price=50.0,
+        long_bp=long_bp,
+    )
+    sym1 = make_symbol(
+        1,
+        bid=50.0,
+        ask=50.0,
+        long_pos_size=12.0,
+        long_pos_price=50.0,
+        long_bp=long_bp,
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1])
+    out = compute(pbr, inp)
+    assert any(o["order_type"] == "close_auto_reduce_twel_long" for o in out["orders"])
