@@ -64,9 +64,13 @@ def _install_passivbot_rust_stub():
         lambda entry_price, close_price, qty, c_mult=1.0: (entry_price - close_price) * qty
     )
     stub.calc_pprice_diff_int = lambda *args, **kwargs: 0
-    stub.calc_auto_unstuck_allowance = (
-        lambda balance, allowance_pct, max_pnl, last_pnl: allowance_pct * balance
-    )
+
+    def _calc_auto_unstuck_allowance(balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last):
+        balance_peak = balance + (pnl_cumsum_max - pnl_cumsum_last)
+        drop_since_peak_pct = balance / balance_peak - 1.0
+        return max(0.0, balance_peak * (loss_allowance_pct + drop_since_peak_pct))
+
+    stub.calc_auto_unstuck_allowance = _calc_auto_unstuck_allowance
     stub.calc_wallet_exposure = (
         lambda c_mult, balance, size, price: abs(size) * price / max(balance, 1e-12)
     )
@@ -105,6 +109,14 @@ def _install_passivbot_rust_stub():
     stub.run_backtest = lambda *args, **kwargs: {}
     stub.gate_entries_by_twel_py = lambda *args, **kwargs: []
     stub.calc_twel_enforcer_orders_py = lambda *args, **kwargs: []
+
+    # Minimal stub for orchestrator JSON API
+    def _compute_ideal_orders_json(input_json: str) -> str:
+        """Stub orchestrator that returns empty orders."""
+        import json
+        return json.dumps({"orders": []})
+
+    stub.compute_ideal_orders_json = _compute_ideal_orders_json
 
     sys.modules["passivbot_rust"] = stub
 
