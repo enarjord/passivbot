@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+## v7.6.1 - 2026-01-03
+
+### Testing
+- Added comprehensive test coverage for HLCV preparation module (16 tests covering 1,017 lines of production code)
+- Added comprehensive orchestrator integration tests (19 tests for order accuracy, edge cases, multi-symbol coordination)
+- Added warmup utilities test coverage (20 tests for EMA warmup calculations and edge cases)
+- Improved Rust stub in conftest.py with correct parameter signatures and orchestrator JSON API support
+- Total: 55 new tests, bringing test suite from ~420 to 477 passing tests
+
 ## v7.6.0 - 2026-01-03
 
 ### Added
