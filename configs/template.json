@@ -214,6 +214,7 @@
         "inactive_coin_candle_ttl_minutes": 10,
         "leverage": 10,
         "market_orders_allowed": false,
+        "max_concurrent_api_requests": null,
         "max_disk_candles_per_symbol_per_tf": 2000000,
         "max_memory_candles_per_symbol": 200000,
         "max_n_cancellations_per_batch": 5,
@@ -227,6 +228,7 @@
         "recv_window_ms": 5000,
         "time_in_force": "good_till_cancelled",
         "user": "bybit_01",
+        "warmup_jitter_seconds": 30.0,
         "warmup_ratio": 0.3
     },
     "logging": {

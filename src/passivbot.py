@@ -441,6 +441,15 @@ class Passivbot:
                     "Unable to parse live.candle_lock_timeout_seconds=%r; using default",
                     lock_timeout,
                 )
+        max_concurrent = get_optional_live_value(config, "max_concurrent_api_requests", None)
+        if max_concurrent not in (None, "", 0):
+            try:
+                cm_kwargs["max_concurrent_requests"] = int(max_concurrent)
+            except Exception:
+                logging.warning(
+                    "Unable to parse live.max_concurrent_api_requests=%r; ignoring",
+                    max_concurrent,
+                )
         self.cm = CandlestickManager(**cm_kwargs)
         # TTL (minutes) for EMA candles on non-traded symbols
         ttl_min = require_live_value(config, "inactive_coin_candle_ttl_minutes")
@@ -806,6 +815,18 @@ class Passivbot:
         symbols = sorted(set().union(*self.approved_coins_minus_ignored_coins.values()))
         if not symbols:
             return
+
+        # Random jitter delay to prevent API rate limit storms when multiple bots start simultaneously
+        max_jitter = get_optional_live_value(self.config, "warmup_jitter_seconds", 30.0)
+        try:
+            max_jitter = float(max_jitter)
+        except Exception:
+            max_jitter = 30.0
+        if max_jitter > 0:
+            jitter = random.uniform(0, max_jitter)
+            logging.info(f"warmup jitter: sleeping {jitter:.1f}s (max={max_jitter}s)")
+            await asyncio.sleep(jitter)
+
         n = len(symbols)
         now = utc_ms()
         end_final = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS

@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+### Added
+- `live.warmup_jitter_seconds` (default 30): random delay before warmup to prevent API rate limit storms when multiple bots start simultaneously.
+- `live.max_concurrent_api_requests` (default null): optional global concurrency limit for CCXT API calls via CandlestickManager's network semaphore.
+
 ## v7.6.1 - 2026-01-03
 
 ### Testing
