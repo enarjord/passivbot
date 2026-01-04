@@ -266,6 +266,7 @@ class TestFetchPnls:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = MagicMock()
         bot.cca.fetch_my_trades = AsyncMock(return_value=[
             {
@@ -297,17 +298,20 @@ class TestFetchPnls:
         assert result[1]["position_side"] == "long"
 
     @pytest.mark.asyncio
-    async def test_returns_empty_list_on_error(self):
-        """Should return empty list on error instead of raising."""
+    async def test_raises_on_error_and_triggers_restart(self):
+        """Should raise on error and trigger restart_bot_on_too_many_errors (fail loudly)."""
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = MagicMock()
         bot.cca.fetch_my_trades = AsyncMock(side_effect=Exception("API error"))
+        bot.restart_bot_on_too_many_errors = AsyncMock()
 
-        result = await bot.fetch_pnls()
+        with pytest.raises(Exception, match="API error"):
+            await bot.fetch_pnls()
 
-        assert result == []
+        bot.restart_bot_on_too_many_errors.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_passes_params_to_ccxt(self):
@@ -315,6 +319,7 @@ class TestFetchPnls:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = MagicMock()
         bot.cca.fetch_my_trades = AsyncMock(return_value=[])
 
@@ -337,6 +342,7 @@ class TestFetchBalanceHooks:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = MagicMock()
         bot.quote = "USDT"
         return bot
@@ -389,6 +395,7 @@ class TestFetchPositionsHooks:
         """Bot with mocked cca.fetch_positions."""
         from exchanges.ccxt_bot import CCXTBot
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = MagicMock()
         return bot
 
@@ -477,6 +484,7 @@ class TestFetchPnlsHooks:
         """Bot with mocked cca.fetch_my_trades."""
         from exchanges.ccxt_bot import CCXTBot
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = MagicMock()
         return bot
 
@@ -558,6 +566,7 @@ class TestFetchTickersHooks:
         """Bot with mocked cca.fetch_tickers."""
         from exchanges.ccxt_bot import CCXTBot
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = MagicMock()
         bot.markets_dict = {"BTC/USDT:USDT": {}, "ETH/USDT:USDT": {}}
         return bot

@@ -5,9 +5,34 @@ This is a base class for quickly onboarding new exchanges. Subclass this
 and override only the methods that need exchange-specific behavior.
 
 See docs/plans/2026-01-02-ccxtbot-design.md for design rationale.
+
+Hook Taxonomy
+=============
+CCXTBot uses a consistent naming convention for extension points:
+
+    can_*        - Capability checks (return bool)
+                   Example: can_watch_orders() -> True if WebSocket supported
+
+    _do_*        - Async actions that call the exchange API
+                   Example: _do_fetch_balance() -> dict from CCXT
+
+    _get_*       - Value extraction from API responses
+                   Example: _get_balance(fetched) -> float
+
+    _normalize_* - Data transformation to passivbot format
+                   Example: _normalize_positions(fetched) -> list[dict]
+
+    _build_*     - Config/parameter construction
+                   Example: _build_order_params(order) -> dict for CCXT
+
+To customize behavior for a new exchange:
+1. Subclass CCXTBot
+2. Override only the hooks that need exchange-specific logic
+3. Template methods (fetch_balance, fetch_positions, etc.) orchestrate the hooks
 """
 
 import asyncio
+import time
 import traceback
 
 from passivbot import Passivbot, logging, custom_id_to_snake
@@ -20,7 +45,10 @@ assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
 class CCXTBot(Passivbot):
-    """Generic exchange bot using CCXT unified API."""
+    """Generic exchange bot using CCXT unified API.
+
+    See module docstring for hook taxonomy and extension patterns.
+    """
 
     def __init__(self, config: dict):
         super().__init__(config)
@@ -219,7 +247,12 @@ class CCXTBot(Passivbot):
         Default: Use CCXT's fetch_balance()
         Override: Custom API call or different endpoint
         """
-        return await self.cca.fetch_balance()
+        logging.debug(f"{self.exchange}: fetching balance via CCXT fetch_balance()")
+        t0 = time.time()
+        result = await self.cca.fetch_balance()
+        elapsed_ms = (time.time() - t0) * 1000
+        logging.debug(f"{self.exchange}: fetch_balance completed in {elapsed_ms:.1f}ms")
+        return result
 
     def _get_balance(self, fetched: dict) -> float:
         """Hook: Extract balance value from response.
@@ -238,17 +271,23 @@ class CCXTBot(Passivbot):
         - _get_position_side(): Derive position_side per position
 
         Returns:
-            list: List of position dicts with normalized fields, or False on error.
+            list: List of position dicts with normalized fields.
+
+        Raises:
+            Exception: On API errors (triggers restart_bot_on_too_many_errors).
         """
         fetched = None
         try:
             fetched = await self._do_fetch_positions()
-            return self._normalize_positions(fetched)
+            positions = self._normalize_positions(fetched)
+            logging.debug(f"{self.exchange}: fetched {len(positions)} open positions")
+            return positions
         except Exception as e:
             logging.error(f"error fetching positions: {e}")
             print_async_exception(fetched)
             traceback.print_exc()
-            return False
+            await self.restart_bot_on_too_many_errors()
+            raise
 
     async def _do_fetch_positions(self) -> list:
         """Hook: Call exchange API for positions.
@@ -256,7 +295,12 @@ class CCXTBot(Passivbot):
         Default: Use CCXT's fetch_positions()
         Override: Custom API call
         """
-        return await self.cca.fetch_positions()
+        logging.debug(f"{self.exchange}: fetching positions via CCXT fetch_positions()")
+        t0 = time.time()
+        result = await self.cca.fetch_positions()
+        elapsed_ms = (time.time() - t0) * 1000
+        logging.debug(f"{self.exchange}: fetch_positions completed in {elapsed_ms:.1f}ms, {len(result)} raw positions")
+        return result
 
     def _normalize_positions(self, fetched: list) -> list:
         """Hook: Transform raw positions to passivbot format.
@@ -295,7 +339,12 @@ class CCXTBot(Passivbot):
         """
         fetched = None
         try:
+            sym_str = symbol if symbol else "all symbols"
+            logging.debug(f"{self.exchange}: fetching open orders for {sym_str}")
+            t0 = time.time()
             fetched = await self.cca.fetch_open_orders(symbol=symbol)
+            elapsed_ms = (time.time() - t0) * 1000
+            logging.debug(f"{self.exchange}: fetch_open_orders completed in {elapsed_ms:.1f}ms, {len(fetched)} orders")
             for elm in fetched:
                 elm["position_side"] = self._get_position_side_for_order(elm)
                 # Normalize qty from amount
@@ -433,7 +482,12 @@ class CCXTBot(Passivbot):
         Default: Use CCXT's fetch_tickers()
         Override: Custom API call or different endpoint
         """
-        return await self.cca.fetch_tickers()
+        logging.debug(f"{self.exchange}: fetching tickers via CCXT fetch_tickers()")
+        t0 = time.time()
+        result = await self.cca.fetch_tickers()
+        elapsed_ms = (time.time() - t0) * 1000
+        logging.debug(f"{self.exchange}: fetch_tickers completed in {elapsed_ms:.1f}ms, {len(result)} tickers")
+        return result
 
     def _normalize_tickers(self, fetched: dict) -> dict:
         """Hook: Transform to {symbol: {bid, ask, last}} format.
@@ -462,7 +516,12 @@ class CCXTBot(Passivbot):
             list: OHLCV data or empty list on error.
         """
         try:
-            return await self.cca.fetch_ohlcv(symbol, timeframe=timeframe, limit=1000)
+            logging.debug(f"{self.exchange}: fetching OHLCV for {symbol} ({timeframe})")
+            t0 = time.time()
+            result = await self.cca.fetch_ohlcv(symbol, timeframe=timeframe, limit=1000)
+            elapsed_ms = (time.time() - t0) * 1000
+            logging.debug(f"{self.exchange}: fetch_ohlcv completed in {elapsed_ms:.1f}ms, {len(result)} candles")
+            return result
         except Exception as e:
             logging.error(f"error fetching ohlcv for {symbol}: {e}")
             traceback.print_exc()
@@ -481,15 +540,22 @@ class CCXTBot(Passivbot):
         """
         n_limit = limit or 1000
         try:
+            logging.debug(f"{self.exchange}: fetching 1m OHLCV for {symbol}, since={since}, limit={n_limit}")
+            t0 = time.time()
             if since is None:
-                return await self.cca.fetch_ohlcv(symbol, timeframe="1m", limit=n_limit)
+                result = await self.cca.fetch_ohlcv(symbol, timeframe="1m", limit=n_limit)
+                elapsed_ms = (time.time() - t0) * 1000
+                logging.debug(f"{self.exchange}: fetch_ohlcvs_1m completed in {elapsed_ms:.1f}ms, {len(result)} candles")
+                return result
 
             since = int(since // 60000 * 60000)  # Round to minute
             all_candles = {}
+            page_count = 0
             for _ in range(5):  # Max 5 paginated requests
                 fetched = await self.cca.fetch_ohlcv(
                     symbol, timeframe="1m", since=since, limit=n_limit
                 )
+                page_count += 1
                 if not fetched:
                     break
                 for candle in fetched:
@@ -498,6 +564,8 @@ class CCXTBot(Passivbot):
                     break
                 since = fetched[-1][0]
 
+            elapsed_ms = (time.time() - t0) * 1000
+            logging.debug(f"{self.exchange}: fetch_ohlcvs_1m completed in {elapsed_ms:.1f}ms, {len(all_candles)} candles ({page_count} pages)")
             return sorted(all_candles.values(), key=lambda x: x[0])
         except Exception as e:
             logging.error(f"error fetching ohlcvs_1m for {symbol}: {e}")
@@ -520,6 +588,9 @@ class CCXTBot(Passivbot):
 
         Returns:
             list: Trades sorted by timestamp with pnl, position_side, qty fields.
+
+        Raises:
+            Exception: On API errors (triggers restart_bot_on_too_many_errors).
         """
         try:
             trades = await self._do_fetch_pnls(start_time, end_time, limit)
@@ -527,7 +598,8 @@ class CCXTBot(Passivbot):
         except Exception as e:
             logging.error(f"error fetching pnls: {e}")
             traceback.print_exc()
-            return []
+            await self.restart_bot_on_too_many_errors()
+            raise
 
     async def _do_fetch_pnls(self, start_time, end_time, limit) -> list:
         """Hook: Call exchange API for trades.
@@ -535,15 +607,25 @@ class CCXTBot(Passivbot):
         Default: Use CCXT's fetch_my_trades()
         Override: Custom API call or different endpoint
         """
+        logging.debug(
+            f"{self.exchange}: fetching PnLs via CCXT fetch_my_trades(), "
+            f"since={start_time}, end_time={end_time}, limit={limit}"
+        )
+        t0 = time.time()
         params = {}
         if end_time:
             params["until"] = int(end_time)
-        return await self.cca.fetch_my_trades(
+        result = await self.cca.fetch_my_trades(
             symbol=None,
             since=int(start_time) if start_time else None,
             limit=limit,
             params=params,
         )
+        elapsed_ms = (time.time() - t0) * 1000
+        logging.debug(
+            f"{self.exchange}: fetch_my_trades completed in {elapsed_ms:.1f}ms, {len(result)} trades"
+        )
+        return result
 
     def _normalize_pnls(self, trades: list) -> list:
         """Hook: Add pnl, position_side, qty to each trade.
