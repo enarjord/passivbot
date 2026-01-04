@@ -460,9 +460,9 @@ class HyperliquidBot(Passivbot):
     async def update_exchange_config(self):
         pass
 
-    async def calc_ideal_orders(self, allow_unstuck: bool = True):
+    async def calc_ideal_orders(self):
         # hyperliquid needs custom price rounding
-        ideal_orders = await super().calc_ideal_orders(allow_unstuck=allow_unstuck)
+        ideal_orders = await super().calc_ideal_orders()
         for sym in ideal_orders:
             for i in range(len(ideal_orders[sym])):
                 if ideal_orders[sym][i]["side"] == "sell":

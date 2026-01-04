@@ -131,7 +131,7 @@ fn calc_reentry_price_bid(
     order_book_bid: f64,
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
-    grid_log_range: f64,
+    entry_volatility_logrange_ema_1h: f64,
     wallet_exposure_limit_cap: f64,
 ) -> f64 {
     let effective_wallet_exposure_limit = f64::min(
@@ -144,7 +144,8 @@ fn calc_reentry_price_bid(
     } else {
         0.0
     };
-    let log_multiplier = grid_log_range * bot_params.entry_grid_spacing_volatility_weight;
+    let log_multiplier =
+        entry_volatility_logrange_ema_1h * bot_params.entry_grid_spacing_volatility_weight;
     let spacing_multiplier = 1.0 + we_multiplier + log_multiplier;
     let reentry_price = f64::min(
         round_dn(
@@ -167,7 +168,7 @@ fn calc_reentry_price_ask(
     order_book_ask: f64,
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
-    grid_log_range: f64,
+    entry_volatility_logrange_ema_1h: f64,
     wallet_exposure_limit_cap: f64,
 ) -> f64 {
     let effective_wallet_exposure_limit = f64::min(
@@ -180,7 +181,8 @@ fn calc_reentry_price_ask(
     } else {
         0.0
     };
-    let log_multiplier = grid_log_range * bot_params.entry_grid_spacing_volatility_weight;
+    let log_multiplier =
+        entry_volatility_logrange_ema_1h * bot_params.entry_grid_spacing_volatility_weight;
     let spacing_multiplier = 1.0 + we_multiplier + log_multiplier;
     let reentry_price = f64::max(
         round_up(
@@ -262,7 +264,7 @@ pub fn calc_grid_entry_long(
         state_params.order_book.bid,
         exchange_params,
         bot_params,
-        state_params.grid_log_range,
+        state_params.entry_volatility_logrange_ema_1h,
         effective_wallet_exposure_limit,
     );
     if reentry_price <= 0.0 {
@@ -311,7 +313,7 @@ pub fn calc_grid_entry_long(
         state_params.order_book.bid,
         exchange_params,
         bot_params,
-        state_params.grid_log_range,
+        state_params.entry_volatility_logrange_ema_1h,
         effective_wallet_exposure_limit,
     );
     let next_reentry_qty = f64::max(
@@ -524,8 +526,8 @@ pub fn calc_trailing_entry_long(
     } else {
         0.0
     };
-    let threshold_log_multiplier =
-        state_params.grid_log_range * bot_params.entry_trailing_threshold_volatility_weight;
+    let threshold_log_multiplier = state_params.entry_volatility_logrange_ema_1h
+        * bot_params.entry_trailing_threshold_volatility_weight;
     let threshold_pct = bot_params.entry_trailing_threshold_pct
         * (1.0 + threshold_multiplier + threshold_log_multiplier).max(0.0);
 
@@ -535,8 +537,8 @@ pub fn calc_trailing_entry_long(
     } else {
         0.0
     };
-    let retracement_log_multiplier =
-        state_params.grid_log_range * bot_params.entry_trailing_retracement_volatility_weight;
+    let retracement_log_multiplier = state_params.entry_volatility_logrange_ema_1h
+        * bot_params.entry_trailing_retracement_volatility_weight;
     let retracement_pct = bot_params.entry_trailing_retracement_pct
         * (1.0 + retracement_multiplier + retracement_log_multiplier).max(0.0);
     let mut entry_triggered = false;
@@ -692,7 +694,7 @@ pub fn calc_grid_entry_short(
         state_params.order_book.ask,
         exchange_params,
         bot_params,
-        state_params.grid_log_range,
+        state_params.entry_volatility_logrange_ema_1h,
         effective_wallet_exposure_limit,
     );
     if reentry_price <= 0.0 {
@@ -741,7 +743,7 @@ pub fn calc_grid_entry_short(
         state_params.order_book.ask,
         exchange_params,
         bot_params,
-        state_params.grid_log_range,
+        state_params.entry_volatility_logrange_ema_1h,
         effective_wallet_exposure_limit,
     );
     let next_reentry_qty = f64::max(
@@ -857,8 +859,8 @@ pub fn calc_trailing_entry_short(
     } else {
         0.0
     };
-    let threshold_log_multiplier =
-        state_params.grid_log_range * bot_params.entry_trailing_threshold_volatility_weight;
+    let threshold_log_multiplier = state_params.entry_volatility_logrange_ema_1h
+        * bot_params.entry_trailing_threshold_volatility_weight;
     let threshold_pct = bot_params.entry_trailing_threshold_pct
         * (1.0 + threshold_multiplier + threshold_log_multiplier).max(0.0);
 
@@ -868,8 +870,8 @@ pub fn calc_trailing_entry_short(
     } else {
         0.0
     };
-    let retracement_log_multiplier =
-        state_params.grid_log_range * bot_params.entry_trailing_retracement_volatility_weight;
+    let retracement_log_multiplier = state_params.entry_volatility_logrange_ema_1h
+        * bot_params.entry_trailing_retracement_volatility_weight;
     let retracement_pct = bot_params.entry_trailing_retracement_pct
         * (1.0 + retracement_multiplier + retracement_log_multiplier).max(0.0);
     let mut entry_triggered = false;

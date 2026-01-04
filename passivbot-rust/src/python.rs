@@ -26,6 +26,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
 use pyo3::PyObject;
 use serde::Serialize;
+use serde_json;
 use std::str::FromStr;
 
 type BacktestPyResult = (PyObject, PyObject, Py<PyDict>, Py<PyDict>);
@@ -400,6 +401,7 @@ pub fn gate_entries_by_twel_py(
         qty,
         price,
         order_type,
+        ..
     } in gated
     {
         result.push((idx, qty, price, order_type.id()));
@@ -727,7 +729,7 @@ fn run_backtest_core<'py>(
                 py_analysis_btc,
             ));
         }
-        let mut py_fills = Array2::from_elem((fills.len(), 16), py.None());
+        let mut py_fills = Array2::from_elem((fills.len(), 18), py.None());
         for (i, fill) in fills.iter().enumerate() {
             py_fills[(i, 0)] = fill.index.into_py(py);
             py_fills[(i, 1)] = (fill.timestamp_ms as i64).into_py(py);
@@ -744,7 +746,9 @@ fn run_backtest_core<'py>(
             py_fills[(i, 12)] = fill.position_price.into_py(py);
             py_fills[(i, 13)] = fill.order_type.to_string().into_py(py);
             py_fills[(i, 14)] = fill.wallet_exposure.into_py(py);
-            py_fills[(i, 15)] = fill.total_wallet_exposure.into_py(py);
+            py_fills[(i, 15)] = fill.twe_long.into_py(py);
+            py_fills[(i, 16)] = fill.twe_short.into_py(py);
+            py_fills[(i, 17)] = fill.twe_net.into_py(py);
         }
 
         let equities_array =
@@ -1015,7 +1019,7 @@ pub fn calc_next_entry_long_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_lower: f64,
-    grid_log_range: f64,
+    entry_volatility_logrange_ema_1h: f64,
     order_book_bid: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -1035,7 +1039,7 @@ pub fn calc_next_entry_long_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
-        grid_log_range,
+        entry_volatility_logrange_ema_1h,
         ..Default::default()
     };
     let bot_params = BotParams {
@@ -1191,7 +1195,7 @@ pub fn calc_next_entry_short_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_upper: f64,
-    grid_log_range: f64,
+    entry_volatility_logrange_ema_1h: f64,
     order_book_ask: f64,
 ) -> (f64, f64, String) {
     let exchange_params = ExchangeParams {
@@ -1211,7 +1215,7 @@ pub fn calc_next_entry_short_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
-        grid_log_range,
+        entry_volatility_logrange_ema_1h,
         ..Default::default()
     };
     let bot_params = BotParams {
@@ -1367,7 +1371,7 @@ pub fn calc_entries_long_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_lower: f64,
-    grid_log_range: f64,
+    entry_volatility_logrange_ema_1h: f64,
     order_book_bid: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -1388,7 +1392,7 @@ pub fn calc_entries_long_py(
             lower: ema_bands_lower,
             ..Default::default()
         },
-        grid_log_range,
+        entry_volatility_logrange_ema_1h,
         ..Default::default()
     };
 
@@ -1468,7 +1472,7 @@ pub fn calc_entries_short_py(
     max_since_open: f64,
     min_since_max: f64,
     ema_bands_upper: f64,
-    grid_log_range: f64,
+    entry_volatility_logrange_ema_1h: f64,
     order_book_ask: f64,
 ) -> Vec<(f64, f64, u16)> {
     let exchange_params = ExchangeParams {
@@ -1489,7 +1493,7 @@ pub fn calc_entries_short_py(
             upper: ema_bands_upper,
             ..Default::default()
         },
-        grid_log_range,
+        entry_volatility_logrange_ema_1h,
         ..Default::default()
     };
 
@@ -1843,4 +1847,31 @@ pub fn order_type_snake_to_id(name: &str) -> PyResult<u16> {
 #[pyfunction(name = "get_order_id_type_from_string")]
 pub fn get_order_id_type_from_string_alias(name: &str) -> PyResult<u16> {
     order_type_snake_to_id(name)
+}
+
+// -------- Orchestrator JSON API --------
+
+#[pyfunction]
+pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
+    let input: crate::orchestrator::OrchestratorInput =
+        serde_json::from_str(input_json).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "failed to parse OrchestratorInput JSON: {}",
+                e
+            ))
+        })?;
+
+    let out = crate::orchestrator::compute_ideal_orders(&input).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "orchestrator compute_ideal_orders failed: {:?}",
+            e
+        ))
+    })?;
+
+    serde_json::to_string(&out).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "failed to serialize OrchestratorOutput JSON: {}",
+            e
+        ))
+    })
 }

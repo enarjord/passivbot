@@ -99,6 +99,29 @@ In practice, the bot rarely fills all positions simultaneously. Therefore, the b
 
 * **Example:** If WEL is `0.20` and allowance is `0.10` (10%), the position can grow to `0.22` before the bot considers it "full."
 * **Motivation:** In a multi-coin setup, this lets the bot boost performance on active positions by utilizing the unused capacity of inactive positions.
+
+> **Comprehensive Calculation Example:**
+> Given a **$2000 balance**, `TWEL=1.0`, `excess_allowance=0.5`, `n_positions=4`, `unstuck_threshold=0.48`:
+>
+> 1.  **Per position allowance:**
+>     `((balance * twel) / n_positions) * (1 + excess_allowance)`
+>     `(($2000 * 1.0) / 4) * (1 + 0.5) == $500 * 1.5 == $750`
+>
+> 2.  **Per position effective exposure limit:**
+>     `(twel / n_position) * (1 + excess_allowance)`
+>     `(1.0 / 4) * (1 + 0.5) == 0.375`
+>
+> **The Result:**
+> The bot will stop making entries when a position's exposure hits **0.375** or when the overall account's exposure hits **1.0**.
+>
+> Since `0.375 * 4 > 1.0`, the bot will allow filling up the first positions' effective limits, but will gate new entries when filling those entries would lead to `twe > twel`.
+>
+> **Auto-Unstuck Trigger:**
+> Auto unstuck will begin at `effective_we_limit * unstuck_threshold`:
+> `0.375 * 0.48 == 0.18` (or 48% of the full position).
+
+
+
 * **Edge Case:**
     * *Scenario:* `TWEL = 1.0`, `n_positions = 10`, `excess_allowance = 0.5`.
     * *Effective per-position limit:* `(1.0 / 10) * (1 + 0.5) = 0.15`.

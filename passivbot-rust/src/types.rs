@@ -3,7 +3,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use numpy::{PyArray1, PyArray3, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::{Py, PyResult, Python};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use strum_macros::{Display, EnumIter, EnumString};
 
@@ -131,7 +131,8 @@ impl HlcvsBundle {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExchangeParams {
     pub qty_step: f64,
     pub price_step: f64,
@@ -171,25 +172,28 @@ pub struct BacktestParams {
     pub filter_by_min_effective_cost: bool,
 }
 
-#[derive(Default, Debug, Clone, Copy)]
+#[derive(Default, Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Position {
     pub size: f64,
     pub price: f64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Positions {
     pub long: HashMap<usize, Position>,
     pub short: HashMap<usize, Position>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EMABands {
     pub upper: f64,
     pub lower: f64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Order {
     pub qty: f64,
     pub price: f64,
@@ -206,27 +210,31 @@ impl Default for Order {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OrderBook {
     pub bid: f64,
     pub ask: f64,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StateParams {
     pub balance: f64,
     pub order_book: OrderBook,
     pub ema_bands: EMABands,
-    pub grid_log_range: f64,
+    pub entry_volatility_logrange_ema_1h: f64,
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BotParamsPair {
     pub long: BotParams,
     pub short: BotParams,
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BotParams {
     pub close_grid_markup_end: f64,
     pub close_grid_markup_start: f64,
@@ -268,7 +276,8 @@ pub struct BotParams {
     pub unstuck_threshold: f64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TrailingPriceBundle {
     pub min_since_open: f64,
     pub max_since_min: f64,
@@ -293,12 +302,15 @@ impl Default for TrailingPriceBundle {
     Eq,
     Clone,
     Copy,
+    Serialize,
+    Deserialize,
     IntoPrimitive,
     TryFromPrimitive,
     EnumString,
     Display,
     EnumIter,
 )]
+#[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum OrderType {
     EntryInitialNormalLong = 0,
@@ -404,8 +416,10 @@ pub struct Fill {
     pub position_size: f64,
     pub position_price: f64,
     pub order_type: OrderType,
-    pub wallet_exposure: f64,
-    pub total_wallet_exposure: f64,
+    pub wallet_exposure: f64, // signed: long positive, short negative
+    pub twe_long: f64,
+    pub twe_short: f64, // signed negative
+    pub twe_net: f64,   // twe_long + twe_short
 }
 
 #[derive(Debug, Clone, Serialize)]

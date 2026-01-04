@@ -1,5 +1,5 @@
 from setuptools import setup, find_packages
-from setuptools_rust import RustExtension
+from setuptools_rust import Binding, RustExtension
 
 
 def parse_requirements(filename):
@@ -14,7 +14,7 @@ setup(
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     rust_extensions=[
-        RustExtension("passivbot_rust", path="passivbot-rust/Cargo.toml", binding="pyo3")
+        RustExtension("passivbot_rust", path="passivbot-rust/Cargo.toml", binding=Binding.PyO3)
     ],
     install_requires=parse_requirements("requirements-rust.txt"),
     setup_requires=["setuptools-rust>=1.9.0", "wheel"],

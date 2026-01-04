@@ -34,6 +34,7 @@ passivbot_agent_principles:
     - Include clear, actionable error messages for all expected failures.
     - Exchange fetch methods (fetch_balance, fetch_positions, fetch_open_orders, etc.) must NOT catch exceptions. Let exceptions propagate to the caller who handles via restart_bot_on_too_many_errors(). This ensures clean return types (no Union[list, bool]), preserves exception context, and makes errors impossible to ignore.
 
+
   testing:
     - Write comprehensive tests covering both normal and edge cases.
     - Include property-based or randomized tests where applicable to uncover edge behavior.

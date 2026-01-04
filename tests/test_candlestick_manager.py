@@ -189,6 +189,81 @@ async def test_tf_persistence_via_get_candles(tmp_path, monkeypatch):
     assert f"{symbol}::1h" in cm._index
 
 
+def test_merge_overwrite_prefers_new_on_conflict(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    ts = _floor_minute(int(time.time() * 1000))
+    existing = np.array([(ts, 1.0, 1.0, 1.0, 1.0, 1.0)], dtype=CANDLE_DTYPE)
+    new = np.array([(ts, 2.0, 2.0, 2.0, 2.0, 2.0)], dtype=CANDLE_DTYPE)
+    merged = cm._merge_overwrite(existing, new)
+    assert merged.size == 1
+    assert float(merged[0]["c"]) == pytest.approx(2.0)
+
+
+@pytest.mark.asyncio
+async def test_get_latest_ema_metrics_calls_get_candles_once_and_caches(monkeypatch, tmp_path):
+    fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "BTC/USDT:USDT"
+
+    # Provide a deterministic window of 10 candles.
+    base = _floor_minute(fixed_now_ms) - ONE_MIN_MS * 20
+    ts = [base + i * ONE_MIN_MS for i in range(10)]
+    arr = np.zeros(len(ts), dtype=CANDLE_DTYPE)
+    arr["ts"] = np.asarray(ts, dtype=np.int64)
+    arr["h"] = np.linspace(100.0, 109.0, len(ts)).astype(np.float32)
+    arr["l"] = (arr["h"] - 1.0).astype(np.float32)
+    arr["c"] = (arr["h"] - 0.5).astype(np.float32)
+    arr["bv"] = np.linspace(1.0, 2.0, len(ts)).astype(np.float32)
+
+    # Force the manager to use this exact range.
+    end_ts = ts[-1]
+    start_ts = end_ts - 9 * ONE_MIN_MS
+
+    async def fake_latest_finalized_range(span, period_ms=ONE_MIN_MS):
+        return (start_ts, end_ts)
+
+    monkeypatch.setattr(cm, "_latest_finalized_range", fake_latest_finalized_range)
+
+    calls = {"n": 0}
+
+    async def fake_get_candles(
+        symbol_, *, start_ts=None, end_ts=None, max_age_ms=None, strict=False, timeframe=None, tf=None
+    ):
+        calls["n"] += 1
+        return arr
+
+    monkeypatch.setattr(cm, "get_candles", fake_get_candles)
+
+    spans = {"qv": 5.0, "log_range": 3.0}
+    out1 = await cm.get_latest_ema_metrics(symbol, spans, max_age_ms=60_000, timeframe=None)
+    assert calls["n"] == 1
+    assert set(out1.keys()) == set(spans.keys())
+
+    qv_series = (
+        np.asarray(arr[-5:]["bv"], dtype=np.float64)
+        * (
+            np.asarray(arr[-5:]["h"], dtype=np.float64)
+            + np.asarray(arr[-5:]["l"], dtype=np.float64)
+            + np.asarray(arr[-5:]["c"], dtype=np.float64)
+        )
+        / 3.0
+    )
+    lr_series = np.log(
+        np.maximum(np.asarray(arr[-3:]["h"], dtype=np.float64), 1e-12)
+        / np.maximum(np.asarray(arr[-3:]["l"], dtype=np.float64), 1e-12)
+    )
+    assert out1["qv"] == pytest.approx(float(cm._ema(qv_series, 5.0)))
+    assert out1["log_range"] == pytest.approx(float(cm._ema(lr_series, 3.0)))
+
+    # Second call should hit EMA cache (no new get_candles call).
+    out2 = await cm.get_latest_ema_metrics(symbol, spans, max_age_ms=60_000, timeframe=None)
+    assert calls["n"] == 1
+    assert out2["qv"] == pytest.approx(out1["qv"])
+    assert out2["log_range"] == pytest.approx(out1["log_range"])
+
+
 @pytest.mark.asyncio
 async def test_tf_loads_from_disk_without_network(tmp_path, monkeypatch):
     class _Ex:
@@ -498,3 +573,213 @@ async def test_get_current_close_tail_fetch_merges_and_primes(monkeypatch, tmp_p
     out = await cm.get_candles(symbol, start_ts=start_ts, end_ts=end_finalized, max_age_ms=60_000)
     assert out.size > 0
     assert calls["paginated"] == 0
+
+
+@pytest.mark.asyncio
+async def test_refresh_bounds_disk_load_range(monkeypatch, tmp_path):
+    fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    class _Ex:
+        id = "okx"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="okx",
+        cache_dir=str(tmp_path / "caches"),
+        default_window_candles=100,
+        overlap_candles=30,
+    )
+    symbol = "BTC/USDT:USDT"
+    calls = []
+
+    def fake_load_from_disk(symbol_, start_ts, end_ts, *, timeframe=None, tf=None):
+        calls.append((int(start_ts), int(end_ts), (timeframe or tf)))
+        return None
+
+    async def fake_fetch(
+        symbol_, since_ms, end_exclusive_ms, *, timeframe=None, tf=None, on_batch=None
+    ):
+        return np.empty((0,), dtype=CANDLE_DTYPE)
+
+    monkeypatch.setattr(cm, "_load_from_disk", fake_load_from_disk)
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fake_fetch)
+
+    await cm.refresh(symbol)
+
+    end_exclusive = _floor_minute(fixed_now_ms)
+    lookback_candles = max(100, 30) + 10
+    disk_since = max(0, end_exclusive - lookback_candles * ONE_MIN_MS)
+
+    assert calls
+    assert all(end == end_exclusive for _, end, _ in calls)
+    assert all(start >= disk_since for start, _, _ in calls)
+
+
+# ----- Enhanced Gap Metadata Tests -----
+
+
+def test_enhanced_gap_metadata_new_format(tmp_path):
+    """Test that gaps are stored in enhanced format with retry counts."""
+    from candlestick_manager import GapEntry, GAP_REASON_FETCH_FAILED, _GAP_MAX_RETRIES
+
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TEST/USDT"
+
+    # Add a gap
+    cm._add_known_gap(symbol, 1000000, 2000000, reason=GAP_REASON_FETCH_FAILED)
+
+    # Verify enhanced format
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert len(gaps) == 1
+    assert gaps[0]["start_ts"] == 1000000
+    assert gaps[0]["end_ts"] == 2000000
+    assert gaps[0]["retry_count"] == 1
+    assert gaps[0]["reason"] == GAP_REASON_FETCH_FAILED
+    assert "added_at" in gaps[0]
+
+    # Backward compatibility: simple tuple format still works
+    simple_gaps = cm._get_known_gaps(symbol)
+    assert len(simple_gaps) == 1
+    assert simple_gaps[0] == (1000000, 2000000)
+
+
+def test_gap_retry_count_increments(tmp_path):
+    """Test that retry count increments when gap is re-added."""
+    from candlestick_manager import _GAP_MAX_RETRIES
+
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TEST/USDT"
+
+    # Add gap 3 times (overlapping)
+    for i in range(3):
+        cm._add_known_gap(symbol, 1000000, 2000000, increment_retry=True)
+        gaps = cm._get_known_gaps_enhanced(symbol)
+        assert gaps[0]["retry_count"] == i + 1
+
+    # After max retries, gap should be considered persistent
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert gaps[0]["retry_count"] >= _GAP_MAX_RETRIES
+    assert not cm._should_retry_gap(gaps[0])
+
+
+def test_gap_retry_without_increment(tmp_path):
+    """Test that retry count doesn't increment when increment_retry=False."""
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TEST/USDT"
+
+    cm._add_known_gap(symbol, 1000000, 2000000, increment_retry=False)
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert gaps[0]["retry_count"] == 0
+
+
+def test_clear_known_gaps_all(tmp_path):
+    """Test clearing all gaps for a symbol."""
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TEST/USDT"
+
+    # Add multiple gaps
+    cm._add_known_gap(symbol, 1000000, 2000000)
+    cm._add_known_gap(symbol, 5000000, 6000000)
+    assert len(cm._get_known_gaps(symbol)) == 2
+
+    # Clear all
+    cleared = cm.clear_known_gaps(symbol)
+    assert cleared == 2
+    assert len(cm._get_known_gaps(symbol)) == 0
+
+
+def test_clear_known_gaps_by_date_range(tmp_path):
+    """Test clearing gaps within a specific date range."""
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TEST/USDT"
+
+    # Add gaps at different ranges
+    cm._add_known_gap(symbol, 1000000, 2000000)  # Gap 1
+    cm._add_known_gap(symbol, 5000000, 6000000)  # Gap 2
+    cm._add_known_gap(symbol, 9000000, 10000000)  # Gap 3
+
+    # Clear only gaps in middle range
+    cleared = cm.clear_known_gaps(symbol, date_range=(4000000, 7000000))
+    assert cleared == 1
+
+    # Verify remaining gaps
+    gaps = cm._get_known_gaps(symbol)
+    assert len(gaps) == 2
+    assert (1000000, 2000000) in gaps
+    assert (9000000, 10000000) in gaps
+
+
+def test_gap_summary(tmp_path):
+    """Test gap summary generation."""
+    from candlestick_manager import GAP_REASON_FETCH_FAILED, GAP_REASON_AUTO, _GAP_MAX_RETRIES
+
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TEST/USDT"
+
+    # Add gaps with different retry counts
+    cm._add_known_gap(symbol, 1000000, 1060000, reason=GAP_REASON_FETCH_FAILED)  # 1 retry
+    cm._add_known_gap(symbol, 5000000, 5120000, reason=GAP_REASON_AUTO)  # 1 retry
+
+    # Make second gap persistent
+    for _ in range(_GAP_MAX_RETRIES - 1):
+        cm._add_known_gap(symbol, 5000000, 5120000)
+
+    summary = cm.get_gap_summary(symbol)
+    assert summary["total_gaps"] == 2
+    assert summary["persistent_gaps"] == 1
+    assert summary["retryable_gaps"] == 1
+    assert GAP_REASON_FETCH_FAILED in summary["by_reason"]
+    assert len(summary["gaps"]) == 2
+
+
+def test_legacy_gap_format_upgrade(tmp_path):
+    """Test that old gap format is auto-upgraded to enhanced format."""
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TEST/USDT"
+
+    # Manually inject old format into index
+    idx = cm._ensure_symbol_index(symbol)
+    idx["meta"]["known_gaps"] = [[1000000, 2000000], [5000000, 6000000]]
+    cm._index[symbol] = idx
+    cm._save_index(symbol)
+
+    # Read should auto-upgrade
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert len(gaps) == 2
+    for gap in gaps:
+        assert "start_ts" in gap
+        assert "end_ts" in gap
+        assert "retry_count" in gap
+        assert "reason" in gap
+        assert "added_at" in gap
+
+
+@pytest.mark.asyncio
+async def test_force_refetch_gaps_clears_gaps(tmp_path):
+    """Test that force_refetch_gaps clears gaps in the requested range."""
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TEST/USDT"
+
+    # Add a gap
+    cm._add_known_gap(symbol, 1000000, 2000000)
+    assert len(cm._get_known_gaps(symbol)) == 1
+
+    # Pre-populate cache to avoid network fetch
+    base = 1000000
+    arr = np.array([
+        (base + i * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0)
+        for i in range(20)
+    ], dtype=CANDLE_DTYPE)
+    cm._cache[symbol] = arr
+
+    # Call get_candles with force_refetch_gaps
+    await cm.get_candles(
+        symbol,
+        start_ts=1000000,
+        end_ts=2000000,
+        force_refetch_gaps=True,
+    )
+
+    # Gap should be cleared
+    assert len(cm._get_known_gaps(symbol)) == 0

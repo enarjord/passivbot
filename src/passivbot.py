@@ -22,6 +22,7 @@ import inspect
 import passivbot_rust as pbr
 import logging
 import math
+from pathlib import Path
 from candlestick_manager import CandlestickManager, CANDLE_DTYPE
 from typing import Dict, Iterable, Tuple, List, Optional, Any
 from logging_setup import configure_logging, resolve_log_level
@@ -77,6 +78,9 @@ from procedures import (
 from utils import get_file_mod_ms
 from downloader import compute_per_coin_warmup_minutes
 import re
+
+# Orchestrator-only: ideal orders are computed via Rust orchestrator (JSON API).
+# Legacy Python order calculation paths are removed in this branch.
 
 from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
@@ -177,15 +181,6 @@ def snake_of(type_id: int) -> str:
         return "unknown"
 
 
-@dataclass
-class BaseOrderPlan:
-    """Intermediate data produced while building ideal orders."""
-
-    close_candidates: dict[str, list]
-    entry_candidates: dict[str, list[dict[str, float]]]
-    entry_index_map: dict[str, dict[int, str]]
-
-
 # Legacy EMA helper removed; CandlestickManager provides EMA utilities
 
 
@@ -233,10 +228,7 @@ def calc_pnl(position_side, entry_price, close_price, qty, inverse, c_mult):
 
 def order_market_diff(side: str, order_price: float, market_price: float) -> float:
     """Return side-aware relative price diff between order and market."""
-    try:
-        return float(calc_order_price_diff(side, float(order_price), float(market_price)))
-    except Exception:
-        return 0.0
+    return float(calc_order_price_diff(side, float(order_price), float(market_price)))
 
 
 from pure_funcs import (
@@ -440,6 +432,24 @@ class Passivbot:
         disk_cap = require_live_value(config, "max_disk_candles_per_symbol_per_tf")
         if disk_cap is not None:
             cm_kwargs["max_disk_candles_per_symbol_per_tf"] = int(disk_cap)
+        lock_timeout = get_optional_live_value(config, "candle_lock_timeout_seconds", None)
+        if lock_timeout not in (None, ""):
+            try:
+                cm_kwargs["lock_timeout_seconds"] = float(lock_timeout)
+            except Exception:
+                logging.warning(
+                    "Unable to parse live.candle_lock_timeout_seconds=%r; using default",
+                    lock_timeout,
+                )
+        max_concurrent = get_optional_live_value(config, "max_concurrent_api_requests", None)
+        if max_concurrent not in (None, "", 0):
+            try:
+                cm_kwargs["max_concurrent_requests"] = int(max_concurrent)
+            except Exception:
+                logging.warning(
+                    "Unable to parse live.max_concurrent_api_requests=%r; ignoring",
+                    max_concurrent,
+                )
         self.cm = CandlestickManager(**cm_kwargs)
         # TTL (minutes) for EMA candles on non-traded symbols
         ttl_min = require_live_value(config, "inactive_coin_candle_ttl_minutes")
@@ -740,7 +750,7 @@ class Passivbot:
         self,
         ema_bounds_long: Dict[str, Tuple[float, float]],
         ema_bounds_short: Dict[str, Tuple[float, float]],
-        entry_grid_log_ranges: Dict[str, Dict[str, float]],
+        entry_volatility_logrange_ema_1h: Dict[str, Dict[str, float]],
     ) -> None:
 
         ema_debug_logging_enabled = False
@@ -770,7 +780,7 @@ class Passivbot:
             for symbol, (lower, upper) in sorted(bounds.items()):
                 span0 = _safe_span(pside, "ema_span_0", symbol)
                 span1 = _safe_span(pside, "ema_span_1", symbol)
-                grid_lr = (entry_grid_log_ranges or {}).get(pside, {}).get(symbol)
+                grid_lr = (entry_volatility_logrange_ema_1h or {}).get(pside, {}).get(symbol)
                 parts = [f"{symbol}"]
                 if span0 is not None or span1 is not None:
                     parts.append(
@@ -805,6 +815,18 @@ class Passivbot:
         symbols = sorted(set().union(*self.approved_coins_minus_ignored_coins.values()))
         if not symbols:
             return
+
+        # Random jitter delay to prevent API rate limit storms when multiple bots start simultaneously
+        max_jitter = get_optional_live_value(self.config, "warmup_jitter_seconds", 30.0)
+        try:
+            max_jitter = float(max_jitter)
+        except Exception:
+            max_jitter = 30.0
+        if max_jitter > 0:
+            jitter = random.uniform(0, max_jitter)
+            logging.info(f"warmup jitter: sleeping {jitter:.1f}s (max={max_jitter}s)")
+            await asyncio.sleep(jitter)
+
         n = len(symbols)
         now = utc_ms()
         end_final = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
@@ -992,13 +1014,19 @@ class Passivbot:
 
     async def run_execution_loop(self):
         """Main execution loop coordinating order generation and exchange interaction."""
+        failed_update_pos_oos_pnls_ohlcvs_count = 0
+        max_n_fails = 10
         while not self.stop_signal_received:
             try:
                 self.execution_scheduled = False
                 self.state_change_detected_by_symbol = set()
                 if not await self.update_pos_oos_pnls_ohlcvs():
                     await asyncio.sleep(0.5)
+                    failed_update_pos_oos_pnls_ohlcvs_count += 1
+                    if failed_update_pos_oos_pnls_ohlcvs_count > max_n_fails:
+                        await self.restart_bot_on_too_many_errors()
                     continue
+                failed_update_pos_oos_pnls_ohlcvs_count = 0
                 res = await self.execute_to_exchange()
                 if self.debug_mode:
                     return res
@@ -1042,6 +1070,8 @@ class Passivbot:
             return False
         balance_ok, positions_ok = await self.update_positions_and_balance()
         if not positions_ok:
+            return False
+        if not balance_ok:
             return False
         open_orders_ok, pnls_ok = await asyncio.gather(
             self.update_open_orders(),
@@ -1813,12 +1843,14 @@ class Passivbot:
             volatility_drop = self.bot_value(pside, "filter_volatility_drop_pct")
             max_n_positions = self.get_max_n_positions(pside)
             if clip_pct > 0.0:
-                volumes = await self.calc_volumes(pside, symbols=candidates)
+                volumes, log_ranges = await self.calc_volumes_and_log_ranges(
+                    pside, symbols=candidates
+                )
             else:
                 volumes = {
                     symbol: float(len(candidates) - idx) for idx, symbol in enumerate(candidates)
                 }
-            log_ranges = await self.calc_log_range(pside, eligible_symbols=candidates)
+                log_ranges = await self.calc_log_range(pside, eligible_symbols=candidates)
             features = [
                 {
                     "index": idx,
@@ -1848,6 +1880,95 @@ class Passivbot:
             # all approved coins are selected, no filtering by volume and log range
             ideal_coins = sorted(eligible)
         return ideal_coins
+
+    async def calc_volumes_and_log_ranges(
+        self,
+        pside: str,
+        symbols: Optional[Iterable[str]] = None,
+        *,
+        max_age_ms: Optional[int] = 60_000,
+    ) -> Tuple[Dict[str, float], Dict[str, float]]:
+        """Compute 1m EMA quote volume and 1m EMA log range per symbol with one candles fetch.
+
+        This uses CandlestickManager.get_latest_ema_metrics() to avoid calling get_candles() twice
+        per symbol (once for volume and once for log range).
+        """
+        span_volume = int(round(self.bot_value(pside, "filter_volume_ema_span")))
+        span_volatility = int(round(self.bot_value(pside, "filter_volatility_ema_span")))
+        if symbols is None:
+            symbols = self.get_symbols_approved_or_has_pos(pside)
+
+        async def one(symbol: str):
+            try:
+                if max_age_ms is not None:
+                    ttl = int(max_age_ms)
+                else:
+                    has_pos = self.has_position(symbol)
+                    has_oo = (
+                        bool(self.open_orders.get(symbol)) if hasattr(self, "open_orders") else False
+                    )
+                    ttl = (
+                        60_000
+                        if (has_pos or has_oo)
+                        else int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
+                    )
+                res = await self.cm.get_latest_ema_metrics(
+                    symbol,
+                    {"qv": span_volume, "log_range": span_volatility},
+                    max_age_ms=ttl,
+                    timeframe=None,
+                )
+                vol = float(res.get("qv", float("nan")))
+                lr = float(res.get("log_range", float("nan")))
+                return (0.0 if not np.isfinite(vol) else vol, 0.0 if not np.isfinite(lr) else lr)
+            except Exception:
+                return (0.0, 0.0)
+
+        syms = list(symbols)
+        tasks = {s: asyncio.create_task(one(s)) for s in syms}
+        volumes: Dict[str, float] = {}
+        log_ranges: Dict[str, float] = {}
+        started_ms = utc_ms()
+        for sym, task in tasks.items():
+            try:
+                vol, lr = await task
+            except Exception:
+                vol, lr = 0.0, 0.0
+            volumes[sym] = float(vol)
+            log_ranges[sym] = float(lr)
+
+        # Preserve the low-noise "top ranking changed" logging from calc_volumes/calc_log_range.
+        elapsed_s = max(0.001, (utc_ms() - started_ms) / 1000.0)
+        if volumes:
+            top_n = min(8, len(volumes))
+            top = sorted(volumes.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+            top_syms = tuple(sym for sym, _ in top)
+            if not hasattr(self, "_volume_top_cache"):
+                self._volume_top_cache = {}
+            cache_key = (pside, span_volume)
+            last_top = self._volume_top_cache.get(cache_key)
+            if last_top != top_syms:
+                self._volume_top_cache[cache_key] = top_syms
+                summary = ", ".join(f"{symbol_to_coin(sym)}={val:.2f}" for sym, val in top)
+                logging.info(
+                    f"volume EMA span {span_volume}: {len(syms)} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
+                )
+        if log_ranges:
+            top_n = min(8, len(log_ranges))
+            top = sorted(log_ranges.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+            top_syms = tuple(sym for sym, _ in top)
+            if not hasattr(self, "_log_range_top_cache"):
+                self._log_range_top_cache = {}
+            cache_key = (pside, span_volatility)
+            last_top = self._log_range_top_cache.get(cache_key)
+            if last_top != top_syms:
+                self._log_range_top_cache[cache_key] = top_syms
+                summary = ", ".join(f"{symbol_to_coin(sym)}={val:.6f}" for sym, val in top)
+                logging.info(
+                    f"log_range EMA span {span_volatility}: {len(syms)} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
+                )
+
+        return volumes, log_ranges
 
     def warn_on_high_effective_min_cost(self, pside):
         """Log a warning if min effective cost filtering removes every candidate."""
@@ -3196,249 +3317,502 @@ class Passivbot:
                 logging.error(f"error with {get_function_name()} for {symbol}: {e}")
                 traceback.print_exc()
 
-    async def calc_ideal_orders(self, allow_unstuck: bool = True):
+    async def calc_ideal_orders(self):
         """Compute desired entry and exit orders for every active symbol."""
-        last_prices, ema_anchor, entry_grid_log_ranges = await self._load_price_context()
+        return await self.calc_ideal_orders_orchestrator()
 
-        order_plan = self._build_base_orders(last_prices, ema_anchor, entry_grid_log_ranges)
-        close_candidates = order_plan.close_candidates
-
-        unstucking_symbol, unstucking_close = await self.calc_unstucking_close(
-            allow_new_unstuck=allow_unstuck
-        )
-        if unstucking_close[0] != 0.0:
-            close_candidates[unstucking_symbol] = [
-                x for x in close_candidates[unstucking_symbol] if not "close" in x[2]
-            ]
-            close_candidates[unstucking_symbol].append(unstucking_close)
-
-        self._apply_twel_entry_gating(order_plan)
-
-        ideal_orders_f, wel_blocked_symbols = self._to_executable_orders(
-            close_candidates, last_prices
-        )
-
-        ideal_orders_f = self._inject_twel_enforcer_orders(
-            ideal_orders_f,
-            wel_blocked_symbols,
-            last_prices,
-            unstucking_symbol,
-            unstucking_close,
-        )
-
-        # ensure close qtys don't exceed pos sizes
-        for symbol in ideal_orders_f:
-            for i in range(len(ideal_orders_f[symbol])):
-                order = ideal_orders_f[symbol][i]
-                if order["reduce_only"]:
-                    pos_size_abs = abs(
-                        self.positions[order["symbol"]][order["position_side"]]["size"]
-                    )
-                    if abs(order["qty"]) > pos_size_abs:
-                        logging.warning(
-                            "trimmed reduce-only qty to position size | order=%s | position=%s",
-                            order,
-                            self.positions[order["symbol"]],
-                        )
-                        order["qty"] = pos_size_abs
-        return ideal_orders_f
-
-    # Legacy calc_ema_bound removed; pricing uses CandlestickManager EMA bounds
-
-    async def _load_price_context(
-        self,
-    ) -> tuple[Dict[str, float], Dict[str, Dict[str, float]], Dict[str, Dict[str, float]]]:
-        """Fetch latest prices and EMA/log-range anchors required for order calculation."""
-        to_update_last_prices: set[str] = set()
-        to_update_emas: dict[str, set[str]] = {"long": set(), "short": set()}
-        to_update_grid_log_ranges: dict[str, dict[str, float]] = {"long": {}, "short": {}}
-
-        for pside in self.PB_modes:
-            for symbol in self.PB_modes[pside]:
-                mode = self.PB_modes[pside][symbol]
-                if mode == "panic":
-                    if self.has_position(pside, symbol):
-                        to_update_last_prices.add(symbol)
-                elif mode in {"graceful_stop", "tp_only"} and not self.has_position(pside, symbol):
-                    continue
-                elif mode == "manual":
-                    continue
-                else:
-                    to_update_emas[pside].add(symbol)
-                    to_update_last_prices.add(symbol)
-                    if self.bp(pside, "entry_grid_spacing_volatility_weight", symbol) != 0.0:
-                        grid_log_span_hours = float(
-                            self.bp(pside, "entry_volatility_ema_span_hours", symbol)
-                        )
-                        if grid_log_span_hours > 0.0:
-                            to_update_grid_log_ranges[pside][symbol] = max(1e-6, grid_log_span_hours)
-
-        def build_ema_items(symbols_set: set[str], pside: str) -> list[tuple[str, float, float]]:
-            return [
-                (
-                    sym,
-                    self.bp(pside, "ema_span_0", sym),
-                    self.bp(pside, "ema_span_1", sym),
-                )
-                for sym in symbols_set
-            ]
-
-        def build_grid_log_range_items(pside: str) -> list[tuple[str, float]]:
-            return list(to_update_grid_log_ranges[pside].items())
-
-        entry_grid_log_ranges: dict[str, dict[str, float]] = {"long": {}, "short": {}}
-        (
-            last_prices,
-            ema_bounds_long,
-            ema_bounds_short,
-            entry_grid_log_ranges["long"],
-            entry_grid_log_ranges["short"],
-        ) = await asyncio.gather(
-            self.cm.get_last_prices(list(to_update_last_prices), max_age_ms=10_000),
-            self.cm.get_ema_bounds_many(
-                build_ema_items(to_update_emas["long"], "long"), max_age_ms=30_000
-            ),
-            self.cm.get_ema_bounds_many(
-                build_ema_items(to_update_emas["short"], "short"), max_age_ms=30_000
-            ),
-            self.cm.get_latest_ema_log_range_many(
-                build_grid_log_range_items("long"), tf="1h", max_age_ms=600_000
-            ),
-            self.cm.get_latest_ema_log_range_many(
-                build_grid_log_range_items("short"), tf="1h", max_age_ms=600_000
-            ),
-        )
-
-        self.maybe_log_ema_debug(ema_bounds_long, ema_bounds_short, entry_grid_log_ranges)
-
-        ema_anchor = {
-            "long": {s: ema_bounds_long[s][0] for s in ema_bounds_long},
-            "short": {s: ema_bounds_short[s][1] for s in ema_bounds_short},
+    def _bot_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
+        """Build a dict matching Rust `BotParams` for JSON orchestrator input."""
+        # Values which are configured globally (not per symbol) live under bot_value.
+        global_keys = {
+            "n_positions",
+            "total_wallet_exposure_limit",
+            "risk_twel_enforcer_threshold",
+            "unstuck_loss_allowance_pct",
         }
-        return last_prices, ema_anchor, entry_grid_log_ranges
+        # Maintain 1:1 field coverage with `passivbot-rust/src/types.rs BotParams`.
+        fields = [
+            "close_grid_markup_end",
+            "close_grid_markup_start",
+            "close_grid_qty_pct",
+            "close_trailing_retracement_pct",
+            "close_trailing_grid_ratio",
+            "close_trailing_qty_pct",
+            "close_trailing_threshold_pct",
+            "entry_grid_double_down_factor",
+            "entry_grid_spacing_volatility_weight",
+            "entry_grid_spacing_we_weight",
+            "entry_grid_spacing_pct",
+            "entry_volatility_ema_span_hours",
+            "entry_initial_ema_dist",
+            "entry_initial_qty_pct",
+            "entry_trailing_double_down_factor",
+            "entry_trailing_retracement_pct",
+            "entry_trailing_retracement_we_weight",
+            "entry_trailing_retracement_volatility_weight",
+            "entry_trailing_grid_ratio",
+            "entry_trailing_threshold_pct",
+            "entry_trailing_threshold_we_weight",
+            "entry_trailing_threshold_volatility_weight",
+            "filter_volatility_ema_span",
+            "filter_volatility_drop_pct",
+            "filter_volume_ema_span",
+            "filter_volume_drop_pct",
+            "ema_span_0",
+            "ema_span_1",
+            "n_positions",
+            "total_wallet_exposure_limit",
+            "wallet_exposure_limit",
+            "risk_wel_enforcer_threshold",
+            "risk_twel_enforcer_threshold",
+            "risk_we_excess_allowance_pct",
+            "unstuck_close_pct",
+            "unstuck_ema_dist",
+            "unstuck_loss_allowance_pct",
+            "unstuck_threshold",
+        ]
+        out: dict[str, float | int] = {}
+        for key in fields:
+            if key in global_keys:
+                val = self.bot_value(pside, key)
+            else:
+                val = self.bp(pside, key, symbol) if symbol is not None else self.bp(pside, key)
+            if key == "n_positions":
+                out[key] = int(round(val or 0.0))
+            else:
+                out[key] = float(val or 0.0)
+        return out
 
-    def _build_base_orders(
-        self,
-        last_prices: Dict[str, float],
-        ema_anchor: Dict[str, Dict[str, float]],
-        entry_grid_log_ranges: Dict[str, Dict[str, float]],
-    ) -> BaseOrderPlan:
-        """Construct initial close/entry order tuples and gating payloads."""
-        close_candidates: defaultdict = defaultdict(list)
-        entry_candidates = {"long": [], "short": []}
-        entry_index_map = {"long": {}, "short": {}}
-        idx_counters = {"long": 0, "short": 0}
+    def _pb_mode_to_orchestrator_mode(self, mode: str) -> str:
+        m = (mode or "").strip().lower()
+        if m in {"normal", "panic", "graceful_stop", "tp_only", "manual"}:
+            return m
+        return "manual"
 
-        for pside in self.PB_modes:
-            for symbol in self.PB_modes[pside]:
-                mode = self.PB_modes[pside][symbol]
-                if mode == "panic":
-                    if self.has_position(pside, symbol):
-                        qmul = -1 if pside == "long" else 1
-                        panic_order_type = f"close_panic_{pside}"
-                        close_candidates[symbol].append(
-                            (
-                                abs(self.positions[symbol][pside]["size"]) * qmul,
-                                last_prices[symbol],
-                                panic_order_type,
-                                pbr.order_type_snake_to_id(panic_order_type),
-                            )
-                        )
-                    continue
-
-                if mode in {"graceful_stop", "tp_only"} and not self.has_position(pside, symbol):
-                    continue
-                if mode == "manual":
-                    continue
-
-                entries = getattr(pbr, f"calc_entries_{pside}_py")(
-                    self.qty_steps[symbol],
-                    self.price_steps[symbol],
-                    self.min_qtys[symbol],
-                    self.min_costs[symbol],
-                    self.c_mults[symbol],
-                    self.bp(pside, "entry_grid_double_down_factor", symbol),
-                    self.bp(pside, "entry_grid_spacing_volatility_weight", symbol),
-                    self.bp(pside, "entry_grid_spacing_we_weight", symbol),
-                    self.bp(pside, "entry_grid_spacing_pct", symbol),
-                    self.bp(pside, "entry_initial_ema_dist", symbol),
-                    self.bp(pside, "entry_initial_qty_pct", symbol),
-                    self.bp(pside, "entry_trailing_double_down_factor", symbol),
-                    self.bp(pside, "entry_trailing_grid_ratio", symbol),
-                    self.bp(pside, "entry_trailing_retracement_pct", symbol),
-                    self.bp(pside, "entry_trailing_retracement_we_weight", symbol),
-                    self.bp(pside, "entry_trailing_retracement_volatility_weight", symbol),
-                    self.bp(pside, "entry_trailing_threshold_pct", symbol),
-                    self.bp(pside, "entry_trailing_threshold_we_weight", symbol),
-                    self.bp(pside, "entry_trailing_threshold_volatility_weight", symbol),
-                    self.bp(pside, "wallet_exposure_limit", symbol),
-                    self.bp(pside, "risk_we_excess_allowance_pct", symbol),
-                    self.balance,
-                    self.positions[symbol][pside]["size"],
-                    self.positions[symbol][pside]["price"],
-                    self.trailing_prices[symbol][pside]["min_since_open"],
-                    self.trailing_prices[symbol][pside]["max_since_min"],
-                    self.trailing_prices[symbol][pside]["max_since_open"],
-                    self.trailing_prices[symbol][pside]["min_since_max"],
-                    ema_anchor[pside].get(symbol, last_prices.get(symbol, float("nan"))),
-                    entry_grid_log_ranges.get(pside, {}).get(symbol, 0.0),
-                    last_prices[symbol],
-                )
-
-                closes = getattr(pbr, f"calc_closes_{pside}_py")(
-                    self.qty_steps[symbol],
-                    self.price_steps[symbol],
-                    self.min_qtys[symbol],
-                    self.min_costs[symbol],
-                    self.c_mults[symbol],
-                    self.bp(pside, "close_grid_markup_end", symbol),
-                    self.bp(pside, "close_grid_markup_start", symbol),
-                    self.bp(pside, "close_grid_qty_pct", symbol),
-                    self.bp(pside, "close_trailing_grid_ratio", symbol),
-                    self.bp(pside, "close_trailing_qty_pct", symbol),
-                    self.bp(pside, "close_trailing_retracement_pct", symbol),
-                    self.bp(pside, "close_trailing_threshold_pct", symbol),
-                    self.bp(pside, "wallet_exposure_limit", symbol),
-                    self.bp(pside, "risk_we_excess_allowance_pct", symbol),
-                    self.bp(pside, "risk_wel_enforcer_threshold", symbol),
-                    self.balance,
-                    self.positions[symbol][pside]["size"],
-                    self.positions[symbol][pside]["price"],
-                    self.trailing_prices[symbol][pside]["min_since_open"],
-                    self.trailing_prices[symbol][pside]["max_since_min"],
-                    self.trailing_prices[symbol][pside]["max_since_open"],
-                    self.trailing_prices[symbol][pside]["min_since_max"],
-                    last_prices[symbol],
-                )
-                close_candidates[symbol] += [(x[0], x[1], snake_of(x[2]), x[2]) for x in closes]
-
-                if symbol not in entry_index_map[pside]:
-                    entry_index_map[pside][idx_counters[pside]] = symbol
-                    idx_counters[pside] += 1
-
-                inv_map = {v: k for k, v in entry_index_map[pside].items()}
-                idx = inv_map.get(symbol)
-                if idx is None:
-                    idx = idx_counters[pside]
-                    entry_index_map[pside][idx] = symbol
-                    idx_counters[pside] += 1
-
-                for qty, price, order_type_id in entries:
-                    entry_candidates[pside].append(
-                        {
-                            "idx": idx,
-                            "qty": float(abs(qty)),
-                            "price": float(price),
-                            "qty_step": float(self.qty_steps[symbol]),
-                            "min_qty": float(self.min_qtys[symbol]),
-                            "min_cost": float(self.min_costs[symbol]),
-                            "c_mult": float(self.c_mults[symbol]),
-                            "market_price": float(last_prices[symbol]),
-                            "order_type_id": int(order_type_id),
-                        }
+    def _calc_unstuck_allowances_live(self, allow_new_unstuck: bool) -> dict[str, float]:
+        if not allow_new_unstuck or len(getattr(self, "pnls", [])) == 0:
+            return {"long": 0.0, "short": 0.0}
+        pnls_cumsum = np.array([x["pnl"] for x in self.pnls]).cumsum()
+        pnls_cumsum_max, pnls_cumsum_last = pnls_cumsum.max(), pnls_cumsum[-1]
+        out = {}
+        for pside in ["long", "short"]:
+            pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
+            if pct > 0.0:
+                out[pside] = float(
+                    pbr.calc_auto_unstuck_allowance(
+                        float(self.balance),
+                        pct * float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0),
+                        float(pnls_cumsum_max),
+                        float(pnls_cumsum_last),
                     )
+                )
+            else:
+                out[pside] = 0.0
+        return out
 
-        return BaseOrderPlan(close_candidates, entry_candidates, entry_index_map)
+    async def calc_ideal_orders_orchestrator_from_snapshot(
+        self, snapshot: dict, *, return_snapshot: bool
+    ):
+        symbols = snapshot["symbols"]
+        last_prices = snapshot["last_prices"]
+        m1_close_emas = snapshot["m1_close_emas"]
+        m1_volume_emas = snapshot["m1_volume_emas"]
+        m1_log_range_emas = snapshot["m1_log_range_emas"]
+        h1_log_range_emas = snapshot["h1_log_range_emas"]
+
+        unstuck_allowances = snapshot.get("unstuck_allowances", {"long": 0.0, "short": 0.0})
+
+        global_bp = {
+            "long": self._bot_params_to_rust_dict("long", None),
+            "short": self._bot_params_to_rust_dict("short", None),
+        }
+        input_dict = {
+            "balance": float(self.balance),
+            "global": {
+                "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),
+                "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
+                "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
+                "sort_global": True,
+                "global_bot_params": global_bp,
+            },
+            "symbols": [],
+            "peek_hints": None,
+        }
+
+        symbol_to_idx: dict[str, int] = {s: i for i, s in enumerate(symbols)}
+        idx_to_symbol: dict[int, str] = {i: s for s, i in symbol_to_idx.items()}
+
+        for symbol in symbols:
+            idx = symbol_to_idx[symbol]
+            mprice = float(last_prices.get(symbol, 0.0))
+            if not math.isfinite(mprice) or mprice <= 0.0:
+                raise Exception(f"invalid market price for {symbol}: {mprice}")
+
+            active = bool(self.markets_dict.get(symbol, {}).get("active", True))
+            effective_min_cost = float(
+                getattr(self, "effective_min_cost", {}).get(symbol, 0.0) or 0.0
+            )
+            if effective_min_cost <= 0.0:
+                effective_min_cost = float(
+                    max(
+                        pbr.qty_to_cost(self.min_qtys[symbol], mprice, self.c_mults[symbol]),
+                        self.min_costs[symbol],
+                    )
+                )
+
+            def side_input(pside: str) -> dict:
+                mode = self._pb_mode_to_orchestrator_mode(
+                    self.PB_modes.get(pside, {}).get(symbol, "manual")
+                )
+                pos = self.positions.get(symbol, {}).get(pside, {"size": 0.0, "price": 0.0})
+                trailing = self.trailing_prices.get(symbol, {}).get(pside)
+                if not trailing:
+                    trailing = _trailing_bundle_default_dict()
+                else:
+                    trailing = dict(trailing)
+                return {
+                    "mode": mode,
+                    "position": {"size": float(pos["size"]), "price": float(pos["price"])},
+                    "trailing": {
+                        "min_since_open": float(trailing.get("min_since_open", 0.0)),
+                        "max_since_min": float(trailing.get("max_since_min", 0.0)),
+                        "max_since_open": float(trailing.get("max_since_open", 0.0)),
+                        "min_since_max": float(trailing.get("min_since_max", 0.0)),
+                    },
+                    "bot_params": self._bot_params_to_rust_dict(pside, symbol),
+                }
+
+            m1_close_pairs = [[float(k), float(v)] for k, v in sorted(m1_close_emas[symbol].items())]
+            m1_volume_pairs = [
+                [float(k), float(v)] for k, v in sorted(m1_volume_emas[symbol].items())
+            ]
+            m1_lr_pairs = [[float(k), float(v)] for k, v in sorted(m1_log_range_emas[symbol].items())]
+            h1_lr_pairs = [[float(k), float(v)] for k, v in sorted(h1_log_range_emas[symbol].items())]
+
+            input_dict["symbols"].append(
+                {
+                    "symbol_idx": int(idx),
+                    "order_book": {"bid": mprice, "ask": mprice},
+                    "exchange": {
+                        "qty_step": float(self.qty_steps[symbol]),
+                        "price_step": float(self.price_steps[symbol]),
+                        "min_qty": float(self.min_qtys[symbol]),
+                        "min_cost": float(self.min_costs[symbol]),
+                        "c_mult": float(self.c_mults[symbol]),
+                    },
+                    "tradable": bool(active),
+                    "next_candle": None,
+                    "effective_min_cost": float(effective_min_cost),
+                    "emas": {
+                        "m1": {
+                            "close": m1_close_pairs,
+                            "log_range": m1_lr_pairs,
+                            "volume": m1_volume_pairs,
+                        },
+                        "h1": {"close": [], "log_range": h1_lr_pairs, "volume": []},
+                    },
+                    "long": side_input("long"),
+                    "short": side_input("short"),
+                }
+            )
+
+        out_json = pbr.compute_ideal_orders_json(json.dumps(input_dict))
+        out = json.loads(out_json)
+        orders = out.get("orders", [])
+
+        ideal_orders: dict[str, list] = {}
+        for o in orders:
+            symbol = idx_to_symbol.get(int(o["symbol_idx"]))
+            if symbol is None:
+                continue
+            order_type = str(o["order_type"])
+            order_type_id = int(pbr.order_type_snake_to_id(order_type))
+            tup = (float(o["qty"]), float(o["price"]), order_type, order_type_id)
+            ideal_orders.setdefault(symbol, []).append(tup)
+
+        ideal_orders_f, _wel_blocked = self._to_executable_orders(ideal_orders, last_prices)
+        ideal_orders_f = self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
+
+        if return_snapshot:
+            snapshot_out = {
+                "ts_ms": int(utc_ms()),
+                "exchange": str(getattr(self, "exchange", "")),
+                "user": str(self.config_get(["live", "user"]) or ""),
+                "active_symbols": list(symbols),
+                "orchestrator_input": input_dict,
+                "orchestrator_output": out,
+            }
+            return ideal_orders_f, snapshot_out
+        return ideal_orders_f, None
+
+    async def _load_orchestrator_ema_bundle(
+        self, symbols: list[str], modes: dict[str, dict[str, str]]
+    ) -> tuple[
+        dict[str, dict[float, float]],
+        dict[str, dict[float, float]],
+        dict[str, dict[float, float]],
+        dict[str, dict[float, float]],
+        dict[str, float],
+        dict[str, float],
+    ]:
+        """Fetch the EMA values required by the Rust orchestrator for the given symbols.
+
+        Returns:
+        - m1_close_emas[symbol][span] = ema_close
+        - m1_volume_emas[symbol][span] = ema_quote_volume
+        - m1_log_range_emas[symbol][span] = ema_log_range (1m)
+        - h1_log_range_emas[symbol][span] = ema_log_range (1h)
+        - volumes_long[symbol], log_ranges_long[symbol] (for convenience)
+        """
+        # Determine which symbols/psides need full EMA context.
+        need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
+        need_h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
+
+        for pside in ["long", "short"]:
+            for symbol in symbols:
+                mode = self._pb_mode_to_orchestrator_mode(modes.get(pside, {}).get(symbol, "manual"))
+                has_pos = self.has_position(pside, symbol)
+                if mode == "panic":
+                    continue
+                if mode == "manual" and not has_pos:
+                    continue
+                span0 = float(self.bp(pside, "ema_span_0", symbol))
+                span1 = float(self.bp(pside, "ema_span_1", symbol))
+                span2 = float((span0 * span1) ** 0.5) if span0 > 0.0 and span1 > 0.0 else 0.0
+                for sp in (span0, span1, span2):
+                    if sp > 0.0 and math.isfinite(sp):
+                        need_close_spans[symbol].add(sp)
+                h1_span = float(self.bp(pside, "entry_volatility_ema_span_hours", symbol) or 0.0)
+                if h1_span > 0.0 and math.isfinite(h1_span):
+                    need_h1_lr_spans[symbol].add(h1_span)
+
+        # Forager metrics use global spans (per side); include them for all symbols.
+        vol_span_long = float(self.bot_value("long", "filter_volume_ema_span") or 0.0)
+        lr_span_long = float(self.bot_value("long", "filter_volatility_ema_span") or 0.0)
+        vol_span_short = float(self.bot_value("short", "filter_volume_ema_span") or 0.0)
+        lr_span_short = float(self.bot_value("short", "filter_volatility_ema_span") or 0.0)
+        m1_volume_spans = sorted(
+            {s for s in (vol_span_long, vol_span_short) if s > 0.0 and math.isfinite(s)}
+        )
+        m1_lr_spans = sorted(
+            {s for s in (lr_span_long, lr_span_short) if s > 0.0 and math.isfinite(s)}
+        )
+
+        async def fetch_map(symbol: str, spans: list[float], fn):
+            out: dict[float, float] = {}
+            if not spans:
+                return out
+            tasks = [asyncio.create_task(fn(symbol, sp)) for sp in spans]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for sp, res in zip(spans, results):
+                if isinstance(res, Exception):
+                    continue
+                val = float(res)
+                if math.isfinite(val):
+                    out[float(sp)] = val
+            return out
+
+        async def ema_close(symbol: str, span: float) -> float:
+            return float(await self.cm.get_latest_ema_close(symbol, span=span, max_age_ms=30_000))
+
+        async def ema_qv(symbol: str, span: float) -> float:
+            return float(
+                await self.cm.get_latest_ema_quote_volume(symbol, span=span, max_age_ms=60_000)
+            )
+
+        async def ema_lr_1m(symbol: str, span: float) -> float:
+            return float(await self.cm.get_latest_ema_log_range(symbol, span=span, max_age_ms=60_000))
+
+        async def ema_lr_1h(symbol: str, span: float) -> float:
+            return float(
+                await self.cm.get_latest_ema_log_range(symbol, span=span, tf="1h", max_age_ms=600_000)
+            )
+
+        close_tasks = {
+            sym: asyncio.create_task(fetch_map(sym, sorted(need_close_spans[sym]), ema_close))
+            for sym in symbols
+        }
+        h1_lr_tasks = {
+            sym: asyncio.create_task(fetch_map(sym, sorted(need_h1_lr_spans[sym]), ema_lr_1h))
+            for sym in symbols
+        }
+        vol_tasks = {
+            sym: asyncio.create_task(fetch_map(sym, m1_volume_spans, ema_qv)) for sym in symbols
+        }
+        lr1m_tasks = {
+            sym: asyncio.create_task(fetch_map(sym, m1_lr_spans, ema_lr_1m)) for sym in symbols
+        }
+
+        m1_close_emas: dict[str, dict[float, float]] = {}
+        m1_volume_emas: dict[str, dict[float, float]] = {}
+        m1_log_range_emas: dict[str, dict[float, float]] = {}
+        h1_log_range_emas: dict[str, dict[float, float]] = {}
+        for sym in symbols:
+            m1_close_emas[sym] = await close_tasks[sym]
+            h1_log_range_emas[sym] = await h1_lr_tasks[sym]
+            m1_volume_emas[sym] = await vol_tasks[sym]
+            m1_log_range_emas[sym] = await lr1m_tasks[sym]
+
+        # Convenience: compute the single-span values used by legacy forager logging.
+        volumes_long = {s: m1_volume_emas[s].get(vol_span_long, 0.0) for s in symbols}
+        log_ranges_long = {s: m1_log_range_emas[s].get(lr_span_long, 0.0) for s in symbols}
+
+        return (
+            m1_close_emas,
+            m1_volume_emas,
+            m1_log_range_emas,
+            h1_log_range_emas,
+            volumes_long,
+            log_ranges_long,
+        )
+
+    async def calc_ideal_orders_orchestrator(self, *, return_snapshot: bool = False):
+        """Compute desired orders using Rust orchestrator (JSON API)."""
+        # Use the same symbol universe as legacy live path (pre-selected in execution_cycle).
+        symbols = sorted(set(getattr(self, "active_symbols", []) or []))
+        if not symbols:
+            return ({}, None) if return_snapshot else {}
+
+        last_prices = await self.cm.get_last_prices(symbols, max_age_ms=10_000)
+
+        # Ensure effective min cost is up to date.
+        if not hasattr(self, "effective_min_cost") or not self.effective_min_cost:
+            await self.update_effective_min_cost()
+
+        (
+            m1_close_emas,
+            m1_volume_emas,
+            m1_log_range_emas,
+            h1_log_range_emas,
+            _volumes_long,
+            _log_ranges_long,
+        ) = await self._load_orchestrator_ema_bundle(symbols, self.PB_modes)
+
+        unstuck_allowances = self._calc_unstuck_allowances_live(
+            allow_new_unstuck=not self.has_open_unstuck_order()
+        )
+
+        global_bp = {
+            "long": self._bot_params_to_rust_dict("long", None),
+            "short": self._bot_params_to_rust_dict("short", None),
+        }
+        input_dict = {
+            "balance": float(self.balance),
+            "global": {
+                "filter_by_min_effective_cost": bool(self.live_value("filter_by_min_effective_cost")),
+                "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
+                "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
+                "sort_global": True,
+                "global_bot_params": global_bp,
+            },
+            "symbols": [],
+            "peek_hints": None,
+        }
+
+        symbol_to_idx: dict[str, int] = {s: i for i, s in enumerate(symbols)}
+        idx_to_symbol: dict[int, str] = {i: s for s, i in symbol_to_idx.items()}
+
+        for symbol in symbols:
+            idx = symbol_to_idx[symbol]
+            mprice = float(last_prices.get(symbol, 0.0))
+            if not math.isfinite(mprice) or mprice <= 0.0:
+                raise Exception(f"invalid market price for {symbol}: {mprice}")
+
+            active = bool(self.markets_dict.get(symbol, {}).get("active", True))
+            effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
+            if effective_min_cost <= 0.0:
+                effective_min_cost = float(
+                    max(
+                        pbr.qty_to_cost(self.min_qtys[symbol], mprice, self.c_mults[symbol]),
+                        self.min_costs[symbol],
+                    )
+                )
+
+            def side_input(pside: str) -> dict:
+                mode = self._pb_mode_to_orchestrator_mode(
+                    self.PB_modes.get(pside, {}).get(symbol, "manual")
+                )
+                pos = self.positions.get(symbol, {}).get(pside, {"size": 0.0, "price": 0.0})
+                trailing = self.trailing_prices.get(symbol, {}).get(pside)
+                if not trailing:
+                    trailing = _trailing_bundle_default_dict()
+                else:
+                    trailing = dict(trailing)
+                return {
+                    "mode": mode,
+                    "position": {"size": float(pos["size"]), "price": float(pos["price"])},
+                    "trailing": {
+                        "min_since_open": float(trailing.get("min_since_open", 0.0)),
+                        "max_since_min": float(trailing.get("max_since_min", 0.0)),
+                        "max_since_open": float(trailing.get("max_since_open", 0.0)),
+                        "min_since_max": float(trailing.get("min_since_max", 0.0)),
+                    },
+                    "bot_params": self._bot_params_to_rust_dict(pside, symbol),
+                }
+
+            # Build EMA bundle for this symbol.
+            m1_close_pairs = [[float(k), float(v)] for k, v in sorted(m1_close_emas[symbol].items())]
+            m1_volume_pairs = [
+                [float(k), float(v)] for k, v in sorted(m1_volume_emas[symbol].items())
+            ]
+            m1_lr_pairs = [[float(k), float(v)] for k, v in sorted(m1_log_range_emas[symbol].items())]
+            h1_lr_pairs = [[float(k), float(v)] for k, v in sorted(h1_log_range_emas[symbol].items())]
+
+            input_dict["symbols"].append(
+                {
+                    "symbol_idx": int(idx),
+                    "order_book": {"bid": mprice, "ask": mprice},
+                    "exchange": {
+                        "qty_step": float(self.qty_steps[symbol]),
+                        "price_step": float(self.price_steps[symbol]),
+                        "min_qty": float(self.min_qtys[symbol]),
+                        "min_cost": float(self.min_costs[symbol]),
+                        "c_mult": float(self.c_mults[symbol]),
+                    },
+                    "tradable": bool(active),
+                    "next_candle": None,
+                    "effective_min_cost": float(effective_min_cost),
+                    "emas": {
+                        "m1": {
+                            "close": m1_close_pairs,
+                            "log_range": m1_lr_pairs,
+                            "volume": m1_volume_pairs,
+                        },
+                        "h1": {"close": [], "log_range": h1_lr_pairs, "volume": []},
+                    },
+                    "long": side_input("long"),
+                    "short": side_input("short"),
+                }
+            )
+
+        out_json = pbr.compute_ideal_orders_json(json.dumps(input_dict))
+        out = json.loads(out_json)
+        orders = out.get("orders", [])
+
+        ideal_orders: dict[str, list] = {}
+        for o in orders:
+            symbol = idx_to_symbol.get(int(o["symbol_idx"]))
+            if symbol is None:
+                continue
+            order_type = str(o["order_type"])
+            order_type_id = int(pbr.order_type_snake_to_id(order_type))
+            tup = (float(o["qty"]), float(o["price"]), order_type, order_type_id)
+            ideal_orders.setdefault(symbol, []).append(tup)
+
+        ideal_orders_f, _wel_blocked = self._to_executable_orders(ideal_orders, last_prices)
+        ideal_orders_f = self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
+
+        if return_snapshot:
+            snapshot = {
+                "ts_ms": int(utc_ms()),
+                "exchange": str(getattr(self, "exchange", "")),
+                "user": str(self.config_get(["live", "user"]) or ""),
+                "active_symbols": list(symbols),
+                "orchestrator_input": input_dict,
+                "orchestrator_output": out,
+            }
+            return ideal_orders_f, snapshot
+        return ideal_orders_f
 
     def _to_executable_orders(
         self, ideal_orders: dict, last_prices: Dict[str, float]
@@ -3521,16 +3895,21 @@ class Passivbot:
                     }
                 )
                 seen.add(seen_key)
-        return self._finalize_reduce_only_orders(ideal_orders_f), wel_blocked_symbols
+        return self._finalize_reduce_only_orders(ideal_orders_f, last_prices), wel_blocked_symbols
 
-    def _finalize_reduce_only_orders(self, orders_by_symbol: Dict[str, list]) -> Dict[str, list]:
-        """Bound reduce-only quantities so they never exceed the current position size."""
+    def _finalize_reduce_only_orders(
+        self, orders_by_symbol: Dict[str, list], last_prices: Dict[str, float]
+    ) -> Dict[str, list]:
+        """Bound reduce-only quantities so they never exceed the current position size (per order and in sum)."""
         for symbol, orders in orders_by_symbol.items():
+            market_price = float(last_prices.get(symbol, 0.0))
+
+            # 1) clamp each reduce-only order to position size
             for order in orders:
                 if not order.get("reduce_only"):
                     continue
                 pos = self.positions.get(order["symbol"], {}).get(order["position_side"], {})
-                pos_size_abs = abs(pos.get("size", 0.0))
+                pos_size_abs = abs(float(pos.get("size", 0.0)))
                 if abs(order["qty"]) > pos_size_abs:
                     logging.warning(
                         "trimmed reduce-only qty to position size | order=%s | position=%s",
@@ -3538,119 +3917,53 @@ class Passivbot:
                         pos,
                     )
                     order["qty"] = pos_size_abs
-        return orders_by_symbol
 
-    async def calc_unstucking_close(self, allow_new_unstuck: bool = True) -> (float, float, str, int):
-        """Optionally return an emergency close order for stuck positions."""
-        empty = (0.0, 0.0, "", pbr.get_order_id_type_from_string("empty"))
-        if not allow_new_unstuck or len(self.pnls) == 0:
-            return "", empty
-
-        pnls_cumsum = np.array([x["pnl"] for x in self.pnls]).cumsum()
-        pnls_cumsum_max, pnls_cumsum_last = pnls_cumsum.max(), pnls_cumsum[-1]
-
-        unstuck_allowances = {}
-        for pside in ["long", "short"]:
-            pct = self.bot_value(pside, "unstuck_loss_allowance_pct")
-            if pct > 0.0:
-                unstuck_allowances[pside] = pbr.calc_auto_unstuck_allowance(
-                    self.balance,
-                    pct * self.bot_value(pside, "total_wallet_exposure_limit"),
-                    pnls_cumsum_max,
-                    pnls_cumsum_last,
+            # 2) cap sum(reduce_only qty) <= pos size by reducing furthest-from-market closes first
+            for pside in ("long", "short"):
+                pos_size_abs = abs(
+                    float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0))
                 )
-            else:
-                unstuck_allowances[pside] = 0.0
-
-        if unstuck_allowances["long"] <= 0.0 and unstuck_allowances["short"] <= 0.0:
-            return "", empty
-
-        last_prices = await self.cm.get_last_prices(set(self.positions), max_age_ms=10_000)
-
-        positions_payload = []
-        idx_map = {}
-        idx_counter = 0
-
-        for symbol in sorted(self.positions):
-            current_price = float(last_prices.get(symbol, 0.0))
-            if not math.isfinite(current_price) or current_price <= 0.0:
-                continue
-
-            for pside in ["long", "short"]:
-                if unstuck_allowances.get(pside, 0.0) <= 0.0:
+                if pos_size_abs <= 0.0:
                     continue
-                if not self.has_position(pside, symbol):
+                ro = [o for o in orders if o.get("reduce_only") and o.get("position_side") == pside]
+                if not ro:
                     continue
-
-                try:
-                    span_0 = self.bp(pside, "ema_span_0", symbol)
-                    span_1 = self.bp(pside, "ema_span_1", symbol)
-                    ema_lower, ema_upper = await self.cm.get_ema_bounds(
-                        symbol,
-                        span_0,
-                        span_1,
-                        max_age_ms=30_000,
-                    )
-                except Exception as e:
-                    logging.debug(
-                        "failed ema bounds for unstucking %s %s: %s; skipping", symbol, pside, e
-                    )
+                total = sum(float(o.get("qty", 0.0)) for o in ro)
+                if total <= pos_size_abs + 1e-12:
                     continue
-
-                payload = {
-                    "idx": idx_counter,
-                    "side": pside,
-                    "position_size": float(self.positions[symbol][pside]["size"]),
-                    "position_price": float(self.positions[symbol][pside]["price"]),
-                    "wallet_exposure_limit": float(self.bp(pside, "wallet_exposure_limit", symbol)),
-                    "risk_we_excess_allowance_pct": float(
-                        self.bp(pside, "risk_we_excess_allowance_pct", symbol)
+                excess = total - pos_size_abs
+                # furthest first: larger order_market_diff
+                ro_sorted = sorted(
+                    ro,
+                    key=lambda o: order_market_diff(
+                        o.get("side", ""), float(o.get("price", 0.0)), market_price
                     ),
-                    "unstuck_threshold": float(self.bp(pside, "unstuck_threshold", symbol)),
-                    "unstuck_close_pct": float(self.bp(pside, "unstuck_close_pct", symbol)),
-                    "unstuck_ema_dist": float(self.bp(pside, "unstuck_ema_dist", symbol)),
-                    "ema_band_upper": float(ema_upper),
-                    "ema_band_lower": float(ema_lower),
-                    "current_price": current_price,
-                    "price_step": float(self.price_steps[symbol]),
-                    "qty_step": float(self.qty_steps[symbol]),
-                    "min_qty": float(self.min_qtys[symbol]),
-                    "min_cost": float(self.min_costs[symbol]),
-                    "c_mult": float(self.c_mults[symbol]),
-                }
-                positions_payload.append(payload)
-                idx_map[idx_counter] = (symbol, pside)
-                idx_counter += 1
+                    reverse=True,
+                )
+                for o in ro_sorted:
+                    if excess <= 0.0:
+                        break
+                    q = float(o.get("qty", 0.0))
+                    if q <= 0.0:
+                        continue
+                    reduce_by = min(q, excess)
+                    new_q = q - reduce_by
+                    o["qty"] = float(round(new_q, 12))
+                    excess -= reduce_by
+                # drop any zeroed reduce-only orders
+                orders_by_symbol[symbol] = [
+                    o
+                    for o in orders_by_symbol[symbol]
+                    if not (o.get("reduce_only") and float(o.get("qty", 0.0)) <= 0.0)
+                ]
 
-        if not positions_payload:
-            return "", empty
-
-        result = pbr.calc_unstucking_close_py(
-            float(self.balance),
-            float(unstuck_allowances.get("long", 0.0)),
-            float(unstuck_allowances.get("short", 0.0)),
-            positions_payload,
-        )
-        if not result:
-            return "", empty
-
-        idx, side_code, qty, price, order_type_id = result
-        symbol_pside = idx_map.get(idx)
-        if symbol_pside is None:
-            return "", empty
-
-        symbol, _ = symbol_pside
-        return symbol, (qty, price, snake_of(order_type_id), order_type_id)
+        return orders_by_symbol
 
     async def calc_orders_to_cancel_and_create(self):
         """Determine which existing orders to cancel and which new ones to place."""
         if not hasattr(self, "_last_plan_detail"):
             self._last_plan_detail = {}
-        allow_new_unstuck = not self.has_open_unstuck_order()
-        ideal_orders = await self.calc_ideal_orders(allow_unstuck=allow_new_unstuck)
-
-        unstuck_names = {"close_unstuck_long", "close_unstuck_short"}
-        ideal_orders = self._trim_extra_unstuck_orders(ideal_orders, unstuck_names)
+        ideal_orders = await self.calc_ideal_orders()
 
         actual_orders = self._snapshot_actual_orders()
         keys = ("symbol", "side", "position_side", "qty", "price")
@@ -3658,9 +3971,7 @@ class Passivbot:
         plan_summaries = []
         for symbol, symbol_orders in actual_orders.items():
             ideal_list = ideal_orders.get(symbol, []) if isinstance(ideal_orders, dict) else []
-            cancel_, create_ = self._reconcile_symbol_orders(
-                symbol, symbol_orders, ideal_list, keys, unstuck_names
-            )
+            cancel_, create_ = self._reconcile_symbol_orders(symbol, symbol_orders, ideal_list, keys)
             cancel_, create_ = self._annotate_order_deltas(cancel_, create_)
             pre_cancel = len(cancel_)
             pre_create = len(create_)
@@ -3720,29 +4031,6 @@ class Passivbot:
                     )
         return to_cancel, to_create
 
-    def _trim_extra_unstuck_orders(
-        self, ideal_orders: dict, unstuck_names: set[str]
-    ) -> dict[str, list[dict]]:
-        """Ensure at most one unstuck order exists across all symbols."""
-        trimmed: dict[str, list[dict]] = {}
-        allow_unstuck = True
-        for symbol, orders in ideal_orders.items():
-            new_orders = []
-            for order in orders:
-                custom_id = order.get("custom_id", "")
-                order_type_id = try_decode_type_id_from_custom_id(custom_id)
-                order_type = snake_of(order_type_id) if order_type_id is not None else ""
-                if order_type in unstuck_names:
-                    if allow_unstuck:
-                        new_orders.append(order)
-                        allow_unstuck = False
-                    else:
-                        continue
-                else:
-                    new_orders.append(order)
-            trimmed[symbol] = new_orders
-        return trimmed
-
     def _snapshot_actual_orders(self) -> dict[str, list[dict]]:
         """Return a normalized snapshot of currently open orders keyed by symbol."""
         actual_orders: dict[str, list[dict]] = {}
@@ -3778,11 +4066,9 @@ class Passivbot:
         actual_orders: list[dict],
         ideal_orders: list,
         keys: tuple[str, ...],
-        unstuck_names: set[str],
     ) -> tuple[list[dict], list[dict]]:
         """Return cancel/create lists for a single symbol after mode filtering."""
         to_cancel, to_create = filter_orders(actual_orders, ideal_orders, keys)
-        to_create = self._dedupe_unstuck_orders(to_create, unstuck_names)
         to_cancel, to_create = self._apply_mode_filters(symbol, to_cancel, to_create)
         return to_cancel, to_create
 
@@ -3928,21 +4214,6 @@ class Passivbot:
         remaining_cancel = [o for i, o in enumerate(to_cancel) if i not in used_cancel]
         return remaining_cancel, kept_create, skipped
 
-    def _dedupe_unstuck_orders(self, orders: list[dict], unstuck_names: set[str]) -> list[dict]:
-        """Keep at most one unstuck order within a list of orders."""
-        filtered: list[dict] = []
-        seen_unstuck = False
-        for order in orders:
-            custom_id = order.get("custom_id", "")
-            order_type_id = try_decode_type_id_from_custom_id(custom_id)
-            order_type = snake_of(order_type_id) if order_type_id is not None else ""
-            if order_type in unstuck_names:
-                if seen_unstuck:
-                    continue
-                seen_unstuck = True
-            filtered.append(order)
-        return filtered
-
     def _apply_mode_filters(
         self,
         symbol: str,
@@ -4012,190 +4283,6 @@ class Passivbot:
                 logging.debug("failed fetching mprice for %s: %s", symbol, exc)
                 results[symbol] = None
         return results
-
-    def _apply_twel_entry_gating(self, order_plan: BaseOrderPlan) -> None:
-        """Use the Rust TWEL gate to prune oversized entry lists per side."""
-        entry_candidates = order_plan.entry_candidates
-        close_candidates = order_plan.close_candidates
-        for pside in ("long", "short"):
-            if not entry_candidates.get(pside):
-                continue
-            total_wel = self.bot_value(pside, "total_wallet_exposure_limit")
-            if total_wel is None or total_wel <= 0.0:
-                continue
-            positions_payload = self._build_twel_gating_payload(order_plan, pside)
-            if not positions_payload:
-                continue
-            try:
-                gated_entries = pbr.gate_entries_by_twel_py(
-                    pside,
-                    float(self.balance),
-                    float(total_wel),
-                    positions_payload,
-                    entry_candidates[pside],
-                )
-            except Exception as exc:
-                logging.debug("failed to gate entries by TWEL (%s): %s", pside, exc)
-                continue
-            if len(gated_entries) < len(entry_candidates[pside]):
-                logging.debug(
-                    "twel gating pruned %d/%d %s entries",
-                    len(entry_candidates[pside]) - len(gated_entries),
-                    len(entry_candidates[pside]),
-                    pside,
-                )
-            for idx, qty, price, order_type_id in gated_entries:
-                symbol = order_plan.entry_index_map[pside].get(idx)
-                if symbol is None:
-                    continue
-                close_candidates[symbol].append((qty, price, snake_of(order_type_id), order_type_id))
-
-    def _build_twel_gating_payload(
-        self, order_plan: BaseOrderPlan, pside: str
-    ) -> list[dict[str, float]]:
-        """Return position state payload for TWEL entry gating."""
-        inv_map = {symbol: idx for idx, symbol in order_plan.entry_index_map.get(pside, {}).items()}
-        payload: list[dict[str, float]] = []
-        for symbol, position_data in self.positions.items():
-            idx = inv_map.get(symbol)
-            if idx is None:
-                continue
-            payload.append(
-                {
-                    "idx": idx,
-                    "position_size": float(position_data[pside]["size"]),
-                    "position_price": float(position_data[pside]["price"]),
-                    "c_mult": float(self.c_mults.get(symbol, 1.0)),
-                }
-            )
-        return payload
-
-    def _inject_twel_enforcer_orders(
-        self,
-        ideal_orders_f: dict[str, list[dict]],
-        wel_blocked_symbols: set[str],
-        last_prices: dict[str, float],
-        unstucking_symbol: str | None,
-        unstucking_close: tuple,
-    ) -> dict[str, list[dict]]:
-        """Append TWEL enforcer reduce-only orders to the order map."""
-        try:
-            unstuck_side = self._resolve_unstuck_side(unstucking_symbol, unstucking_close)
-            for pside in ("long", "short"):
-                threshold = self.bot_value(pside, "risk_twel_enforcer_threshold")
-                if threshold is None or threshold < 0.0:
-                    continue
-                total_wel = self.bot_value(pside, "total_wallet_exposure_limit")
-                if total_wel is None or total_wel <= 0.0:
-                    continue
-                effective_n_positions = int(round(self.bot_value(pside, "n_positions") or 0.0))
-                if effective_n_positions <= 0:
-                    effective_n_positions = max(1, len(self.positions))
-                payload, symbol_idx_map = self._build_twel_enforcer_payload(
-                    pside, wel_blocked_symbols, last_prices
-                )
-                if not payload:
-                    continue
-                skip_idx = None
-                if unstucking_symbol and unstuck_side == pside:
-                    skip_idx = next(
-                        (
-                            idx
-                            for idx, symbol in symbol_idx_map.items()
-                            if symbol == unstucking_symbol
-                        ),
-                        None,
-                    )
-                actions = pbr.calc_twel_enforcer_orders_py(
-                    pside,
-                    float(threshold),
-                    float(total_wel),
-                    int(effective_n_positions),
-                    float(self.balance),
-                    payload,
-                    skip_idx,
-                )
-                for idx, qty, price, order_type_id in actions:
-                    symbol = symbol_idx_map.get(idx)
-                    if (
-                        symbol is None
-                        or not self.has_position(pside, symbol)
-                        or abs(qty) <= 0.0
-                        or (symbol == unstucking_symbol and unstuck_side == pside)
-                    ):
-                        continue
-                    if symbol not in ideal_orders_f:
-                        ideal_orders_f[symbol] = []
-                    order_side = "sell" if pside == "long" else "buy"
-                    exec_type = "market" if self.live_value("market_orders_allowed") else "limit"
-                    ideal_orders_f[symbol].append(
-                        {
-                            "symbol": symbol,
-                            "side": order_side,
-                            "position_side": pside,
-                            "qty": abs(qty),
-                            "price": price,
-                            "reduce_only": True,
-                            "custom_id": self.format_custom_id_single(order_type_id),
-                            "type": exec_type,
-                        }
-                    )
-        except Exception as exc:
-            logging.debug("failed to compute TWEL enforcer orders: %s", exc)
-        return ideal_orders_f
-
-    def _build_twel_enforcer_payload(
-        self,
-        pside: str,
-        wel_blocked_symbols: set[str],
-        last_prices: dict[str, float],
-    ) -> tuple[list[dict[str, float]], dict[int, str]]:
-        """Prepare position payload and index map for TWEL enforcer."""
-        payload: list[dict[str, float]] = []
-        symbol_idx_map: dict[int, str] = {}
-        idx_counter = 0
-        for symbol in self.positions:
-            if not self.has_position(pside, symbol):
-                continue
-            if symbol in wel_blocked_symbols:
-                continue
-            size = float(self.positions[symbol][pside]["size"])
-            if size == 0.0:
-                continue
-            payload.append(
-                {
-                    "idx": idx_counter,
-                    "position_size": size,
-                    "position_price": float(self.positions[symbol][pside]["price"]),
-                    "market_price": float(
-                        last_prices.get(symbol, self.positions[symbol][pside]["price"])
-                    ),
-                    "base_wallet_exposure_limit": float(
-                        self.bp(pside, "wallet_exposure_limit", symbol)
-                    ),
-                    "c_mult": float(self.c_mults[symbol]),
-                    "qty_step": float(self.qty_steps[symbol]),
-                    "price_step": float(self.price_steps[symbol]),
-                    "min_qty": float(self.min_qtys[symbol]),
-                    "min_cost": float(self.min_costs[symbol]),
-                }
-            )
-            symbol_idx_map[idx_counter] = symbol
-            idx_counter += 1
-        return payload, symbol_idx_map
-
-    def _resolve_unstuck_side(self, unstucking_symbol: str | None, unstucking_close: tuple) -> str:
-        """Determine which side is currently being unstuck, if any."""
-        if not unstucking_symbol or len(unstucking_close) < 3:
-            return ""
-        order_name = unstucking_close[2]
-        if not isinstance(order_name, str):
-            return ""
-        if "long" in order_name:
-            return "long"
-        if "short" in order_name:
-            return "short"
-        return ""
 
     async def restart_bot_on_too_many_errors(self):
         """Restart the bot if the hourly execution error budget is exhausted."""
@@ -4810,6 +4897,13 @@ async def main():
         default=None,
         help="Logging verbosity (warning, info, debug, trace or 0-3).",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Enable verbose (debug) logging. Equivalent to --log-level debug.",
+    )
 
     template_config = get_template_config()
     del template_config["optimize"]
@@ -4819,7 +4913,8 @@ async def main():
     add_arguments_recursively(parser, template_config)
     raw_args = merge_negative_cli_values(sys.argv[1:])
     args = parser.parse_args(raw_args)
-    cli_log_level = args.log_level
+    # --verbose flag overrides --log-level to debug (level 2)
+    cli_log_level = "debug" if args.verbose else args.log_level
     initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     config = load_config(args.config_path, live_only=True)

@@ -280,6 +280,22 @@ pub fn calc_price_diff_pside_int(pside: usize, pprice: f64, price: f64) -> f64 {
     calc_pside_price_diff_int(pside, pprice, price)
 }
 
+pub fn calc_order_price_diff_bid(order_price: f64, market_price: f64) -> f64 {
+    if market_price <= 0.0 {
+        0.0
+    } else {
+        1.0 - order_price / market_price
+    }
+}
+
+pub fn calc_order_price_diff_ask(order_price: f64, market_price: f64) -> f64 {
+    if market_price <= 0.0 {
+        0.0
+    } else {
+        order_price / market_price - 1.0
+    }
+}
+
 #[pyfunction]
 pub fn calc_order_price_diff(side: &str, order_price: f64, market_price: f64) -> PyResult<f64> {
     if !order_price.is_finite() || !market_price.is_finite() || market_price <= 0.0 {
@@ -287,8 +303,8 @@ pub fn calc_order_price_diff(side: &str, order_price: f64, market_price: f64) ->
     }
     let norm_side = side.trim().to_ascii_lowercase();
     let diff = match norm_side.as_str() {
-        "buy" | "long" => 1.0 - order_price / market_price,
-        "sell" | "short" => order_price / market_price - 1.0,
+        "buy" => 1.0 - order_price / market_price,
+        "sell" => order_price / market_price - 1.0,
         other => {
             return Err(PyValueError::new_err(format!(
                 "invalid order side '{}'; expected 'buy' or 'sell'",

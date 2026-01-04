@@ -43,6 +43,7 @@ pub struct GateEntriesDecision {
     pub qty: f64,
     pub price: f64,
     pub order_type: OrderType,
+    pub original_order: usize,
 }
 
 pub fn gate_entries_by_twel(
@@ -177,6 +178,7 @@ pub fn gate_entries_by_twel(
                         qty,
                         price: candidate.data.price,
                         order_type: candidate.data.order_type,
+                        original_order: candidate.original_order,
                     },
                 )
             })
@@ -262,6 +264,7 @@ pub fn gate_entries_by_twel(
                     qty,
                     price: candidate.data.price,
                     order_type: candidate.data.order_type,
+                    original_order: candidate.original_order,
                 },
             )
         })

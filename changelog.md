@@ -5,6 +5,21 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 ### Added
+- `live.warmup_jitter_seconds` (default 30): random delay before warmup to prevent API rate limit storms when multiple bots start simultaneously.
+- `live.max_concurrent_api_requests` (default null): optional global concurrency limit for CCXT API calls via CandlestickManager's network semaphore.
+
+## v7.6.1 - 2026-01-03
+
+### Testing
+- Added comprehensive test coverage for HLCV preparation module (16 tests covering 1,017 lines of production code)
+- Added comprehensive orchestrator integration tests (19 tests for order accuracy, edge cases, multi-symbol coordination)
+- Added warmup utilities test coverage (20 tests for EMA warmup calculations and edge cases)
+- Improved Rust stub in conftest.py with correct parameter signatures and orchestrator JSON API support
+- Total: 55 new tests, bringing test suite from ~420 to 477 passing tests
+
+## v7.6.0 - 2026-01-03
+
+### Added
 - Shared Pareto core (`pareto_core.py`) with constraint-aware dominance, crowding, and extreme-preserving pruning; reused by ParetoStore.
 - Canonical suite metrics payload now shared by backtest and optimizer; suite summaries include the same schema as Pareto members.
 - Targeted Pareto tests to ensure consistency.
@@ -17,8 +32,12 @@ All notable user-facing changes will be documented in this file.
 - Balance hysteresis now applied centrally in core bot update_balance; exchange fetch_balance implementations return raw balances.
 - Added configurable `live.balance_hysteresis_snap_pct` (default 0.02); set 0.0 to disable balance hysteresis entirely.
 - Optimizer: bounds now support optional step size `[low, high, step]` for grid-based optimization; stepped parameters stay on-grid through sampling, crossover/mutation, and Pareto storage.
+- Live: added `live.candle_lock_timeout_seconds` to control how long CandlestickManager waits for per-symbol candle locks when multiple bot instances share the same cache (default 10s).
+- Rust orchestrator JSON API for unified order planning across live and backtest.
+- Backtest HLCV preparation pipeline now routes through CandlestickManager with shared warmup utilities.
 
 ### Changed
+- Backtest fills now include signed `wallet_exposure` and `twe_long`/`twe_short`/`twe_net` (replacing the previous `total_wallet_exposure` fill column).
 - Pareto explorer: default metrics for X/Y/histogram, scenario comparison, param scatter, correlation heatmap, and Closest Config now derive from `config.optimize.scoring` and `config.optimize.limits` instead of first-alphabetical metrics; Closest Config table no longer shows raw *_mean/_min/_max/_std stat columns by default.
 - Suite summaries are leaner: redundant metric dumps removed; canonical metrics schema persisted alongside per-scenario timing.
 - Pareto pruning preserves per-objective extremes when enforcing max size.
@@ -32,3 +51,5 @@ All notable user-facing changes will be documented in this file.
 - Balance updates now keep the previous value on fetch failures (no more transient zero balances); warnings are logged and the standard restart-on-errors flow handles persistent issues.
 - EMA log spam reduced: volume/log-range EMA summaries only emit when rankings change, keeping live logs quieter.
 - Suite configuration is canonical under `backtest.suite` for both backtesting and optimizer runs; `optimize.suite` (if present) is ignored and removed during config normalization.
+- Live orchestrator compare mode now derives all EMA inputs from a single per-symbol candle snapshot (1m + 1h), reducing redundant candle-lock contention and false compare failures in multi-bot deployments.
+- Live order generation now runs exclusively through the Rust orchestrator; legacy Python order planning paths are removed.

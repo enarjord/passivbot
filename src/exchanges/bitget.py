@@ -792,11 +792,11 @@ class BitgetBot(Passivbot):
             if to_print:
                 logging.info(f"{symbol}: {to_print}")
 
-    async def calc_ideal_orders(self, allow_unstuck: bool = True):
+    async def calc_ideal_orders(self):
         # Bitget returns max 100 open orders per fetch_open_orders.
         # Only create 100 open orders.
         # Drop orders whose pprice diff is greatest.
-        ideal_orders = await super().calc_ideal_orders(allow_unstuck=allow_unstuck)
+        ideal_orders = await super().calc_ideal_orders()
         ideal_orders_tmp = []
         for s in ideal_orders:
             for x in ideal_orders[s]:
