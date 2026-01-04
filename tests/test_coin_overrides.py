@@ -39,3 +39,29 @@ def test_coin_override_forced_mode_manual(monkeypatch):
 
     assert "DOGE/USDT:USDT" in bot.coin_overrides
     assert bot.get_forced_PB_mode("long", "DOGE/USDT:USDT") == "manual"
+
+
+def test_forced_mode_shorthand_expansion(monkeypatch):
+    """Verify shorthand modes ('p', 'gs', 'm') are expanded to full names."""
+    base_config = {
+        "bot": {"long": {}, "short": {}},
+        "live": {
+            "user": "dummy",
+            "forced_mode_long": "p",  # shorthand for "panic"
+            "forced_mode_short": "gs",  # shorthand for "graceful_stop"
+        },
+        "coin_overrides": {},
+    }
+
+    config = parse_overrides(deepcopy(base_config), verbose=False)
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = config
+    bot.exchange = "binance"
+    bot.markets_dict = {"ETH/USDT:USDT": {"active": True}}
+    bot.coin_overrides = {}
+
+    # Shorthand "p" should expand to "panic"
+    assert bot.get_forced_PB_mode("long", "ETH/USDT:USDT") == "panic"
+    # Shorthand "gs" should expand to "graceful_stop"
+    assert bot.get_forced_PB_mode("short", "ETH/USDT:USDT") == "graceful_stop"

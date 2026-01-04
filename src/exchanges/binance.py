@@ -445,8 +445,7 @@ class BinanceBot(Passivbot):
             traceback.print_exc()
             return False
 
-    def get_order_execution_params(self, order: dict) -> dict:
-        # defined for each exchange
+    def _build_order_params(self, order: dict) -> dict:
         order_type = order.get("type", "limit")
         params = {
             "positionSide": order["position_side"].upper(),

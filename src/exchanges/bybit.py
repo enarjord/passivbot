@@ -551,8 +551,7 @@ class BybitBot(Passivbot):
             return "short" if float(x["info"]["closedSize"]) != 0.0 else "long"
         return "long" if float(x["info"]["closedSize"]) != 0.0 else "short"
 
-    def get_order_execution_params(self, order: dict) -> dict:
-        # defined for each exchange
+    def _build_order_params(self, order: dict) -> dict:
         return {
             "positionIdx": 1 if order["position_side"] == "long" else 2,
             "timeInForce": (

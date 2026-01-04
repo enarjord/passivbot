@@ -340,14 +340,13 @@ class HyperliquidBot(Passivbot):
         except:
             return False
 
-    def get_order_execution_params(self, order: dict) -> dict:
-        # defined for each exchange
+    def _build_order_params(self, order: dict) -> dict:
         params = {
             "reduceOnly": order["reduce_only"],
             "timeInForce": (
                 "Alo" if require_live_value(self.config, "time_in_force") == "post_only" else "Gtc"
             ),
-            "clientOrderId": order["custom_id"],  # TODO
+            "clientOrderId": order["custom_id"],
         }
         if self.user_info["is_vault"]:
             params["vaultAddress"] = self.user_info["wallet_address"]

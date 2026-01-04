@@ -310,8 +310,7 @@ class GateIOBot(Passivbot):
         except:
             return False
 
-    def get_order_execution_params(self, order: dict) -> dict:
-        # defined for each exchange
+    def _build_order_params(self, order: dict) -> dict:
         order_type = order["type"] if "type" in order else "limit"
         params = {
             "reduce_only": order["reduce_only"],

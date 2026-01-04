@@ -375,14 +375,14 @@ def trim_analysis_aliases(analysis: dict) -> dict:
     return trimmed
 
 
-def filter_markets(markets: dict, exchange: str, verbose=False) -> (dict, dict, dict):
+def filter_markets(markets: dict, exchange: str, quote=None, verbose=False) -> (dict, dict, dict):
     """
     returns (eligible, ineligible, reasons)
     """
     eligible = {}
     ineligible = {}
     reasons = {}
-    quote = get_quote(normalize_exchange_name(exchange))
+    quote = get_quote(normalize_exchange_name(exchange), quote)
     for k, v in markets.items():
         if not v["active"]:
             ineligible[k] = v
@@ -421,6 +421,7 @@ async def load_markets(
     max_age_ms: int = 1000 * 60 * 60 * 24,
     verbose=True,
     cc=None,
+    quote=None,
 ) -> dict:
     """
     Standalone helper to load and cache CCXT markets for a given exchange.
@@ -443,7 +444,7 @@ async def load_markets(
                     markets = json.load(f)
                 if verbose:
                     logging.info(f"{ex} Loaded markets from cache")
-                create_coin_symbol_map_cache(ex, markets, verbose=verbose)
+                create_coin_symbol_map_cache(ex, markets, quote=quote, verbose=verbose)
                 return markets
     except Exception as e:
         logging.error("Error loading %s: %s", markets_path, e)
@@ -474,7 +475,7 @@ async def load_markets(
             logging.info(f"{ex} Dumped markets to cache")
     except Exception as e:
         logging.error("Error dumping markets to cache at %s: %s", markets_path, e)
-    create_coin_symbol_map_cache(ex, markets, verbose=verbose)
+    create_coin_symbol_map_cache(ex, markets, quote=quote, verbose=verbose)
     return markets
 
 
@@ -536,9 +537,22 @@ def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True):
     return cc
 
 
-def get_quote(exchange):
+def get_quote(exchange, quote=None):
+    """Return quote currency for an exchange.
+
+    Args:
+        exchange: Exchange name
+        quote: Explicit quote override (from api-keys.json).
+               If provided, returns this value directly.
+
+    Returns:
+        Quote currency string (e.g., "USDT", "USDC")
+    """
+    if quote is not None:
+        return quote
+    # Legacy hardcoded defaults for backward compatibility
     exchange = normalize_exchange_name(exchange)
-    return "USDC" if exchange in ["hyperliquid", "defx"] else "USDT"
+    return "USDC" if exchange in ["hyperliquid", "defx", "paradex"] else "USDT"
 
 
 def remove_powers_of_ten(text):
@@ -689,7 +703,7 @@ def _write_coin_symbol_maps(
         pass
 
 
-def create_coin_symbol_map_cache(exchange: str, markets, verbose=True):
+def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=True):
     """
     High-level function that coordinates loading any existing symbol_to_coin_map,
     building fresh maps from markets, merging them (new data overrides), and
@@ -698,7 +712,7 @@ def create_coin_symbol_map_cache(exchange: str, markets, verbose=True):
     """
     try:
         exchange = normalize_exchange_name(exchange)
-        quote = get_quote(exchange)
+        quote = get_quote(exchange, quote)
 
         # Attempt to preserve existing symbol->coin mappings when possible
         symbol_to_coin_map = {}
@@ -724,12 +738,12 @@ def create_coin_symbol_map_cache(exchange: str, markets, verbose=True):
         return False
 
 
-def coin_to_symbol(coin, exchange):
+def coin_to_symbol(coin, exchange, quote=None):
     # caches coin_to_symbol_map in memory and reloads if file changes
     if coin == "":
         return ""
     ex = normalize_exchange_name(exchange)
-    quote = get_quote(ex)
+    quote = get_quote(ex, quote)
     coin_sanitized = symbol_to_coin(coin)
     fallback = f"{coin_sanitized}/{quote}:{quote}"
     try:
@@ -838,7 +852,7 @@ def _diff_snapshot(before, after):
     return {"old": _snapshot(before), "new": _snapshot(after)}
 
 
-async def format_approved_ignored_coins(config, exchanges: [str], verbose=True):
+async def format_approved_ignored_coins(config, exchanges: [str], quote=None, verbose=True):
     if isinstance(exchanges, str):
         exchanges = [exchanges]
     before_approved = deepcopy(config.get("live", {}).get("approved_coins"))
@@ -861,8 +875,8 @@ async def format_approved_ignored_coins(config, exchanges: [str], verbose=True):
         {"long": [""], "short": [""]},
     ]:
         if bool(_require_live_value(config, "empty_means_all_approved")):
-            marketss = await asyncio.gather(*[load_markets(ex, verbose=False) for ex in exchanges])
-            marketss = [filter_markets(m, ex)[0] for m, ex in zip(marketss, exchanges)]
+            marketss = await asyncio.gather(*[load_markets(ex, verbose=False, quote=quote) for ex in exchanges])
+            marketss = [filter_markets(m, ex, quote=quote)[0] for m, ex in zip(marketss, exchanges)]
             approved_coins = set()
             for markets in marketss:
                 for symbol in markets:

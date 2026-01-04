@@ -519,7 +519,7 @@ class Passivbot:
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""
         logging.info(f"Starting bot {self.exchange}...")
-        await format_approved_ignored_coins(self.config, self.user_info["exchange"])
+        await format_approved_ignored_coins(self.config, self.user_info["exchange"], quote=self.quote)
         await self.init_markets()
         # Staggered warmup of candles for approved symbols (large sets handled gracefully)
         try:
@@ -542,10 +542,10 @@ class Passivbot:
         await self.update_exchange_config()  # set hedge mode
         # Reuse existing ccxt session when available (ensures shared options such as fetchMarkets types).
         cc_instance = getattr(self, "cca", None)
-        self.markets_dict = await load_markets(self.exchange, 0, verbose=False, cc=cc_instance)
+        self.markets_dict = await load_markets(self.exchange, 0, verbose=False, cc=cc_instance, quote=self.quote)
         await self.determine_utc_offset(verbose)
         # ineligible symbols cannot open new positions
-        eligible, _, reasons = filter_markets(self.markets_dict, self.exchange, verbose)
+        eligible, _, reasons = filter_markets(self.markets_dict, self.exchange, quote=self.quote, verbose=verbose)
         self.eligible_symbols = set(eligible)
         self.ineligible_symbols = reasons
         self.set_market_specific_settings()
@@ -980,7 +980,7 @@ class Passivbot:
         if coinf in self.coin_to_symbol_map:
             self.coin_to_symbol_map[coin] = self.coin_to_symbol_map[coinf]
             return self.coin_to_symbol_map[coinf]
-        result = coin_to_symbol(coin, self.exchange)
+        result = coin_to_symbol(coin, self.exchange, quote=self.quote)
         self.coin_to_symbol_map[coin] = result
         return result
 
@@ -2012,7 +2012,7 @@ class Passivbot:
         """Return an explicitly forced mode for the side or symbol, if configured."""
         mode = self.config_get(["live", f"forced_mode_{pside}"], symbol)
         if mode:
-            return mode
+            return expand_PB_mode(mode)
         elif symbol and not self.markets_dict[symbol]["active"]:
             return "tp_only"
         return None
@@ -3116,7 +3116,7 @@ class Passivbot:
             # Compute metrics for new pos
             wallet_exposure = (
                 pbr.qty_to_cost(new["size"], new["price"], self.c_mults[symbol]) / self.balance
-                if new["size"] != 0
+                if new["size"] != 0 and self.balance > 0
                 else 0.0
             )
             wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
@@ -4769,9 +4769,11 @@ class Passivbot:
                 )
             self._last_coin_symbol_warning_counts = dict(counts)
 
-    def get_order_execution_params(self, order: dict) -> dict:
-        """Return exchange-specific parameters for order placement."""
-        # defined for each exchange
+    def _build_order_params(self, order: dict) -> dict:
+        """Hook: Build execution parameters for order placement.
+
+        Override in subclass with exchange-specific logic.
+        """
         return {}
 
     async def execute_order(self, order: dict) -> dict:
@@ -4782,7 +4784,7 @@ class Passivbot:
             "side": order["side"],
             "amount": abs(order["qty"]),
             "price": order["price"],
-            "params": self.get_order_execution_params(order),
+            "params": self._build_order_params(order),
         }
         executed = await self.cca.create_order(**params)
         return executed
@@ -4843,8 +4845,18 @@ def setup_bot(config):
         from exchanges.kucoin import KucoinBot
 
         bot = KucoinBot(config)
+    elif user_info["exchange"] == "paradex":
+        from exchanges.paradex import ParadexBot
+
+        bot = ParadexBot(config)
     else:
-        raise Exception(f"unknown exchange {user_info['exchange']}")
+        # Generic CCXTBot for any CCXT-supported exchange
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot(config)
+        logging.info(
+            f"Using generic CCXTBot for '{user_info['exchange']}' (no custom implementation)"
+        )
     return bot
 
 

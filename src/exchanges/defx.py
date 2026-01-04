@@ -230,11 +230,10 @@ class DefxBot(Passivbot):
             )
         return events
 
-    def get_order_execution_params(self, order: dict) -> dict:
-        # defined for each exchange
+    def _build_order_params(self, order: dict) -> dict:
         return {
             "timeInForce": "GTC",
-            "reduceOnly": reduce_only,
+            "reduceOnly": order.get("reduce_only", False),
         }
 
     async def determine_utc_offset(self, verbose=True):

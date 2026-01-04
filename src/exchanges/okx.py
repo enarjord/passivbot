@@ -311,8 +311,7 @@ class OKXBot(Passivbot):
             traceback.print_exc()
             return {}
 
-    def get_order_execution_params(self, order: dict) -> dict:
-        # defined for each exchange
+    def _build_order_params(self, order: dict) -> dict:
         params = {
             "postOnly": require_live_value(self.config, "time_in_force") == "post_only",
             "reduceOnly": order["reduce_only"],

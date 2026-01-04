@@ -179,3 +179,51 @@ def test_symbol_to_coin_warns_only_once(tmp_path, monkeypatch, caplog):
     assert utils.symbol_to_coin("FOO/USDT:USDT") == "FOO"
     warnings = [rec for rec in caplog.records if "heuristics to guess coin" in rec.message]
     assert len(warnings) == 1
+
+
+def test_get_quote_with_explicit_override():
+    """get_quote() returns explicit quote when provided, ignoring exchange defaults."""
+    # Without override - uses hardcoded defaults
+    assert utils.get_quote("binance") == "USDT"
+    assert utils.get_quote("hyperliquid") == "USDC"
+
+    # With explicit override - returns the override
+    assert utils.get_quote("binance", quote="USDC") == "USDC"
+    assert utils.get_quote("hyperliquid", quote="USDT") == "USDT"
+    assert utils.get_quote("paradex", quote="USDC") == "USDC"
+
+
+def test_filter_markets_with_explicit_quote():
+    """filter_markets() uses explicit quote when provided."""
+    markets = {
+        "BTC/USDT:USDT": {"active": True, "swap": True, "linear": True},
+        "BTC/USDC:USDC": {"active": True, "swap": True, "linear": True},
+        "ETH/USDT:USDT": {"active": True, "swap": True, "linear": True},
+    }
+
+    # Default for binance is USDT
+    eligible, ineligible, reasons = utils.filter_markets(markets, "binance")
+    assert "BTC/USDT:USDT" in eligible
+    assert "BTC/USDC:USDC" in ineligible
+    assert reasons["BTC/USDC:USDC"] == "wrong quote"
+
+    # Override to USDC
+    eligible, ineligible, reasons = utils.filter_markets(markets, "binance", quote="USDC")
+    assert "BTC/USDC:USDC" in eligible
+    assert "BTC/USDT:USDT" in ineligible
+    assert reasons["BTC/USDT:USDT"] == "wrong quote"
+
+
+def test_coin_to_symbol_with_explicit_quote(tmp_path, monkeypatch):
+    """coin_to_symbol() uses explicit quote for fallback symbol construction."""
+    monkeypatch.chdir(tmp_path)
+    ex = "paradex"
+
+    # No cache exists, so fallback is used
+    # Default would be USDT, but with explicit USDC override
+    sym = utils.coin_to_symbol("BTC", ex, quote="USDC")
+    assert sym == "BTC/USDC:USDC"
+
+    # Verify default still works for legacy exchanges
+    sym2 = utils.coin_to_symbol("ETH", "binance")
+    assert sym2 == "ETH/USDT:USDT"
