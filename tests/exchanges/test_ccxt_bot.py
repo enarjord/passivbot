@@ -61,6 +61,7 @@ class TestCCXTBotFetchBalance:
 
         # Use __new__ to bypass complex Passivbot initialization
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.quote = "USDT"
         bot.cca = AsyncMock()
         bot.cca.fetch_balance = AsyncMock(return_value={
@@ -79,6 +80,7 @@ class TestCCXTBotFetchBalance:
 
         # Use __new__ to bypass complex Passivbot initialization
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.quote = "USDC"
         bot.cca = AsyncMock()
         bot.cca.fetch_balance = AsyncMock(return_value={
@@ -100,6 +102,7 @@ class TestCCXTBotFetchPositions:
 
         # Use __new__ to bypass complex Passivbot initialization
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = AsyncMock()
         bot.cca.fetch_positions = AsyncMock(return_value=[
             {
@@ -138,6 +141,7 @@ class TestCCXTBotFetchPositions:
 
         # Use __new__ to bypass complex Passivbot initialization
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = AsyncMock()
         bot.cca.fetch_positions = AsyncMock(return_value=[])
 
@@ -156,6 +160,7 @@ class TestCCXTBotFetchOpenOrders:
 
         # Use __new__ to bypass complex Passivbot initialization
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = AsyncMock()
         bot.cca.fetch_open_orders = AsyncMock(return_value=[
             {
@@ -475,6 +480,7 @@ class TestCCXTBotFetchTickers:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.markets_dict = {"BTC/USDT:USDT": {}, "ETH/USDT:USDT": {}}
         bot.cca = AsyncMock()
         bot.cca.fetch_tickers = AsyncMock(return_value={
@@ -499,6 +505,7 @@ class TestCCXTBotFetchTickers:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.markets_dict = {"BTC/USDT:USDT": {}}
         bot.cca = AsyncMock()
         bot.cca.fetch_tickers = AsyncMock(return_value={
@@ -535,6 +542,7 @@ class TestCCXTBotFetchOHLCV:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = AsyncMock()
         bot.cca.fetch_ohlcv = AsyncMock(return_value=[
             [1704067200000, 42000.0, 42100.0, 41900.0, 42050.0, 100.0],
@@ -553,6 +561,7 @@ class TestCCXTBotFetchOHLCV:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = AsyncMock()
         bot.cca.fetch_ohlcv = AsyncMock(side_effect=Exception("API error"))
 
@@ -566,6 +575,7 @@ class TestCCXTBotFetchOHLCV:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = AsyncMock()
         bot.cca.fetch_ohlcv = AsyncMock(return_value=[
             [1704067200000, 42000.0, 42100.0, 41900.0, 42050.0, 100.0],
@@ -582,6 +592,7 @@ class TestCCXTBotFetchOHLCV:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = AsyncMock()
 
         # Simulate two pages of results
