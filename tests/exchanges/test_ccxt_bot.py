@@ -323,6 +323,7 @@ class TestCCXTBotUpdateExchangeConfigBySymbols:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = MagicMock()
         bot.cca.has = {"setLeverage": True, "setMarginMode": False}
         bot.cca.set_leverage = AsyncMock()
@@ -340,6 +341,7 @@ class TestCCXTBotUpdateExchangeConfigBySymbols:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = MagicMock()
         bot.cca.has = {"setLeverage": False, "setMarginMode": True}
         bot.cca.set_margin_mode = AsyncMock()
@@ -371,6 +373,7 @@ class TestCCXTBotUpdateExchangeConfigBySymbols:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = MagicMock()
         bot.cca.has = {"setLeverage": True}
         bot.cca.set_leverage = AsyncMock(side_effect=Exception("Leverage API error"))
@@ -385,6 +388,7 @@ class TestCCXTBotUpdateExchangeConfigBySymbols:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.cca = MagicMock()
         bot.cca.has = {"setMarginMode": True}
         bot.cca.set_margin_mode = AsyncMock(side_effect=Exception("Margin API error"))
@@ -519,18 +523,18 @@ class TestCCXTBotFetchTickers:
         assert tickers["BTC/USDT:USDT"]["last"] == 50000.0  # Falls back to bid
 
     @pytest.mark.asyncio
-    async def test_fetch_tickers_returns_false_on_error(self):
-        """Test that method returns False on error."""
+    async def test_fetch_tickers_raises_on_error(self):
+        """Test that method raises on error (caller handles exceptions)."""
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "testexchange"
         bot.markets_dict = {"BTC/USDT:USDT": {}}
         bot.cca = AsyncMock()
         bot.cca.fetch_tickers = AsyncMock(side_effect=Exception("Network error"))
 
-        result = await bot.fetch_tickers()
-
-        assert result is False
+        with pytest.raises(Exception, match="Network error"):
+            await bot.fetch_tickers()
 
 
 class TestCCXTBotFetchOHLCV:
@@ -556,8 +560,8 @@ class TestCCXTBotFetchOHLCV:
         bot.cca.fetch_ohlcv.assert_called_with("BTC/USDT:USDT", timeframe="1m", limit=1000)
 
     @pytest.mark.asyncio
-    async def test_fetch_ohlcv_returns_empty_on_error(self):
-        """Test that fetch_ohlcv returns empty list on error."""
+    async def test_fetch_ohlcv_raises_on_error(self):
+        """Test that fetch_ohlcv raises on error (caller handles exceptions)."""
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
@@ -565,9 +569,8 @@ class TestCCXTBotFetchOHLCV:
         bot.cca = AsyncMock()
         bot.cca.fetch_ohlcv = AsyncMock(side_effect=Exception("API error"))
 
-        result = await bot.fetch_ohlcv("BTC/USDT:USDT")
-
-        assert result == []
+        with pytest.raises(Exception, match="API error"):
+            await bot.fetch_ohlcv("BTC/USDT:USDT")
 
     @pytest.mark.asyncio
     async def test_fetch_ohlcvs_1m_without_since(self):

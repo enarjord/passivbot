@@ -298,20 +298,17 @@ class TestFetchPnls:
         assert result[1]["position_side"] == "long"
 
     @pytest.mark.asyncio
-    async def test_raises_on_error_and_triggers_restart(self):
-        """Should raise on error and trigger restart_bot_on_too_many_errors (fail loudly)."""
+    async def test_raises_on_error(self):
+        """Should raise on error (caller handles via restart_bot_on_too_many_errors)."""
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
         bot.exchange = "testexchange"
         bot.cca = MagicMock()
         bot.cca.fetch_my_trades = AsyncMock(side_effect=Exception("API error"))
-        bot.restart_bot_on_too_many_errors = AsyncMock()
 
         with pytest.raises(Exception, match="API error"):
             await bot.fetch_pnls()
-
-        bot.restart_bot_on_too_many_errors.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_passes_params_to_ccxt(self):
