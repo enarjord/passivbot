@@ -17,8 +17,5 @@
 			"broker-name": "passivbotFutures"
 		}
 	}
-	mexc: ""
-	hyperliquid: ""
 	gateio: "passivbot"
-	defx: ""
 }

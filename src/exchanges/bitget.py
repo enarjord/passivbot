@@ -744,8 +744,7 @@ class BitgetBot(Passivbot):
                 logging.warning(f"fetch_fills_with_types id missing {id_}")
         return sorted(fills_by_id.values(), key=lambda x: x["timestamp"])
 
-    def get_order_execution_params(self, order: dict) -> dict:
-        # defined for each exchange
+    def _build_order_params(self, order: dict) -> dict:
         return {
             "timeInForce": (
                 "PO" if require_live_value(self.config, "time_in_force") == "post_only" else "GTC"
