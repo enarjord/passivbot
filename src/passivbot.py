@@ -709,9 +709,14 @@ class Passivbot:
                 ", ".join(sorted(self.coin_overrides.keys())),
             )
 
-    def config_get(self, path: [str], symbol=None):
+    def config_get(self, path: [str], symbol=None, default=None):
         """
         Retrieve a configuration value, preferring per-symbol overrides when provided.
+
+        Args:
+            path: List of keys to traverse in the config dict
+            symbol: Optional symbol for per-symbol overrides
+            default: Optional default value if path not found (if None, raises KeyError)
         """
         log_key = None
         if symbol and symbol in self.coin_overrides:
@@ -737,6 +742,8 @@ class Passivbot:
             if isinstance(d, dict) and p in d:
                 d = d[p]
             else:
+                if default is not None:
+                    return default
                 raise KeyError(f"Key path {'.'.join(path)} not found in config or coin overrides.")
         return d
 

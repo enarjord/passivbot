@@ -195,6 +195,17 @@
         }
     },
     "coin_overrides": {},
+    "hedge": {
+        "enabled": false,
+        "mode": "hedge_shorts_for_longs",
+        "threshold": 1.0,
+        "tolerance_pct": 0.05,
+        "hedge_excess_allowance_pct": 0.20,
+        "max_n_positions": 0,
+        "allocation_min_fraction": 0.10,
+        "one_way": true,
+        "approved_coins": []
+    },
     "live": {
         "approved_coins": "configs/approved_coins.json",
         "auto_gs": true,
