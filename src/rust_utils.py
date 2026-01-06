@@ -295,6 +295,12 @@ def sync_installed_extension_into_src() -> None:
                 return
         dst.parent.mkdir(parents=True, exist_ok=True)
         copy2(installed_path, dst)
+        # Re-sign on macOS to avoid SIGKILL from invalid code signature
+        if sys.platform == "darwin":
+            subprocess.run(
+                ["codesign", "--force", "--sign", "-", str(dst)],
+                capture_output=True,
+            )
         print(f"Synced Rust extension into {dst}")
     except OSError:
         # Best-effort; if we can't sync, the build still exists in site-packages.
