@@ -64,9 +64,13 @@ def _install_passivbot_rust_stub():
         lambda entry_price, close_price, qty, c_mult=1.0: (entry_price - close_price) * qty
     )
     stub.calc_pprice_diff_int = lambda *args, **kwargs: 0
-    stub.calc_auto_unstuck_allowance = (
-        lambda balance, allowance_pct, max_pnl, last_pnl: allowance_pct * balance
-    )
+
+    def _calc_auto_unstuck_allowance(balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last):
+        balance_peak = balance + (pnl_cumsum_max - pnl_cumsum_last)
+        drop_since_peak_pct = balance / balance_peak - 1.0
+        return max(0.0, balance_peak * (loss_allowance_pct + drop_since_peak_pct))
+
+    stub.calc_auto_unstuck_allowance = _calc_auto_unstuck_allowance
     stub.calc_wallet_exposure = (
         lambda c_mult, balance, size, price: abs(size) * price / max(balance, 1e-12)
     )
@@ -82,19 +86,35 @@ def _install_passivbot_rust_stub():
     stub.calc_closes_short_py = lambda *args, **kwargs: []
     stub.calc_unstucking_close_py = lambda *args, **kwargs: None
 
+    # Order type IDs must match passivbot_rust exactly
     _order_map = {
-        "close_unstuck_long": 0x1234,
-        "close_unstuck_short": 0x1235,
-        "entry_initial_normal_long": 0x2001,
-        "entry_initial_normal_short": 0x2002,
-        "entry_grid_normal_long": 0x2003,
-        "entry_grid_normal_short": 0x2004,
-        "close_grid_long": 0x3001,
-        "close_grid_short": 0x3002,
-        "close_auto_reduce_wel_long": 0x3003,
-        "close_auto_reduce_wel_short": 0x3004,
-        "close_panic_long": 0x3005,
-        "close_panic_short": 0x3006,
+        "entry_initial_normal_long": 0,
+        "entry_initial_partial_long": 1,
+        "entry_trailing_normal_long": 2,
+        "entry_trailing_cropped_long": 3,
+        "entry_grid_normal_long": 4,
+        "entry_grid_cropped_long": 5,
+        "entry_grid_inflated_long": 6,
+        "close_grid_long": 7,
+        "close_trailing_long": 8,
+        "close_unstuck_long": 9,
+        "close_auto_reduce_twel_long": 10,
+        "entry_initial_normal_short": 11,
+        "entry_initial_partial_short": 12,
+        "entry_trailing_normal_short": 13,
+        "entry_trailing_cropped_short": 14,
+        "entry_grid_normal_short": 15,
+        "entry_grid_cropped_short": 16,
+        "entry_grid_inflated_short": 17,
+        "close_grid_short": 18,
+        "close_trailing_short": 19,
+        "close_unstuck_short": 20,
+        "close_auto_reduce_twel_short": 21,
+        "close_panic_long": 22,
+        "close_panic_short": 23,
+        "close_auto_reduce_wel_long": 24,
+        "close_auto_reduce_wel_short": 25,
+        "empty": 65535,
     }
     stub.get_order_id_type_from_string = lambda name: _order_map.get(name, 0)
     stub.order_type_id_to_snake = lambda type_id: {v: k for k, v in _order_map.items()}.get(
@@ -105,6 +125,14 @@ def _install_passivbot_rust_stub():
     stub.run_backtest = lambda *args, **kwargs: {}
     stub.gate_entries_by_twel_py = lambda *args, **kwargs: []
     stub.calc_twel_enforcer_orders_py = lambda *args, **kwargs: []
+
+    # Minimal stub for orchestrator JSON API
+    def _compute_ideal_orders_json(input_json: str) -> str:
+        """Stub orchestrator that returns empty orders."""
+        import json
+        return json.dumps({"orders": []})
+
+    stub.compute_ideal_orders_json = _compute_ideal_orders_json
 
     sys.modules["passivbot_rust"] = stub
 

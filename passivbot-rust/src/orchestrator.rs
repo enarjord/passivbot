@@ -18,16 +18,6 @@ pub struct EntryPeekHints {
     pub expand_close_short: HashSet<usize>,
 }
 
-impl EntryPeekHints {
-    #[inline]
-    pub fn clear(&mut self) {
-        self.expand_grid_long.clear();
-        self.expand_grid_short.clear();
-        self.expand_close_long.clear();
-        self.expand_close_short.clear();
-    }
-}
-
 mod core {
     use crate::closes::{
         calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
@@ -37,10 +27,6 @@ mod core {
     use crate::entries::{
         calc_entries_long, calc_entries_short, calc_min_entry_qty, calc_next_entry_long,
         calc_next_entry_short,
-    };
-    use crate::hedge::{
-        compute_hedge_cycle, DesiredBaseOrder as HedgeDesiredBaseOrder, HedgeConfig, HedgeMode,
-        HedgePosition as HedgePosIdx, HedgeSymbol as HedgeSymbolIdx,
     };
     use crate::risk::{
         calc_twel_enforcer_actions, calc_unstucking_action, GateEntriesPosition,
@@ -125,9 +111,6 @@ mod core {
         MissingEma {
             symbol_idx: usize,
         },
-        HedgeError {
-            message: String,
-        },
     }
 
     #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -174,9 +157,6 @@ mod core {
         pub sort_global: bool,
         /// Global bot params (not modifiable by per-coin overrides).
         pub global_bot_params: BotParamsPair,
-        /// Market-neutral hedging overlay (default disabled).
-        #[serde(default)]
-        pub hedge: HedgeConfig,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,14 +215,12 @@ mod core {
                 | CloseAutoReduceTwelLong
                 | ClosePanicLong
                 | CloseAutoReduceWelLong
-                | CloseHedgeLong
                 | CloseGridShort
                 | CloseTrailingShort
                 | CloseUnstuckShort
                 | CloseAutoReduceTwelShort
                 | ClosePanicShort
                 | CloseAutoReduceWelShort
-                | CloseHedgeShort
         )
     }
 
@@ -336,10 +314,6 @@ mod core {
         }
         let req = balance * effective_limit * bot.entry_initial_qty_pct;
         req >= effective_min_cost
-    }
-
-    fn forager_enabled(bp: &BotParams) -> bool {
-        bp.filter_volume_drop_pct > 0.0 || bp.filter_volatility_drop_pct > 0.0
     }
 
     fn market_price_for_order_side(ob: &OrderBook, qty: f64) -> f64 {
@@ -797,7 +771,6 @@ mod core {
             symbol_idx: usize,
             qty: f64,
             price: f64,
-            market_price: f64,
             qty_step: f64,
             c_mult: f64,
             order_type: OrderType,
@@ -866,7 +839,6 @@ mod core {
                 symbol_idx: o.symbol_idx,
                 qty: qty_abs,
                 price: o.price,
-                market_price,
                 qty_step: exch.qty_step,
                 c_mult: exch.c_mult,
                 order_type: o.order_type,
@@ -1091,30 +1063,6 @@ mod core {
         // Compute selection sets and effective n_positions per pside.
         let enabled_long = is_pside_enabled(&input.global.global_bot_params, PositionSide::Long);
         let enabled_short = is_pside_enabled(&input.global.global_bot_params, PositionSide::Short);
-        let hedge_allows_long_positions = input.global.hedge.threshold > 0.0
-            && input.global.hedge.mode == HedgeMode::HedgeLongsForShorts;
-        let hedge_allows_short_positions = input.global.hedge.threshold > 0.0
-            && input.global.hedge.mode == HedgeMode::HedgeShortsForLongs;
-
-        // v0 safety: hedging overlay is defined only for base long-only or base short-only.
-        if input.global.hedge.threshold > 0.0 {
-            match input.global.hedge.mode {
-                HedgeMode::HedgeShortsForLongs => {
-                    if enabled_short {
-                        return Err(OrchestratorError::HedgeError {
-                            message: "hedge_shorts_for_longs requires base short side disabled (set bot.short.n_positions=0 or bot.short.total_wallet_exposure_limit=0.0)".to_string(),
-                        });
-                    }
-                }
-                HedgeMode::HedgeLongsForShorts => {
-                    if enabled_long {
-                        return Err(OrchestratorError::HedgeError {
-                            message: "hedge_longs_for_shorts requires base long side disabled (set bot.long.n_positions=0 or bot.long.total_wallet_exposure_limit=0.0)".to_string(),
-                        });
-                    }
-                }
-            }
-        }
 
         fill_forced_normal_indices(
             &input.symbols,
@@ -1284,7 +1232,7 @@ mod core {
             // LONG
             {
                 let has_pos = s.long.position.size != 0.0;
-                if !enabled_long && has_pos && !hedge_allows_long_positions {
+                if !enabled_long && has_pos {
                     diagnostics
                         .warnings
                         .push(OrchestratorWarning::DisabledPsideHasPosition {
@@ -1555,7 +1503,7 @@ mod core {
             // SHORT
             {
                 let has_pos = s.short.position.size != 0.0;
-                if !enabled_short && has_pos && !hedge_allows_short_positions {
+                if !enabled_short && has_pos {
                     diagnostics
                         .warnings
                         .push(OrchestratorWarning::DisabledPsideHasPosition {
@@ -2217,155 +2165,6 @@ mod core {
             orders.append(&mut s.entries);
         }
 
-	        // Hedge overlay (v0): compute hedge orders and gate base entries on one-way collisions.
-	        {
-	            let hedge_cfg = &input.global.hedge;
-	            let hedge_side_has_pos = match hedge_cfg.mode {
-                HedgeMode::HedgeShortsForLongs => {
-                    input.symbols.iter().any(|s| s.short.position.size != 0.0)
-                }
-                HedgeMode::HedgeLongsForShorts => {
-                    input.symbols.iter().any(|s| s.long.position.size != 0.0)
-                }
-	            };
-	            if hedge_cfg.threshold > 0.0 || hedge_side_has_pos {
-	                if hedge_cfg.threshold > 0.0 && hedge_cfg.approved_hedge_symbols.is_empty() {
-	                    return Err(OrchestratorError::HedgeError {
-	                        message: "hedge is enabled (threshold > 0) but approved_hedge_symbols is empty".to_string(),
-	                    });
-	                }
-	                let (base_pside, base_bp) = match hedge_cfg.mode {
-	                    HedgeMode::HedgeShortsForLongs => {
-	                        (PositionSide::Long, &input.global.global_bot_params.long)
-	                    }
-	                    HedgeMode::HedgeLongsForShorts => {
-	                        (PositionSide::Short, &input.global.global_bot_params.short)
-	                    }
-	                };
-	                let base_twel = base_bp.total_wallet_exposure_limit;
-	                let base_n_positions = base_bp.n_positions;
-	                if hedge_cfg.threshold > 0.0 && (base_twel <= 0.0 || base_n_positions == 0) {
-	                    return Err(OrchestratorError::HedgeError {
-	                        message: "hedge is enabled (threshold > 0) but base side is disabled (base_twel <= 0 or base_n_positions == 0)".to_string(),
-	                    });
-	                }
-	                let span_volume = base_bp.filter_volume_ema_span;
-	                let span_volatility = base_bp.filter_volatility_ema_span;
-
-                // Symbols (contiguous by invariant).
-                let mut hedge_symbols: Vec<HedgeSymbolIdx> = Vec::with_capacity(n_symbols);
-                for s in &input.symbols {
-                    let volume_score = ema_lookup(&s.emas.m1.volume, span_volume).unwrap_or(0.0);
-                    let volatility_score =
-                        ema_lookup(&s.emas.m1.log_range, span_volatility).unwrap_or(0.0);
-                    hedge_symbols.push(HedgeSymbolIdx {
-                        idx: s.symbol_idx,
-                        bid: s.order_book.bid,
-                        ask: s.order_book.ask,
-                        volume_score,
-                        volatility_score,
-                        exchange_params: s.exchange.clone(),
-                        effective_min_cost: s.effective_min_cost,
-                    });
-                }
-
-                // Current positions.
-                let mut positions_long: Vec<HedgePosIdx> = Vec::new();
-                let mut positions_short: Vec<HedgePosIdx> = Vec::new();
-                for s in &input.symbols {
-                    if s.long.position.size != 0.0 {
-                        positions_long.push(HedgePosIdx {
-                            idx: s.symbol_idx,
-                            size: s.long.position.size,
-                            price: s.long.position.price,
-                        });
-                    }
-                    if s.short.position.size != 0.0 {
-                        positions_short.push(HedgePosIdx {
-                            idx: s.symbol_idx,
-                            size: s.short.position.size,
-                            price: s.short.position.price,
-                        });
-                    }
-                }
-
-                // Base entry intents (one-way exclusions + collision detection).
-                let mut desired_base: Vec<HedgeDesiredBaseOrder> = Vec::new();
-                for o in &orders {
-                    if o.pside != base_pside {
-                        continue;
-                    }
-                    let is_entry = match base_pside {
-                        PositionSide::Long => o.qty > 0.0,
-                        PositionSide::Short => o.qty < 0.0,
-                    };
-                    if !is_entry {
-                        continue;
-                    }
-                    desired_base.push(HedgeDesiredBaseOrder {
-                        idx: o.symbol_idx,
-                        qty: o.qty,
-                    });
-                }
-
-                let hedge_out = compute_hedge_cycle(
-                    hedge_cfg,
-                    &hedge_symbols,
-                    &positions_long,
-                    &positions_short,
-                    &desired_base,
-                    input.balance,
-                    base_twel,
-                    base_n_positions,
-                )
-                .map_err(|e| OrchestratorError::HedgeError { message: e.message })?;
-
-                if !hedge_out.gate_base_entries.is_empty() {
-                    let gate = &hedge_out.gate_base_entries;
-                    orders.retain(|o| {
-                        if o.pside != base_pside {
-                            return true;
-                        }
-                        let is_entry = match base_pside {
-                            PositionSide::Long => o.qty > 0.0,
-                            PositionSide::Short => o.qty < 0.0,
-                        };
-                        !(is_entry && gate.contains(&o.symbol_idx))
-                    });
-                }
-
-                for ho in hedge_out.orders {
-                    let (pside, order_type) = match hedge_cfg.mode {
-                        HedgeMode::HedgeShortsForLongs => {
-                            let pside = PositionSide::Short;
-                            let ot = if ho.qty < 0.0 {
-                                OrderType::EntryHedgeShort
-                            } else {
-                                OrderType::CloseHedgeShort
-                            };
-                            (pside, ot)
-                        }
-                        HedgeMode::HedgeLongsForShorts => {
-                            let pside = PositionSide::Long;
-                            let ot = if ho.qty > 0.0 {
-                                OrderType::EntryHedgeLong
-                            } else {
-                                OrderType::CloseHedgeLong
-                            };
-                            (pside, ot)
-                        }
-                    };
-                    orders.push(IdealOrder {
-                        symbol_idx: ho.idx,
-                        pside,
-                        qty: ho.qty,
-                        price: ho.price,
-                        order_type,
-                    });
-                }
-            }
-        }
-
         if input.global.sort_global {
             orders.sort_by(|a, b| {
                 let oba = &input.symbols[a.symbol_idx].order_book;
@@ -2474,7 +2273,6 @@ mod core {
                         pair.long.n_positions = 1;
                         pair
                     },
-                    hedge: Default::default(),
                 },
                 symbols: vec![sym.clone()],
                 peek_hints: None,
@@ -2555,7 +2353,6 @@ mod core {
                     unstuck_allowance_short: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
-                    hedge: Default::default(),
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -2588,7 +2385,6 @@ mod core {
                     unstuck_allowance_short: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
-                    hedge: Default::default(),
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
@@ -2692,7 +2488,6 @@ mod core {
                     unstuck_allowance_short: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
-                    hedge: Default::default(),
                 },
                 symbols: syms,
                 peek_hints: None,
@@ -2895,7 +2690,6 @@ mod core {
                     unstuck_allowance_short: 1000.0,
                     sort_global: true,
                     global_bot_params: global_bp,
-                    hedge: Default::default(),
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -2903,120 +2697,6 @@ mod core {
             let out = compute_ideal_orders(&input).unwrap();
             assert_eq!(out.orders.len(), 1);
             assert_eq!(out.orders[0].order_type, OrderType::ClosePanicLong);
-        }
-
-        #[test]
-        fn hedge_overlay_opens_short_hedge_when_underhedged() {
-            let mut sym0 = make_basic_symbol(0);
-            let mut sym1 = make_basic_symbol(1);
-
-            // Base long position on sym0.
-            sym0.long.position = Position {
-                size: 10.0,
-                price: 10.0,
-            };
-
-            // Ensure sym1 is not selected for base longs, so hedger may use it.
-            sym1.long.mode = Some(TradingMode::Manual);
-
-            let mut global_bp = BotParamsPair::default();
-            global_bp.long.total_wallet_exposure_limit = 1.5;
-            global_bp.long.n_positions = 1;
-            global_bp.short.total_wallet_exposure_limit = 0.0;
-            global_bp.short.n_positions = 0;
-
-            let mut hedge = HedgeConfig::default();
-            hedge.mode = HedgeMode::HedgeShortsForLongs;
-            hedge.threshold = 1.0;
-            hedge.tolerance_pct = 0.0;
-            hedge.approved_hedge_symbols = vec![1];
-            hedge.one_way = true;
-
-            let input = OrchestratorInput {
-                balance: 1000.0,
-                global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
-                    unstuck_allowance_long: 0.0,
-                    unstuck_allowance_short: 0.0,
-                    sort_global: false,
-                    global_bot_params: global_bp,
-                    hedge,
-                },
-                symbols: vec![sym0, sym1],
-                peek_hints: None,
-            };
-
-            let out = compute_ideal_orders(&input).unwrap();
-            assert!(
-                out.orders.iter().any(|o| o.symbol_idx == 1
-                    && o.pside == PositionSide::Short
-                    && o.order_type == OrderType::EntryHedgeShort
-                    && o.qty < 0.0),
-                "expected a hedge short entry on idx 1"
-            );
-        }
-
-        #[test]
-        fn hedge_overlay_closes_short_on_collision_and_gates_base_entry() {
-            let mut sym0 = make_basic_symbol(0);
-            let mut sym1 = make_basic_symbol(1);
-
-            // Base long position on sym0 so base has exposure.
-            sym0.long.position = Position {
-                size: 10.0,
-                price: 10.0,
-            };
-
-            // Force a base initial entry desire on sym1.
-            sym1.long.mode = Some(TradingMode::Normal);
-
-            // Existing hedge short on sym1 collides with base wanting a long on sym1 (one-way).
-            sym1.short.position = Position {
-                size: -1.0,
-                price: 10.0,
-            };
-
-            let mut global_bp = BotParamsPair::default();
-            global_bp.long.total_wallet_exposure_limit = 1.5;
-            global_bp.long.n_positions = 2;
-            global_bp.short.total_wallet_exposure_limit = 0.0;
-            global_bp.short.n_positions = 0;
-
-            let mut hedge = HedgeConfig::default();
-            hedge.mode = HedgeMode::HedgeShortsForLongs;
-            hedge.threshold = 1.0;
-            hedge.tolerance_pct = 0.0;
-            hedge.approved_hedge_symbols = vec![1];
-            hedge.one_way = true;
-
-            let input = OrchestratorInput {
-                balance: 1000.0,
-                global: OrchestratorGlobal {
-                    filter_by_min_effective_cost: false,
-                    unstuck_allowance_long: 0.0,
-                    unstuck_allowance_short: 0.0,
-                    sort_global: false,
-                    global_bot_params: global_bp,
-                    hedge,
-                },
-                symbols: vec![sym0, sym1],
-                peek_hints: None,
-            };
-
-            let out = compute_ideal_orders(&input).unwrap();
-            assert!(
-                out.orders.iter().any(|o| o.symbol_idx == 1
-                    && o.pside == PositionSide::Short
-                    && o.order_type == OrderType::CloseHedgeShort
-                    && o.qty > 0.0),
-                "expected a hedge close on collision for idx 1"
-            );
-            assert!(
-                out.orders
-                    .iter()
-                    .all(|o| !(o.symbol_idx == 1 && o.pside == PositionSide::Long && o.qty > 0.0)),
-                "expected base long entry orders on idx 1 to be gated"
-            );
         }
     }
 }

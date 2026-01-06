@@ -81,5 +81,6 @@ If you see linker errors after an OS update (e.g. new glibc), rebuild the extens
 | `rustup: command not found` | Install Rust via https://rustup.rs/. |
 | `pip install … failed due to SSL` | Update `certifi` or set `PIP_CERT` if corporate proxies intercept TLS. |
 | `maturin develop` can’t find Python | Ensure you run it inside the venv (`which python` should point to `venv/bin/python`). |
+| `TypeError: unsupported operand type(s) for |: ...` | You are running an unsupported Python version; install Python 3.12 and recreate the venv with `python3.12 -m venv venv`. |
 
 Still stuck? Open an issue with the full error log and details about your OS/architecture.

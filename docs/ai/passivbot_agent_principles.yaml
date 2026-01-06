@@ -30,8 +30,10 @@ passivbot_agent_principles:
 
   error_handling:
     - Fail loudly. Prefer clear exceptions or panics over silent error handling.
-    - Assume upstream code is correct; don’t silently compensate for bad data.
+    - Assume upstream code is correct; don't silently compensate for bad data.
     - Include clear, actionable error messages for all expected failures.
+    - Exchange fetch methods (fetch_balance, fetch_positions, fetch_open_orders, etc.) must NOT catch exceptions. Let exceptions propagate to the caller who handles via restart_bot_on_too_many_errors(). This ensures clean return types (no Union[list, bool]), preserves exception context, and makes errors impossible to ignore.
+
 
   testing:
     - Write comprehensive tests covering both normal and edge cases.

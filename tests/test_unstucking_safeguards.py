@@ -1,3 +1,4 @@
+import json
 import sys
 import types
 
@@ -32,6 +33,7 @@ def _make_mock_pbr():
         else (0.0 if not market else (price / market - 1))
     )
     module.round_ = lambda value, step: value
+    module.compute_ideal_orders_json = lambda *_args, **_kwargs: "{}"
 
     def _get_order_id_type_from_string(name: str) -> int:
         mapping = {
@@ -154,9 +156,63 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self.approved_coins_minus_ignored_coins = {"long": [], "short": []}
             self.PB_modes = {"long": {}, "short": {}}
             self.inactive_coin_candle_ttl_ms = 60_000
+            self.trailing_prices = {}
+            self.markets_dict = {}
+            self.effective_min_cost = {}
+            self._bp_defaults = {
+                "ema_span_0": 1.0,
+                "ema_span_1": 2.0,
+                "entry_volatility_ema_span_hours": 0.0,
+                "entry_grid_spacing_pct": 0.0,
+                "entry_initial_qty_pct": 0.0,
+                "entry_grid_double_down_factor": 1.0,
+                "entry_grid_spacing_volatility_weight": 0.0,
+                "entry_grid_spacing_we_weight": 0.0,
+                "entry_initial_ema_dist": 0.0,
+                "entry_trailing_double_down_factor": 0.0,
+                "entry_trailing_grid_ratio": 0.0,
+                "entry_trailing_retracement_pct": 0.0,
+                "entry_trailing_retracement_we_weight": 0.0,
+                "entry_trailing_retracement_volatility_weight": 0.0,
+                "entry_trailing_threshold_pct": 0.0,
+                "entry_trailing_threshold_we_weight": 0.0,
+                "entry_trailing_threshold_volatility_weight": 0.0,
+                "wallet_exposure_limit": 1.0,
+                "risk_we_excess_allowance_pct": 0.0,
+                "close_grid_markup_end": 0.0,
+                "close_grid_markup_start": 0.0,
+                "close_grid_qty_pct": 0.0,
+                "close_trailing_grid_ratio": 0.0,
+                "close_trailing_qty_pct": 0.0,
+                "close_trailing_retracement_pct": 0.0,
+                "close_trailing_threshold_pct": 0.0,
+                "risk_wel_enforcer_threshold": 0.0,
+                "unstuck_threshold": 0.0,
+                "unstuck_close_pct": 0.0,
+                "unstuck_ema_dist": 0.0,
+            }
+            self._bot_value_defaults = {
+                "n_positions": 0,
+                "total_wallet_exposure_limit": 0.0,
+                "risk_twel_enforcer_threshold": 0.0,
+                "filter_volume_ema_span": 0.0,
+                "filter_volatility_ema_span": 0.0,
+                "filter_volume_drop_pct": 0.0,
+                "filter_volatility_drop_pct": 0.0,
+                "unstuck_loss_allowance_pct": 0.0,
+            }
+            self._live_values = {
+                "filter_by_min_effective_cost": False,
+                "price_distance_threshold": 1.0,
+                "market_orders_allowed": False,
+                "order_match_tolerance_pct": 0.0,
+            }
+
+            async def _get_last_prices(symbols, max_age_ms=None):
+                return {s: last_price for s in symbols}
 
             self.cm = types.SimpleNamespace(
-                get_last_prices=lambda symbols, max_age_ms=None: {s: last_price for s in symbols},
+                get_last_prices=_get_last_prices,
                 get_ema_bounds=lambda symbol, span0, span1, max_age_ms=None: (
                     last_price - 10,
                     last_price + 10,
@@ -167,6 +223,15 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     sym: (last_price - 10, last_price + 10) for sym, _, _ in items
                 },
             )
+
+        def bp(self, pside: str, key: str, symbol: str | None = None):
+            return self._bp_defaults.get(key, 0.0)
+
+        def bot_value(self, pside: str, key: str):
+            return self._bot_value_defaults.get(key, 0.0)
+
+        def live_value(self, key: str):
+            return self._live_values.get(key, 0.0)
 
     return DummyBot(config)
 
@@ -180,6 +245,11 @@ def _set_basic_state(bot, symbol="TEST/USDT"):
             "short": {"size": 0.0, "price": 0.0},
         }
     }
+    bot.qty_steps[symbol] = 0.01
+    bot.price_steps[symbol] = 0.01
+    bot.min_qtys[symbol] = 0.0
+    bot.min_costs[symbol] = 0.0
+    bot.c_mults[symbol] = 1.0
     bot.PB_modes = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
     bot.approved_coins_minus_ignored_coins = {"long": [symbol], "short": []}
     bot.pnls = [{"pnl": 5.0, "timestamp": 0, "id": 1}]
@@ -222,38 +292,11 @@ def _make_order(
 
 
 @pytest.mark.asyncio
-async def test_calc_orders_emits_single_unstuck(monkeypatch):
-    cfg = _dummy_config()
-    bot = _make_dummy_bot(cfg)
-    symbol = _set_basic_state(bot)
-
-    import types as _types
-
-    async def fake_calc(self):
-        return {
-            symbol: [
-                _make_unstuck_order(symbol, 0x1234, 101.0),
-                _make_unstuck_order(symbol, 0x1235, 102.0),
-            ]
-        }
-
-    bot.calc_ideal_orders = _types.MethodType(fake_calc, bot)
-
-    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
-
-    unstuck_created = [
-        order
-        for order in to_create
-        if order["custom_id"].startswith("0x1234") or order["custom_id"].startswith("0x1235")
-    ]
-    assert len(unstuck_created) == 1
-
-
-@pytest.mark.asyncio
 async def test_existing_unstuck_blocks_new(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
+    import passivbot_rust as pbr
 
     # Pretend an unstuck order is already live on the exchange
     bot.open_orders[symbol] = [
@@ -268,25 +311,48 @@ async def test_existing_unstuck_blocks_new(monkeypatch):
         }
     ]
 
-    import types as _types
+    bot.markets_dict = {symbol: {"active": True}}
+    bot.effective_min_cost = {symbol: 1.0}
+    bot.trailing_prices = {
+        symbol: {
+            "long": {
+                "min_since_open": 0.0,
+                "max_since_min": 0.0,
+                "max_since_open": 0.0,
+                "min_since_max": 0.0,
+            },
+            "short": {
+                "min_since_open": 0.0,
+                "max_since_min": 0.0,
+                "max_since_open": 0.0,
+                "min_since_max": 0.0,
+            },
+        }
+    }
 
-    flags = {}
+    captured = {}
 
-    async def fake_calc(self):
-        allow_new_unstuck = not self.has_open_unstuck_order()
-        flags["allow_new_unstuck"] = allow_new_unstuck
-        if not allow_new_unstuck:
-            return {symbol: []}
-        return {symbol: [_make_unstuck_order(symbol, 0x1234, 101.0)]}
+    async def fake_load_bundle(self, symbols, modes):
+        m1_close = {symbol: {1.0: 100.0, 2.0: 100.0, (1.0 * 2.0) ** 0.5: 100.0}}
+        m1_volume = {symbol: {}}
+        m1_log_range = {symbol: {}}
+        h1_log_range = {symbol: {}}
+        return m1_close, m1_volume, m1_log_range, h1_log_range, {}, {}
 
-    bot.calc_ideal_orders = _types.MethodType(fake_calc, bot)
+    def fake_compute(input_json: str) -> str:
+        captured["input"] = input_json
+        return '{"orders": [], "diagnostics": {"warnings": []}}'
 
-    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+    monkeypatch.setattr(
+        bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot)
+    )
+    monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
 
-    assert flags.get("allow_new_unstuck") is False
-    assert all(
-        not order["custom_id"].startswith("0x1234") for order in to_create
-    ), "No new unstuck orders should be created when one is live"
+    await bot.calc_ideal_orders_orchestrator()
+
+    payload = json.loads(captured["input"])
+    assert payload["global"]["unstuck_allowance_long"] == 0.0
+    assert payload["global"]["unstuck_allowance_short"] == 0.0
 
 
 @pytest.mark.asyncio

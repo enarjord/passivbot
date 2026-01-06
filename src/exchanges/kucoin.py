@@ -492,8 +492,7 @@ class KucoinBot(Passivbot):
             )
         return events
 
-    def get_order_execution_params(self, order: dict) -> dict:
-        # defined for each exchange
+    def _build_order_params(self, order: dict) -> dict:
         return {
             "timeInForce": "GTC",
             "reduceOnly": order.get("reduce_only", False),

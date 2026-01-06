@@ -4,10 +4,32 @@ import os
 import platform
 import sys
 
-from rust_utils import check_and_maybe_compile
-
 
 if __name__ == "__main__":
+    min_version = (3, 12)
+    if sys.version_info < min_version:
+        current = ".".join(map(str, sys.version_info[:3]))
+        required = ".".join(map(str, min_version))
+        print(
+            "\n".join(
+                [
+                    f"Passivbot requires Python {required} (earlier versions are not supported).",
+                    f"You are running Python {current} from: {sys.executable}",
+                    "",
+                    "Fix:",
+                    f"  - Install Python {required}",
+                    f"  - Recreate your venv with: python{required} -m venv venv",
+                    "  - Reinstall deps and try again",
+                    "",
+                    "See docs/installation.md for full instructions.",
+                ]
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    from rust_utils import check_and_maybe_compile
+
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--skip-rust-compile", action="store_true", help="Skip Rust build check.")
     parser.add_argument(

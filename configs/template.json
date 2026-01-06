@@ -1,13 +1,4 @@
 {
-    "hedge": {
-        "allocation_min_fraction": 0.1,
-        "hedge_excess_allowance_pct": 0.2,
-        "max_n_positions": 0,
-        "mode": "hedge_shorts_for_longs",
-        "one_way": true,
-        "threshold": 1.0,
-        "tolerance_pct": 0.05
-    },
     "backtest": {
         "balance_sample_divider": 60,
         "base_dir": "backtests",
@@ -102,8 +93,7 @@
                     "overrides": {
                         "bot.long.close_trailing_grid_ratio": 1,
                         "bot.long.entry_trailing_grid_ratio": 1
-                    },
-                    "start_date": "2024-07"
+                    }
                 },
                 {
                     "coins": ["ADA","BTC","ETH","SOL","XRP"],
@@ -111,18 +101,15 @@
                     "overrides": {
                         "bot.long.close_trailing_grid_ratio": 0,
                         "bot.long.entry_trailing_grid_ratio": 0
-                    },
-                    "start_date": "2024-07"
+                    }
                 },
                 {
                     "label": "n_positions=3",
-                    "overrides": {"bot.long.n_positions":3},
-                    "start_date": "2024-07"
+                    "overrides": {"bot.long.n_positions":3}
                 },
                 {
                     "label": "ltwel=2",
-                    "overrides": {"bot.long.total_wallet_exposure_limit":2},
-                    "start_date": "2024-07"
+                    "overrides": {"bot.long.total_wallet_exposure_limit":2}
                 }
             ]
         }
@@ -223,6 +210,7 @@
         "inactive_coin_candle_ttl_minutes": 10,
         "leverage": 10,
         "market_orders_allowed": false,
+        "max_concurrent_api_requests": null,
         "max_disk_candles_per_symbol_per_tf": 2000000,
         "max_memory_candles_per_symbol": 200000,
         "max_n_cancellations_per_batch": 5,
@@ -236,6 +224,7 @@
         "recv_window_ms": 5000,
         "time_in_force": "good_till_cancelled",
         "user": "bybit_01",
+        "warmup_jitter_seconds": 30.0,
         "warmup_ratio": 0.3
     },
     "logging": {
@@ -372,6 +361,7 @@
         "population_size": 250,
         "round_to_n_significant_digits": 3,
         "scoring": [
+            "adg_pnl",
             "adg_pnl_w",
             "mdg_pnl_w",
             "loss_profit_ratio",

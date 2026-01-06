@@ -47,5 +47,19 @@
         "key": "key",
         "secret": "secret",
         "passphrase": "passphrase"
+    },
+    "_comment_paradex": "Paradex uses L2 StarkNet auth (like Hyperliquid).",
+    "paradex_01": {
+        "exchange": "paradex",
+        "wallet_address": "0x_your_starknet_address",
+        "private_key": "0x_your_starknet_private_key"
+    },
+    "_comment_ccxtbot": "CCXTBot uses CCXT native field names. Add 'quote' for non-USDT exchanges.",
+    "generic_ccxtbot_01": {
+        "exchange": "kraken",
+        "quote": "USDT",
+        "apiKey": "your_api_key",
+        "secret": "your_api_secret",
+        "password": "optional_passphrase"
     }
 }
