@@ -1332,6 +1332,16 @@ impl<'a> Backtest<'a> {
                 } else {
                     0.0
                 };
+                // Convert base volume to quote volume using typical price
+                // This matches live bot's get_latest_ema_quote_volume() calculation
+                let high = hlcvs[[start_idx, col, HIGH]];
+                let low = hlcvs[[start_idx, col, LOW]];
+                let typical_price = if high.is_finite() && low.is_finite() && base_close > 0.0 {
+                    (high + low + base_close) / 3.0
+                } else {
+                    base_close.max(1.0) // Fallback to close price or 1.0
+                };
+                let quote_volume = base_volume * typical_price;
                 EMAs {
                     long: [base_close; 3],
                     long_num: [base_close; 3],
@@ -1339,11 +1349,11 @@ impl<'a> Backtest<'a> {
                     short: [base_close; 3],
                     short_num: [base_close; 3],
                     short_den: [1.0; 3],
-                    vol_long: base_volume,
-                    vol_long_num: base_volume,
+                    vol_long: quote_volume,
+                    vol_long_num: quote_volume,
                     vol_long_den: 1.0,
-                    vol_short: base_volume,
-                    vol_short_num: base_volume,
+                    vol_short: quote_volume,
+                    vol_short_num: quote_volume,
                     vol_short_den: 1.0,
                     log_range_long: 0.0,
                     log_range_long_num: 0.0,
@@ -2647,7 +2657,7 @@ impl<'a> Backtest<'a> {
                 continue;
             }
             let vol_raw = self.hlcvs_value(k, i, VOLUME);
-            let vol = if vol_raw.is_finite() {
+            let vol_base = if vol_raw.is_finite() {
                 f64::max(0.0, vol_raw)
             } else {
                 0.0
@@ -2657,6 +2667,10 @@ impl<'a> Backtest<'a> {
             if !high.is_finite() || !low.is_finite() {
                 continue;
             }
+            // Convert base volume to quote volume using typical price
+            // This matches live bot's get_latest_ema_quote_volume() calculation
+            let typical_price = (high + low + close_price) / 3.0;
+            let vol = vol_base * typical_price;
 
             let long_alphas = &self.ema_alphas[i].long.alphas;
             let short_alphas = &self.ema_alphas[i].short.alphas;
