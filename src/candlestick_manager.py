@@ -1070,6 +1070,10 @@ class CandlestickManager:
         return mapping
 
     def _load_shard(self, path: str) -> np.ndarray:
+        if not os.path.exists(path):
+            # Missing file is expected for pre-inception dates - log at debug level
+            self.log.debug(f"Shard not found (expected for pre-inception): {path}")
+            return np.empty((0,), dtype=CANDLE_DTYPE)
         try:
             with open(path, "rb") as f:
                 arr = np.load(f, allow_pickle=False)
@@ -1519,8 +1523,13 @@ class CandlestickManager:
             )
             if updated_gap:
                 current_retry_count = updated_gap.get("retry_count", 0)
-                # Only warn on transition to persistent status
-                if current_retry_count >= _GAP_MAX_RETRIES and previous_retry_count < _GAP_MAX_RETRIES:
+                gap_reason = updated_gap.get("reason", GAP_REASON_AUTO)
+                # Only warn on transition to persistent status (skip pre_inception - expected behavior)
+                if (
+                    current_retry_count >= _GAP_MAX_RETRIES
+                    and previous_retry_count < _GAP_MAX_RETRIES
+                    and gap_reason != "pre_inception"
+                ):
                     gap_minutes = (updated_gap["end_ts"] - updated_gap["start_ts"]) // ONE_MIN_MS + 1
                     # Use throttled warning to handle edge cases (concurrent calls, etc.)
                     throttle_key = f"gap_persistent_{symbol}_{updated_gap['start_ts']}_{updated_gap['end_ts']}"
@@ -1532,7 +1541,7 @@ class CandlestickManager:
                         end_ts=updated_gap["end_ts"],
                         gap_minutes=gap_minutes,
                         retry_count=current_retry_count,
-                        reason=updated_gap.get("reason", GAP_REASON_AUTO),
+                        reason=gap_reason,
                         msg=f"Gap marked as persistent after {_GAP_MAX_RETRIES} retries. Use --force-refetch-gaps to retry.",
                     )
 
@@ -2558,11 +2567,18 @@ class CandlestickManager:
         shard_paths = self._iter_shard_paths(symbol, tf="1m")
         legacy_paths = self._get_legacy_shard_paths(symbol, "1m")
 
+        # Don't try to fetch archives for recent days - they don't exist yet
+        # Exchanges typically need 48-72 hours to publish archive data
+        archive_freshness_hours = 72
+        archive_cutoff_ms = _utc_now_ms() - (archive_freshness_hours * 3600 * 1000)
+
         # First pass: count days to fetch
         days_to_fetch = []
         for day_key, (day_start, day_end) in day_map.items():
             if start_ts > day_start or end_ts < day_end:
                 continue  # not a full-day request for this day
+            if day_end > archive_cutoff_ms:
+                continue  # too recent - archive not available yet, use CCXT
             if day_key in shard_paths:
                 continue  # already have at least some data on disk
             if day_key in legacy_paths:
@@ -2629,10 +2645,12 @@ class CandlestickManager:
                 for i, result in enumerate(results):
                     day_key = batch[i][0]
                     if isinstance(result, Exception):
-                        self._log("warning", "archive_day_failed", symbol=symbol, day=day_key, error=str(result))
+                        error_msg = str(result) or f"{type(result).__name__}"
+                        self._log("warning", "archive_day_failed", symbol=symbol, day=day_key, error=error_msg)
                         skipped += 1
                     elif result[2] is not None:  # Error string
-                        self._log("warning", "archive_day_failed", symbol=symbol, day=day_key, error=result[2])
+                        error_msg = result[2] or "unknown error"
+                        self._log("warning", "archive_day_failed", symbol=symbol, day=day_key, error=error_msg)
                         skipped += 1
                     elif result[1] is None or result[1].size == 0:
                         self._log("debug", "archive_day_unavailable", symbol=symbol, day=day_key)
@@ -3112,14 +3130,25 @@ class CandlestickManager:
                             )
                             sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
                             still_missing = self._missing_spans(sub, start_ts, end_ts)
+                            # Re-fetch inception_ts after archive prefetch (may have been discovered)
+                            inception_ts = self._get_inception_ts(symbol)
                             for s, e in still_missing:
                                 if not span_in_persistent_gap(s, e):
-                                    # This will either create a new gap or increment retry count
-                                    self._add_known_gap(
-                                        symbol, s, e,
-                                        reason=GAP_REASON_FETCH_FAILED,
-                                        increment_retry=True,
-                                    )
+                                    # If gap is before known inception, mark as pre_inception
+                                    # immediately (no retries, no warning)
+                                    if inception_ts is not None and e < inception_ts:
+                                        self._add_known_gap(
+                                            symbol, s, e,
+                                            reason="pre_inception",
+                                            retry_count=_GAP_MAX_RETRIES,  # Persistent immediately
+                                        )
+                                    else:
+                                        # Normal gap - will retry and eventually warn
+                                        self._add_known_gap(
+                                            symbol, s, e,
+                                            reason=GAP_REASON_FETCH_FAILED,
+                                            increment_retry=True,
+                                        )
         elif self.exchange is not None and allow_fetch_present:
             # Range touches present (end at or beyond current minute); fetch up to current minute inclusive
             end_current = _floor_minute(now)
