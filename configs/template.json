@@ -93,7 +93,7 @@
                     "overrides": {
                         "bot.long.close_trailing_grid_ratio": 1,
                         "bot.long.entry_trailing_grid_ratio": 1
-                    },
+                    }
                 },
                 {
                     "coins": ["ADA","BTC","ETH","SOL","XRP"],
@@ -101,15 +101,15 @@
                     "overrides": {
                         "bot.long.close_trailing_grid_ratio": 0,
                         "bot.long.entry_trailing_grid_ratio": 0
-                    },
+                    }
                 },
                 {
                     "label": "n_positions=3",
-                    "overrides": {"bot.long.n_positions":3},
+                    "overrides": {"bot.long.n_positions":3}
                 },
                 {
                     "label": "ltwel=2",
-                    "overrides": {"bot.long.total_wallet_exposure_limit":2},
+                    "overrides": {"bot.long.total_wallet_exposure_limit":2}
                 }
             ]
         }

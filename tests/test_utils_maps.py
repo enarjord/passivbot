@@ -227,3 +227,91 @@ def test_coin_to_symbol_with_explicit_quote(tmp_path, monkeypatch):
     # Verify default still works for legacy exchanges
     sym2 = utils.coin_to_symbol("ETH", "binance")
     assert sym2 == "ETH/USDT:USDT"
+
+
+def test_concurrent_write_symbol_maps(tmp_path, monkeypatch):
+    """
+    Multiple threads writing to symbol_to_coin_map shouldn't corrupt it.
+    This tests the race condition fix for parallel bot startup.
+    """
+    import concurrent.futures
+    import threading
+
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("caches", exist_ok=True)
+
+    # Reset the stale cleanup flag so each call triggers cleanup check
+    utils._SYMBOL_MAP_STALE_CLEANUP_DONE = False
+
+    errors = []
+    results = []
+    lock = threading.Lock()
+
+    def write_maps(thread_id):
+        try:
+            # Each thread creates different market data
+            markets = {
+                f"COIN{thread_id}/USDT:USDT": {
+                    "swap": True,
+                    "base": f"COIN{thread_id}",
+                    "baseName": f"COIN{thread_id}",
+                }
+            }
+            result = utils.create_coin_symbol_map_cache("binanceusdm", markets, verbose=False)
+            with lock:
+                results.append((thread_id, result))
+        except Exception as e:
+            with lock:
+                errors.append((thread_id, e))
+
+    # Launch 10 concurrent writers to simulate parallel bot startup
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(write_maps, i) for i in range(10)]
+        concurrent.futures.wait(futures)
+
+    # No exceptions should have occurred
+    assert not errors, f"Concurrent writes failed: {errors}"
+
+    # Verify file is valid JSON (not corrupted)
+    s2c_path = os.path.join("caches", "symbol_to_coin_map.json")
+    assert os.path.exists(s2c_path), "symbol_to_coin_map.json should exist"
+    with open(s2c_path) as f:
+        data = json.load(f)  # Should not raise JSONDecodeError
+    assert isinstance(data, dict), "symbol_to_coin_map should be a dict"
+
+    # Verify coin_to_symbol_map is also valid
+    c2s_path = os.path.join("caches", "binanceusdm", "coin_to_symbol_map.json")
+    assert os.path.exists(c2s_path), "coin_to_symbol_map.json should exist"
+    with open(c2s_path) as f:
+        c2s_data = json.load(f)  # Should not raise JSONDecodeError
+    assert isinstance(c2s_data, dict), "coin_to_symbol_map should be a dict"
+
+
+def test_stale_lock_cleanup(tmp_path, monkeypatch):
+    """Stale lock files should be cleaned up on first access."""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("caches/binanceusdm", exist_ok=True)
+
+    # Reset cleanup flag
+    utils._SYMBOL_MAP_STALE_CLEANUP_DONE = False
+
+    # Create a stale lock file (older than threshold)
+    stale_lock = os.path.join("caches", "symbol_to_coin_map.json.lock")
+    with open(stale_lock, "w") as f:
+        f.write("")
+    # Set mtime to 5 minutes ago (older than 180s threshold)
+    old_time = time.time() - 300
+    os.utime(stale_lock, (old_time, old_time))
+
+    # Create a fresh lock file (should NOT be removed)
+    fresh_lock = os.path.join("caches", "binanceusdm", "coin_to_symbol_map.json.lock")
+    with open(fresh_lock, "w") as f:
+        f.write("")
+
+    # Trigger cleanup via any symbol map operation
+    utils._cleanup_stale_symbol_map_locks()
+
+    # Stale lock should be removed
+    assert not os.path.exists(stale_lock), "Stale lock should be removed"
+    # Fresh lock should still exist
+    assert os.path.exists(fresh_lock), "Fresh lock should not be removed"

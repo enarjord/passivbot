@@ -14,6 +14,7 @@ import re
 import logging
 from copy import deepcopy
 from pathlib import Path
+import portalocker  # type: ignore
 from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
     resolve_custom_endpoint_override,
@@ -32,11 +33,67 @@ _COIN_TO_SYMBOL_CACHE = {}  # {exchange: {"map": dict, "mtime_ns": int, "size": 
 _SYMBOL_TO_COIN_CACHE = {"map": None, "mtime_ns": None, "size": None}
 _SYMBOL_TO_COIN_WARNINGS: set[str] = set()
 _COIN_TO_SYMBOL_FALLBACKS: set[tuple[str, str]] = set()
+
+# File locking constants for symbol/coin map files
+_SYMBOL_MAP_LOCK_STALE_SECONDS = 180  # Remove locks older than 3 minutes
+_SYMBOL_MAP_LOCK_TIMEOUT = 5  # Seconds to wait for lock acquisition
+_SYMBOL_MAP_STALE_CLEANUP_DONE = False  # Track if cleanup has run this session
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LEGACY_COINS_FILE_ALIASES = {
     "approved_coins_topmcap.json": Path("configs/approved_coins.json"),
     "approved_coins_topmcap.txt": Path("configs/approved_coins.json"),
 }
+
+
+def _atomic_write_json(path: str, data: dict, indent=None, sort_keys=False) -> None:
+    """Write JSON atomically: write to .tmp then os.replace() for crash safety."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(data, f, indent=indent, sort_keys=sort_keys)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)
+
+
+def _cleanup_stale_symbol_map_locks() -> None:
+    """
+    Remove leftover .lock files for symbol/coin maps that are clearly stale.
+    Runs once per session on first access to prevent accumulation.
+    """
+    global _SYMBOL_MAP_STALE_CLEANUP_DONE
+    if _SYMBOL_MAP_STALE_CLEANUP_DONE:
+        return
+    _SYMBOL_MAP_STALE_CLEANUP_DONE = True
+
+    cache_dir = Path("caches")
+    if not cache_dir.exists():
+        return
+
+    now = time.time()
+    threshold = _SYMBOL_MAP_LOCK_STALE_SECONDS
+
+    # Clean up lock files in caches/ and caches/{exchange}/
+    lock_patterns = [
+        "*.lock",  # Top-level locks (symbol_to_coin_map.json.lock)
+        "*/*.lock",  # Per-exchange locks (caches/{exchange}/coin_to_symbol_map.json.lock)
+    ]
+
+    for pattern in lock_patterns:
+        for lock_path in cache_dir.glob(pattern):
+            # Only clean up symbol/coin map related locks
+            if "symbol" not in lock_path.name and "coin" not in lock_path.name:
+                continue
+            try:
+                stat = lock_path.stat()
+                age = now - stat.st_mtime
+                if age > threshold:
+                    lock_path.unlink()
+                    logging.warning("removed stale symbol map lock %s (age %.1fs)", lock_path, age)
+            except FileNotFoundError:
+                continue
+            except Exception as exc:
+                logging.debug("failed to remove stale lock %s: %s", lock_path, exc)
 
 
 def _resolve_coins_file_path(value: str) -> Optional[Path]:
@@ -569,7 +626,11 @@ def _load_coin_to_symbol_map(exchange: str) -> dict:
     """
     Lazily load and cache caches/{exchange}/coin_to_symbol_map.json in memory.
     Reloads if the file changes on disk (mtime or size).
+    Uses shared locking to prevent reading during concurrent writes.
     """
+    # Run stale lock cleanup on first access
+    _cleanup_stale_symbol_map_locks()
+
     path = os.path.join("caches", exchange, "coin_to_symbol_map.json")
     try:
         st = os.stat(path)
@@ -579,11 +640,16 @@ def _load_coin_to_symbol_map(exchange: str) -> dict:
     entry = _COIN_TO_SYMBOL_CACHE.get(exchange)
     if entry and entry.get("mtime_ns") == mtime_ns and entry.get("size") == size:
         return entry.get("map", {})
+    lock_path = path + ".lock"
     try:
-        with open(path) as f:
-            data = json.load(f)
+        with portalocker.Lock(lock_path, timeout=_SYMBOL_MAP_LOCK_TIMEOUT, flags=portalocker.LOCK_SH):
+            with open(path) as f:
+                data = json.load(f)
         _COIN_TO_SYMBOL_CACHE[exchange] = {"map": data, "mtime_ns": mtime_ns, "size": size}
         return data
+    except portalocker.LockException:
+        logging.warning("Could not acquire shared lock for %s, returning cached data", path)
+        return entry.get("map", {}) if entry else {}
     except Exception as e:
         logging.error(f"failed to load coin_to_symbol_map for {exchange}: {e}")
         return {}
@@ -593,7 +659,11 @@ def _load_symbol_to_coin_map() -> dict:
     """
     Lazily load and cache caches/symbol_to_coin_map.json in memory.
     Reloads if the file changes on disk (mtime or size).
+    Uses shared locking to prevent reading during concurrent writes.
     """
+    # Run stale lock cleanup on first access
+    _cleanup_stale_symbol_map_locks()
+
     path = os.path.join("caches", "symbol_to_coin_map.json")
     try:
         st = os.stat(path)
@@ -607,13 +677,18 @@ def _load_symbol_to_coin_map() -> dict:
         and entry.get("size") == size
     ):
         return entry.get("map", {})
+    lock_path = path + ".lock"
     try:
-        with open(path) as f:
-            data = json.load(f)
+        with portalocker.Lock(lock_path, timeout=_SYMBOL_MAP_LOCK_TIMEOUT, flags=portalocker.LOCK_SH):
+            with open(path) as f:
+                data = json.load(f)
         _SYMBOL_TO_COIN_CACHE["map"] = data
         _SYMBOL_TO_COIN_CACHE["mtime_ns"] = mtime_ns
         _SYMBOL_TO_COIN_CACHE["size"] = size
         return data
+    except portalocker.LockException:
+        logging.warning("Could not acquire shared lock for %s, returning cached data", path)
+        return entry.get("map") if entry.get("map") is not None else {}
     except Exception as e:
         logging.error(f"failed to load symbol_to_coin_map: {e}")
         return {}
@@ -666,22 +741,36 @@ def _write_coin_symbol_maps(
     exchange: str, coin_to_symbol_map: dict, symbol_to_coin_map: dict, verbose=True
 ):
     """
-    Write coin/symbol maps to disk and update in-memory caches.
+    Write coin/symbol maps to disk with file locking and atomic writes.
+    Uses portalocker to prevent race conditions when multiple bots start simultaneously.
     """
+    # Run stale lock cleanup on first access
+    _cleanup_stale_symbol_map_locks()
+
     coin_to_symbol_map_path = make_get_filepath(
         os.path.join("caches", exchange, "coin_to_symbol_map.json")
     )
     symbol_to_coin_map_path = make_get_filepath(os.path.join("caches", "symbol_to_coin_map.json"))
 
-    if verbose:
-        logging.info("dumping coin_to_symbol_map %s", coin_to_symbol_map_path)
-    with open(coin_to_symbol_map_path, "w") as f:
-        json.dump(coin_to_symbol_map, f, indent=4, sort_keys=True)
+    # Write coin_to_symbol_map (per-exchange) with locking
+    c2s_lock_path = coin_to_symbol_map_path + ".lock"
+    try:
+        with portalocker.Lock(c2s_lock_path, timeout=_SYMBOL_MAP_LOCK_TIMEOUT):
+            if verbose:
+                logging.info("dumping coin_to_symbol_map %s", coin_to_symbol_map_path)
+            _atomic_write_json(coin_to_symbol_map_path, coin_to_symbol_map, indent=4, sort_keys=True)
+    except portalocker.LockException:
+        logging.warning("Could not acquire lock for %s, skipping write", coin_to_symbol_map_path)
 
-    if verbose:
-        logging.info("dumping symbol_to_coin_map %s", symbol_to_coin_map_path)
-    with open(symbol_to_coin_map_path, "w") as f2:
-        json.dump(symbol_to_coin_map, f2)
+    # Write symbol_to_coin_map (global) with locking
+    s2c_lock_path = symbol_to_coin_map_path + ".lock"
+    try:
+        with portalocker.Lock(s2c_lock_path, timeout=_SYMBOL_MAP_LOCK_TIMEOUT):
+            if verbose:
+                logging.info("dumping symbol_to_coin_map %s", symbol_to_coin_map_path)
+            _atomic_write_json(symbol_to_coin_map_path, symbol_to_coin_map)
+    except portalocker.LockException:
+        logging.warning("Could not acquire lock for %s, skipping write", symbol_to_coin_map_path)
 
     # update in-memory caches to avoid stale reads
     try:
@@ -709,29 +798,79 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
     building fresh maps from markets, merging them (new data overrides), and
     writing results to disk. IO is performed here; conversion logic lives in
     _build_coin_symbol_maps().
+
+    Uses file locking to make the read-modify-write cycle atomic, preventing
+    race conditions when multiple bots start simultaneously.
     """
+    # Run stale lock cleanup on first access
+    _cleanup_stale_symbol_map_locks()
+
     try:
         exchange = normalize_exchange_name(exchange)
         quote = get_quote(exchange, quote)
 
-        # Attempt to preserve existing symbol->coin mappings when possible
-        symbol_to_coin_map = {}
         symbol_to_coin_map_path = make_get_filepath(os.path.join("caches", "symbol_to_coin_map.json"))
+        s2c_lock_path = symbol_to_coin_map_path + ".lock"
+
+        # Lock the symbol_to_coin_map for the entire read-modify-write cycle
         try:
-            if os.path.exists(symbol_to_coin_map_path):
-                with open(symbol_to_coin_map_path, "r") as f:
-                    symbol_to_coin_map = json.load(f)
-        except Exception as e:
-            logging.error("failed to load symbol_to_coin_map %s", e)
+            with portalocker.Lock(s2c_lock_path, timeout=_SYMBOL_MAP_LOCK_TIMEOUT):
+                # Read existing symbol->coin mappings while holding lock
+                symbol_to_coin_map = {}
+                try:
+                    if os.path.exists(symbol_to_coin_map_path):
+                        with open(symbol_to_coin_map_path, "r") as f:
+                            symbol_to_coin_map = json.load(f)
+                except Exception as e:
+                    logging.error("failed to load symbol_to_coin_map %s", e)
 
-        # Build fresh maps from provided markets (pure logic)
-        coin_to_symbol_map, new_symbol_to_coin_map = _build_coin_symbol_maps(markets, quote)
+                # Build fresh maps from provided markets (pure logic)
+                coin_to_symbol_map, new_symbol_to_coin_map = _build_coin_symbol_maps(markets, quote)
 
-        # Merge: prefer new discovered mappings while retaining others
-        symbol_to_coin_map.update(new_symbol_to_coin_map)
+                # Merge: prefer new discovered mappings while retaining others
+                symbol_to_coin_map.update(new_symbol_to_coin_map)
 
-        # Persist to disk and update in-memory caches
-        _write_coin_symbol_maps(exchange, coin_to_symbol_map, symbol_to_coin_map, verbose=verbose)
+                # Write symbol_to_coin_map atomically while still holding lock
+                if verbose:
+                    logging.info("dumping symbol_to_coin_map %s", symbol_to_coin_map_path)
+                _atomic_write_json(symbol_to_coin_map_path, symbol_to_coin_map)
+
+                # Update in-memory cache
+                try:
+                    st2 = os.stat(symbol_to_coin_map_path)
+                    _SYMBOL_TO_COIN_CACHE["map"] = symbol_to_coin_map
+                    _SYMBOL_TO_COIN_CACHE["mtime_ns"] = st2.st_mtime_ns
+                    _SYMBOL_TO_COIN_CACHE["size"] = st2.st_size
+                except Exception:
+                    pass
+
+            # Write coin_to_symbol_map separately (per-exchange, uses its own lock)
+            coin_to_symbol_map_path = make_get_filepath(
+                os.path.join("caches", exchange, "coin_to_symbol_map.json")
+            )
+            c2s_lock_path = coin_to_symbol_map_path + ".lock"
+            try:
+                with portalocker.Lock(c2s_lock_path, timeout=_SYMBOL_MAP_LOCK_TIMEOUT):
+                    if verbose:
+                        logging.info("dumping coin_to_symbol_map %s", coin_to_symbol_map_path)
+                    _atomic_write_json(coin_to_symbol_map_path, coin_to_symbol_map, indent=4, sort_keys=True)
+                    # Update in-memory cache
+                    try:
+                        st = os.stat(coin_to_symbol_map_path)
+                        _COIN_TO_SYMBOL_CACHE[exchange] = {
+                            "map": coin_to_symbol_map,
+                            "mtime_ns": st.st_mtime_ns,
+                            "size": st.st_size,
+                        }
+                    except Exception:
+                        pass
+            except portalocker.LockException:
+                logging.warning("Could not acquire lock for %s, skipping write", coin_to_symbol_map_path)
+
+        except portalocker.LockException:
+            logging.warning("Could not acquire lock for symbol map cache update, skipping")
+            return False
+
         return True
     except Exception as e:
         logging.error("error with create_coin_symbol_map_cache %s: %s", exchange, e)
