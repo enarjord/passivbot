@@ -28,6 +28,10 @@ mod core {
         calc_entries_long, calc_entries_short, calc_min_entry_qty, calc_next_entry_long,
         calc_next_entry_short,
     };
+    use crate::hedge::{
+        compute_hedge_cycle, DesiredBaseOrder, HedgeAction, HedgeConfig, HedgeMode, HedgePosition,
+        HedgeSymbol,
+    };
     use crate::risk::{
         calc_twel_enforcer_actions, calc_unstucking_action, GateEntriesPosition,
         TwelEnforcerInputPosition, UnstuckPositionInput,
@@ -157,6 +161,9 @@ mod core {
         pub sort_global: bool,
         /// Global bot params (not modifiable by per-coin overrides).
         pub global_bot_params: BotParamsPair,
+        /// Hedge overlay configuration. If `None` or `threshold == 0.0`, hedging is disabled.
+        #[serde(default)]
+        pub hedge: Option<HedgeConfig>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -221,6 +228,10 @@ mod core {
                 | CloseAutoReduceTwelShort
                 | ClosePanicShort
                 | CloseAutoReduceWelShort
+                | HedgeCloseCollisionLong
+                | HedgeCloseCollisionShort
+                | HedgeCloseRebalanceLong
+                | HedgeCloseRebalanceShort
         )
     }
 
@@ -2100,6 +2111,233 @@ mod core {
             }
         }
 
+        // --- Hedge Overlay ---
+        // If hedge is enabled and threshold > 0, compute hedge orders and apply gating.
+        let mut hedge_orders: Vec<IdealOrder> = Vec::new();
+        if let Some(ref hedge_cfg) = input.global.hedge {
+            if hedge_cfg.threshold > 0.0 {
+                // Build position vectors for hedge module
+                let mut positions_long: Vec<HedgePosition> = Vec::new();
+                let mut positions_short: Vec<HedgePosition> = Vec::new();
+                for s in input.symbols.iter() {
+                    if s.long.position.size != 0.0 {
+                        positions_long.push(HedgePosition {
+                            idx: s.symbol_idx,
+                            size: s.long.position.size,
+                            price: s.long.position.price,
+                        });
+                    }
+                    if s.short.position.size != 0.0 {
+                        positions_short.push(HedgePosition {
+                            idx: s.symbol_idx,
+                            size: s.short.position.size,
+                            price: s.short.position.price,
+                        });
+                    }
+                }
+
+                // Build symbol data for hedge module
+                let hedge_symbols: Vec<HedgeSymbol> = input
+                    .symbols
+                    .iter()
+                    .map(|s| {
+                        // Use 1h volatility EMA for hedge ranking (same span as entry volatility)
+                        let vol_span = match hedge_cfg.mode {
+                            HedgeMode::HedgeShortsForLongs => {
+                                input
+                                    .global
+                                    .global_bot_params
+                                    .long
+                                    .entry_volatility_ema_span_hours
+                            }
+                            HedgeMode::HedgeLongsForShorts => {
+                                input
+                                    .global
+                                    .global_bot_params
+                                    .short
+                                    .entry_volatility_ema_span_hours
+                            }
+                        };
+                        let volatility_score =
+                            ema_lookup(&s.emas.h1.log_range, vol_span).unwrap_or(0.0);
+                        // Use volume EMA span from bot params for volume score
+                        let volume_span = match hedge_cfg.mode {
+                            HedgeMode::HedgeShortsForLongs => {
+                                input.global.global_bot_params.long.filter_volume_ema_span
+                            }
+                            HedgeMode::HedgeLongsForShorts => {
+                                input.global.global_bot_params.short.filter_volume_ema_span
+                            }
+                        };
+                        let volume_score =
+                            ema_lookup(&s.emas.h1.volume, volume_span).unwrap_or(0.0);
+                        HedgeSymbol {
+                            idx: s.symbol_idx,
+                            bid: s.order_book.bid,
+                            ask: s.order_book.ask,
+                            volume_score,
+                            volatility_score,
+                            exchange_params: s.exchange.clone(),
+                            effective_min_cost: s.effective_min_cost,
+                        }
+                    })
+                    .collect();
+
+                // Build desired base orders (initial entries only) for collision detection
+                let mut desired_base_orders: Vec<DesiredBaseOrder> = Vec::new();
+                match hedge_cfg.mode {
+                    HedgeMode::HedgeShortsForLongs => {
+                        // Base is long, so collect long initial entries
+                        for s in per_long.iter().filter_map(|v| v.as_ref()) {
+                            for o in &s.entries {
+                                if matches!(
+                                    o.order_type,
+                                    OrderType::EntryInitialNormalLong
+                                        | OrderType::EntryInitialPartialLong
+                                ) {
+                                    desired_base_orders.push(DesiredBaseOrder {
+                                        idx: o.symbol_idx,
+                                        qty: o.qty,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    HedgeMode::HedgeLongsForShorts => {
+                        // Base is short, so collect short initial entries
+                        for s in per_short.iter().filter_map(|v| v.as_ref()) {
+                            for o in &s.entries {
+                                if matches!(
+                                    o.order_type,
+                                    OrderType::EntryInitialNormalShort
+                                        | OrderType::EntryInitialPartialShort
+                                ) {
+                                    desired_base_orders.push(DesiredBaseOrder {
+                                        idx: o.symbol_idx,
+                                        qty: o.qty,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Determine base TWEL and n_positions for the base side
+                let (base_twel, base_n_positions) = match hedge_cfg.mode {
+                    HedgeMode::HedgeShortsForLongs => (
+                        input
+                            .global
+                            .global_bot_params
+                            .long
+                            .total_wallet_exposure_limit,
+                        input.global.global_bot_params.long.n_positions,
+                    ),
+                    HedgeMode::HedgeLongsForShorts => (
+                        input
+                            .global
+                            .global_bot_params
+                            .short
+                            .total_wallet_exposure_limit,
+                        input.global.global_bot_params.short.n_positions,
+                    ),
+                };
+
+                // Call hedge overlay
+                match compute_hedge_cycle(
+                    hedge_cfg,
+                    &hedge_symbols,
+                    &positions_long,
+                    &positions_short,
+                    &desired_base_orders,
+                    input.balance,
+                    base_twel,
+                    base_n_positions,
+                ) {
+                    Ok(hedge_output) => {
+                        // Gate base initial entries on symbols with hedge collisions
+                        if !hedge_output.gate_base_entries.is_empty() {
+                            match hedge_cfg.mode {
+                                HedgeMode::HedgeShortsForLongs => {
+                                    // Gate long initial entries
+                                    for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
+                                        if hedge_output.gate_base_entries.contains(&s.symbol_idx) {
+                                            s.entries.retain(|o| {
+                                                !matches!(
+                                                    o.order_type,
+                                                    OrderType::EntryInitialNormalLong
+                                                        | OrderType::EntryInitialPartialLong
+                                                )
+                                            });
+                                        }
+                                    }
+                                }
+                                HedgeMode::HedgeLongsForShorts => {
+                                    // Gate short initial entries
+                                    for s in per_short.iter_mut().filter_map(|v| v.as_mut()) {
+                                        if hedge_output.gate_base_entries.contains(&s.symbol_idx) {
+                                            s.entries.retain(|o| {
+                                                !matches!(
+                                                    o.order_type,
+                                                    OrderType::EntryInitialNormalShort
+                                                        | OrderType::EntryInitialPartialShort
+                                                )
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Convert hedge orders to IdealOrder
+                        for ho in hedge_output.orders {
+                            let (pside, order_type) = match hedge_cfg.mode {
+                                HedgeMode::HedgeShortsForLongs => {
+                                    // Hedge side is short
+                                    let ot = match ho.action {
+                                        HedgeAction::OpenOrIncrease => OrderType::HedgeEntryShort,
+                                        HedgeAction::Close => {
+                                            if ho.reason == "collision_with_base" {
+                                                OrderType::HedgeCloseCollisionShort
+                                            } else {
+                                                OrderType::HedgeCloseRebalanceShort
+                                            }
+                                        }
+                                    };
+                                    (PositionSide::Short, ot)
+                                }
+                                HedgeMode::HedgeLongsForShorts => {
+                                    // Hedge side is long
+                                    let ot = match ho.action {
+                                        HedgeAction::OpenOrIncrease => OrderType::HedgeEntryLong,
+                                        HedgeAction::Close => {
+                                            if ho.reason == "collision_with_base" {
+                                                OrderType::HedgeCloseCollisionLong
+                                            } else {
+                                                OrderType::HedgeCloseRebalanceLong
+                                            }
+                                        }
+                                    };
+                                    (PositionSide::Long, ot)
+                                }
+                            };
+                            hedge_orders.push(IdealOrder {
+                                symbol_idx: ho.idx,
+                                pside,
+                                qty: ho.qty,
+                                price: ho.price,
+                                order_type,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        // Log hedge error but don't fail the orchestrator
+                        // In production, this could be logged; for now we silently skip
+                        let _ = e; // suppress unused warning
+                    }
+                }
+            }
+        }
+
         // If global output sorting is disabled (backtest), we still need deterministic per-symbol
         // ordering for fill-priority. Sort per-symbol entries/closes by the canonical key.
         if !input.global.sort_global {
@@ -2148,7 +2386,7 @@ mod core {
         }
 
         // Collect and (optionally) globally sort.
-        let mut total_orders: usize = 0;
+        let mut total_orders: usize = hedge_orders.len();
         for s in per_long.iter().filter_map(|v| v.as_ref()) {
             total_orders += s.closes.len() + s.entries.len();
         }
@@ -2164,6 +2402,8 @@ mod core {
             orders.append(&mut s.closes);
             orders.append(&mut s.entries);
         }
+        // Add hedge orders
+        orders.extend(hedge_orders);
 
         if input.global.sort_global {
             orders.sort_by(|a, b| {
@@ -2273,6 +2513,7 @@ mod core {
                         pair.long.n_positions = 1;
                         pair
                     },
+                    hedge: None,
                 },
                 symbols: vec![sym.clone()],
                 peek_hints: None,
@@ -2353,6 +2594,7 @@ mod core {
                     unstuck_allowance_short: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
+                    hedge: None,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -2385,6 +2627,7 @@ mod core {
                     unstuck_allowance_short: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
+                    hedge: None,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
@@ -2488,6 +2731,7 @@ mod core {
                     unstuck_allowance_short: 0.0,
                     sort_global: true,
                     global_bot_params: global_bp,
+                    hedge: None,
                 },
                 symbols: syms,
                 peek_hints: None,
@@ -2690,6 +2934,7 @@ mod core {
                     unstuck_allowance_short: 1000.0,
                     sort_global: true,
                     global_bot_params: global_bp,
+                    hedge: None,
                 },
                 symbols: vec![sym],
                 peek_hints: None,

@@ -267,6 +267,7 @@ pub struct Backtest<'a> {
     effective_n_positions: EffectiveNPositions,
     exchange_params_list: Vec<ExchangeParams>,
     backtest_params: BacktestParams,
+    hedge_config: Option<crate::hedge::HedgeConfig>,
     pub balance: Balance,
     n_coins: usize,
     ema_alphas: Vec<EmaAlphas>,
@@ -1002,6 +1003,7 @@ impl<'a> Backtest<'a> {
                 unstuck_allowance_short: short_allowance,
                 sort_global: false,
                 global_bot_params: self.bot_params_master.clone(),
+                hedge: self.hedge_config.clone(),
             },
             symbols,
             peek_hints,
@@ -1208,6 +1210,7 @@ impl<'a> Backtest<'a> {
         bot_params: Vec<BotParamsPair>,
         exchange_params_list: Vec<ExchangeParams>,
         backtest_params: &BacktestParams,
+        hedge_config: Option<crate::hedge::HedgeConfig>,
     ) -> Self {
         let mut balance = Balance::default();
         balance.btc_collateral_cap = backtest_params.btc_collateral_cap.max(0.0);
@@ -1391,6 +1394,16 @@ impl<'a> Backtest<'a> {
         let any_trailing_long = trailing_enabled.iter().any(|te| te.long);
         let any_trailing_short = trailing_enabled.iter().any(|te| te.short);
 
+        // Check hedge modes before moving hedge_config
+        let hedge_uses_longs = matches!(
+            hedge_config.as_ref().map(|h| &h.mode),
+            Some(crate::hedge::HedgeMode::HedgeLongsForShorts)
+        );
+        let hedge_uses_shorts = matches!(
+            hedge_config.as_ref().map(|h| &h.mode),
+            Some(crate::hedge::HedgeMode::HedgeShortsForLongs)
+        );
+
         Backtest {
             hlcvs,
             btc_usd_prices,
@@ -1401,6 +1414,7 @@ impl<'a> Backtest<'a> {
             effective_n_positions,
             exchange_params_list,
             backtest_params: backtest_params.clone(),
+            hedge_config,
             balance,
             n_coins,
             ema_alphas,
@@ -1445,14 +1459,18 @@ impl<'a> Backtest<'a> {
             pnl_cumsum_max: 0.0,
             fills: Vec::new(),
             trading_enabled: TradingEnabled {
-                long: bot_params
+                long: (bot_params
                     .iter()
                     .any(|bp| bp.long.wallet_exposure_limit != 0.0)
-                    && bot_params_master.long.n_positions > 0,
-                short: bot_params
+                    && bot_params_master.long.n_positions > 0)
+                    // Also enable longs if hedge mode uses longs (HedgeLongsForShorts)
+                    || hedge_uses_longs,
+                short: (bot_params
                     .iter()
                     .any(|bp| bp.short.wallet_exposure_limit != 0.0)
-                    && bot_params_master.short.n_positions > 0,
+                    && bot_params_master.short.n_positions > 0)
+                    // Also enable shorts if hedge mode uses shorts (HedgeShortsForLongs)
+                    || hedge_uses_shorts,
             },
             trailing_enabled,
             any_trailing_long,

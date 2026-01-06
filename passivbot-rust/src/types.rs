@@ -344,6 +344,14 @@ pub enum OrderType {
     CloseAutoReduceWelLong = 24,
     CloseAutoReduceWelShort = 25,
 
+    // Hedge overlay order types
+    HedgeEntryLong = 26,
+    HedgeEntryShort = 27,
+    HedgeCloseCollisionLong = 28,
+    HedgeCloseCollisionShort = 29,
+    HedgeCloseRebalanceLong = 30,
+    HedgeCloseRebalanceShort = 31,
+
     Empty = 65535,
 }
 
@@ -377,6 +385,9 @@ impl OrderType {
                 | CloseAutoReduceTwelLong
                 | CloseAutoReduceWelLong
                 | ClosePanicLong
+                | HedgeEntryLong
+                | HedgeCloseCollisionLong
+                | HedgeCloseRebalanceLong
         )
     }
 }
