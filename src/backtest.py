@@ -941,6 +941,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "filter_by_min_effective_cost": bool(
                 require_config_value(config, "backtest.filter_by_min_effective_cost")
             ),
+            "hedge_mode": bool(require_config_value(config, "backtest.hedge_mode")),
         }
     return bot_params_list, exchange_params, backtest_params
 

@@ -1892,6 +1892,7 @@ def get_template_config():
             "end_date": "now",
             "exchanges": ["binance", "bybit", "gateio", "bitget"],
             "filter_by_min_effective_cost": None,
+            "hedge_mode": True,
             "gap_tolerance_ohlcvs_minutes": 120.0,
             "max_warmup_minutes": 0.0,
             "start_date": "2021-04-01",

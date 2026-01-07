@@ -9,6 +9,7 @@
         "end_date": "now",
         "exchanges": ["binance","bybit"],
         "filter_by_min_effective_cost": false,
+        "hedge_mode": true,
         "gap_tolerance_ohlcvs_minutes": 120,
         "max_warmup_minutes": 0,
         "start_date": "2021-03-01",

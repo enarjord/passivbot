@@ -874,6 +874,19 @@ impl<'a> Backtest<'a> {
                     }
                 }
 
+                // No-hedge mode: block opposite-side entries when position exists.
+                // Only applies if hedge_mode is disabled and mode not already overridden.
+                if !self.backtest_params.hedge_mode {
+                    // If long position exists and short mode not yet set, block short entries
+                    if pos_long.size != 0.0 && mode_short.is_none() {
+                        mode_short = Some(orchestrator::TradingMode::GracefulStop);
+                    }
+                    // If short position exists and long mode not yet set, block long entries
+                    if pos_short.size != 0.0 && mode_long.is_none() {
+                        mode_long = Some(orchestrator::TradingMode::GracefulStop);
+                    }
+                }
+
                 // Build EMA bundle (per-coin spans; must match how EMAs were computed).
                 let mut m1 = OrchestratorEmaTimeframeBundle::default();
                 let mut h1 = OrchestratorEmaTimeframeBundle::default();
@@ -1142,6 +1155,16 @@ impl<'a> Backtest<'a> {
                 }
                 if !self.coin_passes_min_effective_cost(idx, SHORT) && pos_short.size == 0.0 {
                     mode_short = Some(orchestrator::TradingMode::GracefulStop);
+                }
+            }
+
+            // No-hedge mode: block opposite-side entries when position exists.
+            if !self.backtest_params.hedge_mode {
+                if pos_long.size != 0.0 && mode_short.is_none() {
+                    mode_short = Some(orchestrator::TradingMode::GracefulStop);
+                }
+                if pos_short.size != 0.0 && mode_long.is_none() {
+                    mode_long = Some(orchestrator::TradingMode::GracefulStop);
                 }
             }
 
@@ -2822,6 +2845,7 @@ mod tests {
             btc_collateral_ltv_cap: None,
             metrics_only: true,
             filter_by_min_effective_cost: false,
+            hedge_mode: true,
         };
 
         let mut bt = Backtest::new(
