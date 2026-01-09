@@ -1282,7 +1282,7 @@ class CandlestickManager:
                     primary_rows = int(a.shape[0]) if a is not None else 0
                     legacy_arr = self._load_shard(str(ctx["legacy_path"]))
                     if legacy_arr.size:
-                        repaired = self._merge_overwrite(legacy_arr, a)
+                        repaired = self._merge_overwrite(a, legacy_arr)
                         try:
                             self._save_shard(symbol, day_key, repaired, tf=tf_norm, defer_index=True)
                             repaired_primary_days += 1

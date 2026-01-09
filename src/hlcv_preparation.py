@@ -297,6 +297,10 @@ class HLCVManager:
                     if ts.size > 1:
                         intervals = np.diff(ts)
                         greatest_gap_ms = int(intervals.max(initial=60_000))
+                    else:
+                        # Single or zero timestamp implies no measurable gaps;
+                        # don't reuse stale greatest_gap_ms from the initial fetch.
+                        greatest_gap_ms = 0
                 if greatest_gap_ms > int(self.gap_tolerance_ohlcvs_minutes * 60_000):
                     if self.verbose:
                         logging.warning(
