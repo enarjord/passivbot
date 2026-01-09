@@ -1183,8 +1183,15 @@ class CandlestickManager:
                                 cnt = int(meta.get("count", 0))
                                 if exp_len > 0 and cnt < max(10, int(exp_len * 0.50)):
                                     choose_legacy = True
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            self._log(
+                                "debug",
+                                "disk_load_metadata_check_failed",
+                                symbol=symbol,
+                                timeframe=tf_norm,
+                                day=key,
+                                error=str(exc),
+                            )
                     if choose_legacy and legacy_path is not None:
                         chosen_path = legacy_path
                         chosen_source = "legacy"
@@ -1244,16 +1251,31 @@ class CandlestickManager:
                             cnt = int(meta.get("count", 0))
                             if exp_len > 0 and cnt < max(10, int(exp_len * 0.50)):
                                 suspect_primary = True
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        self._log(
+                            "debug",
+                            "disk_load_primary_meta_check_failed",
+                            symbol=symbol,
+                            timeframe=tf_norm,
+                            day=day_key,
+                            error=str(exc),
+                        )
                     if not suspect_primary:
                         try:
                             primary_arr = self._load_shard(str(ctx.get("primary_path")))
                             suspect_primary = _looks_suspicious_1m(
                                 primary_arr, int(ctx.get("day_start", 0)), int(ctx.get("day_end", 0))
                             )
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            self._log(
+                                "debug",
+                                "disk_load_primary_shard_check_failed",
+                                symbol=symbol,
+                                timeframe=tf_norm,
+                                day=day_key,
+                                primary_path=str(ctx.get("primary_path")),
+                                error=str(exc),
+                            )
                     if suspect_primary:
                         try:
                             self._save_shard(symbol, day_key, a, tf=tf_norm, defer_index=True)
@@ -1269,8 +1291,18 @@ class CandlestickManager:
                                 legacy_path=str(ctx.get("legacy_path")),
                                 repaired_rows=int(a.shape[0]),
                             )
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            # Best-effort: keep going with in-memory array, but log the failure.
+                            self._log(
+                                "warning",
+                                "primary_shard_overwrite_from_legacy_save_failed",
+                                symbol=symbol,
+                                timeframe=tf_norm,
+                                day=day_key,
+                                primary_path=str(ctx.get("primary_path")),
+                                legacy_path=str(ctx.get("legacy_path")),
+                                error=str(exc),
+                            )
 
                 # Auto-repair obviously partial primary shards using legacy archive shards.
                 if (
@@ -1287,8 +1319,18 @@ class CandlestickManager:
                             self._save_shard(symbol, day_key, repaired, tf=tf_norm, defer_index=True)
                             repaired_primary_days += 1
                             repaired_any = True
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            # Best-effort: keep going with the repaired in-memory array.
+                            self._log(
+                                "warning",
+                                "primary_shard_repair_save_failed",
+                                symbol=symbol,
+                                timeframe=tf_norm,
+                                day=day_key,
+                                primary_path=str(ctx.get("primary_path")),
+                                legacy_path=str(ctx.get("legacy_path")),
+                                error=str(exc),
+                            )
                         a = repaired
                         self._log(
                             "warning",
@@ -1324,16 +1366,27 @@ class CandlestickManager:
             if repaired_any:
                 try:
                     self.flush_deferred_index(symbol, tf=tf_norm)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._log(
+                        "warning",
+                        "flush_deferred_index_failed",
+                        symbol=symbol,
+                        timeframe=tf_norm,
+                        error=str(exc),
+                    )
 
             # If legacy data revealed earlier candles than our stored inception_ts,
             # update inception_ts now so archive prefetch logic doesn't skip.
             if tf_norm == "1m":
                 try:
                     self._maybe_update_inception_ts(symbol, merged_disk, save=True)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._log(
+                        "warning",
+                        "maybe_update_inception_ts_failed",
+                        symbol=symbol,
+                        error=str(exc),
+                    )
             self._log(
                 "debug",
                 "disk_load_done",
@@ -1900,8 +1953,13 @@ class CandlestickManager:
             # future repair/refetch. Trim/remove it best-effort.
             try:
                 self._prune_pre_inception_gaps(symbol, int(ts), save=save)
-            except Exception:
-                pass
+            except Exception as exc:
+                self._log(
+                    "warning",
+                    "prune_pre_inception_gaps_failed",
+                    symbol=symbol,
+                    error=str(exc),
+                )
             self._log(
                 "debug",
                 "inception_ts_updated",
