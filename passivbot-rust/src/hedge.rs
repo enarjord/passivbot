@@ -135,12 +135,13 @@ fn effective_min_entry_qty(effective_min_cost: f64, entry_price: f64, ep: &Excha
     )
 }
 
-/// Exposure uses pprice (avg entry) like elsewhere in passivbot.
+/// Exposure uses mark-to-market price for true market-neutral hedging.
+/// This means exposure reflects current risk, not historical entry cost.
 fn position_exposure(pos: &HedgePosition, sym: &HedgeSymbol, balance: f64) -> f64 {
     if pos.size == 0.0 {
         return 0.0;
     }
-    qty_to_cost(pos.size.abs(), pos.price, sym.exchange_params.c_mult) / balance
+    qty_to_cost(pos.size.abs(), market_price(sym), sym.exchange_params.c_mult) / balance
 }
 
 /// Borda ranking: low volatility + high volume. Lower score is better.

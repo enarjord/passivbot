@@ -541,8 +541,33 @@ def process_forager_fills(
             analysis_appendix[f"loss_profit_ratio_{pside}"] = 1.0
             continue
         pnls[pside] = profit + loss
-        analysis_appendix[f"loss_profit_ratio_{pside}"] = abs(loss / profit)
-    analysis_appendix["pnl_ratio_long_short"] = pnls["long"] / (pnls["long"] + pnls["short"])
+        analysis_appendix[f"loss_profit_ratio_{pside}"] = abs(loss / profit) if profit != 0 else 1.0
+
+    total_pnl = pnls["long"] + pnls["short"]
+    analysis_appendix["pnl_ratio_long_short"] = pnls["long"] / total_pnl if total_pnl != 0 else 0.5
+
+    # Hedge-specific metrics
+    hedge_fills = fdf[fdf.type.str.contains("hedge")]
+    if len(hedge_fills) > 0:
+        hedge_profit = hedge_fills[hedge_fills.pnl > 0.0].pnl.sum()
+        hedge_loss = hedge_fills[hedge_fills.pnl < 0.0].pnl.sum()
+        hedge_pnl_total = hedge_profit + hedge_loss
+        analysis_appendix["hedge_pnl_total"] = hedge_pnl_total
+        analysis_appendix["hedge_fill_count"] = len(hedge_fills)
+        analysis_appendix["hedge_loss_profit_ratio"] = abs(hedge_loss / hedge_profit) if hedge_profit != 0 else 1.0
+        # Calculate hedge ADG (average daily gain)
+        if len(fdf) > 0:
+            ts_min = pd.to_datetime(fdf["timestamp"].min(), unit="ms")
+            ts_max = pd.to_datetime(fdf["timestamp"].max(), unit="ms")
+            n_days = (ts_max - ts_min).total_seconds() / (60 * 60 * 24)
+            analysis_appendix["hedge_adg"] = hedge_pnl_total / n_days if n_days > 0 else 0.0
+        else:
+            analysis_appendix["hedge_adg"] = 0.0
+    else:
+        analysis_appendix["hedge_pnl_total"] = 0.0
+        analysis_appendix["hedge_fill_count"] = 0
+        analysis_appendix["hedge_loss_profit_ratio"] = 1.0
+        analysis_appendix["hedge_adg"] = 0.0
     sample_divider = max(1, int(balance_sample_divider))
     if not fdf.empty:
         timestamps_ns = fdf["timestamp"].astype("int64")
@@ -1000,8 +1025,32 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
     analysis_usd = dict(analysis_usd)
     analysis_btc = dict(analysis_btc)
     keys = ["adg", "adg_w", "mdg", "mdg_w", "gain"]
+
+    # Determine effective exposure limits, accounting for hedge mode
+    hedge_cfg = config.get("hedge", {}) or {}
+    hedge_threshold = float(hedge_cfg.get("threshold", 0.0) or 0.0)
+    hedge_mode = str(hedge_cfg.get("mode", "") or "")
+
+    effective_twel = {}
     for pside in ["long", "short"]:
-        twel = float(require_config_value(config, f"bot.{pside}.total_wallet_exposure_limit"))
+        base_twel = float(require_config_value(config, f"bot.{pside}.total_wallet_exposure_limit"))
+        if base_twel > 0.0:
+            effective_twel[pside] = base_twel
+        elif hedge_threshold > 0.0:
+            # When base TWEL is 0 but hedge is active, use hedge exposure
+            if pside == "short" and hedge_mode == "hedge_shorts_for_longs":
+                long_twel = float(require_config_value(config, "bot.long.total_wallet_exposure_limit"))
+                effective_twel[pside] = hedge_threshold * long_twel
+            elif pside == "long" and hedge_mode == "hedge_longs_for_shorts":
+                short_twel = float(require_config_value(config, "bot.short.total_wallet_exposure_limit"))
+                effective_twel[pside] = hedge_threshold * short_twel
+            else:
+                effective_twel[pside] = 0.0
+        else:
+            effective_twel[pside] = 0.0
+
+    for pside in ["long", "short"]:
+        twel = effective_twel[pside]
         for key in keys:
             analysis_usd[f"{key}_per_exposure_{pside}"] = (
                 (analysis_usd[key] / twel if twel > 0.0 else 0.0)
