@@ -1,5 +1,5 @@
 # Stage 1: Build Rust extensions
-FROM python:3.10-slim-bullseye AS builder
+FROM python:3.12-slim-bookworm AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/root/.cargo/bin:${PATH}"
@@ -30,7 +30,7 @@ RUN pip install --no-cache-dir -r requirements-rust.txt \
     && maturin build --release
 
 # Stage 2: Final minimal image
-FROM python:3.10-slim-bullseye
+FROM python:3.12-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV SKIP_RUST_COMPILE=true
@@ -38,6 +38,7 @@ ENV SKIP_RUST_COMPILE=true
 WORKDIR /app
 
 # Copy runtime source files
+COPY requirements-rust.txt requirements-rust.txt
 COPY requirements-live.txt requirements-live.txt
 COPY broker_codes.hjson broker_codes.hjson
 COPY src src
