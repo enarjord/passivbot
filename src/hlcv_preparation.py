@@ -159,6 +159,26 @@ class HLCVManager:
                 max_disk_candles_per_symbol_per_tf=0,
             )
 
+    async def aclose(self) -> None:
+        """Close CandlestickManager resources (not the ccxt exchange)."""
+        if self.cm is None:
+            return
+        try:
+            await self.cm.aclose()
+        except Exception:
+            pass
+        self.cm = None
+
+    def close(self) -> None:
+        """Best-effort sync close for CandlestickManager resources."""
+        if self.cm is None:
+            return
+        try:
+            self.cm.close()
+        except Exception:
+            pass
+        self.cm = None
+
     def _remote_fetch_log(self, payload: dict) -> None:
         """Log a concise view of download progress (CCXT + archive).
 
@@ -558,6 +578,7 @@ async def prepare_hlcvs(config: dict, exchange: str, *, force_refetch_gaps: bool
 
         return mss, timestamps, hlcvs, btc_usd_prices
     finally:
+        await om.aclose()
         if om.cc:
             await om.cc.close()
 
@@ -839,8 +860,11 @@ async def prepare_hlcvs_combined(config, forced_sources=None, *, force_refetch_g
         return mss, timestamps, unified_array, btc_usd_prices
     finally:
         for om in om_dict.values():
+            await om.aclose()
             if om.cc:
                 await om.cc.close()
+        if btc_om:
+            await btc_om.aclose()
         if btc_om and btc_om.cc:
             await btc_om.cc.close()
 
