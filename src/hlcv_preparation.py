@@ -148,6 +148,9 @@ class HLCVManager:
                 exchange_name=self.exchange,
                 debug=int(self.cm_debug_level),
                 progress_log_interval_seconds=float(self.cm_progress_log_interval_seconds),
+                # Backtest HLCV preparation may share the same cache directory as live trading.
+                # Force-disable disk retention here to avoid deleting shards created/needed by other processes.
+                max_disk_candles_per_symbol_per_tf=0,
             )
 
     async def load_markets(self):
