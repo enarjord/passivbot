@@ -279,14 +279,37 @@ class HLCVManager:
             intervals = np.diff(ts)
             greatest_gap_ms = int(intervals.max(initial=60_000))
             if greatest_gap_ms > int(self.gap_tolerance_ohlcvs_minutes * 60_000):
-                if self.verbose:
-                    logging.warning(
-                        "[%s] gaps detected in %s OHLCV data; greatest gap: %.1f minutes. Returning empty.",
-                        self.exchange,
-                        coin,
-                        greatest_gap_ms / 60_000.0,
+                # Give CandlestickManager one chance to self-heal (legacy merge / refetch gaps)
+                # before returning empty.
+                if not self.force_refetch_gaps:
+                    real = await self.cm.get_candles(
+                        symbol,
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                        max_age_ms=0,
+                        strict=True,
+                        timeframe="1m",
+                        force_refetch_gaps=True,
                     )
-                return pd.DataFrame()
+                    if real.size == 0:
+                        return pd.DataFrame()
+                    ts = real["ts"].astype(np.int64, copy=False)
+                    if ts.size > 1:
+                        intervals = np.diff(ts)
+                        greatest_gap_ms = int(intervals.max(initial=60_000))
+                    else:
+                        # Single or zero timestamp implies no measurable gaps;
+                        # don't reuse stale greatest_gap_ms from the initial fetch.
+                        greatest_gap_ms = 0
+                if greatest_gap_ms > int(self.gap_tolerance_ohlcvs_minutes * 60_000):
+                    if self.verbose:
+                        logging.warning(
+                            "[%s] gaps detected in %s OHLCV data; greatest gap: %.1f minutes. Returning empty.",
+                            self.exchange,
+                            coin,
+                            greatest_gap_ms / 60_000.0,
+                        )
+                    return pd.DataFrame()
 
         # Fill to the full requested window (bfill/ffill inside CM).
         # Data from get_candles is already sorted, so skip redundant sort

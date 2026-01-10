@@ -993,7 +993,14 @@ class CandlestickManager:
             base = symbol.split(":", 1)[0]
         else:
             base = symbol
-        return base.strip()
+        base = base.strip()
+        # Some exchanges encode symbols like "HYPE_USDT:USDT".
+        # Legacy downloader caches typically use the base coin only ("HYPE").
+        if "_" in base:
+            left, right = base.rsplit("_", 1)
+            if right in {"USDT", "USDC", "USD", "BUSD"}:
+                base = left
+        return base
 
     def _legacy_symbol_code_from_symbol(self, symbol: str) -> str:
         """Return legacy symbol codes used in some historical_data subtrees."""
@@ -1116,18 +1123,101 @@ class CandlestickManager:
             legacy_paths = self._get_legacy_shard_paths(symbol, tf_norm)
             days = self._date_keys_between(start_ts, end_ts)
             load_keys: List[Tuple[str, str]] = []
+            day_ctx: Dict[str, Dict[str, Any]] = {}
             legacy_hits = 0
             primary_hits = 0
+
+            def _expected_len_for_day(day_start: int, day_end: int) -> int:
+                lo = _floor_minute(max(int(start_ts), int(day_start)))
+                hi = _floor_minute(min(int(end_ts), int(day_end)))
+                if hi < lo:
+                    return 0
+                return int((hi - lo) // ONE_MIN_MS) + 1
+
+            def _looks_suspicious_1m(arr: np.ndarray, day_start: int, day_end: int) -> bool:
+                if tf_norm != "1m":
+                    return False
+                expected_len = _expected_len_for_day(day_start, day_end)
+                if expected_len <= 0:
+                    return False
+                if arr.size == 0:
+                    return True
+                # Conservative: only flag shards that are clearly partial.
+                if int(arr.shape[0]) < max(10, int(expected_len * 0.50)):
+                    return True
+                try:
+                    ts0 = int(arr[0]["ts"])
+                    ts1 = int(arr[-1]["ts"])
+                except Exception:
+                    return True
+                full_day_requested = int(start_ts) <= int(day_start) and int(end_ts) >= int(day_end)
+                if full_day_requested and expected_len >= 600:
+                    lo = _floor_minute(max(int(start_ts), int(day_start)))
+                    hi = _floor_minute(min(int(end_ts), int(day_end)))
+                    if ts0 > lo + 5 * ONE_MIN_MS:
+                        return True
+                    if ts1 < hi - 5 * ONE_MIN_MS:
+                        return True
+                if arr.size > 1:
+                    diffs = np.diff(arr["ts"].astype(np.int64, copy=False))
+                    if diffs.size and (int(diffs.min()) < ONE_MIN_MS or int(diffs.max()) > ONE_MIN_MS):
+                        return True
+                return False
+
+            idx = self._ensure_symbol_index(symbol, tf=tf_norm)
+            shard_meta = idx.get("shards", {}) if isinstance(idx, dict) else {}
             for key, (day_start, day_end) in days.items():
                 if day_end < start_ts or day_start > end_ts:
                     continue
-                if key in shard_paths:
-                    load_keys.append((key, shard_paths[key]))
-                    primary_hits += 1
+                primary_path = shard_paths.get(key)
+                legacy_path = legacy_paths.get(key)
+                if primary_path is None and legacy_path is None:
                     continue
-                if key in legacy_paths:
-                    load_keys.append((key, legacy_paths[key]))
+
+                chosen_path: Optional[str] = None
+                chosen_source: str = ""
+                if primary_path is not None:
+                    choose_legacy = False
+                    if legacy_path is not None and tf_norm == "1m":
+                        # Quick suspicion check via index metadata (if available)
+                        try:
+                            meta = shard_meta.get(key) if isinstance(shard_meta, dict) else None
+                            if isinstance(meta, dict):
+                                exp_len = _expected_len_for_day(int(day_start), int(day_end))
+                                cnt = int(meta.get("count", 0))
+                                if exp_len > 0 and cnt < max(10, int(exp_len * 0.50)):
+                                    choose_legacy = True
+                        except Exception as exc:
+                            self._log(
+                                "debug",
+                                "disk_load_metadata_check_failed",
+                                symbol=symbol,
+                                timeframe=tf_norm,
+                                day=key,
+                                error=str(exc),
+                            )
+                    if choose_legacy and legacy_path is not None:
+                        chosen_path = legacy_path
+                        chosen_source = "legacy"
+                        legacy_hits += 1
+                    else:
+                        chosen_path = primary_path
+                        chosen_source = "primary"
+                        primary_hits += 1
+                else:
+                    chosen_path = legacy_path
+                    chosen_source = "legacy"
                     legacy_hits += 1
+
+                if chosen_path is not None:
+                    load_keys.append((key, chosen_path))
+                    day_ctx[key] = {
+                        "day_start": int(day_start),
+                        "day_end": int(day_end),
+                        "source": chosen_source,
+                        "primary_path": primary_path,
+                        "legacy_path": legacy_path,
+                    }
             if not load_keys:
                 return
             self._log(
@@ -1143,8 +1233,121 @@ class CandlestickManager:
             arrays: List[np.ndarray] = []
             t0 = time.monotonic()
             last_progress_log = t0
+            repaired_primary_days = 0
+            repaired_any = False
             for i, (day_key, path) in enumerate(sorted(load_keys), start=1):
-                arrays.append(self._load_shard(path))
+                ctx = day_ctx.get(day_key, {})
+                a = self._load_shard(path)
+
+                # If we loaded legacy for a day where a primary shard exists but looks incomplete,
+                # overwrite/repair the primary shard on disk to self-heal permanently.
+                if (
+                    tf_norm == "1m"
+                    and ctx.get("source") == "legacy"
+                    and ctx.get("primary_path")
+                    and a.size
+                ):
+                    suspect_primary = False
+                    try:
+                        meta = shard_meta.get(day_key) if isinstance(shard_meta, dict) else None
+                        if isinstance(meta, dict):
+                            exp_len = _expected_len_for_day(int(ctx.get("day_start", 0)), int(ctx.get("day_end", 0)))
+                            cnt = int(meta.get("count", 0))
+                            if exp_len > 0 and cnt < max(10, int(exp_len * 0.50)):
+                                suspect_primary = True
+                    except Exception as exc:
+                        self._log(
+                            "debug",
+                            "disk_load_primary_meta_check_failed",
+                            symbol=symbol,
+                            timeframe=tf_norm,
+                            day=day_key,
+                            error=str(exc),
+                        )
+                    if not suspect_primary:
+                        try:
+                            primary_arr = self._load_shard(str(ctx.get("primary_path")))
+                            suspect_primary = _looks_suspicious_1m(
+                                primary_arr, int(ctx.get("day_start", 0)), int(ctx.get("day_end", 0))
+                            )
+                        except Exception as exc:
+                            self._log(
+                                "debug",
+                                "disk_load_primary_shard_check_failed",
+                                symbol=symbol,
+                                timeframe=tf_norm,
+                                day=day_key,
+                                primary_path=str(ctx.get("primary_path")),
+                                error=str(exc),
+                            )
+                    if suspect_primary:
+                        try:
+                            self._save_shard(symbol, day_key, a, tf=tf_norm, defer_index=True)
+                            repaired_primary_days += 1
+                            repaired_any = True
+                            self._log(
+                                "warning",
+                                "primary_shard_overwritten_from_legacy",
+                                symbol=symbol,
+                                timeframe=tf_norm,
+                                day=day_key,
+                                primary_path=str(ctx.get("primary_path")),
+                                legacy_path=str(ctx.get("legacy_path")),
+                                repaired_rows=int(a.shape[0]),
+                            )
+                        except Exception as exc:
+                            # Best-effort: keep going with in-memory array, but log the failure.
+                            self._log(
+                                "warning",
+                                "primary_shard_overwrite_from_legacy_save_failed",
+                                symbol=symbol,
+                                timeframe=tf_norm,
+                                day=day_key,
+                                primary_path=str(ctx.get("primary_path")),
+                                legacy_path=str(ctx.get("legacy_path")),
+                                error=str(exc),
+                            )
+
+                # Auto-repair obviously partial primary shards using legacy archive shards.
+                if (
+                    tf_norm == "1m"
+                    and ctx.get("source") == "primary"
+                    and ctx.get("legacy_path")
+                    and _looks_suspicious_1m(a, int(ctx.get("day_start", 0)), int(ctx.get("day_end", 0)))
+                ):
+                    primary_rows = int(a.shape[0]) if a is not None else 0
+                    legacy_arr = self._load_shard(str(ctx["legacy_path"]))
+                    if legacy_arr.size:
+                        repaired = self._merge_overwrite(a, legacy_arr)
+                        try:
+                            self._save_shard(symbol, day_key, repaired, tf=tf_norm, defer_index=True)
+                            repaired_primary_days += 1
+                            repaired_any = True
+                        except Exception as exc:
+                            # Best-effort: keep going with the repaired in-memory array.
+                            self._log(
+                                "warning",
+                                "primary_shard_repair_save_failed",
+                                symbol=symbol,
+                                timeframe=tf_norm,
+                                day=day_key,
+                                primary_path=str(ctx.get("primary_path")),
+                                legacy_path=str(ctx.get("legacy_path")),
+                                error=str(exc),
+                            )
+                        a = repaired
+                        self._log(
+                            "warning",
+                            "primary_shard_repaired_from_legacy",
+                            symbol=symbol,
+                            timeframe=tf_norm,
+                            day=day_key,
+                            primary_path=str(ctx.get("primary_path")),
+                            legacy_path=str(ctx.get("legacy_path")),
+                            primary_rows=primary_rows,
+                            repaired_rows=int(a.shape[0]),
+                        )
+                arrays.append(a)
                 now = time.monotonic()
                 if now - last_progress_log >= 5.0 or i == len(load_keys):
                     last_progress_log = now
@@ -1162,6 +1365,32 @@ class CandlestickManager:
             if not arrays:
                 return
             merged_disk = np.sort(np.concatenate(arrays), order="ts")
+
+            # Flush deferred index updates once after repairs.
+            if repaired_any:
+                try:
+                    self.flush_deferred_index(symbol, tf=tf_norm)
+                except Exception as exc:
+                    self._log(
+                        "warning",
+                        "flush_deferred_index_failed",
+                        symbol=symbol,
+                        timeframe=tf_norm,
+                        error=str(exc),
+                    )
+
+            # If legacy data revealed earlier candles than our stored inception_ts,
+            # update inception_ts now so archive prefetch logic doesn't skip.
+            if tf_norm == "1m":
+                try:
+                    self._maybe_update_inception_ts(symbol, merged_disk, save=True)
+                except Exception as exc:
+                    self._log(
+                        "warning",
+                        "maybe_update_inception_ts_failed",
+                        symbol=symbol,
+                        error=str(exc),
+                    )
             self._log(
                 "debug",
                 "disk_load_done",
@@ -1178,6 +1407,7 @@ class CandlestickManager:
                 days=len(load_keys),
                 primary_days=primary_hits,
                 legacy_days=legacy_hits,
+                repaired_primary_days=repaired_primary_days,
                 rows=int(merged_disk.shape[0]),
                 start_ts=start_ts,
                 end_ts=end_ts,
@@ -1727,6 +1957,18 @@ class CandlestickManager:
             self._index[f"{symbol}::1m"] = idx
             if save:
                 self._save_index(symbol)
+            # If we previously marked ranges as "pre_inception" (persistent), but we now
+            # discovered earlier real data, that metadata becomes stale and can block
+            # future repair/refetch. Trim/remove it best-effort.
+            try:
+                self._prune_pre_inception_gaps(symbol, int(ts), save=save)
+            except Exception as exc:
+                self._log(
+                    "warning",
+                    "prune_pre_inception_gaps_failed",
+                    symbol=symbol,
+                    error=str(exc),
+                )
             self._log(
                 "debug",
                 "inception_ts_updated",
@@ -1734,6 +1976,46 @@ class CandlestickManager:
                 old_ts=current,
                 new_ts=int(ts),
             )
+
+    def _prune_pre_inception_gaps(self, symbol: str, inception_ts: int, *, save: bool = True) -> None:
+        """Trim/remove known gaps with reason='pre_inception' now covered by real data."""
+        gaps = self._get_known_gaps_enhanced(symbol)
+        if not gaps:
+            return
+        cutoff_end = int(inception_ts) - ONE_MIN_MS
+        changed = False
+        new_gaps: List[GapEntry] = []
+
+        for g in gaps:
+            try:
+                if str(g.get("reason", "")) != "pre_inception":
+                    new_gaps.append(g)
+                    continue
+                s = int(g.get("start_ts", 0))
+                e = int(g.get("end_ts", 0))
+                if e <= cutoff_end:
+                    new_gaps.append(g)
+                    continue
+                if s <= cutoff_end:
+                    # Overlaps: trim to end before inception
+                    trimmed: GapEntry = {
+                        "start_ts": s,
+                        "end_ts": cutoff_end,
+                        "retry_count": int(g.get("retry_count", 0)),
+                        "reason": "pre_inception",
+                        "added_at": int(g.get("added_at", 0)),
+                    }
+                    if trimmed["start_ts"] <= trimmed["end_ts"]:
+                        new_gaps.append(trimmed)
+                    changed = True
+                    continue
+                # Entirely after inception: remove
+                changed = True
+            except Exception:
+                new_gaps.append(g)
+
+        if changed and save:
+            self._save_known_gaps_enhanced(symbol, new_gaps)
 
     def _maybe_update_inception_ts(self, symbol: str, arr: np.ndarray, *, save: bool = True) -> None:
         """Update inception_ts if arr contains an earlier timestamp than known."""

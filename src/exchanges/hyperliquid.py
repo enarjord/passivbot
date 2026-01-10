@@ -1,36 +1,27 @@
-from passivbot import Passivbot, logging, get_function_name
-from uuid import uuid4
+import asyncio
+import json
+import traceback
+
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
-import pprint
-import asyncio
-import traceback
-import json
-import numpy as np
 import passivbot_rust as pbr
-from utils import ts_to_date, symbol_to_coin, coin_to_symbol, utc_ms
-from config_utils import require_live_value
-from pure_funcs import (
-    multi_replace,
-    floatify,
-    calc_hash,
-    shorten_custom_id,
-)
 
-calc_order_price_diff = pbr.calc_order_price_diff
+from exchanges.ccxt_bot import CCXTBot
+from passivbot import logging
+from utils import ts_to_date, utc_ms
+from config_utils import require_live_value
+from pure_funcs import calc_hash
+from procedures import print_async_exception, assert_correct_ccxt_version
+
 round_ = pbr.round_
-round_up = pbr.round_up
-round_dn = pbr.round_dn
 round_dynamic = pbr.round_dynamic
 round_dynamic_up = pbr.round_dynamic_up
 round_dynamic_dn = pbr.round_dynamic_dn
-from procedures import print_async_exception, assert_correct_ccxt_version
-from sortedcontainers import SortedDict
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
-class HyperliquidBot(Passivbot):
+class HyperliquidBot(CCXTBot):
     def __init__(self, config: dict):
         super().__init__(config)
         self.quote = "USDC"
@@ -119,20 +110,16 @@ class HyperliquidBot(Passivbot):
                     return "long" if order["reduceOnly"] else "short"
             return "long" if order["side"] == "buy" else "short"
 
+    def _get_position_side_for_order(self, order: dict) -> str:
+        """Hook: Derive position_side from order data for Hyperliquid (one-way mode)."""
+        return self.determine_pos_side(order)
+
     async def fetch_open_orders(self, symbol: str = None):
-        fetched = None
-        open_orders = []
-        try:
-            fetched = await self.cca.fetch_open_orders()
-            for i in range(len(fetched)):
-                fetched[i]["position_side"] = self.determine_pos_side(fetched[i])
-                fetched[i]["qty"] = fetched[i]["amount"]
-            return sorted(fetched, key=lambda x: x["timestamp"])
-        except Exception as e:
-            logging.error(f"error fetching open orders {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
-            return False
+        fetched = await self.cca.fetch_open_orders()
+        for elm in fetched:
+            elm["position_side"] = self.determine_pos_side(elm)
+            elm["qty"] = elm["amount"]
+        return sorted(fetched, key=lambda x: x["timestamp"])
 
     async def _fetch_positions_and_balance(self):
         info = await self.cca.fetch_balance()
@@ -151,73 +138,46 @@ class HyperliquidBot(Passivbot):
         return positions, balance
 
     async def fetch_positions(self):
-        info = None
-        try:
-            positions, balance = await self._fetch_positions_and_balance()
-            self._last_hl_positions_balance = (positions, balance)
-            self._hl_positions_balance_applied = False
-            return positions
-        except Exception as e:
-            logging.error(f"error fetching positions {e}")
-            print_async_exception(info)
-            traceback.print_exc()
-            return False
+        positions, balance = await self._fetch_positions_and_balance()
+        self._last_hl_positions_balance = (positions, balance)
+        self._hl_positions_balance_applied = False
+        return positions
 
     async def fetch_balance(self):
-        try:
-            cached = getattr(self, "_last_hl_positions_balance", None)
-            applied = getattr(self, "_hl_positions_balance_applied", False)
-            if cached and not applied:
-                positions, balance = cached
-                self._hl_positions_balance_applied = True
-                return balance
-            positions, balance = await self._fetch_positions_and_balance()
-            self._last_hl_positions_balance = (positions, balance)
+        cached = getattr(self, "_last_hl_positions_balance", None)
+        applied = getattr(self, "_hl_positions_balance_applied", False)
+        if cached and not applied:
+            positions, balance = cached
             self._hl_positions_balance_applied = True
             return balance
-        except Exception as e:
-            logging.error(f"error fetching balance {e}")
-            traceback.print_exc()
-            return False
+        positions, balance = await self._fetch_positions_and_balance()
+        self._last_hl_positions_balance = (positions, balance)
+        self._hl_positions_balance_applied = True
+        return balance
 
     async def fetch_tickers(self):
-        fetched = None
-        try:
-            fetched = await self.cca.fetch(
-                "https://api.hyperliquid.xyz/info",
-                method="POST",
-                headers={"Content-Type": "application/json"},
-                body=json.dumps({"type": "allMids"}),
-            )
-            return {
-                self.coin_to_symbol(coin): {
-                    "bid": float(fetched[coin]),
-                    "ask": float(fetched[coin]),
-                    "last": float(fetched[coin]),
-                }
-                for coin in fetched
+        fetched = await self.cca.fetch(
+            "https://api.hyperliquid.xyz/info",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            body=json.dumps({"type": "allMids"}),
+        )
+        return {
+            self.coin_to_symbol(coin): {
+                "bid": float(fetched[coin]),
+                "ask": float(fetched[coin]),
+                "last": float(fetched[coin]),
             }
-        except Exception as e:
-            logging.error(f"error fetching tickers {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
-            return False
+            for coin in fetched
+        }
 
     async def fetch_ohlcv(self, symbol: str, timeframe="1m"):
         # intervals: 1,3,5,15,30,60,120,240,360,720,D,M,W
         # fetches latest ohlcvs
-        fetched = None
         str2int = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 60 * 4}
         n_candles = 480
-        try:
-            since = int(utc_ms() - 1000 * 60 * str2int[timeframe] * n_candles)
-            fetched = await self.cca.fetch_ohlcv(symbol, timeframe=timeframe, since=since)
-            return fetched
-        except Exception as e:
-            logging.error(f"error fetching ohlcv for {symbol} {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
-            return False
+        since = int(utc_ms() - 1000 * 60 * str2int[timeframe] * n_candles)
+        return await self.cca.fetch_ohlcv(symbol, timeframe=timeframe, since=since)
 
     async def fetch_ohlcvs_1m(self, symbol: str, since: float = None, limit=None):
         n_candles_limit = 5000 if limit is None else limit
@@ -255,7 +215,7 @@ class HyperliquidBot(Passivbot):
                 break
             new_hash = calc_hash(fetched)
             if prev_hash == new_hash:
-                print("debug pnls hash", prev_hash, new_hash)
+                logging.debug(f"pnls hash unchanged: {prev_hash}")
                 break
             prev_hash = new_hash
             logging.info(
@@ -268,11 +228,7 @@ class HyperliquidBot(Passivbot):
     async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
         """Return canonical fill events for Hyperliquid (draft placeholder)."""
         events = []
-        try:
-            fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
-        except Exception as exc:
-            logging.error(f"error gathering fill events (hyperliquid) {exc}")
-            return events
+        fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
         for fill in fills:
             events.append(
                 {
@@ -295,49 +251,30 @@ class HyperliquidBot(Passivbot):
         start_time: int = None,
         limit=None,
     ):
-        fetched = None
-        try:
-            if start_time is None:
-                fetched = await self.cca.fetch_my_trades(limit=limit)
-            else:
-                fetched = await self.cca.fetch_my_trades(since=max(1, int(start_time)), limit=limit)
-            for i in range(len(fetched)):
-                fetched[i]["pnl"] = float(fetched[i]["info"]["closedPnl"])
-                fetched[i]["position_side"] = (
-                    "long" if "long" in fetched[i]["info"]["dir"].lower() else "short"
-                )
-            return sorted(fetched, key=lambda x: x["timestamp"])
-        except Exception as e:
-            logging.error(f"error with {get_function_name()} {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
-            return False
+        if start_time is None:
+            fetched = await self.cca.fetch_my_trades(limit=limit)
+        else:
+            fetched = await self.cca.fetch_my_trades(since=max(1, int(start_time)), limit=limit)
+        for elm in fetched:
+            elm["pnl"] = float(elm["info"]["closedPnl"])
+            elm["position_side"] = "long" if "long" in elm["info"]["dir"].lower() else "short"
+        return sorted(fetched, key=lambda x: x["timestamp"])
 
     async def execute_cancellation(self, order: dict) -> dict:
-        executed = None
-        try:
-            executed = await self.cca.cancel_order(
-                order["id"],
-                symbol=order["symbol"],
-                params=(
-                    {"vaultAddress": self.user_info["wallet_address"]}
-                    if self.user_info["is_vault"]
-                    else {}
-                ),
-            )
-            return executed
-        except Exception as e:
-            logging.error(f"error cancelling order {order} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return {}
+        """Hyperliquid: Cancel order with vault support."""
+        params = (
+            {"vaultAddress": self.user_info["wallet_address"]}
+            if self.user_info["is_vault"]
+            else {}
+        )
+        return await self.cca.cancel_order(order["id"], symbol=order["symbol"], params=params)
 
     def did_cancel_order(self, executed, order=None) -> bool:
         if isinstance(executed, list) and len(executed) == 1:
-            return self.did_cancel_order(executed[0])
+            return self.did_cancel_order(executed[0], order)
         try:
             return "status" in executed and executed["status"] == "success"
-        except:
+        except (TypeError, KeyError):
             return False
 
     def _build_order_params(self, order: dict) -> dict:
@@ -353,20 +290,19 @@ class HyperliquidBot(Passivbot):
         return params
 
     async def execute_order(self, order: dict) -> dict:
-        executed = None
+        """Hyperliquid: Execute order with min_cost auto-adjustment on specific errors."""
         try:
-            executed = await super().execute_order(order)
-            return executed
+            return await super().execute_order(order)
         except Exception as e:
+            # Try to recover from Hyperliquid's "$10 minimum" errors by adjusting min_cost
             try:
                 if self.adjust_min_cost_on_error(e, order):
+                    logging.info(f"Adjusted min_cost for order, will retry: {order['symbol']}")
                     return {}
             except Exception as e0:
                 logging.error(f"error with adjust_min_cost_on_error {e0}")
-            logging.error(f"error executing order {order} {e}")
-            print_async_exception(executed)
-            traceback.print_exc()
-            return {}
+            # Could not recover - re-raise to trigger restart_bot_on_too_many_errors
+            raise
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         return await self.execute_multiple(orders, "execute_order")
@@ -377,14 +313,20 @@ class HyperliquidBot(Passivbot):
             return did_create and (
                 "info" in executed and ("filled" in executed["info"] or "resting" in executed["info"])
             )
-        except:
+        except (TypeError, KeyError):
             return False
 
     def adjust_min_cost_on_error(self, error, order=None):
         any_adjusted = False
         successful_orders = []
-        str_e = error.args[0]
-        error_json = json.loads(str_e[str_e.find("{") :])
+        str_e = str(error)
+        brace_idx = str_e.find("{")
+        if brace_idx == -1:
+            return False
+        try:
+            error_json = json.loads(str_e[brace_idx:])
+        except json.JSONDecodeError:
+            return False
         if (
             "response" in error_json
             and "data" in error_json["response"]
@@ -450,7 +392,7 @@ class HyperliquidBot(Passivbot):
                 res = await coros_to_call_margin_mode[symbol]
                 to_print += f"set cross mode {res}"
             except Exception as e:
-                if '"code":"59107"' in e.args[0]:
+                if '"code":"59107"' in str(e):
                     to_print += f" cross mode and leverage: {res} {e}"
                 else:
                     logging.error(f"{symbol} error setting cross mode {res} {e}")

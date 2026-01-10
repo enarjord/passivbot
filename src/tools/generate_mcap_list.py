@@ -14,8 +14,12 @@ def is_stablecoin(elm):
     try:
         if elm["symbol"] in ["tether", "usdb", "usdy", "tusd", "usd0", "usde"]:
             return True
+        # Check if all required price fields are not None before comparing
+        price_fields = ["high_24h", "low_24h", "current_price"]
         if (
-            all([abs(elm[k] - 1.0) < 0.01 for k in ["high_24h", "low_24h", "current_price"]])
+            all([elm.get(k) is not None for k in price_fields])
+            and all([abs(elm[k] - 1.0) < 0.01 for k in price_fields])
+            and elm.get("price_change_24h") is not None
             and abs(elm["price_change_24h"]) < 0.01
         ):
             return True
