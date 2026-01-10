@@ -1,29 +1,15 @@
-from passivbot import Passivbot, logging, custom_id_to_snake, clip_by_timestamp
-from uuid import uuid4
-import ccxt.pro as ccxt_pro
-import ccxt.async_support as ccxt_async
-import pprint
+from exchanges.ccxt_bot import CCXTBot
+from passivbot import logging, custom_id_to_snake, clip_by_timestamp
 import asyncio
-import traceback
 import json
 import os
-import numpy as np
 from typing import Dict, List, Tuple
 from utils import utc_ms, ts_to_date
 from config_utils import require_live_value
-from pure_funcs import (
-    multi_replace,
-    floatify,
-    calc_hash,
-    shorten_custom_id,
-)
+from pure_funcs import calc_hash
 import passivbot_rust as pbr
 
 calc_order_price_diff = pbr.calc_order_price_diff
-from procedures import print_async_exception, assert_correct_ccxt_version
-import passivbot_rust as pbr
-
-assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
 def deduce_side_pside(fill: dict) -> tuple[str, str]:
@@ -98,58 +84,24 @@ def deduce_side_pside(fill: dict) -> tuple[str, str]:
     return _canonical(raw_side or "buy", "long")
 
 
-class BitgetBot(Passivbot):
+class BitgetBot(CCXTBot):
     def __init__(self, config: dict):
         super().__init__(config)
-        self.position_side_map = {
-            "buy": {"open": "long", "close": "short"},
-            "sell": {"open": "short", "close": "long"},
-        }
         self.custom_id_max_length = 64
 
-    def create_ccxt_sessions(self):
-        if self.ws_enabled:
-            self.ccp = getattr(ccxt_pro, self.exchange)(
-                {
-                    "apiKey": self.user_info["key"],
-                    "secret": self.user_info["secret"],
-                    "password": self.user_info["passphrase"],
-                    "enableRateLimit": True,
-                }
-            )
-            self.ccp.options.update(self._build_ccxt_options())
-            self.ccp.options["defaultType"] = "swap"
-            self._apply_endpoint_override(self.ccp)
-        elif self.endpoint_override:
-            logging.info("Skipping Bitget websocket session due to custom endpoint override.")
-        self.cca = getattr(ccxt_async, self.exchange)(
-            {
-                "apiKey": self.user_info["key"],
-                "secret": self.user_info["secret"],
-                "password": self.user_info["passphrase"],
-                "enableRateLimit": True,
-            }
-        )
-        self.cca.options.update(self._build_ccxt_options())
-        self.cca.options["defaultType"] = "swap"
-        self._apply_endpoint_override(self.cca)
+    # ═══════════════════ HOOK OVERRIDES ═══════════════════
+
+    def _get_position_side_for_order(self, order: dict) -> str:
+        """Bitget provides posSide in info."""
+        return order.get("info", {}).get("posSide", "long").lower()
 
     def get_symbol_id(self, symbol):
-        """Return the exchange-native identifier for `symbol`, caching defaults. Overrides from parent"""
-        try:
+        """Return the exchange-native identifier for `symbol`, caching defaults."""
+        if symbol in self.symbol_ids:
             return self.symbol_ids[symbol]
-            if symbol in self.symbol_ids:
-                return self.symbol_ids[symbol]
-            # use heuristics to guess
-            guess = symbol.replace("/USDT:", "")
-            logging.warning(
-                f"failed to map {symbol} to its exchange specifec symbol id. Using heursistics to guess {guess}"
-            )
-            return guess
-        except:
-            logging.info(f"debug: symbol {symbol} missing from self.symbol_ids. Using {symbol}")
-            self.symbol_ids[symbol] = symbol
-            return symbol
+        logging.debug(f"symbol {symbol} missing from self.symbol_ids, using as-is")
+        self.symbol_ids[symbol] = symbol
+        return symbol
 
     async def determine_utc_offset(self, verbose=True):
         # returns millis to add to utc to get exchange timestamp
@@ -164,35 +116,23 @@ class BitgetBot(Passivbot):
             logging.info(f"Exchange time offset is {self.utc_offset}ms compared to UTC")
 
     def set_market_specific_settings(self):
+        """Bitget override: higher minimum cost floor (5.1 USDT)."""
         super().set_market_specific_settings()
         for symbol in self.markets_dict:
             elm = self.markets_dict[symbol]
-            self.symbol_ids[symbol] = elm["id"]
+            # Bitget requires minimum 5.1 USDT per order
             self.min_costs[symbol] = max(
-                5.1, 0.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
+                5.1, elm["limits"]["cost"]["min"] or 0.1
             )
-            self.min_qtys[symbol] = elm["limits"]["amount"]["min"]
-            self.qty_steps[symbol] = elm["precision"]["amount"]
-            self.price_steps[symbol] = elm["precision"]["price"]
-            self.c_mults[symbol] = elm["contractSize"]
 
-    async def watch_orders(self):
-        while True:
-            try:
-                if self.stop_websocket:
-                    break
-                res = await self.ccp.watch_orders()
-                for i in range(len(res)):
-                    res[i]["position_side"] = res[i]["info"]["posSide"]
-                    res[i]["qty"] = res[i]["amount"]
-                    res[i]["side"] = self.determine_side(res[i])
-                self.handle_order_update(res)
-            except Exception as e:
-                print(f"exception watch_orders", e)
-                traceback.print_exc()
-                await asyncio.sleep(1)
+    def _normalize_order_update(self, order: dict) -> dict:
+        """Bitget override: derive side from tradeSide/posSide."""
+        order["position_side"] = self._get_position_side_for_order(order)
+        order["qty"] = order["amount"]
+        order["side"] = self._determine_side(order)
+        return order
 
-    def determine_side(self, order: dict) -> str:
+    def _determine_side(self, order: dict) -> str:
         if "info" in order:
             if all([x in order["info"] for x in ["tradeSide", "reduceOnly", "posSide"]]):
                 if order["info"]["tradeSide"] == "close":
@@ -208,94 +148,38 @@ class BitgetBot(Passivbot):
         raise Exception(f"failed to determine side {order}")
 
     async def fetch_open_orders(self, symbol: str = None):
-        fetched = None
-        open_orders = []
-        try:
-            fetched = await self.cca.fetch_open_orders()
-            for i in range(len(fetched)):
-                fetched[i]["position_side"] = fetched[i]["info"]["posSide"]
-                fetched[i]["qty"] = fetched[i]["amount"]
-                fetched[i]["custom_id"] = fetched[i]["clientOrderId"]
-                fetched[i]["side"] = self.determine_side(fetched[i])
-            return sorted(fetched, key=lambda x: x["timestamp"])
-        except Exception as e:
-            logging.error(f"error fetching open orders {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
-            return False
+        """Bitget override: derive side from tradeSide/posSide."""
+        fetched = await self.cca.fetch_open_orders(symbol=symbol)
+        for elm in fetched:
+            elm["position_side"] = elm["info"]["posSide"]
+            elm["qty"] = elm["amount"]
+            elm["custom_id"] = elm["clientOrderId"]
+            elm["side"] = self._determine_side(elm)
+        return sorted(fetched, key=lambda x: x["timestamp"])
 
     async def fetch_positions(self):
-        fetched_positions = None
-        try:
-            fetched_positions = await self.cca.fetch_positions()
-            for i in range(len(fetched_positions)):
-                fetched_positions[i]["position_side"] = fetched_positions[i]["side"]
-                fetched_positions[i]["size"] = fetched_positions[i]["contracts"]
-                fetched_positions[i]["price"] = fetched_positions[i]["entryPrice"]
-            return fetched_positions
-        except Exception as e:
-            logging.error(f"error fetching positions {e}")
-            print_async_exception(fetched_positions)
-            traceback.print_exc()
-            return False
+        """Bitget: use CCXT unified fields (contracts, entryPrice, side)."""
+        fetched = await self.cca.fetch_positions()
+        for elm in fetched:
+            elm["position_side"] = elm["side"]
+            elm["size"] = elm["contracts"]
+            elm["price"] = elm["entryPrice"]
+        return fetched
 
-    async def fetch_balance(self):
-        fetched_balance = None
-        try:
-            fetched_balance = await self.cca.fetch_balance()
-            balance_info = [x for x in fetched_balance["info"] if x["marginCoin"] == self.quote][0]
-            if (
-                "assetMode" in balance_info
-                and "unionTotalMargin" in balance_info
-                and balance_info["assetMode"] == "union"
-            ):
-                balance = float(balance_info["unionTotalMargin"]) - float(
-                    balance_info["unrealizedPL"]
-                )
-            else:
-                balance = float(balance_info["available"])
-            return balance
-        except Exception as e:
-            logging.error(f"error fetching balance {e}")
-            print_async_exception(fetched_balance)
-            traceback.print_exc()
-            return False
+    def _get_balance(self, fetched: dict) -> float:
+        """Bitget override: handle union margin mode."""
+        balance_info = [x for x in fetched["info"] if x["marginCoin"] == self.quote][0]
+        if (
+            "assetMode" in balance_info
+            and "unionTotalMargin" in balance_info
+            and balance_info["assetMode"] == "union"
+        ):
+            return float(balance_info["unionTotalMargin"]) - float(
+                balance_info["unrealizedPL"]
+            )
+        return float(balance_info["available"])
 
-    async def fetch_tickers(self):
-        fetched = None
-        try:
-            tickers = await self.cca.fetch_tickers()
-            return tickers
-        except Exception as e:
-            logging.error(f"error fetching tickers {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
-            if "bybit does not have market symbol" in str(e):
-                # ccxt is raising bad symbol error
-                # restart might help...
-                raise Exception("ccxt gives bad symbol error... attempting bot restart")
-            return False
-
-    async def fetch_ohlcvs_1m(self, symbol: str, limit=None):
-        n_candles_limit = 1000 if limit is None else limit
-        result = await self.cca.fetch_ohlcv(
-            symbol,
-            timeframe="1m",
-            limit=n_candles_limit,
-        )
-        return result
-
-    async def fetch_ohlcv(self, symbol: str, timeframe="1m"):
-        # intervals: 1,3,5,15,30,60,120,240,360,720,D,M,W
-        fetched = None
-        try:
-            fetched = await self.cca.fetch_ohlcv(symbol, timeframe=timeframe, limit=1000)
-            return fetched
-        except Exception as e:
-            logging.error(f"error fetching ohlcv for {symbol} {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
-            return False
+    # ═══════════════════ BITGET-SPECIFIC METHODS ═══════════════════
 
     async def fetch_pnls(self, start_time=None, end_time=None, limit=None):
         params = {"productType": "USDT-FUTURES"}
@@ -312,14 +196,11 @@ class BitgetBot(Passivbot):
             end_id = fetched["data"]["endId"]
             data = fetched["data"]["fillList"]
             if data is None:
-                # print("debug a")
                 break
             if not data:
-                # print("debug b")
                 break
             with_hashes = {calc_hash(x): x for x in data}
             if all([h in data_d for h in with_hashes]):
-                # print("debug c")
                 break
             for h, x in with_hashes.items():
                 data_d[h] = x
@@ -332,11 +213,9 @@ class BitgetBot(Passivbot):
                 data_d[h]["position_side"] = side_pos_side_map[x["side"]]
                 data_d[h]["symbol"] = self.get_symbol_id_inv(x["symbol"])
             if start_time is None:
-                # print("debug d")
                 break
             last_ts = float(data[-1]["cTime"])
             if last_ts < start_time:
-                # print("debug e")
                 break
             logging.info(f"fetched {len(data)} fills until {ts_to_date(last_ts)[:19]}")
             params["endTime"] = int(last_ts)
@@ -357,7 +236,7 @@ class BitgetBot(Passivbot):
                 self._detail_fetch_timestamps.append(now)
                 break
             await asyncio.sleep(0.1)
-        print("fetching order detail for", symbol, order_id)
+        logging.debug(f"fetching order detail for {symbol} {order_id}")
         return await self.cca.private_mix_get_v2_mix_order_detail(
             params={
                 "productType": "USDT-FUTURES",
@@ -658,92 +537,6 @@ class BitgetBot(Passivbot):
 
         return clip_by_timestamp(deduped, start_time, end_time)
 
-    async def fetch_pnls_old(self, start_time=None, end_time=None, limit=None):
-        wait_between_fetches_minimum_seconds = 0.5
-        all_res = {}
-        until = int(end_time) if end_time else None
-        since = int(start_time) if start_time else None
-        retry_count = 0
-        first_fetch = True
-        while True:
-            if since and until and since >= until:
-                # print("debug fetch_pnls g")
-                break
-            sts = utc_ms()
-            res = await (
-                self.cca.fetch_closed_orders(since=since)
-                if until is None
-                else self.cca.fetch_closed_orders(since=since, params={"until": until})
-            )
-            if first_fetch:
-                if not res:
-                    # print("debug fetch_pnls e")
-                    break
-                first_fetch = False
-            if not res:
-                # print("debug fetch_pnls a retry_count:", retry_count)
-                if retry_count >= 10:
-                    break
-                retry_count += 1
-                until = int(until - 1000 * 60 * 60 * 4)
-                continue
-            resd = {elm["id"]: elm for elm in res}
-            # if len(resd) != len(res):
-            #    print("debug fetch_pnls b", len(resd), len(res))
-            if all(id_ in all_res for id_ in resd):
-                # print("debug fetch_pnls c retry_count:", retry_count)
-                if retry_count >= 10:
-                    break
-                retry_count += 1
-                until = int(until - 1000 * 60 * 60 * 4)
-                continue
-            retry_count = 0
-            for k, v in resd.items():
-                all_res[k] = v
-                all_res[k]["pnl"] = float(v["info"]["totalProfits"])
-                all_res[k]["position_side"] = v["info"]["posSide"]
-            if start_time is None and end_time is None:
-                break
-            if since and res[0]["timestamp"] <= since:
-                # print("debug fetch_pnls e")
-                break
-            until = int(res[0]["timestamp"])
-            # print(
-            #    "debug fetch_pnls d len(res):",
-            #    len(res),
-            #    res[0]["datetime"],
-            #    res[-1]["datetime"],
-            #    (res[-1]["timestamp"] - res[0]["timestamp"]) / (1000 * 60 * 60),
-            # )
-            wait_time_seconds = max(
-                0.0, wait_between_fetches_minimum_seconds - (utc_ms() - sts) / 1000
-            )
-            await asyncio.sleep(wait_time_seconds)
-        all_res_list = sorted(all_res.values(), key=lambda x: x["timestamp"])
-        return all_res_list
-
-    async def fetch_fills_with_types(self, start_time=None, end_time=None):
-        fills = await self.fetch_pnls(start_time=start_time, end_time=end_time)
-        print("n fills", len(fills))
-        order_details_tasks = []
-        for fill in fills:
-            order_details_tasks.append(
-                asyncio.create_task(
-                    self.cca.fetch_order(fill.get("orderId", fill.get("id")), fill["symbol"])
-                )
-            )
-        order_details_results = {}
-        for task in order_details_tasks:
-            result = await task
-            order_details_results[result.get("orderId", result.get("id"))] = result
-        fills_by_id = {fill.get("orderId", result.get("id")): fill for fill in fills}
-        for id_ in order_details_results:
-            if id_ in fills_by_id:
-                fills_by_id[id_].update(order_details_results[id_])
-            else:
-                logging.warning(f"fetch_fills_with_types id missing {id_}")
-        return sorted(fills_by_id.values(), key=lambda x: x["timestamp"])
-
     def _build_order_params(self, order: dict) -> dict:
         return {
             "timeInForce": (
@@ -774,7 +567,7 @@ class BitgetBot(Passivbot):
                     )
                 )
             except Exception as e:
-                logging.error(f"{symbol}: a error setting leverage {e}")
+                logging.error(f"{symbol}: error setting leverage {e}")
         for symbol in symbols:
             res = None
             to_print = ""
