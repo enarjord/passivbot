@@ -2004,7 +2004,7 @@ class CandlestickManager:
         backoff = 0.5
         for attempt in range(5):
             try:
-                params = {}
+                params: Dict[str, Any] = {}
                 # Provide an end bound for exchanges that support it.
                 # Note: Avoid passing 'until' to Bitget due to API validation errors on non-1m tfs.
                 if end_exclusive_ms is not None:
@@ -2018,6 +2018,13 @@ class CandlestickManager:
                         and "kucoin" not in exid
                     ):
                         params["until"] = int(end_exclusive_ms) - 1
+
+                # Bybit v5 requires a category for some market data routes. CCXT usually infers
+                # this from the market, but being explicit avoids intermittent misclassification.
+                exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
+                if "bybit" in exid:
+                    params.setdefault("category", "linear")
+
                 tf_norm = self._normalize_timeframe_arg(timeframe, tf, default=self._ccxt_timeframe)
                 t0 = time.monotonic()
                 self._emit_remote_fetch(
@@ -2083,6 +2090,8 @@ class CandlestickManager:
                 )
                 return res or []
             except Exception as e:  # pragma: no cover - network not used in tests
+                err_type = type(e).__name__
+                err_repr = repr(e)
                 elapsed_ms = int((time.monotonic() - t0) * 1000) if "t0" in locals() else None
                 self._emit_remote_fetch(
                     {
@@ -2094,17 +2103,29 @@ class CandlestickManager:
                         "since_ts": int(since_ms),
                         "attempt": int(attempt + 1),
                         "elapsed_ms": elapsed_ms,
+                        "params": dict(params) if "params" in locals() else None,
+                        "error_type": err_type,
                         "error": str(e),
+                        "error_repr": err_repr,
                     }
                 )
                 self._log(
                     "warning",
                     "ccxt_fetch_ohlcv_failed",
                     symbol=symbol,
+                    tf=str(tf) if tf is not None else None,
                     attempt=attempt + 1,
+                    params=params if "params" in locals() else None,
+                    error_type=err_type,
                     error=str(e),
+                    error_repr=err_repr,
                 )
-                await asyncio.sleep(backoff)
+                sleep_s = backoff
+                # Heuristic: slow down harder on rate-limit style responses.
+                msg = (str(e) or "")
+                if any(x in msg.lower() for x in ("rate limit", "too many", "429", "10006")):
+                    sleep_s = max(sleep_s, 5.0)
+                await asyncio.sleep(sleep_s)
                 backoff *= 2
         return []
 
@@ -2501,11 +2522,13 @@ class CandlestickManager:
 
         async with self._http_session_lock:
             if self._http_session is None or self._http_session.closed:
-                # Configure session with faster fail timeouts and increased connection pooling
-                timeout = aiohttp.ClientTimeout(total=30, connect=10, sock_read=15)
+                # Archive hosts can be slow and archives can be large; use tolerant timeouts.
+                # Keep connect timeout bounded, but allow more time for reads.
+                timeout = aiohttp.ClientTimeout(total=120, connect=20, sock_read=60)
                 connector = aiohttp.TCPConnector(
-                    limit=50,  # Increased for parallel symbol fetching
-                    limit_per_host=15,  # Increased for archive servers
+                    # Keep concurrency moderate to avoid timeouts under load.
+                    limit=20,
+                    limit_per_host=6,
                     ttl_dns_cache=300,  # DNS cache TTL in seconds
                     enable_cleanup_closed=True,
                 )
@@ -2558,17 +2581,28 @@ class CandlestickManager:
                 resp.raise_for_status()
                 data = await resp.read()
         except Exception as e:
+            err_type = type(e).__name__
+            err_repr = repr(e)
             self._emit_remote_fetch(
                 {
                     "kind": "archive_http_get",
                     "stage": "error",
                     "exchange": str(self._ex_id),
                     "url": str(url),
+                    "error_type": err_type,
                     "error": str(e),
+                    "error_repr": err_repr,
                     "elapsed_ms": int((time.monotonic() - t0) * 1000),
                 }
             )
-            self._log("debug", "archive_http_error", url=url, error=str(e))
+            self._log(
+                "debug",
+                "archive_http_error",
+                url=url,
+                error_type=err_type,
+                error=str(e),
+                error_repr=err_repr,
+            )
             raise
 
         self._emit_remote_fetch(
@@ -2804,6 +2838,16 @@ class CandlestickManager:
         shard_paths = self._iter_shard_paths(symbol, tf="1m")
         legacy_paths = self._get_legacy_shard_paths(symbol, "1m")
 
+        # Determine primary shard completeness via index.json (cheap; avoids loading npy files).
+        idx_shards: Dict[str, Dict[str, Any]] = {}
+        try:
+            idx = self._ensure_symbol_index(symbol, tf="1m")
+            idx_shards = idx.get("shards") or {}
+            if not isinstance(idx_shards, dict):
+                idx_shards = {}
+        except Exception:
+            idx_shards = {}
+
         # Don't try to fetch archives for recent days - they don't exist yet
         # Exchanges typically need 48-72 hours to publish archive data
         archive_freshness_hours = 72
@@ -2811,18 +2855,59 @@ class CandlestickManager:
 
         # First pass: count days to fetch
         days_to_fetch = []
+        skipped_reasons = {
+            "partial_day_request": 0,
+            "too_recent": 0,
+            "legacy_present": 0,
+            "primary_complete": 0,
+        }
         for day_key, (day_start, day_end) in day_map.items():
             if start_ts > day_start or end_ts < day_end:
+                skipped_reasons["partial_day_request"] += 1
                 continue  # not a full-day request for this day
             if day_end > archive_cutoff_ms:
+                skipped_reasons["too_recent"] += 1
                 continue  # too recent - archive not available yet, use CCXT
-            if day_key in shard_paths:
-                continue  # already have at least some data on disk
             if day_key in legacy_paths:
+                skipped_reasons["legacy_present"] += 1
                 continue  # legacy cache already covers this day
+
+            # Only fetch archives for days missing or incomplete in primary.
+            # NOTE: Previously we skipped any day with an existing primary shard path.
+            # That can block archive healing if a prior CCXT run wrote a partial/incomplete day.
+            if day_key in shard_paths:
+                meta = idx_shards.get(day_key) if isinstance(idx_shards, dict) else None
+                try:
+                    if isinstance(meta, dict):
+                        # full UTC day coverage (inclusive endpoints)
+                        if (
+                            int(meta.get("count") or -1) == 1440
+                            and int(meta.get("min_ts") or 0) == int(day_start)
+                            and int(meta.get("max_ts") or 0) == int(day_end)
+                        ):
+                            skipped_reasons["primary_complete"] += 1
+                            continue
+                except Exception:
+                    # If meta is missing/corrupt, treat as incomplete and allow archive fetch.
+                    pass
+
             days_to_fetch.append((day_key, day_start, day_end))
 
         if not days_to_fetch:
+            # Surface why archive prefetch didn't run (useful when large gaps exist but
+            # they are not eligible for full-day archive materialization).
+            try:
+                self._emit_remote_fetch(
+                    {
+                        "kind": "archive_prefetch",
+                        "stage": "skip",
+                        "exchange": str(self._ex_id),
+                        "symbol": symbol,
+                        "reasons": dict(skipped_reasons),
+                    }
+                )
+            except Exception:
+                pass
             return
 
         total_days = len(days_to_fetch)
@@ -2839,6 +2924,19 @@ class CandlestickManager:
             parallel=parallel_days,
             date_range=f"{days_to_fetch[0][0]}..{days_to_fetch[-1][0]}",
         )
+        self._emit_remote_fetch(
+            {
+                "kind": "archive_prefetch",
+                "stage": "start",
+                "exchange": str(self._ex_id),
+                "symbol": symbol,
+                "days_to_fetch": int(total_days),
+                "parallel": int(parallel_days),
+                "date_range": f"{days_to_fetch[0][0]}..{days_to_fetch[-1][0]}",
+            }
+        )
+
+        last_progress_emit = 0.0
 
         # Semaphore to limit concurrent fetches
         sem = asyncio.Semaphore(max(1, parallel_days))
@@ -2881,6 +2979,25 @@ class CandlestickManager:
                     batch=f"{batch[0][0]}..{batch[-1][0]}",
                     elapsed_s=round(time.monotonic() - start_time, 1),
                 )
+                try:
+                    now = time.monotonic()
+                    if (now - last_progress_emit) >= float(self._progress_log_interval_seconds or 0.0):
+                        last_progress_emit = now
+                        self._emit_remote_fetch(
+                            {
+                                "kind": "archive_prefetch",
+                                "stage": "progress",
+                                "exchange": str(self._ex_id),
+                                "symbol": symbol,
+                                "completed": int(completed),
+                                "total": int(total_days),
+                                "pct": int(100 * completed / total_days) if total_days > 0 else 0,
+                                "batch": f"{batch[0][0]}..{batch[-1][0]}",
+                                "elapsed_s": round(time.monotonic() - start_time, 1),
+                            }
+                        )
+                except Exception:
+                    pass
 
                 # Fetch batch in parallel
                 tasks = [fetch_single_day(d) for d in batch]
@@ -2966,6 +3083,18 @@ class CandlestickManager:
             skipped=skipped,
             total=total_days,
             elapsed_s=total_elapsed,
+        )
+        self._emit_remote_fetch(
+            {
+                "kind": "archive_prefetch",
+                "stage": "done",
+                "exchange": str(self._ex_id),
+                "symbol": symbol,
+                "fetched": int(completed),
+                "skipped": int(skipped),
+                "total": int(total_days),
+                "elapsed_s": float(total_elapsed),
+            }
         )
 
     async def get_candles(

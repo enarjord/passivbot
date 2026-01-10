@@ -7,6 +7,7 @@ import sys
 import time
 import traceback
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
@@ -143,15 +144,144 @@ class HLCVManager:
         if self.cc is None:
             self.cc = load_ccxt_instance(self.exchange, enable_rate_limit=True)
         if self.cm is None:
+            # Limit concurrent ccxt requests per exchange to reduce timeouts under heavy parallelism.
+            # Bybit tends to be more sensitive.
+            max_concurrent_requests = 3 if self.exchange == "bybit" else 5
             self.cm = CandlestickManager(
                 exchange=self.cc,
                 exchange_name=self.exchange,
                 debug=int(self.cm_debug_level),
                 progress_log_interval_seconds=float(self.cm_progress_log_interval_seconds),
+                max_concurrent_requests=max_concurrent_requests,
+                remote_fetch_callback=self._remote_fetch_log,
                 # Backtest HLCV preparation may share the same cache directory as live trading.
                 # Force-disable disk retention here to avoid deleting shards created/needed by other processes.
                 max_disk_candles_per_symbol_per_tf=0,
             )
+
+    def _remote_fetch_log(self, payload: dict) -> None:
+        """Log a concise view of download progress (CCXT + archive).
+
+        CandlestickManager uses its own logger which is often set to WARNING when
+        cm_debug_level=0. This callback lets hlcv_preparation surface progress at
+        INFO level without changing CandlestickManager verbosity globally.
+        """
+
+        # Throttle per (kind, symbol, tf/stage) to avoid log spam.
+        if not hasattr(self, "_download_log_last"):
+            self._download_log_last = {}
+        now = time.monotonic()
+
+        kind = payload.get("kind")
+        stage = payload.get("stage")
+        symbol = payload.get("symbol")
+        tf = payload.get("tf")
+
+        if kind == "ccxt_fetch_ohlcv":
+            attempt = int(payload.get("attempt", 1) or 1)
+            if stage == "start":
+                # Only show attempt 1, and at most once per 10 seconds per symbol/tf.
+                key = ("ccxt", symbol, tf, "start")
+                if (now - float(self._download_log_last.get(key, 0.0))) < 10.0:
+                    return
+                self._download_log_last[key] = now
+
+                since_ms = payload.get("since_ts")
+                since_iso = None
+                try:
+                    if since_ms is not None:
+                        since_iso = datetime.fromtimestamp(int(since_ms) / 1000, tz=timezone.utc).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        )
+                except Exception:
+                    since_iso = None
+
+                logging.info(
+                    "[%s] download ccxt start symbol=%s tf=%s since=%s since_ms=%s limit=%s params=%s",
+                    self.exchange,
+                    symbol,
+                    payload.get("tf"),
+                    since_iso if since_iso is not None else since_ms,
+                    since_ms,
+                    payload.get("limit"),
+                    payload.get("params"),
+                )
+                return
+
+            if stage == "ok":
+                # Throttle OK logs to once per 10 seconds per symbol/tf.
+                key = ("ccxt", symbol, tf, "ok")
+                if (now - float(self._download_log_last.get(key, 0.0))) < 10.0:
+                    return
+                self._download_log_last[key] = now
+                logging.info(
+                    "[%s] download ccxt ok symbol=%s tf=%s rows=%s elapsed_ms=%s",
+                    self.exchange,
+                    symbol,
+                    payload.get("tf"),
+                    payload.get("rows"),
+                    payload.get("elapsed_ms"),
+                )
+                return
+
+            if stage == "error":
+                # Let CandlestickManager warnings show the details; keep this concise.
+                if attempt == 1:
+                    logging.warning(
+                        "[%s] download ccxt error symbol=%s tf=%s error_type=%s error=%s",
+                        self.exchange,
+                        symbol,
+                        tf,
+                        payload.get("error_type"),
+                        payload.get("error"),
+                    )
+                return
+
+        if kind == "archive_prefetch":
+            if stage == "start":
+                logging.info(
+                    "[%s] download archive start symbol=%s days=%s parallel=%s range=%s",
+                    self.exchange,
+                    symbol,
+                    payload.get("days_to_fetch"),
+                    payload.get("parallel"),
+                    payload.get("date_range"),
+                )
+                return
+            if stage == "skip":
+                logging.info(
+                    "[%s] download archive skip symbol=%s reasons=%s",
+                    self.exchange,
+                    symbol,
+                    payload.get("reasons"),
+                )
+                return
+            if stage == "progress":
+                key = ("archive", symbol, "progress")
+                if (now - float(self._download_log_last.get(key, 0.0))) < 10.0:
+                    return
+                self._download_log_last[key] = now
+                logging.info(
+                    "[%s] download archive progress symbol=%s %s/%s (%s%%) batch=%s",
+                    self.exchange,
+                    symbol,
+                    payload.get("completed"),
+                    payload.get("total"),
+                    payload.get("pct"),
+                    payload.get("batch"),
+                )
+                return
+            if stage == "done":
+                logging.info(
+                    "[%s] download archive done symbol=%s fetched=%s skipped=%s total=%s elapsed_s=%s",
+                    self.exchange,
+                    symbol,
+                    payload.get("fetched"),
+                    payload.get("skipped"),
+                    payload.get("total"),
+                    payload.get("elapsed_s"),
+                )
+                return
 
     async def load_markets(self):
         self.load_cc()
@@ -250,19 +380,20 @@ class HLCVManager:
         return float(fts)
 
     async def get_ohlcvs(self, coin: str, start_date=None, end_date=None) -> pd.DataFrame:
+        empty_df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
         if start_date is not None or end_date is not None:
             self.update_date_range(start_date, end_date)
         if not self.markets:
             await self.load_markets()
         if not self.has_coin(coin):
-            return pd.DataFrame()
+            return empty_df
         self.load_cc()
         assert self.cm is not None
         symbol = self.get_symbol(coin)
         start_ts = int(self.start_ts)
         end_ts = int(self.end_ts)
         if start_ts > end_ts:
-            return pd.DataFrame()
+            return empty_df
 
         # Fetch strict (real) candles first to detect large gaps.
         real = await self.cm.get_candles(
@@ -275,7 +406,7 @@ class HLCVManager:
             force_refetch_gaps=self.force_refetch_gaps,
         )
         if real.size == 0:
-            return pd.DataFrame()
+            return empty_df
 
         ts = real["ts"].astype(np.int64, copy=False)
         if ts.size > 1:
@@ -295,7 +426,7 @@ class HLCVManager:
                         force_refetch_gaps=True,
                     )
                     if real.size == 0:
-                        return pd.DataFrame()
+                        return empty_df
                     ts = real["ts"].astype(np.int64, copy=False)
                     if ts.size > 1:
                         intervals = np.diff(ts)
@@ -312,7 +443,7 @@ class HLCVManager:
                             coin,
                             greatest_gap_ms / 60_000.0,
                         )
-                    return pd.DataFrame()
+                    return empty_df
 
         # Fill to the full requested window (bfill/ffill inside CM).
         # Data from get_candles is already sorted, so skip redundant sort
@@ -320,7 +451,7 @@ class HLCVManager:
             real, start_ts=start_ts, end_ts=end_ts, strict=False, assume_sorted=True
         )
         if filled.size == 0:
-            return pd.DataFrame()
+            return empty_df
         df = pd.DataFrame(
             {
                 "timestamp": filled["ts"].astype(np.int64),
