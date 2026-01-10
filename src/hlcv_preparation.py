@@ -413,6 +413,18 @@ class HLCVManager:
             intervals = np.diff(ts)
             greatest_gap_ms = int(intervals.max(initial=60_000))
             if greatest_gap_ms > int(self.gap_tolerance_ohlcvs_minutes * 60_000):
+                # Helpful diagnostics: locate the exact gap boundaries
+                gap_start_ts = None
+                gap_end_ts = None
+                try:
+                    imax = int(np.argmax(intervals))
+                    if 0 <= imax < ts.size - 1:
+                        gap_start_ts = int(ts[imax])
+                        gap_end_ts = int(ts[imax + 1])
+                except Exception:
+                    gap_start_ts = None
+                    gap_end_ts = None
+
                 # Give CandlestickManager one chance to self-heal (legacy merge / refetch gaps)
                 # before returning empty.
                 if not self.force_refetch_gaps:
@@ -443,6 +455,20 @@ class HLCVManager:
                             coin,
                             greatest_gap_ms / 60_000.0,
                         )
+                        if gap_start_ts is not None and gap_end_ts is not None:
+                            gap_start_iso = datetime.fromtimestamp(
+                                int(gap_start_ts) / 1000, tz=timezone.utc
+                            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                            gap_end_iso = datetime.fromtimestamp(
+                                int(gap_end_ts) / 1000, tz=timezone.utc
+                            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                            logging.warning(
+                                "[%s] largest_gap_window %s -> %s (%.1f minutes)",
+                                self.exchange,
+                                gap_start_iso,
+                                gap_end_iso,
+                                (gap_end_ts - gap_start_ts) / 60_000.0,
+                            )
                     return empty_df
 
         # Fill to the full requested window (bfill/ffill inside CM).
@@ -646,9 +672,9 @@ async def prepare_hlcvs_internal(
                 traceback.print_exc()
                 return None
 
-    # Parallelize coin fetching with rate limiting
-    # Use semaphore of 6 to respect exchange rate limits while gaining parallelism
-    COIN_CONCURRENCY = 6
+    # Parallelize coin fetching with rate limiting.
+    # Bybit is more sensitive to bursts; keep concurrency lower to reduce timeouts.
+    COIN_CONCURRENCY = 3 if str(exchange).lower() == "bybit" else 6
     sem = asyncio.Semaphore(COIN_CONCURRENCY)
 
     tasks = [fetch_coin_data(coin, sem) for coin in coins]

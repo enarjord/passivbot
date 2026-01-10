@@ -1172,8 +1172,14 @@ class CandlestickManager:
     def _legacy_day_is_complete(self, symbol: str, tf: str, date_key: str) -> bool:
         """Return True if legacy has a continuous shard for this day.
 
-        "Complete" is defined as non-empty and 1m-continuous between its own endpoints.
-        This avoids misclassifying partial inception days as incomplete.
+        "Complete" is defined as a full UTC-day of 1m candles:
+        - exactly 1440 minutes
+        - spanning [00:00, 23:59] UTC for the given date_key
+        - strictly 1m-continuous with no duplicates
+
+        This is intentionally strict because this flag gates whether we skip writing a
+        primary shard overlay. If we mistakenly treat a partial legacy shard as complete,
+        we will keep re-downloading the missing minutes every run but never persist them.
         """
         cache_key = (str(symbol), str(tf), str(date_key))
         cached = self._legacy_day_quality_cache.get(cache_key)
@@ -1189,16 +1195,22 @@ class CandlestickManager:
                 arr = self._load_shard(str(legacy_path))
                 if arr.size == 0:
                     ok = False
-                elif arr.size == 1:
-                    ok = True
                 else:
-                    ts = np.sort(arr["ts"].astype(np.int64, copy=False))
-                    diffs = np.diff(ts)
-                    ok = bool(
-                        diffs.size
-                        and int(diffs.min()) == ONE_MIN_MS
-                        and int(diffs.max()) == ONE_MIN_MS
-                    )
+                    day_start, day_end = self._date_range_of_key(str(date_key))
+                    expected_len = int((day_end - day_start) // ONE_MIN_MS) + 1  # 1440
+                    if int(arr.shape[0]) != int(expected_len):
+                        ok = False
+                    else:
+                        ts = np.sort(arr["ts"].astype(np.int64, copy=False))
+                        if int(ts[0]) != int(day_start) or int(ts[-1]) != int(day_end):
+                            ok = False
+                        else:
+                            diffs = np.diff(ts)
+                            ok = bool(
+                                diffs.size
+                                and int(diffs.min()) == ONE_MIN_MS
+                                and int(diffs.max()) == ONE_MIN_MS
+                            )
         except Exception:
             ok = False
         self._legacy_day_quality_cache[cache_key] = bool(ok)
@@ -2001,8 +2013,12 @@ class CandlestickManager:
         if not hasattr(ex, "fetch_ohlcv"):
             return []
 
-        backoff = 0.5
-        for attempt in range(5):
+        exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
+        is_bybit = "bybit" in exid
+        max_attempts = 9 if is_bybit else 5
+        backoff = 1.0 if is_bybit else 0.5
+        backoff_cap = 20.0 if is_bybit else 8.0
+        for attempt in range(max_attempts):
             try:
                 params: Dict[str, Any] = {}
                 # Provide an end bound for exchanges that support it.
@@ -2021,7 +2037,6 @@ class CandlestickManager:
 
                 # Bybit v5 requires a category for some market data routes. CCXT usually infers
                 # this from the market, but being explicit avoids intermittent misclassification.
-                exid = (self._ex_id or "").lower() if isinstance(self._ex_id, str) else ""
                 if "bybit" in exid:
                     params.setdefault("category", "linear")
 
@@ -2121,12 +2136,19 @@ class CandlestickManager:
                     error_repr=err_repr,
                 )
                 sleep_s = backoff
-                # Heuristic: slow down harder on rate-limit style responses.
                 msg = (str(e) or "")
-                if any(x in msg.lower() for x in ("rate limit", "too many", "429", "10006")):
+                msg_l = msg.lower()
+                # Heuristic: slow down harder on rate-limit style responses.
+                if any(x in msg_l for x in ("rate limit", "too many", "429", "10006")):
                     sleep_s = max(sleep_s, 5.0)
+                # Bybit: be more persistent on transient network-ish errors.
+                if is_bybit and (
+                    err_type in {"RequestTimeout", "NetworkError", "ExchangeNotAvailable", "DDoSProtection"}
+                    or any(x in msg_l for x in ("timed out", "timeout", "etimedout", "econnreset", "502", "503", "504"))
+                ):
+                    sleep_s = max(sleep_s, 2.0)
                 await asyncio.sleep(sleep_s)
-                backoff *= 2
+                backoff = min(backoff * 2.0, backoff_cap)
         return []
 
     # ----- Array slicing helpers -----
