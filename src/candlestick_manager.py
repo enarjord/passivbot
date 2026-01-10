@@ -43,7 +43,7 @@ import atexit
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple, TypedDict, Union, TYPE_CHECKING
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple, TypedDict, TYPE_CHECKING
 import threading
 from collections import OrderedDict
 
@@ -684,7 +684,7 @@ class CandlestickManager:
         return str(Path(self._symbol_dir(symbol, timeframe=timeframe, tf=tf)) / f"{date_key}.npy")
 
     def _prune_missing_shards_from_index(self, idx: dict) -> int:
-        """Remove shard entries whose files are missing; refresh meta["last_final_ts"]."""
+        """Remove shard entries whose files are missing; refresh derived meta fields."""
         try:
             shards = idx.get("shards", {})
             if not isinstance(shards, dict) or not shards:
@@ -705,15 +705,21 @@ class CandlestickManager:
             meta = idx.setdefault("meta", {})
             try:
                 last_ts = 0
+                inception_ts: Optional[int] = None
                 for shard_meta in shards.values():
                     if not isinstance(shard_meta, dict):
                         continue
                     mt = shard_meta.get("max_ts")
                     if mt is not None:
                         last_ts = max(last_ts, int(mt))
+                    mi = shard_meta.get("min_ts")
+                    if mi is not None:
+                        inception_ts = int(mi) if inception_ts is None else min(inception_ts, int(mi))
                 meta["last_final_ts"] = int(last_ts)
+                meta["inception_ts"] = inception_ts
             except Exception:
                 meta["last_final_ts"] = 0
+                meta["inception_ts"] = None
             return int(removed)
         except Exception:
             return 0
@@ -2837,16 +2843,16 @@ class CandlestickManager:
         # Semaphore to limit concurrent fetches
         sem = asyncio.Semaphore(max(1, parallel_days))
 
-        def _format_archive_exc(exc: BaseException) -> tuple[str, str]:
+        def _format_archive_exc(exc: BaseException) -> Tuple[str, str]:
             """Return (error_type, error_repr) for logging."""
             try:
                 return (type(exc).__name__, repr(exc))
             except Exception:
-                return (type(exc).__name__, "<unreprable exception>")
+                return (type(exc).__name__, "<unrepresentable exception>")
 
         async def fetch_single_day(
             day_info: Tuple[str, int, int]
-        ) -> Tuple[str, Optional[np.ndarray], Optional[tuple[str, str]]]:
+        ) -> Tuple[str, Optional[np.ndarray], Optional[Tuple[str, str]]]:
             """Fetch a single day's archive data. Returns (day_key, array or None, (err_type, err_repr) or None)."""
             day_key, day_start, day_end = day_info
             async with sem:
@@ -3324,6 +3330,7 @@ class CandlestickManager:
                             if unknown_after:
                                 persisted_batches = False
                                 deferred_index_any = False
+                                flush_failed_once = False
 
                                 def _persist_hist_batch(batch: np.ndarray) -> None:
                                     nonlocal persisted_batches, deferred_index_any
@@ -3410,8 +3417,23 @@ class CandlestickManager:
                                     if deferred_index_any:
                                         try:
                                             self.flush_deferred_index(symbol, tf="1m")
-                                        except Exception:
-                                            pass
+                                        except Exception as exc:  # best-effort; keep fetching even if index update fails
+                                            if not flush_failed_once:
+                                                try:
+                                                    err_type = type(exc).__name__
+                                                    err_repr = repr(exc)
+                                                except Exception:
+                                                    err_type = "Exception"
+                                                    err_repr = "<unrepresentable exception>"
+                                                self._log(
+                                                    "warning",
+                                                    "flush_deferred_index_failed",
+                                                    symbol=symbol,
+                                                    timeframe="1m",
+                                                    error_type=err_type,
+                                                    error=err_repr,
+                                                )
+                                                flush_failed_once = True
                                         deferred_index_any = False
                                     if fetched.size and not persisted_batches:
                                         # Skip memory retention to preserve full historical data
@@ -3426,8 +3448,23 @@ class CandlestickManager:
                                         )
                                         try:
                                             self.flush_deferred_index(symbol, tf="1m")
-                                        except Exception:
-                                            pass
+                                        except Exception as exc:  # best-effort; keep fetching even if index update fails
+                                            if not flush_failed_once:
+                                                try:
+                                                    err_type = type(exc).__name__
+                                                    err_repr = repr(exc)
+                                                except Exception:
+                                                    err_type = "Exception"
+                                                    err_repr = "<unrepresentable exception>"
+                                                self._log(
+                                                    "warning",
+                                                    "flush_deferred_index_failed",
+                                                    symbol=symbol,
+                                                    timeframe="1m",
+                                                    error_type=err_type,
+                                                    error=err_repr,
+                                                )
+                                                flush_failed_once = True
                             arr = (
                                 np.sort(self._cache[symbol], order="ts")
                                 if symbol in self._cache
@@ -4625,8 +4662,22 @@ class CandlestickManager:
             try:
                 if self._legacy_day_is_complete(symbol, tf_norm, date_key):
                     return
-            except Exception:
-                pass
+            except Exception as exc:  # best-effort; legacy cache may be unreadable, fall back to primary write
+                try:
+                    err_type = type(exc).__name__
+                    err_repr = repr(exc)
+                except Exception:
+                    err_type = "Exception"
+                    err_repr = "<unrepresentable exception>"
+                self._log(
+                    "warning",
+                    "legacy_day_quality_check_failed",
+                    symbol=symbol,
+                    timeframe=tf_norm,
+                    day=date_key,
+                    error_type=err_type,
+                    error=err_repr,
+                )
         shard_path = self._shard_path(symbol, date_key, tf=tf_norm)
         os.makedirs(os.path.dirname(shard_path), exist_ok=True)
         # Write .npy content atomically
