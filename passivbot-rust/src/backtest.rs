@@ -874,16 +874,43 @@ impl<'a> Backtest<'a> {
                     }
                 }
 
-                // No-hedge mode: block opposite-side entries when position exists.
-                // Only applies if hedge_mode is disabled and mode not already overridden.
+                // No-hedge mode: only one position side allowed per coin at a time.
                 if !self.backtest_params.hedge_mode {
-                    // If long position exists and short mode not yet set, block short entries
-                    if pos_long.size != 0.0 && mode_short.is_none() {
+                    let has_long = pos_long.size != 0.0;
+                    let has_short = pos_short.size != 0.0;
+
+                    if has_long && !has_short && mode_short.is_none() {
+                        // Long position exists - block short entries
                         mode_short = Some(orchestrator::TradingMode::GracefulStop);
-                    }
-                    // If short position exists and long mode not yet set, block long entries
-                    if pos_short.size != 0.0 && mode_long.is_none() {
+                    } else if has_short && !has_long && mode_long.is_none() {
+                        // Short position exists - block long entries
                         mode_long = Some(orchestrator::TradingMode::GracefulStop);
+                    } else if !has_long && !has_short && mode_long.is_none() && mode_short.is_none() {
+                        // No position on either side - decide which side gets to enter
+                        // based on distance to EMA entry band
+                        let ema_bands_long = self.emas[idx].compute_bands(LONG);
+                        let ema_bands_short = self.emas[idx].compute_bands(SHORT);
+                        let bp_long = &self.bot_params[idx].long;
+                        let bp_short = &self.bot_params[idx].short;
+
+                        // Entry band: lower EMA * (1 + entry_initial_ema_dist) for long
+                        //             upper EMA * (1 + entry_initial_ema_dist) for short
+                        let entry_band_long = ema_bands_long.lower * (1.0 + bp_long.entry_initial_ema_dist);
+                        let entry_band_short = ema_bands_short.upper * (1.0 + bp_short.entry_initial_ema_dist);
+
+                        // Distance to entry band (lower is closer/better)
+                        // For long: how far price is above the entry band (want price below band)
+                        // For short: how far price is below the entry band (want price above band)
+                        let dist_long = close_price / entry_band_long - 1.0;
+                        let dist_short = 1.0 - close_price / entry_band_short;
+
+                        // Block the side that's farther from its entry band
+                        // Tie-break: favor long
+                        if dist_long <= dist_short {
+                            mode_short = Some(orchestrator::TradingMode::GracefulStop);
+                        } else {
+                            mode_long = Some(orchestrator::TradingMode::GracefulStop);
+                        }
                     }
                 }
 
@@ -1158,13 +1185,43 @@ impl<'a> Backtest<'a> {
                 }
             }
 
-            // No-hedge mode: block opposite-side entries when position exists.
+            // No-hedge mode: only one position side allowed per coin at a time.
             if !self.backtest_params.hedge_mode {
-                if pos_long.size != 0.0 && mode_short.is_none() {
+                let has_long = pos_long.size != 0.0;
+                let has_short = pos_short.size != 0.0;
+
+                if has_long && !has_short && mode_short.is_none() {
+                    // Long position exists - block short entries
                     mode_short = Some(orchestrator::TradingMode::GracefulStop);
-                }
-                if pos_short.size != 0.0 && mode_long.is_none() {
+                } else if has_short && !has_long && mode_long.is_none() {
+                    // Short position exists - block long entries
                     mode_long = Some(orchestrator::TradingMode::GracefulStop);
+                } else if !has_long && !has_short && mode_long.is_none() && mode_short.is_none() {
+                    // No position on either side - decide which side gets to enter
+                    // based on distance to EMA entry band
+                    let ema_bands_long = self.emas[idx].compute_bands(LONG);
+                    let ema_bands_short = self.emas[idx].compute_bands(SHORT);
+                    let bp_long = &self.bot_params[idx].long;
+                    let bp_short = &self.bot_params[idx].short;
+
+                    // Entry band: lower EMA * (1 + entry_initial_ema_dist) for long
+                    //             upper EMA * (1 + entry_initial_ema_dist) for short
+                    let entry_band_long = ema_bands_long.lower * (1.0 + bp_long.entry_initial_ema_dist);
+                    let entry_band_short = ema_bands_short.upper * (1.0 + bp_short.entry_initial_ema_dist);
+
+                    // Distance to entry band (lower is closer/better)
+                    // For long: how far price is above the entry band (want price below band)
+                    // For short: how far price is below the entry band (want price above band)
+                    let dist_long = close_price / entry_band_long - 1.0;
+                    let dist_short = 1.0 - close_price / entry_band_short;
+
+                    // Block the side that's farther from its entry band
+                    // Tie-break: favor long
+                    if dist_long <= dist_short {
+                        mode_short = Some(orchestrator::TradingMode::GracefulStop);
+                    } else {
+                        mode_long = Some(orchestrator::TradingMode::GracefulStop);
+                    }
                 }
             }
 
