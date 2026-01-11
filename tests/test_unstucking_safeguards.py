@@ -135,6 +135,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self.stop_signal_received = False
             self.balance = 1000.0
             self.hedge_mode = True
+            self._config_hedge_mode = True
             self.inverse = False
             self.active_symbols = []
             self.open_orders = {}

@@ -1255,7 +1255,6 @@ mod core {
                 } else if !has_long && !has_short {
                     // No position on either side - decide based on EMA band distance
                     // The side closer to its entry threshold gets to enter
-                    let close_price = s.order_book.bid; // use bid as reference price
 
                     // Derive EMA bands for both sides
                     let ema_bands_long = derive_ema_bands(idx, &s.emas, &s.long.bot_params);
@@ -1271,10 +1270,11 @@ mod core {
                             bands_short.upper * (1.0 + s.short.bot_params.entry_initial_ema_dist);
 
                         // Distance to entry threshold (larger = closer to triggering)
-                        // For long: threshold / close - 1 (want positive, closer to 0 = closer to triggering)
-                        // For short: 1 - threshold / close (want positive, closer to 0 = closer to triggering)
-                        let dist_long = entry_threshold_long / close_price - 1.0;
-                        let dist_short = 1.0 - entry_threshold_short / close_price;
+                        // Long entries (buys) compare to bid; short entries (sells) compare to ask
+                        // For long: threshold / bid - 1 (closer to 0 = closer to triggering)
+                        // For short: 1 - threshold / ask (closer to 0 = closer to triggering)
+                        let dist_long = entry_threshold_long / s.order_book.bid - 1.0;
+                        let dist_short = 1.0 - entry_threshold_short / s.order_book.ask;
 
                         // Block the side that's farther from triggering (smaller distance)
                         // Tie-break: favor long

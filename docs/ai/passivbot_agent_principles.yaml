@@ -16,6 +16,25 @@ passivbot_agent_principles:
     - Backtester and live bot should share the same Rust logic wherever possible.
     - Use Python primarily for orchestration, bindings, and experimentation.
 
+  config_hierarchy:
+    description: |
+      Configuration sections form an inheritance hierarchy. When adding new parameters,
+      place them in the section that matches which components need to read them.
+    sections:
+      - name: config.live
+        used_by: [live_bot, backtester, optimizer]
+        description: Parameters that affect runtime behavior for all modes. Place new params here if they affect order calculation, risk management, or any logic shared between live trading and simulation.
+        examples: [hedge_mode, time_in_force, leverage, approved_coins]
+      - name: config.backtest
+        used_by: [backtester, optimizer]
+        description: Parameters specific to historical simulation that don't apply to live trading. Place new params here only if they control backtest-specific behavior like date ranges or data sources.
+        examples: [start_date, end_date, starting_balance, exchange]
+      - name: config.optimize
+        used_by: [optimizer]
+        description: Parameters only relevant to the optimization process. Place new params here if they control genetic algorithm behavior, fitness functions, or optimization-specific settings.
+        examples: [n_cpus, iters, population_size, bounds]
+    rule: When in doubt, prefer config.live. A parameter that works in both live and backtest belongs in config.live, not config.backtest.
+
   notation_and_terminology:
     - Position side or position direction (long or short) is consistently called, as appropriate, [position_side, pos_side, pside, PositionSide, PosSide, Pside] everywhere in the codebase and in documentation.
     - Order side or order direction (buy or sell / bid or ask) is consistently called, as appropriate, [side, order_side, Side, OrderSide] everywhere in the codebase and in documentation.
