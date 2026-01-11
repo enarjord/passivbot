@@ -941,6 +941,7 @@ def prep_backtest_args(config, mss, exchange, exchange_params=None, backtest_par
             "filter_by_min_effective_cost": bool(
                 require_config_value(config, "backtest.filter_by_min_effective_cost")
             ),
+            "hedge_mode": bool(require_config_value(config, "live.hedge_mode")),
         }
     return bot_params_list, exchange_params, backtest_params
 
@@ -1169,6 +1170,7 @@ async def main():
     del template_config["optimize"]
     keep_live_keys = {
         "approved_coins",
+        "hedge_mode",
         "ignored_coins",
         "minimum_coin_age_days",
     }

@@ -1002,6 +1002,7 @@ impl<'a> Backtest<'a> {
                 unstuck_allowance_short: short_allowance,
                 sort_global: false,
                 global_bot_params: self.bot_params_master.clone(),
+                hedge_mode: self.backtest_params.hedge_mode,
             },
             symbols,
             peek_hints,
@@ -2822,6 +2823,7 @@ mod tests {
             btc_collateral_ltv_cap: None,
             metrics_only: true,
             filter_by_min_effective_cost: false,
+            hedge_mode: true,
         };
 
         let mut bt = Backtest::new(

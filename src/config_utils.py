@@ -1996,6 +1996,7 @@ def get_template_config():
             "filter_by_min_effective_cost": True,
             "forced_mode_long": "",
             "forced_mode_short": "",
+            "hedge_mode": True,
             "ignored_coins": {"long": [], "short": []},
             "inactive_coin_candle_ttl_minutes": 10.0,
             "leverage": 10.0,

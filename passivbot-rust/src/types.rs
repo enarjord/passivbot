@@ -170,6 +170,7 @@ pub struct BacktestParams {
     pub btc_collateral_ltv_cap: Option<f64>,
     pub metrics_only: bool,
     pub filter_by_min_effective_cost: bool,
+    pub hedge_mode: bool,
 }
 
 #[derive(Default, Debug, Clone, Copy, Serialize, Deserialize)]
