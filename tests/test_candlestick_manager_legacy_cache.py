@@ -119,3 +119,45 @@ async def test_legacy_leading_minutes_are_backfilled_when_requested(tmp_path, mo
     assert float(out[0]["bv"]) == pytest.approx(0.0)
     assert float(out[1]["bv"]) == pytest.approx(0.0)
 
+
+def test_partial_but_continuous_legacy_day_does_not_block_primary_overlay_write(tmp_path, monkeypatch):
+    """A partial legacy day (continuous, but not full 00:00-23:59 coverage) must not be treated as complete.
+
+    Otherwise `_save_shard()` would skip writing the primary overlay shard and the missing minutes
+    would be re-downloaded on every run.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    day = "2021-03-01"
+    day_start = 1614556800000  # 2021-03-01 00:00:00 UTC
+
+    # Create a partial legacy shard: continuous minutes, but only 2 candles (not a full day).
+    legacy_dir = tmp_path / "historical_data" / "ohlcvs_binanceusdm" / "BTC"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    legacy_path = legacy_dir / f"{day}.npy"
+    legacy = np.array(
+        [
+            [day_start + 10 * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0],
+            [day_start + 11 * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    np.save(legacy_path, legacy)
+
+    cm = CandlestickManager(exchange=None, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches"))
+    symbol = "BTC/USDT:USDT"
+
+    # Attempt to write a primary shard for this day.
+    primary = np.empty((1,), dtype=CANDLE_DTYPE)
+    primary[0]["ts"] = day_start
+    primary[0]["o"] = 1.0
+    primary[0]["h"] = 1.0
+    primary[0]["l"] = 1.0
+    primary[0]["c"] = 1.0
+    primary[0]["bv"] = 0.0
+
+    cm._save_shard(symbol, day, primary, tf="1m")
+
+    # With strict legacy completeness, this MUST be written.
+    assert os.path.exists(cm._shard_path(symbol, day, tf="1m"))
+
