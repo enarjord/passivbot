@@ -378,12 +378,12 @@ async def prepare_hlcvs(config: dict, exchange: str, *, force_refetch_gaps: bool
             om,
         )
 
-        om.update_date_range(timestamps[0], timestamps[-1])
+        om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
         btc_df = await om.get_ohlcvs("BTC")
         if btc_df.empty:
             raise ValueError(f"Failed to fetch BTC/USD prices from {exchange}")
 
-        btc_df = btc_df.set_index("timestamp").reindex(timestamps, method="ffill").reset_index()
+        btc_df = btc_df.set_index("timestamp").reindex(timestamps, method="ffill").ffill().bfill().reset_index()
         btc_usd_prices = btc_df["close"].values
 
         warmup_provided = max(0, int(max(0, requested_start_ts - int(timestamps[0])) // minute_ms))
@@ -659,11 +659,13 @@ async def prepare_hlcvs_combined(config, forced_sources=None, *, force_refetch_g
             end_date,
             gap_tolerance_ohlcvs_minutes=require_config_value(config, "backtest.gap_tolerance_ohlcvs_minutes"),
         )
+        # Align BTC date range to actual timestamps (mirrors single-exchange case)
+        btc_om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
         btc_df = await btc_om.get_ohlcvs("BTC")
         if btc_df.empty:
             raise ValueError(f"Failed to fetch BTC/USD prices from {btc_exchange}")
 
-        btc_df = btc_df.set_index("timestamp").reindex(timestamps, method="ffill").reset_index()
+        btc_df = btc_df.set_index("timestamp").reindex(timestamps, method="ffill").ffill().bfill().reset_index()
         btc_usd_prices = btc_df["close"].values
 
         warmup_provided = max(0, int(max(0, requested_start_ts - int(timestamps[0])) // minute_ms))
