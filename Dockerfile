@@ -1,4 +1,4 @@
-FROM python:3.10-slim-bullseye
+FROM python:3.12-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
 # Skip runtime Rust compilation; extensions are prebuilt at image build time
