@@ -1691,7 +1691,11 @@ class Passivbot:
             x for x in self.active_symbols if x not in self.already_updated_exchange_config_symbols
         ]
         if symbols_not_done:
-            await self.update_exchange_config_by_symbols(symbols_not_done)
+            try:
+                await self.update_exchange_config_by_symbols(symbols_not_done)
+            except Exception as e:
+                logging.info(f"error with update_exchange_config_by_symbols {e} {symbols_not_done}")
+                traceback.print_exc()
             self.already_updated_exchange_config_symbols.update(symbols_not_done)
 
     async def update_exchange_config_by_symbols(self, symbols):
