@@ -164,6 +164,14 @@ mod core {
         /// Hedge overlay configuration. If `None` or `threshold == 0.0`, hedging is disabled.
         #[serde(default)]
         pub hedge: Option<HedgeConfig>,
+        /// If false (one-way mode), only one position side can exist per coin at a time.
+        /// When no position exists on either side, the side closer to its EMA entry band wins.
+        #[serde(default = "default_hedge_mode")]
+        pub hedge_mode: bool,
+    }
+
+    fn default_hedge_mode() -> bool {
+        true
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -754,6 +762,9 @@ mod core {
         gate_keep: Vec<u8>,
         gate_qty_by_order_idx: Vec<f64>,
         gate_out: Vec<IdealOrder>,
+        /// One-way mode: per-symbol flags to block initial entries
+        one_way_block_initial_long: Vec<bool>,
+        one_way_block_initial_short: Vec<bool>,
     }
 
     fn gate_entries_by_twel_deterministic(
@@ -1227,6 +1238,69 @@ mod core {
             }
         }
 
+        // One-way mode: compute per-symbol initial entry blocking
+        workspace
+            .one_way_block_initial_long
+            .resize(n_symbols, false);
+        workspace
+            .one_way_block_initial_short
+            .resize(n_symbols, false);
+        for v in workspace.one_way_block_initial_long.iter_mut() {
+            *v = false;
+        }
+        for v in workspace.one_way_block_initial_short.iter_mut() {
+            *v = false;
+        }
+        if !input.global.hedge_mode {
+            for s in &input.symbols {
+                let has_long = s.long.position.size != 0.0;
+                let has_short = s.short.position.size != 0.0;
+                let idx = s.symbol_idx;
+
+                if has_long && !has_short {
+                    // Long position exists - block short initial entries
+                    workspace.one_way_block_initial_short[idx] = true;
+                } else if has_short && !has_long {
+                    // Short position exists - block long initial entries
+                    workspace.one_way_block_initial_long[idx] = true;
+                } else if !has_long && !has_short {
+                    // No position on either side - decide based on EMA band distance
+                    // The side closer to its entry threshold gets to enter
+
+                    // Derive EMA bands for both sides
+                    let ema_bands_long = derive_ema_bands(idx, &s.emas, &s.long.bot_params);
+                    let ema_bands_short = derive_ema_bands(idx, &s.emas, &s.short.bot_params);
+
+                    if let (Ok(bands_long), Ok(bands_short)) = (ema_bands_long, ema_bands_short) {
+                        // Entry thresholds:
+                        // Long: lower_ema * (1 - entry_initial_ema_dist)
+                        // Short: upper_ema * (1 + entry_initial_ema_dist)
+                        let entry_threshold_long =
+                            bands_long.lower * (1.0 - s.long.bot_params.entry_initial_ema_dist);
+                        let entry_threshold_short =
+                            bands_short.upper * (1.0 + s.short.bot_params.entry_initial_ema_dist);
+
+                        // Distance to entry threshold (larger = closer to triggering)
+                        // Long entries (buys) compare to bid; short entries (sells) compare to ask
+                        // For long: threshold / bid - 1 (closer to 0 = closer to triggering)
+                        // For short: 1 - threshold / ask (closer to 0 = closer to triggering)
+                        let dist_long = entry_threshold_long / s.order_book.bid - 1.0;
+                        let dist_short = 1.0 - entry_threshold_short / s.order_book.ask;
+
+                        // Block the side that's farther from triggering (smaller distance)
+                        // Tie-break: favor long
+                        if dist_long >= dist_short {
+                            workspace.one_way_block_initial_short[idx] = true;
+                        } else {
+                            workspace.one_way_block_initial_long[idx] = true;
+                        }
+                    }
+                    // If EMA bands can't be derived, allow both (no blocking)
+                }
+                // If both positions exist (shouldn't happen in one-way mode), don't block either
+            }
+        }
+
         // Per-symbol order generation
         workspace.per_long.resize_with(n_symbols, || None);
         workspace.per_short.resize_with(n_symbols, || None);
@@ -1267,6 +1341,7 @@ mod core {
                 };
 
                 let allow_initial = actives_long[s.symbol_idx]
+                    && !workspace.one_way_block_initial_long[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
                         input.balance,
                         input.global.filter_by_min_effective_cost,
@@ -1538,6 +1613,7 @@ mod core {
                 };
 
                 let allow_initial = actives_short[s.symbol_idx]
+                    && !workspace.one_way_block_initial_short[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
                         input.balance,
                         input.global.filter_by_min_effective_cost,
@@ -2514,6 +2590,7 @@ mod core {
                         pair
                     },
                     hedge: None,
+                    hedge_mode: true,
                 },
                 symbols: vec![sym.clone()],
                 peek_hints: None,
@@ -2595,6 +2672,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge: None,
+                    hedge_mode: true,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -2628,6 +2706,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge: None,
+                    hedge_mode: true,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
@@ -2732,6 +2811,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge: None,
+                    hedge_mode: true,
                 },
                 symbols: syms,
                 peek_hints: None,
@@ -2935,6 +3015,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge: None,
+                    hedge_mode: true,
                 },
                 symbols: vec![sym],
                 peek_hints: None,

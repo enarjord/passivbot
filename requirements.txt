@@ -1,7 +1,6 @@
 -r requirements-rust.txt
 -r requirements-live.txt
-matplotlib==3.8.4; python_version>='3.9'
-matplotlib==3.5.1; python_version<'3.9'
+matplotlib==3.8.4
 prospector==1.17.3
 colorama==0.4.6
 mkdocs==1.6.1

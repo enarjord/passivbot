@@ -154,12 +154,14 @@ class CCXTBot(Passivbot):
         config = {k: v for k, v in self.user_info.items() if k not in passivbot_fields}
         config["enableRateLimit"] = True
 
-        # Warn about legacy credential field names
+        # Remap legacy credential field names to CCXT-native names for backwards compatibility
         legacy_mappings = {
             "key": "apiKey",
             "api_key": "apiKey",
             "wallet": "walletAddress",
             "private_key": "privateKey",
+            "passphrase": "password",
+            "wallet_address": "walletAddress",
         }
         for old_name, new_name in legacy_mappings.items():
             if old_name in config and new_name not in config:
@@ -167,6 +169,7 @@ class CCXTBot(Passivbot):
                     f"{self.exchange}: '{old_name}' in api-keys.json is deprecated, "
                     f"use '{new_name}' instead (CCXT-native field name)"
                 )
+                config[new_name] = config.pop(old_name)
 
         return config
 

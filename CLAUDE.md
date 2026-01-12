@@ -251,6 +251,18 @@ Current branch: `refactor/merge-downloader-into-cm`
 - Coin overrides allow per-symbol parameter tweaks
 - Suite scenarios enable multi-condition evaluation
 
+### Config Section Hierarchy
+
+Configuration sections form an inheritance hierarchy. When adding new parameters, place them in the section that matches which components need to read them:
+
+| Section | Used By | Purpose |
+|---------|---------|---------|
+| `config.live` | Live bot, Backtester, Optimizer | Runtime behavior params shared across all modes (order logic, risk, hedge_mode) |
+| `config.backtest` | Backtester, Optimizer | Simulation-specific params (date ranges, starting_balance, data sources) |
+| `config.optimize` | Optimizer only | Optimization process params (population_size, bounds, fitness settings) |
+
+**Rule:** When in doubt, prefer `config.live`. A parameter that works in both live and backtest belongs in `config.live`, not `config.backtest`.
+
 ## Common Gotchas
 
 - If Rust changes are detected, recompile with `cd passivbot-rust && maturin develop --release && cd ..`

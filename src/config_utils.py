@@ -2005,6 +2005,7 @@ def get_template_config():
             "filter_by_min_effective_cost": True,
             "forced_mode_long": "",
             "forced_mode_short": "",
+            "hedge_mode": True,
             "ignored_coins": {"long": [], "short": []},
             "inactive_coin_candle_ttl_minutes": 10.0,
             "leverage": 10.0,
@@ -2022,7 +2023,9 @@ def get_template_config():
             "recv_window_ms": 5000,
             "time_in_force": "good_till_cancelled",
             "user": "bybit_01",
+            "warmup_jitter_seconds": 30.0,
             "warmup_ratio": 0.2,
+            "max_concurrent_api_requests": None,
         },
         "logging": {
             "level": 1,

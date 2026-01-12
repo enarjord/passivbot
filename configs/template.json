@@ -216,6 +216,7 @@
         "filter_by_min_effective_cost": true,
         "forced_mode_long": "",
         "forced_mode_short": "",
+        "hedge_mode": true,
         "ignored_coins": {"long":[],"short":[]},
         "inactive_coin_candle_ttl_minutes": 10,
         "leverage": 10,

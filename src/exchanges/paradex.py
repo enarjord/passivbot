@@ -29,6 +29,7 @@ class ParadexBot(CCXTBot):
         # Paradex only supports USDC as quote currency - must set after super()
         # to override CCXTBot's default of USDT
         self.quote = "USDC"
+        self.hedge_mode = False  # Paradex doesn't support two-way mode
         self._ws = None
 
     def _build_ccxt_config(self) -> dict:

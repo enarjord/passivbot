@@ -2,6 +2,8 @@ import asyncio
 import json
 from pathlib import Path
 
+import hjson
+
 import pytest
 
 from config_utils import load_config
@@ -84,7 +86,7 @@ def test_load_config_preserves_external_coin_sources(tmp_path: Path):
     ignored_file.write_text('["DOGE"]')
 
     template_path = Path("configs/template.json")
-    data = json.loads(template_path.read_text())
+    data = hjson.loads(template_path.read_text())
     data["live"]["approved_coins"] = str(approved_file)
     data["live"]["ignored_coins"] = str(ignored_file)
 

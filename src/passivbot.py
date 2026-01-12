@@ -366,7 +366,14 @@ class Passivbot:
         self.balance_hysteresis_snap_pct = float(
             get_optional_live_value(self.config, "balance_hysteresis_snap_pct", 0.02)
         )
-        self.hedge_mode = True
+        # hedge_mode controls whether simultaneous long/short on same coin is allowed.
+        # This is the config-level setting; exchange-specific bots may override
+        # self.hedge_mode to False if the exchange doesn't support two-way mode.
+        # Effective hedge_mode = config setting AND exchange capability.
+        self._config_hedge_mode = bool(
+            get_optional_live_value(self.config, "hedge_mode", True)
+        )
+        self.hedge_mode = True  # Exchange capability, may be overridden by subclass
         self.inverse = False
         self.active_symbols = []
         self.fetched_positions = []
@@ -1691,7 +1698,11 @@ class Passivbot:
             x for x in self.active_symbols if x not in self.already_updated_exchange_config_symbols
         ]
         if symbols_not_done:
-            await self.update_exchange_config_by_symbols(symbols_not_done)
+            try:
+                await self.update_exchange_config_by_symbols(symbols_not_done)
+            except Exception as e:
+                logging.info(f"error with update_exchange_config_by_symbols {e} {symbols_not_done}")
+                traceback.print_exc()
             self.already_updated_exchange_config_symbols.update(symbols_not_done)
 
     async def update_exchange_config_by_symbols(self, symbols):
@@ -3433,6 +3444,9 @@ class Passivbot:
             "long": self._bot_params_to_rust_dict("long", None),
             "short": self._bot_params_to_rust_dict("short", None),
         }
+        # Effective hedge_mode = config setting AND exchange capability.
+        # If either is False, we block same-coin hedging in the orchestrator.
+        effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
         input_dict = {
             "balance": float(self.balance),
             "global": {
@@ -3462,6 +3476,7 @@ class Passivbot:
                     "one_way": True,
                     "approved_hedge_symbols": [],
                 },
+                "hedge_mode": effective_hedge_mode,
             },
             "symbols": [],
             "peek_hints": None,
@@ -3724,6 +3739,9 @@ class Passivbot:
             "long": self._bot_params_to_rust_dict("long", None),
             "short": self._bot_params_to_rust_dict("short", None),
         }
+        # Effective hedge_mode = config setting AND exchange capability.
+        # If either is False, we block same-coin hedging in the orchestrator.
+        effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
         input_dict = {
             "balance": float(self.balance),
             "global": {
@@ -3753,6 +3771,7 @@ class Passivbot:
                     "one_way": True,
                     "approved_hedge_symbols": [],
                 },
+                "hedge_mode": effective_hedge_mode,
             },
             "symbols": [],
             "peek_hints": None,

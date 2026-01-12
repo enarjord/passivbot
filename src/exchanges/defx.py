@@ -1,105 +1,30 @@
-from passivbot import Passivbot, logging
-from uuid import uuid4
-import ccxt.pro as ccxt_pro
-import ccxt.async_support as ccxt_async
+"""
+DefxBot: Defx-specific exchange connector.
+
+Extends CCXTBot with Defx-specific logic for one-way mode positions,
+custom balance fetching, and leverage configuration.
+"""
+
 import asyncio
-import traceback
-import numpy as np
+
 import passivbot_rust as pbr
-from pure_funcs import (
-    floatify,
-    ts_to_date,
-    calc_hash,
-    shorten_custom_id,
-)
-from procedures import print_async_exception, utc_ms, assert_correct_ccxt_version
-
-assert_correct_ccxt_version(ccxt=ccxt_async)
+from exchanges.ccxt_bot import CCXTBot
+from passivbot import logging
+from utils import utc_ms
 
 
-class DefxBot(Passivbot):
+class DefxBot(CCXTBot):
+    """Defx exchange bot with one-way mode position handling."""
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.custom_id_max_length = 36  # adjust if needed
         self.quote = "USDC"
         self.hedge_mode = False
 
-    def create_ccxt_sessions(self):
-        if self.ws_enabled:
-            self.ccp = getattr(ccxt_pro, self.exchange)(
-                {
-                    "apiKey": self.user_info["key"],
-                    "secret": self.user_info["secret"],
-                    "enableRateLimit": True,
-                }
-            )
-        elif self.endpoint_override:
-            logging.info("Skipping Defx websocket session due to custom endpoint override.")
-        self.cca = getattr(ccxt_async, self.exchange)(
-            {
-                "apiKey": self.user_info["key"],
-                "secret": self.user_info["secret"],
-                "enableRateLimit": True,
-            }
-        )
-        if self.ws_enabled and self.ccp is not None:
-            self.ccp.options.update(self._build_ccxt_options())
-            self.ccp.options["defaultType"] = "swap"
-            self._apply_endpoint_override(self.ccp)
-        self.cca.options["defaultType"] = "swap"
-        self.cca.options.update(self._build_ccxt_options())
-        self._apply_endpoint_override(self.cca)
-
-    async def fetch_wallet_collaterals(self):
-        fetched = None
-        try:
-            fetched = await self.cca.fetch2(
-                path="api/wallet/balance/collaterals",
-                api=["v1", "private"],  # tuple-like fallback
-                method="GET",
-                params={},
-            )
-            for i in range(len(fetched)):
-                for k in fetched[i]:
-                    try:
-                        fetched[i][k] = float(fetched[i][k])
-                    except:
-                        pass
-            return fetched
-        except Exception as e:
-            logging.error(f"error fetch_wallet_collaterals {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
-            return False
-
-    def set_market_specific_settings(self):
-        super().set_market_specific_settings()
-        for symbol in self.markets_dict:
-            elm = self.markets_dict[symbol]
-            self.symbol_ids[symbol] = elm["id"]
-            self.min_costs[symbol] = (
-                0.1 if elm["limits"]["cost"]["min"] is None else elm["limits"]["cost"]["min"]
-            )
-            self.min_qtys[symbol] = elm["limits"]["amount"]["min"]
-            self.qty_steps[symbol] = elm["precision"]["amount"]
-            self.price_steps[symbol] = elm["precision"]["price"]
-            self.c_mults[symbol] = elm["contractSize"]
-            self.max_leverage[symbol] = int(elm["limits"]["leverage"]["max"])
-
-    async def watch_orders(self):
-        while True:
-            try:
-                if self.stop_websocket:
-                    break
-                res = await self.ccp.watch_orders()
-                for order in res:
-                    order["position_side"] = self.determine_pos_side(order)
-                    order["qty"] = order["amount"]
-                self.handle_order_update(res)
-            except Exception as e:
-                logging.error(f"exception watch_orders {e}")
-                traceback.print_exc()
-                await asyncio.sleep(1)
+    def _get_position_side_for_order(self, order: dict) -> str:
+        """Defx: Derive from position state (one-way mode)."""
+        return self.determine_pos_side(order)
 
     def determine_pos_side(self, order):
         # non hedge mode
@@ -114,82 +39,48 @@ class DefxBot(Passivbot):
         raise Exception(f"unknown side {order['side']}")
 
     async def fetch_open_orders(self, symbol: str = None):
-        fetched = None
-        open_orders = []
-        try:
-            fetched = await self.cca.fetch_open_orders(symbol=symbol)
-            for order in fetched:
-                order["position_side"] = self.determine_pos_side(order)
-                order["qty"] = order["amount"]
-            return sorted(fetched, key=lambda x: x["timestamp"])
-        except Exception as e:
-            logging.error(f"error fetching open orders {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
-            return False
+        fetched = await self.cca.fetch_open_orders(symbol=symbol)
+        for order in fetched:
+            order["position_side"] = self.determine_pos_side(order)
+            order["qty"] = order["amount"]
+        return sorted(fetched, key=lambda x: x["timestamp"])
 
     async def fetch_positions(self):
-        fetched_positions = None
-        try:
-            fetched_positions = await self.cca.fetch_positions()
-            positions = []
-            for p in fetched_positions:
-                positions.append(
-                    {
-                        **p,
-                        **{
-                            "symbol": p["symbol"],
-                            "position_side": p["info"]["positionSide"].lower(),
-                            "size": float(p["contracts"]),
-                            "price": float(p["entryPrice"]),
-                        },
-                    }
-                )
-            return positions
-        except Exception as e:
-            logging.error(f"error fetching positions {e}")
-            print_async_exception(fetched_positions)
-            traceback.print_exc()
-            return False
+        fetched_positions = await self.cca.fetch_positions()
+        positions = []
+        for p in fetched_positions:
+            positions.append(
+                {
+                    **p,
+                    **{
+                        "symbol": p["symbol"],
+                        "position_side": p["info"]["positionSide"].lower(),
+                        "size": float(p["contracts"]),
+                        "price": float(p["entryPrice"]),
+                    },
+                }
+            )
+        return positions
+
+    async def fetch_wallet_collaterals(self):
+        fetched = await self.cca.fetch2(
+            path="api/wallet/balance/collaterals",
+            api=["v1", "private"],  # tuple-like fallback
+            method="GET",
+            params={},
+        )
+        for i in range(len(fetched)):
+            for k in fetched[i]:
+                try:
+                    fetched[i][k] = float(fetched[i][k])
+                except (ValueError, TypeError):
+                    # Some fields (IDs, strings) can't be converted to float - skip them
+                    pass
+        return fetched
 
     async def fetch_balance(self):
-        fetched_balance = None
-        try:
-            fetched_balance = await self.fetch_wallet_collaterals()
-            return sum([x["marginValue"] for x in fetched_balance])
-        except Exception as e:
-            logging.error(f"error fetching balance {e}")
-            print_async_exception(fetched_balance)
-            traceback.print_exc()
-            return False
-
-    async def fetch_tickers(self):
-        fetched = None
-        try:
-            fetched = await self.cca.fetch_tickers()
-            return fetched
-        except Exception as e:
-            logging.error(f"error fetching tickers {e}")
-            print_async_exception(fetched)
-            traceback.print_exc()
-            return False
-
-    async def fetch_ohlcv(self, symbol: str, timeframe="1m"):
-        try:
-            return await self.cca.fetch_ohlcv(symbol, timeframe=timeframe, limit=1000)
-        except Exception as e:
-            logging.error(f"error fetching ohlcv for {symbol} {e}")
-            traceback.print_exc()
-            return False
-
-    async def fetch_ohlcvs_1m(self, symbol: str, limit=None):
-        n_candles_limit = 1000 if limit is None else limit
-        result = await self.cca.fetch_ohlcv(
-            symbol,
-            timeframe="1m",
-            limit=n_candles_limit,
-        )
-        return result
+        fetched_balance = await self.fetch_wallet_collaterals()
+        return sum([x["marginValue"] for x in fetched_balance])
 
     async def fetch_pnls(self, start_time=None, end_time=None, limit=None):
         # TODO: impl start_time and end_time
@@ -208,11 +99,7 @@ class DefxBot(Passivbot):
     async def gather_fill_events(self, start_time=None, end_time=None, limit=None):
         """Return canonical fill events for dYdX/DeFX adapter (draft placeholder)."""
         events = []
-        try:
-            fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
-        except Exception as exc:
-            logging.error(f"error gathering fill events (defx) {exc}")
-            return events
+        fills = await self.fetch_pnls(start_time=start_time, end_time=end_time, limit=limit)
         for fill in fills:
             events.append(
                 {
@@ -235,6 +122,10 @@ class DefxBot(Passivbot):
             "timeInForce": "GTC",
             "reduceOnly": order.get("reduce_only", False),
         }
+
+    async def update_exchange_config(self):
+        """Defx uses one-way mode; no hedge mode configuration needed."""
+        pass
 
     async def determine_utc_offset(self, verbose=True):
         # returns millis to add to utc to get exchange timestamp
@@ -269,7 +160,7 @@ class DefxBot(Passivbot):
                     ),
                     "symbol": symbol,
                 }
-                print("debug update_exchange_config_by_symbols", params)
+                logging.debug(f"update_exchange_config_by_symbols {params}")
                 coros_to_call_leverage[symbol] = asyncio.create_task(self.cca.set_leverage(**params))
             except Exception as e:
                 logging.error(f"{symbol}: error setting leverage {e}")
@@ -280,7 +171,7 @@ class DefxBot(Passivbot):
                 res = await coros_to_call_leverage[symbol]
                 to_print += f"set leverage {res}"
             except Exception as e:
-                if '"code":"59107"' in e.args[0]:
+                if '"code":"59107"' in str(e):
                     to_print += f" cross mode and leverage: {res} {e}"
                 else:
                     logging.error(f"{symbol} error setting leverage {res} {e}")

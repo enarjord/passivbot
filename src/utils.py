@@ -569,7 +569,7 @@ def normalize_exchange_name(exchange: str) -> str:
     return ex
 
 
-def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True):
+def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True, timeout_ms: int = 60_000):
     """
     Return a ccxt async-support exchange instance for the given exchange id.
 
@@ -577,7 +577,13 @@ def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True):
     """
     ex = normalize_exchange_name(exchange_id)
     try:
-        cc = getattr(ccxt, ex)({"enableRateLimit": bool(enable_rate_limit)})
+        cc = getattr(ccxt, ex)(
+            {
+                "enableRateLimit": bool(enable_rate_limit),
+                # Default ccxt timeout can be too low for long lookbacks; raise to be tolerant.
+                "timeout": int(timeout_ms),
+            }
+        )
     except Exception:
         raise RuntimeError(f"ccxt exchange '{ex}' not available")
     try:
